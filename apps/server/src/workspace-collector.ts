@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { watch, type FSWatcher } from "node:fs";
-import { lstat, readFile, readdir } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { zstdCompress } from "node:zlib";
 import { minimatch } from "minimatch";
@@ -19,6 +19,10 @@ const MAX_FILES = 20_000;
 const MAX_COMPRESSED_BYTES = 16 * 1024 * 1024;
 const CHANGE_DEBOUNCE_MS = 2_000;
 const FALLBACK_SCAN_MS = 10_000;
+const MAX_CHANGE_JOURNAL_ENTRIES = 512;
+const MAX_CHANGE_JOURNAL_BYTES = 768 * 1024;
+const MAX_SESSION_LEDGER_ENTRIES = 512;
+const SESSION_LEDGER_FILE = "omnirush-collector-sessions.json";
 
 type SnapshotType = "start" | "change" | "end" | "trace";
 
@@ -33,11 +37,35 @@ type TraceEvent = {
   data?: unknown;
 };
 
+type ChangeJournalEntry = {
+  path: string;
+  at: string;
+  status: "present" | "deleted" | "skipped";
+  content?: string;
+};
+
+type SessionLedgerRecord = {
+  segment: number;
+  nextSequence: number;
+  sentBytes?: number;
+  lastMessageId?: string;
+  lastSeenAt: string;
+};
+
+type SessionLedger = {
+  version: 1;
+  sessions: Record<string, SessionLedgerRecord>;
+};
+
 type SessionState = {
   id: string;
   root: string;
   workspaceId: string;
   sentBytes: number;
+  segment: number;
+  sequence: number;
+  resumed: boolean;
+  lastMessageId?: string;
   lastSignature: string;
   started: boolean;
   finished: boolean;
@@ -45,6 +73,10 @@ type SessionState = {
   scanTimer: ReturnType<typeof setInterval> | null;
   watcher: FSWatcher | null;
   trace: TraceEvent[];
+  changeJournal: Map<string, ChangeJournalEntry>;
+  changeJournalBytes: number;
+  changeCaptureTail: Promise<void>;
+  ready: Promise<void>;
   tail: Promise<void>;
 };
 
@@ -53,6 +85,7 @@ type CollectorOptions = {
   accessToken?: string;
   fetch?: typeof externalFetch;
   upload?: (sessionId: string, compressed: Uint8Array) => Promise<Response>;
+  stateDir?: string;
   log?: (level: "info" | "warn", message: string, attributes?: Record<string, unknown>) => void;
   changeDebounceMs?: number;
   fallbackScanMs?: number;
@@ -171,6 +204,83 @@ function ignoredByRules(path: string, rules: string[]): boolean {
   return ignored;
 }
 
+async function gitIgnoresPath(root: string, path: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["-C", root, "check-ignore", "--no-index", "-q", "--", path], {
+      timeout: 5_000,
+      maxBuffer: 64 * 1024,
+    });
+    return true;
+  } catch {
+    // Exit status 1 means the path is not ignored. A non-git workspace also
+    // falls through here and is handled by the normal snapshot walker.
+    return false;
+  }
+}
+
+async function readSessionLedger(path: string | null): Promise<SessionLedger> {
+  if (!path) return { version: 1, sessions: {} };
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<SessionLedger>;
+    if (parsed.version !== 1 || !parsed.sessions || typeof parsed.sessions !== "object") {
+      return { version: 1, sessions: {} };
+    }
+    const sessions = Object.fromEntries(
+      Object.entries(parsed.sessions as Record<string, unknown>).flatMap(([sessionId, value]) => {
+        if (!value || typeof value !== "object") return [];
+        const record = value as Partial<SessionLedgerRecord>;
+        if (typeof record.segment !== "number" || !Number.isSafeInteger(record.segment) || record.segment < 1
+          || typeof record.nextSequence !== "number" || !Number.isSafeInteger(record.nextSequence) || record.nextSequence < 0
+          || (record.sentBytes !== undefined && (!Number.isSafeInteger(record.sentBytes) || record.sentBytes < 0))
+          || typeof record.lastSeenAt !== "string") return [];
+        return [[sessionId, record as SessionLedgerRecord] as const];
+      }),
+    );
+    return { version: 1, sessions };
+  } catch {
+    return { version: 1, sessions: {} };
+  }
+}
+
+function boundedTracePayload(
+  state: Pick<SessionState, "id" | "workspaceId" | "segment" | "resumed">,
+  events: TraceEvent[],
+  maxBytes = MAX_TRACE_BYTES,
+): Buffer {
+  const encode = (selected: TraceEvent[], truncated: boolean, includedCount = selected.length) => Buffer.from(redactCollectorText(JSON.stringify({
+    schema_version: 1,
+    session_id: state.id,
+    workspace_id: state.workspaceId,
+    session_segment: state.segment,
+    session_resumed: state.resumed,
+    trace_truncated: truncated,
+    dropped_event_count: Math.max(0, events.length - includedCount),
+    events: selected,
+  })).text);
+
+  const selected: TraceEvent[] = [];
+  for (const event of events) {
+    const candidate = encode([...selected, event], true);
+    if (candidate.byteLength > maxBytes) break;
+    selected.push(event);
+  }
+  let payload = encode(selected, selected.length < events.length);
+  while (payload.byteLength > maxBytes && selected.length > 0) {
+    selected.pop();
+    payload = encode(selected, true);
+  }
+  if (selected.length === 0 && events.length > 0) {
+    const marker: TraceEvent = {
+      at: new Date().toISOString(),
+      type: "trace.truncated",
+      data: { dropped_event_count: events.length },
+    };
+    const marked = encode([marker], true, 0);
+    if (marked.byteLength <= maxBytes) return marked;
+  }
+  return payload;
+}
+
 async function walkFallback(root: string, directory = root, rules: string[] = [], output: string[] = []): Promise<string[]> {
   const localRules = await readGitignoreFile(directory);
   const prefix = portablePath(root, directory);
@@ -245,11 +355,21 @@ async function workspaceSignature(root: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function collectFiles(root: string, byteLimit: number, workspaceId: string): Promise<CollectorFile[]> {
+async function collectFiles(
+  root: string,
+  byteLimit: number,
+  workspaceId: string,
+  session?: Pick<SessionState, "id" | "segment" | "resumed">,
+): Promise<CollectorFile[]> {
   const files: CollectorFile[] = [];
   let used = 0;
   const metadata = JSON.stringify({
     workspace_id: workspaceId,
+    ...(session ? {
+      session_id: session.id,
+      session_segment: session.segment,
+      session_resumed: session.resumed,
+    } : {}),
     root_name: root.split(sep).filter(Boolean).at(-1) ?? "workspace",
     git: await gitMetadata(root),
   });
@@ -292,6 +412,10 @@ export class WorkspaceCollector {
   private readonly fetcher: typeof externalFetch;
   private readonly uploader?: CollectorOptions["upload"];
   private readonly log: NonNullable<CollectorOptions["log"]>;
+  private readonly ledgerPath: string | null;
+  private readonly ledgerReady: Promise<void>;
+  private ledger: SessionLedger = { version: 1, sessions: {} };
+  private ledgerWriteTail: Promise<void> = Promise.resolve();
   private readonly sessions = new Map<string, SessionState>();
   private readonly changeDebounceMs: number;
   private readonly fallbackScanMs: number;
@@ -302,8 +426,83 @@ export class WorkspaceCollector {
     this.fetcher = options.fetch ?? externalFetch;
     this.uploader = options.upload;
     this.log = options.log ?? (() => undefined);
+    this.ledgerPath = options.stateDir ? join(resolve(options.stateDir), SESSION_LEDGER_FILE) : null;
+    this.ledgerReady = this.loadLedger();
     this.changeDebounceMs = options.changeDebounceMs ?? CHANGE_DEBOUNCE_MS;
     this.fallbackScanMs = options.fallbackScanMs ?? FALLBACK_SCAN_MS;
+  }
+
+  private async loadLedger(): Promise<void> {
+    this.ledger = await readSessionLedger(this.ledgerPath);
+  }
+
+  private async saveLedger(): Promise<void> {
+    if (!this.ledgerPath) return;
+    await this.ledgerReady;
+    const entries = Object.entries(this.ledger.sessions)
+      .sort(([, left], [, right]) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+      .slice(0, MAX_SESSION_LEDGER_ENTRIES);
+    this.ledger.sessions = Object.fromEntries(entries);
+    const snapshot = JSON.stringify(this.ledger);
+    this.ledgerWriteTail = this.ledgerWriteTail
+      .catch(() => undefined)
+      .then(async () => {
+        await mkdir(dirname(this.ledgerPath!), { recursive: true, mode: 0o700 });
+        await writeFile(this.ledgerPath!, snapshot, { encoding: "utf8", mode: 0o600 });
+      });
+    await this.ledgerWriteTail;
+  }
+
+  private async prepareSession(state: SessionState): Promise<void> {
+    await this.ledgerReady;
+    const previous = this.ledger.sessions[state.id];
+    state.segment = (previous?.segment ?? 0) + 1;
+    state.sequence = previous?.nextSequence ?? 0;
+    state.sentBytes = previous?.sentBytes ?? 0;
+    state.lastMessageId = previous?.lastMessageId;
+    state.resumed = Boolean(previous);
+    if (state.resumed) {
+      state.trace.push({
+        at: new Date().toISOString(),
+        type: "session.resumed",
+        data: { session_segment: state.segment, previous_segment: previous?.segment ?? null },
+      });
+    }
+    this.ledger.sessions[state.id] = {
+      segment: state.segment,
+      nextSequence: state.sequence,
+      sentBytes: state.sentBytes,
+      ...(state.lastMessageId ? { lastMessageId: state.lastMessageId } : {}),
+      lastSeenAt: new Date().toISOString(),
+    };
+    await this.saveLedger();
+  }
+
+  private async persistSession(state: SessionState): Promise<void> {
+    await this.ledgerReady;
+    this.ledger.sessions[state.id] = {
+      segment: state.segment,
+      nextSequence: state.sequence,
+      sentBytes: state.sentBytes,
+      ...(state.lastMessageId ? { lastMessageId: state.lastMessageId } : {}),
+      lastSeenAt: new Date().toISOString(),
+    };
+    await this.saveLedger();
+  }
+
+  async sessionCheckpoint(sessionId: string): Promise<{ resumed: boolean; segment?: number; lastMessageId?: string }> {
+    const state = this.sessions.get(sessionId);
+    if (!state) return { resumed: false };
+    await state.ready;
+    return { resumed: state.resumed, segment: state.segment, lastMessageId: state.lastMessageId };
+  }
+
+  async setSessionCheckpoint(sessionId: string, messageId: string): Promise<void> {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.finished) return;
+    await state.ready;
+    state.lastMessageId = messageId;
+    await this.persistSession(state);
   }
 
   get enabled(): boolean {
@@ -317,6 +516,9 @@ export class WorkspaceCollector {
       root,
       workspaceId,
       sentBytes: 0,
+      segment: 1,
+      sequence: 0,
+      resumed: false,
       lastSignature: "",
       started: false,
       finished: false,
@@ -324,10 +526,16 @@ export class WorkspaceCollector {
       scanTimer: null,
       watcher: null,
       trace: [],
+      changeJournal: new Map(),
+      changeJournalBytes: 0,
+      changeCaptureTail: Promise.resolve(),
+      ready: Promise.resolve(),
       tail: Promise.resolve(),
     };
+    state.ready = this.prepareSession(state);
     this.sessions.set(sessionId, state);
     this.enqueue(state, async () => {
+      await state.ready;
       state.lastSignature = await workspaceSignature(root);
       await this.uploadWorkspace(state, "start");
       state.started = true;
@@ -335,6 +543,7 @@ export class WorkspaceCollector {
     try {
       state.watcher = watch(root, { recursive: true }, (_event, filename) => {
         if (filename && isCollectorPathDenied(String(filename))) return;
+        if (filename) this.queueChangedPath(state, String(filename));
         this.scheduleChange(state);
       });
       state.watcher.on("error", () => {
@@ -363,13 +572,17 @@ export class WorkspaceCollector {
   finishSession(sessionId: string, finalTrace?: unknown): void {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
+    const pendingTrace = state.trace.splice(0);
     state.finished = true;
     if (state.changeTimer) clearTimeout(state.changeTimer);
     if (state.scanTimer) clearInterval(state.scanTimer);
     state.watcher?.close();
     this.enqueue(state, async () => {
-      if (finalTrace !== undefined) state.trace.push({ at: new Date().toISOString(), type: "session.completed", data: finalTrace });
-      await this.uploadTrace(state);
+      await state.ready;
+      if (state.trace.length > 0) pendingTrace.push(...state.trace.splice(0));
+      await state.changeCaptureTail;
+      if (finalTrace !== undefined) pendingTrace.push({ at: new Date().toISOString(), type: "session.completed", data: finalTrace });
+      await this.uploadTrace(state, pendingTrace);
       await this.uploadWorkspace(state, "end");
       this.sessions.delete(sessionId);
     });
@@ -378,10 +591,13 @@ export class WorkspaceCollector {
   flushTrace(sessionId: string, finalTrace?: unknown): void {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
+    const pendingTrace = state.trace.splice(0);
+    if (finalTrace !== undefined) pendingTrace.push({ at: new Date().toISOString(), type: "turn.completed", data: finalTrace });
+    if (pendingTrace.length === 0) return;
     this.enqueue(state, async () => {
-      if (finalTrace !== undefined) state.trace.push({ at: new Date().toISOString(), type: "turn.completed", data: finalTrace });
-      await this.uploadTrace(state);
-      state.trace = [];
+      await state.ready;
+      if (state.trace.length > 0) pendingTrace.push(...state.trace.splice(0));
+      await this.uploadTrace(state, pendingTrace);
     });
   }
 
@@ -405,6 +621,67 @@ export class WorkspaceCollector {
     state.changeTimer.unref?.();
   }
 
+  private queueChangedPath(state: SessionState, filename: string): void {
+    if (state.finished) return;
+    state.changeCaptureTail = state.changeCaptureTail
+      .catch(() => undefined)
+      .then(() => this.captureChangedPath(state, filename))
+      .catch((error: unknown) => {
+        this.log("warn", "OmniRush changed-file capture failed", {
+          sessionId: state.id,
+          path: filename,
+          error: error instanceof Error ? error.message : "unknown",
+        });
+      });
+  }
+
+  private async captureChangedPath(state: SessionState, filename: string): Promise<void> {
+    const absolute = resolve(state.root, filename);
+    const path = portablePath(state.root, absolute);
+    if (!path || path.startsWith("../") || isCollectorPathDenied(path) || await gitIgnoresPath(state.root, path)) return;
+    let entry: ChangeJournalEntry;
+    try {
+      const file = await lstat(absolute);
+      if (!file.isFile() || file.isSymbolicLink() || file.size > MAX_COLLECTOR_FILE_BYTES) {
+        entry = { path, at: new Date().toISOString(), status: "skipped" };
+      } else {
+        const buffer = await readFile(absolute);
+        if (buffer.length > MAX_COLLECTOR_FILE_BYTES || isBinary(buffer)) {
+          entry = { path, at: new Date().toISOString(), status: "skipped" };
+        } else {
+          entry = {
+            path,
+            at: new Date().toISOString(),
+            status: "present",
+            content: redactCollectorText(buffer.toString("utf8")).text,
+          };
+        }
+      }
+    } catch {
+      entry = { path, at: new Date().toISOString(), status: "deleted" };
+    }
+    const previous = state.changeJournal.get(path);
+    if (previous) state.changeJournalBytes -= Buffer.byteLength(JSON.stringify(previous));
+    state.changeJournal.set(path, entry);
+    state.changeJournalBytes += Buffer.byteLength(JSON.stringify(entry));
+    while (state.changeJournal.size > MAX_CHANGE_JOURNAL_ENTRIES || state.changeJournalBytes > MAX_CHANGE_JOURNAL_BYTES) {
+      const oldest = state.changeJournal.keys().next().value as string | undefined;
+      if (!oldest) break;
+      const removed = state.changeJournal.get(oldest);
+      if (removed) state.changeJournalBytes -= Buffer.byteLength(JSON.stringify(removed));
+      state.changeJournal.delete(oldest);
+    }
+  }
+
+  private acknowledgeJournal(state: SessionState, entries: ChangeJournalEntry[]): void {
+    for (const entry of entries) {
+      if (state.changeJournal.get(entry.path)?.at === entry.at) {
+        state.changeJournal.delete(entry.path);
+        state.changeJournalBytes -= Buffer.byteLength(JSON.stringify(entry));
+      }
+    }
+  }
+
   private enqueue(state: SessionState, operation: () => Promise<void>): void {
     state.tail = state.tail.then(operation).catch((error: unknown) => {
       this.log("warn", "OmniRush collection operation failed", {
@@ -417,37 +694,48 @@ export class WorkspaceCollector {
   private async uploadWorkspace(state: SessionState, type: Exclude<SnapshotType, "trace">): Promise<void> {
     const remaining = MAX_COLLECTOR_SESSION_BYTES - state.sentBytes;
     if (remaining <= 1_024) return;
-    const files = await collectFiles(state.root, Math.min(MAX_SNAPSHOT_BYTES, remaining - 1_024), state.workspaceId);
-    await this.uploadEnvelope(state, type, files);
+    const files = await collectFiles(
+      state.root,
+      Math.min(MAX_SNAPSHOT_BYTES, remaining - 1_024),
+      state.workspaceId,
+      state,
+    );
+    const journal = type === "change" || type === "end" ? [...state.changeJournal.values()] : [];
+    if (journal.length > 0) {
+      files.push({
+        path: "__omnirush__/changes.json",
+        content: JSON.stringify({ schema_version: 1, session_id: state.id, entries: journal }),
+      });
+    }
+    const uploaded = await this.uploadEnvelope(state, type, files);
+    if (uploaded && journal.length > 0) this.acknowledgeJournal(state, journal);
     state.lastSignature = await workspaceSignature(state.root);
   }
 
-  private async uploadTrace(state: SessionState): Promise<void> {
+  private async uploadTrace(state: SessionState, traceEvents: TraceEvent[]): Promise<void> {
     const remaining = MAX_COLLECTOR_SESSION_BYTES - state.sentBytes;
-    if (remaining <= 1_024 || state.trace.length === 0) return;
-    const redacted = redactCollectorText(JSON.stringify({
-      schema_version: 1,
-      session_id: state.id,
-      workspace_id: state.workspaceId,
-      events: state.trace,
-    })).text;
-    const bounded = Buffer.from(redacted).subarray(0, Math.min(MAX_TRACE_BYTES, remaining - 1_024)).toString("utf8");
-    await this.uploadEnvelope(state, "trace", [{ path: "__omnirush__/trace.json", content: bounded }]);
+    if (remaining <= 1_024 || traceEvents.length === 0) return;
+    const bounded = boundedTracePayload(state, traceEvents, Math.min(MAX_TRACE_BYTES, remaining - 1_024));
+    await this.uploadEnvelope(state, "trace", [{ path: "__omnirush__/trace.json", content: bounded.toString("utf8") }]);
   }
 
-  private async uploadEnvelope(state: SessionState, snapshotType: SnapshotType, files: CollectorFile[]): Promise<void> {
-    if (!this.collectUrl && !this.uploader) return;
+  private async uploadEnvelope(state: SessionState, snapshotType: SnapshotType, files: CollectorFile[]): Promise<boolean> {
+    if (!this.collectUrl && !this.uploader) return false;
+    const sequence = state.sequence + 1;
     const payload = Buffer.from(JSON.stringify({
       schema_version: 1,
       session_id: state.id,
+      session_segment: state.segment,
+      session_resumed: state.resumed,
+      sequence,
       snapshot_type: snapshotType,
       files,
     }));
-    if (state.sentBytes + payload.length > MAX_COLLECTOR_SESSION_BYTES) return;
+    if (state.sentBytes + payload.length > MAX_COLLECTOR_SESSION_BYTES) return false;
     const compressed = await compressZstd(payload);
     if (compressed.length > MAX_COMPRESSED_BYTES) {
       this.log("warn", "OmniRush collection payload exceeded compressed limit", { sessionId: state.id, snapshotType });
-      return;
+      return false;
     }
     const response = this.uploader
       ? await this.uploader(state.id, compressed)
@@ -466,11 +754,19 @@ export class WorkspaceCollector {
       throw new Error(`collector upload failed with status ${response.status}`);
     }
     state.sentBytes += payload.length;
+    state.sequence = sequence;
+    await this.persistSession(state).catch((error: unknown) => {
+      this.log("warn", "OmniRush session ledger update failed", {
+        sessionId: state.id,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+    });
     this.log("info", "OmniRush collection artifact uploaded", {
       sessionId: state.id,
       snapshotType,
       fileCount: files.length,
       compressedBytes: compressed.length,
     });
+    return true;
   }
 }

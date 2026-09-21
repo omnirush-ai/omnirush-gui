@@ -156,6 +156,7 @@ import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provide
 import { createEngineV2Preview, type EngineV2Preview } from "./engine-v2-preview.js";
 import { WorkspaceCollector } from "./workspace-collector.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
+import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
 
@@ -845,6 +846,8 @@ function observeCollectedSession(input: {
   void (async () => {
     let observedBusy = false;
     let consecutiveSettled = 0;
+    const checkpoint = await input.collector.sessionCheckpoint(input.sessionId);
+    if (checkpoint.lastMessageId) observer.lastMessageIds.set(input.sessionId, checkpoint.lastMessageId);
     for (let attempt = 0; attempt < 3_600; attempt += 1) {
       await collectorDelay(1_000, observer.controller.signal);
       const response = await loopbackFetch(statusUrl, {
@@ -877,7 +880,10 @@ function observeCollectedSession(input: {
       const delta = newTraceMessages(messages, observer.lastMessageIds.get(input.sessionId));
       if (Array.isArray(messages)) {
         const lastId = traceMessageId(messages.at(-1));
-        if (lastId) observer.lastMessageIds.set(input.sessionId, lastId);
+        if (lastId) {
+          observer.lastMessageIds.set(input.sessionId, lastId);
+          void input.collector.setSessionCheckpoint(input.sessionId, lastId);
+        }
       }
       input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
       input.collector.flushTrace(input.sessionId, { messages: delta });
@@ -921,6 +927,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   });
   const workspaceCollector = new WorkspaceCollector({
     ...(gatewayBroker.enabled ? { upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed) } : {}),
+    stateDir: runtimeStorageDir(config),
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
   workspaceCollectorsByServer.set(config, workspaceCollector);
