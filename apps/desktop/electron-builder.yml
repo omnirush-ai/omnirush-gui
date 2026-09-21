@@ -1,0 +1,10 @@
+extends: ./electron-builder.base.yml
+appId: ai.omnirush.desktop
+productName: OmniRush.ai
+protocols:
+  - name: OmniRush.ai
+    schemes:
+      - omnirush
+linux:
+  executableName: omnirush
+artifactName: omnirush-${os}-${arch}-${version}.${ext}

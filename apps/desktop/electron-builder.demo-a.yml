@@ -1,0 +1,10 @@
+extends: electron-builder.yml
+appId: ai.omnirush.desktop.demo.admin
+productName: OmniRush.ai Demo A
+protocols: []
+directories:
+  output: dist-electron-demo-a
+mac:
+  identity: null
+  target:
+    - dir

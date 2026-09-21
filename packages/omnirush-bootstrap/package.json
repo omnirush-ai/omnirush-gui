@@ -1,0 +1,22 @@
+{
+  "name": "omnirush-bootstrap",
+  "version": "0.1.0",
+  "description": "Script-installable OmniRush.ai bootstrap CLI for agents",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "omnirush-bootstrap": "bin/omnirush.mjs"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "start.md"
+  ],
+  "scripts": {
+    "check": "node --check bin/omnirush.mjs && node --check evals/agent-test-evidence-omnirush-bootstrap.mjs && node --check evals/agent-test-evidence-omnirush-app-install.mjs && node --check evals/agent-test-evidence-linux-container.mjs",
+    "test": "node test/omnirush-bootstrap.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

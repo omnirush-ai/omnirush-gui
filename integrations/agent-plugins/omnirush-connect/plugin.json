@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "omnirush-connect",
+  "version": "1.0.0",
+  "description": "Use the skills, MCP connections, and connected services assigned to you through OmniRush.ai.",
+  "author": {
+    "name": "OmniRush.ai",
+    "url": "https://omnirushlabs.com"
+  },
+  "homepage": "https://omnirushlabs.com/docs/cloud/run-in-the-cloud/cloud-mcp",
+  "repository": "https://github.com/omnirush-ai/omnirush-gui",
+  "license": "MIT",
+  "keywords": [
+    "omnirush",
+    "mcp",
+    "agent-skills",
+    "organization"
+  ]
+}

@@ -1,0 +1,37 @@
+import { defineConfig } from "tsup"
+
+export default defineConfig({
+  entry: {
+    index: "src/index.ts",
+    "agent-context-diagnostics": "src/agent-context-diagnostics.ts",
+    "omnirush-affordance": "src/omnirush-affordance.ts",
+    "omnirush-context": "src/omnirush-context.ts",
+    "omnirush-provider": "src/omnirush-provider.ts",
+    "automations": "src/automations.ts",
+    workflows: "src/workflows.ts",
+    "local-workflows": "src/local-workflows.ts",
+    "skill-created-app": "src/skill-created-app.ts",
+    "connection-action-app": "src/connection-action-app.ts",
+    "plugin-flow-app": "src/plugin-flow-app.ts",
+    "den/desktop-app-restrictions": "src/den/desktop-app-restrictions.ts",
+    "den/desktop-policies": "src/den/desktop-policies.ts",
+    "den/connect-diagnostics": "src/den/connect-diagnostics.ts",
+    "den/egress-diagnostics": "src/den/egress-diagnostics.ts",
+    "den/inference": "src/den/inference.ts",
+    "den/managed-models-policy": "src/den/managed-models-policy.ts",
+    "den/mcp-connection-action": "src/den/mcp-connection-action.ts",
+    "den/microsoft-365": "src/den/microsoft-365.ts",
+  },
+  tsconfig: "./tsconfig.json",
+  format: ["esm"],
+  dts: {
+    tsconfig: "./tsconfig.json",
+  },
+  clean: true,
+  target: "es2022",
+  platform: "neutral",
+  sourcemap: false,
+  splitting: false,
+  treeshake: true,
+  external: ["zod"],
+})

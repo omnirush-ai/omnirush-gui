@@ -1,0 +1,24 @@
+export { browserScript } from "@omnirush/cdp";
+export type { BrowserEvaluation, BrowserScript } from "@omnirush/cdp";
+export { control, createDesktopHandoffGrant, evalIn, quitDesktop, signInDesktopAs } from "@omnirush/behaviors";
+export { requestDenLoopback } from "@omnirush/labs";
+export { desktop as relaunchDesktop, electronProfilePaths } from "@omnirush/hosts";
+export type { DesktopHandle } from "@omnirush/hosts";
+export type { Surface } from "@omnirush/cdp";
+export type { Target } from "@omnirush/cdp";
+export { browserConversation } from "@omnirush/behaviors";
+export type { BrowserTaskInput, BrowserTaskReply } from "@omnirush/behaviors";
+export { renderPrMarkdown } from "@omnirush/test-artifacts";
+export type { TestRunRecord } from "@omnirush/test-artifacts";
+export type { StepRecord, TestOutcome, TraceEntry } from "@omnirush/test-evidence";
+export { test } from "./fixture.ts";
+export * from "@omnirush/env";
+export * from "./brief.ts";
+export * from "./eventually.ts";
+export * from "./link.ts";
+export * from "./self-host.ts";
+export * from "./spec/index.ts";
+export * from "./state.ts";
+
+export { observeTranscript, readTranscriptMessages } from "./transcript-observer.ts";
+export { readSidebarOverflow } from "@omnirush/behaviors";

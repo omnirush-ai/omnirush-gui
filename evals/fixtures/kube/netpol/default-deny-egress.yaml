@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: omnirush-den-default-deny-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: omnirush-ee
+      app.kubernetes.io/instance: omnirush-ee
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - den-api
+          - den-web
+  policyTypes:
+    - Egress
+  egress: []

@@ -1,0 +1,18 @@
+extends: ./electron-builder.base.yml
+appId: ai.omnirush.desktop
+productName: OmniRush.ai Enterprise
+extraMetadata:
+  omnirushDistribution: enterprise
+protocols:
+  - name: OmniRush.ai Enterprise
+    schemes:
+      - omnirush
+publish:
+  - provider: github
+    owner: omnirush-ai
+    repo: omnirush-gui
+    releaseType: release
+    channel: enterprise
+linux:
+  executableName: omnirush-enterprise
+artifactName: omnirush-enterprise-${os}-${arch}-${version}.${ext}

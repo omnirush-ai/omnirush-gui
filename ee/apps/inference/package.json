@@ -1,0 +1,31 @@
+{
+  "name": "@omnirush-ee/inference",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "models:build": "node scripts/build-models.mjs",
+    "dev": "pnpm run models:build && tsx watch src/server.ts",
+    "dev:local": "OMNIRUSH_DEV_MODE=1 pnpm run models:build && OMNIRUSH_DEV_MODE=1 PORT=${INFERENCE_PORT:-8791} tsx watch src/server.ts",
+    "test": "NODE_OPTIONS=--conditions=development tsx --test test/*.test.ts",
+    "build": "pnpm run models:build && tsc -p tsconfig.json",
+    "start": "node --import ./dist/instrumentation.js dist/server.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.0.12",
+    "@omnirush-ee/den-db": "workspace:*",
+    "@omnirush-ee/utils": "workspace:*",
+    "@omnirush/types": "workspace:*",
+    "@sentry/hono": "^10.65.0",
+    "@sentry/node": "^10.65.0",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.45.2",
+    "hono": "4.12.34",
+    "zod": "^4.3.6",
+    "@omnirush-ee/telemetry": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.23.1",
+    "typescript": "^5.5.4"
+  }
+}

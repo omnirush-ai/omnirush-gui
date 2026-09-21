@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: omnirush-den-allow-eval-mock-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: omnirush-ee
+      app.kubernetes.io/instance: omnirush-ee
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - den-api
+          - den-web
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: ${OMNIRUSH_EVAL_KUBE_ALLOWED_HOST_IP}/32
+      ports:
+        - protocol: TCP
+          port: ${OMNIRUSH_EVAL_KUBE_ALLOWED_MOCK_PORT}

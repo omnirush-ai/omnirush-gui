@@ -1,0 +1,18 @@
+extends: ./electron-builder.base.yml
+appId: ai.omnirush.desktop
+productName: OmniRush.ai Cloud
+extraMetadata:
+  omnirushDistribution: cloud
+protocols:
+  - name: OmniRush.ai Cloud
+    schemes:
+      - omnirush
+publish:
+  - provider: github
+    owner: omnirush-ai
+    repo: omnirush-gui
+    releaseType: release
+    channel: cloud
+linux:
+  executableName: omnirush-cloud
+artifactName: omnirush-cloud-${os}-${arch}-${version}.${ext}

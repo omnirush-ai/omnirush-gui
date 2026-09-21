@@ -1,0 +1,25 @@
+{
+  "name": "@omnirush/testkit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./stack": "./src/stack.ts"
+  },
+  "dependencies": {
+    "@omnirush/behaviors": "workspace:*",
+    "@omnirush/cdp": "workspace:*",
+    "@omnirush/env": "workspace:*",
+    "@omnirush/test-evidence": "workspace:*",
+    "@omnirush/test-artifacts": "workspace:*",
+    "@omnirush/hosts": "workspace:*",
+    "@omnirush/labs": "workspace:*",
+    "mysql2": "^3.11.3",
+    "vitest": "^3.2.4"
+  }
+}

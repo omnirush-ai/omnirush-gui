@@ -1,0 +1,63 @@
+# TEMPLATE — the committed copy is never release-specific. The release
+# workflow renders pkgver + sha256sums via scripts/aur/update-aur.sh in the
+# CI workspace and pushes the result to aur.archlinux.org only. Edit this
+# file for packaging logic changes; never commit a real version here.
+pkgname=omnirush
+pkgver=0.0.0
+pkgrel=1 # pkgrel should change when PKGBUILD does. Standard is to change back to 1 next time. Any interger is valid.
+pkgdesc="An Open source alternative to Claude Cowork"
+arch=('x86_64' 'aarch64')
+url="https://github.com/omnirush-ai/omnirush-gui"
+license=('MIT')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'xdg-utils' 'at-spi2-core' 'libdrm' 'libxkbcommon' 'mesa' 'dbus' 'hicolor-icon-theme')
+options=(!strip)
+
+# Architecture-specific sources and checksums
+source_x86_64=("${pkgname}-${pkgver}-x64.tar.gz::${url}/releases/download/v${pkgver}/omnirush-linux-x64-${pkgver}.tar.gz")
+sha256sums_x86_64=('0000000000000000000000000000000000000000000000000000000000000000')
+
+source_aarch64=("${pkgname}-${pkgver}-arm64.tar.gz::${url}/releases/download/v${pkgver}/omnirush-linux-arm64-${pkgver}.tar.gz")
+sha256sums_aarch64=('0000000000000000000000000000000000000000000000000000000000000000')
+
+package() {
+  cd "${srcdir}"
+
+  local bundle_dir
+  case "${CARCH}" in
+    x86_64)
+      bundle_dir="omnirush-linux-x64-${pkgver}"
+      ;;
+    aarch64)
+      bundle_dir="omnirush-linux-arm64-${pkgver}"
+      ;;
+    *)
+      echo "Unsupported architecture: ${CARCH}" >&2
+      return 1
+      ;;
+  esac
+
+  install -d "${pkgdir}/opt/omnirush"
+  cp -a "${bundle_dir}/." "${pkgdir}/opt/omnirush/"
+
+  install -d "${pkgdir}/usr/bin"
+  ln -s /opt/omnirush/@omnirushdesktop "${pkgdir}/usr/bin/omnirush"
+
+  install -Dm644 "${pkgdir}/opt/omnirush/resources/app-dist/omnirush-logo-square.svg" \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/omnirush.svg"
+
+  install -d "${pkgdir}/usr/share/applications"
+  cat > "${pkgdir}/usr/share/applications/omnirush.desktop" <<'EOF'
+[Desktop Entry]
+Name=OmniRush.ai
+Comment=Run agents, skills, and MCP workflows
+Exec=omnirush %U
+Terminal=false
+Type=Application
+Icon=omnirush
+StartupWMClass=OmniRush.ai
+Categories=Development;Utility;
+MimeType=x-scheme-handler/omnirush;
+EOF
+
+  chmod 4755 "${pkgdir}/opt/omnirush/chrome-sandbox"
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@omnirush/env",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./eval-engine": {
+      "types": "./src/eval-engine.ts",
+      "development": "./src/eval-engine.ts",
+      "default": "./src/eval-engine.ts"
+    }
+  },
+  "dependencies": {
+    "@omnirush/behaviors": "workspace:*",
+    "@omnirush/cdp": "workspace:*",
+    "@omnirush/hosts": "workspace:*",
+    "@omnirush/labs": "workspace:*",
+    "@omnirush/world": "link:../../../packages/world",
+    "mysql2": "^3.11.3"
+  }
+}
