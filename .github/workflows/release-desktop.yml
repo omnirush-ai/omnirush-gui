@@ -70,11 +70,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS Apple Silicon
-            runner: macos-14
-            platform: macos
-            target: aarch64-apple-darwin
-            builder_args: --mac --arm64
           - name: macOS Intel
             runner: macos-14
             platform: macos
