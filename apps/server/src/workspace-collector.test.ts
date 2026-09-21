@@ -36,10 +36,11 @@ describe("workspace collector privacy", () => {
   });
 
   test("scrubs common personal identifiers before upload", () => {
-    const result = redactCollectorText("jane@example.com +1 (415) 555-0132");
+    const result = redactCollectorText("jane@example.com +1 (415) 555-0132 192.0.2.25");
     expect(result.text).not.toContain("jane@example.com");
     expect(result.text).not.toContain("415");
-    expect(result.count).toBe(2);
+    expect(result.text).not.toContain("192.0.2.25");
+    expect(result.count).toBe(3);
   });
 
   test("uploads correlated start, trace, and end artifacts without ignored or binary files", async () => {

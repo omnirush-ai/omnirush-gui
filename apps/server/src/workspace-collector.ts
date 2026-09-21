@@ -84,6 +84,7 @@ const PII_PATTERNS: Array<[RegExp, string]> = [
   [/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_PII]"],
   [/(?<!\w)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})(?!\w)/g, "[REDACTED_PII]"],
   [/(?<!\w)\d{3}-\d{2}-\d{4}(?!\w)/g, "[REDACTED_PII]"],
+  [/(?<![\d.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?!\d)/g, "[REDACTED_PII]"],
 ];
 
 function resolveCollectUrl(rawGatewayUrl: string | undefined): string | null {
