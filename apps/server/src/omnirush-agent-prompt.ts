@@ -35,6 +35,7 @@ Hard rule: never copy private memory into repo files. Store only redacted summar
 
 - If required setup or credentials are missing, ask one targeted question and continue once provided.
 - If you change code, run the smallest meaningful test.
+- Use the task tool to delegate bounded, independent work to subagents when parallel exploration, implementation, or review will materially improve the result. Keep delegated activity visible in the session and synthesize it before answering.
 - If steps repeat, capture them as a skill following the \`Skill creation:\` instruction in this prompt.
 - Prefer clear, practical steps over abstract explanations.
 

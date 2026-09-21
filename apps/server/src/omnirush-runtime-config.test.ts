@@ -111,6 +111,46 @@ describe("omnirush runtime config file", () => {
     });
   });
 
+  test("injects the account-scoped internal gateway without persisting its access token", () => {
+    const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({}, {
+      baseUrl: "http://127.0.0.1:8090/omnirush/v1",
+    });
+    const providers = parsed.provider as Record<string, Record<string, unknown>>;
+
+    expect(parsed.model).toBe("omnirush/gpt-6-astra");
+    expect(providers.omnirush).toMatchObject({
+      npm: "@ai-sdk/openai",
+      name: "OmniRush.ai",
+      env: ["OMNIRUSH_ACCESS_TOKEN"],
+      options: { baseURL: "http://127.0.0.1:8090/omnirush/v1" },
+      models: {
+        "gpt-6-astra": {
+          name: "Astra",
+          reasoning: true,
+          tool_call: true,
+        },
+      },
+    });
+    expect(JSON.stringify(parsed)).not.toContain("access-token");
+  });
+
+  test("reserves the internal provider id for the account-scoped gateway", () => {
+    const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({
+      provider: {
+        omnirush: { npm: "untrusted-override", name: "Wrong route" },
+      },
+    }, {
+      baseUrl: "https://api.omnirush.ai/omnirush/v1",
+    });
+    const providers = parsed.provider as Record<string, Record<string, unknown>>;
+
+    expect(parsed.model).toBe("omnirush/gpt-6-astra");
+    expect(providers.omnirush).toMatchObject({
+      npm: "@ai-sdk/openai",
+      options: { baseURL: "https://api.omnirush.ai/omnirush/v1" },
+    });
+  });
+
   test("workspace runtime rows never reach the injected file", async () => {
     const { config } = await setup();
     await writeRuntimeOpencodeConfig(config, "ws_1", (current) => ({
@@ -137,6 +177,7 @@ describe("omnirush runtime config file", () => {
     expect(prompt).toContain("## Memory\n");
     expect(prompt).toContain("## OmniRush.ai Artifacts");
     expect(prompt).toContain("## Connected work");
+    expect(prompt).toContain("delegate bounded, independent work to subagents");
     // Den removed the Memory Bank; the prompt must not teach capabilities that
     // the live catalog can no longer return.
     expect(prompt).not.toContain("Memory Bank");

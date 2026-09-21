@@ -43,6 +43,56 @@ import {
 import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
 
+const INTERNAL_PROVIDER_ID = "omnirush";
+const INTERNAL_MODEL_ID = "gpt-6-astra";
+
+type InternalGatewayRuntime = {
+  baseUrl: string;
+};
+
+function resolveInternalGatewayRuntime(
+  env: NodeJS.ProcessEnv = process.env,
+): InternalGatewayRuntime | undefined {
+  const baseUrl = env.OMNIRUSH_GATEWAY_URL?.trim().replace(/\/+$/, "");
+  const accessToken = env.OMNIRUSH_ACCESS_TOKEN?.trim();
+  if (!baseUrl || !accessToken) return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname))) {
+    return undefined;
+  }
+  return { baseUrl: url.toString().replace(/\/$/, "") };
+}
+
+function internalGatewayProvider(runtime: InternalGatewayRuntime): Record<string, unknown> {
+  return {
+    // The native OpenAI provider uses the Responses API, which preserves
+    // reasoning summaries, tool calls, and delegated task events. The generic
+    // compatibility provider only emits /chat/completions and loses those
+    // Astra capabilities.
+    npm: "@ai-sdk/openai",
+    name: "OmniRush.ai",
+    env: ["OMNIRUSH_ACCESS_TOKEN"],
+    options: { baseURL: runtime.baseUrl },
+    models: {
+      [INTERNAL_MODEL_ID]: {
+        name: "Astra",
+        reasoning: true,
+        tool_call: true,
+        structured_output: true,
+        temperature: true,
+        limit: { context: 400_000, output: 128_000 },
+        modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+      },
+    },
+  };
+}
+
 export async function buildOmniRushRuntimeConfigObject(
   config?: ServerConfig,
 ): Promise<Record<string, unknown>> {
@@ -52,18 +102,30 @@ export async function buildOmniRushRuntimeConfigObject(
   // engine-pool fingerprint. Per-workspace MCPs reach the engine through the
   // dynamic push path instead.
   const runtimeConfig = config ? await readGlobalRuntimeOpencodeConfig(config) : {};
-  return buildOmniRushRuntimeConfigObjectFromSnapshot(runtimeConfig);
+  return buildOmniRushRuntimeConfigObjectFromSnapshot(
+    runtimeConfig,
+    resolveInternalGatewayRuntime(),
+  );
 }
 
 export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   runtimeConfig: RuntimeOpencodeConfig,
+  internalGateway?: InternalGatewayRuntime,
 ): Record<string, unknown> {
   const disabledProviders = runtimeDisabledProviderList(runtimeConfig);
   const permissions = legacyExecutionPermissions(runtimeConfig.managedPolicy?.execution);
   const { managedPolicy: _managedPolicy, ...engineConfig } = runtimeConfig;
-  const provider = runtimeProviderMap(runtimeConfig);
+  const provider = {
+    ...runtimeProviderMap(runtimeConfig),
+    ...(internalGateway
+      ? { [INTERNAL_PROVIDER_ID]: internalGatewayProvider(internalGateway) }
+      : {}),
+  };
   return {
     ...engineConfig,
+    ...(internalGateway
+      ? { model: `${INTERNAL_PROVIDER_ID}/${INTERNAL_MODEL_ID}` }
+      : {}),
     ...(runtimeConfig.managedPolicy?.allowCustomProviders === false ? { enabled_providers: [
       ...Object.keys(provider).filter((id) => /^(?:lpr_|omnirush$)/i.test(id)),
       ...(runtimeConfig.managedPolicy.allowZenModel !== false ? ["opencode"] : []),
