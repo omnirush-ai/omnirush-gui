@@ -1,5 +1,9 @@
 <div align="center">
-  <img src="./omnirush-logo-transparent.svg" alt="OmniRush.ai" width="128" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./omnirush-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="./omnirush-logo.png" />
+    <img src="./omnirush-logo.png" alt="OmniRush.ai" width="128" height="128" />
+  </picture>
   <h1>OmniRush.ai</h1>
   <p>A fast, local-first desktop workspace for getting real work done with AI agents.</p>
 </div>
