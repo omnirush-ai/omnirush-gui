@@ -237,11 +237,11 @@ test("first-launch bootstrap creates and selects the chat folder, but ordinary r
 
     const state = await store.readWorkspaceState();
     assert.equal(state.workspaces.length, 0);
-    await assert.rejects(readFile(path.join(userData, "omnirush-dev-data", "home", "OmniRush.ai Chat", ".opencode", "omnirush.json"), "utf8"));
+    await assert.rejects(readFile(path.join(userData, "omnirush-dev-data", "home", "omnirush.ai", ".opencode", "omnirush.json"), "utf8"));
 
     await store.bootstrapFirstLaunchWorkspace();
     const created = await store.readWorkspaceState();
-    const folder = path.join(userData, "omnirush-dev-data", "home", "OmniRush.ai Chat");
+    const folder = path.join(userData, "omnirush-dev-data", "home", "omnirush.ai");
     assert.equal(created.workspaces.length, 1);
     assert.equal(created.workspaces[0].path, folder);
     assert.equal(created.workspaces[0].workspaceType, "local");
@@ -261,7 +261,7 @@ test("first-launch bootstrap creates and selects the chat folder, but ordinary r
 
 test("first-launch bootstrap preserves existing folders and their model configuration", async () => {
   await withIsolatedBootstrapStore(async ({ store, root }) => {
-    const folder = path.join(root, "home", "OmniRush.ai Chat");
+    const folder = path.join(root, "home", "omnirush.ai");
     const config = { version: 1, authorizedRoots: [folder], workspace: { name: "Existing chat" } };
     await store.writeWorkspaceOmniRushConfig(folder, config);
     const modelConfigPath = path.join(folder, "opencode.json");
@@ -277,7 +277,7 @@ test("first-launch bootstrap preserves existing folders and their model configur
 
 test("a blocked default folder reports the error and allows a different authorized workspace", async () => {
   await withIsolatedBootstrapStore(async ({ store, root }) => {
-    const folder = path.join(root, "home", "OmniRush.ai Chat");
+    const folder = path.join(root, "home", "omnirush.ai");
     await mkdir(path.dirname(folder), { recursive: true });
     await writeFile(folder, "keep this file", "utf8");
 
@@ -299,7 +299,7 @@ test("a non-writable default folder reports a recoverable permission error", {
   skip: process.platform === "win32" || process.getuid?.() === 0,
 }, async () => {
   await withIsolatedBootstrapStore(async ({ store, root }) => {
-    const folder = path.join(root, "home", "OmniRush.ai Chat");
+    const folder = path.join(root, "home", "omnirush.ai");
     await mkdir(folder, { recursive: true });
     await chmod(folder, 0o500);
     try {

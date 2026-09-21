@@ -156,7 +156,7 @@ export const workspaceLabel = (workspace: WorkspaceInfo) => {
     workspace.name?.trim() ||
     workspace.path?.trim() ||
     t("workspace_list.workspace_fallback");
-  return label === "OmniRush.ai Chat" ? "OmniRush.ai Chat" : label;
+  return /^(?:OmniRush\.ai Chat|omnirush\.ai)$/i.test(label) ? "omnirush.ai" : label;
 };
 
 export const workspaceKindLabel = (workspace: WorkspaceInfo) =>

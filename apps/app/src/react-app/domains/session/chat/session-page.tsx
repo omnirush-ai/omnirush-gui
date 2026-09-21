@@ -299,7 +299,7 @@ function workspaceTitleForId(groups: WorkspaceSessionGroup[], workspaceId: strin
     || workspace?.name?.trim()
     || workspace?.path?.trim()
     || workspaceId;
-  return title === "OmniRush.ai Chat" ? "OmniRush.ai Chat" : title;
+  return /^(?:OmniRush\.ai Chat|omnirush\.ai)$/i.test(title) ? "omnirush.ai" : title;
 }
 
 function WorkbenchPaneHeader(props: {
@@ -932,7 +932,9 @@ export function SessionPage(props: SessionPageProps) {
     props.selectedWorkspaceDisplay.displayName?.trim() ||
     props.selectedWorkspaceDisplay.name?.trim() ||
     t("session.workspace_fallback");
-  const workspaceName = workspaceNameRaw === "OmniRush.ai Chat" ? "OmniRush.ai Chat" : workspaceNameRaw;
+  const workspaceName = /^(?:OmniRush\.ai Chat|omnirush\.ai)$/i.test(workspaceNameRaw)
+    ? "omnirush.ai"
+    : workspaceNameRaw;
   useEffect(() => {
     if (pendingConversationHistoryNavigation) {
       if (

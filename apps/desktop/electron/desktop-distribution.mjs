@@ -1,6 +1,6 @@
 export const PUBLIC_DESKTOP_DISTRIBUTION = Object.freeze({
   flavor: "public",
-  appName: "OmniRush.ai",
+  appName: "omnirush.ai",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: false,
@@ -9,7 +9,7 @@ export const PUBLIC_DESKTOP_DISTRIBUTION = Object.freeze({
 
 export const CLOUD_DESKTOP_DISTRIBUTION = Object.freeze({
   flavor: "cloud",
-  appName: "OmniRush.ai Cloud",
+  appName: "omnirush.ai Cloud",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: true,
@@ -18,7 +18,7 @@ export const CLOUD_DESKTOP_DISTRIBUTION = Object.freeze({
 
 export const ENTERPRISE_DESKTOP_DISTRIBUTION = Object.freeze({
   flavor: "enterprise",
-  appName: "OmniRush.ai Enterprise",
+  appName: "omnirush.ai Enterprise",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: true,

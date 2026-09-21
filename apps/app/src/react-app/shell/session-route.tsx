@@ -3152,7 +3152,7 @@ export function SessionRoute() {
       handleOpenCreateWorkspace();
       throw new Error("Choose a workspace before sending this message.");
     }
-    const folder = await joinDesktopPath(home, "OmniRush.ai Chat").catch(() => "");
+    const folder = await joinDesktopPath(home, "omnirush.ai").catch(() => "");
     if (!folder) {
       handleOpenCreateWorkspace();
       throw new Error("Choose a workspace before sending this message.");

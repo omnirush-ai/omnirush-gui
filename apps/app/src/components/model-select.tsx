@@ -118,11 +118,16 @@ function useModelOptions(
         }),
       );
 
-    return filterEntitledModelOptions(filterCloudManagedModelOptions(
-      mergeModelOptions(options, fallbackOptions).filter((option) =>
-        isSupportedModelProvider(option.providerID)),
-      cloudProvidersEnabled,
-    ), {
+    const mergedOptions = mergeModelOptions(options, fallbackOptions).filter((option) =>
+      isSupportedModelProvider(option.providerID));
+    const visibleOptions = cloudProvidersEnabled
+      ? mergedOptions
+      : mergeModelOptions(
+          options.filter((option) => option.providerID.trim().toLowerCase() === "omnirush"),
+          filterCloudManagedModelOptions(mergedOptions, false),
+        );
+
+    return filterEntitledModelOptions(visibleOptions, {
       restrictToCloud,
       checkRestriction: checkDesktopRestriction,
     });
@@ -302,6 +307,17 @@ export function ModelSelect({
       modelID: option.modelID,
     }),
   );
+  const selectedModelTitle = selectedOption?.title ?? resolveModelDisplayName(value.modelID);
+  const selectedProviderTitle = selectedOption?.description
+    ?? resolveModelProviderDisplayName(value.providerID, value.modelID);
+  // The first-party desktop route is authenticated by the native OmniRush
+  // account, not the separate Den/cloud session. Never hide a valid local
+  // OmniRush selection merely because the latter is signed out.
+  const selectedValueHidden = hideValue || (
+    !denAuth.isSignedIn
+    && isCloudManagedProviderKey(value.providerID)
+    && value.providerID.trim().toLowerCase() !== "omnirush"
+  );
 
   const optionsByKey = React.useMemo(
     () => new Map(modelOptions.map((option) => [modelRefKey(option), option])),
@@ -435,10 +451,13 @@ export function ModelSelect({
         >
           <span className="flex min-w-0 max-w-56 items-center gap-1.5">
             <span className="truncate">
-              {hideValue || (!denAuth.isSignedIn && isCloudManagedProviderKey(value.providerID))
+              {selectedValueHidden || !value.modelID
                 ? "Select model"
-                : (selectedOption?.title ?? value.modelID ?? "Select model")}
+                : selectedModelTitle}
             </span>
+            {!selectedValueHidden && value.modelID && selectedProviderTitle ? (
+              <span className="hidden shrink-0 text-xs text-gray-9 sm:inline">· {selectedProviderTitle}</span>
+            ) : null}
             {showBehavior ? (
               <span className="shrink-0 text-gray-9">· {effectiveBehaviorLabel}</span>
             ) : null}

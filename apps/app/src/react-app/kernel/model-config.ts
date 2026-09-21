@@ -155,6 +155,12 @@ export function readStoredDefaultModel(): ModelRef {
   try {
     const stored = window.localStorage.getItem(MODEL_PREF_KEY);
     const parsed = parseModelRef(stored);
+    // Public OmniRush releases previously persisted a retired managed model.
+    // Keep external provider choices, but migrate the built-in route to Astra.
+    if (parsed?.providerID === "omnirush" && parsed.modelID !== DEFAULT_MODEL.modelID) {
+      writeStoredDefaultModel(DEFAULT_MODEL);
+      return DEFAULT_MODEL;
+    }
     return parsed && isSupportedModelProvider(parsed.providerID) ? parsed : DEFAULT_MODEL;
   } catch {
     return DEFAULT_MODEL;

@@ -89,6 +89,8 @@ describe("model behavior options", () => {
   });
 
   test("keeps model and provider identities truthful", () => {
+    expect(resolveModelDisplayName("gpt-6-astra", "GPT-6 Astra")).toBe("GPT 6 Astra");
+    expect(resolveModelProviderDisplayName("omnirush", "gpt-6-astra")).toBe("omnirush.ai");
     expect(resolveModelDisplayName("gpt-5.6-sol", "GPT-5.6 Sol")).toBe("GPT-5.6 Sol");
     expect(resolveModelDisplayName("gpt-5.6-terra", "GPT-5.6 Terra")).toBe("GPT-5.6 Terra");
     expect(resolveModelDisplayName("claude-sonnet-4", "Claude Sonnet 4")).toBe("Claude Sonnet 4");

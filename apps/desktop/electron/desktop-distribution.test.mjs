@@ -15,7 +15,7 @@ describe("resolveDesktopDistribution", () => {
   it("brands the local public desktop build as OmniRush.ai", () => {
     assert.deepEqual(PUBLIC_DESKTOP_DISTRIBUTION, {
       flavor: "public",
-      appName: "OmniRush.ai",
+      appName: "omnirush.ai",
       appIdentifier: "ai.omnirush.desktop",
       protocolScheme: "omnirush",
       requireSignin: false,
@@ -32,7 +32,7 @@ describe("resolveDesktopDistribution", () => {
       }),
       {
         flavor: "cloud",
-        appName: "OmniRush.ai Cloud",
+        appName: "omnirush.ai Cloud",
         appIdentifier: "ai.omnirush.desktop",
         protocolScheme: "omnirush",
         requireSignin: true,
@@ -50,7 +50,7 @@ describe("resolveDesktopDistribution", () => {
 
     assert.deepEqual(distribution, {
       flavor: "enterprise",
-      appName: "OmniRush.ai Enterprise",
+      appName: "omnirush.ai Enterprise",
       appIdentifier: "ai.omnirush.desktop",
       protocolScheme: "omnirush",
       requireSignin: true,

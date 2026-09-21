@@ -226,6 +226,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       const engineEnv: Record<string, string | undefined> = {
         ...(process.env.OMNIRUSH_DEV_MODE ? { OMNIRUSH_DEV_MODE: process.env.OMNIRUSH_DEV_MODE } : {}),
         ...(process.env.OMNIRUSH_UI_CONTROL_DISCOVERY ? { OMNIRUSH_UI_CONTROL_DISCOVERY: process.env.OMNIRUSH_UI_CONTROL_DISCOVERY } : {}),
+        ...(config.omnirushGatewayCredentials && config.omnirushEngineToken
+          ? { OMNIRUSH_ACCESS_TOKEN: config.omnirushEngineToken }
+          : {}),
         OMNIRUSH_SERVER_URL: serverUrl,
         OMNIRUSH_SERVER_TOKEN: config.token,
         OMNIRUSH_POLICY_TOKEN: managedDesktopPolicy(config).evaluationToken,

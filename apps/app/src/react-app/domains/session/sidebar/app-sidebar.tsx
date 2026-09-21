@@ -29,13 +29,15 @@ import {
   FolderOpen,
   SquarePen,
   Tag,
+  UserRound,
   X,
   Workflow,
 } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
 import { getDisplaySessionTitle } from "../../../../app/lib/session-title";
-import type { WorkspaceInfo } from "../../../../app/lib/desktop";
+import { omnirushAccountStatus, type WorkspaceInfo } from "../../../../app/lib/desktop";
+import { isDesktopRuntime } from "../../../../app/lib/runtime-env";
 import { OmniRushDenHelpLink } from "../../workspace/omnirush-den-help-link";
 import { NotificationBell } from "../../../shell/notification-center";
 import { useUiStateStore } from "../../../shell/ui-state-store";
@@ -955,6 +957,107 @@ export type AppSidebarProps = {
   status: Omit<AccountStatusMenuProps, "onOpenAccountSettings">;
 };
 
+type NativeAccountStatus = Awaited<ReturnType<typeof omnirushAccountStatus>>;
+
+function OmniRushWordmark({ className }: { className?: string }) {
+  return (
+    <span className={className} aria-label="omnirush.ai">
+      <span>omnirush</span><span className="text-[#b9f45a]">.ai</span>
+    </span>
+  );
+}
+
+function compactTokenCount(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.max(0, value));
+}
+
+function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings: () => void }) {
+  const [status, setStatus] = React.useState<NativeAccountStatus | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void omnirushAccountStatus()
+        .then((next) => { if (active) setStatus(next); })
+        .catch(() => { if (active) setStatus({ connected: false, gatewayConfigured: false }); });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  const connected = status?.connected === true;
+  const accountLabel = connected
+    ? status?.displayName?.trim() || status?.email?.trim() || "Your account"
+    : "sign in to omnirush.ai";
+  const usage = connected ? status?.usage : null;
+  const usagePercent = usage && usage.tokenLimit > 0
+    ? Math.min(100, Math.max(0, (usage.usedTokens / usage.tokenLimit) * 100))
+    : 0;
+  const accountDetail = usage
+    ? `${compactTokenCount(usage.remainingTokens)} tokens left today`
+    : connected
+      ? "Astra ready"
+      : status?.reauthorizationRequired
+        ? "Sign in again to continue"
+        : "Use Astra with your account";
+
+  return (
+    <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            type="button"
+            className="h-auto min-h-12 py-1.5"
+            onClick={onOpenAccountSettings}
+            tooltip={connected ? accountLabel : "Sign in to omnirush.ai"}
+            aria-label={connected ? `${accountLabel} account` : "Sign in to omnirush.ai"}
+            data-testid="native-account-profile"
+          >
+            <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-accent">
+              <UserRound className="size-3.5" />
+              <span
+                className={cn(
+                  "absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-sidebar",
+                  connected ? "bg-[#b9f45a]" : "bg-muted-foreground/50",
+                )}
+              />
+            </span>
+            <span className="min-w-0 flex-1 text-left">
+              <span className="block truncate text-xs font-medium">{accountLabel}</span>
+              <span className="block truncate text-[10.5px] text-muted-foreground">
+                {accountDetail}
+              </span>
+              {usage ? (
+                <span className="mt-1 block h-0.5 overflow-hidden rounded-full bg-sidebar-border" aria-hidden="true">
+                  <span className="block h-full rounded-full bg-[#b9f45a]" style={{ width: `${usagePercent}%` }} />
+                </span>
+              ) : null}
+            </span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            type="button"
+            onClick={onOpenAccountSettings}
+            tooltip="Settings"
+            aria-label="Settings"
+          >
+            <Settings className="size-4" />
+            <span>Settings</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    </SidebarFooter>
+  );
+}
+
 function isSessionActivityStatus(status: string | undefined): status is SessionActivityStatus {
   return status === "idle" || status === "thinking" || status === "responding" || status === "error" || status === "compacting" || status === "waiting";
 }
@@ -1137,7 +1240,11 @@ export function AppSidebar(props: AppSidebarProps) {
         ) : (
           <div data-sidebar-brand className="flex h-11 shrink-0 items-center gap-2 px-4 mac:titlebar-drag">
             <img src={resolveExtensionIconSrc("/omnirush-mark.png")} alt="" className="size-5 shrink-0 object-contain dark:invert" />
-            <span className="truncate text-[15px] font-medium tracking-[-0.4px]" title={brandAppName}>{brandAppName}</span>
+            {brandAppName.toLowerCase() === "omnirush.ai" ? (
+              <OmniRushWordmark className="truncate text-[15px] font-medium tracking-[-0.4px]" />
+            ) : (
+              <span className="truncate text-[15px] font-medium tracking-[-0.4px]" title={brandAppName}>{brandAppName}</span>
+            )}
           </div>
         )}
         {props.conversationHistory ? (
@@ -1345,21 +1452,11 @@ export function AppSidebar(props: AppSidebarProps) {
           <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
             <AccountStatusMenu {...props.status} onOpenAccountSettings={props.onOpenAccountSettings} />
           </SidebarFooter>
+        ) : props.onOpenAccountSettings && isDesktopRuntime() ? (
+          <NativeAccountFooter onOpenAccountSettings={props.onOpenAccountSettings} />
         ) : props.onOpenAccountSettings ? (
           <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  type="button"
-                  onClick={props.onOpenAccountSettings}
-                  tooltip="Settings"
-                  aria-label="Settings"
-                >
-                  <Settings className="size-4" />
-                  <span>Settings</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
+            <SidebarMenu><SidebarMenuItem><SidebarMenuButton type="button" onClick={props.onOpenAccountSettings} tooltip="Settings" aria-label="Settings"><Settings className="size-4" /><span>Settings</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu>
           </SidebarFooter>
         ) : null}
 

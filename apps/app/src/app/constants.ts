@@ -20,7 +20,7 @@ export const HIDE_TITLEBAR_PREF_KEY = "omnirush.hideTitlebar";
 
 export const DEFAULT_MODEL: ModelRef = {
   providerID: "omnirush",
-  modelID: "z-ai/glm-5.2",
+  modelID: "gpt-6-astra",
 };
 
 export const SUGGESTED_PLUGINS: SuggestedPlugin[] = [];

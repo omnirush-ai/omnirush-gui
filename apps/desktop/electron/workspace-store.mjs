@@ -927,7 +927,7 @@ export function createWorkspaceStore({
     const home = process.env.OMNIRUSH_DEV_MODE === "1" && process.env.OMNIRUSH_DEV_SHARED_STATE !== "1"
       ? path.join(app.getPath("userData"), "omnirush-dev-data", "home")
       : os.homedir();
-    const folderPath = await normalizeLocalWorkspacePath(path.join(home, "OmniRush.ai Chat"));
+    const folderPath = await normalizeLocalWorkspacePath(path.join(home, "omnirush.ai"));
     try {
       await createWorkspace({ folderPath });
       return null;

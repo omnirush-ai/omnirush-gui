@@ -5,6 +5,7 @@ declare const expect: (value: unknown) => {
 };
 
 import {
+  DEFAULT_MODEL,
   OMNIRUSH_EXTENSION_CATALOG,
   filterOmniRushExtensionCatalogForPlatform,
   resolveOmniRushExtensionCatalogPlatform,
@@ -16,6 +17,10 @@ function filteredIds(platform: "darwin" | "linux" | "windows" | "web") {
 }
 
 describe("OmniRush.ai extension catalog platform filter", () => {
+  test("defaults new conversations to the internal Astra route", () => {
+    expect(DEFAULT_MODEL).toEqual({ providerID: "omnirush", modelID: "gpt-6-astra" });
+  });
+
   test("resolves browser runtime to web and desktop runtime to OS", () => {
     expect(resolveOmniRushExtensionCatalogPlatform("web", "macos")).toEqual("web");
     expect(resolveOmniRushExtensionCatalogPlatform("desktop", "macos")).toEqual("darwin");

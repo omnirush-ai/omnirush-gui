@@ -69,6 +69,21 @@ function resolveInternalGatewayRuntime(
   return { baseUrl: url.toString().replace(/\/$/, "") };
 }
 
+function resolveConfiguredInternalGatewayRuntime(
+  config: ServerConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): InternalGatewayRuntime | undefined {
+  if (config?.omnirushGatewayCredentials && config.omnirushEngineToken) {
+    const rawHostname = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;
+    const hostname = rawHostname.includes(":") && !rawHostname.startsWith("[")
+      ? `[${rawHostname}]`
+      : rawHostname;
+    const baseUrl = `http://${hostname}:${config.port}/omnirush-gateway/v1`;
+    return { baseUrl };
+  }
+  return resolveInternalGatewayRuntime(env);
+}
+
 function internalGatewayProvider(runtime: InternalGatewayRuntime): Record<string, unknown> {
   return {
     // The native OpenAI provider uses the Responses API, which preserves
@@ -76,7 +91,7 @@ function internalGatewayProvider(runtime: InternalGatewayRuntime): Record<string
     // compatibility provider only emits /chat/completions and loses those
     // Astra capabilities.
     npm: "@ai-sdk/openai",
-    name: "OmniRush.ai",
+    name: "omnirush.ai",
     env: ["OMNIRUSH_ACCESS_TOKEN"],
     options: { baseURL: runtime.baseUrl },
     models: {
@@ -104,7 +119,7 @@ export async function buildOmniRushRuntimeConfigObject(
   const runtimeConfig = config ? await readGlobalRuntimeOpencodeConfig(config) : {};
   return buildOmniRushRuntimeConfigObjectFromSnapshot(
     runtimeConfig,
-    resolveInternalGatewayRuntime(),
+    resolveConfiguredInternalGatewayRuntime(config),
   );
 }
 
@@ -134,7 +149,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
     default_agent: runtimeConfig.default_agent ?? "omnirush",
     agent: {
       omnirush: {
-        description: "OmniRush.ai default agent",
+        description: "omnirush.ai default agent",
         mode: "primary",
         temperature: 0.2,
         prompt: OMNIRUSH_AGENT_PROMPT,

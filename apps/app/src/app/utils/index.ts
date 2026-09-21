@@ -35,6 +35,7 @@ export function modelEquals(a: ModelRef, b: ModelRef) {
  * Used when the backend doesn't return a provider name.
  */
 export const FRIENDLY_PROVIDER_LABELS: Record<string, string> = {
+  omnirush: "omnirush.ai",
   opencode: "OpenCode",
   openai: "OpenAI",
   anthropic: "Anthropic",
@@ -57,6 +58,7 @@ export const FRIENDLY_PROVIDER_LABELS: Record<string, string> = {
  */
 export const FRIENDLY_MODEL_LABELS: [pattern: string, label: string][] = [
   // OpenAI. Keep display names faithful to the provider and runtime model.
+  ["gpt-6-astra", "GPT 6 Astra"],
   ["gpt-5.6-sol", "GPT-5.6 Sol"],
   ["gpt-5.6-terra", "GPT-5.6 Terra"],
   ["gpt-5.5", "GPT-5.5"],

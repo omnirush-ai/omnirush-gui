@@ -1924,9 +1924,13 @@ export function createRuntimeManager({
     // Inject user env vars so the server and managed OpenCode inherit them.
     const serverEnv = await buildChildEnv({});
     Object.assign(process.env, serverEnv);
-    if (gatewayCredentials) {
-      // The refresh grant belongs to the Electron account store and loopback
-      // broker. Never let it flow into the managed OpenCode child or plugins.
+    if (omnirushGatewayCredentials) {
+      // The desktop account store is authoritative. Clear inherited or stale
+      // account variables before every restart so sign-out cannot recreate a
+      // broker from process-global credentials. Current credentials are passed
+      // directly to the embedded server below and never reach OpenCode.
+      delete process.env.OMNIRUSH_GATEWAY_URL;
+      delete process.env.OMNIRUSH_ACCESS_TOKEN;
       delete process.env.OMNIRUSH_REFRESH_TOKEN;
     }
 

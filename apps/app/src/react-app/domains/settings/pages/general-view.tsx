@@ -26,6 +26,8 @@ export type GeneralSettingsViewProps = {
   developerMode: boolean;
 };
 
+type NativeAccountStatus = Awaited<ReturnType<typeof omnirushAccountStatus>>;
+
 type SettingsCardDefinition = { tab: SettingsTab; icon: typeof Sparkles } & (
   | { title: string; desc: string }
   | { titleKey: string; descKey: string }
@@ -76,8 +78,15 @@ function SettingsCard(props: {
   );
 }
 
+function compactTokenCount(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.max(0, value));
+}
+
 export function GeneralSettingsView(props: GeneralSettingsViewProps) {
-  const [account, setAccount] = useState<{ connected: boolean; gatewayConfigured: boolean } | null>(null);
+  const [account, setAccount] = useState<NativeAccountStatus | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
 
@@ -92,7 +101,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
     try {
       await omnirushAccountConnect();
       setAccount(await omnirushAccountStatus());
-      setAccountMessage("Account connected. Astra routing is ready.");
+      setAccountMessage("Account connected. Astra is ready.");
     } catch (error) {
       setAccountMessage(error instanceof Error ? error.message : "The account could not be connected.");
     } finally {
@@ -116,7 +125,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
       {isElectronRuntime() && account && (
         <div className="space-y-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
-            OmniRush account
+            Account
           </div>
           <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
@@ -124,15 +133,30 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
             </div>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-medium text-dls-text">
-                {account.connected ? "Connected" : "Connect your account"}
+                {account.connected ? account.displayName || account.email || "Connected" : "Sign in to your account"}
               </div>
-              <div className="text-[11px] text-dls-secondary">
+              {account.connected && account.email ? (
+                <div className="truncate text-[11px] text-dls-secondary">{account.email}</div>
+              ) : null}
+              <div className="mt-0.5 text-[11px] text-dls-secondary">
                 {accountMessage || (account.connected
-                  ? "Secure model access and usage are linked to this Mac."
+                  ? account.usage
+                    ? `${compactTokenCount(account.usage.remainingTokens)} of ${compactTokenCount(account.usage.tokenLimit)} tokens left today`
+                    : "Astra is ready on this Mac."
                   : account.gatewayConfigured
-                    ? "Sign in in your browser, then return here."
-                    : "The OmniRush account service has not been configured for this build.")}
+                    ? account.reauthorizationRequired
+                      ? "Your session expired. Sign in again to continue."
+                      : "Sign in in your browser, then return here."
+                    : "The omnirush.ai account service has not been configured for this build.")}
               </div>
+              {account.connected && account.usage?.tokenLimit ? (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-dls-hover" aria-label={`${account.usage.usedTokens} tokens used today`}>
+                  <div
+                    className="h-full rounded-full bg-[#b9f45a]"
+                    style={{ width: `${Math.min(100, Math.max(0, (account.usage.usedTokens / account.usage.tokenLimit) * 100))}%` }}
+                  />
+                </div>
+              ) : null}
             </div>
             {account.connected ? (
               <button type="button" disabled={accountBusy} onClick={() => void signOutAccount()} className="rounded-lg border border-dls-border px-3 py-2 text-[12px] text-dls-secondary hover:bg-dls-hover disabled:opacity-50">
@@ -140,7 +164,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
               </button>
             ) : (
               <button type="button" disabled={accountBusy || !account.gatewayConfigured} onClick={() => void connectAccount()} className="rounded-lg bg-dls-text px-3 py-2 text-[12px] font-medium text-dls-bg disabled:opacity-50">
-                {accountBusy ? "Waiting…" : "Connect"}
+                {accountBusy ? "Waiting…" : "Sign in"}
               </button>
             )}
           </div>

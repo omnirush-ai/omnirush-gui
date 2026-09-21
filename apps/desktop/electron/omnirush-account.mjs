@@ -38,6 +38,48 @@ function validCredentials(value) {
   return { gatewayUrl, accessToken, refreshToken };
 }
 
+function controlPlaneBase(gatewayUrl) {
+  const base = new URL(gatewayUrl);
+  base.pathname = base.pathname.replace(/\/+$/, "").replace(/\/v1$/, "");
+  return base;
+}
+
+function displayNameFromEmail(email) {
+  const localPart = String(email).split("@", 1)[0] ?? "";
+  const withoutCommonPrefix = localPart.replace(/^i[._-]?am(?=[a-z])/i, "");
+  const words = withoutCommonPrefix
+    .replace(/\d+$/, "")
+    .replace(/[._-]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return null;
+  return words
+    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(" ");
+}
+
+function accountProfile(value) {
+  if (!value || typeof value !== "object") return null;
+  const email = normalizeCredential(value.email);
+  if (!email) return null;
+  const usage = value.usage && typeof value.usage === "object"
+    ? {
+        tokenLimit: Number(value.usage.token_limit) || 0,
+        usedTokens: Number(value.usage.used_tokens) || 0,
+        remainingTokens: Number(value.usage.remaining_tokens) || 0,
+      }
+    : null;
+  return {
+    email,
+    displayName: normalizeCredential(value.display_name) ?? displayNameFromEmail(email),
+    status: normalizeCredential(value.status),
+    usage,
+  };
+}
+
+class InvalidAccountCredentialsError extends Error {}
+
 async function readMacKeychain(service, platform) {
   if (platform !== "darwin") return null;
   try {
@@ -131,12 +173,51 @@ export function createDesktopOmniRushAccountStore({
       ?? (env.OMNIRUSH_DEV_MODE === "1" ? DEV_GATEWAY_URL : DEFAULT_GATEWAY_URL);
   }
 
+  async function refresh(credentials) {
+    const refreshUrl = controlPlaneBase(credentials.gatewayUrl);
+    refreshUrl.pathname += "/device/refresh";
+    const response = await fetchImpl(refreshUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: credentials.refreshToken }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const refreshed = validCredentials({
+      gatewayUrl: payload.gateway_url ?? credentials.gatewayUrl,
+      accessToken: payload.access_token,
+      refreshToken: payload.refresh_token,
+    });
+    if (!refreshed) return null;
+    await save(refreshed);
+    return refreshed;
+  }
+
+  async function fetchProfile(credentials, allowRefresh = true) {
+    const profileUrl = controlPlaneBase(credentials.gatewayUrl);
+    profileUrl.pathname += "/device/me";
+    const response = await fetchImpl(profileUrl, {
+      headers: { Authorization: `Bearer ${credentials.accessToken}` },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (response.status === 401 && allowRefresh) {
+      const refreshed = await refresh(credentials);
+      if (!refreshed) throw new InvalidAccountCredentialsError("Device session expired");
+      return fetchProfile(refreshed, false);
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new InvalidAccountCredentialsError("Device session expired");
+    }
+    if (!response.ok) return null;
+    return accountProfile(await response.json());
+  }
+
   async function authorize({ gatewayUrl, deviceName, openVerification }) {
     const explicitGateway = normalizeCredential(gatewayUrl);
     const configured = explicitGateway ? normalizeGatewayUrl(explicitGateway) : await configuredGatewayUrl();
     if (!configured) throw new Error("OmniRush account service is not configured");
-    const base = new URL(configured);
-    base.pathname = base.pathname.replace(/\/+$/, "").replace(/\/v1$/, "");
+    const base = controlPlaneBase(configured);
     const authorizeUrl = new URL(base);
     authorizeUrl.pathname += "/device/authorize";
     const issuedResponse = await fetchImpl(authorizeUrl, {
@@ -178,7 +259,42 @@ export function createDesktopOmniRushAccountStore({
   }
 
   async function status() {
-    return { connected: Boolean(await load()), gatewayConfigured: Boolean(await configuredGatewayUrl()) };
+    const credentials = await load();
+    const gatewayConfigured = Boolean(await configuredGatewayUrl());
+    if (!credentials) return { connected: false, gatewayConfigured };
+    try {
+      const profile = await fetchProfile(credentials);
+      return {
+        connected: true,
+        gatewayConfigured,
+        email: profile?.email ?? null,
+        displayName: profile?.displayName ?? null,
+        accountStatus: profile?.status ?? null,
+        usage: profile?.usage ?? null,
+      };
+    } catch (error) {
+      if (error instanceof InvalidAccountCredentialsError) {
+        return {
+          connected: false,
+          gatewayConfigured,
+          reauthorizationRequired: true,
+          email: null,
+          displayName: null,
+          accountStatus: null,
+          usage: null,
+        };
+      }
+      // Offline profile lookup must not make a securely stored account look
+      // signed out. Model requests will still use the broker's refresh path.
+      return {
+        connected: true,
+        gatewayConfigured,
+        email: null,
+        displayName: null,
+        accountStatus: null,
+        usage: null,
+      };
+    }
   }
 
   async function clear() {

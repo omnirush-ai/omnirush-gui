@@ -116,7 +116,7 @@ export function workspaceLabel(workspace: OmniRushWorkspaceInfo) {
     workspace.path?.trim() ||
     t("session.workspace_fallback")
   );
-  return label === "OmniRush.ai Chat" ? "OmniRush.ai Chat" : label;
+  return /^(?:OmniRush\.ai Chat|omnirush\.ai)$/i.test(label) ? "omnirush.ai" : label;
 }
 
 export function workspaceExportFilename(workspace: OmniRushWorkspaceInfo) {

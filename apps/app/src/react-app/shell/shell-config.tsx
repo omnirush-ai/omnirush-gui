@@ -39,7 +39,7 @@ export type ShellConfig = {
 /* ------------------------------------------------------------------ */
 
 export const DEFAULT_SHELL_CONFIG: ShellConfig = {
-  appName: "OmniRush.ai",
+  appName: "omnirush.ai",
   statusBar: true,
   sidebar: true,
   docsButton: true,

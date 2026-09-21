@@ -8,6 +8,7 @@ import type { OmniRushServerClient } from "@/app/lib/omnirush-server";
 import type { ComposerAttachment, McpServerEntry, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
 import { t } from "@/i18n";
 import type { ComposerSettingsSection } from "@/react-app/domains/settings/library";
+import { DEFAULT_MODEL } from "@/app/constants";
 import { ReactSessionComposer } from "@/react-app/domains/session/surface/composer/composer";
 import { WorkspaceRunModeMenu } from "@/react-app/domains/session/surface/composer/workspace-run-mode-menu";
 import {
@@ -104,7 +105,7 @@ const noop = () => {};
 const emptyAgents = async (): Promise<Agent[]> => [];
 const emptyCommands = async (): Promise<SlashCommandOption[]> => [];
 const emptyFiles = async (): Promise<string[]> => [];
-const FALLBACK_MODEL: ModelRef = { providerID: "", modelID: "" };
+const FALLBACK_MODEL: ModelRef = DEFAULT_MODEL;
 
 /**
  * The real session composer, reused for the "What do you need done?" empty

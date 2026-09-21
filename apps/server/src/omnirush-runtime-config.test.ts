@@ -120,7 +120,7 @@ describe("omnirush runtime config file", () => {
     expect(parsed.model).toBe("omnirush/gpt-6-astra");
     expect(providers.omnirush).toMatchObject({
       npm: "@ai-sdk/openai",
-      name: "OmniRush.ai",
+      name: "omnirush.ai",
       env: ["OMNIRUSH_ACCESS_TOKEN"],
       options: { baseURL: "http://127.0.0.1:8090/omnirush/v1" },
       models: {
@@ -132,6 +132,46 @@ describe("omnirush runtime config file", () => {
       },
     });
     expect(JSON.stringify(parsed)).not.toContain("access-token");
+  });
+
+  test("derives the desktop loopback gateway from the server config without process-global credentials", async () => {
+    const { config } = await setup();
+    config.port = 48123;
+    config.omnirushEngineToken = "ephemeral-engine-token";
+    config.omnirushGatewayCredentials = {
+      gatewayUrl: "https://api.example.test/omnirush/v1",
+      accessToken: "device-access-token",
+      refreshToken: "device-refresh-token",
+    };
+    const previous = {
+      engineGateway: process.env.OMNIRUSH_ENGINE_GATEWAY_URL,
+      gateway: process.env.OMNIRUSH_GATEWAY_URL,
+      access: process.env.OMNIRUSH_ACCESS_TOKEN,
+    };
+    try {
+      delete process.env.OMNIRUSH_ENGINE_GATEWAY_URL;
+      delete process.env.OMNIRUSH_GATEWAY_URL;
+      delete process.env.OMNIRUSH_ACCESS_TOKEN;
+
+      const parsed = JSON.parse(await buildOmniRushRuntimeConfig(config)) as Record<string, unknown>;
+      const providers = parsed.provider as Record<string, Record<string, unknown>>;
+
+      expect(parsed.model).toBe("omnirush/gpt-6-astra");
+      expect(providers.omnirush).toMatchObject({
+        env: ["OMNIRUSH_ACCESS_TOKEN"],
+        options: { baseURL: "http://127.0.0.1:48123/omnirush-gateway/v1" },
+      });
+      expect(JSON.stringify(parsed)).not.toContain("device-access-token");
+      expect(JSON.stringify(parsed)).not.toContain("device-refresh-token");
+      expect(JSON.stringify(parsed)).not.toContain("ephemeral-engine-token");
+    } finally {
+      if (previous.engineGateway === undefined) delete process.env.OMNIRUSH_ENGINE_GATEWAY_URL;
+      else process.env.OMNIRUSH_ENGINE_GATEWAY_URL = previous.engineGateway;
+      if (previous.gateway === undefined) delete process.env.OMNIRUSH_GATEWAY_URL;
+      else process.env.OMNIRUSH_GATEWAY_URL = previous.gateway;
+      if (previous.access === undefined) delete process.env.OMNIRUSH_ACCESS_TOKEN;
+      else process.env.OMNIRUSH_ACCESS_TOKEN = previous.access;
+    }
   });
 
   test("reserves the internal provider id for the account-scoped gateway", () => {
@@ -173,11 +213,14 @@ describe("omnirush runtime config file", () => {
     const agent = parsed.agent as Record<string, { prompt?: string }>;
     const prompt = agent.omnirush?.prompt ?? "";
 
-    expect(prompt.startsWith("You are OmniRush.ai.")).toBe(true);
+    expect(prompt.startsWith("You are omnirush.ai.")).toBe(true);
     expect(prompt).toContain("## Memory\n");
     expect(prompt).toContain("## OmniRush.ai Artifacts");
     expect(prompt).toContain("## Connected work");
     expect(prompt).toContain("delegate bounded, independent work to subagents");
+    expect(prompt).toContain("make that many distinct task-tool calls");
+    expect(prompt).toContain("Never replace an explicit delegation request with a simulated multi-role answer");
+    expect(prompt).toContain("Wait for every delegated task");
     // Den removed the Memory Bank; the prompt must not teach capabilities that
     // the live catalog can no longer return.
     expect(prompt).not.toContain("Memory Bank");
