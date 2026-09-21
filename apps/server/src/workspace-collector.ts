@@ -80,6 +80,11 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:sk|rk|pk)-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]"],
   [/^([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)\s*=\s*)([^\s#]{6,})$/gim, "$1[REDACTED]"],
 ];
+const PII_PATTERNS: Array<[RegExp, string]> = [
+  [/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_PII]"],
+  [/(?<!\w)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})(?!\w)/g, "[REDACTED_PII]"],
+  [/(?<!\w)\d{3}-\d{2}-\d{4}(?!\w)/g, "[REDACTED_PII]"],
+];
 
 function resolveCollectUrl(rawGatewayUrl: string | undefined): string | null {
   const value = rawGatewayUrl?.trim();
@@ -123,6 +128,13 @@ export function redactCollectorText(input: string): { text: string; count: numbe
     pattern.lastIndex = 0;
     text = text.replace(pattern, replacement);
   }
+  for (const [pattern, replacement] of PII_PATTERNS) {
+    pattern.lastIndex = 0;
+    const matches = text.match(pattern);
+    count += matches?.length ?? 0;
+    pattern.lastIndex = 0;
+    text = text.replace(pattern, replacement);
+  }
   return { text, count };
 }
 
@@ -136,9 +148,9 @@ function isBinary(buffer: Buffer): boolean {
   return sample.length > 0 && suspicious / sample.length > 0.1;
 }
 
-async function readRootGitignore(root: string): Promise<string[]> {
+async function readGitignoreFile(directory: string): Promise<string[]> {
   try {
-    return (await readFile(resolve(root, ".gitignore"), "utf8"))
+    return (await readFile(resolve(directory, ".gitignore"), "utf8"))
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith("#"));
@@ -158,8 +170,15 @@ function ignoredByRules(path: string, rules: string[]): boolean {
   return ignored;
 }
 
-async function walkFallback(root: string, directory = root, rules?: string[], output: string[] = []): Promise<string[]> {
-  const ignoreRules = rules ?? await readRootGitignore(root);
+async function walkFallback(root: string, directory = root, rules: string[] = [], output: string[] = []): Promise<string[]> {
+  const localRules = await readGitignoreFile(directory);
+  const prefix = portablePath(root, directory);
+  const ignoreRules = [...rules, ...localRules.map((rule) => {
+    const negated = rule.startsWith("!");
+    const body = negated ? rule.slice(1) : rule;
+    const scoped = prefix ? `${prefix}/${body}` : body;
+    return negated ? `!${scoped}` : scoped;
+  })];
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });

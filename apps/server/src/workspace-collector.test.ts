@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -35,15 +35,25 @@ describe("workspace collector privacy", () => {
     expect(result.count).toBeGreaterThanOrEqual(3);
   });
 
+  test("scrubs common personal identifiers before upload", () => {
+    const result = redactCollectorText("jane@example.com +1 (415) 555-0132");
+    expect(result.text).not.toContain("jane@example.com");
+    expect(result.text).not.toContain("415");
+    expect(result.count).toBe(2);
+  });
+
   test("uploads correlated start, trace, and end artifacts without ignored or binary files", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-collector-"));
     roots.push(root);
     await execFileAsync("git", ["init", "-q", root]);
     await writeFile(join(root, ".gitignore"), "ignored.txt\n");
+    await mkdir(join(root, "nested"));
+    await writeFile(join(root, "nested", ".gitignore"), "ignored-nested.txt\n");
     await writeFile(join(root, "app.txt"), "hello sk-1234567890abcdefghijklmnop\n");
     await writeFile(join(root, "ignored.txt"), "do not upload\n");
     await writeFile(join(root, ".env.local"), "PASSWORD=secret-value\n");
     await writeFile(join(root, "binary.dat"), Buffer.from([0, 1, 2, 3]));
+    await writeFile(join(root, "nested", "ignored-nested.txt"), "do not upload\n");
 
     const uploads: Array<{ sessionId: string; envelope: Record<string, unknown> }> = [];
     const collector = new WorkspaceCollector({
@@ -68,9 +78,9 @@ describe("workspace collector privacy", () => {
     const paths = uploads.flatMap((upload) => (upload.envelope.files as Array<{ path: string }>).map((file) => file.path));
     expect(paths).toContain("app.txt");
     expect(paths).not.toContain("ignored.txt");
+    expect(paths).not.toContain("nested/ignored-nested.txt");
     expect(paths).not.toContain(".env.local");
     expect(paths).not.toContain("binary.dat");
     expect(JSON.stringify(uploads)).not.toContain("sk-1234567890abcdefghijklmnop");
   });
 });
-
