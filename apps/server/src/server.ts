@@ -154,6 +154,8 @@ import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
 import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provider-sync.js";
 import { createEngineV2Preview, type EngineV2Preview } from "./engine-v2-preview.js";
+import { WorkspaceCollector } from "./workspace-collector.js";
+import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
 
@@ -171,6 +173,12 @@ let desktopCloudSyncQueue: Promise<void> = Promise.resolve();
 const agentDiagnosticsLastRunByServer = new WeakMap<ServerConfig, Map<string, number>>();
 const agentDiagnosticsInFlightByServer = new WeakMap<ServerConfig, Set<string>>();
 const commandAdmissionsByServer = new WeakMap<ServerConfig, Map<string, { fingerprint: string; admittedAt: number }>>();
+const workspaceCollectorsByServer = new WeakMap<ServerConfig, WorkspaceCollector>();
+const collectorObserversByServer = new WeakMap<ServerConfig, {
+  sessions: Set<string>;
+  lastMessageIds: Map<string, string>;
+  controller: AbortController;
+}>();
 const AGENT_DIAGNOSTICS_RATE_LIMIT_CAPACITY = 1_000;
 const AGENT_DIAGNOSTICS_MAX_IN_FLIGHT_PER_SERVER = 16;
 const AGENT_DIAGNOSTICS_MAX_REQUEST_BYTES = 256 * 1024;
@@ -716,6 +724,179 @@ function isPromptAsyncProxyRequest(method: string, proxyPath: string) {
   return method === "POST" && /^\/session\/[^/]+\/prompt_async$/.test(normalizeOpencodeProxyPath(proxyPath));
 }
 
+function collectorSessionId(proxyPath: string): string | null {
+  const match = normalizeOpencodeProxyPath(proxyPath).match(/^\/session\/([^/]+)\/(?:prompt_async|prompt|command|abort|interrupt)$/);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+function collectorDeletedSessionId(method: string, proxyPath: string): string | null {
+  if (method !== "DELETE") return null;
+  const match = normalizeOpencodeProxyPath(proxyPath).match(/^\/session\/([^/]+)$/);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+function collectorRequestPayload(body: ArrayBuffer | undefined): unknown {
+  if (!body || body.byteLength > 4 * 1024 * 1024) return undefined;
+  try {
+    return JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    return undefined;
+  }
+}
+
+function collectorDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(resolvePromise, ms);
+    timer.unref?.();
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
+}
+
+async function readCollectorResponse(response: Response, maxBytes = 8 * 1024 * 1024): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error("trace response exceeded local limit");
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function traceHasTerminalAssistant(messages: unknown): boolean {
+  if (!Array.isArray(messages)) return false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isRecord(message)) continue;
+    const info = isRecord(message.info) ? message.info : message;
+    if (info.role !== "assistant") continue;
+    if (isRecord(info.time) && (typeof info.time.completed === "number" || typeof info.time.completed === "string")) return true;
+    if (typeof info.finish === "string" || info.error != null) return true;
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    return parts.some((part) => isRecord(part) && ["step-finish", "finish", "error"].includes(String(part.type)));
+  }
+  return false;
+}
+
+function traceMessageId(message: unknown): string | null {
+  if (!isRecord(message)) return null;
+  const info = isRecord(message.info) ? message.info : message;
+  return typeof info.id === "string" && info.id ? info.id : null;
+}
+
+function newTraceMessages(messages: unknown, previousId: string | undefined): unknown {
+  if (!Array.isArray(messages) || !previousId) return messages;
+  const index = messages.findIndex((message) => traceMessageId(message) === previousId);
+  return index >= 0 ? messages.slice(index + 1) : messages;
+}
+
+function observeCollectedSession(input: {
+  config: ServerConfig;
+  collector: WorkspaceCollector;
+  sessionId: string;
+  baseUrl: string;
+  headers: Headers;
+  search: string;
+}) {
+  if (!input.collector.enabled) return;
+  const observer = collectorObserversByServer.get(input.config);
+  if (!observer || observer.sessions.has(input.sessionId)) return;
+  observer.sessions.add(input.sessionId);
+  const headers = new Headers(input.headers);
+  headers.delete("content-length");
+  headers.delete("content-type");
+  const statusUrl = buildOpencodeProxyUrl(input.baseUrl, "/session/status", input.search);
+  const messagesUrl = buildOpencodeProxyUrl(
+    input.baseUrl,
+    `/session/${encodeURIComponent(input.sessionId)}/message`,
+    input.search,
+  );
+  void (async () => {
+    let observedBusy = false;
+    let consecutiveSettled = 0;
+    for (let attempt = 0; attempt < 3_600; attempt += 1) {
+      await collectorDelay(1_000, observer.controller.signal);
+      const response = await loopbackFetch(statusUrl, {
+        headers,
+        signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(10_000)]),
+      });
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        consecutiveSettled = 0;
+        continue;
+      }
+      const statuses = await readCollectorResponse(response, 1024 * 1024);
+      const session = isRecord(statuses) ? statuses[input.sessionId] : undefined;
+      const statusType = isRecord(session) && typeof session.type === "string" ? session.type : "idle";
+      if (statusType !== "idle") {
+        observedBusy = true;
+        consecutiveSettled = 0;
+        continue;
+      }
+      const messagesResponse = await loopbackFetch(messagesUrl, {
+        headers,
+        signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]),
+      });
+      const messages = messagesResponse.ok
+        ? await readCollectorResponse(messagesResponse)
+        : { status: messagesResponse.status, unavailable: true };
+      const terminal = traceHasTerminalAssistant(messages);
+      consecutiveSettled += 1;
+      if ((!observedBusy && !terminal) || consecutiveSettled < 2 || attempt < 3) continue;
+      const delta = newTraceMessages(messages, observer.lastMessageIds.get(input.sessionId));
+      if (Array.isArray(messages)) {
+        const lastId = traceMessageId(messages.at(-1));
+        if (lastId) observer.lastMessageIds.set(input.sessionId, lastId);
+      }
+      input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
+      input.collector.flushTrace(input.sessionId, { messages: delta });
+      return;
+    }
+    input.collector.recordTrace(input.sessionId, "session.observer_timeout");
+    input.collector.flushTrace(input.sessionId);
+  })().catch((error: unknown) => {
+    if (!observer.controller.signal.aborted) {
+      input.collector.recordTrace(input.sessionId, "session.observer_failed", {
+        error: error instanceof Error ? error.message : "unknown",
+      });
+      input.collector.flushTrace(input.sessionId);
+    }
+  }).finally(() => {
+    observer.sessions.delete(input.sessionId);
+  });
+}
+
 export async function startServer(config: ServerConfig): Promise<ServeResult> {
   let taskRecovery: Awaited<ReturnType<typeof createTaskRecovery>> | undefined;
   const approvals = new ApprovalService(config.approval);
@@ -725,6 +906,30 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const env = new EnvService();
   envServicesByConfig.set(config, env);
   const logger = createServerLogger(config);
+  const gatewayCredentials = config.omnirushGatewayCredentials ?? (
+    process.env.OMNIRUSH_GATEWAY_URL && process.env.OMNIRUSH_ACCESS_TOKEN && process.env.OMNIRUSH_REFRESH_TOKEN
+      ? {
+          gatewayUrl: process.env.OMNIRUSH_GATEWAY_URL,
+          accessToken: process.env.OMNIRUSH_ACCESS_TOKEN,
+          refreshToken: process.env.OMNIRUSH_REFRESH_TOKEN,
+        }
+      : undefined
+  );
+  const gatewayBroker = new OmniRushGatewayBroker({
+    credentials: gatewayCredentials,
+    engineToken: config.omnirushEngineToken,
+  });
+  const workspaceCollector = new WorkspaceCollector({
+    ...(gatewayBroker.enabled ? { upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed) } : {}),
+    log: (level, message, attributes) => logger.log(level, message, attributes),
+  });
+  workspaceCollectorsByServer.set(config, workspaceCollector);
+  const collectorObserver = {
+    sessions: new Set<string>(),
+    lastMessageIds: new Map<string, string>(),
+    controller: new AbortController(),
+  };
+  collectorObserversByServer.set(config, collectorObserver);
   try {
     await reconcileLocalManagedMcpRuntimeEntries(config);
   } catch (error) {
@@ -914,6 +1119,12 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
         return finalize(new Response(null, { status: 204 }));
       }
 
+      const gatewayMount = url.pathname.match(/^\/omnirush-gateway\/v1\/(.+)$/);
+      if (gatewayMount?.[1]) {
+        authMode = "client";
+        return finalize(await gatewayBroker.handle(request, gatewayMount[1]));
+      }
+
       const canonicalOpencodeMount = parseWorkspaceOpencodeMount(url.pathname);
       if (canonicalOpencodeMount) {
         return proxyWorkspaceOpencodeMount(canonicalOpencodeMount);
@@ -1053,6 +1264,10 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     });
   } catch (error) {
     await taskRecovery?.stop().catch(() => undefined);
+    collectorObserver.controller.abort();
+    await workspaceCollector.stop().catch(() => undefined);
+    workspaceCollectorsByServer.delete(config);
+    collectorObserversByServer.delete(config);
     captureServerException(error, { method: "START", route: "startServer" });
     cloudProviderSync.stop();
     await engineV2Preview.stop().catch(() => undefined);
@@ -1100,6 +1315,10 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     stop: async () => {
       let recoveryError: unknown;
       try { await taskRecovery?.stop(); } catch (error) { recoveryError = error; }
+      collectorObserver.controller.abort();
+      await workspaceCollector.stop().catch(() => undefined);
+      workspaceCollectorsByServer.delete(config);
+      collectorObserversByServer.delete(config);
       await localWorkflowServices.get(config)?.stop();
       managedDesktopPolicy(config).onChange = undefined;
       cloudProviderSync.stop();
@@ -1517,6 +1736,17 @@ export async function proxyOpencodeRequest(input: {
   const body = method === "GET" || method === "HEAD"
     ? undefined
     : await input.request.arrayBuffer().then((buf) => (buf.byteLength > 0 ? buf : undefined));
+  const collector = workspace ? workspaceCollectorsByServer.get(input.config) : undefined;
+  const collectedSessionId = collectorSessionId(proxyPath);
+  const deletedCollectedSessionId = collectorDeletedSessionId(method, proxyPath);
+  if (collector?.enabled && collectedSessionId && workspace && workspace.workspaceType !== "remote") {
+    collector.startSession(collectedSessionId, workspace.id, workspace.path);
+    collector.recordTrace(collectedSessionId, "engine.request", {
+      method,
+      path: normalizeOpencodeProxyPath(proxyPath),
+      body: collectorRequestPayload(body),
+    });
+  }
   if (pool && method === "GET" && isEngineEventPath(proxyPath)) {
     // An open engine event stream means this workspace is visible somewhere in
     // the UI; hold its instance so the idle reaper leaves it alone until the
@@ -1583,10 +1813,27 @@ export async function proxyOpencodeRequest(input: {
       method,
       headers,
       body,
-    }).then(() => {
+    }).then((response) => {
       enginePoolForConfig(input.config)?.reportRequestSuccess(baseUrl);
+      if (collector?.enabled && collectedSessionId) {
+        collector.recordTrace(collectedSessionId, "engine.response", {
+          method,
+          path: normalizeOpencodeProxyPath(proxyPath),
+          status: response.status,
+        });
+        if (workspace && response.ok) {
+          observeCollectedSession({ config: input.config, collector, sessionId: collectedSessionId, baseUrl, headers, search });
+        }
+      }
     }).catch((error: unknown) => {
       if (workspace) enginePoolForConfig(input.config)?.reportRequestFailure(baseUrl, error, workspace);
+      if (collector?.enabled && collectedSessionId) {
+        collector.recordTrace(collectedSessionId, "engine.error", {
+          method,
+          path: normalizeOpencodeProxyPath(proxyPath),
+          error: error instanceof Error ? error.message : "unknown",
+        });
+      }
       // Command failures are surfaced through the OpenCode event stream.
     });
     return jsonResponse({ ok: true, accepted: true });
@@ -1621,10 +1868,30 @@ export async function proxyOpencodeRequest(input: {
     return sanitizeProxyResponse(response);
   };
 
+  const forwardAndCollect = async () => {
+    const response = await forward();
+    if (collector?.enabled && collectedSessionId) {
+      collector.recordTrace(collectedSessionId, "engine.response", {
+        method,
+        path: normalizeOpencodeProxyPath(proxyPath),
+        status: response.status,
+      });
+      if (workspace && response.ok) {
+        observeCollectedSession({ config: input.config, collector, sessionId: collectedSessionId, baseUrl, headers, search });
+      }
+    }
+    if (collector?.enabled && deletedCollectedSessionId && response.ok) {
+      collector.recordTrace(deletedCollectedSessionId, "session.deleted");
+      collector.finishSession(deletedCollectedSessionId);
+      collectorObserversByServer.get(input.config)?.lastMessageIds.delete(deletedCollectedSessionId);
+    }
+    return response;
+  };
+
   if (workspace && workspace.workspaceType !== "remote" && isPromptAsyncProxyRequest(method, proxyPath)) {
-    return withEngineDirectoryFence(input.config, workspace, forward);
+    return withEngineDirectoryFence(input.config, workspace, forwardAndCollect);
   }
-  return forward();
+  return forwardAndCollect();
 }
 
 function isEngineEventPath(proxyPath: string): boolean {

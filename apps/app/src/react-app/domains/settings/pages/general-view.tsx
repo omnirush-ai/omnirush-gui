@@ -1,4 +1,5 @@
 /** @jsxImportSource react */
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Cog,
@@ -8,10 +9,17 @@ import {
   Sparkles,
   Terminal,
   Wrench,
+  UserRoundCheck,
 } from "lucide-react";
 
 import { t } from "../../../../i18n";
 import type { SettingsTab } from "../../../../app/types";
+import {
+  omnirushAccountConnect,
+  omnirushAccountSignOut,
+  omnirushAccountStatus,
+} from "../../../../app/lib/desktop";
+import { isElectronRuntime } from "../../../../app/utils";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
@@ -69,8 +77,75 @@ function SettingsCard(props: {
 }
 
 export function GeneralSettingsView(props: GeneralSettingsViewProps) {
+  const [account, setAccount] = useState<{ connected: boolean; gatewayConfigured: boolean } | null>(null);
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountMessage, setAccountMessage] = useState("");
+
+  useEffect(() => {
+    if (!isElectronRuntime()) return;
+    void omnirushAccountStatus().then(setAccount).catch(() => setAccount({ connected: false, gatewayConfigured: false }));
+  }, []);
+
+  async function connectAccount() {
+    setAccountBusy(true);
+    setAccountMessage("Approve the device link in your browser…");
+    try {
+      await omnirushAccountConnect();
+      setAccount(await omnirushAccountStatus());
+      setAccountMessage("Account connected. Astra routing is ready.");
+    } catch (error) {
+      setAccountMessage(error instanceof Error ? error.message : "The account could not be connected.");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function signOutAccount() {
+    setAccountBusy(true);
+    try {
+      await omnirushAccountSignOut();
+      setAccount({ connected: false, gatewayConfigured: account?.gatewayConfigured ?? false });
+      setAccountMessage("Signed out on this Mac.");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
   return (
     <div className="w-full max-w-3xl space-y-8">
+      {isElectronRuntime() && account && (
+        <div className="space-y-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
+            OmniRush account
+          </div>
+          <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
+              <UserRoundCheck size={17} className={account.connected ? "text-emerald-400" : "text-dls-secondary"} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium text-dls-text">
+                {account.connected ? "Connected" : "Connect your account"}
+              </div>
+              <div className="text-[11px] text-dls-secondary">
+                {accountMessage || (account.connected
+                  ? "Secure model access and usage are linked to this Mac."
+                  : account.gatewayConfigured
+                    ? "Sign in in your browser, then return here."
+                    : "The OmniRush account service has not been configured for this build.")}
+              </div>
+            </div>
+            {account.connected ? (
+              <button type="button" disabled={accountBusy} onClick={() => void signOutAccount()} className="rounded-lg border border-dls-border px-3 py-2 text-[12px] text-dls-secondary hover:bg-dls-hover disabled:opacity-50">
+                Sign out
+              </button>
+            ) : (
+              <button type="button" disabled={accountBusy || !account.gatewayConfigured} onClick={() => void connectAccount()} className="rounded-lg bg-dls-text px-3 py-2 text-[12px] font-medium text-dls-bg disabled:opacity-50">
+                {accountBusy ? "Waiting…" : "Connect"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {/* Workspace settings */}
       <div className="space-y-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">

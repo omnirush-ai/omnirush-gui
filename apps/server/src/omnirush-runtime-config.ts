@@ -53,7 +53,7 @@ type InternalGatewayRuntime = {
 function resolveInternalGatewayRuntime(
   env: NodeJS.ProcessEnv = process.env,
 ): InternalGatewayRuntime | undefined {
-  const baseUrl = env.OMNIRUSH_GATEWAY_URL?.trim().replace(/\/+$/, "");
+  const baseUrl = (env.OMNIRUSH_ENGINE_GATEWAY_URL ?? env.OMNIRUSH_GATEWAY_URL)?.trim().replace(/\/+$/, "");
   const accessToken = env.OMNIRUSH_ACCESS_TOKEN?.trim();
   if (!baseUrl || !accessToken) return undefined;
 

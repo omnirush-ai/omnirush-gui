@@ -78,6 +78,7 @@ import {
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
 import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
+import { createDesktopOmniRushAccountStore } from "./omnirush-account.mjs";
 import {
   clearOmniRushSentrySession,
   initOmniRushSentry,
@@ -1302,6 +1303,11 @@ function validateSkillName(raw) {
   return trimmed;
 }
 
+const omnirushAccountStore = createDesktopOmniRushAccountStore({
+  filePath: path.join(app.getPath("userData"), "omnirush-account.bin"),
+  loadSafeStorage: () => require("electron").safeStorage,
+});
+
 const runtimeManager = createRuntimeManager({
   app,
   desktopRoot: path.resolve(__dirname, ".."),
@@ -1313,6 +1319,7 @@ const runtimeManager = createRuntimeManager({
         filePath: path.join(app.getPath("userData"), "local-managed-mcp-vault-key.bin"),
         loadSafeStorage: () => require("electron").safeStorage,
       }),
+  omnirushGatewayCredentials: omnirushAccountStore,
 });
 const initialRunnerBootstrap = workspaceStore.readDesktopBootstrapConfigSync();
 const legacyRunnerBaseUrls = [
@@ -2035,6 +2042,24 @@ const desktopCommandHandlers = {
   },
   "omnirushServerInfo": async (event, ...args) => {
       return runtimeManager.omnirushServerInfo();
+  },
+  "omnirushAccountStatus": async () => {
+      return omnirushAccountStore.status();
+  },
+  "omnirushAccountConnect": async (_event, ...args) => {
+      const input = args[0] ?? {};
+      const result = await omnirushAccountStore.authorize({
+        gatewayUrl: String(input.gatewayUrl ?? "").trim() || undefined,
+        deviceName: String(input.deviceName ?? "").trim() || `${app.getName()} on ${os.hostname()}`,
+        openVerification: (url) => shell.openExternal(url),
+      });
+      await runtimeManager.omnirushServerRestart({});
+      return result;
+  },
+  "omnirushAccountSignOut": async () => {
+      await omnirushAccountStore.clear();
+      await runtimeManager.omnirushServerRestart({});
+      return { connected: false };
   },
   "automationRunnerConfigure": async (event, ...args) => {
       return desktopAutomationRunner.configure(args[0] ?? null);

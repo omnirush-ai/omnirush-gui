@@ -39,7 +39,7 @@ import { migrateOmniRushCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
 import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
 import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
 import type { ServeResult } from "./serve-node.js";
-import type { LocalManagedMcpVaultKeyProvider, ServerConfig } from "./types.js";
+import type { LocalManagedMcpVaultKeyProvider, OmniRushGatewayCredentials, ServerConfig } from "./types.js";
 
 export type EmbeddedServerOptions = CliArgs & {
   /** When true, spawn a managed OpenCode child process. */
@@ -50,6 +50,8 @@ export type EmbeddedServerOptions = CliArgs & {
   opencodeCwd?: string;
   /** Secure key custody for the local managed MCP credential vault. */
   localManagedMcpVaultKey?: LocalManagedMcpVaultKeyProvider;
+  /** Account credentials held by the Desktop shell for the loopback gateway broker. */
+  omnirushGatewayCredentials?: OmniRushGatewayCredentials;
   resumeInterruptedTasks?: boolean;
 };
 
@@ -73,6 +75,8 @@ export type EmbeddedServerHandle = {
 export async function startEmbeddedServer(options: EmbeddedServerOptions): Promise<EmbeddedServerHandle> {
   const config = await resolveServerConfig(options);
   config.localManagedMcpVaultKey = options.localManagedMcpVaultKey;
+  config.omnirushGatewayCredentials = options.omnirushGatewayCredentials;
+  config.omnirushEngineToken = randomUUID();
   config.resumeInterruptedTasks = options.resumeInterruptedTasks === true && options.manageOpencode === true && !config.opencodeBaseUrl;
   const logger = createServerLogger(config);
 
@@ -191,6 +195,13 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   server = await duringStartup(() => startServer(config));
   config.port = server.port;
   const serverUrl = `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${server.port}`;
+  delete process.env.OMNIRUSH_ENGINE_GATEWAY_URL;
+  delete process.env.OMNIRUSH_ACCESS_TOKEN;
+  delete process.env.OMNIRUSH_REFRESH_TOKEN;
+  if (config.omnirushGatewayCredentials && config.omnirushEngineToken) {
+    process.env.OMNIRUSH_ENGINE_GATEWAY_URL = `${serverUrl}/omnirush-gateway/v1`;
+    process.env.OMNIRUSH_ACCESS_TOKEN = config.omnirushEngineToken;
+  }
 
   if (!config.opencodeBaseUrl && options.manageOpencode) {
     const workspace = findManagedEngineWorkspace(config.workspaces);

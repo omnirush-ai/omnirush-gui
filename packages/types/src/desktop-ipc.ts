@@ -512,6 +512,12 @@ export type DesktopCommandMap = {
 
   // OmniRush.ai server sidecar
   omnirushServerInfo: { args: []; result: OmniRushServerInfo };
+  omnirushAccountStatus: { args: []; result: { connected: boolean; gatewayConfigured: boolean } };
+  omnirushAccountConnect: {
+    args: [options?: { gatewayUrl?: string; deviceName?: string }];
+    result: { connected: true; userCode: string };
+  };
+  omnirushAccountSignOut: { args: []; result: { connected: false } };
   automationRunnerConfigure: {
     args: [configuration: { baseUrl: string; token: string; runnerId: string } | null];
     result: { connected: boolean };

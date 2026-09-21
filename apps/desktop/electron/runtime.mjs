@@ -1375,6 +1375,7 @@ export function createRuntimeManager({
   desktopRoot,
   listLocalWorkspacePaths,
   localManagedMcpVaultKey,
+  omnirushGatewayCredentials = null,
   workspaceMkdir = mkdir,
   workspacePlatform = process.platform,
 }) {
@@ -1915,9 +1916,19 @@ export function createRuntimeManager({
       engineState.opencodeBinSource = managedOpencode?.source ?? null;
     }
 
+    // Load the desktop account before creating the embedded broker. Account
+    // tokens stay in the Electron main process and are never serialized into
+    // OpenCode config or passed to the renderer.
+    const gatewayCredentials = await omnirushGatewayCredentials?.load?.() ?? null;
+
     // Inject user env vars so the server and managed OpenCode inherit them.
     const serverEnv = await buildChildEnv({});
     Object.assign(process.env, serverEnv);
+    if (gatewayCredentials) {
+      // The refresh grant belongs to the Electron account store and loopback
+      // broker. Never let it flow into the managed OpenCode child or plugins.
+      delete process.env.OMNIRUSH_REFRESH_TOKEN;
+    }
 
     // Once the embedded server has a persisted registry, it is the source of
     // truth. Do not pass Electron's legacy workspace list as CLI workspaces or
@@ -1975,6 +1986,12 @@ export function createRuntimeManager({
       opencodeBin: managedOpencode?.path ?? undefined,
       opencodeCwd: managedOpencodeWorkdir(),
       localManagedMcpVaultKey,
+      omnirushGatewayCredentials: gatewayCredentials
+        ? {
+            ...gatewayCredentials,
+            persist: (credentials) => omnirushGatewayCredentials.save(credentials),
+          }
+        : undefined,
     });
     inProcessServer = handle;
     omnirushServerState.managedOpencodeExecution = handle.managedOpencodeExecution ?? null;

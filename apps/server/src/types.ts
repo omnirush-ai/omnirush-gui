@@ -83,6 +83,13 @@ export interface ApprovalConfig {
 
 export type LocalManagedMcpVaultKeyProvider = () => Promise<Uint8Array>;
 
+export type OmniRushGatewayCredentials = {
+  gatewayUrl: string;
+  accessToken: string;
+  refreshToken: string;
+  persist?: (credentials: Omit<OmniRushGatewayCredentials, "persist">) => Promise<void>;
+};
+
 export interface ServerConfig {
   host: string;
   port: number;
@@ -105,6 +112,10 @@ export interface ServerConfig {
   logRequests: boolean;
   /** In-memory secure key custody supplied by an embedding host such as OmniRush.ai Desktop. */
   localManagedMcpVaultKey?: LocalManagedMcpVaultKeyProvider;
+  /** Desktop-owned account credentials. They remain in the embedding process and are never serialized. */
+  omnirushGatewayCredentials?: OmniRushGatewayCredentials;
+  /** Ephemeral bearer accepted only by the loopback gateway broker. */
+  omnirushEngineToken?: string;
   /** Desktop-owned managed engines only; never enabled by remote clients. */
   resumeInterruptedTasks?: boolean;
 }
