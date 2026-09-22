@@ -11,6 +11,7 @@ import type { ComposerSettingsSection } from "@/react-app/domains/settings/libra
 import { DEFAULT_MODEL } from "@/app/constants";
 import { ReactSessionComposer } from "@/react-app/domains/session/surface/composer/composer";
 import { WorkspaceRunModeMenu } from "@/react-app/domains/session/surface/composer/workspace-run-mode-menu";
+import { FullPermissionsToggle } from "@/react-app/domains/session/surface/composer/full-permissions-toggle";
 import {
   snapshotComposerSessionState,
   type ComposerSessionState,
@@ -423,6 +424,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     }}>Clear the current draft to restore the unsent message</button> : null}
     <ReactSessionComposer
       runModeControl={<WorkspaceRunModeMenu client={workspaceClient} workspaceId={workspaceId} busy={props.busy} />}
+      fullPermissionsControl={<FullPermissionsToggle client={workspaceClient} workspaceId={workspaceId} />}
       draft={props.draft}
       mentions={mentions}
       onDraftChange={handleDraftChange}

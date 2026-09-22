@@ -45,7 +45,7 @@ async function temporaryRepository(): Promise<string> {
  * Stand-in for the server's /managed-policy/evaluate route: records calls and,
  * for git_identity, behaves like a desktop with (or without) an account.
  */
-function policyServer(options: { account: { name: string; email: string } | null }) {
+function policyServer(options: { account: { name: string; email: string } | null; approvalMode?: "guarded" | "full" }) {
   const calls: EvaluateCall[] = [];
   const server = Bun.serve({
     port: 0,
@@ -62,7 +62,8 @@ function policyServer(options: { account: { name: string; email: string } | null
         if (!gitGet(directory, "--get", "user.name")) git(directory, "config", "--local", "user.name", options.account.name);
         if (!gitGet(directory, "--get", "user.email")) git(directory, "config", "--local", "user.email", options.account.email);
       }
-      return Response.json({ allowed: true });
+      // A server without approval modes answers without the field (guarded).
+      return Response.json({ allowed: true, ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}) });
     },
   });
   stops.push(() => server.stop(true));
@@ -217,6 +218,56 @@ describe("managed-policy engine plugin: git workflows", () => {
     expect(calls[1]).toEqual({ action: "git_identity", input: { directory: other } });
     expect(git(other, "config", "--local", "--get", "user.email")).toBe("sam@example.com");
     expect(gitGet(workspace, "--local", "--get", "user.email")).toBe("");
+  });
+
+  test("full approval mode: no destructive marker and no identity refusal, the organization policy still evaluated", async () => {
+    const { calls } = policyServer({ account: null, approvalMode: "full" });
+    const repo = await temporaryRepository();
+    const hooks = await managedPolicy({ directory: repo });
+    const push: Record<string, unknown> = { command: "git status && git push --force origin main" };
+    await hooks["tool.execute.before"]({ tool: "bash", callID: "call_20", sessionID: "ses_1" }, { args: push });
+    expect(push.command).toBe("git status && git push --force origin main");
+    // A commit in a repository without an identity and without an account runs instead of being refused.
+    const commit: Record<string, unknown> = { command: "git commit -m x && rm -rf build" };
+    await hooks["tool.execute.before"]({ tool: "bash", callID: "call_21", sessionID: "ses_1" }, { args: commit });
+    expect(commit.command).toBe("git commit -m x && rm -rf build");
+    expect(calls.map((call) => call.action)).toEqual(["shell", "shell", "git_identity"]);
+    expect(await readGitIdentity(repo)).toEqual({ repository: true, name: null, email: null });
+    expect(annotateShellOutput("call_21", "out")).toBe("out");
+    // A marker the model wrote itself is left alone: nothing asks anyway.
+    const marked: Record<string, unknown> = { command: `${DESTRUCTIVE_MARKER} rm -rf build` };
+    await hooks["tool.execute.before"]({ tool: "bash", callID: "call_22", sessionID: "ses_1" }, { args: marked });
+    expect(marked.command).toBe(`${DESTRUCTIVE_MARKER} rm -rf build`);
+  });
+
+  test("full approval mode still sets the connected account's identity for the repository and says so", async () => {
+    const { calls } = policyServer({ account: { name: "Sam Example", email: "sam@example.com" }, approvalMode: "full" });
+    const repo = await temporaryRepository();
+    const hooks = await managedPolicy({ directory: repo });
+    const args: Record<string, unknown> = { command: "git commit -m x" };
+    await hooks["tool.execute.before"]({ tool: "bash", callID: "call_23", sessionID: "ses_1" }, { args });
+    expect(calls.map((call) => call.action)).toEqual(["shell", "git_identity"]);
+    expect(git(repo, "config", "--local", "--get", "user.name")).toBe("Sam Example");
+    expect(gitGet(repo, "--global", "--get", "user.name")).toBe("");
+    const output = { title: "git commit", output: "[main abc] x", metadata: {} };
+    await hooks["tool.execute.after"]({ tool: "bash", callID: "call_23", sessionID: "ses_1", args }, output);
+    expect(output.output).toContain("set the commit identity for");
+  });
+
+  test("the next-engine plugin skips the marker and the refusal in full mode as well", async () => {
+    const { calls } = policyServer({ account: null, approvalMode: "full" });
+    const repo = await temporaryRepository();
+    const hooks: Record<string, (event: never) => Promise<void>> = {};
+    await managedPolicyNext.setup({
+      directory: repo,
+      tool: { hook: async (name, callback) => { hooks[`tool.${name}`] = callback as never; } },
+      shell: { hook: async (name, callback) => { hooks[`shell.${name}`] = callback as never; } },
+      session: { hook: async (name, callback) => { hooks[`session.${name}`] = callback as never; } },
+    });
+    const input: Record<string, unknown> = { command: "git commit -m x && rm -rf build" };
+    await hooks["tool.execute.before"]({ tool: "bash", input, callID: "call_24" } as never);
+    expect(input.command).toBe("git commit -m x && rm -rf build");
+    expect(calls.map((call) => call.action)).toEqual(["shell", "git_identity"]);
   });
 
   test("hands the bash tool a PATH with the well-known tool directories", async () => {

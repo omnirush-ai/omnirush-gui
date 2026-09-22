@@ -19,6 +19,6 @@ export default async function managedPolicy(input?: { directory?: string }) {
     "shell.env": async (_event: { cwd: string }, output: { env: Record<string, string> }) => {
       if (enginePath) output.env.PATH = enginePath;
     },
-    "chat.params": async (input: { model: { providerID: string; id: string } }) => check("model", input.model),
+    "chat.params": async (input: { model: { providerID: string; id: string } }) => { await check("model", input.model); },
   };
 }

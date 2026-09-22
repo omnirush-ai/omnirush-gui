@@ -1,5 +1,6 @@
 import { desktopConfigSchema, type DesktopConfig } from "@omnirush/types/den/desktop-policies-runtime";
 import { existsSync } from "node:fs";
+import { parseApprovalMode, type ApprovalMode } from "./approval-mode.js";
 import { importNodeSqlite, runtimeDbPath } from "./runtime-db.js";
 import type { ServerConfig } from "./types.js";
 import { createWorkspaceKvStore, isRecord } from "./workspace-kv-store.js";
@@ -8,6 +9,8 @@ export { runtimeDbPath, runtimeStorageDir } from "./runtime-db.js";
 
 export type RuntimeOpencodeConfig = {
   managedPolicy?: DesktopConfig;
+  /** User setting for the engine approval mode; global row only, OMNIRUSH_APPROVALS overrides it. */
+  approvals?: { mode: ApprovalMode };
   default_agent?: string;
   plugin?: string[];
   disabled_providers?: string[];
@@ -38,9 +41,11 @@ function normalizeRuntimeOpencodeConfig(value: unknown): RuntimeOpencodeConfig {
   const permission = isRecord(value.permission) ? value.permission : undefined;
   const externalDirectory = permission && isRecord(permission.external_directory) ? permission.external_directory : undefined;
   const provider = isRecord(value.provider) ? value.provider : undefined;
+  const approvalMode = isRecord(value.approvals) ? parseApprovalMode(value.approvals.mode) : null;
   return {
     ...(defaultAgent ? { default_agent: defaultAgent } : {}),
     ...(value.managedPolicy !== undefined ? { managedPolicy: desktopConfigSchema.parse(value.managedPolicy) } : {}),
+    ...(approvalMode ? { approvals: { mode: approvalMode } } : {}),
     ...(plugin ? { plugin } : {}),
     ...(disabledProviders ? { disabled_providers: disabledProviders } : {}),
     ...(mcp ? { mcp } : {}),
@@ -259,6 +264,8 @@ export function mergeRuntimeOpencodeConfigLayers(
 
   return normalizeRuntimeOpencodeConfig({
     ...(base.managedPolicy ? { managedPolicy: base.managedPolicy } : {}),
+    // The approval mode is engine-global like the managed policy.
+    ...(base.approvals ? { approvals: base.approvals } : {}),
     ...(base.default_agent || overlay.default_agent ? { default_agent: overlay.default_agent ?? base.default_agent } : {}),
     ...(plugin.length ? { plugin } : {}),
     ...(disabledProviders.length ? { disabled_providers: disabledProviders } : {}),

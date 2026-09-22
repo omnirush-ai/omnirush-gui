@@ -11,6 +11,7 @@ import {
   writeOmniRushRuntimeConfigFile,
 } from "./omnirush-runtime-config.js";
 import { writeGlobalRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
+import { rulesFromPermissionConfig, winningRule } from "./effective-permissions.js";
 import { gitWorkflowPermissionRules } from "./git-command-policy.js";
 import type { ServerConfig } from "./types.js";
 
@@ -74,6 +75,41 @@ describe("omnirush runtime config file", () => {
     expect(parsed.agent).toMatchObject({ omnirush: { permission } });
     expect(parsed.managedPolicy).toBeUndefined();
     expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}).permission).toEqual({ bash: gitWorkflowPermissionRules() });
+  });
+
+  test("full approval mode allows every permission category; the environment overrides the setting", () => {
+    const permission = { bash: { "*": "allow" }, read: { "*": "allow" }, edit: "allow", webfetch: "allow", websearch: "allow", doom_loop: "allow", external_directory: "allow" };
+    const full = buildOmniRushRuntimeConfigObjectFromSnapshot(
+      { approvals: { mode: "full" }, permission: { external_directory: { "/Users/sam/Docs": "allow" } } },
+      undefined,
+      {},
+    );
+    expect(full.permission).toEqual(permission);
+    expect(full.agent).toMatchObject({ omnirush: { permission: { ...permission, skill: { "get-started": "deny" } } } });
+    // The setting is server state, never engine config.
+    expect(full.approvals).toBeUndefined();
+
+    // The engine asks before reading .env files by default and appends the injected block after its
+    // own rules; the full-mode catch-all read allow wins, the guarded block leaves the default alone.
+    const engineEnvDefaults = [{ permission: "read", pattern: "*.env", action: "ask" as const }, { permission: "read", pattern: "*.env.*", action: "ask" as const }];
+    const guarded = buildOmniRushRuntimeConfigObjectFromSnapshot({}, undefined, {});
+    for (const file of ["/workspace/.env", "/workspace/.env.local"]) {
+      expect(winningRule([...engineEnvDefaults, ...rulesFromPermissionConfig(full.permission)], "read", file)?.action).toBe("allow");
+      expect(winningRule([...engineEnvDefaults, ...rulesFromPermissionConfig(guarded.permission)], "read", file)?.action).toBe("ask");
+    }
+
+    // Organization denies are appended last so the engine's last-match-wins keeps them.
+    const denied = buildOmniRushRuntimeConfigObjectFromSnapshot({
+      approvals: { mode: "full" },
+      managedPolicy: { execution: { commands: "allow", blockedCommands: ["curl *"], browserOrigins: ["https://approved.example"], blockBrowserUploads: false } },
+    }, undefined, {});
+    expect(denied.permission).toEqual({ ...permission, bash: { "*": "allow", "curl *": "deny" }, webfetch: "deny", websearch: "deny" });
+
+    // OMNIRUSH_APPROVALS on the server process wins in both directions; the default stays guarded.
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({ approvals: { mode: "full" } }, undefined, { OMNIRUSH_APPROVALS: "guarded" }).permission)
+      .toEqual({ bash: gitWorkflowPermissionRules() });
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}, undefined, { OMNIRUSH_APPROVALS: "full" }).permission).toEqual(permission);
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}, undefined, {}).permission).toEqual({ bash: gitWorkflowPermissionRules() });
   });
 
   test("writes global-row MCPs and omnirush defaults into the file", async () => {

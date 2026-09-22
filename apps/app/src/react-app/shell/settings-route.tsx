@@ -2245,6 +2245,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
           <GeneralSettingsView
             onNavigateTab={(tab) => navigateSettingsPath(tab)}
             developerMode={developerMode}
+            omnirushClient={omnirushClient}
+            runtimeWorkspaceId={runtimeWorkspaceId}
           />
         );
       case "permissions":

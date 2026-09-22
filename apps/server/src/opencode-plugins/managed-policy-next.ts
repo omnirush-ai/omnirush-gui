@@ -15,7 +15,7 @@ export default {
     applyEnginePath();
     await ctx.tool.hook("execute.before", (event) =>
       checkManagedTool(event.tool, event.input, { directory: ctx.directory, callID: event.callID, sessionID: event.sessionID }));
-    await ctx.shell.hook("create.before", (event) => check("shell", { command: event.command }));
-    await ctx.session.hook("http.request", (event) => check("model", event.model));
+    await ctx.shell.hook("create.before", async (event) => { await check("shell", { command: event.command }); });
+    await ctx.session.hook("http.request", async (event) => { await check("model", event.model); });
   },
 };

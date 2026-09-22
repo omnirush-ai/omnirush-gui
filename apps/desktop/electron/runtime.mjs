@@ -1927,6 +1927,10 @@ export function createRuntimeManager({
     const gatewayCredentials = await omnirushGatewayCredentials?.load?.() ?? null;
 
     // Inject user env vars so the server and managed OpenCode inherit them.
+    // The embedded server runs in this process and reads process.env, so an
+    // OMNIRUSH_APPROVALS=full|guarded from the launching shell reaches it
+    // here (the user env file cannot set OMNIRUSH_* keys, see
+    // loadUserEnvFile) and forces the engine approval mode.
     const serverEnv = await buildChildEnv({});
     Object.assign(process.env, serverEnv);
     if (omnirushGatewayCredentials) {

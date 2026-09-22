@@ -118,6 +118,8 @@ type ComposerProps = {
   flush?: boolean;
   topAccessory?: ReactNode;
   runModeControl?: ReactNode;
+  /** The "Full permissions" switch, rendered right after the model selector. */
+  fullPermissionsControl?: ReactNode;
 };
 
 const FLUSH_PROMPT_EVENT = "omnirush:flushPromptDraft";
@@ -1761,6 +1763,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                     if (!props.steering) props.onModelVariantChange(value);
                   }}
                 />
+                {props.fullPermissionsControl}
                 {props.modelUnavailable ? props.onRefreshOrganizationModels ? (
                   <button
                     type="button"

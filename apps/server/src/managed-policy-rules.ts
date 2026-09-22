@@ -1,5 +1,6 @@
 import type { DesktopConfig, DesktopExecutionPolicy, DesktopPolicyKey } from "@omnirush/types/den/desktop-policies";
 import { z } from "zod";
+import type { ApprovalMode } from "./approval-mode.js";
 import { gitWorkflowPermissionRules } from "./git-command-policy.js";
 
 export const managedPolicyActionSchema = z.enum([
@@ -41,18 +42,30 @@ export function executionRules(policy: DesktopExecutionPolicy | undefined): Engi
 }
 type LegacyExecutionPermissions = {
   bash: Record<string, "allow" | "ask" | "deny">;
+  /** Full mode only: a catch-all allow appended after the engine's default `read *.env: ask` / `read *.env.*: ask` rules. */
+  read?: Record<string, "allow">;
   webfetch?: "allow" | "deny";
   websearch?: "allow" | "deny";
+  edit?: "allow";
+  doom_loop?: "allow";
+  external_directory?: "allow";
 };
 /**
- * Engine permission block for every managed desktop: the built-in git and PR
- * workflow rules (read-only commands run, write commands ask once per
- * session per command family, destructive commands always ask) followed by
- * the organization's execution policy. The engine picks the last matching
- * rule, so an organization deny always wins over a workflow allow.
+ * Engine permission block for every managed desktop: in guarded mode the
+ * built-in git and PR workflow rules (read-only commands run, write commands
+ * ask once per session per command family, destructive commands always ask);
+ * in full mode a single catch-all allow for bash, a catch-all allow for read
+ * (the engine's own defaults ask before reading `*.env` and `*.env.*`; the
+ * later `read *` allow wins) and allow for every other permission category
+ * the pinned engine exposes, so nothing asks. Both are
+ * followed by the organization's execution policy. The engine picks the last
+ * matching rule, so an organization deny always wins over a workflow or
+ * full-mode allow.
  */
-export function legacyExecutionPermissions(policy: DesktopExecutionPolicy | undefined): LegacyExecutionPermissions {
-  const permissions: LegacyExecutionPermissions = { bash: gitWorkflowPermissionRules() };
+export function legacyExecutionPermissions(policy: DesktopExecutionPolicy | undefined, mode: ApprovalMode = "guarded"): LegacyExecutionPermissions {
+  const permissions: LegacyExecutionPermissions = mode === "full"
+    ? { bash: { "*": "allow" }, read: { "*": "allow" }, edit: "allow", webfetch: "allow", websearch: "allow", doom_loop: "allow", external_directory: "allow" }
+    : { bash: gitWorkflowPermissionRules() };
   for (const rule of executionRules(policy)) {
     if (rule.action === "shell") {
       // Re-insert so a pattern the workflow rules already use moves after them.
@@ -140,6 +153,7 @@ export function policyRequestActions(method: string, path: string): ManagedPolic
   const actions: ManagedPolicyAction[] = [];
   if (/^\/workspaces\/(local|remote)$/.test(path)) actions.push("workspace");
   if (/^\/runtime-config\/providers$/.test(path)) actions.push("provider");
+  if (/^\/runtime-config\/approvals$/.test(path)) actions.push("settings");
   if (/^\/workspace\/[^/]+\/(?:cloud-plugins|claude-plugins|plugins|skills|commands|mcp)(?:\/|$)/.test(path)
     && !/\/mcp\/[^/]+\/(?:auth|managed\/connect)$/.test(path)) actions.push("extensions");
   if (/^\/workspace\/[^/]+\/(?:config|opencode-config|runtime-config|permissions|authorized-folders)(?:\/|$)/.test(path)) actions.push("settings");

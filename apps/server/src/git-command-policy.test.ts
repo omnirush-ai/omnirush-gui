@@ -24,12 +24,23 @@ function commandNodes(command: string): string[] {
   });
 }
 
-/** The engine's evaluation: its own allow-everything default followed by the injected bash rules; last match wins. */
-function engineAction(bash: Record<string, string>, command: string): string {
+/** The engine's evaluation: its own allow-everything default followed by the injected bash rules; last match wins. The plugin marks destructive commands in guarded mode only. */
+function engineAction(bash: Record<string, string>, command: string, mode: "guarded" | "full" = "guarded"): string {
   const rules = [{ permission: "*", pattern: "*", action: "allow" as const }, ...rulesFromPermissionConfig({ bash })];
-  const marked = markDestructiveCommands(command).command;
+  const marked = mode === "full" ? command : markDestructiveCommands(command).command;
   return commandNodes(marked).map((node) => winningRule(rules, "bash", node)?.action ?? "ask").join(",");
 }
+
+/** The pinned engine's own default ruleset for the omnirush agent, as effective-permissions.e2e.test.ts records it. */
+const ENGINE_DEFAULT_RULES = [
+  { permission: "*", pattern: "*", action: "allow" as const },
+  { permission: "doom_loop", pattern: "*", action: "ask" as const },
+  { permission: "external_directory", pattern: "*", action: "ask" as const },
+  { permission: "read", pattern: "*", action: "allow" as const },
+  { permission: "read", pattern: "*.env", action: "ask" as const },
+  { permission: "read", pattern: "*.env.*", action: "ask" as const },
+  { permission: "read", pattern: "*.env.example", action: "allow" as const },
+];
 
 describe("git workflow command classification", () => {
   test("read-only git and gh commands", () => {
@@ -265,6 +276,45 @@ describe("git workflow permission rules", () => {
     expect(engineAction(blocked, "git status")).toBe("deny");
     expect(engineAction(blocked, "git push origin f")).toBe("deny");
     expect(engineAction(blocked, "gh pr list")).toBe("allow");
+  });
+
+  test("full approval mode: one catch-all allow, no ask rules, organization denies still come last", () => {
+    const full = legacyExecutionPermissions(undefined, "full");
+    expect(full).toEqual({ bash: { "*": "allow" }, read: { "*": "allow" }, edit: "allow", webfetch: "allow", websearch: "allow", doom_loop: "allow", external_directory: "allow" });
+    for (const command of ["git status", "git commit -m x", "git push --force origin f", "rm -rf build", "sudo rm -rf /x",
+      "bash -c 'git reset --hard'", `${DESTRUCTIVE_MARKER} git push -f origin f`, "if git push -f origin f; then echo ok; fi"]) {
+      expect(engineAction(full.bash, command, "full").split(",").every((action) => action === "allow")).toBe(true);
+    }
+    const denied = legacyExecutionPermissions({ commands: "deny", blockedCommands: [], blockBrowserUploads: false }, "full");
+    expect(denied.bash).toEqual({ "*": "deny" });
+    expect(engineAction(denied.bash, "echo hi", "full")).toBe("deny");
+    const blocked = legacyExecutionPermissions(
+      { commands: "allow", blockedCommands: ["git push*"], browserOrigins: ["https://approved.example"], blockBrowserUploads: false },
+      "full",
+    );
+    expect(Object.entries(blocked.bash)).toEqual([["*", "allow"], ["git push*", "deny"]]);
+    expect(engineAction(blocked.bash, "git push --force origin f", "full")).toBe("deny");
+    expect(engineAction(blocked.bash, "rm -rf build", "full")).toBe("allow");
+    expect(blocked).toMatchObject({ read: { "*": "allow" }, edit: "allow", webfetch: "deny", websearch: "deny" });
+  });
+
+  test("full approval mode outranks the engine's default ask rules, including reading .env files", () => {
+    // The engine appends the injected block after its own defaults; last match wins.
+    const action = (mode: "guarded" | "full", permission: string, pattern: string) =>
+      winningRule([...ENGINE_DEFAULT_RULES, ...rulesFromPermissionConfig(legacyExecutionPermissions(undefined, mode))], permission, pattern)?.action ?? "ask";
+    // Guarded mode leaves every category but bash to the engine defaults.
+    expect(action("guarded", "read", "/workspace/.env")).toBe("ask");
+    expect(action("guarded", "read", "/workspace/.env.local")).toBe("ask");
+    expect(action("guarded", "read", "/workspace/.env.example")).toBe("allow");
+    expect(action("guarded", "external_directory", "/outside/repo")).toBe("ask");
+    expect(action("guarded", "doom_loop", "*")).toBe("ask");
+    for (const [permission, pattern] of [
+      ["read", "/workspace/.env"], ["read", "/workspace/.env.local"], ["read", "/workspace/src/index.ts"],
+      ["bash", "git push --force origin f"], ["edit", "/workspace/.env"], ["external_directory", "/outside/repo"],
+      ["doom_loop", "*"], ["webfetch", "https://example.com"], ["websearch", "*"],
+    ]) {
+      expect({ permission, pattern, action: action("full", permission, pattern) }).toEqual({ permission, pattern, action: "allow" });
+    }
   });
 
   test("rule table shape", () => {

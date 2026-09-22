@@ -6,6 +6,7 @@ import {
   FolderLock,
   Paintbrush,
   RefreshCcw,
+  ShieldCheck,
   Sparkles,
   Terminal,
   Wrench,
@@ -14,6 +15,7 @@ import {
 
 import type { OmniRushAccountSignOutReason } from "@omnirush/types/desktop-ipc";
 
+import { Switch } from "@/components/ui/switch";
 import { t } from "../../../../i18n";
 import type { SettingsTab } from "../../../../app/types";
 import {
@@ -21,11 +23,22 @@ import {
   omnirushAccountSignOut,
   omnirushAccountStatus,
 } from "../../../../app/lib/desktop";
+import type { OmniRushRuntimeApprovals } from "../../../../app/lib/omnirush-server";
 import { isElectronRuntime } from "../../../../app/utils";
+import {
+  FULL_PERMISSIONS_HELP,
+  approvalsEnvironmentHint,
+  useApprovalMode,
+  type ApprovalsClient,
+} from "../approval-mode";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
   developerMode: boolean;
+  /** Server client for the Approvals card; the card is hidden without one. */
+  omnirushClient?: ApprovalsClient | null;
+  /** Workspace whose engine is reloaded after the approval mode changes. */
+  runtimeWorkspaceId?: string | null;
 };
 
 type NativeAccountStatus = Awaited<ReturnType<typeof omnirushAccountStatus>>;
@@ -122,10 +135,54 @@ export function accountServerLine(account: Pick<NativeAccountStatus, "connected"
   return account.connected ? `Connected to ${host}` : `Account server: ${host}`;
 }
 
+/**
+ * Settings > General > Approvals. The mode, busy flag and status come from
+ * useApprovalMode, which the composer's "Full permissions" switch shares.
+ */
+export function ApprovalsCard(props: {
+  approvals: OmniRushRuntimeApprovals | null;
+  busy: boolean;
+  status: string;
+  onToggle: (enabled: boolean) => void;
+}) {
+  const hint = props.approvals ? approvalsEnvironmentHint(props.approvals) : null;
+  const full = props.approvals?.mode === "full";
+  return (
+    <div className="space-y-3">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
+        Approvals
+      </div>
+      <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
+          <ShieldCheck size={17} className={full ? "text-amber-400" : "text-dls-secondary"} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-dls-text">Full permissions</div>
+          <div className="text-[11px] text-dls-secondary">{FULL_PERMISSIONS_HELP}</div>
+          {hint ? (
+            <div className="mt-0.5 text-[11px] text-dls-secondary" data-testid="approvals-env-hint">{hint}</div>
+          ) : null}
+          {props.status ? (
+            <div className="mt-0.5 text-[11px] text-dls-secondary" data-testid="approvals-status">{props.status}</div>
+          ) : null}
+        </div>
+        <Switch
+          aria-label="Full permissions"
+          checked={full}
+          disabled={props.busy || !props.approvals || hint !== null}
+          onCheckedChange={props.onToggle}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   const [account, setAccount] = useState<NativeAccountStatus | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
+  const approvalsClient = props.omnirushClient ?? null;
+  const approvalMode = useApprovalMode(approvalsClient, props.runtimeWorkspaceId ?? null);
 
   useEffect(() => {
     if (!isElectronRuntime()) return;
@@ -256,6 +313,14 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
         </div>
       </div>
 
+      {approvalsClient ? (
+        <ApprovalsCard
+          approvals={approvalMode.approvals}
+          busy={approvalMode.busy}
+          status={approvalMode.status}
+          onToggle={(enabled) => void approvalMode.setFullPermissions(enabled)}
+        />
+      ) : null}
     </div>
   );
 }

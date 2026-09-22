@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveApprovalMode } from "./approval-mode.js";
+import { managedDesktopPolicy } from "./managed-desktop-policy.js";
+import { policyRequestActions } from "./managed-policy-rules.js";
 import { addMcp, listMcp, setMcpEnabled } from "./mcp.js";
 import { buildOmniRushRuntimeConfig } from "./omnirush-runtime-config.js";
 import { readOmniRushWorkspaceConfig } from "./omnirush-workspace-config-store.js";
@@ -323,6 +326,57 @@ describe("runtime OpenCode config store", () => {
           runtimeKeys: ["mcp"],
         });
       } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("approval mode persists in the global row, OMNIRUSH_APPROVALS overrides it, and the engine plugin is told", async () => {
+    await withWorkspace(async ({ config }) => {
+      const previousMode = process.env.OMNIRUSH_APPROVALS;
+      delete process.env.OMNIRUSH_APPROVALS;
+      const server = await startServer(config) as Served;
+      const base = `http://127.0.0.1:${server.port}`;
+      const headers = { authorization: `Bearer ${config.token}`, "content-type": "application/json" };
+      const readApprovals = async () => (await fetch(`${base}/runtime-config/approvals`, { headers })).json();
+      const policyHeaders = { authorization: `Bearer ${managedDesktopPolicy(config).evaluationToken}`, "content-type": "application/json" };
+      const evaluate = async () => (await fetch(`${base}/managed-policy/evaluate`, {
+        method: "POST", headers: policyHeaders, body: JSON.stringify({ action: "shell", input: { command: "git status" } }),
+      })).json();
+      try {
+        expect(await readApprovals()).toEqual({ mode: "guarded", source: "default", setting: null });
+        expect(await evaluate()).toEqual({ allowed: true, approvalMode: "guarded" });
+
+        const invalid = await fetch(`${base}/runtime-config/approvals`, { method: "PUT", headers, body: JSON.stringify({ mode: "yes" }) });
+        expect(invalid.status).toBe(400);
+
+        const enabled = await fetch(`${base}/runtime-config/approvals`, { method: "PUT", headers, body: JSON.stringify({ mode: "full" }) });
+        expect(enabled.status).toBe(200);
+        expect(await enabled.json()).toEqual({ ok: true, changed: true, mode: "full", source: "settings", setting: "full" });
+        expect((await readGlobalRuntimeOpencodeConfig(config)).approvals).toEqual({ mode: "full" });
+        // Workspace rows never carry the mode; the effective config inherits the global one.
+        expect((await readEffectiveRuntimeOpencodeConfig(config, WORKSPACE_ID)).approvals).toEqual({ mode: "full" });
+        // The injected engine config follows the row; the setting itself stays out of it.
+        const injected = JSON.parse(await buildOmniRushRuntimeConfig(config)) as { permission?: { bash?: Record<string, string> }; approvals?: unknown };
+        expect(injected.permission?.bash).toEqual({ "*": "allow" });
+        expect(injected.approvals).toBeUndefined();
+        // Every evaluate answer carries the mode, so the plugin needs no restart.
+        expect(await evaluate()).toEqual({ allowed: true, approvalMode: "full" });
+
+        // The environment wins over the setting; Settings shows the switch disabled.
+        process.env.OMNIRUSH_APPROVALS = "guarded";
+        expect(await readApprovals()).toEqual({ mode: "guarded", source: "environment", setting: "full" });
+        expect(await evaluate()).toEqual({ allowed: true, approvalMode: "guarded" });
+        const guarded = JSON.parse(await buildOmniRushRuntimeConfig(config)) as { permission?: { bash?: Record<string, string> } };
+        expect(guarded.permission?.bash?.["*"]).toBeUndefined();
+
+        expect(resolveApprovalMode({ approvals: { mode: "guarded" } }, { OMNIRUSH_APPROVALS: " FULL " })).toEqual({ mode: "full", source: "environment", setting: "guarded" });
+        expect(resolveApprovalMode({}, { OMNIRUSH_APPROVALS: "yes" })).toEqual({ mode: "guarded", source: "default", setting: null });
+        // Organizations that lock settings lock the switch as well.
+        expect(policyRequestActions("PUT", "/runtime-config/approvals")).toEqual(["settings"]);
+      } finally {
+        if (previousMode === undefined) delete process.env.OMNIRUSH_APPROVALS;
+        else process.env.OMNIRUSH_APPROVALS = previousMode;
         await server.stop(true);
       }
     });

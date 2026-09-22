@@ -1,3 +1,4 @@
+import { resolveApprovalMode } from "./approval-mode.js";
 import { legacyExecutionPermissions } from "./managed-policy-rules.js";
 import { managedPolicyPluginPath } from "./managed-policy-plugin.js";
 /**
@@ -160,10 +161,12 @@ export async function buildOmniRushRuntimeConfigObject(
 export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   runtimeConfig: RuntimeOpencodeConfig,
   internalGateway?: InternalGatewayRuntime,
+  env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
   const disabledProviders = runtimeDisabledProviderList(runtimeConfig);
-  const permissions = legacyExecutionPermissions(runtimeConfig.managedPolicy?.execution);
-  const { managedPolicy: _managedPolicy, ...engineConfig } = runtimeConfig;
+  // OMNIRUSH_APPROVALS in the server environment wins over the persisted setting.
+  const permissions = legacyExecutionPermissions(runtimeConfig.managedPolicy?.execution, resolveApprovalMode(runtimeConfig, env).mode);
+  const { managedPolicy: _managedPolicy, approvals: _approvals, ...engineConfig } = runtimeConfig;
   const provider = {
     ...runtimeProviderMap(runtimeConfig),
     ...(internalGateway

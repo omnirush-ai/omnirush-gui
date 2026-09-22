@@ -112,6 +112,27 @@ Server side this is the `git_identity` action of `/managed-policy/evaluate`
 profile through the account store; a standalone server with
 `OMNIRUSH_GATEWAY_URL` / `OMNIRUSH_ACCESS_TOKEN` reads `/device/me` directly.
 
+## Full permissions mode
+
+The rules above are the `guarded` approval mode, the default. Settings >
+General > Approvals > "Full permissions" switches the engine to `full` mode:
+nothing asks. The injected `permission.bash` block becomes a single
+`"*": "allow"` rule (no git ask rules, no `OMNIRUSH_DESTRUCTIVE` marker rule),
+`permission.read` becomes a single `"*": "allow"` rule (so `.env` files, which
+the engine asks about by default, are read without a prompt) and `edit`,
+`webfetch`, `websearch`, `doom_loop` and `external_directory` are set to
+`allow`. Organization denies from Den are still appended last and win.
+
+In full mode the managed-policy plugin does not write the destructive marker
+and never refuses a commit for a missing identity; it still sets the
+repository-local identity from the connected omnirush.ai account when the
+repository has none, and reports it in the tool output.
+
+`OMNIRUSH_APPROVALS=full|guarded` in the environment of the app or server
+process forces the mode and disables the switch. See
+[approvals.md](approvals.md) for how to launch with it and how the mode reaches
+the engine.
+
 ## Troubleshooting gh
 
 - `gh: command not found` in the agent: install GitHub CLI (`brew install gh`

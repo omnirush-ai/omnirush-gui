@@ -1,4 +1,5 @@
 import { managedDesktopPolicy } from "./managed-desktop-policy.js";
+import { parseApprovalMode, resolveApprovalMode } from "./approval-mode.js";
 import { createTaskRecovery, setTaskRecovery } from "./task-recovery.js";
 import { managedPolicyActionSchema } from "./managed-policy-rules.js";
 import { readFile, realpath, writeFile, rm, stat } from "node:fs/promises";
@@ -3489,6 +3490,25 @@ function createRoutes(
     return jsonResponse({ provider: runtimeProviderMap(runtime) });
   });
 
+  // Engine approval mode: OMNIRUSH_APPROVALS in the server environment wins
+  // over the persisted setting (source "environment"), so Settings shows the
+  // switch disabled while the environment forces it.
+  addRoute(routes, "GET", "/runtime-config/approvals", "client", async () =>
+    jsonResponse(resolveApprovalMode(await readGlobalRuntimeOpencodeConfig(config))));
+
+  addRoute(routes, "PUT", "/runtime-config/approvals", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const body = await readJsonBody(ctx.request);
+    const mode = parseApprovalMode(body.mode);
+    if (!mode) throw new ApiError(400, "invalid_payload", 'mode must be "guarded" or "full"');
+    const result = await writeGlobalRuntimeOpencodeConfig(config, (current) => ({ ...current, approvals: { mode } }));
+    // The injected engine config file must carry the new rules before the
+    // client's engine reload re-reads it.
+    await writeOmniRushRuntimeConfigFile(config);
+    return jsonResponse({ ok: true, changed: result.changed, ...resolveApprovalMode(result.config) });
+  });
+
   addRoute(routes, "PUT", "/den-session", "host-token", async (ctx) => {
     ensureWritable(config);
     const session = parseCloudProviderDenSession(await readJsonBody(ctx.request));
@@ -3563,7 +3583,9 @@ function createRoutes(
     const action = managedPolicyActionSchema.safeParse(body.action);
     if (!action.success || !isRecord(body.input)) throw new ApiError(400, "invalid_payload", "A supported policy action and input are required");
     await managedDesktopPolicy(config).assert(action.data, body.input);
-    return jsonResponse({ allowed: true });
+    // The plugin applies the git workflow rules (destructive marker, commit
+    // identity refusal) only in guarded mode.
+    return jsonResponse({ allowed: true, approvalMode: resolveApprovalMode(await readGlobalRuntimeOpencodeConfig(config)).mode });
   });
 
   addRoute(routes, "GET", "/cloud-provider-sync/status", "client", async () => {

@@ -390,6 +390,15 @@ export type OmniRushRuntimeConfigStatus = {
   };
 };
 
+export type OmniRushApprovalMode = "guarded" | "full";
+export type OmniRushRuntimeApprovals = {
+  /** Effective mode: the environment override, else the setting, else guarded. */
+  mode: OmniRushApprovalMode;
+  source: "environment" | "settings" | "default";
+  /** The persisted user setting, even while the environment overrides it. */
+  setting: OmniRushApprovalMode | null;
+};
+
 export type OmniRushDesktopCloudSyncChange = {
   id: string;
   kind: "new" | "modified" | "removed";
@@ -1824,6 +1833,16 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         `/workspace/${encodeURIComponent(workspaceId)}/runtime-config`,
         { token, hostToken, timeoutMs: timeouts.config },
       ),
+    getRuntimeApprovals: () =>
+      requestJson<OmniRushRuntimeApprovals>(baseUrl, "/runtime-config/approvals", { token, hostToken, timeoutMs: timeouts.config }),
+    setRuntimeApprovals: (mode: OmniRushApprovalMode) =>
+      requestJson<OmniRushRuntimeApprovals & { ok: boolean; changed: boolean }>(baseUrl, "/runtime-config/approvals", {
+        token,
+        hostToken,
+        method: "PUT",
+        body: { mode },
+        timeoutMs: timeouts.config,
+      }),
     patchConfig: (workspaceId: string, payload: { opencode?: Record<string, unknown>; omnirush?: Record<string, unknown> }) =>
       requestJson<{ updatedAt?: number | null }>(baseUrl, `/workspace/${workspaceId}/config`, {
         token,

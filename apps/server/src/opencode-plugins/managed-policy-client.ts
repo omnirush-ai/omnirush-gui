@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { DEFAULT_APPROVAL_MODE, parseApprovalMode, type ApprovalMode } from "../approval-mode.js";
 import type { ManagedPolicyAction } from "../managed-policy-rules.js";
 import { classifyShellCommand, markDestructiveCommands, type ClassifiedCommand, type IdentityFields } from "../git-command-policy.js";
 
@@ -30,18 +31,26 @@ export async function checkManagedTool(tool: string, raw: unknown, context: Mana
   else if (tool === "webfetch" || tool === "websearch") action = tool;
   else if (tool === "browser_navigate" || tool === "browser_open") action = "browser";
   else if (tool === "omnirush_execute") {
-    if (input.id === "browser.open_url") return check("browser", record(input.args));
+    if (input.id === "browser.open_url") {
+      await check("browser", record(input.args));
+      return;
+    }
     if (typeof input.id === "string" && /^(?:plugin|skill|mcp)\.(?:install|add|update|remove)/.test(input.id)) action = "extensions";
   }
   // Even read-only tools synchronize policy, so unknown identities cannot keep
   // running with a previous member's loaded configuration.
-  await check(action ?? "sync", input);
+  const verdict = await check(action ?? "sync", input);
   // The organization policy saw the command as written; the git workflow
   // rules then rewrite it in place (the engine reads the same args object).
-  if (action === "shell") await prepareShellCommand(input, context);
+  if (action === "shell") await prepareShellCommand(input, context, { approvalMode: verdict.approvalMode });
 }
 
-export async function check(action: ManagedPolicyAction, input: Record<string, unknown>): Promise<void> {
+export interface PolicyVerdict {
+  /** Approval mode the server resolved (environment, then setting, then guarded) at the time of this call. */
+  approvalMode: ApprovalMode;
+}
+
+export async function check(action: ManagedPolicyAction, input: Record<string, unknown>): Promise<PolicyVerdict> {
   const base = process.env.OMNIRUSH_SERVER_URL;
   const token = process.env.OMNIRUSH_POLICY_TOKEN;
   if (!base || !token) throw new Error("OmniRush.ai policy service is unavailable.");
@@ -49,10 +58,12 @@ export async function check(action: ManagedPolicyAction, input: Record<string, u
     method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ action, input }), signal: AbortSignal.timeout(15_000),
   });
+  const payload = record(await response.json().catch(() => undefined));
   if (!response.ok) {
-    const payload = record(await response.json());
     throw new Error(typeof payload.message === "string" ? payload.message : "Your organization blocked this action.");
   }
+  // A server that predates approval modes answers without one: guarded.
+  return { approvalMode: parseApprovalMode(payload.approvalMode) ?? DEFAULT_APPROVAL_MODE };
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +117,8 @@ export interface PrepareShellOptions {
   readIdentity?: GitIdentityReader;
   ensureIdentity?: (directory: string) => Promise<void>;
   env?: NodeJS.ProcessEnv;
+  /** Full mode leaves the command untouched and never refuses a commit; default guarded. */
+  approvalMode?: ApprovalMode;
 }
 
 /** Repositories the command records commits in, resolved against the tool's working directory. */
@@ -127,6 +140,11 @@ export function commitRepositories(classified: ClassifiedCommand[], cwd: string)
  * an exported `GIT_AUTHOR_*` / `GIT_COMMITTER_*` pair or the process
  * environment, so the recovery the refusal message asks for is never refused
  * again.
+ *
+ * In full approval mode nothing asks, so the destructive marker is not
+ * written and a missing identity never refuses the command: the account
+ * identity is still applied to the repository when one is connected, and the
+ * commit runs with whatever git has otherwise.
  */
 export async function prepareShellCommand(
   input: Record<string, unknown>,
@@ -134,9 +152,10 @@ export async function prepareShellCommand(
   options: PrepareShellOptions = {},
 ): Promise<void> {
   if (typeof input.command !== "string") return;
-  const marked = markDestructiveCommands(input.command);
-  if (marked.command !== input.command) input.command = marked.command;
-  const classified = classifyShellCommand(marked.command);
+  const full = options.approvalMode === "full";
+  const command = full ? input.command : markDestructiveCommands(input.command).command;
+  if (command !== input.command) input.command = command;
+  const classified = classifyShellCommand(command);
   const base = context.directory && isAbsolute(context.directory) ? context.directory : process.cwd();
   const workdir = typeof input.workdir === "string" && input.workdir.trim() ? input.workdir.trim() : ".";
   const cwd = resolve(base, workdir);
@@ -164,11 +183,21 @@ export async function prepareShellCommand(
     }
     // The server applies the account identity to this repository or refuses
     // with the message that explains what to ask the user.
-    await ensureIdentity(directory);
+    try {
+      await ensureIdentity(directory);
+    } catch (error) {
+      if (!full) throw error;
+      settled.add(directory);
+      continue;
+    }
     const after = await readIdentity(directory);
     if (!after.name || !after.email) {
-      throw new Error("Git identity is not configured for this repository (user.name and user.email are unset). "
-        + 'Ask the user which name and email to commit with, then run: git config user.name "<name>" && git config user.email "<email>" (never --global).');
+      if (!full) {
+        throw new Error("Git identity is not configured for this repository (user.name and user.email are unset). "
+          + 'Ask the user which name and email to commit with, then run: git config user.name "<name>" && git config user.email "<email>" (never --global).');
+      }
+      settled.add(directory);
+      continue;
     }
     settled.add(directory);
     notes.push(`omnirush.ai set the commit identity for ${directory} to ${after.name} <${after.email}> from the connected omnirush.ai account `
