@@ -452,7 +452,7 @@ export function CloudWorkspaceBootTakeover(props: { decision: CloudWorkspaceMain
                     size="sm"
                     onClick={() => platform.openLink(denWebBillingUrl(readDenSettings().baseUrl))}
                   >
-                    Get OmniRush.ai Web
+                    Get omnirush.ai Web
                     <ArrowUpRight className="size-4" aria-hidden="true" />
                   </Button>
                   <Button type="button" size="sm" variant="outline" onClick={() => void cloudWorkspace.refresh()}>

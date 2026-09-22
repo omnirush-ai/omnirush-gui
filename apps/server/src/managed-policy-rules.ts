@@ -1,9 +1,13 @@
 import type { DesktopConfig, DesktopExecutionPolicy, DesktopPolicyKey } from "@omnirush/types/den/desktop-policies";
 import { z } from "zod";
+import { gitWorkflowPermissionRules } from "./opencode-plugins/managed-policy-git.js";
 
 export const managedPolicyActionSchema = z.enum([
   "sync", "shell", "terminal", "saved_command", "file_write", "engine_config", "browser_external",
   "model", "webfetch", "websearch", "browser", "extensions", "settings", "provider", "workspace",
+  // The engine is about to record a commit in a repository; the server
+  // defaults the identity from the omnirush.ai account or refuses clearly.
+  "git_identity",
 ]);
 export type ManagedPolicyAction = z.infer<typeof managedPolicyActionSchema>;
 
@@ -36,15 +40,23 @@ export function executionRules(policy: DesktopExecutionPolicy | undefined): Engi
   return rules;
 }
 type LegacyExecutionPermissions = {
-  bash?: Record<string, "allow" | "deny">;
+  bash: Record<string, "allow" | "ask" | "deny">;
   webfetch?: "allow" | "deny";
   websearch?: "allow" | "deny";
 };
+/**
+ * Engine permission block for every managed desktop: the built-in git and PR
+ * workflow rules (read-only commands run, write commands ask once per
+ * session per command family, destructive commands always ask) followed by
+ * the organization's execution policy. The engine picks the last matching
+ * rule, so an organization deny always wins over a workflow allow.
+ */
 export function legacyExecutionPermissions(policy: DesktopExecutionPolicy | undefined): LegacyExecutionPermissions {
-  const permissions: LegacyExecutionPermissions = {};
+  const permissions: LegacyExecutionPermissions = { bash: gitWorkflowPermissionRules() };
   for (const rule of executionRules(policy)) {
     if (rule.action === "shell") {
-      permissions.bash ??= {};
+      // Re-insert so a pattern the workflow rules already use moves after them.
+      delete permissions.bash[rule.resource];
       permissions.bash[rule.resource] = rule.effect;
     } else if (rule.action === "webfetch" || rule.action === "websearch") {
       // The pinned engine accepts only scalar actions for these two tools.

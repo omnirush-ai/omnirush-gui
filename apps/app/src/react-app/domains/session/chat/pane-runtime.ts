@@ -49,7 +49,7 @@ export function resolveWorkbenchPaneEndpoint<TWorkspace extends PaneWorkspace>(i
       status: "unavailable",
       workspaceId: input.workspace.id,
       workspaceTitle: input.workspaceTitle,
-      message: "OmniRush.ai could not connect to this workspace runtime.",
+      message: "omnirush.ai could not connect to this workspace runtime.",
     };
   }
 

@@ -35,10 +35,10 @@ describe("Automation execution thread UI", () => {
     })
   })
 
-  test("labels a Web-created run as OmniRush.ai Cloud on Desktop", () => {
+  test("labels a Web-created run as omnirush.ai Cloud on Desktop", () => {
     expect(automationExecutionIdentity(cloudThread())).toEqual({
       icon: "cloud",
-      label: "OmniRush.ai Cloud",
+      label: "omnirush.ai Cloud",
     })
   })
 

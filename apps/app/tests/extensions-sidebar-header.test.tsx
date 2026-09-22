@@ -46,7 +46,9 @@ describe("Extensions sidebar destination", () => {
     const searchIndex = source.indexOf("<Search");
     const extensionsIndex = source.indexOf("<SidebarDestination");
     const pinnedIndex = source.indexOf("{pinnedSessions.length");
-    const footerIndex = source.indexOf("<SidebarFooter");
+    // The native account footer component is defined above the sidebar body
+    // and renders its own <SidebarFooter>; measure the body footer instead.
+    const footerIndex = source.indexOf("<SidebarFooter", extensionsIndex);
 
     expect(searchIndex).toBeGreaterThan(-1);
     expect(extensionsIndex).toBeGreaterThan(searchIndex);

@@ -134,7 +134,7 @@ function health(input: { usable: boolean; failure?: OmniRushCloudMcpFailure | nu
   };
 }
 
-describe("OmniRush.ai Cloud MCP reconciler", () => {
+describe("omnirush.ai Cloud MCP reconciler", () => {
   beforeEach(() => installStorageStub());
 
   test("uses the minted web proxy resource instead of a stale direct API fallback", () => {
@@ -453,7 +453,7 @@ describe("OmniRush.ai Cloud MCP reconciler", () => {
     const canonicalProjectionFailure = {
       ...failure("provider_tool_projection_missing"),
       stage: "provider_projection" as const,
-      recommendedAction: "Choose a model that can use OmniRush.ai Cloud tools",
+      recommendedAction: "Choose a model that can use omnirush.ai Cloud tools",
     };
     expect(cloudMcpFailureStageLabel({
       signedIn: true,
@@ -468,7 +468,7 @@ describe("OmniRush.ai Cloud MCP reconciler", () => {
     })).toMatchObject({
       statusLabel: "Degraded",
       stageLabel: "Current model can’t use Cloud tools",
-      recommendedAction: "Choose a model that can use OmniRush.ai Cloud tools.",
+      recommendedAction: "Choose a model that can use omnirush.ai Cloud tools.",
     });
 
     const summary = cloudMcpDisplaySummary({

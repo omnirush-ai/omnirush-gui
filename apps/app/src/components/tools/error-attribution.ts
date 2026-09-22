@@ -107,7 +107,7 @@ export function reconnectActionFromChatToolResult(
   result: unknown,
   input?: unknown,
 ): ChatToolReconnectAction | null {
-  // Only canonical OmniRush.ai Cloud tools may produce a native connection action.
+  // Only canonical omnirush.ai Cloud tools may produce a native connection action.
   // Discovery may offer authorization only for an explicit setup request;
   // finding an unavailable connection is not itself a reason to prompt.
   if (!OMNIRUSH_CLOUD_CAPABILITY_TOOLS.has(toolName)) return null
@@ -170,15 +170,15 @@ export function attributeChatToolError(errorText: string): ToolErrorAttribution 
   const providerCode = stringValue(diagnostic, "providerCode")
 
   if (
-    errorText.includes("OmniRush.ai stopped waiting after")
+    errorText.includes("omnirush.ai stopped waiting after")
     || /The capability call exceeded \d+(?:\.\d+)?s\b/.test(errorText)
     || code === "MCP_LIFECYCLE_DEADLINE"
     || code === "MCP_REQUEST_TIMEOUT"
     || category === "lifecycle_deadline"
   ) {
     return confirmed(
-      "OmniRush.ai timeout",
-      "OmniRush.ai created this deadline. The external operation may still have completed, so verify its state before retrying.",
+      "omnirush.ai timeout",
+      "omnirush.ai created this deadline. The external operation may still have completed, so verify its state before retrying.",
     )
   }
 
@@ -187,7 +187,7 @@ export function attributeChatToolError(errorText: string): ToolErrorAttribution 
     || code === "MCP_URL_BLOCKED"
     || code === "MCP_FETCH_FORBIDDEN_PORT"
   ) {
-    return confirmed("Blocked by OmniRush.ai", "OmniRush.ai blocked the request before it was sent.")
+    return confirmed("Blocked by omnirush.ai", "omnirush.ai blocked the request before it was sent.")
   }
 
   if (httpStatus !== undefined && (httpStatus < 200 || httpStatus >= 300)) {

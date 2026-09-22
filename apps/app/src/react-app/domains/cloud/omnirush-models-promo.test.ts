@@ -19,7 +19,7 @@ afterEach(async () => {
   await setDenBootstrapConfig({ baseUrl: DEFAULT_DEN_BASE_URL, requireSignin: false });
 });
 
-describe("OmniRush.ai Models promo eligibility", () => {
+describe("omnirush.ai Models promo eligibility", () => {
   test("allows promotions on the default Den URL after normalization", () => {
     expect(isOmniRushModelsPromoEligibleForDenBaseUrl(`${HOSTED_DEFAULT_DEN_BASE_URL}/api/den/`)).toBe(true);
   });

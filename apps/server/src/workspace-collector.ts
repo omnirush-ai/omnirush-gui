@@ -28,6 +28,10 @@ export const MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES = 64 * 1024;
 export const MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES = 256 * 1024;
 /** Task-tool subagent nesting captured below a root session (children, grandchildren, ...). */
 export const MAX_COLLECTOR_CHILD_SESSION_DEPTH = 3;
+// Events kept per session between trace flushes; older events are dropped
+// first. Every push site goes through appendTrace so the cap holds for the
+// model, child, browser, attachment and artifact events too.
+export const MAX_COLLECTOR_TRACE_EVENTS = 5_000;
 const MAX_FILES = MAX_COLLECTOR_FILES;
 const MAX_SNAPSHOT_BYTES = MAX_COLLECTOR_SNAPSHOT_BYTES;
 const MAX_TRACE_BYTES = MAX_COLLECTOR_TRACE_BYTES;
@@ -623,13 +627,21 @@ function boundedTracePayload(
     events: selected,
   })).text);
 
-  const selected: TraceEvent[] = [];
-  for (const event of events) {
-    const candidate = encode([...selected, event], true);
-    if (candidate.byteLength > maxBytes) break;
-    selected.push(event);
+  // One encode settles the common case. Only an oversized trace pays for the
+  // search, which bisects on the prefix length: every probe is a full encode
+  // (serialize + redact), so probing once per event stalled the event loop
+  // for seconds at the MAX_COLLECTOR_TRACE_EVENTS cap.
+  let payload = encode(events, false);
+  if (payload.byteLength <= maxBytes) return payload;
+  let fits = 0;
+  let overflow = events.length;
+  while (overflow - fits > 1) {
+    const middle = Math.floor((fits + overflow) / 2);
+    if (encode(events.slice(0, middle), true).byteLength <= maxBytes) fits = middle;
+    else overflow = middle;
   }
-  let payload = encode(selected, selected.length < events.length);
+  const selected = events.slice(0, fits);
+  payload = encode(selected, true);
   while (payload.byteLength > maxBytes && selected.length > 0) {
     selected.pop();
     payload = encode(selected, true);
@@ -785,7 +797,7 @@ function parseGitStatus(raw: string, prefix = ""): { entries: GitStatusEntry[]; 
 function parseGitRemotes(raw: string): GitRemote[] {
   const remotes = new Map<string, string>();
   for (const line of raw.split(/\r?\n/)) {
-    const match = line.match(/^(\S+)\t(.+?)(?:\s+\((fetch|push)\))?$/);
+    const match = line.match(/^(\S+)\t(.+?)(?:\s+\(((?:fetc|pus)h)\))?$/);
     if (!match?.[1] || !match[2]) continue;
     if (remotes.has(match[1]) && match[3] === "push") continue;
     remotes.set(match[1], match[2]);
@@ -1288,11 +1300,7 @@ export class WorkspaceCollector {
     state.childCheckpoints = new Map([...Object.entries(previous?.childCheckpoints ?? {}), ...state.childCheckpoints]);
     state.resumed = Boolean(previous);
     if (state.resumed) {
-      state.trace.push({
-        at: new Date().toISOString(),
-        type: "session.resumed",
-        data: { session_segment: state.segment, previous_segment: previous?.segment ?? null },
-      });
+      this.appendTrace(state, "session.resumed", { session_segment: state.segment, previous_segment: previous?.segment ?? null });
     }
     this.ledger.sessions[state.id] = this.ledgerRecord(state);
     await this.saveLedger();
@@ -1439,8 +1447,13 @@ export class WorkspaceCollector {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
     for (const candidate of pathCandidates(data)) this.recordTouchedPath(state, candidate);
+    this.appendTrace(state, type, data);
+  }
+
+  /** Appends one trace event, keeping only the newest MAX_COLLECTOR_TRACE_EVENTS. */
+  private appendTrace(state: SessionState, type: string, data?: unknown): void {
     state.trace.push({ at: new Date().toISOString(), type, ...(data === undefined ? {} : { data }) });
-    if (state.trace.length > 5_000) state.trace.splice(0, state.trace.length - 5_000);
+    if (state.trace.length > MAX_COLLECTOR_TRACE_EVENTS) state.trace.splice(0, state.trace.length - MAX_COLLECTOR_TRACE_EVENTS);
   }
 
   private recordTouchedPath(state: SessionState, candidate: string): void {
@@ -1478,7 +1491,7 @@ export class WorkspaceCollector {
       agent: clamp(model.agent),
     };
     state.model = cleaned;
-    state.trace.push({ at: new Date().toISOString(), type: "session.model", data: { ...cleaned } });
+    this.appendTrace(state, "session.model", { ...cleaned });
     void this.persistOnceReady(state);
   }
 
@@ -1513,16 +1526,12 @@ export class WorkspaceCollector {
     }
     if (child.lastMessageId) state.childCheckpoints.set(child.childSessionId, child.lastMessageId);
     for (const candidate of pathCandidates(child.messages)) this.recordTouchedPath(state, candidate);
-    state.trace.push({
-      at: new Date().toISOString(),
-      type: "session.child",
-      data: {
-        child_session_id: child.childSessionId,
-        parent_session_id: child.parentSessionId,
-        title: child.title ? clampCollectorText(child.title, MAX_GIT_SUBJECT_CHARS) : null,
-        agent: child.agent ? clampCollectorText(child.agent, MAX_ENVIRONMENT_FIELD_CHARS) : null,
-        messages: child.messages,
-      },
+    this.appendTrace(state, "session.child", {
+      child_session_id: child.childSessionId,
+      parent_session_id: child.parentSessionId,
+      title: child.title ? clampCollectorText(child.title, MAX_GIT_SUBJECT_CHARS) : null,
+      agent: child.agent ? clampCollectorText(child.agent, MAX_ENVIRONMENT_FIELD_CHARS) : null,
+      messages: child.messages,
     });
     void this.persistOnceReady(state);
   }
@@ -1541,15 +1550,11 @@ export class WorkspaceCollector {
     url.password = "";
     const title = collectorTextForTrace(visit.title ?? null, MAX_WEB_VISIT_TITLE_CHARS * 4);
     const text = collectorTextForTrace(visit.text ?? null, MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES);
-    state.trace.push({
-      at: new Date().toISOString(),
-      type: "web.visit",
-      data: {
-        url: clampCollectorText(redactCollectorText(url.toString()).text, MAX_WEB_VISIT_URL_CHARS),
-        title: title.text === null ? null : clampCollectorText(title.text, MAX_WEB_VISIT_TITLE_CHARS),
-        text: text.text,
-        text_truncated: text.truncated,
-      },
+    this.appendTrace(state, "web.visit", {
+      url: clampCollectorText(redactCollectorText(url.toString()).text, MAX_WEB_VISIT_URL_CHARS),
+      title: title.text === null ? null : clampCollectorText(title.text, MAX_WEB_VISIT_TITLE_CHARS),
+      text: text.text,
+      text_truncated: text.truncated,
     });
     return true;
   }
@@ -1559,17 +1564,13 @@ export class WorkspaceCollector {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
     const text = collectorTextForTrace(attachment.text, MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES);
-    state.trace.push({
-      at: new Date().toISOString(),
-      type: "attachment",
-      data: {
-        name: clampCollectorText(redactCollectorText(basename(attachment.name || "attachment")).text, MAX_ATTACHMENT_NAME_CHARS),
-        mime: clampCollectorText(attachment.mime || "application/octet-stream", MAX_ATTACHMENT_MIME_CHARS),
-        bytes: Math.max(0, Math.floor(attachment.bytes)),
-        sha256: attachment.sha256,
-        text: text.text,
-        text_truncated: text.truncated || attachment.textTruncated === true,
-      },
+    this.appendTrace(state, "attachment", {
+      name: clampCollectorText(redactCollectorText(basename(attachment.name || "attachment")).text, MAX_ATTACHMENT_NAME_CHARS),
+      mime: clampCollectorText(attachment.mime || "application/octet-stream", MAX_ATTACHMENT_MIME_CHARS),
+      bytes: Math.max(0, Math.floor(attachment.bytes)),
+      sha256: attachment.sha256,
+      text: text.text,
+      text_truncated: text.truncated || attachment.textTruncated === true,
     });
   }
 
@@ -1614,7 +1615,7 @@ export class WorkspaceCollector {
       if (stat.size > MAX_ARTIFACT_HASH_BYTES) continue;
       try {
         const sha256 = await sha256File(resolve(state.root, path));
-        state.trace.push({ at: new Date().toISOString(), type: "artifact", data: { path: collectorPathForUpload(path), sha256, bytes: stat.size } });
+        this.appendTrace(state, "artifact", { path: collectorPathForUpload(path), sha256, bytes: stat.size });
         state.touchedPaths.add(path);
         emitted += 1;
       } catch {
@@ -1733,7 +1734,7 @@ export class WorkspaceCollector {
     const signature = await workspaceSignature(state.root);
     const changed = Boolean(signature) && (signature !== state.lastSignature || this.journalHasChanges(state));
     if (trigger === "prompt" || trigger === "turn_completed") {
-      state.trace.push({ at: new Date().toISOString(), type: "collector.trigger", data: { trigger, captured: changed } });
+      this.appendTrace(state, "collector.trigger", { trigger, captured: changed });
     }
     if (!changed) return;
     state.lastSignature = signature;

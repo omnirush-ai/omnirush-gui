@@ -26,6 +26,6 @@ export function GeneratedAppPreview({ html, payload, title, revision }: {
     return <p role="status" className="text-sm text-muted-foreground">Connect a workspace to open the preview.</p>;
   }
   return <McpAppSandboxView app={resource} toolName={title} inputArguments={PREVIEW_ARGUMENTS}
-    result={result} unavailableNotice="This app could not open. Try reopening it, or ask OmniRush.ai to fix the preview."
+    result={result} unavailableNotice="This app could not open. Try reopening it, or ask omnirush.ai to fix the preview."
     initialHeight={360} readOnly />;
 }

@@ -86,12 +86,12 @@ describe("session error resilience", () => {
   test("does not diagnose a generic database failure as a full disk", () => {
     const presentation = presentOpencodeSessionError("effect/sql/SqlError: Failed to execute statement\n at runLoop (/$bunfs/root/chunk.js:25:2045)")
     expect(presentation.kind).toBe("database-error")
-    expect(presentation.title).toBe("OmniRush.ai couldn’t access its saved data")
+    expect(presentation.title).toBe("omnirush.ai couldn’t access its saved data")
     expect(presentation.description).toContain("check the available disk space")
     expect(presentation.description).not.toContain("has run out")
   })
 
-  test("classifies an OpenCode abort and retains its diagnostic payload", () => {
+  test("classifies an omnirush.ai abort and retains its diagnostic payload", () => {
     const presentation = presentOpencodeSessionError({
       name: "MessageAbortedError",
       data: {
@@ -384,7 +384,7 @@ describe("session error resilience", () => {
           reason: "free_tier_limit",
           provider: "opencode",
           title: "Free limit reached",
-          message: "Subscribe to OpenCode Go for reliable access to the best open-source models, starting at $5/month.",
+          message: "Subscribe to omnirush.ai Go for reliable access to the best open-source models, starting at $5/month.",
           label: "subscribe",
           link: "https://opencode.ai/go",
         },
@@ -393,7 +393,7 @@ describe("session error resilience", () => {
       expect(container.textContent).toContain("The free starter model is busy right now")
       expect(container.textContent).toContain("Connect a model provider")
       expect(container.textContent).not.toContain("subscribe to Go")
-      expect(container.textContent).not.toContain("OpenCode Go")
+      expect(container.textContent).not.toContain("omnirush.ai Go")
       expect(container.textContent).not.toContain("$5/month")
       const connectButton = Array.from(container.querySelectorAll("button")).find(
         (button) => button.textContent === "Connect a model provider",

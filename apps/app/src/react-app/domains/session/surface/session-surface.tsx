@@ -162,7 +162,7 @@ import { buildConnectorToolIdentities } from "@/react-app/domains/connections/co
 
 const EMPTY_TRANSCRIPT: UIMessage[] = [];
 const IDLE_STATUS: SessionStatus = { type: "idle" };
-const DEFAULT_COMPOSER_CONTROL_TEXT = "Help me outline the next OmniRush.ai task.";
+const DEFAULT_COMPOSER_CONTROL_TEXT = "Help me outline the next omnirush.ai task.";
 const SESSION_SURFACE_SELECTOR = "[data-session-surface-id]";
 
 function sanitizedInspectorDiagnosticText(value: string) {
@@ -176,7 +176,7 @@ function sanitizedInspectorDiagnosticText(value: string) {
 
 const MARKDOWN_PRIMITIVE_EVAL_TEXT = `# Markdown proof heading
 
-This shared renderer keeps **bold proof text**, inline \`renderMarkdownHtml\`, and [OmniRush.ai link](https://omnirushlabs.com) readable in one message.
+This shared renderer keeps **bold proof text**, inline \`renderMarkdownHtml\`, and [omnirush.ai link](https://omnirushlabs.com) readable in one message.
 
 \`\`\`ts
 const pipeline = "shared markdown primitive";
@@ -362,7 +362,7 @@ function createChatTranscriptEvalMessages(sessionId: string) {
         },
         {
           type: "text",
-          text: "Your plan is drafted — details in [OmniRush.ai](https://omnirushlabs.com). Search token: chat-transcript-proof.",
+          text: "Your plan is drafted — details in [omnirush.ai](https://omnirushlabs.com). Search token: chat-transcript-proof.",
         },
       ],
       // `completed` makes the finished turn fold behind a real
@@ -594,9 +594,9 @@ export type SessionSurfaceProps = {
   selectedModel: ModelRef;
   /** providerID → modelID → provider model, for per-session variant options. */
   providerCatalog?: ProviderCatalog;
-  /** Den/import includes OmniRush.ai Models for this org member (not just local sync). */
+  /** Den/import includes omnirush.ai Models for this org member (not just local sync). */
   omniRushModelsEntitled?: boolean;
-  /** The server is waiting to reload this workspace with OmniRush.ai Models. */
+  /** The server is waiting to reload this workspace with omnirush.ai Models. */
   omniRushModelsSyncing?: boolean;
   onRefreshOrganizationModels?: () => void | Promise<void>;
   onModelPickerOpenChange: (open: boolean) => void;
@@ -644,7 +644,7 @@ export type SessionSurfaceProps = {
 };
 
 function messageToReadableText(message: UIMessage) {
-  const header = message.role === "user" ? "You" : message.role === "assistant" ? "OmniRush.ai" : message.role;
+  const header = message.role === "user" ? "You" : message.role === "assistant" ? "omnirush.ai" : message.role;
   const body = message.parts
     .flatMap((part) => {
       if (part.type === "text") return [part.text];
@@ -2799,7 +2799,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const organizationId = settings.activeOrgId?.trim() ?? "";
     if (!token || !organizationId) {
       props.onOpenConnect();
-      throw new Error("Sign in to OmniRush.ai Cloud, then try reconnecting again.");
+      throw new Error("Sign in to omnirush.ai Cloud, then try reconnecting again.");
     }
 
     const scope: ChatMcpReconnectScope = {
@@ -2818,7 +2818,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     try {
       const denClient = createDenClient({ baseUrl: settings.baseUrl, token });
       const connections = await denClient.listMcpConnections(organizationId, "usable");
-      if (!isChatMcpReconnectScopeCurrent(scope, currentScope())) throw new Error("Your OmniRush.ai account changed. Try connecting again.");
+      if (!isChatMcpReconnectScopeCurrent(scope, currentScope())) throw new Error("Your omnirush.ai account changed. Try connecting again.");
       const connection = connections.find((entry) => entry.id === action.connectionId);
       if (!connection || connection.authType !== "oauth" || connection.credentialMode !== "per_member") {
         throw new Error(`${action.connectionName} is no longer available as your reconnectable account.`);
@@ -2831,7 +2831,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       });
       onProgress({ phase: "opening" });
       const result = await denClient.startMcpConnectionConnect(organizationId, action.connectionId);
-      if (!isChatMcpReconnectScopeCurrent(scope, currentScope())) throw new Error("Your OmniRush.ai account changed. Try connecting again.");
+      if (!isChatMcpReconnectScopeCurrent(scope, currentScope())) throw new Error("Your omnirush.ai account changed. Try connecting again.");
       if (result.status === "connected") {
         recordInspectorEvent("mcp.chat_reconnect.completed", {
           workspaceId: props.workspaceId,

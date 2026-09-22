@@ -43,7 +43,7 @@ export type UseSessionProviderAuthInput = {
   selectedWorkspaceRoot: string;
   selectedWorkspaceId: string;
   /**
-   * Live host token of the local OmniRush.ai server (desktop runtime host info).
+   * Live host token of the local omnirush.ai server (desktop runtime host info).
    * Enables the server-side provider sync path: PUT /den-session and
    * POST /cloud-provider-sync/run are host-token routes.
    */

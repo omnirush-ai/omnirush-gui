@@ -9,8 +9,8 @@
 // the Den session, and server-side cloud provider sync never started (#3671).
 //
 // This adapter reports the truth for the endpoint it wraps:
-// - local endpoints (the desktop's own OmniRush.ai server) advertise
-//   `providerSync: true` — every OmniRush.ai server does
+// - local endpoints (the desktop's own omnirush.ai server) advertise
+//   `providerSync: true` — every omnirush.ai server does
 //   (apps/server/src/types.ts `Capabilities.providerSync: true`) — and carry
 //   the live host token so the store can PUT /den-session and
 //   POST /cloud-provider-sync/run;

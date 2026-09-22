@@ -156,13 +156,13 @@ export const BUILT_IN_OMNIRUSH_EXTENSION_MANIFESTS: OmniRushExtensionManifest[] 
   {
     schemaVersion: 1,
     id: "omnirush-browser",
-    name: "OmniRush.ai Browser",
-    description: "Automate the built-in browser panel that stays visible inside OmniRush.ai.",
+    name: "omnirush.ai Browser",
+    description: "Automate the built-in browser panel that stays visible inside omnirush.ai.",
     source: { format: "omnirush-builtin", origin: "builtin", trusted: true },
     icon: { src: "/omnirush-mark.png" },
-    composer: { prompt: "Use the OmniRush.ai Browser extension to " },
+    composer: { prompt: "Use the omnirush.ai Browser extension to " },
     setup: {
-      instructions: "OmniRush.ai Browser is ready by default in desktop workspaces.",
+      instructions: "omnirush.ai Browser is ready by default in desktop workspaces.",
     },
     resources: [
       {
@@ -175,7 +175,7 @@ export const BUILT_IN_OMNIRUSH_EXTENSION_MANIFESTS: OmniRushExtensionManifest[] 
     contributions: [
       { type: "settings-panel", ref: "omnirush.browser.settings", location: "settings-detail" },
       { type: "session-side-panel", ref: "omnirush.browser.panel", location: "session-right-pane" },
-      { type: "composer-prompt", prompt: "Use the OmniRush.ai Browser extension to ", location: "composer" },
+      { type: "composer-prompt", prompt: "Use the omnirush.ai Browser extension to ", location: "composer" },
     ],
     enablement: [
       { type: "toggle-enabled", ref: "omnirush-browser", label: "Enabled" },
@@ -194,7 +194,7 @@ export const BUILT_IN_OMNIRUSH_EXTENSION_MANIFESTS: OmniRushExtensionManifest[] 
     icon: { src: "/omnirush-mark.png" },
     composer: { prompt: "Use Computer Use to " },
     setup: {
-      instructions: "Computer Use is available on macOS 14 or later. Grant Accessibility and Screen Recording in the helper. For each session, choose an app window and allow reading, app controls, or mouse and keyboard. Choose Allow and start in OmniRush.ai. Your input interrupts control; Stop in the preview ends access.",
+      instructions: "Computer Use is available on macOS 14 or later. Grant Accessibility and Screen Recording in the helper. For each session, choose an app window and allow reading, app controls, or mouse and keyboard. Choose Allow and start in omnirush.ai. Your input interrupts control; Stop in the preview ends access.",
       primaryCta: "Enable Computer Use",
       secondaryCta: "Check macOS permissions",
       testActionRef: "omnirush.computerUse.healthCheck",

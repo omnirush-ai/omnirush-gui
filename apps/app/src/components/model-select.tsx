@@ -91,7 +91,7 @@ function useModelOptions(
     return () => window.removeEventListener(newProvidersEvent, handler);
   }, [client, refetch]);
 
-  // Keep the picker intentionally small: OmniRush.ai-managed models plus the
+  // Keep the picker intentionally small: omnirush.ai-managed models plus the
   // four direct providers supported by the product UI.
   return React.useMemo(() => {
     const restrictToCloud = checkDesktopRestriction({

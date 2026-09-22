@@ -1,5 +1,5 @@
 /**
- * Web error monitoring for the OmniRush.ai web deployment (Sentry, zero-dependency).
+ * Web error monitoring for the omnirush.ai web deployment (Sentry, zero-dependency).
  *
  * Principles (mirrors `analytics.ts`):
  * - Detection-first: report that a web instance failed to boot or hit an

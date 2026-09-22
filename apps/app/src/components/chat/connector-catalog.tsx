@@ -56,7 +56,7 @@ export function ConnectorCatalogCard({ catalog }: { catalog: ConnectorCatalog })
       const expected = new URL("/dashboard/mcp-connections", readDenSettings().baseUrl)
       expected.searchParams.set("quickAdd", entry.id)
       // The model cannot supply a new setup destination or extra query parameters.
-      if (entry.setupUrl !== expected.toString()) throw new Error("Your OmniRush.ai server changed. Search for this connector again.")
+      if (entry.setupUrl !== expected.toString()) throw new Error("Your omnirush.ai server changed. Search for this connector again.")
       await openDesktopUrl(expected.toString())
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not open setup.") }
   }

@@ -75,15 +75,15 @@ describe("chat tool error attribution", () => {
     expect(connectionCardPayloadFromChatToolResult("omnirush-cloud_search_capabilities", { matches }, { intent: "connect" })).toBeNull()
   })
 
-  test("identifies an OmniRush.ai-created capability deadline", () => {
+  test("identifies an omnirush.ai-created capability deadline", () => {
     expect(attributeChatToolError("The capability call exceeded 180s. Retry once.")).toEqual({
-      label: "OmniRush.ai timeout",
+      label: "omnirush.ai timeout",
       confidence: "Confirmed",
-      description: "OmniRush.ai created this deadline. The external operation may still have completed, so verify its state before retrying.",
+      description: "omnirush.ai created this deadline. The external operation may still have completed, so verify its state before retrying.",
     })
   })
 
-  test("identifies a structured OmniRush.ai lifecycle deadline", () => {
+  test("identifies a structured omnirush.ai lifecycle deadline", () => {
     expect(attributeChatToolError(JSON.stringify({
       error: "connection_failed",
       diagnostic: {
@@ -92,16 +92,16 @@ describe("chat tool error attribution", () => {
         phase: "MCP_TOOL_EXECUTION",
       },
     }))).toMatchObject({
-      label: "OmniRush.ai timeout",
+      label: "omnirush.ai timeout",
       confidence: "Confirmed",
     })
   })
 
-  test("identifies an OmniRush.ai block before send", () => {
+  test("identifies an omnirush.ai block before send", () => {
     expect(attributeChatToolError(JSON.stringify({
       diagnostic: { code: "MCP_URL_BLOCKED", category: "security_blocked" },
     }))).toMatchObject({
-      label: "Blocked by OmniRush.ai",
+      label: "Blocked by omnirush.ai",
       confidence: "Confirmed",
     })
   })

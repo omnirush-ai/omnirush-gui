@@ -15,6 +15,7 @@ import {
   MAX_COLLECTOR_FILES,
   MAX_COLLECTOR_SESSION_BYTES,
   MAX_COLLECTOR_TRACE_BYTES,
+  MAX_COLLECTOR_TRACE_EVENTS,
   MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES,
   WorkspaceCollector,
   clampCollectorBytes,
@@ -821,6 +822,34 @@ describe("workspace collector trace additions", () => {
     });
     await second.stop();
   });
+
+  test("keeps only the newest 5,000 events across every push site", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-cap-"));
+    roots.push(root);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-cap-1234";
+    collector.startSession(sessionId, "workspace-cap", root);
+    await collector.idle(sessionId);
+    expect(MAX_COLLECTOR_TRACE_EVENTS).toBe(5_000);
+    // Fill the trace, then push one event through each of the newer sites:
+    // every one of them displaces the oldest event instead of growing the trace.
+    for (let index = 0; index < MAX_COLLECTOR_TRACE_EVENTS; index += 1) collector.recordTrace(sessionId, "filler", { index });
+    collector.recordSessionModel(sessionId, { provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: null, agent: null });
+    collector.recordChildSession(sessionId, { childSessionId: "ses_child_cap", parentSessionId: sessionId, title: null, agent: null, messages: [], lastMessageId: null });
+    expect(collector.recordWebVisit(sessionId, { url: "https://example.com/page", title: "Page", text: "text" })).toBe(true);
+    collector.recordAttachment(sessionId, { name: "note.txt", mime: "text/plain", bytes: 4, sha256: "0".repeat(64), text: "note", textTruncated: false });
+    collector.flushTrace(sessionId);
+    await collector.stop();
+
+    const events = traceEvents(uploads);
+    expect(events).toHaveLength(MAX_COLLECTOR_TRACE_EVENTS);
+    expect(events.slice(-4).map((event) => event.type)).toEqual(["session.model", "session.child", "web.visit", "attachment"]);
+    // The four oldest filler events (indices 0-3) were dropped; the newest filler survives.
+    expect(events[0]?.data).toEqual({ index: 4 });
+    expect(events.filter((event) => event.type === "filler")).toHaveLength(MAX_COLLECTOR_TRACE_EVENTS - 4);
+  }, 20_000);
 
   test("traces browser visits with redacted, capped text and never local pages", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-collector-web-"));

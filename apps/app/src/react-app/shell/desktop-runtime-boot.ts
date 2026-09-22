@@ -56,12 +56,12 @@ function isOmniRushServerReady(info?: BootOmniRushServerInfo) {
 /**
  * On desktop (Tauri) startup:
  *   1) bootstrap the workspace list
- *   2) if a local workspace is selected, restart the embedded OmniRush.ai server
+ *   2) if a local workspace is selected, restart the embedded omnirush.ai server
  *   3) start the OpenCode engine pointed at the workspace
- *   4) activate the workspace on the running OmniRush.ai server
+ *   4) activate the workspace on the running omnirush.ai server
  *   5) notify React routes that fresh desktop runtime info is available. Electron
  *      routes read live runtime info directly instead of persisting ephemeral
- *      localhost ports/tokens into OmniRush.ai settings.
+ *      localhost ports/tokens into omnirush.ai settings.
  *
  * Safe to call multiple times — gated by a `didBoot` ref so it runs once per mount.
  */
@@ -117,13 +117,13 @@ export function useDesktopRuntimeBoot() {
         };
 
         const startServerWithoutDesktopWorkspace = async () => {
-          setPhase("starting-engine", "Starting OmniRush.ai server");
+          setPhase("starting-engine", "Starting omnirush.ai server");
           const serverInfo = await omnirushServerRestart({ remoteAccessEnabled: preferredRemoteAccess }).catch((error) => {
             console.warn("[desktop-boot] omnirushServerRestart failed:", error);
             return null;
           });
           if (!isOmniRushServerInfoLike(serverInfo) || !isOmniRushServerReady(serverInfo)) {
-            setError("OmniRush.ai server did not finish starting. Please restart OmniRush.ai.");
+            setError("omnirush.ai server did not finish starting. Please restart omnirush.ai.");
             return;
           }
           publishOmniRushServerInfo(serverInfo);
@@ -167,12 +167,12 @@ export function useDesktopRuntimeBoot() {
           };
 
           if (boot.ok === false) {
-            setError(boot.error || "Failed to start OmniRush.ai runtime");
+            setError(boot.error || "Failed to start omnirush.ai runtime");
             return;
           }
 
           if (!boot.skipped && !isOmniRushServerReady(boot.omnirushServer)) {
-            setError("OmniRush.ai server did not finish starting. Please restart OmniRush.ai.");
+            setError("omnirush.ai server did not finish starting. Please restart omnirush.ai.");
             return;
           }
 

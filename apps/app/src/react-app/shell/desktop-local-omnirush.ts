@@ -171,7 +171,7 @@ export async function ensureDesktopLocalOmniRushConnection(
     // of failing on the first empty answer.
     const info = await waitForReadyLocalOmniRushServerInfo();
     if (!isReadyLocalOmniRushServerInfo(info) || !info.baseUrl) {
-      throw new Error("OmniRush.ai server did not become ready after activation.");
+      throw new Error("omnirush.ai server did not become ready after activation.");
     }
 
     const previousSettings = readOmniRushServerSettings();

@@ -51,9 +51,9 @@ export type McpDirectoryInfo = {
   type?: "remote" | "local";
   command?: string[];
   oauth: boolean;
-  /** Route OAuth through the local OmniRush.ai gateway instead of delegating it to OpenCode. */
+  /** Route OAuth through the local omnirush.ai gateway instead of delegating it to OpenCode. */
   managedOAuth?: boolean;
-  /** Identifies MCP entries owned by OmniRush.ai Connect instead of workspace configuration. */
+  /** Identifies MCP entries owned by omnirush.ai Connect instead of workspace configuration. */
   managedBy?: "omnirush-connect";
   oauthConfig?: {
     clientId?: string;
@@ -68,9 +68,9 @@ export type McpDirectoryInfo = {
   iconSrc?: string;
   /** Prompt inserted from the composer extension picker. */
   composerPrompt?: string;
-  /** Whether OmniRush.ai should show this extension as enabled before user setup. */
+  /** Whether omnirush.ai should show this extension as enabled before user setup. */
   defaultEnabled?: boolean;
-  /** Whether OmniRush.ai should hide this extension from the default catalog view. */
+  /** Whether omnirush.ai should hide this extension from the default catalog view. */
   defaultHidden?: boolean;
   /** Whether this extension is still in preview. */
   preview?: boolean;
@@ -187,7 +187,7 @@ export const MCP_QUICK_CONNECT: McpDirectoryInfo[] = [
     kind: "mcp",
     iconSrc: "/omnirush-mark.png",
     // Auto-managed by the signed-in cloud reconciler (syncCloudControlMcp):
-    // configured + enabled while signed in to OmniRush.ai Cloud. Hidden from the
+    // configured + enabled while signed in to omnirush.ai Cloud. Hidden from the
     // default catalog; "Show hidden" reveals it.
     defaultHidden: true,
   },

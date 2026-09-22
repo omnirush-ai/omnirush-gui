@@ -1141,7 +1141,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const installOpenAiImageExtension = useCallback(async (apiKey: string) => {
     const resolvedApiKey = apiKey.trim();
     if (!omnirushClient) {
-      setImageExtensionError("OmniRush.ai server is not connected.");
+      setImageExtensionError("omnirush.ai server is not connected.");
       return;
     }
     if (!resolvedApiKey) {
@@ -1155,7 +1155,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     try {
       await omnirushClient.upsertUserEnv([{ key: "OPENAI_API_KEY", value: resolvedApiKey }]);
       setUserEnvKeys((current) => Array.from(new Set([...current, "OPENAI_API_KEY"])));
-      setImageExtensionStatus("Saved OPENAI_API_KEY. Agents can use OmniRush.ai extension actions for image generation.");
+      setImageExtensionStatus("Saved OPENAI_API_KEY. Agents can use omnirush.ai extension actions for image generation.");
     } catch (error) {
       setImageExtensionError(describeRouteError(error));
     } finally {
@@ -1169,7 +1169,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     const apiKey = input.apiKey.trim();
     const prompt = input.prompt.trim();
     if (!client || !workspaceId) {
-      setImageGenerationError("OmniRush.ai server is not connected for this workspace.");
+      setImageGenerationError("omnirush.ai server is not connected for this workspace.");
       return;
     }
     if (!apiKey) {
@@ -1216,7 +1216,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     const workspaceId = runtimeWorkspaceId?.trim() ?? "";
     const modelId = input.modelId.trim();
     if (!client || !workspaceId) {
-      setLocalProviderError("OmniRush.ai server is not connected for this workspace.");
+      setLocalProviderError("omnirush.ai server is not connected for this workspace.");
       return;
     }
     if (!modelId) {
@@ -2140,7 +2140,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     setRenameWorkspaceBusy(true);
     try {
       if (!omnirushClient) {
-        toast.error("OmniRush.ai server is unavailable. Reconnect the server before renaming workspaces.");
+        toast.error("omnirush.ai server is unavailable. Reconnect the server before renaming workspaces.");
         return;
       }
       await omnirushClient.updateWorkspaceDisplayName(renameWorkspaceId, trimmed);
@@ -2177,7 +2177,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
       }
       return;
     }
-    throw new Error("OmniRush.ai server is unavailable. Reconnect the server before exporting workspace config.");
+    throw new Error("omnirush.ai server is unavailable. Reconnect the server before exporting workspace config.");
   }, [workspaceServerClientResolver, workspaces]);
 
   const handleForgetWorkspace = useCallback(async (workspaceId: string) => {
@@ -2467,15 +2467,15 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
               cloudMcpHealth={cloudMcpHealth}
               refreshCloudMcpHealth={refreshCloudMcpHealth}
               getEngineV2PreviewStatus={async () => {
-                if (!omnirushClient) throw new Error("OmniRush.ai server is not connected.");
+                if (!omnirushClient) throw new Error("omnirush.ai server is not connected.");
                 return omnirushClient.getEngineV2PreviewStatus();
               }}
               setEngineV2PreviewEnabled={async (enabled) => {
-                if (!omnirushClient) throw new Error("OmniRush.ai server is not connected.");
+                if (!omnirushClient) throw new Error("omnirush.ai server is not connected.");
                 return omnirushClient.setEngineV2PreviewEnabled(enabled);
               }}
               setEngineV2PreviewChatRouting={async (enabled) => {
-                if (!omnirushClient) throw new Error("OmniRush.ai server is not connected.");
+                if (!omnirushClient) throw new Error("omnirush.ai server is not connected.");
                 return omnirushClient.setEngineV2PreviewChatRouting(enabled);
               }}
               organizationServer={denSession}

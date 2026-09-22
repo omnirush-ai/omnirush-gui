@@ -1,9 +1,9 @@
 /**
  * Single source of truth for "where does a workspace's server live?".
  *
- * Every workspace-scoped API call in the app must route to the OmniRush.ai server
+ * Every workspace-scoped API call in the app must route to the omnirush.ai server
  * that actually owns that workspace. For local workspaces that's the user's
- * local OmniRush.ai server. For workspaces hosted on a remote OmniRush.ai worker
+ * local omnirush.ai server. For workspaces hosted on a remote omnirush.ai worker
  * (`id` starts with `rem_` and `workspaceType === "remote"`), it's the
  * `baseUrl`/`omnirushHostUrl` and `omnirushToken` saved on the workspace
  * record, with the workspace addressed by its server-side id (the `rem_`
@@ -27,13 +27,13 @@ import {
 } from "./omnirush-server";
 
 export type ResolvedWorkspaceEndpoint = {
-  /** Host URL of the OmniRush.ai server that owns this workspace (no `/workspace` mount). */
+  /** Host URL of the omnirush.ai server that owns this workspace (no `/workspace` mount). */
   baseUrl: string;
   /** Auth token for that server. May be empty for unauthenticated local servers. */
   token: string;
   /** Workspace id as the owning server expects it in URL paths. No `rem_` prefix. */
   workspaceId: string;
-  /** True when the workspace lives on a remote OmniRush.ai worker, not the user's local server. */
+  /** True when the workspace lives on a remote omnirush.ai worker, not the user's local server. */
   isRemote: boolean;
   /** OmniRushServerClient bound to {@link baseUrl}/{@link token}. */
   client: OmniRushServerClient;

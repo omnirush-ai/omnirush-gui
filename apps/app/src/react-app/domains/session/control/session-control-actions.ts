@@ -182,7 +182,7 @@ export function useSessionControlActions(input: UseSessionControlActionsInput) {
       const title = stringArg(args, "title");
       if (!sessionId) return { ok: false, error: "sessionId is required" };
       if (!title) return { ok: false, error: "title is required" };
-      if (!opencodeClient) return { ok: false, error: "OpenCode client is not connected" };
+      if (!opencodeClient) return { ok: false, error: "omnirush.ai client is not connected" };
 
       const targetWorkspace = findSessionWorkspace(workspaces, sessionsByWorkspaceId, sessionId);
       await opencodeClient.session.update({
@@ -213,7 +213,7 @@ export function useSessionControlActions(input: UseSessionControlActionsInput) {
       const confirmed = booleanArg(args, "confirmed");
       if (!sessionId) return { ok: false, error: "sessionId is required" };
       if (!confirmed) return { ok: false, error: "Deletion requires confirmed: true after explicit user confirmation" };
-      if (!omnirushClient) return { ok: false, error: "OmniRush.ai server is not connected" };
+      if (!omnirushClient) return { ok: false, error: "omnirush.ai server is not connected" };
 
       const targetWorkspace = findSessionWorkspace(workspaces, sessionsByWorkspaceId, sessionId);
       if (!targetWorkspace) return { ok: false, error: "Session was not found in the current session list" };
@@ -296,7 +296,7 @@ export function useSessionControlActions(input: UseSessionControlActionsInput) {
       const archived = booleanArg(args, "archived");
       if (archiveDisabledReason) return { ok: false, error: archiveDisabledReason };
       if (!sessionId) return { ok: false, error: "sessionId is required" };
-      if (!opencodeClient) return { ok: false, error: "OpenCode client is not connected" };
+      if (!opencodeClient) return { ok: false, error: "omnirush.ai client is not connected" };
       const targetWorkspace = findSessionWorkspace(workspaces, sessionsByWorkspaceId, sessionId);
       await setSessionArchived(opencodeClient, sessionId, archived, targetWorkspace?.path || selectedWorkspaceRoot || undefined);
       await refreshRouteState();

@@ -42,7 +42,7 @@ export function ComputerUseControls() {
               {session.windows?.map((window) => <option key={window.id} value={window.id}>{window.title}</option>)}
             </select>
           </label>
-          <p className="my-3 text-xs text-muted-foreground">{session.mode === "observe" ? "Read this window. No clicks or typing." : session.mode === "assist" ? "Read and use this window’s app controls." : "Use this window’s mouse and keyboard. OmniRush.ai yields to your input, then refreshes the window before continuing. Stop ends access."} Access lasts up to 15 minutes. Window content goes to your selected model provider.</p>
+          <p className="my-3 text-xs text-muted-foreground">{session.mode === "observe" ? "Read this window. No clicks or typing." : session.mode === "assist" ? "Read and use this window’s app controls." : "Use this window’s mouse and keyboard. omnirush.ai yields to your input, then refreshes the window before continuing. Stop ends access."} Access lasts up to 15 minutes. Window content goes to your selected model provider.</p>
           <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => send("deny")}>Cancel</Button><Button disabled={selectedWindow === undefined || action.isPending} onClick={() => send("approve")}>Allow and start</Button></div>
         </> : <>
           <p className="mt-2 truncate text-xs text-muted-foreground">{session.windowTitle} · {session.mode === "observe" ? "Read only" : session.mode === "assist" ? "App controls" : "Mouse and keyboard"}</p>

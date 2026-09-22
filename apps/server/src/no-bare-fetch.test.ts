@@ -7,9 +7,9 @@ const srcDir = dirname(fileURLToPath(import.meta.url));
 // Flags every bare `fetch` reference, not only call sites, so fallback
 // expressions such as `input.fetchImpl ?? fetch` or `= fetch` cannot bypass
 // the ban. Allowed contexts: member access (`globalThis.fetch`), the
-// type-only `typeof fetch`, `fetch:` object/type keys, and prose where the
+// type-only `typeof fetch`, `fetch:` / `fetch?:` object/type keys, and prose where the
 // word `fetch` is followed by another word.
-const bareFetchPattern = /(?<![-.\w$])(?<!typeof )fetch\b(?!\s*:)(?!\s+[A-Za-z_$])/;
+const bareFetchPattern = /(?<![-.\w$])(?<!typeof )fetch\b(?!\s*\??\s*:)(?!\s+[A-Za-z_$])/;
 
 async function collectTypescriptFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });

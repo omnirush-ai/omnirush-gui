@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
+import { OmniRushGatewayBroker, guardEventStream } from "./omnirush-gateway-broker.js";
 import { OmniRushReasoningEffort } from "./opencode-plugins/omnirush-reasoning-effort.js";
 import type { OmniRushGatewayCredentials } from "./types.js";
 
@@ -170,5 +170,78 @@ describe("OmniRush gateway broker", () => {
       { model: "gpt-6-astra", input: "c" },
       { model: "gpt-6-astra", input: "d" },
     ]);
+  });
+});
+
+
+function sseBroker(chunks: string[]) {
+  return new OmniRushGatewayBroker({
+    credentials: {
+      gatewayUrl: "https://gateway.example/omnirush/v1",
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+    },
+    engineToken: "local-engine-token",
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+  });
+}
+
+async function readAll(response: Response): Promise<string> {
+  return new TextDecoder().decode(new Uint8Array(await response.arrayBuffer()));
+}
+
+describe("upstream stream guard", () => {
+  const created = 'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1"}}\n\n';
+  const completed = 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1"}}\n\n';
+
+  test("passes a completed stream through untouched", async () => {
+    const response = await sseBroker([created, completed]).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+    const text = await readAll(response);
+    expect(text).toBe(created + completed);
+    expect(text).not.toContain("upstream_stream_interrupted");
+  });
+
+  test("appends an error event when the upstream closes before a terminal event", async () => {
+    const partial = 'event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","delta":"{\\"patch"}\n\n';
+    const response = await sseBroker([created, partial]).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+    const text = await readAll(response);
+    expect(text.startsWith(created + partial)).toBe(true);
+    const tailEvent = text.slice((created + partial).length);
+    expect(tailEvent).toMatch(/^event: error\ndata: /);
+    const payload = JSON.parse(tailEvent.replace(/^event: error\ndata: /, "").trim()) as { type: string; error: { code: string; message: string } };
+    expect(payload.type).toBe("error");
+    expect(payload.error.code).toBe("upstream_stream_interrupted");
+    expect(payload.error.message).toContain("omnirush.ai");
+  });
+
+  test("treats response.failed and response.incomplete as terminal", async () => {
+    for (const terminal of ['data: {"type":"response.failed"}\n\n', 'data: {"type":"response.incomplete"}\n\n']) {
+      const response = await sseBroker([created, terminal]).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+      expect(await readAll(response)).toBe(created + terminal);
+    }
+  });
+
+  test("closes a stalled stream with an error event after the idle timeout", async () => {
+    const reasons: string[] = [];
+    const stalled = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(created)); },
+    });
+    const guarded = guardEventStream(stalled, { idleMs: 50, onInterrupted: (reason) => reasons.push(reason) });
+    const text = await readAll(new Response(guarded));
+    expect(reasons).toEqual(["idle"]);
+    expect(text.startsWith(created)).toBe(true);
+    expect(text).toContain("upstream_stream_interrupted");
+    expect(text).toContain("stalled");
+  });
+
+  test("does not wrap non-streamed JSON responses", async () => {
+    const calls: UpstreamCall[] = [];
+    const response = await capturingBroker(calls).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi" }), "responses");
+    expect(await response.json()).toEqual({ output: [] });
   });
 });

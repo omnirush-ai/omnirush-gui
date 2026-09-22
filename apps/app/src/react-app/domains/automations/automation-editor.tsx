@@ -325,7 +325,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       <div className="rounded-xl border border-border bg-muted/30 p-3 text-sm text-muted-foreground" data-automation-placement={props.placement}>
         {cloud
           ? "Runs on your cloud computer, even when your desktop is offline. You can check past runs here."
-          : "Runs on your desktop computer. Keep OmniRush.ai open, signed in, and connected at the scheduled time. If your desktop stays unavailable, the run is marked as missed."}
+          : "Runs on your desktop computer. Keep omnirush.ai open, signed in, and connected at the scheduled time. If your desktop stays unavailable, the run is marked as missed."}
       </div>
 
       <div className="flex justify-end gap-2">

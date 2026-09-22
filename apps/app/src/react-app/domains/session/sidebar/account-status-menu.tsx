@@ -129,7 +129,7 @@ function connectDotVariant(status: OmniRushConnectStatus): StatusDotVariant {
 
 /**
  * Non-developer mode shows one status row: the runtime status, unless
- * OmniRush.ai Connect needs attention (or is the only signal available).
+ * omnirush.ai Connect needs attention (or is the only signal available).
  * Developer mode keeps the two separate rows.
  */
 export function resolveCollapsedStatus(
@@ -140,7 +140,7 @@ export function resolveCollapsedStatus(
   if (connect && connect.state === "needs_attention") {
     return {
       variant: "disconnected",
-      label: `OmniRush.ai Connect: ${connect.label}`,
+      label: `omnirush.ai Connect: ${connect.label}`,
       detail: connect.description,
     };
   }
@@ -148,7 +148,7 @@ export function resolveCollapsedStatus(
   if (connect) {
     return {
       variant: connectDotVariant(connect),
-      label: `OmniRush.ai Connect: ${connect.label}`,
+      label: `omnirush.ai Connect: ${connect.label}`,
       detail: connect.description,
     };
   }
@@ -215,7 +215,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
 
   const docsControlAction = useMemo<OmniRushControlAction>(() => ({
     id: "status.docs.open",
-    label: "Open OmniRush.ai docs",
+    label: "Open omnirush.ai docs",
     description: "Open the documentation from the account menu.",
     sideEffect: "external",
     targetRef: triggerRef,
@@ -226,7 +226,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   const feedbackControlAction = useMemo<OmniRushControlAction>(() => ({
     id: "status.feedback.open",
     label: "Send feedback",
-    description: "Open the OmniRush.ai feedback surface from the account menu.",
+    description: "Open the omnirush.ai feedback surface from the account menu.",
     sideEffect: "external",
     disabled: !props.onSendFeedback,
     targetRef: triggerRef,
@@ -257,10 +257,10 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   });
   const accountLabel = signedIn
     ? user.name?.trim() || user.email
-    : restoringSession ? "OmniRush.ai Cloud" : "Sign in";
+    : restoringSession ? "omnirush.ai Cloud" : "Sign in";
   const accountDetail = signedIn
-    ? (user.name ? user.email : "OmniRush.ai Cloud")
-    : restoringSession ? "Restoring your session" : "Sync with OmniRush.ai Cloud";
+    ? (user.name ? user.email : "omnirush.ai Cloud")
+    : restoringSession ? "Restoring your session" : "Sync with omnirush.ai Cloud";
 
   const runtimeStatus = props.showConnectionStatus
     ? resolveRuntimeStatus({
@@ -339,7 +339,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
             title={connectNeedsAttention
               ? omniRushConnectAttentionTitle(connectStatus.description)
               : connectStatus
-                ? `${runtimeStatus ? `${runtimeStatus.label} · ` : ""}OmniRush.ai Connect: ${connectStatus.label}`
+                ? `${runtimeStatus ? `${runtimeStatus.label} · ` : ""}omnirush.ai Connect: ${connectStatus.label}`
                 : runtimeStatus?.label}
           >
               {signedIn ? (
@@ -399,7 +399,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
                     </span>
                     <div className="min-w-0">
                       <div className="text-[11.5px] font-medium text-foreground">
-                        {`OmniRush.ai Connect: ${connectStatus.label}`}
+                        {`omnirush.ai Connect: ${connectStatus.label}`}
                       </div>
                       <div className="text-[10.5px] leading-tight text-muted-foreground">
                         {connectStatus.description}
@@ -479,7 +479,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
             >
               <span className="inline-flex min-w-0 items-center gap-2">
                 <UserRound className="size-3.5" />
-                <span className="truncate">Sign in to OmniRush.ai Cloud</span>
+                <span className="truncate">Sign in to omnirush.ai Cloud</span>
               </span>
               <ArrowUpRight className="size-3.5" />
             </Button>

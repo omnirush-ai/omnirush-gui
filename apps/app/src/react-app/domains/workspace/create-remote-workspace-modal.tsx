@@ -107,7 +107,7 @@ export function CreateRemoteWorkspaceModal(
             submitting={submitting}
             hostInputRef={inputRef}
             title="Remote server details"
-            description="Use the URL your OmniRush.ai server shared with you. Add a token only if the server needs one."
+            description="Use the URL your omnirush.ai server shared with you. Add a token only if the server needs one."
           />
         </div>
 

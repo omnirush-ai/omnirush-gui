@@ -308,7 +308,7 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
       setError(
         nextError instanceof Error
           ? nextError.message
-          : "Failed to restore OmniRush.ai Cloud session.",
+          : "Failed to restore omnirush.ai Cloud session.",
       );
       updateStatus(failureStatus);
     }

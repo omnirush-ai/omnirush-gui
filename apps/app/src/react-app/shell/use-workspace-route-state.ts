@@ -505,7 +505,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
 
       const { normalizedBaseUrl, resolvedToken, resolvedHostToken, hostInfo } = await withRouteRefreshTimeout(
         resolveOmniRushConnection(),
-        "OmniRush.ai server connection",
+        "omnirush.ai server connection",
       );
       if (!attempt.isCurrent()) return;
       if (!normalizedBaseUrl || !resolvedToken) {
@@ -1007,7 +1007,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const selectedWorkspaceRoot = selectedWorkspace?.path?.trim() || "";
   // Single source of truth for the selected workspace's server URL/token/id.
   // For remote workspaces this is the worker that owns the workspace; for
-  // local workspaces it's the user's local OmniRush.ai server.
+  // local workspaces it's the user's local omnirush.ai server.
   const selectedWorkspaceEndpoint = useWorkspaceServerClient(selectedWorkspace, { baseUrl, token });
   const selectedWorkspaceServerToken = selectedWorkspaceEndpoint?.token ?? "";
   const defaultOpencodeBaseUrl = selectedWorkspaceEndpoint?.opencodeBaseUrl ?? "";

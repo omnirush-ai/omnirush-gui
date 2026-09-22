@@ -162,7 +162,7 @@ export function AgentAccessCard(props: {
     setBusy("test");
     setError(null);
     try {
-      // probe: verify the Cloud endpoint directly from the OmniRush.ai server as
+      // probe: verify the Cloud endpoint directly from the omnirush.ai server as
       // well, so a failure can be attributed to the endpoint, the network
       // path, or the engine — not just reported as the engine's cached state.
       const result = await runOmniRushCloudMcpReconciler({
@@ -198,7 +198,7 @@ export function AgentAccessCard(props: {
       if (result.status === "skipped") {
         setError(
           result.skippedReason === "unsupported"
-            ? "This OmniRush.ai server does not support engine refresh yet. Update OmniRush.ai, then retry."
+            ? "This omnirush.ai server does not support engine refresh yet. Update omnirush.ai, then retry."
             : "Select a workspace before refreshing the engine connection.",
         );
       }
@@ -374,7 +374,7 @@ export function AgentAccessCard(props: {
         <div className="space-y-1">
           <div className="text-base font-semibold text-dls-text">Agent access to connected services</div>
           <div className="max-w-[62ch] text-sm text-dls-secondary">
-            Lets agents use the exact OmniRush.ai Cloud tools for this active workspace and organization.
+            Lets agents use the exact omnirush.ai Cloud tools for this active workspace and organization.
           </div>
         </div>
         <SettingsStatusBadge label={summary.statusLabel} tone={summary.tone} />

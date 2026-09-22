@@ -313,7 +313,7 @@ export function McpAppSandboxView({ app, toolName, inputArguments, result, unava
         checkpoints: [...checkpoints],
         ...(sandboxDocument ? { sandboxDocument } : {}),
       }
-      console.error(`[OmniRush.ai MCP App] ${code}`, diagnostic)
+      console.error(`[omnirush.ai MCP App] ${code}`, diagnostic)
       setError(diagnostic)
     }
     checkpoint("resource-resolved")
@@ -323,14 +323,14 @@ export function McpAppSandboxView({ app, toolName, inputArguments, result, unava
         "MCP_APP_SANDBOX_ORIGIN_INVALID",
         "sandbox-proxy",
         null,
-        "The sandbox resolved to the same origin as the OmniRush.ai host.",
+        "The sandbox resolved to the same origin as the omnirush.ai host.",
         sandbox.expectedOrigin,
       )
       return
     }
     const bridge = new AppBridge(
       null,
-      { name: "OmniRush.ai", version: "1.0.0" },
+      { name: "omnirush.ai", version: "1.0.0" },
       readOnly ? {} : { serverTools: {} },
       {
         hostContext: {
@@ -346,7 +346,7 @@ export function McpAppSandboxView({ app, toolName, inputArguments, result, unava
         await openDesktopUrl(url)
         return {}
       } catch (cause) {
-        console.error("[OmniRush.ai MCP App] MCP_APP_OPEN_LINK_BLOCKED", {
+        console.error("[omnirush.ai MCP App] MCP_APP_OPEN_LINK_BLOCKED", {
           toolName,
           message: safeMcpAppDiagnosticMessage(cause, "The link could not be opened."),
         })
@@ -648,7 +648,7 @@ function EmbeddedMcpAppFrame({ part }: { part: DynamicToolUIPart }) {
             elapsedMs: Math.round(performance.now() - startedAt),
             checkpoints: ["resolve-started"],
           }
-          console.error(`[OmniRush.ai MCP App] ${diagnostic.code}`, diagnostic)
+          console.error(`[omnirush.ai MCP App] ${diagnostic.code}`, diagnostic)
           setError(diagnostic)
         }
       })

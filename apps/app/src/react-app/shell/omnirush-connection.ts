@@ -51,7 +51,7 @@ export function isStaleStoredDesktopConnection(input: {
 }
 
 /**
- * Resolve the OmniRush.ai server connection for routes that consume the server API.
+ * Resolve the omnirush.ai server connection for routes that consume the server API.
  *
  * Local desktop-hosted servers expose ephemeral loopback ports and freshly
  * minted tokens on every boot, so live runtime info is the source of truth

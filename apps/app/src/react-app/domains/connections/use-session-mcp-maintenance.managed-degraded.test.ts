@@ -109,7 +109,7 @@ function cloudHealth(usable: boolean): OmniRushCloudMcpHealth {
       code: "cloud_desired_missing",
       stage: "desired",
       retryable: false,
-      recommendedAction: "Connect OmniRush.ai Cloud",
+      recommendedAction: "Connect omnirush.ai Cloud",
       message: "missing",
     },
     checkedAt: new Date(NOW).toISOString(),
@@ -137,7 +137,7 @@ describe("managed MCP secure-storage degradation in session maintenance", () => 
         throw new OmniRushServerError(
           503,
           "managed_mcp_secure_storage_unavailable",
-          "Secure storage for OmniRush.ai-managed MCP credentials is unavailable.",
+          "Secure storage for omnirush.ai-managed MCP credentials is unavailable.",
         );
       },
       getOmniRushCloudMcpHealth: async () => cloudHealth(false),

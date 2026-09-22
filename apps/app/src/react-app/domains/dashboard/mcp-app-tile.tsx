@@ -232,7 +232,7 @@ export function McpAppTile({
         if (!userInitiated) return { phase: "idle", revokeAutoLaunch: true };
         const approved = window.confirm(
           `Allow this MCP App to call ${app.toolName} on ${app.serverName}? `
-          + "OmniRush.ai remembers your choice for this tile until you remove it.",
+          + "omnirush.ai remembers your choice for this tile until you remove it.",
         );
         if (!approved) return { phase: "error", message: "The app launch was declined." };
         result = await endpoint.client.callMcpAppTool(endpoint.workspaceId, { ...request, approved: true });

@@ -82,7 +82,7 @@ const ORG_PROXY_HEADER = "x-omnirush-legacy-org-id";
 const ORG_SCOPE_HEADER = "x-omnirush-org-id";
 const DEFAULT_DEN_TIMEOUT_MS = 12_000;
 
-export const DEFAULT_DEN_AUTH_NAME = "OmniRush.ai User";
+export const DEFAULT_DEN_AUTH_NAME = "omnirush.ai User";
 const BUILD_DEN_BASE_URL =
   (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_BASE_URL === "string"
     ? import.meta.env.VITE_DEN_BASE_URL
@@ -701,10 +701,10 @@ export function denOriginComparisonKey(input: string | null | undefined): string
 }
 
 /**
- * True when the effective Den control plane is not the hosted OmniRush.ai Cloud
+ * True when the effective Den control plane is not the hosted omnirush.ai Cloud
  * (app.omnirushlabs.com). Self-hosted deployments point the app at their own
  * control plane via VITE_DEN_BASE_URL or the desktop bootstrap config, so
- * hosted-only surfaces (e.g. OmniRush.ai Models upsells) should stay hidden.
+ * hosted-only surfaces (e.g. omnirush.ai Models upsells) should stay hidden.
  */
 export function isSelfHostedControlPlane(): boolean {
   return (
@@ -787,7 +787,7 @@ function isHostedDenHost(hostname: string): boolean {
  *
  * Only two shapes are known ahead of time:
  * - An explicit API host (`api.*`) is already the API origin.
- * - Hosted OmniRush.ai Cloud (`*.omnirushlabs.com`) serves its API at the
+ * - Hosted omnirush.ai Cloud (`*.omnirushlabs.com`) serves its API at the
  *   `api.`-prefixed host.
  *
  * Every other deployment (self-hosted single host, localhost, tunnel or
@@ -3221,7 +3221,7 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
       });
       const access = parseDenOmniRushWebAccess(payload);
       if (!access) {
-        throw new DenApiError(500, "invalid_omnirush_web_access_payload", "OmniRush.ai Web access response was invalid.");
+        throw new DenApiError(500, "invalid_omnirush_web_access_payload", "omnirush.ai Web access response was invalid.");
       }
       return access;
     },
@@ -3304,7 +3304,7 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
       });
     },
 
-    /** Web creation surface: placement is fixed to OmniRush.ai Cloud by the route. */
+    /** Web creation surface: placement is fixed to omnirush.ai Cloud by the route. */
     async createCloudAutomation(orgId: string, input: CreateCloudAutomation): Promise<AutomationDetail> {
       return requestJson<AutomationDetail>(baseUrls, "/v1/cloud-automations", {
         method: "POST",

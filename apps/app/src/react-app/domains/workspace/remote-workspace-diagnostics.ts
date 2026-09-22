@@ -104,7 +104,7 @@ function rejectedTokenMessage(target: RemoteWorkspaceConnectionTarget) {
 }
 
 function remoteSupportMessage(message: string) {
-  return `${message} Upgrade the OmniRush.ai host and try again. If this continues, contact team@omnirushlabs.com.`;
+  return `${message} Upgrade the omnirush.ai host and try again. If this continues, contact team@omnirushlabs.com.`;
 }
 
 export function redactRemoteDiagnosticText(value: string): string {
@@ -165,7 +165,7 @@ export function resolveRemoteWorkspaceConnectionTarget(workspace: WorkspaceInfo)
       ok: false,
       state: {
         status: "error",
-        message: "Connection diagnostics are only available for OmniRush.ai remote workers.",
+        message: "Connection diagnostics are only available for omnirush.ai remote workers.",
         checkedAt: Date.now(),
       },
     };
@@ -254,7 +254,7 @@ export async function testRemoteWorkspaceConnection(
 
   if (!target.token) {
     return fail(
-      remoteSupportMessage(`Token is missing for ${target.endpointLabel}. Edit connection and paste a valid OmniRush.ai token.`),
+      remoteSupportMessage(`Token is missing for ${target.endpointLabel}. Edit connection and paste a valid omnirush.ai token.`),
       checkedAt,
     );
   }

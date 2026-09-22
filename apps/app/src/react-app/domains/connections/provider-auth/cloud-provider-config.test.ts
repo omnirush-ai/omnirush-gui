@@ -93,7 +93,7 @@ describe("buildCloudProviderConfig", () => {
       id: "lpr_omnirush",
       source: "omnirush",
       providerId: "omnirush",
-      name: "OmniRush.ai Models",
+      name: "omnirush.ai Models",
       providerConfig: {
         npm: "@openrouter/ai-sdk-provider",
         api: "https://inference.omnirushlabs.com/api/v1",
@@ -109,7 +109,7 @@ describe("buildCloudProviderConfig", () => {
 
     const config = buildCloudProviderConfig(provider);
     expect(config.models).toBe(undefined);
-    expect(config.name).toBe("OmniRush.ai Models");
+    expect(config.name).toBe("omnirush.ai Models");
   });
 
   test("keeps an empty models map for non-omnirush cloud providers", () => {

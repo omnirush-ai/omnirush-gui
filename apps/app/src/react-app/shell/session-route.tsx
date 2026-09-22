@@ -318,7 +318,7 @@ function describeTaskCreateError(error: unknown) {
     lower.includes("internal_error") ||
     lower.includes("unexpected server error")
   ) {
-    return "OpenCode is unavailable for this workspace. Retry once it restarts, or restart OmniRush.ai if the problem continues.";
+    return "omnirush.ai is unavailable for this workspace. Retry once it restarts, or restart omnirush.ai if the problem continues.";
   }
   return message;
 }
@@ -2046,7 +2046,7 @@ export function SessionRoute() {
     setRenameWorkspaceBusy(true);
     try {
       if (!client) {
-        toast.error("OmniRush.ai server is unavailable. Reconnect the server before renaming workspaces.");
+        toast.error("omnirush.ai server is unavailable. Reconnect the server before renaming workspaces.");
         return;
       }
       await client.updateWorkspaceDisplayName(renameWorkspaceId, trimmed);
@@ -2095,7 +2095,7 @@ export function SessionRoute() {
         downloadWorkspaceJson(workspaceExportFilename(workspace), payload);
         return;
       }
-      throw new Error("OmniRush.ai server is unavailable. Reconnect the server before exporting workspace config.");
+      throw new Error("omnirush.ai server is unavailable. Reconnect the server before exporting workspace config.");
     },
     [endpointForWorkspace, workspaces],
   );
@@ -2458,7 +2458,7 @@ export function SessionRoute() {
       disabled: !opencodeClient,
       args: [{ name: "scope", type: "string", description: "default | both (default: both)" }],
       execute: async (args) => {
-        if (!opencodeClient) return { ok: false, error: "OpenCode client is not connected." };
+        if (!opencodeClient) return { ok: false, error: "omnirush.ai client is not connected." };
         const scope = (args && typeof args === "object" && Reflect.get(args, "scope") === "default")
           ? "default"
           : "both";
@@ -3038,7 +3038,7 @@ export function SessionRoute() {
           .catch(() => null);
       }
       if (!list) {
-        throw new Error("OmniRush.ai server is unavailable. Start or reconnect the server before creating a workspace.");
+        throw new Error("omnirush.ai server is unavailable. Start or reconnect the server before creating a workspace.");
       }
       const createdId = resolveWorkspaceListSelectedId(list) || list.workspaces[list.workspaces.length - 1]?.id || "";
       let targetWorkspaceId = createdId;
@@ -3047,7 +3047,7 @@ export function SessionRoute() {
         await workspaceSetSelected(createdId).catch(() => undefined);
         await workspaceSetRuntimeActive(createdId).catch(() => undefined);
       }
-      // First workspace on a fresh install: the OmniRush.ai server was started
+      // First workspace on a fresh install: the omnirush.ai server was started
       // engine-less (it only spawns OpenCode at boot when a workspace already
       // exists), so sessions would hang forever. This boots the engine when
       // it isn't running, same as the old /welcome flow did.
@@ -3234,7 +3234,7 @@ export function SessionRoute() {
         list = await client.createRemoteWorkspace(payload).catch(() => null);
       }
       if (!list) {
-        throw new Error("OmniRush.ai server is unavailable. Start or reconnect the server before connecting a remote workspace.");
+        throw new Error("omnirush.ai server is unavailable. Start or reconnect the server before connecting a remote workspace.");
       }
       const createdId = resolveWorkspaceListSelectedId(list) || list.workspaces[list.workspaces.length - 1]?.id || "";
       if (createdId) {

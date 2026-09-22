@@ -13,11 +13,11 @@ import {
 } from "@/components/ui/dialog";
 
 const SUPPORT_EMAIL = "team@omnirushlabs.com";
-const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}?subject=OmniRush.ai%20Den%20remote%20worker%20upgrade`;
+const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}?subject=omnirush.ai%20Den%20remote%20worker%20upgrade`;
 
 /**
  * Small inline link rendered inside the remote-worker error card. When clicked,
- * it opens a dialog explaining the OmniRush.ai Den upgrade situation and how to
+ * it opens a dialog explaining the omnirush.ai Den upgrade situation and how to
  * reach support.
  */
 export function OmniRushDenHelpLink() {
@@ -30,17 +30,17 @@ export function OmniRushDenHelpLink() {
         className="mt-2 inline-flex items-center text-[11px] font-medium text-blue-11 underline-offset-2 hover:underline"
         onClick={() => setOpen(true)}
       >
-        Using OmniRush.ai Den Remote Workers? Click here
+        Using omnirush.ai Den Remote Workers? Click here
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>OmniRush.ai Den remote workers</DialogTitle>
+            <DialogTitle>omnirush.ai Den remote workers</DialogTitle>
             <DialogDescription>
               We recently upgraded our servers. If your remote worker was
               provisioned before that upgrade, it may no longer be compatible
-              with the current OmniRush.ai app.
+              with the current omnirush.ai app.
             </DialogDescription>
           </DialogHeader>
 

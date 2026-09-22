@@ -31,7 +31,7 @@ const connectConfirmDialogSource = readFileSync(
 
 const publicDistribution = {
   flavor: "public" as const,
-  appName: "OmniRush.ai",
+  appName: "omnirush.ai",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: false,
@@ -40,7 +40,7 @@ const publicDistribution = {
 
 const enterpriseDistribution = {
   flavor: "enterprise" as const,
-  appName: "OmniRush.ai Enterprise",
+  appName: "omnirush.ai Enterprise",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: true,
@@ -130,16 +130,16 @@ describe("enterprise desktop activation", () => {
     expect(activationGateSource).toContain('data-testid="organization-server-input"');
     expect(activationGateSource).toContain('data-testid="organization-server-confirm"');
     expect(activationGateSource).toContain("Connect this app to");
-    expect(activationGateSource).toContain("binds OmniRush.ai Enterprise to it");
+    expect(activationGateSource).toContain("binds omnirush.ai Enterprise to it");
     expect(activationGateSource).toContain("Continue in browser");
     expect(activationGateSource).not.toContain('htmlFor="enterprise-omnirush-link"');
-    expect(activationGateSource).not.toContain("OmniRush.ai link");
+    expect(activationGateSource).not.toContain("omnirush.ai link");
     expect(activationGateSource).not.toContain("enterprise-omnirush-link-connect");
     expect(activationGateSource).toContain("Link this app to your organization");
     expect(activationGateSource).toContain("Enter your workspace address — the page where you downloaded this app. Sign-in finishes in your browser and returns here.");
     expect(activationGateSource).toContain("const pastedLink = parseManualAuthInput(serverInput);");
     expect(activationGateSource).toContain("{pendingConfirmation ? null : (");
-    expect(activationGateSource).not.toContain("Have an OmniRush.ai link");
+    expect(activationGateSource).not.toContain("Have an omnirush.ai link");
     expect(activationGateSource).not.toContain("Use workspace address instead");
     expect(activationGateSource).not.toContain("manualAuthOpen");
     expect(activationGateSource).not.toMatch(/(?:paste|hide) sign-in code/i);

@@ -71,7 +71,7 @@ function WorkspaceRunModePicker({ client, workspaceId, busy }: { client: OmniRus
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" sideOffset={10} className="w-[min(390px,calc(100vw-32px))] p-2">
           <DropdownMenuGroup>
-            <DropdownMenuLabel className="px-3 text-sm">How should OmniRush.ai handle approvals?</DropdownMenuLabel>
+            <DropdownMenuLabel className="px-3 text-sm">How should omnirush.ai handle approvals?</DropdownMenuLabel>
             <DropdownMenuRadioGroup value={mode.data?.mode ?? ""}>
               {modes.map((item) => (
                 <DropdownMenuRadioItem key={item.value} value={item.value} onClick={() => select(item.value)} aria-label={item.label} data-testid={`run-mode-${item.value}`} disabled={locked} className={`gap-3 py-3 ${item.value === "run-everything" ? "text-orange-600 dark:text-orange-400" : ""}`}>
@@ -95,7 +95,7 @@ function WorkspaceRunModePicker({ client, workspaceId, busy }: { client: OmniRus
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Let OmniRush.ai keep going?</AlertDialogTitle>
+            <AlertDialogTitle>Let omnirush.ai keep going?</AlertDialogTitle>
             <AlertDialogDescription>
               This changes every chat in this workspace. Tools can edit or delete files, run commands, and use the network without approval, including outside authorized folders. It can override global permission rules and repeated-action prompts. Specific workspace rules still apply; it does not grant operating-system or service access.
             </AlertDialogDescription>

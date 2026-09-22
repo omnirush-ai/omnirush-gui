@@ -1,5 +1,5 @@
 /**
- * Release-channel concept for OmniRush.ai desktop builds.
+ * Release-channel concept for omnirush.ai desktop builds.
  *
  * There are two channels users can opt into:
  *

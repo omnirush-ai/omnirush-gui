@@ -11,7 +11,7 @@ function billingWeb(input: Record<string, unknown>) {
   return { billing: { stripe: { web: input } } };
 }
 
-describe("OmniRush.ai Web access payload", () => {
+describe("omnirush.ai Web access payload", () => {
   test("accepts subscription and complimentary access authored by Den", () => {
     expect(parseDenOmniRushWebAccess(billingWeb({
       hasAccess: true,
@@ -51,7 +51,7 @@ describe("OmniRush.ai Web access payload", () => {
   });
 });
 
-describe("OmniRush.ai Web product-origin gate", () => {
+describe("omnirush.ai Web product-origin gate", () => {
   const identity = { principalId: "user_1", organizationId: "org_1" };
   const scope = "user_1\u0000org_1\u0000token_1";
 
@@ -127,7 +127,7 @@ describe("OmniRush.ai Web product-origin gate", () => {
       />,
     );
     expect(unavailable).toContain('data-state="error"');
-    expect(unavailable).toContain("OmniRush.ai Web remains locked");
+    expect(unavailable).toContain("omnirush.ai Web remains locked");
     expect(unavailable).toContain("Retry");
   });
 });

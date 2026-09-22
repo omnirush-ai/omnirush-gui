@@ -157,7 +157,7 @@ function remoteMcpStatus(
       ? "Organization setup is required."
       : plugin.cloudReadiness?.state === "not_synced"
         ? "Marketplace content has not synced yet."
-        : "This OmniRush.ai Connect capability is not ready.",
+        : "This omnirush.ai Connect capability is not ready.",
   };
 }
 

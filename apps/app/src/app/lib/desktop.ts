@@ -689,7 +689,7 @@ export function readDesktopDistributionInfo(): DesktopDistributionInfo {
     : window.__OMNIRUSH_ELECTRON__?.meta?.distribution;
   return distribution ?? {
     flavor: "public",
-    appName: "OmniRush.ai",
+    appName: "omnirush.ai",
     appIdentifier: "ai.omnirush.desktop",
     protocolScheme: "omnirush",
     requireSignin: false,

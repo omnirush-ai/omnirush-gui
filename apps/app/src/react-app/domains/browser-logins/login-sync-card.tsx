@@ -30,7 +30,7 @@ export function LoginSyncCard() {
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-medium text-dls-text">Keep selected logins in sync</p>
             <p className="text-xs text-muted-foreground">
-              Choose one browser profile and the sites OmniRush.ai may keep reading. Nothing starts until you enable sync.
+              Choose one browser profile and the sites omnirush.ai may keep reading. Nothing starts until you enable sync.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">

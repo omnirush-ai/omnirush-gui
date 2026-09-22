@@ -12,6 +12,23 @@ import type { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 type Engine = ReturnType<typeof createOpencodeClient>;
 type EngineFactory = (config: ServerConfig, workspace: WorkspaceInfo, options?: { sessionId?: string }) => Engine;
+
+/** The body of one workflow step's prompt, as the engine's session prompt route receives it. */
+export type LocalWorkflowPromptBody = { model: LocalModelRef; parts: Array<{ type: "text"; text: string }> };
+
+/**
+ * How a workflow step reaches the engine. A step is a prompt dispatch like any
+ * other, so it goes through the server's own engine proxy: the sign-in gate,
+ * collector session start, prompt snapshot, request/response trace and turn
+ * observer all apply exactly as they do to a prompt sent from the app. The
+ * service never calls the engine's prompt route directly.
+ */
+export interface LocalWorkflowPromptDispatcher {
+  /** Throws the gate's ApiError (403 omnirush_account_required) before any engine session exists. */
+  assertAllowed(workspace: WorkspaceInfo): void;
+  /** Sends the prompt through the collected proxy and resolves with the engine's response. */
+  prompt(workspace: WorkspaceInfo, sessionId: string, body: LocalWorkflowPromptBody, signal: AbortSignal): Promise<Response>;
+}
 type ActiveRun = {
   runId: string; workflowId: string; workspace: WorkspaceInfo;
   controller: AbortController; actor: Actor; sessionId?: string;
@@ -42,7 +59,11 @@ export class LocalWorkflowService {
   private scheduler: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
   private ticking = false;
-  constructor(private readonly config: ServerConfig, private readonly engineFactory: EngineFactory) {}
+  constructor(
+    private readonly config: ServerConfig,
+    private readonly engineFactory: EngineFactory,
+    private readonly dispatcher: LocalWorkflowPromptDispatcher,
+  ) {}
 
   start(): void {
     if (this.config.readOnly || this.stopped || this.scheduler) return;
@@ -173,6 +194,8 @@ export class LocalWorkflowService {
     this.writable();
     if (!workflow) throw new ApiError(404, "workflow_not_found", "Workflow not found");
     if (trigger === "schedule" && (!workflow.enabled || !workflow.intervalMinutes)) throw new ApiError(409, "workflow_paused", "Workflow schedule is paused");
+    // Refused runs never reach the engine: nothing is reserved, persisted or created.
+    this.dispatcher.assertAllowed(workspace);
     if (this.active.has(workspace.id)) throw new ApiError(409, "workflow_run_active", "Another workflow run is already active for this workspace");
     const run: LocalWorkflowRun = {
       id: `run_${randomUUID()}`, workflowId, workflowName: workflow.name, status: "running", trigger,
@@ -223,6 +246,8 @@ export class LocalWorkflowService {
         await managedDesktopPolicy(this.config).assert("model", { ...decision.model });
         this.checkActive(active);
         await this.updateStep(workspace, run.id, index, { decision });
+        // The gate can close mid-run (sign-out); check again before creating a session it would orphan.
+        this.dispatcher.assertAllowed(workspace);
         const created = await this.engineFactory(this.config, workspace).session.create({
           title: `Workflow: ${workflow.name} / ${step.name}`,
           model: { providerID: decision.model.providerID, id: decision.model.modelID },
@@ -234,13 +259,16 @@ export class LocalWorkflowService {
         this.checkActive(active);
         const prompt = step.prompt.includes("{{previous}}") ? step.prompt.replaceAll("{{previous}}", () => previous)
           : previous ? `${step.prompt}\n\nPrevious step output:\n${previous}` : step.prompt;
-        const response = await this.engineFactory(this.config, workspace, { sessionId }).session.prompt({
-          sessionID: sessionId, model: decision.model, parts: [{ type: "text", text: prompt }],
-        }, { signal: active.controller.signal });
+        const response = await this.dispatcher.prompt(workspace, sessionId, {
+          model: decision.model, parts: [{ type: "text", text: prompt }],
+        }, active.controller.signal);
+        const payload: unknown = await response.json().catch(() => null);
         this.checkActive(active);
-        if (response.error || !response.data) throw new Error(safeError(response.error));
-        if (response.data.info.error) throw new Error(safeError(response.data.info.error));
-        const text = response.data.parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n").trim();
+        if (!response.ok) throw new Error(safeError(payload));
+        const info = isRecord(payload) && isRecord(payload.info) ? payload.info : null;
+        if (info?.error) throw new Error(safeError(info.error));
+        const parts = isRecord(payload) && Array.isArray(payload.parts) ? payload.parts : [];
+        const text = parts.flatMap((part) => isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n").trim();
         if (!text) throw new Error("The model returned no text. Open the task to inspect its tool activity.");
         const output = redact(text).slice(0, 16_000);
         previous = output;

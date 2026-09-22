@@ -569,11 +569,11 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
       const env = await updaterEnvironmentCmd() as { appBundlePath?: string };
       const appBundlePath = env.appBundlePath?.trim();
       if (!appBundlePath) {
-        setElectronMigrationStatus("Could not resolve the current OmniRush.ai.app bundle path.");
+        setElectronMigrationStatus("Could not resolve the current omnirush.ai.app bundle path.");
         return;
       }
       await revealDesktopItemInDir(`${appBundlePath}.migrate-bak`);
-      setElectronMigrationStatus("Requested Finder reveal for OmniRush.ai.app.migrate-bak. The backup exists after an install handoff completes.");
+      setElectronMigrationStatus("Requested Finder reveal for omnirush.ai.app.migrate-bak. The backup exists after an install handoff completes.");
     } catch (error) {
       setElectronMigrationStatus(error instanceof Error ? error.message : safeStringify(error));
     }
@@ -785,14 +785,14 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
       await bootFullEngineStack();
       setOpencodeServiceStatus({
         tone: "success",
-        message: t("settings.restart_succeeded_template", { service: "OpenCode" }),
+        message: t("settings.restart_succeeded_template", { service: "omnirush.ai" }),
       });
-      pushDeveloperLog("Restarted OpenCode via engine_start");
+      pushDeveloperLog("Restarted omnirush.ai via engine_start");
     } catch (error) {
       const message = error instanceof Error ? error.message : safeStringify(error);
       setOpencodeServiceStatus({
         tone: "error",
-        message: `${t("settings.restart_failed_template", { service: "OpenCode" })} ${message}`,
+        message: `${t("settings.restart_failed_template", { service: "omnirush.ai" })} ${message}`,
       });
       setServiceRestartError(message);
     } finally {
@@ -811,7 +811,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
       });
       setOmniRushServiceStatus({
         tone: "success",
-        message: t("settings.restart_succeeded_template", { service: "OmniRush.ai server" }),
+        message: t("settings.restart_succeeded_template", { service: "omnirush.ai server" }),
       });
       pushDeveloperLog("Restarted omnirush-server");
       await omnirushServerStore.reconnectOmniRushServer();
@@ -819,7 +819,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
       const message = error instanceof Error ? error.message : safeStringify(error);
       setOmniRushServiceStatus({
         tone: "error",
-        message: `${t("settings.restart_failed_template", { service: "OmniRush.ai server" })} ${message}`,
+        message: `${t("settings.restart_failed_template", { service: "omnirush.ai server" })} ${message}`,
       });
       setServiceRestartError(message);
     } finally {
@@ -851,7 +851,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     }
     try {
       await navigator.clipboard.writeText(text);
-      setOpencodeLogStatus(t("settings.copied_service_logs", { service: "OpenCode" }));
+      setOpencodeLogStatus(t("settings.copied_service_logs", { service: "omnirush.ai" }));
     } catch (error) {
       setOpencodeLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
@@ -884,7 +884,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     }
     try {
       await navigator.clipboard.writeText(text);
-      setOmniRushLogStatus(t("settings.copied_service_logs", { service: "OmniRush.ai server" }));
+      setOmniRushLogStatus(t("settings.copied_service_logs", { service: "omnirush.ai server" }));
     } catch (error) {
       setOmniRushLogStatus(error instanceof Error ? error.message : safeStringify(error));
     }
@@ -916,7 +916,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
       if (!isDesktopRuntime()) return;
       const message =
         mode === "all"
-          ? "Reset ALL OmniRush.ai app data? Open sessions and workspaces will be removed."
+          ? "Reset ALL omnirush.ai app data? Open sessions and workspaces will be removed."
           : "Reset onboarding state only?";
       if (typeof window !== "undefined" && !window.confirm(message)) {
         return;
@@ -928,7 +928,7 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
           clearOmniRushLocalStorageForReset(mode);
           setResetStatus(
             mode === "all"
-              ? "Reset OmniRush.ai state. Restart the app to see changes."
+              ? "Reset omnirush.ai state. Restart the app to see changes."
               : "Reset onboarding state. Restart the app to see changes.",
           );
           pushDeveloperLog(`reset_omnirush_state mode=${mode}`);

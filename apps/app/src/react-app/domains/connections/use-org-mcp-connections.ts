@@ -27,7 +27,7 @@ export type OrgMcpConnectFailure =
 export function orgMcpConnectFailureMessage(failure: OrgMcpConnectFailure): string {
   switch (failure) {
     case "missing_context":
-      return "Sign in to OmniRush.ai Cloud and select an organization before connecting.";
+      return "Sign in to omnirush.ai Cloud and select an organization before connecting.";
     case "missing_authorization_url":
       return "The connection did not return a sign-in URL. Check its OAuth configuration and try again.";
     case "timeout":

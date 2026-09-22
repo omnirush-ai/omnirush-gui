@@ -5,7 +5,7 @@ export type ManualAuthInput = {
   baseUrl?: string;
 };
 
-/** Accept a raw handoff grant or an OmniRush.ai desktop-auth deep link. */
+/** Accept a raw handoff grant or an omnirush.ai desktop-auth deep link. */
 export function parseManualAuthInput(value: string): ManualAuthInput | null {
   const trimmed = value.trim();
   if (!trimmed) return null;

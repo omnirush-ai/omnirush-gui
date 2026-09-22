@@ -15,7 +15,7 @@ const ACTION_OWNER = {
   organization_admin: "Your organization admin",
   provider_admin: "The provider admin",
   network_admin: "Your network admin",
-  omnirush: "OmniRush.ai support",
+  omnirush: "omnirush.ai support",
 }
 
 /** Uses the desktop's signed-in account; credentials never enter an MCP App. */

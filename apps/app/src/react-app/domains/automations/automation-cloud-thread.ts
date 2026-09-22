@@ -3,14 +3,14 @@ import { workspaceSessionRoute } from "@/react-app/shell/workspace-routes"
 
 export type AutomationExecutionIdentity = {
   icon: "desktop" | "cloud"
-  label: "Desktop" | "OmniRush.ai Cloud"
+  label: "Desktop" | "omnirush.ai Cloud"
 }
 
 export function automationExecutionIdentity(
   thread: Pick<AutomationExecutionThread, "executionLocation">,
 ): AutomationExecutionIdentity {
   return thread.executionLocation === "cloud"
-    ? { icon: "cloud", label: "OmniRush.ai Cloud" }
+    ? { icon: "cloud", label: "omnirush.ai Cloud" }
     : { icon: "desktop", label: "Desktop" }
 }
 

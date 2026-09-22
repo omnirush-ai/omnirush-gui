@@ -92,6 +92,8 @@ export type OmniRushGatewayCredentialBundle = {
 export type OmniRushGatewayCredentials = OmniRushGatewayCredentialBundle & {
   persist?: (credentials: OmniRushGatewayCredentialBundle) => Promise<void>;
   invalidate?: () => Promise<void>;
+  /** Connected account's profile (name and email for the git commit identity default); null when signed out or offline. */
+  profile?: () => Promise<{ email: string | null; displayName: string | null } | null>;
 };
 
 export interface ServerConfig {

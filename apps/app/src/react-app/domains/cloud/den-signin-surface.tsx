@@ -71,7 +71,7 @@ const errorBannerClass =
  */
 export function DenSignInSurface(props: DenSignInSurfaceProps) {
   const variant: DenSignInSurfaceVariant = props.variant ?? "panel";
-  const appName = props.appName?.trim() || "OmniRush.ai";
+  const appName = props.appName?.trim() || "omnirush.ai";
 
   /* -- Panel content (reused by both variants) -- */
   const panelContent = (

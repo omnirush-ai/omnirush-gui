@@ -333,7 +333,7 @@ export function OmniRushControlProvider({ children }: { children: ReactNode }) {
       resources: [{
         ref: `screen:${route}`,
         kind: "screen",
-        title: "OmniRush.ai",
+        title: "omnirush.ai",
         provider: { id: "omnirush-ui", kind: "builtin" },
         state: { kind: "other", route },
       }],
@@ -538,7 +538,7 @@ export function OmniRushControlProvider({ children }: { children: ReactNode }) {
       return {
         ok: false,
         id: request.id,
-        error: `OmniRush.ai context changed from revision ${request.expectedRevision} to ${revision}.`,
+        error: `omnirush.ai context changed from revision ${request.expectedRevision} to ${revision}.`,
         code: "conflict",
         revision,
       };
@@ -822,8 +822,8 @@ export function OmniRushRouteControlActions() {
     },
     {
       id: "help.capabilities",
-      label: "What can OmniRush.ai do?",
-      description: "List the main capabilities of OmniRush.ai.",
+      label: "What can omnirush.ai do?",
+      description: "List the main capabilities of omnirush.ai.",
       kind: "query",
       effects: { data: "read", ui: "none", external: false },
       sideEffect: "none",
@@ -837,7 +837,7 @@ export function OmniRushRouteControlActions() {
           { id: "computer-use", label: "Computer use", description: "Control your computer with screenshots and mouse/keyboard actions." },
           { id: "skills", label: "Skills", description: "Install specialized skill packs for specific workflows." },
           { id: "automations", label: "Automations", description: "Schedule recurring tasks and background agents." },
-          { id: "sharing", label: "Share sessions", description: "Share workspace sessions with collaborators via OmniRush.ai Cloud." },
+          { id: "sharing", label: "Share sessions", description: "Share workspace sessions with collaborators via omnirush.ai Cloud." },
         ],
         hint: "Use settings.panel.open for settings such as AI providers, and route.extensions.skills to browse Library.",
       }),

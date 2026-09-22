@@ -99,8 +99,8 @@ export function cloudWorkspaceTakeoverCopy(input: {
 }): { title: string; body: string } {
   if (input.variant === "access-required") {
     return {
-      title: "OmniRush.ai Web needs an active plan",
-      body: "Your organization does not have an active OmniRush.ai Web subscription or complimentary access. Get OmniRush.ai Web in Den to start your cloud workspace.",
+      title: "omnirush.ai Web needs an active plan",
+      body: "Your organization does not have an active omnirush.ai Web subscription or complimentary access. Get omnirush.ai Web in Den to start your cloud workspace.",
     };
   }
   if (input.variant === "failed") {
@@ -112,7 +112,7 @@ export function cloudWorkspaceTakeoverCopy(input: {
   if (input.variant === "unavailable") {
     return {
       title: "Couldn’t check your workspace",
-      body: "OmniRush.ai Cloud didn’t answer. Your sandbox may still be running, so try checking again.",
+      body: "omnirush.ai Cloud didn’t answer. Your sandbox may still be running, so try checking again.",
     };
   }
   if (input.slow) {
@@ -130,7 +130,7 @@ export function cloudWorkspaceTakeoverCopy(input: {
   if (input.variant === "updating") {
     return {
       title: "Updating your workspace…",
-      body: "We’re applying the latest OmniRush.ai image. Your files and sessions come along.",
+      body: "We’re applying the latest omnirush.ai image. Your files and sessions come along.",
     };
   }
   return {
@@ -269,9 +269,9 @@ export function mapCloudWorkspaceState(input: {
   if (input.accessRequired) {
     return {
       variant: "access-required",
-      label: "OmniRush.ai Web plan required",
+      label: "omnirush.ai Web plan required",
       tone: "amber",
-      statusLine: "OmniRush.ai Web plan required",
+      statusLine: "omnirush.ai Web plan required",
       ...lines,
       updateAvailable,
       showUpdate: false,

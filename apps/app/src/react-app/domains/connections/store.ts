@@ -363,7 +363,7 @@ export function createConnectionsStore(options: {
     });
 
     if (hasOmniRushTarget && !canTryOmniRushServer) {
-      throw new Error("OmniRush.ai server cannot read MCP config for this workspace.");
+      throw new Error("omnirush.ai server cannot read MCP config for this workspace.");
     }
 
     if (!canTryOmniRushServer || !omnirushClient || !omnirushWorkspaceId) return null;
@@ -380,7 +380,7 @@ export function createConnectionsStore(options: {
         && ((command.length === 2 && command[1] === "mcp") || (command.length === 3 && command[1] === "relay"))) {
         const currentCommand = await resolveDesktopCommand("getComputerUseMcpCommand", false);
         const bundled = currentCommand && (command[0] === currentCommand[0]
-          || command[0].endsWith("/OmniRush.ai Computer Use.app/Contents/MacOS/ComputerUse"));
+          || command[0].endsWith("/omnirush.ai Computer Use.app/Contents/MacOS/ComputerUse"));
         if (bundled && JSON.stringify(command) !== JSON.stringify(currentCommand)) {
           const writable = await resolveWritableOmniRushTarget();
           if (writable.canUseOmniRushServer && writable.omnirushClient && writable.omnirushWorkspaceId === omnirushWorkspaceId
@@ -447,7 +447,7 @@ export function createConnectionsStore(options: {
       if (!fallbackOnError) {
         throw error instanceof Error
           ? error
-          : new Error("Computer Use helper app is unavailable. Restart OmniRush.ai or reinstall the app.");
+          : new Error("Computer Use helper app is unavailable. Restart omnirush.ai or reinstall the app.");
       }
       // Fall through to the published package command in the manifest/catalog.
     }
@@ -458,7 +458,7 @@ export function createConnectionsStore(options: {
     const mcpResource = extensionResource(entry.extensionManifest, "mcp");
     if (mcpResource?.localCommandRef === "omnirush.computerUseMcp") {
       const command = await resolveDesktopCommand("getComputerUseMcpCommand", false);
-      if (!command) throw new Error("Computer Use requires the bundled OmniRush.ai helper on macOS.");
+      if (!command) throw new Error("Computer Use requires the bundled omnirush.ai helper on macOS.");
       return command;
     }
     if (mcpResource?.localCommandRef === "omnirush.uiMcp" || entry.serverName === "omnirush-ui") {
@@ -571,7 +571,7 @@ export function createConnectionsStore(options: {
       if (!isCurrentRefresh()) return;
       mutateState((current) => ({
         ...current,
-        mcpStatus: "OmniRush.ai server unavailable. MCP config is read-only.",
+        mcpStatus: "omnirush.ai server unavailable. MCP config is read-only.",
         mcpServers: [],
         mcpStatuses: {},
       }));
@@ -623,7 +623,7 @@ export function createConnectionsStore(options: {
         ...globalServers.filter((entry) => !projectNames.has(entry.name)),
         ...projectServers,
       ];
-      // Runtime-DB MCPs (source "config.remote") only exist on the OmniRush.ai
+      // Runtime-DB MCPs (source "config.remote") only exist on the omnirush.ai
       // server. Keep the last-known entries instead of silently dropping them
       // while the server is briefly unreachable (startup race) — otherwise
       // enabled MCPs like omnirush-ui render as "off".
@@ -728,7 +728,7 @@ export function createConnectionsStore(options: {
       await resolveWritableOmniRushTarget();
 
     if (isRemoteWorkspace && !canUseOmniRushServer) {
-      const error = "OmniRush.ai server unavailable. MCP config is read-only.";
+      const error = "omnirush.ai server unavailable. MCP config is read-only.";
       setStateField("mcpStatus", error);
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "omnirush-server-unavailable",
@@ -737,7 +737,7 @@ export function createConnectionsStore(options: {
     }
 
     if (hasOmniRushTarget && !canUseOmniRushServer) {
-      const error = "OmniRush.ai server MCP config is read-only.";
+      const error = "omnirush.ai server MCP config is read-only.";
       setStateField("mcpStatus", error);
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "omnirush-server-read-only",
@@ -800,14 +800,14 @@ export function createConnectionsStore(options: {
 
       if (entry.managedBy === "omnirush-connect") {
         if (slug !== CLOUD_MCP_SERVER_NAME) {
-          throw new Error("OmniRush.ai Connect MCP metadata is invalid.");
+          throw new Error("omnirush.ai Connect MCP metadata is invalid.");
         }
         if (!canUseOmniRushServer || !omnirushClient || !omnirushWorkspaceId) {
-          throw new Error("OmniRush.ai server is required to repair agent access to connected services.");
+          throw new Error("omnirush.ai server is required to repair agent access to connected services.");
         }
         const context = await resolveCloudMcpOperationContext(null);
         if (!context) {
-          throw new Error("Sign in to OmniRush.ai Cloud and choose an organization first.");
+          throw new Error("Sign in to omnirush.ai Cloud and choose an organization first.");
         }
         clearCloudMcpDisabledIntent(context);
         const result = await runOmniRushCloudMcpReconciler({
@@ -845,13 +845,13 @@ export function createConnectionsStore(options: {
 
       if (entry.managedOAuth) {
         if (isRemoteWorkspace || !isDesktopRuntime()) {
-          throw new Error("OmniRush.ai-managed MCP OAuth is currently available for local desktop workspaces only.");
+          throw new Error("omnirush.ai-managed MCP OAuth is currently available for local desktop workspaces only.");
         }
         if (entryType !== "remote" || !entry.url) {
-          throw new Error("OmniRush.ai-managed OAuth requires a remote MCP URL.");
+          throw new Error("omnirush.ai-managed OAuth requires a remote MCP URL.");
         }
         if (!canUseOmniRushServer || !omnirushClient || !omnirushWorkspaceId) {
-          throw new Error("The local OmniRush.ai server is required for managed MCP sign-in.");
+          throw new Error("The local omnirush.ai server is required for managed MCP sign-in.");
         }
         const result = await omnirushClient.addManagedMcp(omnirushWorkspaceId, {
           name: slug,
@@ -909,7 +909,7 @@ export function createConnectionsStore(options: {
 
       if (entryType === "remote") {
         if (!resolvedUrl) {
-          throw new Error("Missing MCP URL. Is the OmniRush.ai desktop app running?");
+          throw new Error("Missing MCP URL. Is the omnirush.ai desktop app running?");
         }
         mcpEntryConfig["url"] = resolvedUrl;
         if (resolvedHeaders) {
@@ -985,11 +985,11 @@ export function createConnectionsStore(options: {
       }
 
       if (canUseOmniRushServer && omnirushClient && omnirushWorkspaceId) {
-        // The OmniRush.ai server is the source of truth for workspace-scoped MCP
+        // The omnirush.ai server is the source of truth for workspace-scoped MCP
         // config in the React port. Avoid also calling the OpenCode SDK's MCP
         // hot-add endpoint here: when the SDK client is rooted at the aggregate
         // `/opencode` route it can resolve to an internal `local_*` workspace
-        // id that the OmniRush.ai server does not expose, producing a confusing
+        // id that the omnirush.ai server does not expose, producing a confusing
         // `workspace_not_found` after the config write already succeeded.
       } else {
         if (!activeClient || !resolvedProjectDir) {
@@ -1075,7 +1075,7 @@ export function createConnectionsStore(options: {
 
   /**
    * Background reconciliation for the Den cloud MCP: when the desktop is
-   * signed in to OmniRush.ai Cloud with an active org, keep the
+   * signed in to omnirush.ai Cloud with an active org, keep the
    * `omnirush-cloud` MCP entry configured with a fresh first-party token.
    * Quiet by design — a failed mint never opens the OAuth modal.
    *
@@ -1151,7 +1151,7 @@ export function createConnectionsStore(options: {
       try {
         const { omnirushClient, omnirushWorkspaceId, canUseOmniRushServer } = await resolveWritableOmniRushTarget();
         if (!canUseOmniRushServer || !omnirushClient || !omnirushWorkspaceId) {
-          throw new Error("The local OmniRush.ai server is required for managed MCP sign-in.");
+          throw new Error("The local omnirush.ai server is required for managed MCP sign-in.");
         }
         mutateState((current) => ({ ...current, mcpStatus: null, mcpConnectingName: entry.name }));
         const result = await omnirushClient.connectManagedMcp(omnirushWorkspaceId, entry.name);
@@ -1201,12 +1201,12 @@ export function createConnectionsStore(options: {
       await resolveWritableOmniRushTarget();
 
     if (isRemoteWorkspace && !canUseOmniRushServer) {
-      setStateField("mcpStatus", "OmniRush.ai server unavailable. MCP auth is read-only.");
+      setStateField("mcpStatus", "omnirush.ai server unavailable. MCP auth is read-only.");
       return;
     }
 
     if (hasOmniRushTarget && !canUseOmniRushServer) {
-      setStateField("mcpStatus", "OmniRush.ai server MCP auth is read-only.");
+      setStateField("mcpStatus", "omnirush.ai server MCP auth is read-only.");
       return;
     }
 
@@ -1267,7 +1267,7 @@ export function createConnectionsStore(options: {
         await omnirushClient.removeMcp(omnirushWorkspaceId, name);
       } else {
         if (hasOmniRushTarget) {
-          setStateField("mcpStatus", "OmniRush.ai server MCP config is read-only.");
+          setStateField("mcpStatus", "omnirush.ai server MCP config is read-only.");
           return;
         }
         const projectDir = options.projectDir().trim();

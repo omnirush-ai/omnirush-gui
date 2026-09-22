@@ -110,7 +110,7 @@ export function ServerProvider({ children, defaultUrl }: ServerProviderProps) {
     const gatewayOrigin = getOmniRushGatewayOrigin();
     const fallback = normalizeServerUrl(gatewayOrigin ? `${gatewayOrigin}/opencode` : defaultUrl) ?? "";
 
-    // Hosted web deployments served by OmniRush.ai must reuse the OpenCode proxy
+    // Hosted web deployments served by omnirush.ai must reuse the OpenCode proxy
     // rather than any persisted localhost target.
     const forceProxy =
       Boolean(gatewayOrigin) ||
@@ -150,7 +150,7 @@ export function ServerProvider({ children, defaultUrl }: ServerProviderProps) {
   useEffect(() => {
     if (!active) return;
     if (isDesktopRuntime() && !active.includes("/opencode")) {
-      // Desktop React routes now talk to OmniRush.ai server workspace-mounted
+      // Desktop React routes now talk to omnirush.ai server workspace-mounted
       // `/opencode` URLs directly. Ignore old persisted raw OpenCode daemon
       // URLs here; their ephemeral ports go stale across restarts and otherwise
       // produce noisy `/global/health` connection-refused polling forever.

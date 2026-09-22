@@ -127,7 +127,7 @@ export function LoginSyncDialog({ open, onOpenChange, onSyncEnabled }: LoginSync
         <DialogHeader>
           <DialogTitle>Sync logins from another browser</DialogTitle>
           <DialogDescription>
-            While enabled, OmniRush.ai keeps reading only the browser profile and sites you select. It never changes the source browser.
+            While enabled, omnirush.ai keeps reading only the browser profile and sites you select. It never changes the source browser.
           </DialogDescription>
         </DialogHeader>
 
@@ -189,7 +189,7 @@ export function LoginSyncDialog({ open, onOpenChange, onSyncEnabled }: LoginSync
             {sensitiveSites.length > 0 ? (
               <div className="flex flex-col gap-2">
                 <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <ShieldAlert className="size-3.5" /> Unchecked on purpose. Select only sites you want OmniRush.ai to use.
+                  <ShieldAlert className="size-3.5" /> Unchecked on purpose. Select only sites you want omnirush.ai to use.
                 </p>
                 <SiteList sites={sensitiveSites} selected={stage.selected} onToggle={toggleSite} />
               </div>

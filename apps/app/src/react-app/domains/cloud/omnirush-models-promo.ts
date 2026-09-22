@@ -13,7 +13,7 @@ import { denSettingsChangedEvent } from "../../../app/lib/den-session-events";
 import { useSyncExternalStore } from "react";
 
 export const OMNIRUSH_MODELS_PROVIDER_ID = "omnirush";
-export const OMNIRUSH_MODELS_PROVIDER_NAME = "OmniRush.ai Models";
+export const OMNIRUSH_MODELS_PROVIDER_NAME = "omnirush.ai Models";
 export const OMNIRUSH_MODELS_PROMO_HIDDEN_KEY = "omnirush.omnirushModelsPromo.hidden";
 export const OMNIRUSH_MODELS_PROMO_LAST_SHOWN_KEY = "omnirush.omnirushModelsPromo.lastShownAt";
 export const OMNIRUSH_MODELS_STARTUP_PROMO_SHOWN_KEY = "omnirush.omnirushModelsPromo.startupShown";
@@ -26,7 +26,7 @@ export function areOmniRushModelsPromosDisabled() {
   if (/^(1|true|yes|on)$/i.test(String(import.meta.env.VITE_DISABLE_OMNIRUSH_MODELS ?? "").trim())) {
     return true;
   }
-  // OmniRush.ai Models are a hosted OmniRush.ai Cloud offering; self-hosted
+  // omnirush.ai Models are a hosted omnirush.ai Cloud offering; self-hosted
   // deployments should never see the upsell surfaces.
   return isSelfHostedControlPlane();
 }
@@ -63,15 +63,15 @@ export const OMNIRUSH_MODEL_PREVIEWS: OmniRushModelPreview[] = Object.entries(
   .filter(([, model]) => model.enabled)
   .map(([id, model]) => ({
     id,
-    title: model.displayName.replace(/^OmniRush.ai:\s*/, ""),
-    subtitle: "OmniRush.ai hosted",
+    title: model.displayName.replace(/^omnirush.ai:\s*/, ""),
+    subtitle: "omnirush.ai hosted",
   }));
 
 export function hasOmniRushModelsProvider(providerIds: readonly string[]) {
   return providerIds.some((id) => id.trim().toLowerCase() === OMNIRUSH_MODELS_PROVIDER_ID);
 }
 
-/** Local engine has OmniRush.ai Models connected with at least one selectable model. */
+/** Local engine has omnirush.ai Models connected with at least one selectable model. */
 export function hasOmniRushModelsAvailable(input: {
   providerConnectedIds: readonly string[];
   providers: ReadonlyArray<{ id: string; models?: Record<string, unknown> | null }>;
@@ -98,7 +98,7 @@ export function getOmniRushModelsActionUrl(
 ) {
   const settings = readDenSettings();
   const baseUrl = settings.baseUrl || readDenBootstrapConfig().baseUrl;
-  // Signed-in users go straight to the OmniRush.ai Models page — the value-prop
+  // Signed-in users go straight to the omnirush.ai Models page — the value-prop
   // + subscribe surface — never to a bare auth or billing page.
   return isSignedIn ? getDenInferenceUrl(baseUrl) : buildDenAuthUrl(baseUrl, authMode);
 }

@@ -65,7 +65,7 @@ export async function updateManagedDisabledProviders(
   }
 
   const client = options.opencodeClient;
-  if (!client) throw new Error("OpenCode client is not connected.");
+  if (!client) throw new Error("omnirush.ai client is not connected.");
   const currentConfig = options.currentConfig ?? unwrap(await client.config.get());
   await client.config.update({
     config: configWithDisabledProviders(

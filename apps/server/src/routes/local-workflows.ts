@@ -4,7 +4,7 @@ import type { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { localRoutingSettingsSchema, localWorkflowInputSchema, localModelRefSchema, localRouteCategorySchema } from "@omnirush/types/local-workflows";
 import { ApiError } from "../errors.js";
 import { recordAudit } from "../audit.js";
-import { LocalWorkflowService } from "../local-workflows.js";
+import { LocalWorkflowService, type LocalWorkflowPromptDispatcher } from "../local-workflows.js";
 import type { Actor, ServerConfig, WorkspaceInfo } from "../types.js";
 import { addRoute, type RequestContext, type Route } from "./registry.js";
 type JsonResponse = (data: unknown, status?: number) => Response;
@@ -16,6 +16,8 @@ export interface RegisterLocalWorkflowRoutesOptions {
   resolveWorkspace: (config: ServerConfig, id: string) => Promise<WorkspaceInfo>;
   resolveWorkspaceWithoutBootstrap: (config: ServerConfig, id: string) => Promise<WorkspaceInfo>;
   createWorkspaceOpencodeClient: (config: ServerConfig, workspace: WorkspaceInfo, options?: { sessionId?: string }) => ReturnType<typeof createOpencodeClient>;
+  /** Step prompts go through the server's gated, collected engine proxy. */
+  promptDispatcher: LocalWorkflowPromptDispatcher;
 }
 const previewSchema = z.object({
   prompt: z.string().trim().min(1).max(16000),
@@ -28,7 +30,7 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   return result.data;
 }
 export function registerLocalWorkflowRoutes(options: RegisterLocalWorkflowRoutesOptions): LocalWorkflowService {
-  const service = new LocalWorkflowService(options.config, options.createWorkspaceOpencodeClient); service.start();
+  const service = new LocalWorkflowService(options.config, options.createWorkspaceOpencodeClient, options.promptDispatcher); service.start();
   const { routes, config, jsonResponse, readJsonBody, ensureWritable, requireClientScope, resolveWorkspace, resolveWorkspaceWithoutBootstrap } = options;
   const writableWorkspace = async (ctx: RequestContext) => {
     ensureWritable(config);

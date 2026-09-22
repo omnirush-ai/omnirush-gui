@@ -51,7 +51,7 @@ export function sideChatSystemContext(workspaceId: string, sessionId: string): s
   const main = owner ? state.tabs.find((tab) => workbenchSessionKey(tab) === owner[0]) : null;
   if (!main) return undefined;
   return [
-    "This is a side chat associated with a main conversation in OmniRush.ai.",
+    "This is a side chat associated with a main conversation in omnirush.ai.",
     `Main conversation reference: ${JSON.stringify({ workspaceId: main.workspaceId, sessionId: main.sessionId })}.`,
     "When relevant, use the main conversation as background for this side chat. Retrieve it through available session tools before referring to details; do not assume you have read it. Follow the user's request here and keep replies in this side chat.",
   ].join("\n");

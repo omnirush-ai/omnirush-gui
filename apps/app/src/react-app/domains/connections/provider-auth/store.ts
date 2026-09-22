@@ -593,7 +593,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     try {
       if (serverHandlesProviderSync()) {
         const omnirushClient = options.omnirushServer.getSnapshot().omnirushServerClient;
-        if (!omnirushClient) throw new Error("OmniRush.ai server unavailable.");
+        if (!omnirushClient) throw new Error("omnirush.ai server unavailable.");
         const status = await omnirushClient.getCloudProviderSyncStatus();
         const next = Object.fromEntries(status.providers.map((provider) => [provider.cloudProviderId, provider]));
         setStateField("importedCloudProviders", next);
@@ -649,7 +649,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     const persisted = await writeWorkspaceOmniRushConfigRecord(nextConfig);
     if (!persisted) {
       throw new Error(
-        "OmniRush.ai server unavailable. Connect to manage imported cloud providers.",
+        "omnirush.ai server unavailable. Connect to manage imported cloud providers.",
       );
     }
     setStateField("importedCloudProviders", nextProviders);
@@ -667,7 +667,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     }
 
     if (hasOmniRushTarget) {
-      throw new Error("OmniRush.ai server config API is unavailable for this workspace.");
+      throw new Error("omnirush.ai server config API is unavailable for this workspace.");
     }
 
     if (isLocalWorkspace && isDesktopRuntime() && root) {
@@ -697,7 +697,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     }
 
     if (hasOmniRushTarget) {
-      throw new Error("OmniRush.ai server config API is unavailable for this workspace.");
+      throw new Error("omnirush.ai server config API is unavailable for this workspace.");
     }
 
     if (isLocalWorkspace && isDesktopRuntime() && root) {
@@ -721,7 +721,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     const { omnirushClient, omnirushWorkspaceId, canUseOmniRushServer } =
       await resolveOmniRushConfigTarget("write");
     if (!canUseOmniRushServer || !omnirushClient || !omnirushWorkspaceId) {
-      throw new Error("OmniRush.ai server unavailable. Connect to manage cloud providers.");
+      throw new Error("omnirush.ai server unavailable. Connect to manage cloud providers.");
     }
     await omnirushClient.patchConfig(omnirushWorkspaceId, {
       opencode: { provider: update },
@@ -735,7 +735,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     const { omnirushClient, omnirushWorkspaceId, canUseOmniRushServer } =
       await resolveOmniRushConfigTarget("write");
     if (!canUseOmniRushServer || !omnirushClient || !omnirushWorkspaceId) {
-      throw new Error("OmniRush.ai server unavailable. Connect to manage cloud providers.");
+      throw new Error("omnirush.ai server unavailable. Connect to manage cloud providers.");
     }
     const config = await readWorkspaceOmniRushConfigRecord();
     const cloudImports = readWorkspaceCloudImports(config);
@@ -1456,7 +1456,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       const shouldUseServerReload = !(
         isDesktopRuntime() && options.selectedWorkspaceDisplay().workspaceType === "local"
       );
-      // Prefer the OmniRush.ai server engine reload: it disposes the engine AND
+      // Prefer the omnirush.ai server engine reload: it disposes the engine AND
       // re-registers runtime-DB MCPs, so non-primary workspaces and pending
       // changes are picked up instead of silently dropping (toggles "turn
       // off").
@@ -1666,7 +1666,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     const token = settings.authToken?.trim() ?? "";
     const orgId = settings.activeOrgId?.trim() ?? "";
     if (!token || !orgId) {
-      throw new Error("Sign in to OmniRush.ai Cloud and choose an organization first.");
+      throw new Error("Sign in to omnirush.ai Cloud and choose an organization first.");
     }
 
     try {
@@ -1694,7 +1694,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
           throw new CloudProviderNeedsServerError(
             `${provider.name} needs environment variables (${envEntries
               .map((entry) => entry.key)
-              .join(", ")}) but the OmniRush.ai server is not available.`,
+              .join(", ")}) but the omnirush.ai server is not available.`,
           );
         }
         await omnirushClient.upsertUserEnv(envEntries);
@@ -1933,7 +1933,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       return;
     }
 
-    // Imports, baseline reads, and persistence all go through the OmniRush.ai
+    // Imports, baseline reads, and persistence all go through the omnirush.ai
     // server target (patchRuntimeProviders throws without it). Running before
     // the target resolves made the baseline read fall back to an empty source
     // and re-import every org provider — engine dispose churn on settings open.
@@ -2099,7 +2099,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
           `server:${getCloudProviderSyncContextKey()}`,
           async () => {
             const omnirushClient = options.omnirushServer.getSnapshot().omnirushServerClient;
-            if (!omnirushClient) throw new Error("OmniRush.ai server unavailable.");
+            if (!omnirushClient) throw new Error("omnirush.ai server unavailable.");
             let result = await omnirushClient.runCloudProviderSyncNow(reason);
             if (result.status === "no_session") {
               await pushDenSession(true);

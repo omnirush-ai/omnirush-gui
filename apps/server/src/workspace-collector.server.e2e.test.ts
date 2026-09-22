@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { zstdDecompressSync } from "node:zlib";
 
-import { proxyOpencodeRequest, startServer } from "./server.js";
+import { proxyOpencodeRequest, proxyOpencodeV2Request, startServer } from "./server.js";
 import type { ServerConfig } from "./types.js";
 
 /**
@@ -43,6 +43,20 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()?.();
 });
 
+// Workflow state and audit logs live under the server data directory; keep
+// them out of the developer's real one.
+const previousDataDir = process.env.OMNIRUSH_DATA_DIR;
+let dataDir = "";
+beforeAll(async () => {
+  dataDir = await mkdtemp(join(tmpdir(), "omnirush-collector-server-data-"));
+  process.env.OMNIRUSH_DATA_DIR = dataDir;
+});
+afterAll(async () => {
+  if (previousDataDir === undefined) delete process.env.OMNIRUSH_DATA_DIR;
+  else process.env.OMNIRUSH_DATA_DIR = previousDataDir;
+  await rm(dataDir, { recursive: true, force: true });
+});
+
 const sha256 = (input: string | Buffer) => createHash("sha256").update(input).digest("hex");
 
 async function git(root: string, ...args: string[]): Promise<void> {
@@ -68,15 +82,20 @@ type EngineMessage = { info: Record<string, unknown>; parts: unknown[] };
 /**
  * A fake engine with one root session and a two-level subagent tree. Each
  * prompt is a turn: the root gains a user + assistant message, the child gains
- * a message on turns 1 and 2, the grandchild on turns 1 and 3.
+ * a message on turns 1 and 2, the grandchild on turns 1 and 3. It also serves
+ * what a local workflow step needs: the provider catalog, session creation and
+ * the synchronous prompt route on the "ses_workflow" session it creates.
  */
 function startMockEngine(input: { provider: string; model: string }) {
   let turn = 0;
   let busy = false;
+  let workflowBusy = false;
   const root: EngineMessage[] = [];
   const child: EngineMessage[] = [];
   const grandchild: EngineMessage[] = [];
+  const workflow: EngineMessage[] = [];
   const prompts: unknown[] = [];
+  const workflowPrompts: unknown[] = [];
   const received: string[] = [];
   const message = (session: string, id: string, role: "user" | "assistant", text: string): EngineMessage => ({
     info: {
@@ -106,8 +125,27 @@ function startMockEngine(input: { provider: string; model: string }) {
       // The real engine's router (Hono) decodes unreserved escapes before
       // matching, so "/session/ses_root/prompt%5Fasync" is a prompt dispatch.
       const pathname = decodeURI(url.pathname);
-      if (pathname === "/session/status") return Response.json(busy ? { ses_root: { type: "busy" } } : {});
+      if (pathname === "/session/status") {
+        return Response.json({ ...(busy ? { ses_root: { type: "busy" } } : {}), ...(workflowBusy ? { ses_workflow: { type: "busy" } } : {}) });
+      }
       if (["/permission", "/question"].includes(pathname)) return Response.json([]);
+      if (pathname === "/provider") {
+        return Response.json({ all: [{ id: input.provider, name: "Provider", models: { [input.model]: { name: input.model } } }], connected: [input.provider], default: {} });
+      }
+      if (pathname === "/session" && request.method === "POST") return Response.json(session("ses_workflow"));
+      if (pathname === "/session/ses_workflow/prompt" && request.method === "POST") {
+        workflowPrompts.push(await request.json().catch(() => null));
+        turn += 1;
+        workflowBusy = true;
+        const answer = message("ses_workflow", `wf_assistant_${turn}`, "assistant", `workflow answer ${turn}`);
+        workflow.push(message("ses_workflow", `wf_user_${turn}`, "user", `workflow prompt ${turn}`), answer);
+        setTimeout(() => { workflowBusy = false; }, 50);
+        return Response.json(answer);
+      }
+      if (pathname === "/session/ses_workflow") return Response.json(session("ses_workflow"));
+      if (pathname === "/session/ses_workflow/message") return Response.json(workflow);
+      if (pathname === "/session/ses_workflow/children") return Response.json([]);
+      if (pathname === "/session/ses_workflow/abort" && request.method === "POST") return Response.json(true);
       if (pathname === "/session/ses_root/prompt_async" && request.method === "POST") {
         prompts.push(await request.json().catch(() => null));
         turn += 1;
@@ -131,7 +169,104 @@ function startMockEngine(input: { provider: string; model: string }) {
     },
   }) as Served;
   cleanups.push(() => server.stop(true));
-  return { server, prompts, received, baseUrl: `http://127.0.0.1:${server.port}` };
+  return { server, prompts, workflowPrompts, received, baseUrl: `http://127.0.0.1:${server.port}` };
+}
+
+/**
+ * A fake engine v2 daemon: the routes the v2 mount touches before admitting a
+ * prompt (session ownership, MCP and skill catalogs, the managed instruction
+ * entry) plus the prompt, activity and context routes the collector observes.
+ */
+function startMockV2Engine(input: { provider: string; model: string }) {
+  let turn = 0;
+  let busy = false;
+  const context: Array<Record<string, unknown>> = [];
+  const prompts: unknown[] = [];
+  const received: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      received.push(`${request.method} ${url.pathname}`);
+      const pathname = decodeURI(url.pathname);
+      if (request.headers.get("authorization") !== `Basic ${Buffer.from("opencode:v2-password").toString("base64")}`) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      if (pathname === "/api/session/active") return Response.json({ data: busy ? { ses_v2root: { type: "running" } } : {} });
+      if (pathname === "/api/mcp" || pathname === "/api/skill") return Response.json({ data: [] });
+      if (pathname === "/api/session/ses_v2root/instructions/entries/omnirush.context" && request.method === "PUT") return Response.json({ data: {} });
+      if (pathname === "/api/session/ses_v2root/prompt" && request.method === "POST") {
+        prompts.push(await request.json().catch(() => null));
+        turn += 1;
+        busy = true;
+        context.push(
+          { id: `v2_user_${turn}`, type: "user", text: `prompt ${turn}`, time: { created: turn } },
+          {
+            id: `v2_assistant_${turn}`, type: "assistant", agent: "build",
+            model: { providerID: input.provider, id: input.model, variant: "high" },
+            content: [{ type: "text", text: `answer ${turn}` }], time: { created: turn, completed: turn + 1 },
+          },
+        );
+        setTimeout(() => { busy = false; }, 50);
+        return Response.json({ data: { id: `in_${turn}`, admittedSeq: turn } });
+      }
+      if (pathname === "/api/session/ses_v2root/context") return Response.json({ data: context });
+      if (pathname === "/api/session/ses_v2root" && request.method === "GET") {
+        // The mount binds the workspace directory into the query; echo it back as the session's location.
+        return Response.json({ data: { id: "ses_v2root", title: "Root task", location: { directory: url.searchParams.get("location[directory]") } } });
+      }
+      return Response.json({ error: `Not found: ${request.method} ${pathname}` }, { status: 404 });
+    },
+  }) as Served;
+  cleanups.push(() => server.stop(true));
+  return { prompts, received, connection: { url: `http://127.0.0.1:${server.port}`, username: "opencode", password: "v2-password" } };
+}
+
+/** A prompt dispatch on the v2 mount, as the mount handler forwards it to proxyOpencodeV2Request. */
+function promptV2(config: ServerConfig, connection: { url: string; username: string; password: string }, path = "api/session/ses_v2root/prompt", body: unknown = { text: "Do the task" }) {
+  const proxyPath = `/opencode2/${path}`;
+  const url = new URL(`http://127.0.0.1/workspace/ws_1${proxyPath}`);
+  return proxyOpencodeV2Request({
+    config,
+    request: new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+    url,
+    workspace: config.workspaces[0]!,
+    proxyPath,
+    connection,
+  });
+}
+
+const clientHeaders = { Authorization: "Bearer owt_test_token", "content-type": "application/json" };
+
+/** Creates a one-step workflow routed to the mock engine's model and returns its id. */
+async function createWorkflow(base: string, model: { provider: string; model: string }): Promise<string> {
+  const routing = await fetch(`${base}/workspace/ws_1/local-workflows/routing`, {
+    method: "PUT", headers: clientHeaders,
+    body: JSON.stringify({ enabled: true, defaultModel: { providerID: model.provider, modelID: model.model }, categories: {} }),
+  });
+  expect(routing.status).toBe(200);
+  const created = await fetch(`${base}/workspace/ws_1/local-workflows`, {
+    method: "POST", headers: clientHeaders,
+    body: JSON.stringify({ name: "Nightly summary", steps: [{ id: "s1", name: "Summarise", prompt: "Summarise the repository", category: "auto", model: null }] }),
+  });
+  expect(created.status).toBe(201);
+  return ((await created.json()) as { id: string }).id;
+}
+
+function runWorkflow(base: string, workflowId: string) {
+  return fetch(`${base}/workspace/ws_1/local-workflows/${workflowId}/run`, { method: "POST", headers: clientHeaders });
+}
+
+async function settledRun(base: string, runId: string): Promise<{ status: string; error: string | null; steps: Array<{ status: string; sessionId: string | null; output: string }> }> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${base}/workspace/ws_1/local-workflows/runs/${runId}`, { headers: clientHeaders });
+    const run = (await response.json()) as { status: string; error: string | null; steps: Array<{ status: string; sessionId: string | null; output: string }> };
+    if (run.status !== "running") return run;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("the workflow run did not settle");
 }
 
 /** The omnirush.ai collector endpoint, recording every decompressed envelope. */
@@ -531,5 +666,154 @@ describe("workspace collector server integration", () => {
     const request = all.find((event) => event.type === "engine.request")?.data as { body?: { parts?: Array<{ url?: string }> } };
     expect(request.body?.parts?.map((part) => part.url ?? null)).toEqual([null, "data:text/plain;omitted", "data:image/png;omitted"]);
     expect(serialized).not.toContain(noteUrl.slice(0, 80));
+  }, 60_000);
+});
+
+describe("collection gaps: the v2 mount and local workflow steps", () => {
+  const provider = { provider: "anthropic", model: "claude-sonnet-4-5" };
+
+  test("refuses a v2 prompt dispatch on a local workspace without an account, unless both development flags are set", async () => {
+    const { root, stateDir } = await createWorkspace();
+    const engine = startMockEngine(provider);
+    const v2 = startMockV2Engine(provider);
+    const config = serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl });
+    await startOmniRush(config);
+
+    preserveGateEnv();
+    setGateEnv(undefined, undefined);
+    // Encoded spellings are classified as the daemon's router decodes them.
+    for (const path of ["api/session/ses_v2root/prompt", "api/session/ses_v2root/command", "api/session/ses_v2root/promp%74", "api/sessio%6E/ses_v2root/prompt"]) {
+      const response = await promptV2(config, v2.connection, path);
+      expect([path, response.status]).toEqual([path, 403]);
+      expect(await response.json()).toEqual({ error: "omnirush_account_required", message: "Sign in to omnirush.ai from Settings to start a session." });
+    }
+    // Nothing reached the daemon: no ownership lookup, no instruction sync, no prompt.
+    expect(v2.received).toEqual([]);
+
+    setGateEnv("1", undefined);
+    expect((await promptV2(config, v2.connection)).status).toBe(403);
+    setGateEnv(undefined, "1");
+    expect((await promptV2(config, v2.connection)).status).toBe(403);
+    expect(v2.received).toEqual([]);
+
+    setGateEnv("1", "1");
+    const bypassed = await promptV2(config, v2.connection);
+    expect(bypassed.status).toBe(200);
+    expect(v2.prompts).toEqual([{ text: "Do the task" }]);
+    expect(v2.received).toContain("PUT /api/session/ses_v2root/instructions/entries/omnirush.context");
+    // Even bypassed, a session identifier the daemon cannot decode is refused before the request is forwarded.
+    const malformed = await promptV2(config, v2.connection, "api/session/ses%E0/prompt");
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toEqual({ error: "invalid_session_id", message: "The session identifier is not valid." });
+    expect(v2.prompts).toHaveLength(1);
+  }, 30_000);
+
+  test("collects a v2 prompt dispatch exactly like a v1 one: session start, prompt milestone, request/response trace and the settled turn", async () => {
+    const { root, stateDir } = await createWorkspace();
+    const engine = startMockEngine(provider);
+    const v2 = startMockV2Engine(provider);
+    const gateway = startMockGateway();
+    const config = serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl, gatewayUrl: gateway.gatewayUrl });
+    const omnirush = await startOmniRush(config);
+
+    const noteText = "OPENAI_API_KEY=sk-1234567890abcdefghijklmnop attached note";
+    const noteUri = `data:text/plain;base64,${Buffer.from(noteText).toString("base64")}`;
+    const response = await promptV2(config, v2.connection, "api/session/ses_v2root/prompt", { text: "Summarise the note", files: [{ uri: noteUri, mime: "text/plain", name: "note.txt" }] });
+    expect(response.status).toBe(200);
+    expect(v2.prompts).toHaveLength(1);
+    await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
+    await omnirush.stop();
+
+    expect(gateway.uploads.map((upload) => [upload.sessionId, upload.envelope.snapshot_type, upload.envelope.trigger])).toEqual([
+      ["ses_v2root", "start", "session_start"],
+      ["ses_v2root", "trace", "trace_flush"],
+      ["ses_v2root", "end", "session_end"],
+    ]);
+    const trace = traces(gateway.uploads)[0]!;
+    const types = events(trace).map((event) => event.type);
+    for (const type of ["engine.request", "engine.response", "collector.trigger", "session.model", "session.idle", "turn.completed"]) {
+      expect(types).toContain(type);
+    }
+    expect(events(trace).find((event) => event.type === "engine.request")?.data).toEqual({
+      method: "POST", path: "/api/session/ses_v2root/prompt",
+      body: { text: "Summarise the note", files: [{ uri: "data:text/plain;omitted", omitted_uri_chars: noteUri.length, mime: "text/plain", name: "note.txt" }] },
+    });
+    expect(events(trace).find((event) => event.type === "engine.response")?.data).toEqual({ method: "POST", path: "/api/session/ses_v2root/prompt", status: 200 });
+    expect(events(trace).filter((event) => event.type === "collector.trigger").map((event) => event.data?.trigger)).toEqual(["prompt", "turn_completed"]);
+    expect(events(trace).find((event) => event.type === "session.model")?.data).toEqual({
+      provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", agent: "build",
+    });
+    expect((events(trace).find((event) => event.type === "turn.completed")?.data?.messages as unknown[]).length).toBe(2);
+    expect(trace.session).toEqual({ provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: [] });
+    // The observer used the daemon's own routes, and the inline attachment never left the client.
+    expect(v2.received).toContain("GET /api/session/active");
+    expect(v2.received).toContain("GET /api/session/ses_v2root/context");
+    expect(JSON.stringify(gateway.uploads)).not.toContain("sk-1234567890abcdefghijklmnop");
+    expect(JSON.stringify(gateway.uploads)).not.toContain(noteUri.slice(0, 60));
+  }, 60_000);
+
+  test("refuses a local workflow run without an account, unless both development flags are set", async () => {
+    const { root, stateDir } = await createWorkspace();
+    const engine = startMockEngine(provider);
+    const omnirush = await startOmniRush(serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl }));
+    const workflowId = await createWorkflow(omnirush.base, provider);
+
+    preserveGateEnv();
+    setGateEnv(undefined, undefined);
+    const refused = await runWorkflow(omnirush.base, workflowId);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: "omnirush_account_required", message: "Sign in to omnirush.ai from Settings to start a session." });
+    setGateEnv("1", undefined);
+    expect((await runWorkflow(omnirush.base, workflowId)).status).toBe(403);
+    setGateEnv(undefined, "1");
+    expect((await runWorkflow(omnirush.base, workflowId)).status).toBe(403);
+    // No engine session was created and no prompt was sent; no run was recorded.
+    expect(engine.received.filter((entry) => entry.startsWith("POST"))).toEqual([]);
+    const snapshot = await fetch(`${omnirush.base}/workspace/ws_1/local-workflows`, { headers: clientHeaders });
+    expect(((await snapshot.json()) as { runs: unknown[] }).runs).toEqual([]);
+
+    setGateEnv("1", "1");
+    const accepted = await runWorkflow(omnirush.base, workflowId);
+    expect(accepted.status).toBe(202);
+    const run = await settledRun(omnirush.base, ((await accepted.json()) as { id: string }).id);
+    expect(run.status).toBe("completed");
+    expect(run.steps.map((step) => [step.status, step.sessionId, step.output])).toEqual([["completed", "ses_workflow", "workflow answer 1"]]);
+    expect(engine.workflowPrompts).toEqual([{ model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" }, parts: [{ type: "text", text: "Summarise the repository" }] }]);
+  }, 30_000);
+
+  test("collects a workflow step exactly like a prompt sent from the app", async () => {
+    const { root, stateDir } = await createWorkspace();
+    const engine = startMockEngine(provider);
+    const gateway = startMockGateway();
+    const omnirush = await startOmniRush(serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl, gatewayUrl: gateway.gatewayUrl }));
+    const workflowId = await createWorkflow(omnirush.base, provider);
+    const accepted = await runWorkflow(omnirush.base, workflowId);
+    expect(accepted.status).toBe(202);
+    const run = await settledRun(omnirush.base, ((await accepted.json()) as { id: string }).id);
+    expect(run.status).toBe("completed");
+    await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
+    await omnirush.stop();
+
+    expect(gateway.uploads.map((upload) => [upload.sessionId, upload.envelope.snapshot_type, upload.envelope.trigger])).toEqual([
+      ["ses_workflow", "start", "session_start"],
+      ["ses_workflow", "trace", "trace_flush"],
+      ["ses_workflow", "end", "session_end"],
+    ]);
+    const trace = traces(gateway.uploads)[0]!;
+    const types = events(trace).map((event) => event.type);
+    for (const type of ["engine.request", "engine.response", "collector.trigger", "session.model", "session.idle", "turn.completed"]) {
+      expect(types).toContain(type);
+    }
+    expect(events(trace).find((event) => event.type === "engine.request")?.data).toEqual({
+      method: "POST", path: "/session/ses_workflow/prompt",
+      body: { model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" }, parts: [{ type: "text", text: "Summarise the repository" }] },
+    });
+    expect(events(trace).find((event) => event.type === "engine.response")?.data).toEqual({ method: "POST", path: "/session/ses_workflow/prompt", status: 200 });
+    expect(events(trace).filter((event) => event.type === "collector.trigger").map((event) => event.data?.trigger)).toEqual(["prompt", "turn_completed"]);
+    expect(events(trace).find((event) => event.type === "session.model")?.data).toEqual({
+      provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", agent: "build",
+    });
+    expect((events(trace).find((event) => event.type === "turn.completed")?.data?.messages as unknown[]).length).toBe(2);
+    expect(gateway.uploads.at(-1)?.envelope.session).toEqual({ provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: [] });
   }, 60_000);
 });

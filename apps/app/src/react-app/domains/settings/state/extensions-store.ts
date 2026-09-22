@@ -642,7 +642,7 @@ export function createExtensionsStore(options: {
     const nextConfig = withWorkspaceCloudImports(config, nextCloudImports);
     const persisted = await writeWorkspaceOmniRushConfigRecord(nextConfig);
     if (!persisted) {
-      throw new Error("OmniRush.ai server unavailable. Connect to manage imported cloud marketplaces.");
+      throw new Error("omnirush.ai server unavailable. Connect to manage imported cloud marketplaces.");
     }
     setStateField("importedCloudMarketplaces", nextMarketplaces);
     void refreshPendingCloudPluginChanges();
@@ -658,7 +658,7 @@ export function createExtensionsStore(options: {
     const nextConfig = withWorkspaceCloudImports(config, nextCloudImports);
     const persisted = await writeWorkspaceOmniRushConfigRecord(nextConfig);
     if (!persisted) {
-      throw new Error("OmniRush.ai server unavailable. Connect to manage imported cloud plugins.");
+      throw new Error("omnirush.ai server unavailable. Connect to manage imported cloud plugins.");
     }
     setStateField("importedCloudPlugins", nextPlugins);
     void refreshPendingCloudPluginChanges(nextPlugins);
@@ -696,11 +696,11 @@ export function createExtensionsStore(options: {
     }
 
     if (hasOmniRushTarget) {
-      throw new Error("OmniRush.ai server cannot remove skills for this workspace.");
+      throw new Error("omnirush.ai server cannot remove skills for this workspace.");
     }
 
     if (isRemoteWorkspace) {
-      throw new Error("OmniRush.ai server unavailable. Connect to remove skills.");
+      throw new Error("omnirush.ai server unavailable. Connect to remove skills.");
     }
 
     if (!isDesktopRuntime()) {
@@ -914,7 +914,7 @@ export function createExtensionsStore(options: {
       await omnirushClient.addMcp(omnirushWorkspaceId, { name, config });
       return;
     }
-    throw new Error("OmniRush.ai server unavailable. Connect to import MCP servers into this workspace.");
+    throw new Error("omnirush.ai server unavailable. Connect to import MCP servers into this workspace.");
   };
 
   const deletePluginMcpConfig = async (name: string) => {
@@ -930,7 +930,7 @@ export function createExtensionsStore(options: {
       await omnirushClient.removeMcp(omnirushWorkspaceId, name);
       return;
     }
-    throw new Error("OmniRush.ai server unavailable. Connect to remove imported MCP servers from this workspace.");
+    throw new Error("omnirush.ai server unavailable. Connect to remove imported MCP servers from this workspace.");
   };
 
   const pluginReloadReason = (objectType: string): ReloadReason => {
@@ -961,7 +961,7 @@ export function createExtensionsStore(options: {
       await omnirushClient.writeWorkspaceFile(omnirushWorkspaceId, { path, content, force: true });
       return;
     }
-    throw new Error("OmniRush.ai server unavailable. Connect to import plugin files into this workspace.");
+    throw new Error("omnirush.ai server unavailable. Connect to import plugin files into this workspace.");
   };
 
   const deletePluginWorkspaceFiles = async (files: Array<{ path: string; recursive?: boolean }>) => {
@@ -984,7 +984,7 @@ export function createExtensionsStore(options: {
       }
       return;
     }
-    throw new Error("OmniRush.ai server unavailable. Connect to remove imported plugin files from this workspace.");
+    throw new Error("omnirush.ai server unavailable. Connect to remove imported plugin files from this workspace.");
   };
 
   const applyCloudOrgPluginImport = async (
@@ -1257,7 +1257,7 @@ export function createExtensionsStore(options: {
       const settings = readDenSettings();
       const token = settings.authToken?.trim() ?? "";
       const orgId = settings.activeOrgId?.trim() ?? "";
-      if (!token || !orgId) throw new Error("Sign in to OmniRush.ai Cloud and choose an organization first.");
+      if (!token || !orgId) throw new Error("Sign in to omnirush.ai Cloud and choose an organization first.");
       const client = createDenClient({ baseUrl: settings.baseUrl, token });
       const resolved = await client.getOrgPluginResolved(orgId, plugin);
       const target = await resolveWorkspaceServerTarget();
@@ -1299,7 +1299,7 @@ export function createExtensionsStore(options: {
   async function previewClaudePlugin(url: string): Promise<OmniRushClaudePluginPreview> {
     const target = await resolveWorkspaceServerTarget();
     if (!target.omnirushClient || !target.omnirushWorkspaceId) {
-      throw new Error("OmniRush.ai server unavailable. Connect to install plugins from GitHub.");
+      throw new Error("omnirush.ai server unavailable. Connect to install plugins from GitHub.");
     }
     const result = await target.omnirushClient.previewClaudePlugin(target.omnirushWorkspaceId, { url });
     return result.preview;
@@ -1312,7 +1312,7 @@ export function createExtensionsStore(options: {
     try {
       const target = await resolveWorkspaceServerTarget();
       if (!target.omnirushClient || !target.omnirushWorkspaceId) {
-        throw new Error("OmniRush.ai server unavailable. Connect to install plugins from GitHub.");
+        throw new Error("omnirush.ai server unavailable. Connect to install plugins from GitHub.");
       }
       const result = await target.omnirushClient.installClaudePlugin(target.omnirushWorkspaceId, { url });
       await refreshSkills({ force: true });
@@ -1477,7 +1477,7 @@ export function createExtensionsStore(options: {
       mutateState((current) => ({
         ...current,
         skills: [],
-        skillsStatus: "OmniRush.ai server cannot read skills for this workspace.",
+        skillsStatus: "omnirush.ai server cannot read skills for this workspace.",
       }));
       return;
     }
@@ -1527,7 +1527,7 @@ export function createExtensionsStore(options: {
       mutateState((current) => ({
         ...current,
         skills: [],
-        skillsStatus: "OmniRush.ai server unavailable. Connect to load skills.",
+        skillsStatus: "omnirush.ai server unavailable. Connect to load skills.",
       }));
       return;
     }
@@ -1541,7 +1541,7 @@ export function createExtensionsStore(options: {
     try {
       setStateField("skillsStatus", null);
       const rawClient = client as unknown as { _client?: { get: (input: { url: string }) => Promise<unknown> } };
-      if (!rawClient._client) throw new Error("OpenCode client unavailable.");
+      if (!rawClient._client) throw new Error("omnirush.ai client unavailable.");
       const result = await rawClient._client.get({ url: "/skill" }) as {
         data?: Array<{ name: string; description: string; location: string }>;
         error?: unknown;
@@ -1647,9 +1647,9 @@ export function createExtensionsStore(options: {
     if (scope === "project" && hasOmniRushTarget) {
       mutateState((current) => ({
         ...current,
-        pluginStatus: "OmniRush.ai server cannot read plugins for this workspace.",
+        pluginStatus: "omnirush.ai server cannot read plugins for this workspace.",
         pluginList: [],
-        sidebarPluginStatus: "OmniRush.ai server cannot read plugins for this workspace.",
+        sidebarPluginStatus: "omnirush.ai server cannot read plugins for this workspace.",
         sidebarPluginList: [],
       }));
       refreshPluginsInFlight = false;
@@ -1671,9 +1671,9 @@ export function createExtensionsStore(options: {
     if (!isLocalWorkspace && !canUseOmniRushServer) {
       mutateState((current) => ({
         ...current,
-        pluginStatus: "OmniRush.ai server unavailable. Connect to manage plugins.",
+        pluginStatus: "omnirush.ai server unavailable. Connect to manage plugins.",
         pluginList: [],
-        sidebarPluginStatus: "Connect an OmniRush.ai server to load plugins.",
+        sidebarPluginStatus: "Connect an omnirush.ai server to load plugins.",
         sidebarPluginList: [],
       }));
       refreshPluginsInFlight = false;
@@ -1792,7 +1792,7 @@ export function createExtensionsStore(options: {
     }
 
     if (snapshot.pluginScope === "project" && hasOmniRushTarget) {
-      setStateField("pluginStatus", "OmniRush.ai server cannot write plugins for this workspace.");
+      setStateField("pluginStatus", "omnirush.ai server cannot write plugins for this workspace.");
       return;
     }
 
@@ -1802,7 +1802,7 @@ export function createExtensionsStore(options: {
     }
 
     if (!isLocalWorkspace) {
-      setStateField("pluginStatus", "OmniRush.ai server unavailable. Connect to manage plugins.");
+      setStateField("pluginStatus", "omnirush.ai server unavailable. Connect to manage plugins.");
       return;
     }
 
@@ -1883,7 +1883,7 @@ export function createExtensionsStore(options: {
     }
 
     if (snapshot.pluginScope === "project" && hasOmniRushTarget) {
-      setStateField("pluginStatus", "OmniRush.ai server cannot write plugins for this workspace.");
+      setStateField("pluginStatus", "omnirush.ai server cannot write plugins for this workspace.");
       return;
     }
 
@@ -1893,7 +1893,7 @@ export function createExtensionsStore(options: {
     }
 
     if (!isLocalWorkspace) {
-      setStateField("pluginStatus", "OmniRush.ai server unavailable. Connect to manage plugins.");
+      setStateField("pluginStatus", "omnirush.ai server unavailable. Connect to manage plugins.");
       return;
     }
 
@@ -2005,13 +2005,13 @@ export function createExtensionsStore(options: {
     }
 
     if (hasOmniRushTarget) {
-      const message = "OmniRush.ai server cannot write skills for this workspace.";
+      const message = "omnirush.ai server cannot write skills for this workspace.";
       setStateField("skillsStatus", message);
       return { ok: false, message };
     }
 
     if (isRemoteWorkspace) {
-      const message = "OmniRush.ai server unavailable. Connect to install skills.";
+      const message = "omnirush.ai server unavailable. Connect to install skills.";
       setStateField("skillsStatus", message);
       return { ok: false, message };
     }
@@ -2147,7 +2147,7 @@ export function createExtensionsStore(options: {
     }
 
     if (hasOmniRushTarget) {
-      setStateField("skillsStatus", "OmniRush.ai server cannot read skills for this workspace.");
+      setStateField("skillsStatus", "omnirush.ai server cannot read skills for this workspace.");
       return null;
     }
 
@@ -2157,7 +2157,7 @@ export function createExtensionsStore(options: {
     }
 
     if (isRemoteWorkspace) {
-      setStateField("skillsStatus", "OmniRush.ai server unavailable. Connect to view skills.");
+      setStateField("skillsStatus", "omnirush.ai server unavailable. Connect to view skills.");
       return null;
     }
     if (!isDesktopRuntime()) {
@@ -2215,7 +2215,7 @@ export function createExtensionsStore(options: {
     }
 
     if (hasOmniRushTarget) {
-      setStateField("skillsStatus", "OmniRush.ai server cannot write skills for this workspace.");
+      setStateField("skillsStatus", "omnirush.ai server cannot write skills for this workspace.");
       return;
     }
 
@@ -2225,7 +2225,7 @@ export function createExtensionsStore(options: {
     }
 
     if (isRemoteWorkspace) {
-      setStateField("skillsStatus", "OmniRush.ai server unavailable. Connect to edit skills.");
+      setStateField("skillsStatus", "omnirush.ai server unavailable. Connect to edit skills.");
       return;
     }
     if (!isDesktopRuntime()) {

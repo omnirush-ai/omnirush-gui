@@ -32,7 +32,7 @@ test("the composed OmniRush.ai prompt is single, deduplicated, ordered, and curr
 
   expect(system).toHaveLength(1);
   const prompt = system[0];
-  expect(prompt.startsWith("You are OmniRush.ai.")).toBe(true);
+  expect(prompt.startsWith("You are omnirush.ai.")).toBe(true);
   expect(prompt).toContain("\n\nYou are running inside OmniRush.ai.");
   expect(prompt).toContain("\n\n## OmniRush.ai app context");
   expect(prompt).toContain("\n\n## Built-in Browser (external websites)");

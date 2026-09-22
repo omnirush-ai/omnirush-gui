@@ -131,7 +131,7 @@ export function buildOmniRushContext(
   const resources: OmniRushResourceDescriptor[] = [{
     ref: `screen:${input.route}`,
     kind: "screen",
-    title: screen.kind === "settings" ? `${screen.panel} settings` : "OmniRush.ai",
+    title: screen.kind === "settings" ? `${screen.panel} settings` : "omnirush.ai",
     provider,
     state: { kind: screen.kind, route: input.route },
   }];

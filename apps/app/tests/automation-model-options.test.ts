@@ -24,7 +24,7 @@ describe("Automation model options", () => {
     expect(automationModelOptions([])).toEqual([{
       providerId: "omnirush",
       modelId: "z-ai/glm-5.2",
-      providerName: "OmniRush.ai Models",
+      providerName: "omnirush.ai Models",
       modelName: "GLM-5.2",
       accessKind: "omnirush_managed",
     }])
@@ -34,9 +34,9 @@ describe("Automation model options", () => {
     expect(automationModelOptions([], { includeInternalStarter: false })).toEqual([])
   })
 
-  test("expands the member's managed OmniRush.ai aliases even when Den stores no model rows", () => {
+  test("expands the member's managed omnirush.ai aliases even when Den stores no model rows", () => {
     const options = automationModelOptions([
-      provider({ id: "lpr_member_omnirush", source: "omnirush", name: "OmniRush.ai Models" }),
+      provider({ id: "lpr_member_omnirush", source: "omnirush", name: "omnirush.ai Models" }),
     ])
 
     expect(options.some((option) => option.providerId === "omnirush" && option.modelId === "z-ai/glm-5.2")).toBe(true)
@@ -138,10 +138,10 @@ describe("Automation proposal model resolution", () => {
     const custom = { providerId: "lpr_abc", modelId: "deepseek-v4-flash", variant: "high" }
     expect(resolveProposalModel(custom, [customProvider])).toEqual({ model: custom, resolution: "exact" })
 
-    const managedProvider = provider({ id: "lpr_managed", source: "omnirush", name: "OmniRush.ai Models" })
+    const managedProvider = provider({ id: "lpr_managed", source: "omnirush", name: "omnirush.ai Models" })
     const managedOption = automationModelOptions([managedProvider]).find((option) => option.accessKind === "omnirush_managed")
     expect(managedOption).toBeDefined()
-    if (!managedOption) throw new Error("Expected an enabled OmniRush.ai managed model")
+    if (!managedOption) throw new Error("Expected an enabled omnirush.ai managed model")
     const managed = { providerId: managedOption.providerId, modelId: managedOption.modelId, variant: "high" }
     expect(resolveProposalModel(managed, [managedProvider])).toEqual({ model: managed, resolution: "exact" })
   })
@@ -158,7 +158,7 @@ describe("Automation proposal model resolution", () => {
     })
   })
 
-  test("does not map through OmniRush.ai provider records", () => {
+  test("does not map through omnirush.ai provider records", () => {
     const managed = provider({
       ...customProvider,
       id: "lpr_managed",

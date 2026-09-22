@@ -62,7 +62,7 @@ function missingContextIssue(input: {
       code: "cloud_mcp_submission_context_missing",
       stage: "engine_delivery",
       retryable: true,
-      message: "OmniRush.ai could not resolve the workspace server before checking connected service tools.",
+      message: "omnirush.ai could not resolve the workspace server before checking connected service tools.",
       recommendedAction: "Retry after the workspace finishes loading.",
     };
   }
@@ -79,7 +79,7 @@ function missingContextIssue(input: {
     code: "cloud_mcp_submission_context_missing",
     stage: "provider_projection",
     retryable: false,
-    message: "OmniRush.ai could not verify connected service tools for this submission.",
+    message: "omnirush.ai could not verify connected service tools for this submission.",
     recommendedAction: "Retry or open Settings → Connect for diagnostics.",
   };
 }

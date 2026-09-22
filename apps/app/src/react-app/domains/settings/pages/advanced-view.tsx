@@ -124,9 +124,9 @@ export function AdvancedView(props: AdvancedViewProps) {
   })();
 
   const clientDetailLines = props.clientConnected
-    ? ["Chat and task creation can use the OpenCode engine for this workspace."]
+    ? ["Chat and task creation can use the omnirush.ai engine for this workspace."]
     : [
-      "Chat and task creation may fail until OpenCode restarts.",
+      "Chat and task creation may fail until omnirush.ai restarts.",
         "Runtime server config sources below can still be inspected.",
       ];
 

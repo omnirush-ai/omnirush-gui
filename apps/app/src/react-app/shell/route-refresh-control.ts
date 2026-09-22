@@ -250,7 +250,7 @@ export type RouteConnectionGapPlan = {
 };
 
 /**
- * Decide what a refresh does when it resolves no usable OmniRush.ai server
+ * Decide what a refresh does when it resolves no usable omnirush.ai server
  * URL/token.
  *
  * On desktop the local server owns that URL and mints fresh tokens on every

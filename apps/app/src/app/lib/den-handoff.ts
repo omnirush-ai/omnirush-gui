@@ -136,7 +136,7 @@ export async function exchangeHandoffAndSignIn(
   grant: string,
   options: ExchangeHandoffOptions,
 ): Promise<ExchangeHandoffResult> {
-  const fallback = options.fallbackErrorMessage ?? "Failed to sign in to OmniRush.ai Cloud.";
+  const fallback = options.fallbackErrorMessage ?? "Failed to sign in to omnirush.ai Cloud.";
   const attempt = ++handoffAttemptCounter;
 
   const fail = (

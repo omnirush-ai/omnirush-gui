@@ -26,14 +26,14 @@ function maintenance(
   };
 }
 
-describe("OmniRush.ai Connect status", () => {
+describe("omnirush.ai Connect status", () => {
   test("distinguishes missing, disabled, and unreadable Connect state", () => {
     expect(resolveOmniRushConnectStateSummary("missing", false)).toEqual({
       status: "not_configured",
       statusLabel: "Not configured",
       tone: "neutral",
       stageLabel: "Connect setup is not finished",
-      recommendedAction: "Sign in to OmniRush.ai Cloud to finish setup.",
+      recommendedAction: "Sign in to omnirush.ai Cloud to finish setup.",
     });
     expect(resolveOmniRushConnectStateSummary("available", false)).toEqual({
       status: "disabled",
@@ -48,7 +48,7 @@ describe("OmniRush.ai Connect status", () => {
         statusLabel: "Needs attention",
         tone: "error",
         stageLabel: "Connect settings are unavailable",
-        recommendedAction: "Restart OmniRush.ai. If this continues, run diagnostics.",
+        recommendedAction: "Restart omnirush.ai. If this continues, run diagnostics.",
       });
     }
   });
@@ -66,7 +66,7 @@ describe("OmniRush.ai Connect status", () => {
     expect(resolveOmniRushConnectStatus(true, undefined)).toEqual({
       state: "ready",
       label: "Ready",
-      description: "Signed in to OmniRush.ai Cloud. Connected service tools will be checked when a workspace is active.",
+      description: "Signed in to omnirush.ai Cloud. Connected service tools will be checked when a workspace is active.",
     });
     expect(resolveOmniRushConnectStatus(true, maintenance("idle"))).toMatchObject({
       state: "ready",

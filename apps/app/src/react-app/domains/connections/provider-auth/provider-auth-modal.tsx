@@ -631,9 +631,9 @@ export default function ProviderAuthModal(props: ProviderAuthModalProps) {
         : "Use OpenAI's device flow when the local browser callback is unreliable.";
     }
     if (method.type === "oauth") {
-      return "Continue in the browser and let OmniRush.ai finish the connection automatically.";
+      return "Continue in the browser and let omnirush.ai finish the connection automatically.";
     }
-    return "Paste a secret key that OmniRush.ai stores locally on this device.";
+    return "Paste a secret key that omnirush.ai stores locally on this device.";
   };
 
   return (

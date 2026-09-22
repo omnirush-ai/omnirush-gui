@@ -107,7 +107,7 @@ describe("bundled Computer Use setup", () => {
   }
 
   test("resolves the desktop helper before validating the empty catalog command", async () => {
-    const command = ["/Applications/OmniRush.ai.app/Contents/Resources/helpers/OmniRush.ai Computer Use.app/Contents/MacOS/ComputerUse", "mcp"];
+    const command = ["/Applications/omnirush.ai.app/Contents/Resources/helpers/omnirush.ai Computer Use.app/Contents/MacOS/ComputerUse", "mcp"];
     const { result, saved } = await connectWithHelper(command);
     expect(result).toEqual({ ok: true });
     expect(saved).toEqual([{ name: "computer-use", config: { type: "local", enabled: true, command } }]);
@@ -115,7 +115,7 @@ describe("bundled Computer Use setup", () => {
 
   test("missing helper returns an actionable error without saving a connection", async () => {
     const { result, saved } = await connectWithHelper(null);
-    expect(result).toEqual({ ok: false, error: "Computer Use requires the bundled OmniRush.ai helper on macOS." });
+    expect(result).toEqual({ ok: false, error: "Computer Use requires the bundled omnirush.ai helper on macOS." });
     expect(saved).toEqual([]);
   });
 });

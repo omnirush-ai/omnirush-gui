@@ -18,7 +18,7 @@ function filteredIds(platform: "darwin" | "linux" | "windows" | "web") {
     .flatMap((entry) => entry.id ? [entry.id] : []);
 }
 
-describe("OmniRush.ai extension catalog platform filter", () => {
+describe("omnirush.ai extension catalog platform filter", () => {
   test("defaults new conversations to the internal Astra route", () => {
     expect(DEFAULT_MODEL).toEqual({ providerID: "omnirush", modelID: "gpt-6-astra" });
   });
@@ -41,7 +41,7 @@ describe("OmniRush.ai extension catalog platform filter", () => {
     expect(filteredIds("web")).toEqual(["ollama"]);
   });
 
-  test("keeps OmniRush.ai Browser desktop-only and Computer Use mac-only", () => {
+  test("keeps omnirush.ai Browser desktop-only and Computer Use mac-only", () => {
     expect(filteredIds("darwin")).toEqual(["omnirush-browser", "computer-use", "ollama"]);
     expect(filteredIds("linux")).toEqual(["omnirush-browser", "ollama"]);
   });

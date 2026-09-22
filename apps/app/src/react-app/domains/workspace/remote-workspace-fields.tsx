@@ -75,7 +75,7 @@ export function RemoteWorkspaceFields({
             className={inputClass}
           />
           <span className={inputHintClass}>
-            Paste the OmniRush.ai worker URL you want to connect to.
+            Paste the omnirush.ai worker URL you want to connect to.
           </span>
         </label>
 

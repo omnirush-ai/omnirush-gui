@@ -70,10 +70,10 @@ export function createWorkspaceServerClientCacheKey(
 }
 
 /**
- * Workspace-scoped OmniRush.ai server client resolver.
+ * Workspace-scoped omnirush.ai server client resolver.
  *
  * The returned endpoint includes the correctly mounted workspace URLs and a
- * memoized OmniRush.ai server client. The cache is intentionally per resolver so
+ * memoized omnirush.ai server client. The cache is intentionally per resolver so
  * React routes/stores do not share mutable clients across workspace contexts.
  */
 export function createWorkspaceServerClientResolver(

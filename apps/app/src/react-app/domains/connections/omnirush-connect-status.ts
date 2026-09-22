@@ -74,7 +74,7 @@ export function resolveOmniRushConnectStatus(
     return {
       state: "ready",
       label: "Ready",
-      description: "Signed in to OmniRush.ai Cloud. Connected service tools will be checked when a workspace is active.",
+      description: "Signed in to omnirush.ai Cloud. Connected service tools will be checked when a workspace is active.",
     };
   }
 
@@ -91,7 +91,7 @@ export function resolveOmniRushConnectStatus(
       state: "needs_attention",
       label: "Needs attention",
       description: maintenance.issue?.message
-        ?? "OmniRush.ai Connect could not verify connected service tools. Run diagnostics for details.",
+        ?? "omnirush.ai Connect could not verify connected service tools. Run diagnostics for details.",
     };
   }
 

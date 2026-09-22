@@ -597,7 +597,11 @@ function nvmVersionBinPaths(home) {
   }
 }
 
-function pathHelperEntries() {
+// PATH resolution for the server and the sidecars it spawns. The engine-side
+// twin lives in apps/server/src/opencode-plugins/managed-policy-path.ts and
+// must list the same directories (a server test compares the two), so the
+// engine's bash tool finds git and gh the way the packaged app does.
+export function pathHelperEntries() {
   if (process.platform !== "darwin") return [];
   const result = spawnSync("/usr/libexec/path_helper", ["-s"], {
     encoding: "utf8",
@@ -609,7 +613,7 @@ function pathHelperEntries() {
   return match?.[1]?.split(path.delimiter).filter(Boolean) ?? [];
 }
 
-function extraPathEntries() {
+export function extraPathEntries() {
   const home = os.homedir();
   const candidates = [];
 
@@ -661,7 +665,7 @@ function extraPathEntries() {
   return candidates.filter((entry) => entry && isDirectory(entry));
 }
 
-function enrichedPath(sidecarDirs, currentPath) {
+export function enrichedPath(sidecarDirs, currentPath) {
   const entries = [
     ...sidecarDirs.filter(isDirectory),
     ...extraPathEntries(),
@@ -1997,6 +2001,14 @@ export function createRuntimeManager({
             ...gatewayCredentials,
             persist: (credentials) => omnirushGatewayCredentials.save(credentials),
             invalidate: () => omnirushGatewayCredentials.clear({ revokeRemote: false }),
+            // Name and email for the git commit identity default; the account
+            // store owns the profile lookup and its token refresh.
+            profile: async () => {
+              const status = await omnirushGatewayCredentials.status?.();
+              return status?.connected && status.email
+                ? { email: status.email, displayName: status.displayName ?? null }
+                : null;
+            },
           }
         : undefined,
     });

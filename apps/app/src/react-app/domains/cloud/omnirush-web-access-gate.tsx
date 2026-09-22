@@ -75,21 +75,21 @@ export function OmniRushWebAccessGateScreen(props: {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              OmniRush.ai Web
+              omnirush.ai Web
             </p>
             <h1 className="mt-2 text-[26px] font-semibold leading-tight tracking-[-0.03em]">
               {checking
                 ? "Checking workspace access…"
                 : denied
-                  ? "OmniRush.ai Web access is required"
-                  : "OmniRush.ai Web remains locked"}
+                  ? "omnirush.ai Web access is required"
+                  : "omnirush.ai Web remains locked"}
             </h1>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
               {checking
                 ? `Waiting for Den to confirm access for ${organizationName}.`
                 : denied
-                  ? `${organizationName} does not have an active OmniRush.ai Web subscription or complimentary admin grant.`
-                  : `Den could not confirm OmniRush.ai Web access for ${organizationName}. The workspace stays locked until it can.`}
+                  ? `${organizationName} does not have an active omnirush.ai Web subscription or complimentary admin grant.`
+                  : `Den could not confirm omnirush.ai Web access for ${organizationName}. The workspace stays locked until it can.`}
             </p>
           </div>
         </div>

@@ -1129,7 +1129,7 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
               </p>
               <p className="text-xs text-amber-900">
                 {freeModelLimit
-                  ? "OmniRush.ai will keep retrying. To keep working now, connect your own model provider."
+                  ? "omnirush.ai will keep retrying. To keep working now, connect your own model provider."
                   : action.message}
               </p>
               {freeModelLimit ? (

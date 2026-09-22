@@ -7,7 +7,77 @@ type BrokerOptions = {
   credentials?: OmniRushGatewayCredentials;
   engineToken?: string;
   fetch?: typeof externalFetch;
+  log?: (level: "info" | "warn" | "error", message: string, attributes?: Record<string, unknown>) => void;
 };
+
+/**
+ * Upstream model streams have been observed to end mid-response (the proxy
+ * closes the connection while a function call is still streaming). Without a
+ * terminal event the engine keeps the turn open forever and the UI shows
+ * nothing. The guard appends a synthetic Responses-API error event when the
+ * upstream closes early or stalls, so the turn fails visibly and can be retried.
+ */
+const TERMINAL_EVENT_PATTERN = /"type":"(?:response\.(?:completed|failed|incomplete)|error)"/;
+export const STREAM_IDLE_TIMEOUT_MS = 180_000;
+export type StreamInterruption = "truncated" | "idle";
+
+function interruptedEvent(reason: StreamInterruption): Uint8Array {
+  const message = reason === "idle"
+    ? "omnirush.ai: the model stream stalled and was closed. Retry the request."
+    : "omnirush.ai: the model stream ended before the response completed. Retry the request.";
+  const payload = {
+    type: "error",
+    sequence_number: -1,
+    error: { type: "server_error", code: "upstream_stream_interrupted", message },
+  };
+  return new TextEncoder().encode(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
+}
+
+export function guardEventStream(
+  body: ReadableStream<Uint8Array>,
+  options: { idleMs?: number; onInterrupted?: (reason: StreamInterruption) => void } = {},
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const idleMs = options.idleMs ?? STREAM_IDLE_TIMEOUT_MS;
+  let tail = "";
+  let terminal = false;
+  const interrupt = (controller: ReadableStreamDefaultController<Uint8Array>, reason: StreamInterruption) => {
+    options.onInterrupted?.(reason);
+    controller.enqueue(interruptedEvent(reason));
+    controller.close();
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<{ idle: true }>((resolve) => {
+        timer = setTimeout(() => resolve({ idle: true }), idleMs);
+        timer.unref?.();
+      });
+      const result = await Promise.race([reader.read(), idle]);
+      if (timer) clearTimeout(timer);
+      if ("idle" in result) {
+        await reader.cancel().catch(() => undefined);
+        interrupt(controller, "idle");
+        return;
+      }
+      if (result.done) {
+        if (terminal) controller.close();
+        else interrupt(controller, "truncated");
+        return;
+      }
+      const chunk = result.value;
+      if (!terminal) {
+        tail = (tail + decoder.decode(chunk, { stream: true })).slice(-4096);
+        if (TERMINAL_EVENT_PATTERN.test(tail)) terminal = true;
+      }
+      controller.enqueue(chunk);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
 
 type CredentialState = {
   gatewayUrl: string;
@@ -115,6 +185,7 @@ export class OmniRushGatewayBroker {
   private readonly persist?: OmniRushGatewayCredentials["persist"];
   private readonly invalidate?: OmniRushGatewayCredentials["invalidate"];
   private readonly fetcher: typeof externalFetch;
+  private readonly log?: BrokerOptions["log"];
   private refreshInFlight: Promise<boolean> | null = null;
 
   constructor(options: BrokerOptions) {
@@ -130,6 +201,7 @@ export class OmniRushGatewayBroker {
     this.persist = options.credentials?.persist;
     this.invalidate = options.credentials?.invalidate;
     this.fetcher = options.fetch ?? externalFetch;
+    this.log = options.log;
   }
 
   get enabled(): boolean {
@@ -166,7 +238,14 @@ export class OmniRushGatewayBroker {
         },
       }, { status: 401 });
     }
-    return new Response(response.body, {
+    const contentType = response.headers.get("content-type") ?? "";
+    const streamed = response.ok && response.body && contentType.includes("text/event-stream");
+    const responseBody = streamed && response.body
+      ? guardEventStream(response.body, {
+          onInterrupted: (reason) => this.log?.("warn", "omnirush.ai model stream interrupted", { reason, path: normalizedPath }),
+        })
+      : response.body;
+    return new Response(responseBody, {
       status: response.status,
       statusText: response.statusText,
       headers: responseHeaders(response.headers),

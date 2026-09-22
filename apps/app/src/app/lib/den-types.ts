@@ -121,7 +121,7 @@ export type DenOrgPlugin = {
   memberCount: number;
   updatedAt: string | null;
   componentCounts: Record<string, number>;
-  /** Preferred Den surface: plugins are normalized into OmniRush.ai extensions. */
+  /** Preferred Den surface: plugins are normalized into omnirush.ai extensions. */
   extension?: DenOrgExtensionProjection | null;
   cloudReadiness?: DenPluginCloudReadiness;
 };

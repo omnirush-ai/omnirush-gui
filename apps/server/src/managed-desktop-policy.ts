@@ -7,6 +7,7 @@ import { externalFetch } from "./server-fetch.js";
 import { ApiError } from "./errors.js";
 import { readGlobalRuntimeOpencodeConfig, writeManagedDesktopPolicy, runtimeProviderMap } from "./runtime-opencode-config-store.js";
 import { policyDenial, policyRequestActions, type ManagedPolicyAction } from "./managed-policy-rules.js";
+import { ensureWorkspaceGitIdentity } from "./managed-git-identity.js";
 
 const services = new WeakMap<ServerConfig, ManagedDesktopPolicy>();
 export function managedDesktopPolicy(config: ServerConfig): ManagedDesktopPolicy {
@@ -114,6 +115,13 @@ class ManagedDesktopPolicy {
     if ("providerID" in model) await this.assert("model", model);
   }
   async assert(action: ManagedPolicyAction, input: Record<string, unknown> = {}): Promise<void> {
+    if (action === "git_identity") {
+      // Not an organization rule: every desktop gets the commit identity
+      // default, managed or not. Throws git_identity_required when neither the
+      // repository nor a connected omnirush.ai account provides one.
+      await ensureWorkspaceGitIdentity(this.config, typeof input.directory === "string" ? input.directory : "");
+      return;
+    }
     const policy = await this.current();
     if (!policy) return;
     const denial = policyDenial(policy, action, input);

@@ -62,7 +62,7 @@ describe("Automations availability", () => {
     expect(proposal).toContain("useAutomationDeploymentEnabled()")
     expect(proposal).toContain("Automations are disabled for this deployment.")
     expect(proposal).toContain("if (!automationsEnabled) return")
-    expect(proposal).toContain("Sign in to OmniRush.ai Cloud")
+    expect(proposal).toContain("Sign in to omnirush.ai Cloud")
     expect(proposal).toContain("resolveProposalModel")
     expect(proposal).toContain("data-automation-model-resolution")
   })

@@ -74,7 +74,7 @@ type AttributionStepProps = {
 /**
  * Self-reported attribution survey shown once during onboarding.
  * When the user picks "AI assistant" we ask which prompt led them
- * here — first-party data on how answer engines describe OmniRush.ai.
+ * here — first-party data on how answer engines describe omnirush.ai.
  */
 export function AttributionStep({ onSubmit, onSkip }: AttributionStepProps) {
   const [aiSelected, setAiSelected] = useState(false);
@@ -87,7 +87,7 @@ export function AttributionStep({ onSubmit, onSkip }: AttributionStepProps) {
 
       <div className="relative z-10 mx-6 w-full max-w-md rounded-3xl border border-border bg-background px-8 py-10">
         <PageHeader className="mb-8 text-center">
-          <PageTitle>How did you hear about OmniRush.ai?</PageTitle>
+          <PageTitle>How did you hear about omnirush.ai?</PageTitle>
           <PageDescription>
             One quick question — it helps us know where to show up.
           </PageDescription>

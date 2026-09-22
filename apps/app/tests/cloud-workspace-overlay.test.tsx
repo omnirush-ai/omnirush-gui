@@ -155,15 +155,15 @@ describe("cloud workspace overlay state", () => {
     });
 
     expect(accessRequired.variant).toBe("access-required");
-    expect(accessRequired.label).toBe("OmniRush.ai Web plan required");
+    expect(accessRequired.label).toBe("omnirush.ai Web plan required");
     expect(accessRequired.showRetry).toBe(true);
     expect(accessRequired.pollMs).toBeNull();
   });
 
   test("uses active-plan guidance for access-required takeover copy", () => {
     expect(cloudWorkspaceTakeoverCopy({ variant: "access-required", slow: false })).toEqual({
-      title: "OmniRush.ai Web needs an active plan",
-      body: "Your organization does not have an active OmniRush.ai Web subscription or complimentary access. Get OmniRush.ai Web in Den to start your cloud workspace.",
+      title: "omnirush.ai Web needs an active plan",
+      body: "Your organization does not have an active omnirush.ai Web subscription or complimentary access. Get omnirush.ai Web in Den to start your cloud workspace.",
     });
   });
 
@@ -485,8 +485,8 @@ describe("cloud workspace boot takeover", () => {
       });
 
       const buttons = Array.from(container.querySelectorAll("button"));
-      const purchase = buttons.find((button) => button.textContent?.includes("Get OmniRush.ai Web"));
-      if (!purchase) throw new Error("Expected Get OmniRush.ai Web action");
+      const purchase = buttons.find((button) => button.textContent?.includes("Get omnirush.ai Web"));
+      if (!purchase) throw new Error("Expected Get omnirush.ai Web action");
       expect(buttons.some((button) => button.textContent?.includes("Check again"))).toBe(true);
       expect(buttons.some((button) => button.textContent?.includes("Sign out"))).toBe(true);
 

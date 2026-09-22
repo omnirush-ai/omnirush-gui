@@ -98,7 +98,7 @@ describe("buildOmniRushSessionSystemContext", () => {
     expect(runtime).toContain(`- Time zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone} (UTC`);
     expect(runtime).toContain("- Today's date in that time zone: ");
     expect(runtime).toContain("Resolve \"today\", \"tomorrow\", \"this week\"");
-    expect(env).toContain("OmniRush.ai environment variables configured:");
+    expect(env).toContain("omnirush.ai environment variables configured:");
     expect(env).toContain("- ANTHROPIC_API_KEY");
   });
 
@@ -112,7 +112,7 @@ describe("buildOmniRushSessionSystemContext", () => {
 
     for (const context of [noKeys, noClient, pending]) {
       expect(context.startsWith("User context:")).toBe(true);
-      expect(context).not.toContain("OmniRush.ai environment variables configured:");
+      expect(context).not.toContain("omnirush.ai environment variables configured:");
       expect(context).not.toContain("- KEY");
     }
   });

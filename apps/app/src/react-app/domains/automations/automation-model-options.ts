@@ -24,7 +24,7 @@ export type ResolvedProposalModel = {
 export const AUTOMATION_INTERNAL_MODEL = {
   providerId: "omnirush",
   modelId: "z-ai/glm-5.2",
-  providerName: "OmniRush.ai Models",
+  providerName: "omnirush.ai Models",
   modelName: "GLM-5.2",
 } satisfies Omit<AutomationModelOption, "accessKind">
 
@@ -40,7 +40,7 @@ function omniRushManagedModels(provider: DenOrgLlmProvider): AutomationModelOpti
       providerId: "omnirush",
       modelId,
       providerName: provider.name,
-      modelName: model.displayName.replace(/^OmniRush.ai:\s*/, ""),
+      modelName: model.displayName.replace(/^omnirush.ai:\s*/, ""),
       accessKind: "omnirush_managed" as const,
     }))
 }

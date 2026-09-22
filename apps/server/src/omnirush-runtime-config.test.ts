@@ -11,6 +11,7 @@ import {
   writeOmniRushRuntimeConfigFile,
 } from "./omnirush-runtime-config.js";
 import { writeGlobalRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
+import { gitWorkflowPermissionRules } from "./opencode-plugins/managed-policy-git.js";
 import type { ServerConfig } from "./types.js";
 
 const roots: string[] = [];
@@ -65,11 +66,14 @@ describe("omnirush runtime config file", () => {
         },
       },
     });
-    const permission = { bash: { "*": "deny", "curl *": "deny" }, webfetch: "deny", websearch: "deny" };
+    // The built-in git workflow rules come first; the organization's execution
+    // rules are appended last so the engine's last-match-wins evaluation keeps them.
+    const permission = { bash: { ...gitWorkflowPermissionRules(), "*": "deny", "curl *": "deny" }, webfetch: "deny", websearch: "deny" };
     expect(parsed.permission).toEqual(permission);
+    expect(Object.keys((parsed.permission as { bash: Record<string, string> }).bash).slice(-2)).toEqual(["*", "curl *"]);
     expect(parsed.agent).toMatchObject({ omnirush: { permission } });
     expect(parsed.managedPolicy).toBeUndefined();
-    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}).permission).toEqual({});
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}).permission).toEqual({ bash: gitWorkflowPermissionRules() });
   });
 
   test("writes global-row MCPs and omnirush defaults into the file", async () => {

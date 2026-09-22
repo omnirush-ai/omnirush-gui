@@ -879,7 +879,7 @@ export function createOmniRushServerStore(options: CreateOmniRushServerStoreOpti
   };
 
   const getSnapshot = () => {
-    if (!snapshot) throw new Error("OmniRush.ai server snapshot was not initialized.");
+    if (!snapshot) throw new Error("omnirush.ai server snapshot was not initialized.");
     return snapshot;
   };
 

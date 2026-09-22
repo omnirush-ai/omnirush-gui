@@ -101,7 +101,7 @@ import { registerUiControlRoutes } from "./routes/ui-control.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { registerCloudMcpRoutes } from "./routes/cloud-mcp.js";
 import { registerLocalWorkflowRoutes } from "./routes/local-workflows.js";
-import type { LocalWorkflowService } from "./local-workflows.js";
+import type { LocalWorkflowPromptDispatcher, LocalWorkflowService } from "./local-workflows.js";
 import { UiControlMailbox } from "./ui-control.js";
 import { captureServerException, isExpectedRequestCancellation } from "./telemetry.js";
 import {
@@ -753,6 +753,70 @@ function collectorAccountRequiredResponse(): Response {
   return jsonResponse({ error: "omnirush_account_required", message: OMNIRUSH_ACCOUNT_REQUIRED_MESSAGE }, 403);
 }
 
+/**
+ * Whether the gate refuses a prompt dispatch on this workspace: a local
+ * workspace whose collector cannot capture the turn, without the development
+ * bypass. A remote workspace is gated by the server that owns it. Every
+ * dispatch path (v1 mount, v2 mount, workflow steps) asks this one predicate.
+ */
+function collectorDispatchRefused(config: ServerConfig, workspace: WorkspaceInfo | undefined): boolean {
+  if (!workspace || workspace.workspaceType === "remote") return false;
+  return !workspaceCollectorsByServer.get(config)?.enabled && !collectorGateBypassed();
+}
+
+/** The gate as an ApiError, for dispatches that are not proxied HTTP requests. */
+export function assertCollectorDispatchAllowed(config: ServerConfig, workspace: WorkspaceInfo | undefined): void {
+  if (collectorDispatchRefused(config, workspace)) {
+    throw new ApiError(403, "omnirush_account_required", OMNIRUSH_ACCOUNT_REQUIRED_MESSAGE);
+  }
+}
+
+// The v2 daemon's dispatch routes, matched on the decoded path like the v1 classifier.
+function isCollectorV2PromptDispatch(method: string, routePath: string): boolean {
+  return method === "POST" && /^\/api\/session\/[^/]+\/(?:prompt|prompt_async|command|generate)$/.test(routePath.replace(/\/+$/, ""));
+}
+
+/**
+ * A v2 prompt body as recorded in the "engine.request" trace event. Inline
+ * file attachments (`files[].uri` data URLs, at the top level or under
+ * `prompt`) are replaced by a marker, as promptBodyForTrace does for v1 parts.
+ */
+function v2PromptBodyForTrace(payload: unknown): unknown {
+  const stripFiles = (value: unknown): unknown => {
+    if (!isRecord(value) || !Array.isArray(value.files)) return value;
+    const files = value.files.map((file) => {
+      if (!isRecord(file) || typeof file.uri !== "string" || !file.uri.startsWith("data:")) return file;
+      const mime = (file.uri.slice(5).split(",")[0] ?? "").split(";")[0] || "application/octet-stream";
+      return { ...file, uri: `data:${mime};omitted`, omitted_uri_chars: file.uri.length };
+    });
+    return { ...value, files };
+  };
+  const stripped = stripFiles(promptBodyForTrace(payload));
+  return isRecord(stripped) && isRecord(stripped.prompt) ? { ...stripped, prompt: stripFiles(stripped.prompt) } : stripped;
+}
+
+/**
+ * Workflow steps are prompt dispatches like any other: they enter the same
+ * engine proxy as the app's requests, so the gate, the collector's session
+ * start, prompt snapshot, request/response trace and turn observer all apply.
+ */
+export function createLocalWorkflowPromptDispatcher(config: ServerConfig): LocalWorkflowPromptDispatcher {
+  return {
+    assertAllowed: (workspace) => assertCollectorDispatchAllowed(config, workspace),
+    prompt: (workspace, sessionId, body, signal) => {
+      const proxyPath = `/opencode/session/${encodeURIComponent(sessionId)}/prompt`;
+      const url = new URL(`http://127.0.0.1${proxyPath}`);
+      const request = new Request(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      return proxyOpencodeRequest({ config, request, url, workspace, proxyPath, recoverySignal: signal });
+    },
+  };
+}
+
 function optionalTraceString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -770,14 +834,16 @@ function turnModelFromMessages(messages: unknown): CollectorSessionModel | null 
     if (!isRecord(message)) continue;
     const info = isRecord(message.info) ? message.info : message;
     const model = isRecord(info.model) ? info.model : {};
-    if (info.role === "user") {
+    // v2 context messages carry the role as `type` and the model as a ModelRef.
+    const role = info.role ?? info.type;
+    if (role === "user") {
       userVariant = optionalTraceString(info.variant) ?? optionalTraceString(model.variant) ?? userVariant;
       userAgent = optionalTraceString(info.agent) ?? userAgent;
       continue;
     }
-    if (info.role !== "assistant") continue;
+    if (role !== "assistant") continue;
     const providerId = optionalTraceString(info.providerID) ?? optionalTraceString(model.providerID);
-    const modelId = optionalTraceString(info.modelID) ?? optionalTraceString(model.modelID);
+    const modelId = optionalTraceString(info.modelID) ?? optionalTraceString(model.modelID) ?? optionalTraceString(model.id);
     if (!providerId && !modelId) continue;
     return {
       provider_id: providerId,
@@ -898,10 +964,10 @@ function traceHasTerminalAssistant(messages: unknown): boolean {
     const message = messages[index];
     if (!isRecord(message)) continue;
     const info = isRecord(message.info) ? message.info : message;
-    if (info.role !== "assistant") continue;
+    if ((info.role ?? info.type) !== "assistant") continue;
     if (isRecord(info.time) && (typeof info.time.completed === "number" || typeof info.time.completed === "string")) return true;
     if (typeof info.finish === "string" || info.error != null) return true;
-    const parts = Array.isArray(message.parts) ? message.parts : [];
+    const parts = Array.isArray(message.parts) ? message.parts : Array.isArray(info.content) ? info.content : [];
     return parts.some((part) => isRecord(part) && ["step-finish", "finish", "error"].includes(String(part.type)));
   }
   return false;
@@ -926,20 +992,24 @@ function observeCollectedSession(input: {
   baseUrl: string;
   headers: Headers;
   search: string;
+  /** The v2 daemon reports activity and context through its own routes, wrapped in `data`. */
+  engine?: "v1" | "v2";
 }) {
   if (!input.collector.enabled) return;
   const observer = collectorObserversByServer.get(input.config);
   if (!observer || observer.sessions.has(input.sessionId)) return;
   observer.sessions.add(input.sessionId);
+  const v2 = input.engine === "v2";
   const headers = new Headers(input.headers);
   headers.delete("content-length");
   headers.delete("content-type");
-  const statusUrl = buildOpencodeProxyUrl(input.baseUrl, "/session/status", input.search);
+  const statusUrl = buildOpencodeProxyUrl(input.baseUrl, v2 ? "/api/session/active" : "/session/status", input.search);
   const messagesUrl = buildOpencodeProxyUrl(
     input.baseUrl,
-    `/session/${encodeURIComponent(input.sessionId)}/message`,
+    v2 ? `/api/session/${encodeURIComponent(input.sessionId)}/context` : `/session/${encodeURIComponent(input.sessionId)}/message`,
     input.search,
   );
+  const enginePayload = (payload: unknown) => (v2 && isRecord(payload) && "data" in payload ? payload.data : payload);
   void (async () => {
     let observedBusy = false;
     let consecutiveSettled = 0;
@@ -956,7 +1026,7 @@ function observeCollectedSession(input: {
         consecutiveSettled = 0;
         continue;
       }
-      const statuses = await readCollectorResponse(response, 1024 * 1024);
+      const statuses = enginePayload(await readCollectorResponse(response, 1024 * 1024));
       const session = isRecord(statuses) ? statuses[input.sessionId] : undefined;
       const statusType = isRecord(session) && typeof session.type === "string" ? session.type : "idle";
       if (statusType !== "idle") {
@@ -969,7 +1039,7 @@ function observeCollectedSession(input: {
         signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]),
       });
       const messages = messagesResponse.ok
-        ? await readCollectorResponse(messagesResponse)
+        ? enginePayload(await readCollectorResponse(messagesResponse))
         : { status: messagesResponse.status, unavailable: true };
       const terminal = traceHasTerminalAssistant(messages);
       consecutiveSettled += 1;
@@ -984,32 +1054,35 @@ function observeCollectedSession(input: {
       }
       const model = turnModelFromMessages(delta);
       if (model) input.collector.recordSessionModel(input.sessionId, model);
-      try {
-        await captureChildSessions({
-          collector: input.collector,
-          rootSessionId: input.sessionId,
-          parentSessionId: input.sessionId,
-          depth: 1,
-          fetchJson: async (path, maxBytes) => {
-            const response = await loopbackFetch(buildOpencodeProxyUrl(input.baseUrl, path, input.search), {
-              headers,
-              signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]),
-            });
-            if (!response.ok) {
-              await response.body?.cancel().catch(() => undefined);
-              return null;
-            }
-            return readCollectorResponse(response, maxBytes);
-          },
-          checkpoints: await input.collector.childCheckpoints(input.sessionId),
-          known: new Set(await input.collector.childSessionIds(input.sessionId)),
-          visited: new Set([input.sessionId]),
-        });
-      } catch (error) {
-        if (observer.controller.signal.aborted) throw error;
-        input.collector.recordTrace(input.sessionId, "session.children_failed", {
-          error: error instanceof Error ? error.message : "unknown",
-        });
+      // The v2 daemon has no subagent children route; only its root turn is captured.
+      if (!v2) {
+        try {
+          await captureChildSessions({
+            collector: input.collector,
+            rootSessionId: input.sessionId,
+            parentSessionId: input.sessionId,
+            depth: 1,
+            fetchJson: async (path, maxBytes) => {
+              const response = await loopbackFetch(buildOpencodeProxyUrl(input.baseUrl, path, input.search), {
+                headers,
+                signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]),
+              });
+              if (!response.ok) {
+                await response.body?.cancel().catch(() => undefined);
+                return null;
+              }
+              return readCollectorResponse(response, maxBytes);
+            },
+            checkpoints: await input.collector.childCheckpoints(input.sessionId),
+            known: new Set(await input.collector.childSessionIds(input.sessionId)),
+            visited: new Set([input.sessionId]),
+          });
+        } catch (error) {
+          if (observer.controller.signal.aborted) throw error;
+          input.collector.recordTrace(input.sessionId, "session.children_failed", {
+            error: error instanceof Error ? error.message : "unknown",
+          });
+        }
       }
       input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
       // The turn snapshot runs first so the artifacts it discovers are part of
@@ -1051,6 +1124,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       : undefined
   );
   const gatewayBroker = new OmniRushGatewayBroker({
+    log: (level, message, attributes) => logger.log(level, message, attributes),
     credentials: gatewayCredentials
       ? {
           ...gatewayCredentials,
@@ -1495,7 +1569,14 @@ function buildOpencodeProxyUrl(baseUrl: string, path: string, search: string) {
   return target.toString();
 }
 
-async function proxyOpencodeV2Request(input: {
+/**
+ * The engine v2 preview mount. A prompt dispatch here is gated and collected
+ * exactly like one on the v1 mount: refused without a connected account
+ * (unless both development flags are set), otherwise the collector starts the
+ * session, captures the prompt snapshot, traces the request and response and
+ * observes the turn until it settles. Exported for the mount's tests.
+ */
+export async function proxyOpencodeV2Request(input: {
   config: ServerConfig;
   request: Request;
   url: URL;
@@ -1509,13 +1590,38 @@ async function proxyOpencodeV2Request(input: {
 
   const withoutPrefix = input.proxyPath.slice("/opencode2".length);
   const forwardedPath = withoutPrefix || "/";
+  // Classify on the path as the daemon's router matches it (see engine-route-path),
+  // so an encoded spelling of a dispatch route cannot skip the gate or the collector.
+  const routePath = decodeEngineRoutePath(forwardedPath);
+  // The private-route checks match the fully decoded spelling as before; a
+  // malformed escape (which the daemon leaves in place) falls back to the
+  // route form instead of failing the request.
+  let decodedPath: string;
+  try { decodedPath = decodeURIComponent(forwardedPath); } catch { decodedPath = routePath; }
   // Runtime provider configuration contains server-owned credentials. The
   // renderer uses the catalog/status APIs; it must not read or mutate this file.
-  if (/^\/api\/config(?:\/|$)/.test(decodeURIComponent(forwardedPath))) {
+  if (/^\/api\/config(?:\/|$)/.test(decodedPath)) {
     throw new ApiError(403, "engine_config_private", "Engine configuration is private");
   }
-  if (method !== "GET" && method !== "HEAD" && /^\/api\/mcp(?:\/|$)/.test(decodeURIComponent(forwardedPath))) {
+  if (method !== "GET" && method !== "HEAD" && /^\/api\/mcp(?:\/|$)/.test(decodedPath)) {
     throw new ApiError(403, "engine_mcp_managed", "Manage connections through OmniRush.ai");
+  }
+  const sessionMatch = routePath.match(/^\/api\/session\/([^/]+)(?:\/|$)/);
+  const sessionId = sessionMatch?.[1] ? decodeEngineRouteParam(sessionMatch[1]) : null;
+  const promptDispatch = isCollectorV2PromptDispatch(method, routePath);
+  const collectible = input.workspace.workspaceType !== "remote";
+  if (promptDispatch && collectible) {
+    if (collectorDispatchRefused(input.config, input.workspace)) {
+      // Drain the unread body so the client's keep-alive connection stays usable.
+      await input.request.arrayBuffer().catch(() => undefined);
+      return collectorAccountRequiredResponse();
+    }
+    if (sessionId === null) {
+      // A dispatch is either refused or collected: a session identifier the
+      // daemon cannot decode would start a turn the collector cannot attribute.
+      await input.request.arrayBuffer().catch(() => undefined);
+      return jsonResponse({ error: "invalid_session_id", message: "The session identifier is not valid." }, 400);
+    }
   }
   const target = new URL(input.connection.url);
   target.pathname = forwardedPath;
@@ -1538,8 +1644,6 @@ async function proxyOpencodeV2Request(input: {
   // The v2 daemon has a global session namespace: a location query does not
   // prevent reading a session owned by another workspace. Match the v1 mount's
   // ownership boundary before forwarding session reads or mutations.
-  const sessionMatch = forwardedPath.match(/^\/api\/session\/([^/]+)(?:\/|$)/);
-  const sessionId = sessionMatch?.[1] ? decodeURIComponent(sessionMatch[1]) : null;
   if (sessionId?.startsWith("ses_")) {
     const sessionUrl = new URL(target);
     sessionUrl.pathname = `/api/session/${encodeURIComponent(sessionId)}`;
@@ -1568,11 +1672,11 @@ async function proxyOpencodeV2Request(input: {
   }
 
   if (method !== "GET" && method !== "HEAD"
-    && decodeURIComponent(forwardedPath).endsWith(`/instructions/entries/${OMNIRUSH_V2_INSTRUCTION_KEY}`)) {
+    && decodedPath.endsWith(`/instructions/entries/${OMNIRUSH_V2_INSTRUCTION_KEY}`)) {
     throw new ApiError(403, "engine_instructions_managed", "OmniRush.ai instructions are managed by the server");
   }
 
-  if (method === "POST" && sessionId && /^\/api\/session\/[^/]+\/(?:prompt|command|generate)$/.test(forwardedPath)) {
+  if (method === "POST" && sessionId && /^\/api\/session\/[^/]+\/(?:prompt|command|generate)$/.test(routePath)) {
     // Session ownership was verified above. Replace one native instruction
     // entry immediately before admission; never append to conversation text.
     const mcpUrl = new URL(target);
@@ -1617,8 +1721,48 @@ async function proxyOpencodeV2Request(input: {
     headers.delete("content-length");
     headers.set("content-type", "application/json");
   }
+  // Collection, identical to the v1 mount: the session starts (or resumes) on
+  // its first dispatch, the prompt milestone is snapshotted, the request and
+  // response are traced and the turn is observed until it settles.
+  const collector = collectible ? workspaceCollectorsByServer.get(input.config) : undefined;
+  const collectedSessionId = collector?.enabled && promptDispatch && sessionId ? sessionId : null;
+  const deletedCollectedSessionId = collector?.enabled && method === "DELETE" && sessionId && /^\/api\/session\/[^/]+$/.test(routePath)
+    ? sessionId
+    : null;
+  if (collector && collectedSessionId) {
+    collector.startSession(collectedSessionId, input.workspace.id, input.workspace.path);
+    const requestPayload = collectorRequestPayload(requestBody);
+    collector.recordTrace(collectedSessionId, "engine.request", {
+      method,
+      path: routePath,
+      body: v2PromptBodyForTrace(requestPayload),
+    });
+    collector.captureSnapshot(collectedSessionId, "prompt");
+    void collectPromptAttachments(requestPayload, input.workspace.path).then((attachments) => {
+      for (const attachment of attachments) collector.recordAttachment(collectedSessionId, attachment);
+    }).catch(() => undefined);
+  }
   const response = await loopbackFetch(target.toString(), { method, headers, body, signal: input.recoverySignal });
-  if (method === "GET" && /^\/api\/provider(?:\/|$)/.test(decodeURIComponent(forwardedPath)) && response.ok) {
+  if (collector && collectedSessionId) {
+    collector.recordTrace(collectedSessionId, "engine.response", { method, path: routePath, status: response.status });
+    if (response.ok) {
+      observeCollectedSession({
+        config: input.config,
+        collector,
+        sessionId: collectedSessionId,
+        baseUrl: input.connection.url,
+        headers,
+        search: target.search,
+        engine: "v2",
+      });
+    }
+  }
+  if (collector && deletedCollectedSessionId && response.ok) {
+    collector.recordTrace(deletedCollectedSessionId, "session.deleted");
+    collector.finishSession(deletedCollectedSessionId);
+    collectorObserversByServer.get(input.config)?.lastMessageIds.delete(deletedCollectedSessionId);
+  }
+  if (method === "GET" && /^\/api\/provider(?:\/|$)/.test(decodedPath) && response.ok) {
     // Provider.Info includes request settings/headers, which may contain the
     // mirrored server-owned key. Clients only need public catalog metadata.
     const payload: unknown = await response.json();
@@ -1632,7 +1776,7 @@ async function proxyOpencodeV2Request(input: {
     const data = Array.isArray(raw) ? raw.map(publicProvider) : publicProvider(raw);
     return jsonResponse({ data });
   }
-  if (method === "GET" && /^\/api\/model(?:\/|$)/.test(decodeURIComponent(forwardedPath)) && response.ok) {
+  if (method === "GET" && /^\/api\/model(?:\/|$)/.test(decodedPath) && response.ok) {
     // Model overrides and variants can carry credentials too. Keep only the
     // metadata needed for selection; request settings remain inside the engine.
     const payload: unknown = await response.json();
@@ -1649,7 +1793,7 @@ async function proxyOpencodeV2Request(input: {
     };
     return jsonResponse({ data: Array.isArray(raw) ? raw.map(publicModel) : publicModel(raw) });
   }
-  if (method === "GET" && /^\/api\/event\/*$/.test(decodeURIComponent(forwardedPath)) && response.ok && response.body) {
+  if (method === "GET" && /^\/api\/event\/*$/.test(decodedPath) && response.ok && response.body) {
     const expected = await realpath(input.workspace.path);
     const frames = new BoundedSseFrameBuffer();
     const encoder = new TextEncoder();
@@ -1852,8 +1996,7 @@ export async function proxyOpencodeRequest(input: {
     ensureWritable(input.config);
   }
   if (workspace && workspace.workspaceType !== "remote" && isCollectorPromptDispatch(method, proxyPath)) {
-    const gateCollector = workspaceCollectorsByServer.get(input.config);
-    if (!gateCollector?.enabled && !collectorGateBypassed()) {
+    if (collectorDispatchRefused(input.config, workspace)) {
       // Drain the unread body so the client's keep-alive connection stays usable.
       await input.request.arrayBuffer().catch(() => undefined);
       return collectorAccountRequiredResponse();
@@ -2805,6 +2948,7 @@ function createRoutes(
     resolveWorkspace,
     resolveWorkspaceWithoutBootstrap,
     createWorkspaceOpencodeClient,
+    promptDispatcher: createLocalWorkflowPromptDispatcher(config),
   });
   localWorkflowServices.set(config, localWorkflowService);
 

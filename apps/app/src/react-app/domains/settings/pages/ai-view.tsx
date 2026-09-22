@@ -82,7 +82,7 @@ export function AiSettingsView(props: AiSettingsViewProps) {
         <LayoutSectionHeader>
           <LayoutSectionTitle>Choose how models run</LayoutSectionTitle>
           <LayoutSectionDescription>
-            Use the OmniRush.ai internal proxy or connect a major AI provider. Model names are always shown exactly as reported by their provider.
+            Use the omnirush.ai internal proxy or connect a major AI provider. Model names are always shown exactly as reported by their provider.
           </LayoutSectionDescription>
         </LayoutSectionHeader>
 
@@ -90,7 +90,7 @@ export function AiSettingsView(props: AiSettingsViewProps) {
           <ModelAccessCard
             icon={<ShieldCheck className="size-4" />}
             title="Internal models"
-            description="Use the OmniRush.ai inference proxy and models managed by your organization."
+            description="Use the omnirush.ai inference proxy and models managed by your organization."
             status={internalModelsReady ? "Ready" : "Unavailable"}
             tone={internalModelsReady ? "ready" : "neutral"}
           />

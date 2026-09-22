@@ -20,7 +20,7 @@ function hasAffordanceId(input: unknown): input is OmniRushAffordanceRequest {
 async function handleRequest(item: OmniRushUiControlRequest, api: OmniRushControlAPI): Promise<unknown> {
   if (item.kind === "context") return { ok: true, context: api.context() };
   if (!hasAffordanceId(item.input)) {
-    return { ok: false, error: "Missing OmniRush.ai affordance id." };
+    return { ok: false, error: "Missing omnirush.ai affordance id." };
   }
   if (item.kind === "query") return api.query(item.input);
   return api.command(item.input);
@@ -55,7 +55,7 @@ export function useUiControlMailbox(apiRef: RefObject<OmniRushControlAPI | null>
             let result: unknown;
             try {
               const api = apiRef.current;
-              if (!api) throw new Error("OmniRush.ai control surface is not available yet.");
+              if (!api) throw new Error("omnirush.ai control surface is not available yet.");
               result = await handleRequest(item, api);
             } catch (error) {
               result = { ok: false, error: error instanceof Error ? error.message : String(error) };

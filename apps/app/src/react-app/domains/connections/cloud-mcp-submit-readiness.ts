@@ -113,7 +113,7 @@ function genericSubmissionIssue(input?: {
     stage: input?.stage ?? "engine_delivery",
     retryable: input?.retryable ?? true,
     recommendedAction: input?.recommendedAction ?? "Retry, then open Settings → Connect if the problem continues.",
-    message: input?.message ?? "OmniRush.ai could not verify connected service tools for the selected model.",
+    message: input?.message ?? "omnirush.ai could not verify connected service tools for the selected model.",
   };
 }
 
@@ -176,8 +176,8 @@ function authResolutionIssue(input?: { timedOut?: boolean }): CloudMcpSubmission
       ? "cloud_mcp_auth_resolution_timeout"
       : "cloud_mcp_auth_resolution_failed",
     message: input?.timedOut
-      ? "OmniRush.ai timed out while restoring connected service access."
-      : "OmniRush.ai could not finish restoring connected service access.",
+      ? "omnirush.ai timed out while restoring connected service access."
+      : "omnirush.ai could not finish restoring connected service access.",
     recommendedAction: "Retry or open Settings → Connect.",
   });
 }
@@ -237,7 +237,7 @@ export function assessCloudMcpSubmissionReadiness(input: {
       issue: genericSubmissionIssue({
         code: "cloud_mcp_direct_tools_unverified",
         stage: "tool_registration",
-        message: "OmniRush.ai Cloud did not prove that search_capabilities and execute_capability are available.",
+        message: "omnirush.ai Cloud did not prove that search_capabilities and execute_capability are available.",
       }),
     };
   }
@@ -264,7 +264,7 @@ export function assessCloudMcpSubmissionReadiness(input: {
       issue: genericSubmissionIssue({
         code: "provider_tool_projection_unverified",
         stage: "provider_projection",
-        message: "OmniRush.ai could not read tool capability information for the selected provider and model.",
+        message: "omnirush.ai could not read tool capability information for the selected provider and model.",
         recommendedAction: "Retry, or check Settings → Advanced → Agent access diagnostics if the problem continues.",
       }),
     };
@@ -284,7 +284,7 @@ export function assessCloudMcpSubmissionReadiness(input: {
           ? "The selected model was not found for this provider."
           : toolCallingUnavailable
             ? "The selected model does not support tool calling."
-            : "OmniRush.ai could not confirm that the selected model supports tool calling.",
+            : "omnirush.ai could not confirm that the selected model supports tool calling.",
         recommendedAction: modelMissing
           ? "Choose a model available from this provider, or check Settings → Advanced → Agent access diagnostics."
           : "Choose a model with tool calling, or check Settings → Advanced → Agent access diagnostics.",
@@ -299,7 +299,7 @@ export function assessCloudMcpSubmissionReadiness(input: {
         code: "provider_tool_projection_unverified",
         stage: "provider_projection",
         retryable: false,
-        message: "OmniRush.ai received an unsupported tool capability result for the selected provider and model.",
+        message: "omnirush.ai received an unsupported tool capability result for the selected provider and model.",
         recommendedAction: "Choose a model with tool calling, or check Settings → Advanced → Agent access diagnostics.",
       }),
     };
@@ -327,7 +327,7 @@ export function assessCloudMcpSubmissionReadiness(input: {
 function timeoutIssue(): CloudMcpSubmissionIssue {
   return genericSubmissionIssue({
     code: "cloud_mcp_submission_timeout",
-    message: "OmniRush.ai timed out while preparing connected service tools.",
+    message: "omnirush.ai timed out while preparing connected service tools.",
   });
 }
 
@@ -353,7 +353,7 @@ function errorAssessment(error: unknown): CloudMcpSubmissionReadinessAssessment 
       ? timeoutIssue()
       : genericSubmissionIssue({
           code: "cloud_mcp_submission_check_failed",
-          message: "OmniRush.ai could not check connected service tools before sending.",
+          message: "omnirush.ai could not check connected service tools before sending.",
         }),
   };
 }

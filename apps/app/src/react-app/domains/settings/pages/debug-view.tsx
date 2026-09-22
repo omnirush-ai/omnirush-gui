@@ -259,8 +259,8 @@ function ExecutionDetails(props: { execution: OpencodeExecutionSnapshot }) {
     <div className="rounded-xl border border-blue-6/30 bg-blue-3/20 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-blue-11">OpenCode execution</div>
-          <div className="text-[11px] text-dls-secondary">Command, working directory, and OmniRush.ai-injected environment.</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-blue-11">omnirush.ai execution</div>
+          <div className="text-[11px] text-dls-secondary">Command, working directory, and omnirush.ai-injected environment.</div>
         </div>
         <div className="shrink-0 rounded-full border border-blue-7/30 bg-blue-7/10 px-2 py-1 text-[10px] font-medium text-blue-11">
           redacted
@@ -599,7 +599,7 @@ export function DebugView(props: DebugViewProps) {
           <div className={sectionHeaderClass}>
             <div className={sectionTitleClass}>Agent access</div>
             <div className={sectionDescClass}>
-              Test and repair OmniRush.ai Cloud MCP access for this workspace.
+              Test and repair omnirush.ai Cloud MCP access for this workspace.
             </div>
           </div>
           <AgentAccessCard
@@ -1089,7 +1089,7 @@ export function DebugView(props: DebugViewProps) {
               size="sm"
               onClick={() => void props.onInstallElectronPreviewFromTauri()}
               disabled={props.electronMigrationBusy || !props.electronMigrationUrl.trim()}
-              title="Requires a trusted artifact URL. macOS keeps OmniRush.ai.app.migrate-bak for rollback."
+              title="Requires a trusted artifact URL. macOS keeps omnirush.ai.app.migrate-bak for rollback."
             >
               Start install handoff…
             </Button>

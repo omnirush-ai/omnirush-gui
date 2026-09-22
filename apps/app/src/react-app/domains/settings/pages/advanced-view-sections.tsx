@@ -462,7 +462,7 @@ export function AdvancedCloudMcpDiagnosticsSection(props: AdvancedCloudMcpDiagno
               {compatibility ? (
                 <>
                   <DiagnosticRow label="Runtime versions" value={`server ${formatMaybe(compatibility.omnirush.serverVersion)}; app ${formatMetadataRecord(compatibility.omnirush.app)}`} />
-                  <DiagnosticRow label="OpenCode compatibility" value={`expected ${formatMaybe(compatibility.opencode.expectedVersion)}; actual ${formatMaybe(compatibility.opencode.actualVersion)}; probe ${compatibility.opencode.probe}`} />
+                  <DiagnosticRow label="omnirush.ai compatibility" value={`expected ${formatMaybe(compatibility.opencode.expectedVersion)}; actual ${formatMaybe(compatibility.opencode.actualVersion)}; probe ${compatibility.opencode.probe}`} />
                   <DiagnosticRow label="Feature probes" value={formatSupportedFeatures(compatibility.supportedFeatures)} />
                   <DiagnosticRow label="Experimental tool IDs" value={formatMcpToolExposure(compatibility.experimentalToolIds)} />
                   <DiagnosticRow label="Experimental provider tools" value={formatMcpToolExposure(compatibility.experimentalProviderTools)} />
@@ -602,9 +602,9 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
   return (
     <LayoutSection id="advanced-config-sources">
       <LayoutSectionHeader>
-        <LayoutSectionTitle>OpenCode config sources</LayoutSectionTitle>
+        <LayoutSectionTitle>omnirush.ai config sources</LayoutSectionTitle>
         <LayoutSectionDescription>
-          Inspect what the app controls at runtime versus what belongs to your workspace config. This works through the local server and does not require the OpenCode engine to be healthy.
+          Inspect what the app controls at runtime versus what belongs to your workspace config. This works through the local server and does not require the engine to be healthy.
         </LayoutSectionDescription>
       </LayoutSectionHeader>
 
@@ -612,7 +612,7 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
         <LayoutSectionItemHeader>
           <LayoutSectionItemTitle>Config source snapshot</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>
-            Shows the runtime database, the injected runtime config, and the workspace-owned OpenCode config files.
+            Shows the runtime database, the injected runtime config, and the workspace-owned engine config files.
           </LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
             <Button
@@ -646,14 +646,14 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
             {props.configStatus.sources ? (
               <div className="space-y-3">
                 <div>
-                  <div className="font-medium text-gray-12">OpenCode source breakdown</div>
+                  <div className="font-medium text-gray-12">omnirush.ai source breakdown</div>
                   <div className="text-[11px] text-gray-9">
-                    OpenCode also reads its own project and global config files. The app injects the runtime config separately; for app-managed keys, the injected config is the source to inspect.
+                    The engine also reads its own project and global config files. The app injects the runtime config separately; for app-managed keys, the injected config is the source to inspect.
                   </div>
                 </div>
                 <RuntimeConfigSourceBlock
                   title="Project opencode config"
-                  description="Workspace-level OpenCode config owned by the user/project."
+                  description="Workspace-level omnirush.ai config owned by the user/project."
                   path={props.configStatus.sources.projectOpencode.path}
                   exists={props.configStatus.sources.projectOpencode.exists}
                   keys={props.configStatus.sources.projectOpencode.keys}
@@ -661,7 +661,7 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
                 />
                 <RuntimeConfigSourceBlock
                   title="Global opencode config"
-                  description="User-level OpenCode config under ~/.config/opencode."
+                  description="User-level omnirush.ai config under ~/.config/opencode."
                   path={props.configStatus.sources.globalOpencode.path}
                   exists={props.configStatus.sources.globalOpencode.exists}
                   keys={props.configStatus.sources.globalOpencode.keys}
@@ -675,7 +675,7 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
                 />
                 <RuntimeConfigSourceBlock
                   title="Injected config"
-                  description="The object the app injects into OpenCode at runtime."
+                  description="The object the app injects into omnirush.ai at runtime."
                   keys={props.configStatus.sources.injected.keys}
                   config={props.configStatus.sources.injected.config}
                 />
@@ -824,7 +824,7 @@ export function AdvancedEngineV2PreviewSection(props: AdvancedEngineV2PreviewSec
         setLoadError(null);
       }
     }).catch((error: unknown) => {
-      if (mounted) setLoadError(error instanceof Error ? error.message : "Failed to load OpenCode v2 engine preview status.");
+      if (mounted) setLoadError(error instanceof Error ? error.message : "Failed to load omnirush.ai v2 engine preview status.");
     });
     return () => {
       mounted = false;
@@ -857,7 +857,7 @@ export function AdvancedEngineV2PreviewSection(props: AdvancedEngineV2PreviewSec
         setStatus(await props.setEnabled(false));
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "Failed to update OpenCode v2 engine preview.");
+      setLoadError(error instanceof Error ? error.message : "Failed to update omnirush.ai v2 engine preview.");
     } finally {
       setBusy(false);
     }
@@ -869,7 +869,7 @@ export function AdvancedEngineV2PreviewSection(props: AdvancedEngineV2PreviewSec
     ? `Running v${status.version ?? "unknown"} (pid ${status.pid ?? "unknown"}) — ${status.mirroredProviderIds.length} providers mirrored, ${status.catalogModelIds.length} models${skippedCount ? `, ${skippedCount} skipped` : ""}${status.chatRouting ? " — chat routed to v2" : ""}`
     : null;
   const error = (status?.enabled && !status.running ? status.lastError : null) ?? loadError;
-  const starting = status?.enabled && !status.running && !error ? "Starting the OpenCode v2 sidecar…" : null;
+  const starting = status?.enabled && !status.running && !error ? "Starting the omnirush.ai v2 sidecar…" : null;
 
   return (
     <LayoutSection id="advanced-experimental-engine">
@@ -881,7 +881,7 @@ export function AdvancedEngineV2PreviewSection(props: AdvancedEngineV2PreviewSec
         <LayoutSectionItemHeader>
           <LayoutSectionItemTitle>Chat engine</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>
-            OpenCode v1 is the default engine. OpenCode v2 (preview) runs as a parallel sidecar with live provider updates and no engine reloads; sessions created on one engine stay in that engine's list.
+            Engine v1 is the default. Engine v2 (preview) runs as a parallel sidecar with live provider updates and no engine reloads; sessions created on one engine stay in that engine's list.
           </LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
             <ToggleGroup
@@ -897,10 +897,10 @@ export function AdvancedEngineV2PreviewSection(props: AdvancedEngineV2PreviewSec
               }}
             >
               <ToggleGroupItem value="v1" data-engine="v1">
-                OpenCode v1 (default)
+                Engine v1 (default)
               </ToggleGroupItem>
               <ToggleGroupItem value="v2" data-engine="v2">
-                OpenCode v2 (preview)
+                Engine v2 (preview)
               </ToggleGroupItem>
             </ToggleGroup>
           </LayoutSectionItemHeaderActions>

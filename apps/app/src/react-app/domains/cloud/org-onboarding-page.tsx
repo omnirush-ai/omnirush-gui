@@ -269,7 +269,7 @@ function PreparedWorkspacePage({ prepared }: { prepared: PreparedBootstrapSummar
             className="mx-auto flex w-fit items-center gap-2 rounded-full border border-green-6/30 bg-green-2/30 px-3 py-1 text-xs font-semibold text-green-11"
           >
             <CheckCircle2 className="size-3.5" />
-            Setup complete — OmniRush.ai is ready
+            Setup complete — omnirush.ai is ready
           </div>
           <PageTitle>{prepared.orgName}</PageTitle>
         </PageHeader>
@@ -770,7 +770,7 @@ export function ResourceSelectionPage({ autoContinue = false }: { autoContinue?:
           <PageHeader>
             <PageTitle>Workspace identity is ready</PageTitle>
             <PageDescription>
-              Restart OmniRush.ai once to finish applying {orgName || "your workspace"}&apos;s name and app icon everywhere.
+              Restart omnirush.ai once to finish applying {orgName || "your workspace"}&apos;s name and app icon everywhere.
             </PageDescription>
             {brandingRestart.updateReady ? (
               <div className="mx-auto flex w-fit items-center gap-2 rounded-full border border-green-6/30 bg-green-2/30 px-3 py-1 text-xs font-semibold text-green-11">
@@ -800,7 +800,7 @@ export function ResourceSelectionPage({ autoContinue = false }: { autoContinue?:
               Continue without restarting
             </Button>
             <Button type="button" size="lg" onClick={() => void restartWithBranding()}>
-              Restart OmniRush.ai
+              Restart omnirush.ai
               <ArrowRight data-icon="inline-end" />
             </Button>
           </PageFooter>
@@ -843,7 +843,7 @@ export function ResourceSelectionPage({ autoContinue = false }: { autoContinue?:
               className="mx-auto flex w-fit items-center gap-2 rounded-full border border-green-6/30 bg-green-2/30 px-3 py-1 text-xs font-semibold text-green-11"
             >
               <CheckCircle2 className="size-3.5" />
-              Setup complete — OmniRush.ai prepared this workspace
+              Setup complete — omnirush.ai prepared this workspace
             </div>
           ) : null}
           <PageTitle>
@@ -876,7 +876,7 @@ export function ResourceSelectionPage({ autoContinue = false }: { autoContinue?:
               <EmptyHeader>
                 <EmptyTitle>No resources have been configured for this organization yet.</EmptyTitle>
                 <EmptyDescription>
-                  Add AI providers or marketplaces from the OmniRush.ai Cloud dashboard.
+                  Add AI providers or marketplaces from the omnirush.ai Cloud dashboard.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
@@ -884,7 +884,7 @@ export function ResourceSelectionPage({ autoContinue = false }: { autoContinue?:
                   variant="outline"
                   onClick={() => platform.openLink(resolveDenBaseUrls(settings.baseUrl).baseUrl)}
                 >
-                  Open OmniRush.ai Cloud
+                  Open omnirush.ai Cloud
                   <ArrowUpRightIcon data-icon="inline-end" />
                 </Button>
               </EmptyContent>

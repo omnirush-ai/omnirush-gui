@@ -457,7 +457,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       : []),
     ...(shellConfig.cloudSignin ? [{
       id: "cloud.sign_in",
-      title: "Sign in to OmniRush.ai Cloud",
+      title: "Sign in to omnirush.ai Cloud",
       keywords: ["login", "account", "organization", "org", "den", "cloud"],
       group: ACTIONS_GROUP,
       action: () => {

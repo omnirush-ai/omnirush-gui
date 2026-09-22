@@ -2,7 +2,7 @@
  * Desired-state reconciler for the organization Connect policy.
  *
  * The Den desktop config carries one desired Connect switch
- * (`connectEnabled`). The local OmniRush.ai server owns the actual state and is
+ * (`connectEnabled`). The local omnirush.ai server owns the actual state and is
  * a moving target: every (re)start is a new *runtime generation*, and a
  * policy delivered to one generation says nothing about the next one.
  *

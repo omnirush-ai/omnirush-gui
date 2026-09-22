@@ -66,7 +66,7 @@ function EnterpriseActivationPage() {
 
     const baseUrl = normalizeOrganizationServerInput(serverInput);
     if (!baseUrl) {
-      setServerError("Enter a valid OmniRush.ai server address.");
+      setServerError("Enter a valid omnirush.ai server address.");
       return;
     }
 
@@ -81,7 +81,7 @@ function EnterpriseActivationPage() {
     setAuthBusy(true);
     setAuthError(null);
     setServerError(null);
-    setStatusMessage("Finishing OmniRush.ai Enterprise sign-in…");
+    setStatusMessage("Finishing omnirush.ai Enterprise sign-in…");
     try {
       // The confirmed server, session, and activation stamp commit in one
       // handoff transaction, so activation can never leave the bootstrap and
@@ -89,7 +89,7 @@ function EnterpriseActivationPage() {
       const result = await exchangeHandoffAndSignIn(grant, {
         baseUrl,
         desktopInitiated: true,
-        fallbackErrorMessage: "OmniRush.ai Enterprise did not return a session token.",
+        fallbackErrorMessage: "omnirush.ai Enterprise did not return a session token.",
         bootstrap: {
           requireSignin: true,
           enterpriseActivation: {
@@ -106,7 +106,7 @@ function EnterpriseActivationPage() {
     } catch (error) {
       setStatusMessage(null);
       setAuthError(
-        error instanceof Error ? error.message : "Unable to finish OmniRush.ai Enterprise sign-in.",
+        error instanceof Error ? error.message : "Unable to finish omnirush.ai Enterprise sign-in.",
       );
     } finally {
       setAuthBusy(false);
@@ -136,11 +136,11 @@ function EnterpriseActivationPage() {
         setAuthError("We couldn't open your browser automatically. Try again, or paste the sign-in link from your browser into the address field.");
         return;
       }
-      setStatusMessage("Finish signing in in your browser, then return to OmniRush.ai.");
+      setStatusMessage("Finish signing in in your browser, then return to omnirush.ai.");
     } catch (error) {
       setStatusMessage(null);
       setServerError(
-        error instanceof Error ? error.message : "Unable to save this OmniRush.ai server.",
+        error instanceof Error ? error.message : "Unable to save this omnirush.ai server.",
       );
     } finally {
       setBrowserBusy(false);
@@ -194,7 +194,7 @@ function EnterpriseActivationPage() {
               aria-hidden="true"
             />
             <span className="text-[15px] font-semibold tracking-tight text-foreground">
-              OmniRush.ai Enterprise
+              omnirush.ai Enterprise
             </span>
           </div>
 
@@ -244,7 +244,7 @@ function EnterpriseActivationPage() {
             {pendingConfirmation ? (
               <section className="space-y-3 rounded-xl border border-border bg-muted/30 p-4">
                 <p className="text-sm leading-6 text-foreground">
-                  Connect this app to <strong className="break-all font-semibold">{pendingConfirmation.baseUrl}</strong>? This signs you in with that organization and binds OmniRush.ai Enterprise to it.
+                  Connect this app to <strong className="break-all font-semibold">{pendingConfirmation.baseUrl}</strong>? This signs you in with that organization and binds omnirush.ai Enterprise to it.
                 </p>
                 <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                   <Button
