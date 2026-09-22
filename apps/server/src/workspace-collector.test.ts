@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +18,7 @@ import {
   MAX_COLLECTOR_TRACE_EVENTS,
   MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES,
   WorkspaceCollector,
+  mapBounded,
   clampCollectorBytes,
   clampCollectorText,
   collectGitBlock,
@@ -25,6 +26,9 @@ import {
   filterCollectorDiff,
   isCollectableWebUrl,
   isCollectorPathDenied,
+  isPathLikeKey,
+  isSecretAssignmentKey,
+  isSecretAssignmentValue,
   redactCollectorContent,
   redactCollectorJson,
   redactCollectorJsonText,
@@ -1344,6 +1348,20 @@ describe("workspace collector secret rails", () => {
     expect(result.diff).not.toContain("hunter2abc");
   });
 
+  test("redacts assignments and e-mails on whichever line they sit, never across a line break", () => {
+    // Both rules are applied only to lines holding their keyword or "@"; the
+    // result must equal a whole-text pass, line endings and escapes included.
+    expect(redactCollectorContent("notes.txt", "first line\npassword=hunter2hunter2\r\nlast")).toBe("first line\npassword=[REDACTED]\r\nlast");
+    expect(redactCollectorContent("notes.txt", "a@b\njane@example.com\n@x\nx@y.io")).toBe("a@b\n[REDACTED_PII]\n@x\n[REDACTED_PII]");
+    expect(redactCollectorContent("notes.txt", "jane@\nexample.com and key\n=abcdefgh12")).toBe("jane@\nexample.com and key\n=abcdefgh12");
+    expect(redactCollectorContent("run.sh", "echo done \\\nexport API_KEY=abc123def456\nTOKEN='S3cretValue99'"))
+      .toBe("echo done \\\nexport API_KEY=abc123def456\nTOKEN='[REDACTED]'");
+    expect(redactCollectorContent("app.ts", "const keyName = config.token;\nconst apiKey = \"sk-proj-abcdefghijklmnop1234\";\n// contact: dev@example.com"))
+      .toBe("const keyName = config.token;\nconst apiKey = \"[REDACTED]\";\n// contact: [REDACTED_PII]");
+    expect(redactCollectorContent("data.json", "{\n  \"note\": \"line\\npassword=hunter2hunter2\",\n  \"author\": \"jane@example.com\"\n}\n"))
+      .toBe("{\n  \"note\": \"line\\npassword=[REDACTED]\",\n  \"author\": \"[REDACTED_PII]\"\n}\n");
+  });
+
   test("scrubs a 1 MiB line in bounded time", () => {
     const mebibyte = 1024 * 1024;
     const lines = [
@@ -1373,6 +1391,410 @@ describe("workspace collector secret rails", () => {
       }
     }
   }, 60_000);
+});
+
+// --- scrubber parity: the backend's second-sample refinements ---------------
+// Ported from the backend's tests/omnirush/test_collector.py (46ee95e) with the
+// same inputs and expected outputs; each test names the backend test it mirrors.
+
+// The excluded last segments added after the second production sample.
+const EXCLUDED_LAST_SEGMENTS_ADDED = [
+  "in", "out", "percent", "pct", "ms", "secs", "minutes", "hours", "days", "expires", "expiry", "expiration", "bytes", "len", "width",
+  "height", "offset", "index", "idx", "pos", "total", "sum", "avg", "ratio", "rate", "threshold", "weight", "score", "encryption",
+  "algorithm", "algo", "cipher", "strategy", "policy", "source", "target", "origin", "backend", "engine", "driver", "handler",
+  "callback", "event", "action", "reason", "message", "error", "envelope", "ref", "reference", "link", "pointer", "alias",
+];
+
+// Lines from the second production sample, each in the file type it came from.
+const SAMPLE2_TS = [
+  "const client = { client_token: stagedClient?.plaintext || null };",
+  "const apiKey = account?.managementKey || account?.apiKey;",
+  "const job = { secret_envelope: params[8] };",
+  "const pattern = /token=[0-9a-f]{16}/;",
+  "const cacheKey = 'pipeline-token:session:trial-123';",
+  "const grant = { refresh_token_expires_in: 15897600 };",
+  "const proxy = { provider_credential_ref: 'iproyal:claude-in-001' };",
+  "",
+].join("\n");
+const SAMPLE2_SH = "psql -c \"ALTER SYSTEM SET password_encryption='scram-sha-256'\"\n";
+const SAMPLE2_CONF = "password_encryption = 'scram-sha-256'\n";
+const SAMPLE2_YML = "proxies:\n  - provider_credential_ref: 'iproyal:claude-in-001'\n    refresh_token_expires_in: 15897600\n";
+const SAMPLE2_HASHES = `{"src/admin_auth.py": "${"3f2a9c1e".repeat(8)}", "src\\\\win\\\\auth.py": "${"b7d80e1f".repeat(8)}", "auth.py": "${"5c6d7e8f".repeat(8)}"}`;
+const SAMPLE2_FIXTURES = "LIVE_DSN = 'postgres://live@host:6432/db'\nSESSION_DSN = 'postgres://session@host/db'\n";
+const PATCH = [
+  "diff --git a/app/settings.py b/app/settings.py",
+  "--- a/app/settings.py",
+  "+++ b/app/settings.py",
+  "@@ -1,2 +1,3 @@",
+  " import config",
+  "+token = config.token",
+  "-password = None",
+  '+password = "hunter2abc"',
+  "",
+].join("\n");
+
+describe("workspace collector scrubber parity: second-sample refinements", () => {
+  test("secret-named keys follow the segment rule (test_secret_key_rule_qualifies / _does_not_qualify)", () => {
+    for (const key of ["auth_token", "basic-auth", "AUTH", "authorization", "oauth_client_secret", "APIKey", "accessKey", "HTTPSecret", "token2",
+      "secrets", "client.secret", "x-api-key"]) {
+      expect(isSecretAssignmentKey(key)).toBe(true);
+    }
+    for (const key of [
+      "author", "authors", "authored_by", "oauth_client_id", "tokenizer_class", "tokenize", "keyboard_layout", "keywords", "pwdir",
+      "accessKeyId", "token_url", "tokens", "additional_special_tokens", "key", "",
+      // The excluded last segments added with value rule v2.
+      "derived.token_estimate", "authMethod", "token_role", "token_owner", "credentials_file", "credential_hash", "githubOAuthConfig",
+      "CONTRACT_POOL_ATLAS_READ_TOKEN_FILE", "AUTH_TIMEOUT", "token_filename", "token_dir", "auth_mode", "token_type", "auth_kind",
+      "auth_enabled", "secret_digest", "token_expires_at", "auth_client", "api_key_prefix", "token_suffix", "token_format", "auth_scheme",
+      "auth_provider", "token_status", "auth_state", "auth_label", "secret_description", "token_title", "auth_class", "password_field",
+      "token_fields", "token_list", "secret_names", "token_version", "token_limit", "auth_max", "secret_min", "auth_interval",
+      "token_retries", "auth_port",
+      // The second production sample.
+      "refresh_token_expires_in", "password_encryption", "provider_credential_ref", "secret_envelope",
+    ]) {
+      expect(isSecretAssignmentKey(key)).toBe(false);
+    }
+  });
+
+  test("the added excluded last segments exclude a key only as its last segment (test_second_sample_excluded_last_segments)", () => {
+    for (const word of EXCLUDED_LAST_SEGMENTS_ADDED) {
+      const capitalized = word[0]!.toUpperCase() + word.slice(1);
+      expect(isSecretAssignmentKey(`token_${word}`)).toBe(false);
+      expect(isSecretAssignmentKey(`auth${capitalized}`)).toBe(false);
+      expect(isSecretAssignmentKey(`client.secret.${word}`)).toBe(false);
+      expect(isSecretAssignmentKey(`${word}_token`)).toBe(true);
+      // The same through the text rule, in both modes.
+      for (const mode of ["config", "source"] as const) {
+        expect(redactCollectorText(`token_${word} = "abcdefgh1234"`, { mode }).count).toBe(0);
+        expect(redactCollectorText(`${word}_token = "abcdefgh1234"`, { mode })).toEqual({ text: `${word}_token = "[REDACTED]"`, count: 1 });
+      }
+    }
+  });
+
+  test("auth_code and *_plaintext stay secret-named (test_auth_code_and_plaintext_keys_stay_secret_named)", () => {
+    const text = 'auth_code = "abcdefgh1234"\npassword_plaintext = "hunter2abc"\n# TOKEN = "abcdefgh1234"\n';
+    const result = redactCollectorText(text, { context: "app.py", mode: "source" });
+    expect(result.text).not.toContain("abcdefgh1234");
+    expect(result.text).not.toContain("hunter2abc");
+    expect(result.count).toBe(3);
+    expect(isSecretAssignmentKey("auth_code")).toBe(true);
+    expect(isSecretAssignmentKey("password_plaintext")).toBe(true);
+  });
+
+  test("path-like JSON keys (test_path_like_keys_follow_the_desktop_rule)", () => {
+    const cases: Array<[string, boolean]> = [
+      ["src/admin_auth.py", true], ["src\\admin_auth.py", true], ["admin_auth.py", true], ["auth.json", true], ["token.a1b2c", true],
+      ["C:\\x", true], ["auth_token", false], ["db.password", false], ["client.secret", false], ["auth.pyproject", false], ["token", false],
+      ["", false],
+    ];
+    for (const [key, expected] of cases) expect(isPathLikeKey(key)).toBe(expected);
+    // Python's `$` also matches before one trailing newline; the desktop mirrors it.
+    expect(isPathLikeKey("auth.py\n")).toBe(true);
+    expect(isPathLikeKey("auth.py\n\n")).toBe(false);
+  });
+
+  test("the scrub mode follows the file extension (test_scrub_mode_follows_the_file_extension)", () => {
+    for (const extension of ["js", "cjs", "mjs", "ts", "tsx", "jsx", "py", "go", "rs", "java", "kt", "c", "cc", "cpp", "h", "hpp", "rb", "php",
+      "swift", "cs", "scala", "sh", "bash", "zsh", "ps1", "lua", "dart", "vue", "svelte", "map", "patch", "diff"]) {
+      expect(redactModeForPath(`src/file.${extension}`)).toBe("source");
+      expect(redactModeForPath(`src/FILE.${extension.toUpperCase()}`)).toBe("source");
+    }
+    expect(redactModeForPath("dist/bundle.js.map")).toBe("source");
+    for (const path of [".env", ".env.local", ".bashrc", "Makefile", "Dockerfile", "index.", "a.tar.gz", "config.yml", "config.yaml", "pyproject.toml",
+      "package.json", "setup.cfg", "app.ini", "nginx.conf", "app.properties", "notes.txt", "README.md", "infra/main.tf", "build.gradle.kts",
+      "schema.sql", "index.html", "__omnirush__/trace.jsonl"]) {
+      expect(redactModeForPath(path)).toBe("config");
+    }
+  });
+
+  test("source value rule (test_source_value_rule_redacts_quoted_literals / _skips_references_paths_and_words)", () => {
+    for (const value of ["hunter2abc", "Abcdefghijklmnopqrstuvwxyz1234", "AbcdefghijklmnopqrsT", "12345678", "sk-testsecret123456789", AWS_SECRET]) {
+      expect(isSecretAssignmentValue(value, "source", true)).toBe(true);
+    }
+    const skipped: Array<[string, boolean]> = [
+      // No digit and under 20 characters of mixed case: a plain word.
+      ["synthetic", true], ["github-app", true], ["sample-owner", true], ["abcdefghijklmnopqrstuvwxyz", true], ["ABCDEFGHIJKLMNOPQRSTUVWXYZ", true],
+      ["AbcdefghijklmnopqrS", true],
+      // Unquoted identifier or member-expression syntax is a reference, whatever digits it holds.
+      ["estimate", false], ["githubOAuthEnabled", false], ["req.headers.authorization", false], ["config.token2", false], ["$scope.token1", false],
+      ["hunter2abc", false], ["Abcdefghijklmnopqrstuvwxyz1234", false],
+      // Filesystem paths.
+      ["/run/secrets/prod_metrics_token", true], ["./fixtures/token1", true], ["../keys/token1", true], ["~/.aws/credentials1", true],
+      ["C:\\Users\\me\\token1", true], ["D:/keys/token1", true], ["https://example.com/oauth/token", true],
+      // Code expressions, placeholders, earlier redactions, too short.
+      ["getToken()", false], ["${TOKEN}", false], ["abc${X}def123", true], ["$(cat token.txt)", false], ["process.env.TOKEN1", false],
+      ["os.environ1", false], ["env.TOKEN1", false], ["<your-token1>", true], ["[REDACTED]", true], ["abc 12345678", true], ["short1", true],
+      // Unquoted and not a token shape (a character outside `[A-Za-z0-9_./+=~-]`): code.
+      ["stagedClient?.plaintext", false], ["account?.managementKey", false], ["params[8]", false], ["[0-9a-f]{16}", false],
+      ["session:trial-123", false], ["a|b-1234567", false], ["abc-1234!", false], ["x*y-1234567", false], ["<abc-1234", false],
+      ["`abc-1234`", false],
+    ];
+    for (const [value, quoted] of skipped) expect(isSecretAssignmentValue(value, "source", quoted)).toBe(false);
+  });
+
+  test("unquoted source values that are token shapes still qualify (test_source_value_rule_keeps_unquoted_token_shapes)", () => {
+    for (const value of ["abc-123-def", "YWJjZGVmZ2hpams=", "a/b+c~12345", "12345678", AWS_SECRET]) {
+      expect(isSecretAssignmentValue(value, "source", false)).toBe(true);
+      expect(isSecretAssignmentValue(value, "source", true)).toBe(true);
+    }
+    // The token shape gates unquoted values only: a quoted literal of 20+ mixed-case characters goes whatever it holds.
+    expect(isSecretAssignmentValue("stagedClient?.plaintext", "source", true)).toBe(true);
+  });
+
+  test("a source key must follow a delimiter (test_source_key_must_follow_a_delimiter)", () => {
+    const cases: Array<[string, string | null]> = [
+      // A key after `/`, `:`, `[`, `?`, `&`, `=` or `|` is not an assignment in source...
+      ["key = 'cache/token:abc-123-def'", null],
+      ["key = 'a:token=abc-123-def'", null],
+      ['x = "[token=abc-123-def, y]"', null],
+      ['url = "https://x/?token=abc-123-def&auth=abc-123-def"', null],
+      ['x = "a=token=abc-123-def"', null],
+      ['x = "a|token=abc-123-def"', null],
+      // ...but one that starts the text or follows whitespace, `{`, `,`, `(`, a quote, a `+` diff marker or an escaped line break is.
+      ['token = "abc-123-def"', 'token = "[REDACTED]"'],
+      ["\ttoken = abc-123-def", "\ttoken = [REDACTED]"],
+      ['{token: "abc-123-def"}', '{token: "[REDACTED]"}'],
+      ['{a: 1,token: "abc-123-def"}', '{a: 1,token: "[REDACTED]"}'],
+      ['f(token="abc-123-def")', 'f(token="[REDACTED]")'],
+      ['{"token": "abc-123-def"}', '{"token": "[REDACTED]"}'],
+      ["{'token': 'abc-123-def'}", "{'token': '[REDACTED]'}"],
+      ['`token="abc-123-def"`', '`token="[REDACTED]"`'],
+      ['+token = "abc-123-def"', '+token = "[REDACTED]"'],
+      ["\\ntoken=abc-123-def", "\\ntoken=[REDACTED]"],
+      // A dotted key still starts at its first segment.
+      ['this.token = "hunter2abc"', 'this.token = "[REDACTED]"'],
+    ];
+    for (const [sample, expected] of cases) {
+      expect(redactCollectorText(sample, { mode: "source" })).toEqual(expected === null ? { text: sample, count: 0 } : { text: expected, count: 1 });
+    }
+    // Config mode keeps the word-start guard: `?token=` in a query string and `#TOKEN=` on a commented-out line still count there.
+    expect(redactCollectorText("https://x/?token=abc-123-def")).toEqual({ text: "https://x/?token=[REDACTED]", count: 1 });
+    expect(redactCollectorText("#TOKEN=abc-123-def")).toEqual({ text: "#TOKEN=[REDACTED]", count: 1 });
+  });
+
+  test("limit-style keys are excluded in both modes (test_limit_style_keys_are_excluded_in_both_modes)", () => {
+    for (const sample of [
+      "AUTH_TIMEOUT = 30000000", "auth_timeout: 30000000", "TOKEN_LIMIT = 10000000", "token_max = 12345678", "secret_min = abcdefgh",
+      "auth_interval = 60000000", "token_retries: 10000000", "AUTH_PORT = 80808080", "refresh_token_expires_in: 15897600",
+      "password_encryption='scram-sha-256'", "provider_credential_ref: 'iproyal:claude-in-001'", "secret_envelope: params[8]",
+      "token_expires_in = 15897600", "secret_algorithm = 'aes-256-gcm'", 'auth_callback = "https://x/cb?state=abc12345"',
+    ]) {
+      expect(redactCollectorText(sample, { mode: "source" })).toEqual({ text: sample, count: 0 });
+      expect(redactCollectorText(sample, { mode: "config" })).toEqual({ text: sample, count: 0 });
+    }
+  });
+
+  test("the second production sample comes back byte-identical (test_second_production_sample_is_byte_identical)", () => {
+    const files: Array<[string, string]> = [
+      ["src/client.ts", SAMPLE2_TS],
+      ["scripts/pg.sh", SAMPLE2_SH],
+      ["db/postgresql.conf", SAMPLE2_CONF],
+      ["config/proxies.yml", SAMPLE2_YML],
+      ["build/source-hashes.json", SAMPLE2_HASHES],
+      ["tests/fixtures.py", SAMPLE2_FIXTURES],
+    ];
+    for (const [path, content] of files) expect(redactCollectorContent(path, content)).toBe(content);
+    for (const sample of [SAMPLE2_TS, SAMPLE2_SH, SAMPLE2_FIXTURES]) expect(redactCollectorText(sample, { mode: "source" })).toEqual({ text: sample, count: 0 });
+    for (const sample of [SAMPLE2_CONF, SAMPLE2_YML]) expect(redactCollectorText(sample)).toEqual({ text: sample, count: 0 });
+    // The text rule is not the JSON rail: a YAML key that ends like a filename is still a key.
+    expect(redactCollectorText("admin_auth.py: abcdefgh1234")).toEqual({ text: "admin_auth.py: [REDACTED]", count: 1 });
+  });
+
+  test("the second sample's true positives still go (test_second_sample_true_positives_still_go)", () => {
+    // A path-like key leaves its value to the provider shapes; a bare user
+    // stays but `user:pass` goes; a .patch file is source, so `config.token`
+    // is a reference and `"hunter2abc"` a literal.
+    expect(redactCollectorContent("build/source-hashes.json", `{"src/x.py": "${GITHUB_TOKEN}"}`)).toBe('{"src/x.py":"[REDACTED]"}');
+    expect(redactCollectorJson({ "src/x.py": GITHUB_TOKEN })).toEqual({ value: { "src/x.py": "[REDACTED]" }, count: 1 });
+    expect(redactCollectorContent("tests/fixtures.py", "LIVE_DSN = 'postgres://live:secret@host/db'\n")).toBe("LIVE_DSN = 'postgres://[REDACTED]@host/db'\n");
+    expect(redactCollectorText("LIVE_DSN = 'postgres://live:secret@host/db'\n", { context: "tests/fixtures.py", mode: "source" }).count).toBe(1);
+    expect(redactCollectorContent("fix.patch", PATCH)).toBe(PATCH.replace('"hunter2abc"', '"[REDACTED]"'));
+    expect(redactCollectorText(PATCH, { context: "fix.patch", mode: redactModeForPath("fix.patch") }).count).toBe(1);
+    // The envelope's git diff stays config, where a bare `hunter2abc` is a
+    // literal; the same line in a .patch file is a name.
+    expect(filterCollectorDiff("diff --git a/app/settings.py b/app/settings.py\n+password = hunter2abc\n").diff)
+      .toBe("diff --git a/app/settings.py b/app/settings.py\n+password = [REDACTED]\n");
+    expect(redactCollectorText("+password = hunter2abc", { mode: redactModeForPath("fix.patch") })).toEqual({ text: "+password = hunter2abc", count: 0 });
+  });
+
+  test("URL userinfo is redacted only with a password (test_url_userinfo_is_redacted_whole)", () => {
+    expect(redactCollectorText(`git clone https://oauth2:${GITHUB_TOKEN}@github.com/acme/widgets.git`))
+      .toEqual({ text: "git clone https://[REDACTED]@github.com/acme/widgets.git", count: 1 });
+    expect(redactCollectorText("DATABASE_URL=postgres://admin:s3cret@db.internal:5432/app"))
+      .toEqual({ text: "DATABASE_URL=postgres://[REDACTED]@db.internal:5432/app", count: 1 });
+    expect(redactCollectorText("Authorization: Bearer <token>")).toEqual({ text: "Authorization: Bearer <token>", count: 0 });
+    // Only `user:pass@` is userinfo worth redacting; a bare user stays.
+    for (const sample of ["postgres://live@host:6432/db", "postgres://session@host/db", "DATABASE_URL=postgres://live@host:6432/db"]) {
+      expect(redactCollectorText(sample)).toEqual({ text: sample, count: 0 });
+      expect(redactCollectorText(sample, { mode: "source" })).toEqual({ text: sample, count: 0 });
+    }
+    expect(redactCollectorText("postgres://live:secret@host/db")).toEqual({ text: "postgres://[REDACTED]@host/db", count: 1 });
+  });
+
+  test("the assignment rule reads whitespace as Python does, and a source key may follow any non-ASCII character", () => {
+    // U+0085 and U+001C-U+001F are whitespace to the backend's `\s`: a value
+    // ends there and a key may start after one, on both sides.
+    expect(redactCollectorText("token=abc-123-def\u0085tail", { mode: "source" })).toEqual({ text: "token=[REDACTED]\u0085tail", count: 1 });
+    expect(redactCollectorText("x = 1\u001ctoken = abc-123-def", { mode: "source" })).toEqual({ text: "x = 1\u001ctoken = [REDACTED]", count: 1 });
+    // U+FEFF is not whitespace to Python: a quoted value may hold one.
+    expect(redactCollectorText('"token": "abc\ufeff12345"')).toEqual({ text: '"token": "[REDACTED]"', count: 1 });
+    // The backend's source guard does not count U+FEFF as whitespace; the
+    // desktop does, so the first line of a BOM-prefixed file is still scrubbed
+    // here (the desktop is the stricter side).
+    expect(redactCollectorContent("settings.py", '\ufeffpassword = "hunter2abc"\n')).toBe('\ufeffpassword = "[REDACTED]"\n');
+    // The backend's `\w` is Unicode, so its key spans `café_token`; the
+    // desktop's key starts after the `é`, with the same result.
+    expect(redactCollectorText("café_token = 'hunter2abc'", { mode: "source" })).toEqual({ text: "café_token = '[REDACTED]'", count: 1 });
+    // Where the backend finds no key at all (`ü` is a word character to it), the desktop still redacts.
+    expect(redactCollectorText("ütoken = 'hunter2abc'", { mode: "source" })).toEqual({ text: "ütoken = '[REDACTED]'", count: 1 });
+  });
+
+  test("URL userinfo with an empty user and a password is redacted too (stricter than the backend at 46ee95e)", () => {
+    // Redis's own AUTH form; the assignment rule cannot catch it (`REDIS_URL` ends in `url`).
+    expect(redactCollectorContent("config/app.env", "REDIS_URL=redis://:p4ssw0rd@cache:6379/0\n")).toBe("REDIS_URL=redis://[REDACTED]@cache:6379/0\n");
+    expect(redactCollectorContent("app.py", 'url = "rediss://:hunter2abc@cache:6380/0"\n')).toBe('url = "rediss://[REDACTED]@cache:6380/0"\n');
+    expect(redactCollectorContent("broker.yml", "broker: amqp://:s3cretpw@mq:5672//\n")).toBe("broker: amqp://[REDACTED]@mq:5672//\n");
+    // No password, no redaction: a bare user, an empty userinfo or none at all.
+    for (const sample of ["postgres://live@host/db", "redis://@cache:6379/0", "redis://cache:6379/0", "http://[::1]:8080/x"]) {
+      expect(redactCollectorText(sample)).toEqual({ text: sample, count: 0 });
+    }
+  });
+
+  test("JSON files keep the AWS proximity rule: the raw-text pass and the container rail (test_json_files_keep_the_aws_secret_proximity_rule)", () => {
+    // ECS task definitions, k8s env lists and Postman environments: the key
+    // naming the secret is a sibling value, not the value's own key.
+    const taskDefinition = JSON.stringify({
+      containerDefinitions: [{
+        environment: [
+          { name: "AWS_ACCESS_KEY_ID", value: "AKIAIOSFODNN7EXAMPLE" },
+          { name: "AWS_SECRET_ACCESS_KEY", value: AWS_SECRET },
+        ],
+      }],
+    }, null, 2);
+    const files: Record<string, string> = {
+      "taskdef.json": taskDefinition,
+      "taskdef.txt": taskDefinition,
+      "taskdef.yaml": taskDefinition,
+      "postman.json": `{"values": [{"key": "aws_secret", "value": "${AWS_SECRET}"}]}`,
+      // The secret's own object names nothing: the id two lines above vouches for it, as in a text file.
+      "pairs.json": `[\n  {"id": "AKIAIOSFODNN7EXAMPLE"},\n  {"k": "${AWS_SECRET}"}\n]\n`,
+      // Escaped slashes break the run in the raw text; the sibling `name` is the context once parsed.
+      "escaped.json": `{"name":"AWS_SECRET_ACCESS_KEY","value":"${AWS_SECRET.replaceAll("/", "\\/")}"}`,
+      // Nothing near names an AWS key: a 40-character run is data.
+      "plain.json": `{"hash": "${AWS_SECRET}"}`,
+    };
+    const out = Object.fromEntries(Object.entries(files).map(([path, content]) => [path, redactCollectorContent(path, content)]));
+    for (const [path, content] of Object.entries(out)) {
+      JSON.parse(content);
+      expect(content.includes(AWS_SECRET)).toBe(path === "plain.json");
+    }
+    expect(JSON.parse(out["taskdef.json"]!)).toEqual(JSON.parse(out["taskdef.txt"]!));
+    expect(JSON.parse(out["taskdef.json"]!).containerDefinitions[0].environment).toEqual([
+      { name: "AWS_ACCESS_KEY_ID", value: "[REDACTED]" },
+      { name: "AWS_SECRET_ACCESS_KEY", value: "[REDACTED]" },
+    ]);
+    expect(JSON.parse(out["postman.json"]!)).toEqual({ values: [{ key: "aws_secret", value: "[REDACTED]" }] });
+    expect(JSON.parse(out["pairs.json"]!)).toEqual([{ id: "[REDACTED]" }, { k: "[REDACTED]" }]);
+    expect(JSON.parse(out["escaped.json"]!)).toEqual({ name: "AWS_SECRET_ACCESS_KEY", value: "[REDACTED]" });
+    expect(out["plain.json"]).toBe(files["plain.json"]);
+    // Keys whose last segment the second sample excluded lose the key rule, not the container rail.
+    expect(redactCollectorContent("a.json", `{"secret_envelope": "${AWS_SECRET}"}`)).toBe('{"secret_envelope":"[REDACTED]"}');
+    expect(redactCollectorContent("a.json", `{"aws_secret_ref": "${AWS_SECRET}"}`)).toBe('{"aws_secret_ref":"[REDACTED]"}');
+    expect(redactCollectorContent("a.json", `{\n  "db": {\n    "secret_alias": "${AWS_SECRET}"\n  }\n}`))
+      .toBe('{\n  "db": {\n    "secret_alias": "[REDACTED]"\n  }\n}');
+    expect(redactCollectorContent("a.json", `{"src/secret.py": "${AWS_SECRET}"}`)).toBe('{"src/secret.py":"[REDACTED]"}');
+  });
+
+  test("trace AWS secrets need their key or a container naming AWS (test_trace_artifact_aws_secrets_need_key_or_container_context)", async () => {
+    const document = {
+      events: [
+        { type: "tool.call", data: { note: "id AKIAIOSFODNN7EXAMPLE" } },
+        { type: "tool.call", data: { note: AWS_SECRET } },
+        { type: "tool.call", data: { aws_secret: AWS_SECRET } },
+        { type: "tool.call", data: { name: "AWS_SECRET_ACCESS_KEY", value: AWS_SECRET } },
+      ],
+    };
+    const { value, count } = redactCollectorJson(document);
+    expect(JSON.parse(JSON.stringify(value)).events.map((event: { data: unknown }) => event.data)).toEqual([
+      { note: "id [REDACTED]" },
+      { note: AWS_SECRET },
+      { aws_secret: "[REDACTED]" },
+      { name: "AWS_SECRET_ACCESS_KEY", value: "[REDACTED]" },
+    ]);
+    expect(count).toBe(3);
+
+    // The uploaded trace document gets the same rail.
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-trace-aws-"));
+    roots.push(root);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-trace-aws-1234";
+    collector.startSession(sessionId, "workspace-trace-aws", root);
+    await collector.idle(sessionId);
+    collector.recordTrace(sessionId, "tool.call", { name: "AWS_SECRET_ACCESS_KEY", value: AWS_SECRET });
+    collector.flushTrace(sessionId);
+    await collector.stop();
+    expect(JSON.stringify(uploads)).not.toContain(AWS_SECRET);
+    const trace = uploads.find((item) => item.snapshot_type === "trace")!;
+    expect(trace.trace?.find((event) => event.type === "tool.call")?.data).toEqual({ name: "AWS_SECRET_ACCESS_KEY", value: "[REDACTED]" });
+  });
+
+  test("JSON repeated keys are kept and scrubbed (test_json_repeated_keys_are_kept_and_scrubbed)", () => {
+    const deep = `{"a": 1, "a": ${"[".repeat(600)}${"]".repeat(600)}}`;
+    const cases: Array<[string, string]> = [
+      ['{"a": "x@example.com", "a": "clean"}', '{"a":"[REDACTED_PII]","a":"clean"}'],
+      [`{"a": "${GITHUB_TOKEN}", "a": "clean"}`, '{"a":"[REDACTED]","a":"clean"}'],
+      ['{"password": "hunter2abc", "password": "x"}', '{"password":"[REDACTED]","password":"x"}'],
+      [
+        '{"list": [{"k": "hunter2abc", "k": 1, "password": "hunter2abc"}], "n": 1.5, "t": true, "z": null, "u": "\\u00e9 \\"q\\""}',
+        '{"list":[{"k":"hunter2abc","k":1,"password":"[REDACTED]"}],"n":1.5,"t":true,"z":null,"u":"é \\"q\\""}',
+      ],
+      // Nothing to redact: byte-identical, repeated key and all.
+      ['{"a": "clean", "a": "cleaner"}', '{"a": "clean", "a": "cleaner"}'],
+      // Too deep for the structural scrub: the text scrub instead.
+      [deep, deep],
+      // A shadowed provider token, with nothing else to redact.
+      [`{"token": "${GITHUB_TOKEN}", "token": ""}`, '{"token":"[REDACTED]","token":""}'],
+    ];
+    for (const [input, expected] of cases) {
+      const output = redactCollectorContent("a.json", input);
+      expect(output).toBe(expected);
+      JSON.parse(output);
+    }
+    // An indented document keeps its indentation, every pair and its empty containers.
+    expect(redactCollectorContent("a.json", '{\n  "x": {"password": "hunter2abc", "password": "y"},\n  "e": [],\n  "o": {}\n}\n'))
+      .toBe('{\n  "x": {\n    "password": "[REDACTED]",\n    "password": "y"\n  },\n  "e": [],\n  "o": {}\n}\n');
+    // A `__proto__` key stays an ordinary member.
+    expect(redactCollectorContent("a.json", '{"__proto__": {"password": "hunter2abc"}}')).toBe('{"__proto__":{"password":"[REDACTED]"}}');
+  });
+
+  test("a .patch file is scrubbed as source while the envelope's git diff stays config", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-patch-"));
+    roots.push(root);
+    await git(root, "init", "-q");
+    await mkdir(join(root, "app"), { recursive: true });
+    await writeFile(join(root, "app", "settings.py"), "import config\n");
+    await git(root, "add", "-A");
+    await git(root, "commit", "-q", "-m", "initial");
+    await writeFile(join(root, "app", "settings.py"), "import config\npassword = hunter2abc\n");
+    await writeFile(join(root, "fix.patch"), PATCH);
+    await writeFile(join(root, "notes.diff"), "+password = hunter2abc\n");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    collector.startSession("session-patch-1", "workspace-patch", root);
+    await collector.stop();
+
+    const start = uploads.find((item) => item.snapshot_type === "start")!;
+    const content = (path: string) => start.files.find((file) => file.path === path)?.content;
+    // Workspace files: .py, .patch and .diff are source, so a bare name stays and a quoted literal goes.
+    expect(content("app/settings.py")).toBe("import config\npassword = hunter2abc\n");
+    expect(content("fix.patch")).toBe(PATCH.replace('"hunter2abc"', '"[REDACTED]"'));
+    expect(content("notes.diff")).toBe("+password = hunter2abc\n");
+    // The envelope's git diff is config: the same bare value is a literal there.
+    const gitBlock = start.workspace.git as { diff: string };
+    expect(gitBlock.diff).toContain("+password = [REDACTED]");
+    expect(gitBlock.diff).not.toContain("hunter2abc");
+  });
 });
 
 // --- gateway auth: stale device tokens ---------------------------------------
@@ -1603,4 +2025,626 @@ describe("workspace collector snapshot cap", () => {
     expect(notes).toHaveLength(0);
     expect(warnings).not.toContain("OmniRush collection snapshot trimmed to the snapshot cap");
   });
+});
+
+// --- incremental snapshots, watcher discipline and memory --------------------
+
+describe("workspace collector incremental snapshots", () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** A git workspace with tracked sources, a dependency tree and gitignored build output. */
+  async function workspace(prefix: string, sourceFiles = 30): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), `omnirush-collector-${prefix}-`));
+    roots.push(root);
+    await git(root, "init", "-q");
+    await writeFile(join(root, ".gitignore"), "dist/\nnode_modules/\n");
+    await mkdir(join(root, "src", "lib"), { recursive: true });
+    await mkdir(join(root, "node_modules", "pkg"), { recursive: true });
+    await mkdir(join(root, "dist"), { recursive: true });
+    for (let index = 0; index < sourceFiles; index += 1) {
+      await writeFile(join(root, "src", index % 2 ? "lib" : "", `f${String(index).padStart(2, "0")}.txt`), `source file ${index}\n`);
+    }
+    await writeFile(join(root, "README.md"), "# readme\n");
+    await writeFile(join(root, "node_modules", "pkg", "index.js"), "module.exports = 1;\n");
+    await writeFile(join(root, "dist", "bundle.js"), "bundled\n");
+    await git(root, "add", "-A");
+    await git(root, "commit", "-q", "-m", "init");
+    return root;
+  }
+
+  const contentPaths = (envelope: Envelope) => envelope.files.map((file) => file.path).filter((path) => !path.startsWith("__omnirush__/"));
+  const changes = (uploads: Envelope[]) => uploads.filter((item) => item.snapshot_type === "change");
+  const triggerEvents = (uploads: Envelope[]) => uploads
+    .filter((item) => item.snapshot_type === "trace")
+    .flatMap((item) => item.trace ?? [])
+    .filter((event) => event.type === "collector.trigger")
+    .map((event) => event.data);
+
+  test("mapBounded keeps at most `limit` operations in flight and returns results in order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const items = Array.from({ length: 50 }, (_, index) => index);
+    const results = await mapBounded(items, 8, async (item) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await sleep(1 + (item % 3));
+      inFlight -= 1;
+      return item * 2;
+    });
+    expect(results).toEqual(items.map((item) => item * 2));
+    expect(peak).toBe(8);
+    expect(await mapBounded([1, 2], 8, async (item) => item)).toEqual([1, 2]);
+    expect(await mapBounded([], 8, async (item: number) => item)).toEqual([]);
+  });
+
+  test("a change snapshot reads only the changed file and reuses digests across sessions on one root", async () => {
+    const root = await workspace("cache");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const first = "session-cache-first-1";
+    collector.startSession(first, "workspace-cache", root);
+    await collector.idle(first);
+    const afterStart = { ...collector.metrics };
+    expect(afterStart.fullScans).toBe(1);
+    expect(afterStart.fileReads).toBeGreaterThanOrEqual(31);
+
+    await writeFile(join(root, "src", "f06.txt"), "source file 6, edited\n");
+    collector.captureSnapshot(first, "turn_completed");
+    await collector.idle(first);
+    const afterChange = { ...collector.metrics };
+    const change = changes(uploads)[0]!;
+    expect(contentPaths(change)).toEqual(["src/f06.txt"]);
+    expect(change.files_scope).toBe("changed");
+    expect(change.changed_paths).toEqual(["src/f06.txt"]);
+    expect(change.manifest).toHaveLength(32);
+    expect(change.manifest.find((entry) => entry.path === "src/f06.txt")?.sha256).toBe(sha256("source file 6, edited\n"));
+    // One dirty-path scan: the journal read, the scan read and the upload read of that one file, no listing pass.
+    expect(afterChange.fullScans).toBe(1);
+    expect(afterChange.dirtyScans).toBe(1);
+    expect(afterChange.fileReads - afterStart.fileReads).toBeLessThanOrEqual(3);
+    expect(afterChange.fileStats - afterStart.fileStats).toBeLessThanOrEqual(3);
+
+    // A second chat on the same workspace starts from the shared cache: a stat per file, no reads.
+    const second = "session-cache-second-1";
+    collector.startSession(second, "workspace-cache", root);
+    await collector.idle(second);
+    const afterSecond = { ...collector.metrics };
+    expect(afterSecond.fullScans).toBe(2);
+    const secondStart = uploads.find((item) => item.snapshot_type === "start" && item.session_id === second)!;
+    expect(secondStart.files_scope).toBe("full");
+    expect(contentPaths(secondStart)).toHaveLength(32);
+    // The scan read nothing; the only reads are the upload pass sending each
+    // file as it is on disk, verified by digest, without the regex pipeline.
+    expect(afterSecond.fileReads - afterChange.fileReads).toBe(32);
+    expect(afterSecond.fileRedactions - afterChange.fileRedactions).toBe(0);
+    expect(collector.cacheStatus()).toEqual({ roots: 1, entries: 32 });
+    await collector.stop();
+    expect(collector.cacheStatus()).toEqual({ roots: 0, entries: 0 });
+  });
+
+  test("skips a milestone capture outright when nothing is dirty, and rescans after a new directory appears", async () => {
+    const root = await workspace("dirty", 10);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-dirty-1234";
+    collector.startSession(sessionId, "workspace-dirty", root);
+    await collector.idle(sessionId);
+    expect(collector.sessionDiagnostics(sessionId)).toMatchObject({ watchMode: "watching", dirtyPaths: 0, dirtyOverflow: false });
+    const before = { ...collector.metrics };
+    collector.captureSnapshot(sessionId, "turn_completed");
+    collector.captureSnapshot(sessionId, "prompt");
+    await collector.idle(sessionId);
+    const after = { ...collector.metrics };
+    expect(after.capturesSkipped - before.capturesSkipped).toBe(2);
+    expect(after.fileStats - before.fileStats).toBe(0);
+    expect(after.fullScans + after.dirtyScans).toBe(before.fullScans + before.dirtyScans);
+    expect(changes(uploads)).toHaveLength(0);
+
+    // Files inside a directory that appears whole arrive without events of
+    // their own: the rename of the directory taints the dirty set and the next
+    // capture rescans the tree.
+    await mkdir(join(root, "feature"));
+    await writeFile(join(root, "feature", "new.txt"), "brand new\n");
+    await sleep(150);
+    expect(collector.sessionDiagnostics(sessionId)?.dirtyOverflow).toBe(true);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    expect(collector.metrics.fullScans).toBe(before.fullScans + 1);
+    expect(contentPaths(changes(uploads)[0]!)).toEqual(["feature/new.txt"]);
+    expect(collector.sessionDiagnostics(sessionId)?.watchedPaths).toContain("feature");
+    collector.flushTrace(sessionId);
+    await collector.stop();
+    expect(triggerEvents(uploads)).toEqual([
+      { trigger: "turn_completed", captured: false },
+      { trigger: "prompt", captured: false },
+      { trigger: "turn_completed", captured: true },
+    ]);
+  });
+
+  test("watches only directories with eligible files, batches ignore checks and polls past the watched-files cap", async () => {
+    const root = await workspace("watch", 6);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000 });
+    const sessionId = "session-watch-1234";
+    collector.startSession(sessionId, "workspace-watch", root);
+    await collector.idle(sessionId);
+    expect(collector.sessionDiagnostics(sessionId)?.watchedPaths.sort()).toEqual([".", "src"]);
+    const before = { ...collector.metrics };
+    // Churn in the dependency tree and in gitignored output never reaches a callback.
+    for (let index = 0; index < 200; index += 1) {
+      await writeFile(join(root, "node_modules", "pkg", `churn-${index}.js`), `// ${index}\n`);
+      await writeFile(join(root, "dist", `chunk-${index}.js`), `// ${index}\n`);
+    }
+    await sleep(250);
+    await collector.idle(sessionId);
+    expect(collector.metrics.watchEvents - before.watchEvents).toBe(0);
+    expect(collector.metrics.ignoreCheckSpawns - before.ignoreCheckSpawns).toBe(0);
+    expect(changes(uploads)).toHaveLength(0);
+    await collector.stop();
+    expect(JSON.stringify(uploads)).not.toContain("churn-");
+    expect(JSON.stringify(uploads)).not.toContain("chunk-");
+
+    // New files are put to git's ignore rules in one spawn per burst, not one
+    // per file (the production debounce is 2 s).
+    const batched = makeUploads();
+    const batcher = new WorkspaceCollector({ upload: batched.upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const batchedId = "session-batched-1234";
+    batcher.startSession(batchedId, "workspace-batched", root);
+    await batcher.idle(batchedId);
+    await writeFile(join(root, ".gitignore"), "dist/\nnode_modules/\n*.log\n");
+    await sleep(120);
+    const beforeBurst = batcher.metrics.ignoreCheckSpawns;
+    for (let index = 0; index < 20; index += 1) await writeFile(join(root, `scratch-${index}.log`), `log ${index}\n`);
+    await writeFile(join(root, "kept.txt"), "kept\n");
+    await sleep(150);
+    batcher.captureSnapshot(batchedId, "turn_completed");
+    await batcher.idle(batchedId);
+    // One spawn for the burst (two if it straddles a batch window), and one
+    // fresh answer for everything the snapshot is about to carry.
+    expect(batcher.metrics.ignoreCheckSpawns - beforeBurst).toBeLessThanOrEqual(3);
+    const batchedChange = changes(batched.uploads).at(-1)!;
+    expect(contentPaths(batchedChange)).toContain("kept.txt");
+    expect(batchedChange.manifest.map((entry) => entry.path)).not.toContain("scratch-0.log");
+    await batcher.stop();
+    expect(JSON.stringify(batched.uploads)).not.toContain("scratch-");
+
+    // Past the cap the tree is polled: no watchers, and a milestone rescans it.
+    const polled = makeUploads();
+    const poller = new WorkspaceCollector({ upload: polled.upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000, maxWatchedFiles: 3 });
+    const polledId = "session-polled-1234";
+    poller.startSession(polledId, "workspace-polled", root);
+    await poller.idle(polledId);
+    expect(poller.sessionDiagnostics(polledId)).toMatchObject({ watchMode: "polling", watchedPaths: [], dirtyOverflow: true });
+    await writeFile(join(root, "src", "f01.txt"), "source file 1, polled edit\n");
+    poller.captureSnapshot(polledId, "turn_completed");
+    await poller.idle(polledId);
+    expect(poller.metrics.fullScans).toBe(2);
+    expect(contentPaths(changes(polled.uploads)[0]!)).toEqual(["src/f01.txt"]);
+    await poller.stop();
+  });
+
+  test("labels snapshot scope and re-sends changes the gateway never accepted", async () => {
+    const root = await workspace("scope", 4);
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-collector-scope-state-"));
+    roots.push(stateDir);
+    let status = 201;
+    const uploads: Envelope[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (_sessionId, compressed) => {
+        if (status !== 201) return Response.json({ error: "rejected" }, { status });
+        uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      changeDebounceMs: 60_000,
+      fallbackScanMs: 60_000,
+    });
+    const sessionId = "session-scope-1234";
+    collector.startSession(sessionId, "workspace-scope", root);
+    await collector.idle(sessionId);
+    expect(uploads[0]).toMatchObject({ snapshot_type: "start", files_scope: "full" });
+    expect(uploads[0]).not.toHaveProperty("changed_paths");
+
+    await writeFile(join(root, "src", "f00.txt"), "rejected edit\n");
+    status = 400;
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    expect(changes(uploads)).toHaveLength(0);
+    status = 201;
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    const resent = changes(uploads)[0]!;
+    expect(contentPaths(resent)).toEqual(["src/f00.txt"]);
+    expect(resent.changed_paths).toEqual(["src/f00.txt"]);
+    expect(resent.files_scope).toBe("changed");
+
+    collector.flushTrace(sessionId);
+    await collector.stop();
+    const end = uploads.find((item) => item.snapshot_type === "end")!;
+    expect(end.files_scope).toBe("changed");
+    expect(end.changed_paths).toEqual([]);
+    expect(uploads.find((item) => item.snapshot_type === "trace")?.files_scope).toBe("full");
+    // Envelopes are streamed through a temp file that never outlives the upload.
+    expect((await readdir(join(stateDir, "omnirush-collector-tmp")).catch(() => [])).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    expect(collector.sessionDiagnostics(sessionId)).toBeNull();
+  });
+
+  test("spaces filesystem-driven change snapshots by the minimum interval while milestones capture at once", async () => {
+    const root = await workspace("interval", 4);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000, minChangeIntervalMs: 500 });
+    const sessionId = "session-interval-1234";
+    collector.startSession(sessionId, "workspace-interval", root);
+    await collector.idle(sessionId);
+    await writeFile(join(root, "src", "f00.txt"), "first burst\n");
+    await sleep(120);
+    await collector.idle(sessionId);
+    expect(changes(uploads)).toHaveLength(1);
+    const firstAt = Date.parse(changes(uploads)[0]!.captured_at as string);
+    // Two edits inside the window merge into one deferred snapshot.
+    await writeFile(join(root, "src", "f01.txt"), "second burst a\n");
+    await sleep(60);
+    await writeFile(join(root, "src", "f02.txt"), "second burst b\n");
+    await sleep(120);
+    await collector.idle(sessionId);
+    expect(changes(uploads)).toHaveLength(1);
+    expect(collector.metrics.capturesDeferred).toBeGreaterThanOrEqual(1);
+    await sleep(500);
+    await collector.idle(sessionId);
+    expect(changes(uploads)).toHaveLength(2);
+    expect(contentPaths(changes(uploads)[1]!).sort()).toEqual(["src/f01.txt", "src/f02.txt"]);
+    expect(Date.parse(changes(uploads)[1]!.captured_at as string) - firstAt).toBeGreaterThanOrEqual(450);
+    // A turn milestone inside the window is not held back.
+    await writeFile(join(root, "src", "f03.txt"), "milestone edit\n");
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    expect(changes(uploads)).toHaveLength(3);
+    expect(contentPaths(changes(uploads)[2]!)).toEqual(["src/f03.txt"]);
+    await collector.stop();
+  });
+
+  test("neither watches nor rescans a rebuilt gitignored directory, and rescans once .gitignore changes", async () => {
+    const root = await workspace("ignored", 6);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-ignored-1234";
+    collector.startSession(sessionId, "workspace-ignored", root);
+    await collector.idle(sessionId);
+    const before = { ...collector.metrics };
+    // A build that wipes and recreates its gitignored output directory.
+    await rm(join(root, "dist"), { recursive: true, force: true });
+    await mkdir(join(root, "dist"));
+    await writeFile(join(root, "dist", "bundle.js"), "rebuilt\n");
+    await sleep(200);
+    expect(collector.sessionDiagnostics(sessionId)).toMatchObject({ dirtyOverflow: false });
+    expect(collector.sessionDiagnostics(sessionId)?.watchedPaths).not.toContain("dist");
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    expect(collector.metrics.fullScans).toBe(before.fullScans);
+    expect(changes(uploads)).toHaveLength(0);
+
+    // An untracked log goes out; a new ignore rule then hides it, and the
+    // edit to .gitignore makes the next capture rescan the tree under it.
+    await writeFile(join(root, "notes.log"), "scratch notes\n");
+    await sleep(150);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    expect(changes(uploads).at(-1)!.manifest.map((entry) => entry.path)).toContain("notes.log");
+    await writeFile(join(root, ".gitignore"), "dist/\nnode_modules/\n*.log\n");
+    await sleep(150);
+    expect(collector.sessionDiagnostics(sessionId)?.dirtyOverflow).toBe(true);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    const last = changes(uploads).at(-1)!;
+    expect(collector.metrics.fullScans).toBe(before.fullScans + 1);
+    expect(last.manifest.map((entry) => entry.path)).not.toContain("notes.log");
+    expect(last.changed_paths).toEqual([".gitignore"]);
+    await collector.stop();
+  });
+
+  test("drops the files of a directory moved out of the workspace without rescanning the tree", async () => {
+    const root = await workspace("moved", 10);
+    const outside = await mkdtemp(join(tmpdir(), "omnirush-collector-moved-out-"));
+    roots.push(outside);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-moved-1234";
+    collector.startSession(sessionId, "workspace-moved", root);
+    await collector.idle(sessionId);
+    const before = { ...collector.metrics };
+    // One event for the directory, none for the five files inside it.
+    await rename(join(root, "src", "lib"), join(outside, "lib"));
+    await sleep(200);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    const change = changes(uploads)[0]!;
+    const paths = change.manifest.map((entry) => entry.path);
+    expect(paths.filter((path) => path.startsWith("src/lib/"))).toEqual([]);
+    expect(paths).toContain("src/f00.txt");
+    expect(collector.metrics.fullScans).toBe(before.fullScans);
+    expect(collector.metrics.dirtyScans).toBe(before.dirtyScans + 1);
+    await collector.stop();
+  });
+
+  test("polls a workspace with more top-level directories than it watches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-wide-"));
+    roots.push(root);
+    for (let index = 0; index < 65; index += 1) {
+      await mkdir(join(root, `dir${index}`));
+      await writeFile(join(root, `dir${index}`, "a.txt"), `file ${index}\n`);
+    }
+    const { upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-wide-1234";
+    collector.startSession(sessionId, "workspace-wide", root);
+    await collector.idle(sessionId);
+    expect(collector.sessionDiagnostics(sessionId)).toMatchObject({ watchMode: "polling", watchedPaths: [], dirtyOverflow: true });
+    await collector.stop();
+  });
+
+  test("keeps a file larger than the change journal out of it, and still snapshots the file", async () => {
+    const root = await workspace("journal", 4);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-journal-1234";
+    collector.startSession(sessionId, "workspace-journal", root);
+    await collector.idle(sessionId);
+    await writeFile(join(root, "src", "small.txt"), "small edit\n");
+    await writeFile(join(root, "src", "large.txt"), "large log line\n".repeat(70_000));
+    await sleep(200);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    const change = changes(uploads)[0]!;
+    expect(contentPaths(change).sort()).toEqual(["src/large.txt", "src/small.txt"]);
+    const journal = change.files.find((file) => file.path === "__omnirush__/changes.json")!;
+    expect(journal.content).toContain('"path":"src/small.txt"');
+    expect(journal.content).not.toContain("src/large.txt");
+    await collector.stop();
+  });
+
+  test("runs one reconcile pass per interval for every session on a root, and it finds what no watcher reported", async () => {
+    const root = await workspace("reconcile", 4);
+    // Every watcher slot is taken, so assets/, which held no file at the start, gets none.
+    await fillWatchSlots(root);
+    await mkdir(join(root, "assets"));
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 300, minChangeIntervalMs: 0 });
+    const sessions = ["session-reconcile-a1", "session-reconcile-b1"];
+    for (const sessionId of sessions) collector.startSession(sessionId, "workspace-reconcile", root);
+    for (const sessionId of sessions) await collector.idle(sessionId);
+    expect(collector.sessionDiagnostics(sessions[0]!)).toMatchObject({ watchMode: "watching" });
+    expect(collector.sessionDiagnostics(sessions[0]!)?.watchedPaths).toHaveLength(65);
+    expect(collector.sessionDiagnostics(sessions[0]!)?.watchedPaths).not.toContain("assets");
+    const before = collector.metrics.reconciles;
+    await writeFile(join(root, "assets", "found.txt"), "found by the reconcile pass\n");
+    await sleep(1_000);
+    for (const sessionId of sessions) await collector.idle(sessionId);
+    const passes = collector.metrics.reconciles - before;
+    // About three passes in a second at a 300 ms interval; per-session passes would make six.
+    expect(passes).toBeGreaterThanOrEqual(1);
+    expect(passes).toBeLessThanOrEqual(4);
+    for (const sessionId of sessions) {
+      const change = changes(uploads).find((item) => item.session_id === sessionId);
+      expect(change && contentPaths(change)).toEqual(["assets/found.txt"]);
+    }
+    await collector.stop();
+  });
+
+  test("keeps gitignored files out of change snapshots and the journal in a workspace git does not manage", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-nogit-"));
+    roots.push(root);
+    await writeFile(join(root, ".gitignore"), "*.log\nbuild/\n");
+    await mkdir(join(root, "src"));
+    await writeFile(join(root, "src", "a.txt"), "a\n");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-nogit-1234";
+    collector.startSession(sessionId, "workspace-nogit", root);
+    await collector.idle(sessionId);
+    // git answers nothing here: the watcher-reported paths go through the
+    // .gitignore files the listing walker applies.
+    await writeFile(join(root, "src", "debug.log"), "debug output\n");
+    await mkdir(join(root, "build"));
+    await writeFile(join(root, "build", "out.txt"), "build output\n");
+    await writeFile(join(root, "src", "b.txt"), "b\n");
+    await sleep(200);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    const change = changes(uploads)[0]!;
+    expect(contentPaths(change)).toEqual(["src/b.txt"]);
+    expect(change.manifest.map((entry) => entry.path).sort()).toEqual([".gitignore", "src/a.txt", "src/b.txt"]);
+    await collector.stop();
+    expect(JSON.stringify(uploads)).not.toContain("debug.log");
+    expect(JSON.stringify(uploads)).not.toContain("out.txt");
+  });
+
+  /** src/ plus 63 more top-level directories with files: every watcher slot taken. */
+  async function fillWatchSlots(root: string): Promise<void> {
+    for (let index = 0; index < 63; index += 1) {
+      const directory = join(root, `d${String(index).padStart(2, "0")}`);
+      await mkdir(directory);
+      await writeFile(join(directory, "a.txt"), `file ${index}\n`);
+    }
+  }
+
+  test("watches the top-level directories the listing did not name, unless git ignores or the denylist names them", async () => {
+    const root = await workspace("unlisted", 4);
+    await mkdir(join(root, "config"));
+    await writeFile(join(root, "config", ".env"), "API=1\n"); // denied, so config/ lists nothing
+    await mkdir(join(root, "scripts")); // empty
+    await mkdir(join(root, "secrets")); // a denied name
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000, minChangeIntervalMs: 0 });
+    const sessionId = "session-unlisted-1234";
+    collector.startSession(sessionId, "workspace-unlisted", root);
+    await collector.idle(sessionId);
+    // Not dist/ (gitignored), node_modules/, secrets/ or .git/ (denied).
+    expect(collector.sessionDiagnostics(sessionId)?.watchedPaths.sort()).toEqual([".", "config", "scripts", "src"]);
+    // Another editor writes next to the denied file: the watcher sees it at once.
+    await writeFile(join(root, "config", "app.yml"), "mode: production\n");
+    await sleep(300);
+    await collector.idle(sessionId);
+    const change = changes(uploads)[0]!;
+    expect(change.trigger).toBe("fs_change");
+    expect(contentPaths(change)).toEqual(["config/app.yml"]);
+    await collector.stop();
+    expect(JSON.stringify(uploads)).not.toContain("API=1");
+  });
+
+  test("a turn's writes where no watcher reaches still land in that turn's change snapshot", async () => {
+    const root = await workspace("unwatched", 4);
+    await fillWatchSlots(root);
+    await mkdir(join(root, "assets"));
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-unwatched-1234";
+    collector.startSession(sessionId, "workspace-unwatched", root);
+    await collector.idle(sessionId);
+    expect(collector.sessionDiagnostics(sessionId)?.watchedPaths).not.toContain("assets");
+    collector.captureSnapshot(sessionId, "prompt");
+    await collector.idle(sessionId);
+    // A bash tool writes it; no trace event names it and no watcher covers assets/.
+    await mkdir(join(root, "assets", "db"));
+    await writeFile(join(root, "assets", "db", "migrate.sh"), "#!/bin/sh\necho migrate\n");
+    await sleep(200);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    // The end-of-turn artifact scan marks it dirty for the turn's own snapshot.
+    expect(contentPaths(changes(uploads)[0]!)).toEqual(["assets/db/migrate.sh"]);
+    collector.flushTrace(sessionId);
+    await collector.stop();
+    expect(triggerEvents(uploads)).toEqual([
+      { trigger: "prompt", captured: false },
+      { trigger: "turn_completed", captured: true },
+    ]);
+  });
+
+  test.skipIf(process.platform === "win32")("a path git refuses to answer for (beyond a symlinked directory) neither changes the ignore answer for its batch nor gets read", async () => {
+    const base = await mkdtemp(join(tmpdir(), "omnirush-collector-symlink-"));
+    roots.push(base);
+    const root = join(base, "repo");
+    const outside = join(base, "shared-lib");
+    await mkdir(join(root, "src"), { recursive: true });
+    await mkdir(outside);
+    await git(root, "init", "-q");
+    await appendFile(join(root, ".git", "info", "exclude"), "private-notes.txt\n");
+    await writeFile(join(root, "src", "app.ts"), "export const app = 1;\n");
+    await writeFile(join(outside, "util.ts"), "export const OUTSIDE_WORKSPACE = true;\n");
+    // A symlinked shared package: `git check-ignore linked/util.ts` exits 128.
+    await symlink("../shared-lib", join(root, "linked"));
+    await git(root, "add", "-A");
+    await git(root, "commit", "-q", "-m", "init");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-symlink-1234";
+    collector.startSession(sessionId, "workspace-symlink", root);
+    await collector.idle(sessionId);
+    // In one ignore batch: a note git ignores only through .git/info/exclude,
+    // the agent's traced read through the symlinked package, and a real edit.
+    await writeFile(join(root, "private-notes.txt"), "PRIVATE: salary negotiation notes\n");
+    collector.recordTrace(sessionId, "tool.read", { filePath: "linked/util.ts" });
+    await writeFile(join(root, "src", "app.ts"), "export const app = 2;\n");
+    await sleep(200);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    const change = changes(uploads)[0]!;
+    expect(contentPaths(change)).toEqual(["src/app.ts"]);
+    expect(change.manifest.map((entry) => entry.path)).toEqual(["src/app.ts"]);
+    expect(change.files.find((file) => file.path === "__omnirush__/changes.json")?.content).toContain('"path":"src/app.ts"');
+    await collector.stop();
+    const all = JSON.stringify(uploads);
+    expect(all).not.toContain("salary negotiation");
+    expect(all).not.toContain("OUTSIDE_WORKSPACE");
+  });
+
+  test("a listed file the user then ignores leaves the manifest, files[] and the journal, through .gitignore or .git/info/exclude", async () => {
+    for (const via of ["gitignore", "exclude"] as const) {
+      const root = await workspace(`newly-ignored-${via}`, 4);
+      await writeFile(join(root, "notes.txt"), "scratch v1\n"); // untracked, not ignored yet
+      const { uploads, upload } = makeUploads();
+      const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+      const sessionId = `session-newly-ignored-${via}`;
+      collector.startSession(sessionId, "workspace-newly-ignored", root);
+      await collector.idle(sessionId);
+      expect(uploads[0]!.manifest.map((entry) => entry.path)).toContain("notes.txt");
+      // An edit while it is still collected: git's "not ignored" is now cached.
+      await writeFile(join(root, "notes.txt"), "scratch v1b\n");
+      await sleep(200);
+      collector.captureSnapshot(sessionId, "turn_completed");
+      await collector.idle(sessionId);
+      expect(contentPaths(changes(uploads)[0]!)).toEqual(["notes.txt"]);
+      // The user hides it from git (.git/info/exclude raises no event), then writes something private into it.
+      if (via === "gitignore") await writeFile(join(root, ".gitignore"), "dist/\nnode_modules/\nnotes.txt\n");
+      else await appendFile(join(root, ".git", "info", "exclude"), "notes.txt\n");
+      await sleep(150);
+      await writeFile(join(root, "notes.txt"), "PRIVATE: do not share v2\n");
+      await sleep(200);
+      collector.captureSnapshot(sessionId, "turn_completed");
+      await collector.idle(sessionId);
+      const change = changes(uploads)[1]!;
+      expect(change.manifest.map((entry) => entry.path)).not.toContain("notes.txt");
+      expect(contentPaths(change)).not.toContain("notes.txt");
+      await collector.stop();
+      expect(JSON.stringify(uploads)).not.toContain("do not share v2");
+    }
+  });
+
+  test("snapshots a 60 MiB workspace with peak RSS growth under 120 MB", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-memory-"));
+    roots.push(root);
+    await mkdir(join(root, "src"));
+    // Pseudo-random words so the content neither compresses away nor trips the scrubber.
+    const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima"];
+    const filler = (seed: number, bytes: number): string => {
+      let out = "";
+      let value = seed;
+      while (out.length < bytes) {
+        value = (value * 1103515245 + 12345) % 2147483648;
+        out += `${words[value % words.length]} ${value.toString(36)}${value % 7 === 0 ? "\n" : " "}`;
+      }
+      return out.slice(0, bytes);
+    };
+    let total = 0;
+    for (let index = 0; index < 8; index += 1) {
+      const text = filler(index + 1, 3 * 1024 * 1024);
+      total += text.length;
+      await writeFile(join(root, "src", `large-${index}.txt`), text);
+    }
+    for (let index = 0; index < 280; index += 1) {
+      const text = filler(100 + index, 128 * 1024);
+      total += text.length;
+      await writeFile(join(root, "src", `small-${String(index).padStart(3, "0")}.txt`), text);
+    }
+    // Just under what the 64 MiB snapshot cap leaves for content.
+    expect(total).toBeGreaterThanOrEqual(58 * 1024 * 1024);
+
+    const compressedEnvelopes: Uint8Array[] = [];
+    const collector = new WorkspaceCollector({
+      upload: async (_sessionId, compressed) => {
+        compressedEnvelopes.push(compressed);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      changeDebounceMs: 60_000,
+      fallbackScanMs: 60_000,
+    });
+    const gc = (globalThis as { gc?: () => void }).gc ?? (globalThis as { Bun?: { gc?: (force: boolean) => void } }).Bun?.gc?.bind(null, true);
+    gc?.();
+    await sleep(50);
+    const baseline = process.memoryUsage().rss;
+    let peak = baseline;
+    const sampler = setInterval(() => { peak = Math.max(peak, process.memoryUsage().rss); }, 20);
+    const sessionId = "session-memory-1234";
+    collector.startSession(sessionId, "workspace-memory", root);
+    await collector.idle(sessionId);
+    peak = Math.max(peak, process.memoryUsage().rss);
+    clearInterval(sampler);
+    await collector.stop();
+
+    const growthMB = (peak - baseline) / (1024 * 1024);
+    expect(growthMB).toBeLessThan(120);
+    const start = JSON.parse(zstdDecompressSync(compressedEnvelopes[0]!).toString("utf8")) as Envelope;
+    expect(start.snapshot_type).toBe("start");
+    expect(start.files.reduce((sum, file) => sum + file.content.length, 0)).toBeGreaterThanOrEqual(58 * 1024 * 1024);
+    expect(start.privacy).toMatchObject({ files_truncated: false });
+  }, 60_000);
 });
