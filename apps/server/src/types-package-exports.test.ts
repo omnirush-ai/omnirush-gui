@@ -3,28 +3,35 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
- * The packaged builds bundle this app's OpenCode plugins with `--target node`,
- * so every workspace import resolves through the exporting package's own
- * conditions. A subpath that points at `dist/` only resolves after that package
- * has been built, which the Docker and alpha pipelines do not guarantee — and
- * neither typechecks nor bun tests take that route, so nothing catches it
- * before merge. Keep every subpath resolvable from source.
+ * Two runtimes consume this package:
+ * - bun (dev server, tests, and the plugin bundles built with --target node)
+ *   resolves the `bun` / `development` conditions and can execute TypeScript
+ *   source directly, so those must point at `src/`.
+ * - the packaged desktop app runs the compiled server under Electron's Node,
+ *   which refuses to strip types from `.ts` files under node_modules
+ *   (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING). Its `default` condition must
+ *   therefore point at the built `dist/` output, which apps/server's build
+ *   produces before packaging (v1.0.1 shipped with `default` -> src and the
+ *   engine never started).
  */
 describe("@omnirush/types package exports", () => {
   const manifest = JSON.parse(
     readFileSync(resolve(import.meta.dir, "../../../packages/types/package.json"), "utf8"),
   ) as { exports: Record<string, Record<string, string> | string> };
 
-  test("every subpath resolves from source under every condition", () => {
-    const buildDependent = Object.entries(manifest.exports).flatMap(([subpath, target]) => {
+  test("every subpath serves source to bun and built output to Node", () => {
+    const wrong = Object.entries(manifest.exports).flatMap(([subpath, target]) => {
       const conditions = typeof target === "string" ? { default: target } : target;
-      const offending = Object.entries(conditions)
-        .filter(([, value]) => typeof value === "string" && value.includes("/dist/"))
-        .map(([condition]) => condition);
-      return offending.length > 0 ? [`${subpath} (${offending.join(", ")})`] : [];
+      const problems: string[] = [];
+      for (const condition of ["development", "bun"]) {
+        const value = conditions[condition];
+        if (typeof value !== "string" || !value.startsWith("./src/") || !value.endsWith(".ts")) problems.push(`${condition} must point at src/*.ts`);
+      }
+      const fallback = conditions.default;
+      if (typeof fallback !== "string" || !fallback.startsWith("./dist/") || !fallback.endsWith(".js")) problems.push("default must point at dist/*.js");
+      return problems.length > 0 ? [`${subpath}: ${problems.join("; ")}`] : [];
     });
-
-    expect(buildDependent).toEqual([]);
+    expect(wrong).toEqual([]);
   });
 
   test("the runtime subpaths this app imports are declared", () => {
@@ -32,7 +39,8 @@ describe("@omnirush/types package exports", () => {
     // the type-only subpaths that surrounded it when it was introduced.
     expect(manifest.exports["./automations"]).toMatchObject({
       types: "./src/automations.ts",
-      default: "./src/automations.ts",
+      bun: "./src/automations.ts",
+      default: "./dist/automations.js",
     });
   });
 });

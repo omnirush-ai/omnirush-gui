@@ -3,9 +3,9 @@ import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { applyEnginePath, enrichedPath, parsePathHelperOutput, pathHelperEntries, wellKnownPathEntries } from "./managed-policy-path.js";
+import { applyEnginePath, enrichedPath, parsePathHelperOutput, pathHelperEntries, wellKnownPathEntries } from "./engine-shell-path.js";
 
-const runtimeSource = readFileSync(path.resolve(import.meta.dir, "../../../desktop/electron/runtime.mjs"), "utf8");
+const runtimeSource = readFileSync(path.resolve(import.meta.dir, "../../desktop/electron/runtime.mjs"), "utf8");
 
 /** Render an entry the way runtime.mjs spells it in extraPathEntries(). */
 function runtimeSpelling(entry: string, home: string, env: Record<string, string>): string {

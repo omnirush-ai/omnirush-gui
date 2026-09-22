@@ -1,5 +1,5 @@
 import { check, checkManagedTool } from "./managed-policy-client.js";
-import { applyEnginePath } from "./managed-policy-path.js";
+import { applyEnginePath } from "../engine-shell-path.js";
 // Plugin.define is the identity function in the pinned SDK. The structural
 // contract avoids loading either engine's SDK into the other engine.
 export default {

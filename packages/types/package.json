@@ -7,122 +7,146 @@
     ".": {
       "types": "./src/index.ts",
       "development": "./src/index.ts",
-      "default": "./src/index.ts"
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
     },
     "./agent-context-diagnostics": {
       "types": "./src/agent-context-diagnostics.ts",
       "development": "./src/agent-context-diagnostics.ts",
-      "default": "./src/agent-context-diagnostics.ts"
+      "bun": "./src/agent-context-diagnostics.ts",
+      "default": "./dist/agent-context-diagnostics.js"
     },
     "./omnirush-affordance": {
       "types": "./src/omnirush-affordance.ts",
       "development": "./src/omnirush-affordance.ts",
-      "default": "./src/omnirush-affordance.ts"
+      "bun": "./src/omnirush-affordance.ts",
+      "default": "./dist/omnirush-affordance.js"
     },
     "./omnirush-context": {
       "types": "./src/omnirush-context.ts",
       "development": "./src/omnirush-context.ts",
-      "default": "./src/omnirush-context.ts"
+      "bun": "./src/omnirush-context.ts",
+      "default": "./dist/omnirush-context.js"
     },
     "./omnirush-provider": {
       "types": "./src/omnirush-provider.ts",
       "development": "./src/omnirush-provider.ts",
-      "default": "./src/omnirush-provider.ts"
+      "bun": "./src/omnirush-provider.ts",
+      "default": "./dist/omnirush-provider.js"
     },
     "./automations": {
       "types": "./src/automations.ts",
       "development": "./src/automations.ts",
-      "default": "./src/automations.ts"
+      "bun": "./src/automations.ts",
+      "default": "./dist/automations.js"
     },
     "./workflows": {
       "types": "./src/workflows.ts",
       "development": "./src/workflows.ts",
-      "default": "./src/workflows.ts"
+      "bun": "./src/workflows.ts",
+      "default": "./dist/workflows.js"
     },
     "./local-workflows": {
       "types": "./src/local-workflows.ts",
       "development": "./src/local-workflows.ts",
-      "default": "./src/local-workflows.ts"
+      "bun": "./src/local-workflows.ts",
+      "default": "./dist/local-workflows.js"
     },
     "./skill-created-app": {
       "types": "./src/skill-created-app.ts",
       "development": "./src/skill-created-app.ts",
-      "default": "./src/skill-created-app.ts"
+      "bun": "./src/skill-created-app.ts",
+      "default": "./dist/skill-created-app.js"
     },
     "./connection-action-app": {
       "types": "./src/connection-action-app.ts",
       "development": "./src/connection-action-app.ts",
-      "default": "./src/connection-action-app.ts"
+      "bun": "./src/connection-action-app.ts",
+      "default": "./dist/connection-action-app.js"
     },
     "./plugin-flow-app": {
       "types": "./src/plugin-flow-app.ts",
       "development": "./src/plugin-flow-app.ts",
-      "default": "./src/plugin-flow-app.ts"
+      "bun": "./src/plugin-flow-app.ts",
+      "default": "./dist/plugin-flow-app.js"
     },
     "./den/desktop-app-restrictions": {
       "types": "./src/den/desktop-app-restrictions.ts",
       "development": "./src/den/desktop-app-restrictions.ts",
-      "default": "./src/den/desktop-app-restrictions.ts"
+      "bun": "./src/den/desktop-app-restrictions.ts",
+      "default": "./dist/den/desktop-app-restrictions.js"
     },
     "./den/desktop-policies": {
       "types": "./src/den/desktop-policies.ts",
       "development": "./src/den/desktop-policies.ts",
-      "default": "./src/den/desktop-policies.ts"
+      "bun": "./src/den/desktop-policies.ts",
+      "default": "./dist/den/desktop-policies.js"
     },
     "./den/connect-diagnostics": {
       "types": "./src/den/connect-diagnostics.ts",
       "development": "./src/den/connect-diagnostics.ts",
-      "default": "./src/den/connect-diagnostics.ts"
+      "bun": "./src/den/connect-diagnostics.ts",
+      "default": "./dist/den/connect-diagnostics.js"
     },
     "./den/egress-diagnostics": {
       "types": "./src/den/egress-diagnostics.ts",
       "development": "./src/den/egress-diagnostics.ts",
-      "default": "./src/den/egress-diagnostics.ts"
+      "bun": "./src/den/egress-diagnostics.ts",
+      "default": "./dist/den/egress-diagnostics.js"
     },
     "./den/managed-models-policy": {
       "types": "./src/den/managed-models-policy.ts",
       "development": "./src/den/managed-models-policy.ts",
-      "default": "./src/den/managed-models-policy.ts"
+      "bun": "./src/den/managed-models-policy.ts",
+      "default": "./dist/den/managed-models-policy.js"
     },
     "./den/inference": {
       "types": "./src/den/inference.ts",
       "development": "./src/den/inference.ts",
-      "default": "./src/den/inference.ts"
+      "bun": "./src/den/inference.ts",
+      "default": "./dist/den/inference.js"
     },
     "./den/microsoft-365": {
       "types": "./src/den/microsoft-365.ts",
       "development": "./src/den/microsoft-365.ts",
-      "default": "./src/den/microsoft-365.ts"
+      "bun": "./src/den/microsoft-365.ts",
+      "default": "./dist/den/microsoft-365.js"
     },
     "./den/mcp-connection-action": {
       "types": "./src/den/mcp-connection-action.ts",
       "development": "./src/den/mcp-connection-action.ts",
-      "default": "./src/den/mcp-connection-action.ts"
+      "bun": "./src/den/mcp-connection-action.ts",
+      "default": "./dist/den/mcp-connection-action.js"
     },
     "./workspace": {
       "types": "./src/workspace.ts",
       "development": "./src/workspace.ts",
-      "default": "./src/workspace.ts"
+      "bun": "./src/workspace.ts",
+      "default": "./dist/workspace.js"
     },
     "./desktop-ipc": {
       "types": "./src/desktop-ipc.ts",
       "development": "./src/desktop-ipc.ts",
-      "default": "./src/desktop-ipc.ts"
+      "bun": "./src/desktop-ipc.ts",
+      "default": "./dist/desktop-ipc.js"
     },
     "./connect-link": {
       "types": "./src/connect-link.ts",
       "development": "./src/connect-link.ts",
-      "default": "./src/connect-link.ts"
+      "bun": "./src/connect-link.ts",
+      "default": "./dist/connect-link.js"
     },
     "./url": {
       "types": "./src/url.ts",
       "development": "./src/url.ts",
-      "default": "./src/url.ts"
+      "bun": "./src/url.ts",
+      "default": "./dist/url.js"
     },
     "./visualization": {
       "types": "./src/visualization.ts",
       "development": "./src/visualization.ts",
-      "default": "./src/visualization.ts"
+      "bun": "./src/visualization.ts",
+      "default": "./dist/visualization.js"
     },
     "./den/desktop-policies-runtime": {
       "types": "./src/den/desktop-policies.ts",

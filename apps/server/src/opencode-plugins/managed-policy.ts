@@ -1,5 +1,5 @@
 import { annotateShellOutput, check, checkManagedTool } from "./managed-policy-client.js";
-import { applyEnginePath } from "./managed-policy-path.js";
+import { applyEnginePath } from "../engine-shell-path.js";
 
 type ToolBeforeInput = { tool: string; sessionID?: string; callID?: string };
 type ToolAfterInput = { tool: string; sessionID?: string; callID?: string; args?: unknown };

@@ -1,6 +1,6 @@
 import type { DesktopConfig, DesktopExecutionPolicy, DesktopPolicyKey } from "@omnirush/types/den/desktop-policies";
 import { z } from "zod";
-import { gitWorkflowPermissionRules } from "./opencode-plugins/managed-policy-git.js";
+import { gitWorkflowPermissionRules } from "./git-command-policy.js";
 
 export const managedPolicyActionSchema = z.enum([
   "sync", "shell", "terminal", "saved_command", "file_write", "engine_config", "browser_external",

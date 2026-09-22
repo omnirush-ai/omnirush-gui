@@ -5,7 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { ManagedPolicyAction } from "../managed-policy-rules.js";
-import { classifyShellCommand, markDestructiveCommands, type ClassifiedCommand, type IdentityFields } from "./managed-policy-git.js";
+import { classifyShellCommand, markDestructiveCommands, type ClassifiedCommand, type IdentityFields } from "../git-command-policy.js";
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 10_000;

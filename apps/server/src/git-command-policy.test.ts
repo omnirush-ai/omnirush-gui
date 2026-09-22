@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { rulesFromPermissionConfig, winningRule } from "../effective-permissions.js";
-import { legacyExecutionPermissions } from "../managed-policy-rules.js";
+import { rulesFromPermissionConfig, winningRule } from "./effective-permissions.js";
+import { legacyExecutionPermissions } from "./managed-policy-rules.js";
 import {
   DESTRUCTIVE_MARKER,
   classifyShellCommand,
@@ -10,7 +10,7 @@ import {
   programTokens,
   splitShellCommand,
   stripDestructiveMarkers,
-} from "./managed-policy-git.js";
+} from "./git-command-policy.js";
 
 function kinds(command: string): string[] {
   return classifyShellCommand(command).map((entry) => `${entry.kind}:${entry.family ?? "-"}`);

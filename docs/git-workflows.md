@@ -17,7 +17,7 @@ managed-policy plugin, not in the model.
   pyenv, `~/.local/bin`) for the server; the managed-policy plugin applies the
   same list inside the engine, so a dev server started from a bare terminal
   behaves like the packaged app. Sources: `apps/desktop/electron/runtime.mjs`
-  and `apps/server/src/opencode-plugins/managed-policy-path.ts` (a test keeps
+  and `apps/server/src/engine-shell-path.ts` (a test keeps
   the two lists identical).
 - Worktrees: the agent prefers `git worktree add ../<repo>-<branch> -b <branch>`
   for parallel branches and removes them when the work lands.
@@ -33,7 +33,7 @@ The rules are stated to the agent in its base prompt
 
 Every shell command is split into segments (`&&`, `||`, `;`, `|`, newlines,
 `$(...)`, subshells, brace groups) and each segment is classified by
-`apps/server/src/opencode-plugins/managed-policy-git.ts`. The classification
+`apps/server/src/git-command-policy.ts`. The classification
 looks through what precedes or wraps the command: reserved words (`if`, `!`,
 `while`, `do`, `time`), privilege and exec wrappers (`sudo`, `env`, `nohup`,
 `nice`, `timeout`, `xargs`, `find -exec`) and interpreters that receive a

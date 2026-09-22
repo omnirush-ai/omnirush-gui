@@ -45,7 +45,9 @@ test("server source does not use bare fetch", async () => {
     const path = relativeSrcPath(file);
     const lines = (await readFile(file, "utf8")).split(/\r?\n/);
     lines.forEach((line, index) => {
-      const code = line.replace(/\/\/.*$/, "");
+      // Words inside string literals (for example the git subcommand "fetch"
+      // in a command table) are data, not a fetch reference.
+      const code = line.replace(/\/\/.*$/, "").replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
       if (/^\s*[*/]/.test(code)) return;
       if (bareFetchPattern.test(code)) offenders.push(`${path}:${index + 1}`);
     });

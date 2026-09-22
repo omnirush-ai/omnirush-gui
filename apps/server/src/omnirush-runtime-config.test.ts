@@ -11,7 +11,7 @@ import {
   writeOmniRushRuntimeConfigFile,
 } from "./omnirush-runtime-config.js";
 import { writeGlobalRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
-import { gitWorkflowPermissionRules } from "./opencode-plugins/managed-policy-git.js";
+import { gitWorkflowPermissionRules } from "./git-command-policy.js";
 import type { ServerConfig } from "./types.js";
 
 const roots: string[] = [];

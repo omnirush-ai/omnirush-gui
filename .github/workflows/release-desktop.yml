@@ -148,6 +148,10 @@ jobs:
             ${{ matrix.builder_args }} \
             --publish never
 
+      - name: Verify packaged server imports
+        shell: bash
+        run: node apps/desktop/scripts/verify-packaged-imports.mjs
+
       - name: Verify and upload installers
         env:
           GH_TOKEN: ${{ github.token }}

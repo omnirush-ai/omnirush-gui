@@ -598,7 +598,7 @@ function nvmVersionBinPaths(home) {
 }
 
 // PATH resolution for the server and the sidecars it spawns. The engine-side
-// twin lives in apps/server/src/opencode-plugins/managed-policy-path.ts and
+// twin lives in apps/server/src/engine-shell-path.ts and
 // must list the same directories (a server test compares the two), so the
 // engine's bash tool finds git and gh the way the packaged app does.
 export function pathHelperEntries() {

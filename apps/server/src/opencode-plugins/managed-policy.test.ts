@@ -6,7 +6,7 @@ import path from "node:path";
 
 import managedPolicy from "./managed-policy.js";
 import managedPolicyNext from "./managed-policy-next.js";
-import { DESTRUCTIVE_MARKER } from "./managed-policy-git.js";
+import { DESTRUCTIVE_MARKER } from "../git-command-policy.js";
 import { annotateShellOutput, prepareShellCommand, readGitIdentity } from "./managed-policy-client.js";
 
 type EvaluateCall = { action: string; input: Record<string, unknown> };
