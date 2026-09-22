@@ -34,11 +34,16 @@ const importPattern = /(?:^|[\s;])(?:import|export)\s+(?:[^"'`;]*?\s+from\s+)?["
 // under Electron's Node, which cannot load .ts files from node_modules.
 const workspacePattern = /(?:^|[\s;])(?:import|export)\s+(?:[^"'`;]*?\s+from\s+)?["'](@omnirush\/[^"'`]+)["']|\bimport\(\s*["'](@omnirush\/[^"'`]+)["']\s*\)/g;
 
-function workspaceTarget(asarPath, files, spec) {
+function workspaceTarget(asarPath, files, native, spec) {
   const [, pkg, ...rest] = spec.split("/");
   const manifestPath = `node_modules/@omnirush/${pkg}/package.json`;
   if (!files.has(manifestPath)) return { error: `${manifestPath} missing from archive` };
-  const manifest = JSON.parse(asar.extractFile(asarPath, manifestPath).toString("utf8"));
+  let manifest;
+  try {
+    manifest = JSON.parse(asar.extractFile(asarPath, native.get(manifestPath) ?? manifestPath).toString("utf8"));
+  } catch (error) {
+    return { error: `${manifestPath} unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
   const subpath = rest.length ? `./${rest.join("/")}` : ".";
   const entry = manifest.exports?.[subpath] ?? (subpath === "." ? manifest.main : undefined);
   const target = typeof entry === "string" ? entry : entry?.default ?? entry?.import ?? entry?.require;
@@ -49,13 +54,20 @@ function workspaceTarget(asarPath, files, spec) {
 }
 
 function checkAsar(asarPath) {
-  const files = new Set(asar.listPackage(asarPath).map((entry) => entry.replace(/\\/g, "/").replace(/^\//, "")));
+  // The archive lists paths with the host's separator (backslashes on Windows);
+  // compare with forward slashes but extract with the native spelling.
+  const native = new Map();
+  for (const entry of asar.listPackage(asarPath)) {
+    const normalized = entry.replace(/\\/g, "/").replace(/^\//, "");
+    native.set(normalized, entry.replace(/^[\\/]/, ""));
+  }
+  const files = new Set(native.keys());
   // Third-party packages are resolved by Node with their own package.json exports; only first-party modules are checked.
   const modules = [...files].filter((file) => /\.(?:m?js|cjs)$/.test(file) && !/(?:^|\/)node_modules\//.test(file) && !/\.test\.[mc]?js$/.test(file));
   const missing = [];
   for (const file of modules) {
     let source;
-    try { source = asar.extractFile(asarPath, file).toString("utf8"); } catch { continue; }
+    try { source = asar.extractFile(asarPath, native.get(file) ?? file).toString("utf8"); } catch { continue; }
     // Ignore comments so JSDoc type imports such as import("../types") are not treated as runtime imports.
     const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\\])\/\/.*$/gm, "$1");
     for (const match of code.matchAll(importPattern)) {
@@ -68,7 +80,7 @@ function checkAsar(asarPath) {
     for (const match of code.matchAll(workspacePattern)) {
       const spec = match[1] ?? match[2];
       if (!spec) continue;
-      const { error } = workspaceTarget(asarPath, files, spec);
+      const { error } = workspaceTarget(asarPath, files, native, spec);
       if (error) missing.push(`${file} -> ${spec}: ${error}`);
     }
   }
