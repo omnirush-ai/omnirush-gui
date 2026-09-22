@@ -4,6 +4,7 @@
   "version": "0.0.0-dev",
   "desktopName": "ai.omnirush.desktop",
   "description": "OmniRush.ai desktop shell",
+  "homepage": "https://omnirush.ai",
   "author": {
     "name": "OmniRush.ai",
     "email": "69191476+ogsamrat@users.noreply.github.com"
