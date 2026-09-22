@@ -69,7 +69,7 @@ eliminates those costs for provider changes
 
 | Area | Current v1 integration |
 | --- | --- |
-| Engine binary | OmniRush.ai uses the anomalyco/opencode fork pinned in `constants.json` as `"opencodeVersion": "v1.18.18"`; desktop sidecar preparation downloads it in `apps/desktop/scripts/prepare-sidecar.mjs:35-48`. |
+| Engine binary | OmniRush.ai uses the anomalyco/opencode fork pinned in `constants.json` as `"opencodeVersion": "v1.18.32"`; desktop sidecar preparation downloads it in `apps/desktop/scripts/prepare-sidecar.mjs:35-48`. |
 | Spawn | `apps/server/src/managed-opencode.ts:147-234` runs `opencode serve --hostname --port --cors '*'`, supplies `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD`, waits for stdout `opencode server listening on <url>`, and sets `OPENCODE_CONFIG` to the runtime configuration file. |
 | Desktop boot | `apps/desktop/electron/main.mjs:1385-1445` enters `apps/desktop/electron/runtime.mjs:1882-2028` through `startOmniRushServerInner`, then starts the in-process server at `apps/server/src/embedded.ts:190-281`, which owns the child engine. |
 | Server client | The engine client factory is `apps/server/src/server.ts:1246-1280`. |

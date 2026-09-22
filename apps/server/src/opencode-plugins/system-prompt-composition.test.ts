@@ -112,3 +112,30 @@ test("all OmniRush.ai prompt hooks retain one ordered system message", async () 
   expect(empty.system).toHaveLength(1);
   expect(empty.system[0].startsWith("\n")).toBe(false);
 });
+
+test("the base prompt carries one Editing files rule between the working style and artifact sections", async () => {
+  const heading = "\n\n## Editing files\n\n";
+  expect(occurrences(OMNIRUSH_AGENT_PROMPT, heading)).toBe(1);
+
+  const start = OMNIRUSH_AGENT_PROMPT.indexOf(heading);
+  const end = OMNIRUSH_AGENT_PROMPT.indexOf("\n\n## ", start + heading.length);
+  expect(start).toBeGreaterThan(OMNIRUSH_AGENT_PROMPT.indexOf("## Working style"));
+  expect(end).toBeGreaterThan(start);
+  expect(OMNIRUSH_AGENT_PROMPT.slice(end).startsWith("\n\n## OmniRush.ai Artifacts")).toBe(true);
+
+  // The failure the rule addresses: the model quotes lines that are no longer
+  // (or never were) in the file, then resends the identical patch.
+  const section = OMNIRUSH_AGENT_PROMPT.slice(start + heading.length, end);
+  expect(section).toContain("expected lines were not found");
+  expect(section).toContain("the file changed since you read it");
+  expect(section).toContain("Read the file again before retrying");
+  expect(section).toContain("never resend the same patch");
+  expect(section).toContain("smaller hunks with unambiguous context");
+  expect(section).toContain("keep the file's existing line endings");
+  expect(section.split(/\s+/).filter(Boolean).length).toBeLessThan(80);
+
+  // The composed prompt keeps the rule exactly once, in the base prompt.
+  const [prompt] = await composeReadyPrompt();
+  expect(occurrences(prompt, "## Editing files")).toBe(1);
+  expect(prompt.indexOf("## Editing files")).toBeLessThan(prompt.indexOf("You are running inside OmniRush.ai."));
+});

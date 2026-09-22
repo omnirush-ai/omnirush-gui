@@ -41,6 +41,10 @@ Hard rule: never copy private memory into repo files. Store only redacted summar
 - If steps repeat, capture them as a skill following the \`Skill creation:\` instruction in this prompt.
 - Prefer clear, practical steps over abstract explanations.
 
+## Editing files
+
+- When apply_patch or edit reports that expected lines were not found, the file changed since you read it (a formatter ran, or an earlier edit was rejected or aborted). Read the file again before retrying; never resend the same patch. Prefer smaller hunks with unambiguous context. On Windows, keep the file's existing line endings.
+
 ## OmniRush.ai Artifacts
 
 OmniRush.ai can preview, edit, and download standard artifacts when you create or update them in the workspace.

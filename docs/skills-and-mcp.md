@@ -151,6 +151,9 @@ The engine caches its skill catalog per project instance and needs an instance r
 **Removing an MCP server left tools behind in a running session.**
 The engine drops the registration immediately, but a session that already started a turn keeps its captured tool set until the turn ends.
 
+**The app reports "Configuration is invalid at … V2 permissions are not supported by OpenCode V1", or a workspace answers `opencode_config_invalid`.**
+The bundled engine is OpenCode V1 (pinned in `constants.json`). Since engine 1.18.32 a `permissions` key in a user-owned `opencode.json(c)` — top level, or under `agent`, `agents` or `mode.<name>` — is rejected instead of ignored (the older 1.18.18 engine served such files normally). The server checks those files before spawning the engine: a `permissions` key in the global file (`~/.config/opencode/opencode.json(c)`, `config.json`, or the `OPENCODE_CONFIG_DIR` directory) stops startup with the message above naming the file; a `permissions` key in `<workspace>/.opencode/opencode.json(c)` or `<workspace>/opencode.json(c)` is logged as a warning, the engine still starts, server routes that read the engine for that workspace return `422 opencode_config_invalid` with the engine's message and the file path in `details`, and the native engine proxy passes the engine's own `400 ConfigInvalidError` body through unchanged. Other V2-only keys (`plugins`, `providers`, `websearch`, `warming`, …) are dropped with a "configuration compatibility diagnostic" warning in the engine log and do not block anything. Fix: rename `permissions` to `permission` (V1 rules) or remove it, then restart OmniRush.ai.
+
 **Where are the files?**
 - Server state directory: `~/.config/omnirush/` (or the directory of `OMNIRUSH_SERVER_CONFIG`), containing `runtime.sqlite` (runtime DB), `runtime-opencode-config.json` (engine-visible config) and the managed MCP vault.
 - Engine data: `~/.local/share/opencode/` (logs under `log/`).

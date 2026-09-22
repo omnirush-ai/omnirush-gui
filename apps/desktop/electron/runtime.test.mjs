@@ -87,8 +87,11 @@ describe("bundled OpenCode runtime", () => {
     const constants = JSON.parse(await readFile(constantsPath, "utf8"));
 
     // OpenCode #40990 stops old assistant messages with lexicographically
-    // later IDs from short-circuiting a newly appended user turn.
-    assert.equal(constants.opencodeVersion, "v1.18.18");
+    // later IDs from short-circuiting a newly appended user turn. It shipped
+    // in 1.18.18; the pin has since moved to 1.18.32 (2026-09-21) for the
+    // patch-release fixes on top of it (apply_patch move-path metadata,
+    // config snapshot comparison, provider SDK bumps, session header fixes).
+    assert.equal(constants.opencodeVersion, "v1.18.32");
   });
 });
 

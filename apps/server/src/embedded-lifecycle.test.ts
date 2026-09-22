@@ -7,6 +7,8 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { startEmbeddedServer, type EmbeddedServerHandle, type EmbeddedServerOptions } from "./embedded.js";
 import { readEngineRegistry } from "./engine-registry.js";
 import * as managedOpencodeModule from "./managed-opencode.js";
+import { OPENCODE_V2_PERMISSIONS_MESSAGE, OpencodeConfigCompatError } from "./opencode-config-compat.js";
+import * as opencodeConfigCompatModule from "./opencode-config-compat.js";
 import { writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
 import { writeGlobalRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
 import * as serverModule from "./server.js";
@@ -24,6 +26,7 @@ const ENV_NAMES: string[] = [
   "OMNIRUSH_ENCRYPTION_KEY",
   "OMNIRUSH_OPENCODE_BASE_URL",
   "OMNIRUSH_LIFECYCLE_LOG",
+  "OPENCODE_CONFIG_DIR",
   "OPENCODE_MODELS_URL",
 ];
 
@@ -394,6 +397,74 @@ describe("embedded server lifecycle", () => {
     } finally {
       managedSpy.mockRestore();
       startSpy.mockRestore();
+      await fixture.restore();
+    }
+  });
+
+  test.serial("a global OpenCode config with V2 permissions aborts before any engine is spawned", async () => {
+    const fixture = await createFixture();
+    // The engine reads its global config from OPENCODE_CONFIG_DIR when set;
+    // the pre-flight must look at the same directory.
+    const globalDir = join(fixture.root, "opencode-config");
+    const globalFile = join(globalDir, "opencode.json");
+    await mkdir(globalDir, { recursive: true });
+    await writeFile(globalFile, JSON.stringify({ permissions: { bash: "deny" } }), "utf8");
+    process.env.OPENCODE_CONFIG_DIR = globalDir;
+    const managedSpy = spyOn(managedOpencodeModule, "createManagedOpencodeServer");
+
+    try {
+      const options = managedOptions(fixture, "v2-global");
+      await mkdir(options.opencodeCwd ?? "", { recursive: true });
+      let thrown: unknown;
+      try {
+        await startEmbeddedServer(options);
+      } catch (error) {
+        thrown = error;
+      }
+
+      // 1.18.32 would exit at boot with this message buried in stderr; the
+      // pre-flight names the file and the fix without spawning anything.
+      expect(thrown).toBeInstanceOf(OpencodeConfigCompatError);
+      if (!(thrown instanceof OpencodeConfigCompatError)) throw new Error("Expected OpencodeConfigCompatError");
+      expect(thrown.message).toContain(`Configuration is invalid at ${globalFile}`);
+      expect(thrown.message).toContain(OPENCODE_V2_PERMISSIONS_MESSAGE);
+      expect(thrown.findings).toEqual([
+        { scope: "global", file: globalFile, issues: [{ path: ["permissions"], message: OPENCODE_V2_PERMISSIONS_MESSAGE }] },
+      ]);
+      expect(managedSpy).not.toHaveBeenCalled();
+      expect((await logLines(fixture.logPath)).filter((line) => line === "SIGTERM")).toHaveLength(0);
+    } finally {
+      managedSpy.mockRestore();
+      await fixture.restore();
+    }
+  });
+
+  test.serial("a workspace OpenCode config with V2 permissions is reported but still boots the engine", async () => {
+    const fixture = await createFixture();
+    process.env.OPENCODE_CONFIG_DIR = join(fixture.root, "opencode-config");
+    const workspace = join(fixture.root, "v2-workspace-workspace");
+    const workspaceFile = join(workspace, ".opencode", "opencode.json");
+    await mkdir(join(workspace, ".opencode"), { recursive: true });
+    await writeFile(workspaceFile, JSON.stringify({ agent: { build: { permissions: { bash: "allow" } } } }), "utf8");
+    const originalAssert = opencodeConfigCompatModule.assertOpencodeConfigCompat;
+    const reported: opencodeConfigCompatModule.OpencodeConfigCompatFinding[][] = [];
+    const assertSpy = spyOn(opencodeConfigCompatModule, "assertOpencodeConfigCompat").mockImplementation(async (input) => {
+      const findings = await originalAssert(input);
+      reported.push(findings);
+      return findings;
+    });
+
+    try {
+      const handle = await startManaged(fixture, "v2-workspace");
+
+      // Other workspaces keep working, so the engine must still come up; the
+      // finding is logged and that workspace's routes answer opencode_config_invalid.
+      expect(handle.managedOpencode?.pid).toBeGreaterThan(0);
+      expect(reported).toEqual([[
+        { scope: "workspace", file: workspaceFile, issues: [{ path: ["agent", "build", "permissions"], message: OPENCODE_V2_PERMISSIONS_MESSAGE }] },
+      ]]);
+    } finally {
+      assertSpy.mockRestore();
       await fixture.restore();
     }
   });

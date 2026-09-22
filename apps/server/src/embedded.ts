@@ -38,6 +38,7 @@ import { keepOmniRushRuntimeConfigFileFresh, writeOmniRushRuntimeConfigFile } fr
 import { migrateOmniRushCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
 import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
 import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
+import { assertOpencodeConfigCompat } from "./opencode-config-compat.js";
 import type { ServeResult } from "./serve-node.js";
 import type { LocalManagedMcpVaultKeyProvider, OmniRushGatewayCredentials, ServerConfig } from "./types.js";
 
@@ -251,6 +252,17 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           return [...new Set([config.port, ...poolPorts, startupPort].filter((port) => port > 0))];
         },
       };
+      // The bundled engine (1.18.32+) refuses user-owned config files that
+      // carry a V2 `permissions` key: a global file exits the engine at boot,
+      // a workspace file breaks that workspace's instance. Name the file and
+      // the keys here, before the spawn, instead of surfacing an opaque exit.
+      await duringStartup(() => assertOpencodeConfigCompat({
+        workspaceRoots: config.workspaces
+          .filter((entry) => entry.workspaceType !== "remote")
+          .map((entry) => entry.path),
+        env: { ...process.env, ...engineEnv },
+        logger,
+      }));
       managedOpencode = await duringStartup(() => createManagedOpencodeServer({
         bin: opencodeBin,
         cwd,

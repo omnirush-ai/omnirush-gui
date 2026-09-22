@@ -153,9 +153,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(patch_hash=b9b29e6a319e94ea968476aa440eb8586b5da9db6b8011ce749c384d186f8a10)(zod@4.3.6)
-      '@opencode-ai/sdk':
-        specifier: ^1.18.15
-        version: 1.18.18
       '@omnirush-ee/telemetry-contracts':
         specifier: workspace:*
         version: link:../../ee/packages/telemetry-contracts
@@ -177,6 +174,9 @@ importers:
       '@omnirush/workbook':
         specifier: workspace:*
         version: link:../../packages/workbook
+      '@opencode-ai/sdk':
+        specifier: ^1.18.15
+        version: 1.18.18
       '@paper-design/shaders-react':
         specifier: 0.0.72
         version: 0.0.72(@types/react@19.2.14)(react@19.2.8)
@@ -337,9 +337,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(patch_hash=b9b29e6a319e94ea968476aa440eb8586b5da9db6b8011ce749c384d186f8a10)(zod@4.3.6)
-      '@opencode-ai/sdk':
-        specifier: ^1.18.15
-        version: 1.18.18
       '@omnirush/browser-logins':
         specifier: workspace:*
         version: link:../../packages/browser-logins
@@ -358,6 +355,9 @@ importers:
       '@omnirush/types':
         specifier: workspace:*
         version: link:../../packages/types
+      '@opencode-ai/sdk':
+        specifier: ^1.18.32
+        version: 1.18.32
       '@sentry/electron':
         specifier: ^7.16.0
         version: 7.16.0(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.220.0(@opentelemetry/api@1.9.1))
@@ -450,15 +450,15 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(patch_hash=b9b29e6a319e94ea968476aa440eb8586b5da9db6b8011ce749c384d186f8a10)(zod@4.3.6)
-      '@opencode-ai/sdk':
-        specifier: ^1.18.15
-        version: 1.18.18
       '@omnirush/enterprise-mcp-client':
         specifier: workspace:*
         version: link:../../packages/enterprise-mcp-client
       '@omnirush/types':
         specifier: workspace:*
         version: link:../../packages/types
+      '@opencode-ai/sdk':
+        specifier: ^1.18.32
+        version: 1.18.32
       better-sqlite3:
         specifier: ^13.0.2
         version: 13.0.2
@@ -590,36 +590,6 @@ importers:
       '@modelcontextprotocol/server':
         specifier: ^2.0.0
         version: 2.0.0
-      '@opentelemetry/api':
-        specifier: 1.9.1
-        version: 1.9.1
-      '@opentelemetry/api-logs':
-        specifier: 0.220.0
-        version: 0.220.0
-      '@opentelemetry/exporter-logs-otlp-proto':
-        specifier: 0.220.0
-        version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/exporter-metrics-otlp-proto':
-        specifier: 0.220.0
-        version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/exporter-trace-otlp-proto':
-        specifier: 0.220.0
-        version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-logs':
-        specifier: 0.220.0
-        version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-metrics':
-        specifier: 2.9.0
-        version: 2.9.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-node':
-        specifier: 0.220.0
-        version: 0.220.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-trace-node':
-        specifier: 2.9.0
-        version: 2.9.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/semantic-conventions':
-        specifier: 1.42.0
-        version: 1.42.0
       '@omnirush-ee/cloud-runtime':
         specifier: workspace:*
         version: link:../../packages/cloud-runtime
@@ -659,6 +629,36 @@ importers:
       '@omnirush/types':
         specifier: workspace:*
         version: link:../../../packages/types
+      '@opentelemetry/api':
+        specifier: 1.9.1
+        version: 1.9.1
+      '@opentelemetry/api-logs':
+        specifier: 0.220.0
+        version: 0.220.0
+      '@opentelemetry/exporter-logs-otlp-proto':
+        specifier: 0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/exporter-metrics-otlp-proto':
+        specifier: 0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/exporter-trace-otlp-proto':
+        specifier: 0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-logs':
+        specifier: 0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-metrics':
+        specifier: 2.9.0
+        version: 2.9.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-node':
+        specifier: 0.220.0
+        version: 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-node':
+        specifier: 2.9.0
+        version: 2.9.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/semantic-conventions':
+        specifier: 1.42.0
+        version: 1.42.0
       '@sentry/hono':
         specifier: 10.64.0
         version: 10.64.0(@hono/node-server@2.0.12(hono@4.12.34))(@sentry/node@10.64.0(@opentelemetry/core@2.9.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.220.0(@opentelemetry/api@1.9.1)))(hono@4.12.34)
@@ -808,6 +808,18 @@ importers:
 
   ee/apps/den-web:
     dependencies:
+      '@omnirush-ee/telemetry-contracts':
+        specifier: workspace:*
+        version: link:../../packages/telemetry-contracts
+      '@omnirush-ee/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
+      '@omnirush/types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+      '@omnirush/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
       '@opentelemetry/api':
         specifier: 1.9.1
         version: 1.9.1
@@ -841,18 +853,6 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: 1.42.0
         version: 1.42.0
-      '@omnirush-ee/telemetry-contracts':
-        specifier: workspace:*
-        version: link:../../packages/telemetry-contracts
-      '@omnirush-ee/utils':
-        specifier: workspace:*
-        version: link:../../packages/utils
-      '@omnirush/types':
-        specifier: workspace:*
-        version: link:../../../packages/types
-      '@omnirush/ui':
-        specifier: workspace:*
-        version: link:../../../packages/ui
       '@paper-design/shaders-react':
         specifier: 0.0.72
         version: 0.0.72(@types/react@19.2.14)(react@19.2.8)
@@ -3068,6 +3068,9 @@ packages:
 
   '@opencode-ai/sdk@1.18.25':
     resolution: {integrity: sha512-GwgwhW+vE8FWSDw730SjzqNhsWXB0uJjbFOiqFkmM+USFuG13HuTlGe6SR2ixt+WXxoD6FV1hILWqsXyqej9hQ==}
+
+  '@opencode-ai/sdk@1.18.32':
+    resolution: {integrity: sha512-Wi3WtH/cLA3C0ga05lyDb7zac+SzbST9MPwCve1Ffod0xwzHdy9G2gnxvMAR4RBRhKJS32Rgk2cR+fxBhAVSQw==}
 
   '@opentelemetry/api-logs@0.220.0':
     resolution: {integrity: sha512-CmVa4ImJ+ynfrPMNaAXHET6Bhb44SwzmfyVJFq9ni2jgXJR/l7C6gfVFddNmHP+ZOkP9cf4f9DBe68qVLTHc9w==}
@@ -11540,6 +11543,10 @@ snapshots:
       cross-spawn: 7.0.6
 
   '@opencode-ai/sdk@1.18.25':
+    dependencies:
+      cross-spawn: 7.0.6
+
+  '@opencode-ai/sdk@1.18.32':
     dependencies:
       cross-spawn: 7.0.6
 

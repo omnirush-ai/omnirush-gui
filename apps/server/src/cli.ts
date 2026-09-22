@@ -27,6 +27,7 @@ import { keepOmniRushRuntimeConfigFileFresh, writeOmniRushRuntimeConfigFile } fr
 import { migrateOmniRushCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
 import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
 import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
+import { assertOpencodeConfigCompat } from "./opencode-config-compat.js";
 import { startWorkerActivityHeartbeat } from "./worker-activity-heartbeat.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -97,6 +98,15 @@ if (!config.opencodeBaseUrl && process.env.OMNIRUSH_MANAGE_OPENCODE === "1") {
         return [...new Set([config.port, ...poolPorts].filter((port) => port > 0))];
       },
     };
+    // See embedded.ts: a V2 `permissions` key in a user-owned config file is
+    // fatal to the bundled engine; report the file before spawning.
+    await assertOpencodeConfigCompat({
+      workspaceRoots: config.workspaces
+        .filter((entry) => entry.workspaceType !== "remote")
+        .map((entry) => entry.path),
+      env: { ...process.env, ...engineEnv },
+      logger,
+    });
     managedOpencode = await createManagedOpencodeServer({
       bin: process.env.OMNIRUSH_OPENCODE_BIN,
       cwd: managedOpencodeCwd,

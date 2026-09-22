@@ -83,6 +83,7 @@ import {
 import { installCloudPlugin, readCloudPluginResolved, readInstalledCloudPlugins, removeCloudPlugin } from "./cloud-plugins.js";
 import { resolveClaudePluginBundle } from "./claude-plugin-bundle.js";
 import { resolveWorkspaceOpencodeConnection } from "./opencode-connection.js";
+import { parseOpencodeConfigErrorBody } from "./opencode-config-compat.js";
 import { listPortableFiles } from "./portable-files.js";
 import {
   collectWorkspaceExportWarnings,
@@ -1974,6 +1975,20 @@ export function unwrapOpencodeResult<T, E>(result: OpencodeClientResult<T, E>, p
   if (!result.response) {
     throw new ApiError(502, "opencode_unreachable", "OpenCode request failed before a response was received", {
       body: result.error,
+      path,
+    });
+  }
+  // The engine answers 400 `{ name: "Config…Error", data: { path, issues } }`
+  // when a user-owned opencode.json(c) is rejected (since 1.18.32 a V2
+  // `permissions` key does this for every instance-scoped route). That is
+  // the user's file, not an engine outage: keep the engine's own message.
+  const configError = parseOpencodeConfigErrorBody(result.error);
+  if (configError) {
+    throw new ApiError(422, "opencode_config_invalid", configError.message, {
+      status: result.response.status,
+      name: configError.name,
+      file: configError.file,
+      issues: configError.issues,
       path,
     });
   }
