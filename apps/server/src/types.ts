@@ -87,11 +87,26 @@ export type OmniRushGatewayCredentialBundle = {
   gatewayUrl: string;
   accessToken: string;
   refreshToken: string;
+  /**
+   * How many times this device session has been rotated, counted by whichever
+   * holder performed the rotation. Two holders (the embedded broker and the
+   * desktop account store) share one session and only adopt a stored pair
+   * that is newer than their own; missing means 0 (bundles persisted before
+   * the counter existed, or read from the environment).
+   */
+  rotation?: number;
 };
 
 export type OmniRushGatewayCredentials = OmniRushGatewayCredentialBundle & {
   persist?: (credentials: OmniRushGatewayCredentialBundle) => Promise<void>;
   invalidate?: () => Promise<void>;
+  /**
+   * The credentials as currently stored. Another holder (the desktop account
+   * store checking the profile) may have rotated them since this bundle was
+   * read; the broker adopts that rotation instead of spending a refresh token
+   * the server already retired, which would look like a revoked device.
+   */
+  latest?: () => Promise<OmniRushGatewayCredentialBundle | null>;
   /** Connected account's profile (name and email for the git commit identity default); null when signed out or offline. */
   profile?: () => Promise<{ email: string | null; displayName: string | null } | null>;
 };

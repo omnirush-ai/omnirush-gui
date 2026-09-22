@@ -24,6 +24,12 @@ const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "::1", "[::1]"];
 const SECURITY_TOOL = "/usr/bin/security";
 /** Upper bound on duplicate keychain items removed per service during sign-out. */
 const MAX_KEYCHAIN_DELETES = 8;
+/**
+ * How long a rejected refresh waits for the embedded broker's persist before
+ * the store concludes the session is gone. The broker's rotation can reach
+ * the server before this store's, while its persist is still on its way.
+ */
+const ROTATION_GRACE_MS = 250;
 
 function normalizeCredential(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -93,13 +99,20 @@ async function responseDetail(response) {
   }
 }
 
+/**
+ * A credential bundle as persisted and handed to the embedded broker. The
+ * `rotation` counter says how often the device session was refreshed, by
+ * either holder; a bundle written before the counter existed loads as 0.
+ * @returns {{ gatewayUrl: string, accessToken: string, refreshToken: string, rotation: number } | null}
+ */
 function validCredentials(value) {
   if (!value || typeof value !== "object") return null;
   const gatewayUrl = normalizeGatewayUrl(value.gatewayUrl);
   const accessToken = normalizeCredential(value.accessToken);
   const refreshToken = normalizeCredential(value.refreshToken);
   if (!gatewayUrl || !accessToken || !refreshToken) return null;
-  return { gatewayUrl, accessToken, refreshToken };
+  const rotation = Number.isSafeInteger(value.rotation) && value.rotation >= 0 ? value.rotation : 0;
+  return { gatewayUrl, accessToken, refreshToken, rotation };
 }
 
 function controlPlaneBase(gatewayUrl) {
@@ -184,9 +197,33 @@ export function createDesktopOmniRushAccountStore({
   sleep = (milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
 }) {
   let cached = null;
+  // The embedded broker shares this store (persist/latest/invalidate) and
+  // rotates the same device session. Every writer is tracked so a reader,
+  // the broker's latest() in particular, observes a settled store rather
+  // than the pair a rotation is about to replace.
   let refreshInFlight = null;
+  let saveInFlight = null;
+  let clearInFlight = null;
+  /** Whether the sign-out in flight revokes the session (see save()). */
+  let clearRevokesRemote = false;
   const signedOutPath = `${filePath}.signed-out`;
   const runSecurity = (args) => execFileImpl(SECURITY_TOOL, args, { timeout: 5_000, maxBuffer: 64 * 1024 });
+
+  /**
+   * Resolves once every in-flight refresh, save and sign-out has finished.
+   * A refresh ends in a save and a save may queue behind another, so this
+   * re-checks a bounded number of times instead of trusting one snapshot.
+   * @param {{ includeRefresh?: boolean, includeClear?: boolean }} [options]
+   * `refresh()` and `clear()` must not wait for their own promise; a refresh
+   * also never waits for a sign-out (which waits for the refresh).
+   */
+  async function settle({ includeRefresh = true, includeClear = true } = {}) {
+    for (let round = 0; round < 8; round += 1) {
+      const pending = [includeRefresh ? refreshInFlight : null, saveInFlight, includeClear ? clearInFlight : null].filter(Boolean);
+      if (!pending.length) return;
+      await Promise.allSettled(pending);
+    }
+  }
 
   async function safeStorage() {
     const storage = loadSafeStorage();
@@ -202,14 +239,24 @@ export function createDesktopOmniRushAccountStore({
       const encrypted = await readFile(filePath);
       const decrypted = await storage.decryptStringAsync(encrypted);
       const credentials = validCredentials(JSON.parse(decrypted.result));
-      if (credentials && decrypted.shouldReEncrypt) await save(credentials);
+      if (credentials && decrypted.shouldReEncrypt) await enqueueWrite(credentials);
       return credentials;
     } catch {
       return null;
     }
   }
 
+  /**
+   * The stored credentials once the store is settled. This is also the
+   * broker's `latest()`: it must never answer with a pair that an in-flight
+   * refresh, save or sign-out is about to replace.
+   */
   async function load() {
+    await settle();
+    return readCredentials();
+  }
+
+  async function readCredentials() {
     if (cached) return cached;
     const stored = await loadFile();
     if (stored) {
@@ -229,14 +276,47 @@ export function createDesktopOmniRushAccountStore({
     });
     if (imported) {
       cached = imported;
-      await save(imported);
+      await enqueueWrite(imported);
     }
     return imported;
   }
 
+  /**
+   * Persist a bundle: this store's own rotation, a sign-in, or the embedded
+   * broker's rotation (its `persist`). A save that arrives while the user is
+   * signing out is dropped, that session is being revoked; one that arrives
+   * during a server-driven sign-out lands afterwards, because a broker that
+   * just rotated successfully proves the session is alive.
+   */
   async function save(credentials) {
     const normalized = validCredentials(credentials);
     if (!normalized) throw new Error("Invalid OmniRush account credential bundle");
+    if (clearInFlight) {
+      const revoked = clearRevokesRemote;
+      await clearInFlight;
+      if (revoked) return;
+    }
+    await enqueueWrite(normalized);
+  }
+
+  /**
+   * Serialized writer: the broker's persist and this store's own refresh
+   * share one temporary file. Internal writes (legacy import, re-encryption)
+   * use this directly since they can run inside a sign-out.
+   */
+  function enqueueWrite(normalized) {
+    const previous = saveInFlight;
+    const write = (async () => {
+      if (previous) await previous.catch(() => undefined);
+      await writeCredentials(normalized);
+    })();
+    saveInFlight = write;
+    return write.finally(() => {
+      if (saveInFlight === write) saveInFlight = null;
+    });
+  }
+
+  async function writeCredentials(normalized) {
     const storage = await safeStorage();
     if (!storage) throw new Error("Secure desktop credential storage is unavailable");
     const encrypted = await storage.encryptStringAsync(JSON.stringify(normalized));
@@ -261,9 +341,30 @@ export function createDesktopOmniRushAccountStore({
       ?? (localApiSelected ? DEV_GATEWAY_URL : DEFAULT_GATEWAY_URL);
   }
 
+  /**
+   * The pair the store holds now when it differs from the one a caller is
+   * about to spend: the embedded broker rotated the session and persisted
+   * the result while the caller's profile request was in flight. Spending
+   * the caller's pair would be answered 401 (the server retires a refresh
+   * token on rotation) and read as a revoked session. Waits for a persist
+   * that is still landing before answering.
+   * @returns {Promise<typeof cached>} null when the store still agrees with the caller.
+   */
+  async function rotatedElsewhere(credentials) {
+    await settle({ includeRefresh: false, includeClear: false });
+    return cached && cached.refreshToken !== credentials.refreshToken ? cached : null;
+  }
+
+  /**
+   * Rotate the device session, or return the pair another holder rotated to.
+   * Resolves null only when the server retired the token and the store
+   * agrees nobody rotated it, which is the sign-out signal.
+   */
   async function refresh(credentials) {
     if (refreshInFlight) return refreshInFlight;
     refreshInFlight = (async () => {
+      const adopted = await rotatedElsewhere(credentials);
+      if (adopted) return adopted;
       const refreshUrl = controlPlaneBase(credentials.gatewayUrl);
       refreshUrl.pathname += "/device/refresh";
       const response = await fetchImpl(refreshUrl, {
@@ -272,16 +373,32 @@ export function createDesktopOmniRushAccountStore({
         body: JSON.stringify({ refresh_token: credentials.refreshToken }),
         signal: AbortSignal.timeout(20_000),
       });
-      if (response.status === 401 || response.status === 403) return null;
+      if (response.status === 401 || response.status === 403) {
+        // The broker's rotation may have reached the server first while its
+        // persist is still on its way here: give it a moment to land.
+        await sleep(ROTATION_GRACE_MS);
+        return rotatedElsewhere(credentials);
+      }
+      if (response.status === 409) {
+        // refresh_token_already_used: the broker is rotating this very token
+        // right now. Its persist lands shortly; until then the account is
+        // merely unverified, never signed out.
+        const rotated = await rotatedElsewhere(credentials);
+        if (rotated) return rotated;
+        throw new Error("Account refresh in progress elsewhere (409)");
+      }
       if (!response.ok) throw new Error(`Account refresh unavailable (${response.status})`);
       const payload = await response.json();
       const refreshed = validCredentials({
         gatewayUrl: payload.gateway_url ?? credentials.gatewayUrl,
         accessToken: payload.access_token,
         refreshToken: payload.refresh_token,
+        rotation: credentials.rotation + 1,
       });
       if (!refreshed) throw new Error("Account service returned invalid credentials");
-      await save(refreshed);
+      // Not save(): a sign-out waiting for this refresh must see the pair
+      // it has to revoke, so this write never queues behind the sign-out.
+      await enqueueWrite(refreshed);
       return refreshed;
     })().finally(() => {
       refreshInFlight = null;
@@ -312,17 +429,22 @@ export function createDesktopOmniRushAccountStore({
     return classifyRemoteLogout(response.status, detail);
   }
 
-  async function fetchProfile(credentials, allowRefresh = true) {
+  /**
+   * @param {number} refreshesLeft Bounded: one refresh may only adopt the
+   * broker's pair, whose access token can itself have expired while the app
+   * was idle, so a second one is allowed before the session counts as gone.
+   */
+  async function fetchProfile(credentials, refreshesLeft = 2) {
     const profileUrl = controlPlaneBase(credentials.gatewayUrl);
     profileUrl.pathname += "/device/me";
     const response = await fetchImpl(profileUrl, {
       headers: { Authorization: `Bearer ${credentials.accessToken}` },
       signal: AbortSignal.timeout(20_000),
     });
-    if (response.status === 401 && allowRefresh) {
+    if (response.status === 401 && refreshesLeft > 0) {
       const refreshed = await refresh(credentials);
       if (!refreshed) throw new InvalidAccountCredentialsError("Device session expired");
-      return fetchProfile(refreshed, false);
+      return fetchProfile(refreshed, refreshesLeft - 1);
     }
     if (response.status === 401 || response.status === 403) {
       throw new InvalidAccountCredentialsError("Device session expired");
@@ -370,7 +492,8 @@ export function createDesktopOmniRushAccountStore({
         refreshToken: payload.refresh_token,
       });
       if (!credentials) throw new Error("Account service returned invalid credentials");
-      await save(credentials);
+      // A brand-new session always lands, even next to a sign-out of the old one.
+      await enqueueWrite(credentials);
       return /** @type {const} */ ({ connected: true, userCode: String(issued.user_code ?? "") });
     }
     throw new Error("Account link expired before it was approved");
@@ -434,17 +557,36 @@ export function createDesktopOmniRushAccountStore({
    * @returns {Promise<SignOutOutcome>}
    */
   async function clear({ revokeRemote = true } = {}) {
-    const credentials = cached ?? await load();
-    /** @type {SignOutOutcome} */
-    const outcome = credentials && revokeRemote
-      ? await remoteLogout(credentials)
-      : { remoteRevoked: true, reason: "already_revoked" };
-    cached = null;
-    await rm(filePath, { force: true });
-    await mkdir(path.dirname(signedOutPath), { recursive: true });
-    await writeFile(signedOutPath, "signed-out\n", { mode: 0o600 });
-    if (revokeRemote) await deleteMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity);
-    return outcome;
+    // Claim the gate first (synchronously, so no persist slips in), then wait
+    // for a rotation still in flight: signing out under it would revoke a
+    // retired token (the live session survives) or let its persist land
+    // right over the sign-out. A second sign-out waits for the first.
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const signOut = new Promise((resolvePromise) => { release = resolvePromise; });
+    const previous = clearInFlight;
+    clearInFlight = signOut;
+    clearRevokesRemote = revokeRemote;
+    try {
+      if (previous) await previous;
+      await settle({ includeClear: false });
+      const credentials = cached ?? await readCredentials();
+      /** @type {SignOutOutcome} */
+      const outcome = credentials && revokeRemote
+        ? await remoteLogout(credentials)
+        : { remoteRevoked: true, reason: "already_revoked" };
+      cached = null;
+      // Sentinel first: a reader that slips in between never sees the file
+      // without the sentinel and resurrects the account from disk.
+      await mkdir(path.dirname(signedOutPath), { recursive: true });
+      await writeFile(signedOutPath, "signed-out\n", { mode: 0o600 });
+      await rm(filePath, { force: true });
+      if (revokeRemote) await deleteMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity);
+      return outcome;
+    } finally {
+      if (clearInFlight === signOut) clearInFlight = null;
+      release();
+    }
   }
 
   return { load, save, authorize, status, clear };

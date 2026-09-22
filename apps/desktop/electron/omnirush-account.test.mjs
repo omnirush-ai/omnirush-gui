@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -489,4 +489,212 @@ test("accountServerLabel marks loopback servers as the local API", () => {
   assert.equal(accountServerLabel("http://example.com/omnirush/v1"), null);
   assert.equal(accountServerLabel(""), null);
   assert.equal(accountServerLabel(null), null);
+});
+
+// The embedded broker shares this store and rotates the same device session
+// (its persist() is store.save(), its latest() is store.load()). The server
+// retires a refresh token on rotation, so whichever holder spends a token
+// the other one already rotated is answered 401.
+
+const SHARED_GATEWAY_URL = "https://gateway.example/omnirush/v1";
+
+/** Fake account server: one live pair; a rotation retires the refresh token it spent. */
+function fakeAccountServer() {
+  const server = {
+    access: "access-1",
+    refresh: "refresh-1",
+    generation: 1,
+    expired: new Set(),
+    refreshCalls: [],
+    holdProfile: null,
+    holdRefresh: null,
+    holdLogout: null,
+    contendNext: false,
+  };
+  const fetchImpl = async (url, init = {}) => {
+    const pathname = new URL(url).pathname;
+    const bearer = new Headers(init.headers).get("authorization")?.slice(7) ?? "";
+    if (pathname.endsWith("/device/me")) {
+      if (server.holdProfile) await server.holdProfile;
+      return bearer === server.access && !server.expired.has(bearer)
+        ? Response.json({ email: "person@example.com", status: "active" })
+        : Response.json({ detail: "device_token_invalid" }, { status: 401 });
+    }
+    if (pathname.endsWith("/device/refresh")) {
+      const token = JSON.parse(init.body).refresh_token;
+      server.refreshCalls.push(token);
+      // Held before the check, so the other holder can retire the token meanwhile.
+      const hold = server.holdRefresh;
+      server.holdRefresh = null;
+      if (hold) await hold;
+      if (server.contendNext) {
+        server.contendNext = false;
+        return Response.json({ detail: "refresh_token_already_used" }, { status: 409 });
+      }
+      if (token !== server.refresh) return Response.json({ detail: "refresh_token_invalid_or_expired" }, { status: 401 });
+      server.generation += 1;
+      server.access = `access-${server.generation}`;
+      server.refresh = `refresh-${server.generation}`;
+      return Response.json({ access_token: server.access, refresh_token: server.refresh });
+    }
+    if (pathname.endsWith("/device/logout")) {
+      if (server.holdLogout) await server.holdLogout;
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`Unexpected request ${pathname}`);
+  };
+  return { server, fetchImpl };
+}
+
+function deferred() {
+  /** @type {(value?: unknown) => void} */
+  let resolve = () => {};
+  const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
+const tick = (milliseconds = 5) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+
+async function connectedStore(fetchImpl, overrides = {}) {
+  const options = await storeOptions({ fetchImpl, ...overrides });
+  const store = createDesktopOmniRushAccountStore(options);
+  await store.save({ gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-1", refreshToken: "refresh-1" });
+  return { store, options };
+}
+
+/** What the embedded broker does on a 401: rotate through the same server and persist the result. */
+async function brokerRotates(store, fetchImpl, current) {
+  const response = await fetchImpl(`${SHARED_GATEWAY_URL.replace(/\/v1$/, "")}/device/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: current.refreshToken }),
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  await store.save({
+    gatewayUrl: SHARED_GATEWAY_URL,
+    accessToken: payload.access_token,
+    refreshToken: payload.refresh_token,
+    rotation: current.rotation + 1,
+  });
+}
+
+test("profile check adopts the pair the embedded broker persisted while it was in flight", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const { store } = await connectedStore(fetchImpl);
+  server.expired.add("access-1");
+  const profile = deferred();
+  server.holdProfile = profile.promise;
+  const status = store.status(); // GET /device/me with the expired token is now in flight
+  await tick();
+  await brokerRotates(store, fetchImpl, { refreshToken: "refresh-1", rotation: 0 }); // 1 -> 2, persisted
+  server.holdProfile = null;
+  profile.resolve();
+  const result = await status; // 401: the closure's refresh-1 is retired and is never spent
+  assert.equal(result.connected, true);
+  assert.equal(result.email, "person@example.com");
+  assert.equal(result.reauthorizationRequired, undefined);
+  assert.deepEqual(server.refreshCalls, ["refresh-1"]);
+  assert.deepEqual(await store.load(), { gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+});
+
+test("a refresh rejected because the broker rotated first adopts the persisted pair instead of signing out", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const { store } = await connectedStore(fetchImpl);
+  server.expired.add("access-1");
+  const refresh = deferred();
+  server.holdRefresh = refresh.promise;
+  const status = store.status(); // 401 -> POST /device/refresh with refresh-1, held inside the handler
+  await tick();
+  await brokerRotates(store, fetchImpl, { refreshToken: "refresh-1", rotation: 0 }); // retires refresh-1
+  refresh.resolve();
+  const result = await status; // the held refresh is answered 401
+  assert.equal(result.connected, true);
+  assert.equal(result.email, "person@example.com");
+  assert.deepEqual(server.refreshCalls, ["refresh-1", "refresh-1"]);
+  assert.equal((await store.load()).refreshToken, "refresh-2");
+});
+
+test("load() waits for a rotation in flight so the broker reads the settled pair", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const slowStorage = {
+    ...testStorage(),
+    encryptStringAsync: async (value) => {
+      await tick(20);
+      return Buffer.from(value, "utf8");
+    },
+  };
+  const { store } = await connectedStore(fetchImpl, { loadSafeStorage: () => slowStorage });
+  server.expired.add("access-1");
+  const refresh = deferred();
+  server.holdRefresh = refresh.promise;
+  const status = store.status();
+  await tick();
+  const latest = store.load(); // the broker's latest(), asked mid-rotation
+  refresh.resolve();
+  assert.deepEqual(await latest, { gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+  assert.equal((await status).connected, true);
+});
+
+test("a contended refresh (409) leaves the account connected until the other holder's pair lands", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const { store } = await connectedStore(fetchImpl);
+  server.expired.add("access-1");
+  server.contendNext = true;
+  const unverified = await store.status();
+  assert.equal(unverified.connected, true);
+  assert.equal(unverified.reauthorizationRequired, undefined);
+  assert.equal(unverified.email, null);
+  assert.equal((await store.load()).refreshToken, "refresh-1");
+  await brokerRotates(store, fetchImpl, { refreshToken: "refresh-1", rotation: 0 });
+  const verified = await store.status();
+  assert.equal(verified.email, "person@example.com");
+  assert.deepEqual(server.refreshCalls, ["refresh-1", "refresh-1"]);
+});
+
+test("a reader that races the sign-out cannot resurrect the cleared account", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const { store, options } = await connectedStore(fetchImpl);
+  const logout = deferred();
+  server.holdLogout = logout.promise;
+  const clearing = store.clear();
+  await tick();
+  const read = store.load(); // the broker's latest(), asked mid-sign-out
+  logout.resolve();
+  assert.deepEqual(await clearing, { remoteRevoked: true, reason: "revoked" });
+  assert.equal(await read, null);
+  assert.equal(await store.load(), null);
+  assert.equal((await createDesktopOmniRushAccountStore(options).status()).connected, false);
+});
+
+test("a broker persist during a user sign-out is dropped; during a server-driven sign-out it lands", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const { store } = await connectedStore(fetchImpl);
+  const logout = deferred();
+  server.holdLogout = logout.promise;
+  const clearing = store.clear();
+  await tick();
+  const dropped = store.save({ gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+  logout.resolve();
+  await clearing;
+  await dropped;
+  assert.equal(await store.load(), null);
+
+  const { store: invalidated } = await connectedStore(fetchImpl);
+  const clearingServerDriven = invalidated.clear({ revokeRemote: false });
+  const landed = invalidated.save({ gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+  await clearingServerDriven;
+  await landed;
+  assert.deepEqual(await invalidated.load(), { gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+});
+
+test("a bundle persisted before the rotation counter loads as rotation 0 and counts from there", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const options = await storeOptions({ fetchImpl });
+  await writeFile(options.filePath, JSON.stringify({ gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-1", refreshToken: "refresh-1" }));
+  const store = createDesktopOmniRushAccountStore(options);
+  assert.deepEqual(await store.load(), { gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-1", refreshToken: "refresh-1", rotation: 0 });
+  server.expired.add("access-1");
+  assert.equal((await store.status()).email, "person@example.com");
+  assert.equal(JSON.parse(await readFile(options.filePath, "utf8")).rotation, 1);
 });
