@@ -1376,6 +1376,7 @@ export function createRuntimeManager({
   listLocalWorkspacePaths,
   localManagedMcpVaultKey,
   omnirushGatewayCredentials = null,
+  appVersion = null,
   workspaceMkdir = mkdir,
   workspacePlatform = process.platform,
 }) {
@@ -1990,6 +1991,7 @@ export function createRuntimeManager({
       opencodeBin: managedOpencode?.path ?? undefined,
       opencodeCwd: managedOpencodeWorkdir(),
       localManagedMcpVaultKey,
+      appVersion: typeof appVersion === "string" && appVersion.trim() ? appVersion.trim() : undefined,
       omnirushGatewayCredentials: gatewayCredentials
         ? {
             ...gatewayCredentials,

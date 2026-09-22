@@ -9,12 +9,20 @@ import { zstdDecompressSync } from "node:zlib";
 
 import {
   COLLECTOR_SCHEMA_VERSION,
+  MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES,
   MAX_COLLECTOR_DIFF_BYTES,
+  MAX_COLLECTOR_FILE_BYTES,
+  MAX_COLLECTOR_FILES,
+  MAX_COLLECTOR_SESSION_BYTES,
+  MAX_COLLECTOR_TRACE_BYTES,
+  MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES,
   WorkspaceCollector,
+  clampCollectorBytes,
   clampCollectorText,
   collectGitBlock,
   diffHeaderPath,
   filterCollectorDiff,
+  isCollectableWebUrl,
   isCollectorPathDenied,
   redactCollectorText,
   stripRemoteUserinfo,
@@ -148,7 +156,7 @@ describe("workspace collector privacy", () => {
     });
     const sessionId = "session-truncate-1234";
     collector.startSession(sessionId, "workspace-truncate", root);
-    collector.recordTrace(sessionId, "huge.event", { text: "x".repeat(5 * 1024 * 1024) });
+    collector.recordTrace(sessionId, "huge.event", { text: "x".repeat(MAX_COLLECTOR_TRACE_BYTES + 1024 * 1024) });
     collector.flushTrace(sessionId);
     await collector.stop();
 
@@ -326,7 +334,9 @@ describe("workspace collector envelope v2", () => {
       expect(file?.sha256).toBe(entry.sha256);
       expect(entry.size).toBe(Buffer.byteLength(file!.content));
     }
-    expect(JSON.stringify(uploads)).not.toContain("415");
+    // Hashes and timestamps can legitimately contain "415"; the number itself must be gone.
+    expect(JSON.stringify(uploads)).not.toContain("(415)");
+    expect(JSON.stringify(uploads)).not.toContain("555-0132");
     expect(JSON.stringify(uploads)).not.toContain("TOKEN=nope");
     const trace = uploads[1]!;
     expect(Array.isArray(trace.trace)).toBe(true);
@@ -405,7 +415,7 @@ describe("workspace collector envelope v2", () => {
     await git(root, "add", "-A");
     await git(root, "commit", "-q", "-m", "seed");
     const lines: string[] = [];
-    for (let index = 0; index < 12_000; index += 1) lines.push(`line ${index} ${"x".repeat(60)}`);
+    for (let index = 0; index < 40_000; index += 1) lines.push(`line ${index} ${"x".repeat(60)}`);
     await writeFile(join(root, "big.txt"), `${lines.join("\n")}\n`);
 
     const { uploads, upload } = makeUploads();
@@ -725,5 +735,200 @@ describe("workspace collector git helpers", () => {
     expect(result.diff).not.toContain("keys/service.json");
     expect(filterCollectorDiff("")).toEqual({ diff: null, truncated: false });
     expect(filterCollectorDiff("diff --git a/x b/x\n+ok\n", true).truncated).toBe(true);
+  });
+});
+
+// --- collector trace additions (contract v2) --------------------------------
+
+function traceEvents(uploads: Envelope[]): Array<{ type: string; data?: Record<string, unknown> }> {
+  return uploads.filter((item) => item.snapshot_type === "trace").flatMap((item) => item.trace ?? []);
+}
+
+describe("workspace collector trace additions", () => {
+  test("raises the caps to the contract values", () => {
+    expect(MAX_COLLECTOR_FILE_BYTES).toBe(4 * 1024 * 1024);
+    expect(MAX_COLLECTOR_SESSION_BYTES).toBe(512 * 1024 * 1024);
+    expect(MAX_COLLECTOR_DIFF_BYTES).toBe(2 * 1024 * 1024);
+    expect(MAX_COLLECTOR_FILES).toBe(50_000);
+    expect(MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES).toBe(64 * 1024);
+    expect(MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES).toBe(256 * 1024);
+  });
+
+  test("records the turn model and child sessions with checkpoints that survive a resume", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-children-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-collector-children-state-"));
+    roots.push(root, stateDir);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const { uploads, upload } = makeUploads();
+    const makeCollector = () => new WorkspaceCollector({ stateDir, upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-children-1234";
+
+    const first = makeCollector();
+    first.startSession(sessionId, "workspace-children", root);
+    await first.idle(sessionId);
+    expect(uploads.map((item) => item.snapshot_type)).toEqual(["start"]);
+    expect(uploads[0]!.session).toEqual({ provider_id: null, model_id: null, variant: null, child_session_ids: [] });
+    first.recordSessionModel(sessionId, { provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", agent: "build" });
+    first.recordChildSession(sessionId, {
+      childSessionId: "ses_child_1",
+      parentSessionId: sessionId,
+      title: "Subtask",
+      agent: "explore",
+      messages: [{ info: { id: "cmsg_1", role: "user", sessionID: "ses_child_1" }, parts: [{ type: "text", text: "find jane@example.com" }] }],
+      lastMessageId: "cmsg_1",
+    });
+    first.recordChildSession(sessionId, {
+      childSessionId: "ses_grandchild_1",
+      parentSessionId: "ses_child_1",
+      title: null,
+      agent: null,
+      messages: [],
+      lastMessageId: null,
+    });
+    first.flushTrace(sessionId);
+    await first.idle(sessionId);
+    expect(await first.childCheckpoints(sessionId)).toEqual({ ses_child_1: "cmsg_1" });
+    expect(await first.childSessionIds(sessionId)).toEqual(["ses_child_1", "ses_grandchild_1"]);
+    await first.stop();
+
+    expect(uploads.map((item) => item.snapshot_type)).toEqual(["start", "trace", "end"]);
+    const events = traceEvents(uploads);
+    expect(events.find((event) => event.type === "session.model")?.data).toEqual({
+      provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", agent: "build",
+    });
+    const children = events.filter((event) => event.type === "session.child");
+    expect(children.map((event) => [event.data?.child_session_id, event.data?.parent_session_id, event.data?.title, event.data?.agent])).toEqual([
+      ["ses_child_1", sessionId, "Subtask", "explore"],
+      ["ses_grandchild_1", "ses_child_1", null, null],
+    ]);
+    expect(JSON.stringify(children[0]?.data?.messages)).toContain("cmsg_1");
+    expect(JSON.stringify(children)).not.toContain("jane@example.com");
+    const end = uploads.at(-1)!;
+    expect(end.session).toEqual({
+      provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: ["ses_child_1", "ses_grandchild_1"],
+    });
+
+    // A resumed session starts from the persisted checkpoints and reports the
+    // last known model and children on its very first upload.
+    const second = makeCollector();
+    second.startSession(sessionId, "workspace-children", root);
+    await second.idle(sessionId);
+    expect(await second.childCheckpoints(sessionId)).toEqual({ ses_child_1: "cmsg_1" });
+    expect(await second.childSessionIds(sessionId)).toEqual(["ses_child_1", "ses_grandchild_1"]);
+    const resumedStart = uploads.find((item) => item.snapshot_type === "start" && item.session_segment === 2)!;
+    expect(resumedStart.session).toEqual({
+      provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: ["ses_child_1", "ses_grandchild_1"],
+    });
+    await second.stop();
+  });
+
+  test("traces browser visits with redacted, capped text and never local pages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-web-"));
+    roots.push(root);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-web-1234";
+    collector.startSession(sessionId, "workspace-web", root);
+    const text = `Contact jane@example.com about AKIA1234567890123456 ${"page text ".repeat(20_000)}`;
+    expect(collector.recordWebVisit(sessionId, { url: "https://user:pw@example.com/docs?q=1#top", title: "Docs jane@example.com", text })).toBe(true);
+    expect(collector.recordWebVisit(sessionId, { url: "https://example.org/short", title: null, text: "brief" })).toBe(true);
+    for (const url of ["file:///etc/passwd", "data:text/html,<p>hi</p>", "chrome://settings", "http://localhost:3000/app", "http://127.0.0.1:8080/", "https://[::1]/", "ftp://example.com/x"]) {
+      expect(collector.recordWebVisit(sessionId, { url, title: "local", text: "secret local page" })).toBe(false);
+    }
+    collector.flushTrace(sessionId);
+    await collector.stop();
+
+    const visits = traceEvents(uploads).filter((event) => event.type === "web.visit");
+    expect(visits).toHaveLength(2);
+    const [long, short] = visits;
+    expect(long?.data?.url).toBe("https://example.com/docs?q=1#top");
+    expect(long?.data?.title).toBe("Docs [REDACTED_PII]");
+    expect(long?.data?.text_truncated).toBe(true);
+    expect(Buffer.byteLength(String(long?.data?.text))).toBeLessThanOrEqual(MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES);
+    expect(String(long?.data?.text)).not.toContain("jane@example.com");
+    expect(String(long?.data?.text)).not.toContain("AKIA1234567890123456");
+    expect(short?.data).toEqual({ url: "https://example.org/short", title: null, text: "brief", text_truncated: false });
+    expect(JSON.stringify(uploads)).not.toContain("secret local page");
+    expect(JSON.stringify(uploads)).not.toContain("user:pw@");
+  });
+
+  test("traces prompt attachments with redacted, capped text", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-attachments-"));
+    roots.push(root);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-attachment-1234";
+    collector.startSession(sessionId, "workspace-attachment", root);
+    const text = `OPENAI_API_KEY=sk-1234567890abcdefghijklmnop\n${"notes ".repeat(60_000)}`;
+    collector.recordAttachment(sessionId, { name: "../notes jane@example.com report.txt", mime: "text/plain", bytes: Buffer.byteLength(text), sha256: sha256(text), text });
+    collector.recordAttachment(sessionId, { name: "photo.png", mime: "image/png", bytes: 12, sha256: sha256("png"), text: null });
+    collector.flushTrace(sessionId);
+    await collector.stop();
+
+    const attachments = traceEvents(uploads).filter((event) => event.type === "attachment");
+    expect(attachments).toHaveLength(2);
+    const [note, photo] = attachments;
+    expect(note?.data?.name).toBe("notes [REDACTED_PII] report.txt");
+    expect(note?.data?.mime).toBe("text/plain");
+    expect(note?.data?.bytes).toBe(Buffer.byteLength(text));
+    expect(note?.data?.sha256).toBe(sha256(text));
+    expect(note?.data?.text_truncated).toBe(true);
+    expect(Buffer.byteLength(String(note?.data?.text))).toBeLessThanOrEqual(MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES);
+    expect(String(note?.data?.text)).not.toContain("sk-1234567890abcdefghijklmnop");
+    expect(String(note?.data?.text)).toContain("[REDACTED]");
+    expect(photo?.data).toEqual({ name: "photo.png", mime: "image/png", bytes: 12, sha256: sha256("png"), text: null, text_truncated: false });
+  });
+
+  test("emits artifact events for untracked outputs a turn creates or modifies", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-artifacts-"));
+    roots.push(root);
+    await git(root, "init", "-q");
+    await writeFile(join(root, ".gitignore"), "ignored/\n");
+    await writeFile(join(root, "tracked.txt"), "tracked\n");
+    await writeFile(join(root, "stale.txt"), "already there\n");
+    await git(root, "add", ".gitignore", "tracked.txt");
+    await git(root, "commit", "-q", "-m", "init");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const sessionId = "session-artifacts-1234";
+    collector.startSession(sessionId, "workspace-artifacts", root);
+    collector.captureSnapshot(sessionId, "prompt");
+    await collector.idle(sessionId);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await writeFile(join(root, "tracked.txt"), "tracked, edited\n");
+    await mkdir(join(root, "out"));
+    await writeFile(join(root, "out", "report.bin"), Buffer.from([0, 1, 2, 3, 255]));
+    await writeFile(join(root, "notes.md"), "generated notes\n");
+    await mkdir(join(root, "ignored"));
+    await writeFile(join(root, "ignored", "cache.txt"), "ignored output\n");
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    collector.flushTrace(sessionId);
+    await collector.stop();
+
+    const artifacts = traceEvents(uploads).filter((event) => event.type === "artifact").map((event) => event.data);
+    expect(artifacts.map((artifact) => artifact?.path).sort()).toEqual(["notes.md", "out/report.bin"]);
+    expect(artifacts.find((artifact) => artifact?.path === "out/report.bin")).toEqual({
+      path: "out/report.bin",
+      sha256: createHash("sha256").update(Buffer.from([0, 1, 2, 3, 255])).digest("hex"),
+      bytes: 5,
+    });
+    expect(artifacts.find((artifact) => artifact?.path === "notes.md")).toEqual({ path: "notes.md", sha256: sha256("generated notes\n"), bytes: 16 });
+    expect(JSON.stringify(uploads)).not.toContain("ignored output");
+    const change = uploads.find((item) => item.snapshot_type === "change" && item.trigger === "turn_completed");
+    expect(change?.files.map((file) => file.path)).toContain("tracked.txt");
+    expect(change?.touched_paths).toEqual(expect.arrayContaining(["notes.md", "out/report.bin"]));
+  });
+
+  test("clamps by bytes without splitting code points and classifies web urls", () => {
+    expect(clampCollectorBytes("abc", 10)).toEqual({ text: "abc", truncated: false });
+    expect(clampCollectorBytes("a😀b", 4)).toEqual({ text: "a", truncated: true });
+    expect(clampCollectorBytes("a😀b", 5)).toEqual({ text: "a😀", truncated: true });
+    expect(isCollectableWebUrl("https://example.com/")).toBe(true);
+    expect(isCollectableWebUrl("http://example.com:8080/path")).toBe(true);
+    for (const url of ["file:///tmp/a", "data:text/plain,a", "chrome://version", "about:blank", "http://localhost/", "http://app.localhost/", "http://127.0.0.1/", "http://[::1]/", "not a url"]) {
+      expect(isCollectableWebUrl(url)).toBe(false);
+    }
   });
 });

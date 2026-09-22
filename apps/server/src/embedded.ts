@@ -53,6 +53,8 @@ export type EmbeddedServerOptions = CliArgs & {
   /** Account credentials held by the Desktop shell for the loopback gateway broker. */
   omnirushGatewayCredentials?: OmniRushGatewayCredentials;
   resumeInterruptedTasks?: boolean;
+  /** Version of the embedding desktop app, reported as environment.app_version by the collector. */
+  appVersion?: string;
 };
 
 export type EmbeddedServerHandle = {
@@ -78,6 +80,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   config.omnirushGatewayCredentials = options.omnirushGatewayCredentials;
   config.omnirushEngineToken = randomUUID();
   config.resumeInterruptedTasks = options.resumeInterruptedTasks === true && options.manageOpencode === true && !config.opencodeBaseUrl;
+  config.appVersion = typeof options.appVersion === "string" && options.appVersion.trim() ? options.appVersion.trim() : undefined;
   const logger = createServerLogger(config);
 
   // Spawn managed OpenCode if requested and no explicit base URL was provided.

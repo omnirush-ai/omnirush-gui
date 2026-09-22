@@ -48,16 +48,16 @@ const INTERNAL_PROVIDER_ID = "omnirush";
 const INTERNAL_DEFAULT_MODEL_ID = "gpt-6-astra";
 /**
  * Effort levels offered for every omnirush.ai model, in picker order. Clients
- * send these literal values; the backend maps "ultra" to the upstream maximum.
+ * send these literal values; "max" is the upstream's top level.
  */
-const INTERNAL_REASONING_EFFORTS = ["low", "high", "xhigh", "ultra"] as const;
+const INTERNAL_REASONING_EFFORTS = ["low", "high", "xhigh", "max"] as const;
 /**
  * Effort levels the engine adds on its own to every reasoning model served by
  * the OpenAI adapter (it merges its defaults into the configured variants and
  * drops only entries marked disabled). Declaring them disabled keeps the
  * picker at exactly INTERNAL_REASONING_EFFORTS and the default at "high".
  */
-const INTERNAL_HIDDEN_EFFORTS = ["none", "minimal", "medium", "max"] as const;
+const INTERNAL_HIDDEN_EFFORTS = ["none", "minimal", "medium"] as const;
 /** Models served by the omnirush.ai account route. The default comes first. */
 const INTERNAL_MODELS: ReadonlyArray<{ id: string; name: string }> = [
   { id: INTERNAL_DEFAULT_MODEL_ID, name: "GPT 6 Astra" },

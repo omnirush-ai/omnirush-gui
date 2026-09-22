@@ -5,13 +5,25 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const KEYCHAIN_SERVICES = {
+/** @typedef {import("@omnirush/types/desktop-ipc").OmniRushAccountStatus} AccountStatus */
+/** @typedef {import("@omnirush/types/desktop-ipc").OmniRushAccountSignOutReason} SignOutReason */
+/** @typedef {{ remoteRevoked: boolean, reason: SignOutReason }} SignOutOutcome */
+/**
+ * Runs the macOS `security` tool; injectable so tests never touch a keychain.
+ * @typedef {(file: string, args: string[], options: { timeout: number, maxBuffer: number }) => Promise<{ stdout: string | Buffer, stderr: string | Buffer }>} SecurityCommandRunner
+ */
+
+export const KEYCHAIN_SERVICES = {
   gatewayUrl: "ai.omnirush.desktop.gateway-url",
   accessToken: "ai.omnirush.desktop.gateway-access",
   refreshToken: "ai.omnirush.desktop.gateway-refresh",
 };
 const DEFAULT_GATEWAY_URL = "https://omnirush.ai/omnirush/v1";
 const DEV_GATEWAY_URL = "http://localhost:8090/omnirush/v1";
+const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "::1", "[::1]"];
+const SECURITY_TOOL = "/usr/bin/security";
+/** Upper bound on duplicate keychain items removed per service during sign-out. */
+const MAX_KEYCHAIN_DELETES = 8;
 
 function normalizeCredential(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -22,8 +34,60 @@ function normalizeGatewayUrl(value) {
   if (!normalized) return null;
   try {
     const url = new URL(normalized);
-    if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname))) return null;
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOSTNAMES.includes(url.hostname))) return null;
     return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Human-readable account server for a gateway URL: the host (with a
+ * non-default port), marked "(local API)" for loopback development servers.
+ * Examples: "omnirush.ai", "localhost:8090 (local API)".
+ */
+export function accountServerLabel(gatewayUrl) {
+  const normalized = normalizeGatewayUrl(gatewayUrl);
+  if (!normalized) return null;
+  const url = new URL(normalized);
+  return LOOPBACK_HOSTNAMES.includes(url.hostname) ? `${url.host} (local API)` : url.host;
+}
+
+/**
+ * Classify the account server's answer to POST /device/logout.
+ *
+ * - 2xx (the service answers 204): the device session was revoked now.
+ * - 401/403: the credentials are already unknown, so the session is gone.
+ * - 404 that names the session (any detail other than the framework's
+ *   default "Not Found"): the session is gone as well.
+ * - 404 with the framework default or no JSON body, 405, 410, 501: the
+ *   server has no device sign-out route.
+ * - Everything else (5xx, unexpected 4xx): the revocation did not happen.
+ * @param {number} status
+ * @param {string | null} [detail]
+ * @returns {SignOutOutcome}
+ */
+export function classifyRemoteLogout(status, detail = null) {
+  if (status >= 200 && status < 300) return { remoteRevoked: true, reason: "revoked" };
+  if (status === 401 || status === 403) return { remoteRevoked: true, reason: "already_revoked" };
+  if (status === 404) {
+    const named = typeof detail === "string" && detail.trim() && !/^not found\.?$/i.test(detail.trim());
+    return named
+      ? { remoteRevoked: true, reason: "already_revoked" }
+      : { remoteRevoked: false, reason: "endpoint_missing" };
+  }
+  if (status === 405 || status === 410 || status === 501) return { remoteRevoked: false, reason: "endpoint_missing" };
+  return { remoteRevoked: false, reason: "unreachable" };
+}
+
+async function responseDetail(response) {
+  try {
+    const text = await response.text();
+    if (!text) return null;
+    const payload = JSON.parse(text);
+    if (typeof payload === "string") return normalizeCredential(payload);
+    if (!payload || typeof payload !== "object") return null;
+    return normalizeCredential(payload.detail) ?? normalizeCredential(payload.error) ?? normalizeCredential(payload.message);
   } catch {
     return null;
   }
@@ -80,17 +144,34 @@ function accountProfile(value) {
 
 class InvalidAccountCredentialsError extends Error {}
 
-async function readMacKeychain(service, platform) {
+async function readMacKeychain(service, platform, runSecurity) {
   if (platform !== "darwin") return null;
   try {
-    const { stdout } = await execFileAsync("/usr/bin/security", ["find-generic-password", "-s", service, "-w"], {
-      timeout: 5_000,
-      maxBuffer: 64 * 1024,
-    });
+    const { stdout } = await runSecurity(["find-generic-password", "-s", service, "-w"]);
     return normalizeCredential(stdout);
   } catch {
     return null;
   }
+}
+
+/**
+ * Remove every keychain item stored under `service`. Only macOS has these
+ * legacy entries; other platforms have nothing to delete. `security` removes
+ * one matching item per call and fails once none is left, which ends the loop.
+ * Returns the number of items removed.
+ */
+async function deleteMacKeychain(service, platform, runSecurity) {
+  if (platform !== "darwin") return 0;
+  let removed = 0;
+  while (removed < MAX_KEYCHAIN_DELETES) {
+    try {
+      await runSecurity(["delete-generic-password", "-s", service]);
+      removed += 1;
+    } catch {
+      break;
+    }
+  }
+  return removed;
 }
 
 export function createDesktopOmniRushAccountStore({
@@ -99,11 +180,13 @@ export function createDesktopOmniRushAccountStore({
   platform = process.platform,
   env = process.env,
   fetchImpl = globalThis.fetch,
+  execFileImpl = /** @type {SecurityCommandRunner} */ (execFileAsync),
   sleep = (milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
 }) {
   let cached = null;
   let refreshInFlight = null;
   const signedOutPath = `${filePath}.signed-out`;
+  const runSecurity = (args) => execFileImpl(SECURITY_TOOL, args, { timeout: 5_000, maxBuffer: 64 * 1024 });
 
   async function safeStorage() {
     const storage = loadSafeStorage();
@@ -140,9 +223,9 @@ export function createDesktopOmniRushAccountStore({
       // No sign-out sentinel: legacy credentials may be imported once.
     }
     const imported = validCredentials({
-      gatewayUrl: env.OMNIRUSH_GATEWAY_URL ?? await readMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform),
-      accessToken: env.OMNIRUSH_ACCESS_TOKEN ?? await readMacKeychain(KEYCHAIN_SERVICES.accessToken, platform),
-      refreshToken: env.OMNIRUSH_REFRESH_TOKEN ?? await readMacKeychain(KEYCHAIN_SERVICES.refreshToken, platform),
+      gatewayUrl: env.OMNIRUSH_GATEWAY_URL ?? await readMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity),
+      accessToken: env.OMNIRUSH_ACCESS_TOKEN ?? await readMacKeychain(KEYCHAIN_SERVICES.accessToken, platform, runSecurity),
+      refreshToken: env.OMNIRUSH_REFRESH_TOKEN ?? await readMacKeychain(KEYCHAIN_SERVICES.refreshToken, platform, runSecurity),
     });
     if (imported) {
       cached = imported;
@@ -174,7 +257,7 @@ export function createDesktopOmniRushAccountStore({
     // OMNIRUSH_LOCAL_API=1, points the account service at a local API.
     const localApiSelected = env.OMNIRUSH_DEV_MODE === "1" && env.OMNIRUSH_LOCAL_API === "1";
     return normalizeGatewayUrl(env.OMNIRUSH_GATEWAY_URL)
-      ?? normalizeGatewayUrl(await readMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform))
+      ?? normalizeGatewayUrl(await readMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity))
       ?? (localApiSelected ? DEV_GATEWAY_URL : DEFAULT_GATEWAY_URL);
   }
 
@@ -206,20 +289,27 @@ export function createDesktopOmniRushAccountStore({
     return refreshInFlight;
   }
 
+  /**
+   * Revoke the device session on the account server. Never throws: the
+   * caller clears local credentials either way and reports the outcome.
+   * @returns {Promise<SignOutOutcome>}
+   */
   async function remoteLogout(credentials) {
     const logoutUrl = controlPlaneBase(credentials.gatewayUrl);
     logoutUrl.pathname += "/device/logout";
+    let response;
     try {
-      const response = await fetchImpl(logoutUrl, {
+      response = await fetchImpl(logoutUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: credentials.refreshToken }),
         signal: AbortSignal.timeout(20_000),
       });
-      return response.ok;
     } catch {
-      return false;
+      return { remoteRevoked: false, reason: "unreachable" };
     }
+    const detail = response.status === 404 ? await responseDetail(response) : null;
+    return classifyRemoteLogout(response.status, detail);
   }
 
   async function fetchProfile(credentials, allowRefresh = true) {
@@ -286,15 +376,22 @@ export function createDesktopOmniRushAccountStore({
     throw new Error("Account link expired before it was approved");
   }
 
+  /** @returns {Promise<AccountStatus>} */
   async function status() {
     const credentials = await load();
-    const gatewayConfigured = Boolean(await configuredGatewayUrl());
-    if (!credentials) return { connected: false, gatewayConfigured };
+    const configured = await configuredGatewayUrl();
+    const gatewayConfigured = Boolean(configured);
+    // A connected account reports the server it is actually linked to; a
+    // signed-out app reports the server the next sign-in will use.
+    const gatewayUrl = credentials?.gatewayUrl ?? configured ?? null;
+    const server = { gatewayUrl, gatewayHost: accountServerLabel(gatewayUrl) };
+    if (!credentials) return { connected: false, gatewayConfigured, ...server };
     try {
       const profile = await fetchProfile(credentials);
       return {
         connected: true,
         gatewayConfigured,
+        ...server,
         email: profile?.email ?? null,
         displayName: profile?.displayName ?? null,
         accountStatus: profile?.status ?? null,
@@ -306,6 +403,7 @@ export function createDesktopOmniRushAccountStore({
         return {
           connected: false,
           gatewayConfigured,
+          ...server,
           reauthorizationRequired: true,
           email: null,
           displayName: null,
@@ -318,6 +416,7 @@ export function createDesktopOmniRushAccountStore({
       return {
         connected: true,
         gatewayConfigured,
+        ...server,
         email: null,
         displayName: null,
         accountStatus: null,
@@ -326,16 +425,26 @@ export function createDesktopOmniRushAccountStore({
     }
   }
 
+  /**
+   * Sign out locally and, for a user-initiated sign-out, revoke the device
+   * session remotely and forget the keychain gateway URL so the next sign-in
+   * uses the configured default. `revokeRemote: false` is the server-driven
+   * invalidation path (the session is already gone), which keeps the gateway
+   * URL so re-authorization returns to the same server.
+   * @returns {Promise<SignOutOutcome>}
+   */
   async function clear({ revokeRemote = true } = {}) {
     const credentials = cached ?? await load();
-    const remoteRevoked = !credentials || !revokeRemote
-      ? !credentials || !revokeRemote
-      : await remoteLogout(credentials);
+    /** @type {SignOutOutcome} */
+    const outcome = credentials && revokeRemote
+      ? await remoteLogout(credentials)
+      : { remoteRevoked: true, reason: "already_revoked" };
     cached = null;
     await rm(filePath, { force: true });
     await mkdir(path.dirname(signedOutPath), { recursive: true });
     await writeFile(signedOutPath, "signed-out\n", { mode: 0o600 });
-    return { remoteRevoked };
+    if (revokeRemote) await deleteMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity);
+    return outcome;
   }
 
   return { load, save, authorize, status, clear };

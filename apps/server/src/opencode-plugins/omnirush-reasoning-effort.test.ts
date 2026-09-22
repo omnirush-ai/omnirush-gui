@@ -19,15 +19,15 @@ async function run(
 }
 
 describe("OmniRushReasoningEffort", () => {
-  test("mirrors the ultra variant into reasoningEffort and the private header", async () => {
+  test("mirrors the max variant into reasoningEffort and the private header", async () => {
     const hooks = await OmniRushReasoningEffort();
     const result = await run(
       hooks,
-      { agent: "omnirush", model: astra, message: { id: "msg_1", model: { variant: "ultra" } } },
-      { reasoning_effort: "ultra", temperature: 0.2 },
+      { agent: "omnirush", model: astra, message: { id: "msg_1", model: { variant: "max" } } },
+      { reasoning_effort: "max", temperature: 0.2 },
     );
-    expect(result.options).toEqual({ reasoning_effort: "ultra", reasoningEffort: "ultra", temperature: 0.2 });
-    expect(result.headers).toEqual({ "x-omnirush-reasoning-effort": "ultra" });
+    expect(result.options).toEqual({ reasoning_effort: "max", reasoningEffort: "max", temperature: 0.2 });
+    expect(result.headers).toEqual({ "x-omnirush-reasoning-effort": "max" });
   });
 
   test("applies to every omnirush.ai model", async () => {
@@ -48,10 +48,10 @@ describe("OmniRushReasoningEffort", () => {
     const result = await run(
       hooks,
       { agent: "omnirush", model: astra, message: { id: "msg_2", model: { variant: "max" } } },
-      { reasoning_effort: "ultra" },
+      { reasoning_effort: "max" },
     );
-    expect(result.options.reasoningEffort).toBe("ultra");
-    expect(result.headers["x-omnirush-reasoning-effort"]).toBe("ultra");
+    expect(result.options.reasoningEffort).toBe("max");
+    expect(result.headers["x-omnirush-reasoning-effort"]).toBe("max");
   });
 
   test("falls back to the variant name when the options carry no effort", async () => {
@@ -87,14 +87,14 @@ describe("OmniRushReasoningEffort", () => {
     const hooks = await OmniRushReasoningEffort();
     const external = await run(
       hooks,
-      { agent: "omnirush", model: { id: "gpt-5.5", providerID: "openai" }, message: { id: "msg_6", model: { variant: "ultra" } } },
-      { reasoning_effort: "ultra" },
+      { agent: "omnirush", model: { id: "gpt-5.5", providerID: "openai" }, message: { id: "msg_6", model: { variant: "max" } } },
+      { reasoning_effort: "max" },
     );
-    expect(external.options).toEqual({ reasoning_effort: "ultra" });
+    expect(external.options).toEqual({ reasoning_effort: "max" });
     expect(external.headers).toEqual({});
     const title = await run(
       hooks,
-      { agent: "title", model: astra, message: { id: "msg_7", model: { variant: "ultra" } } },
+      { agent: "title", model: astra, message: { id: "msg_7", model: { variant: "max" } } },
       {},
     );
     expect(title.options).toEqual({});

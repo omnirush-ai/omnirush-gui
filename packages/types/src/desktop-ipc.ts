@@ -115,6 +115,37 @@ export type OmniRushServerInfo = {
   managedOpencodeExecution: OpencodeExecutionSnapshot | null;
 };
 
+/** Outcome of the remote device-session revocation attempted during sign-out. */
+export type OmniRushAccountSignOutReason =
+  /** The account server accepted the revocation (2xx). */
+  | "revoked"
+  /** The account server no longer knows the device session (401/403, or a 404 naming the session). */
+  | "already_revoked"
+  /** The account server could not be reached or failed (network error, 5xx, other errors). */
+  | "unreachable"
+  /** The account server has no device sign-out route (404 route missing, 405, 501). */
+  | "endpoint_missing";
+
+export type OmniRushAccountSignOutResult = {
+  connected: false;
+  remoteRevoked: boolean;
+  reason: OmniRushAccountSignOutReason;
+};
+
+export type OmniRushAccountStatus = {
+  connected: boolean;
+  gatewayConfigured: boolean;
+  reauthorizationRequired?: boolean;
+  email?: string | null;
+  displayName?: string | null;
+  accountStatus?: string | null;
+  usage?: { tokenLimit: number; usedTokens: number; remainingTokens: number } | null;
+  /** Gateway URL the connected account uses, or the configured default while signed out. */
+  gatewayUrl?: string | null;
+  /** Display label for the account server, e.g. "omnirush.ai" or "localhost:8090 (local API)". */
+  gatewayHost?: string | null;
+};
+
 export type EngineDoctorResult = {
   found: boolean;
   inPath: boolean;
@@ -514,21 +545,13 @@ export type DesktopCommandMap = {
   omnirushServerInfo: { args: []; result: OmniRushServerInfo };
   omnirushAccountStatus: {
     args: [];
-    result: {
-      connected: boolean;
-      gatewayConfigured: boolean;
-      reauthorizationRequired?: boolean;
-      email?: string | null;
-      displayName?: string | null;
-      accountStatus?: string | null;
-      usage?: { tokenLimit: number; usedTokens: number; remainingTokens: number } | null;
-    };
+    result: OmniRushAccountStatus;
   };
   omnirushAccountConnect: {
     args: [options?: { gatewayUrl?: string; deviceName?: string }];
     result: { connected: true; userCode: string };
   };
-  omnirushAccountSignOut: { args: []; result: { connected: false; remoteRevoked: boolean } };
+  omnirushAccountSignOut: { args: []; result: OmniRushAccountSignOutResult };
   automationRunnerConfigure: {
     args: [configuration: { baseUrl: string; token: string; runnerId: string } | null];
     result: { connected: boolean };

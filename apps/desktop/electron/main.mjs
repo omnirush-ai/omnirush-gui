@@ -1320,6 +1320,8 @@ const runtimeManager = createRuntimeManager({
         loadSafeStorage: () => require("electron").safeStorage,
       }),
   omnirushGatewayCredentials: omnirushAccountStore,
+  // Collector envelopes report environment.app_version from the desktop build, not the server package.
+  appVersion: app.getVersion(),
 });
 const initialRunnerBootstrap = workspaceStore.readDesktopBootstrapConfigSync();
 const legacyRunnerBaseUrls = [
@@ -2043,10 +2045,10 @@ const desktopCommandHandlers = {
   "omnirushServerInfo": async (event, ...args) => {
       return runtimeManager.omnirushServerInfo();
   },
-  "omnirushAccountStatus": async () => {
+  "omnirushAccountStatus": async (event, ...args) => {
       return omnirushAccountStore.status();
   },
-  "omnirushAccountConnect": async (_event, ...args) => {
+  "omnirushAccountConnect": async (event, ...args) => {
       const input = args[0] ?? {};
       const result = await omnirushAccountStore.authorize({
         gatewayUrl: String(input.gatewayUrl ?? "").trim() || undefined,
@@ -2056,10 +2058,10 @@ const desktopCommandHandlers = {
       await runtimeManager.omnirushServerRestart({});
       return result;
   },
-  "omnirushAccountSignOut": async () => {
+  "omnirushAccountSignOut": async (event, ...args) => {
       const result = await omnirushAccountStore.clear();
       await runtimeManager.omnirushServerRestart({});
-      return { connected: false, remoteRevoked: result.remoteRevoked };
+      return { connected: false, remoteRevoked: result.remoteRevoked, reason: result.reason };
   },
   "automationRunnerConfigure": async (event, ...args) => {
       return desktopAutomationRunner.configure(args[0] ?? null);

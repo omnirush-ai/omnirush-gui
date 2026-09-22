@@ -2406,6 +2406,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
                 orgMcpDisconnectingId={orgMcpConnections.disconnectingId}
                 disconnectOrgMcp={(connectionId) => { void orgMcpConnections.disconnect(connectionId); }}
                 readSkill={readLibrarySkill}
+                createWorkspaceSkill={async (input) => { await extensionsStore.saveSkill(input); }}
                 previewClaudePlugin={(url) => extensionsStore.previewClaudePlugin(url)}
                 installClaudePlugin={(url) => extensionsStore.installClaudePlugin(url)}
                 createLibraryItem={(kind, input) => extensionsStore.createLibraryItem(kind, input)}

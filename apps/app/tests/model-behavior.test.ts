@@ -89,7 +89,7 @@ const omnirushModel = (id: string, name: string): ProviderModel => ({
     low: { reasoning_effort: "low" },
     high: { reasoning_effort: "high" },
     xhigh: { reasoning_effort: "xhigh" },
-    ultra: { reasoning_effort: "ultra" },
+    max: { reasoning_effort: "max" },
   },
 });
 
@@ -99,28 +99,28 @@ const OMNIRUSH_MODELS = [
 ];
 
 describe("model behavior options", () => {
-  test("offers low, high, xhigh and ultra for every omnirush.ai model", () => {
+  test("offers low, high, xhigh and max for every omnirush.ai model", () => {
     for (const internal of OMNIRUSH_MODELS) {
       const options = getModelBehaviorOptions("omnirush", internal, "omnirush.ai");
       expect(options.map(({ value, label }) => ({ value, label }))).toEqual([
         { value: "low", label: "Low" },
         { value: "high", label: "High" },
         { value: "xhigh", label: "Xhigh" },
-        { value: "ultra", label: "Ultra" },
+        { value: "max", label: "Max" },
       ]);
-      expect(nextModelBehaviorValue(options, "xhigh")).toBe("ultra");
-      expect(nextModelBehaviorValue(options, "ultra")).toBe("low");
-      expect(previousModelBehaviorValue(options, "low")).toBe("ultra");
+      expect(nextModelBehaviorValue(options, "xhigh")).toBe("max");
+      expect(nextModelBehaviorValue(options, "max")).toBe("low");
+      expect(previousModelBehaviorValue(options, "low")).toBe("max");
 
-      const summary = getModelBehaviorSummary("omnirush", internal, "ultra", "omnirush.ai");
-      expect(summary.value).toBe("ultra");
-      expect(summary.label).toBe("Ultra");
+      const summary = getModelBehaviorSummary("omnirush", internal, "max", "omnirush.ai");
+      expect(summary.value).toBe("max");
+      expect(summary.label).toBe("Max");
       expect(getModelBehaviorSummary("omnirush", internal, null, "omnirush.ai").value).toBe("high");
     }
   });
 
   test("hides the effort levels the engine adds on its own to omnirush.ai models", () => {
-    expect([...OMNIRUSH_REASONING_EFFORTS]).toEqual(["low", "high", "xhigh", "ultra"]);
+    expect([...OMNIRUSH_REASONING_EFFORTS]).toEqual(["low", "high", "xhigh", "max"]);
     for (const internal of OMNIRUSH_MODELS) {
       // What GET /config/providers reports once the engine has merged its
       // OpenAI reasoning defaults into the configured variants.
@@ -135,10 +135,10 @@ describe("model behavior options", () => {
         },
       };
       const options = getModelBehaviorOptions("omnirush", reported, "omnirush.ai");
-      expect(options.map((option) => option.value)).toEqual(["low", "high", "xhigh", "ultra"]);
+      expect(options.map((option) => option.value)).toEqual(["low", "high", "xhigh", "max"]);
       expect(getModelBehaviorSummary("omnirush", reported, null, "omnirush.ai").value).toBe("high");
       expect(getModelBehaviorSummary("omnirush", reported, "medium", "omnirush.ai").value).toBe("high");
-      expect(getModelBehaviorSummary("omnirush", reported, "ultra", "omnirush.ai").value).toBe("ultra");
+      expect(getModelBehaviorSummary("omnirush", reported, "max", "omnirush.ai").value).toBe("max");
     }
   });
 

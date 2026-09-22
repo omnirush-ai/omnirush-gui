@@ -760,6 +760,8 @@ export default {
   "extensions.add_skill_body_placeholder": "# Instructions\n\nDescribe the complete workflow...",
   "extensions.add_skill_description_hint": "Explain when an agent should load this skill.",
   "extensions.add_skill_description_placeholder": "When should an agent use this skill?",
+  "extensions.add_skill_description_too_long": "Description must be 1024 characters or fewer.",
+  "extensions.create_workspace_skill_hint": "Saved to this workspace's .opencode/skills folder. The engine loads it for every session in this workspace after a reload.",
   "extensions.add_skill_name_invalid": "Name must use lowercase letters, numbers, and single hyphens only.",
   "extensions.add_command_body_label": "Command",
   "extensions.add_command_body_placeholder": "Write what this command should do when someone runs it...",

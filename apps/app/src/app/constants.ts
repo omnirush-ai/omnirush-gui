@@ -34,7 +34,7 @@ export function isOmniRushModelID(modelID: string): boolean {
  * Effort levels offered for every omnirush.ai model, in picker order. Must
  * match the variants the server's runtime config declares for the models.
  */
-export const OMNIRUSH_REASONING_EFFORTS = ["low", "high", "xhigh", "ultra"] as const;
+export const OMNIRUSH_REASONING_EFFORTS = ["low", "high", "xhigh", "max"] as const;
 
 export const SUGGESTED_PLUGINS: SuggestedPlugin[] = [];
 

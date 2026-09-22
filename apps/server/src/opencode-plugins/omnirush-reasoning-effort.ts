@@ -2,7 +2,7 @@
  * OmniRush.ai Reasoning Effort Plugin
  *
  * omnirush.ai models expose their effort levels as engine variants
- * (low / high / xhigh / ultra) whose options carry the client-facing
+ * (low / high / xhigh / max) whose options carry the client-facing
  * `reasoning_effort` value. The bundled OpenAI Responses adapter only reads
  * the camel-case `reasoningEffort` option, and it only emits
  * `reasoning.effort` for model ids it recognises as reasoning models, so the

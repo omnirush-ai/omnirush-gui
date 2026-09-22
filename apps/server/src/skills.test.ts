@@ -47,6 +47,81 @@ describe("deleteSkill", () => {
 });
 
 describe("listSkills", () => {
+  test("lists the engine's singular .opencode/skill/ layout next to .opencode/skills/", async () => {
+    // OpenCode's documented default is `.opencode/skill/<name>/SKILL.md`; the
+    // desktop writes the plural spelling. The engine loads both, so both must
+    // be visible (and deletable) in the GUI.
+    await writeSkill(join(workspace, ".opencode", "skills", "plural-skill"), "plural-skill");
+    await writeSkill(join(workspace, ".opencode", "skill", "singular-skill"), "singular-skill");
+
+    const listed = await listSkills(workspace, false);
+    expect(listed.map((skill) => skill.name).sort()).toEqual(["plural-skill", "singular-skill"]);
+    expect(listed.every((skill) => skill.scope === "project")).toBe(true);
+
+    const singularDir = join(workspace, ".opencode", "skill", "singular-skill");
+    await deleteSkill(workspace, "singular-skill");
+    expect(await exists(singularDir)).toBe(false);
+  });
+
+  test("keeps a skill whose frontmatter name differs from its folder, under the engine's name", async () => {
+    // The engine registers a skill by its frontmatter `name`; hiding it here
+    // would leave the model with a skill the GUI cannot show or remove.
+    const dir = join(workspace, ".opencode", "skills", "folder-name");
+    await writeSkill(dir, "frontmatter-name");
+
+    const listed = await listSkills(workspace, false);
+    expect(listed.map((skill) => skill.name)).toEqual(["frontmatter-name"]);
+    expect(listed[0]?.path).toBe(join(dir, "SKILL.md"));
+
+    await deleteSkill(workspace, "frontmatter-name");
+    expect(await exists(dir)).toBe(false);
+  });
+
+  test("resolves global skills through the engine's config directory env (OPENCODE_CONFIG_DIR / XDG_CONFIG_HOME / HOME)", async () => {
+    const previous = {
+      HOME: process.env.HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    };
+    const home = await mkdtemp(join(tmpdir(), "omnirush-skills-home-"));
+    const xdg = join(home, "xdg");
+    const explicit = join(home, "explicit-opencode");
+    try {
+      process.env.HOME = home;
+      delete process.env.XDG_CONFIG_HOME;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      await writeSkill(join(home, ".config", "opencode", "skills", "home-skill"), "home-skill");
+      await writeSkill(join(home, ".config", "opencode", "skill", "home-singular"), "home-singular");
+      await writeSkill(join(home, ".claude", "skills", "claude-global"), "claude-global");
+      await writeSkill(join(home, ".agents", "skills", "agents-global"), "agents-global");
+      expect((await listSkills(workspace, true)).map((skill) => `${skill.scope}:${skill.name}`).sort()).toEqual([
+        "global:agents-global",
+        "global:claude-global",
+        "global:home-singular",
+        "global:home-skill",
+      ]);
+      expect((await listSkills(workspace, false))).toEqual([]);
+
+      process.env.XDG_CONFIG_HOME = xdg;
+      await writeSkill(join(xdg, "opencode", "skills", "xdg-skill"), "xdg-skill");
+      const viaXdg = (await listSkills(workspace, true)).map((skill) => skill.name);
+      expect(viaXdg).toContain("xdg-skill");
+      expect(viaXdg).not.toContain("home-skill");
+
+      process.env.OPENCODE_CONFIG_DIR = explicit;
+      await writeSkill(join(explicit, "skills", "explicit-skill"), "explicit-skill");
+      const viaExplicit = (await listSkills(workspace, true)).map((skill) => skill.name);
+      expect(viaExplicit).toContain("explicit-skill");
+      expect(viaExplicit).not.toContain("xdg-skill");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("returns skills with malformed YAML frontmatter as visible errors", async () => {
     const validDir = join(workspace, ".opencode", "skills", "valid-skill");
     await writeSkill(validDir, "valid-skill");

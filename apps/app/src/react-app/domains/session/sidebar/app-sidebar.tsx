@@ -1000,13 +1000,23 @@ function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings:
   const usagePercent = usage && usage.tokenLimit > 0
     ? Math.min(100, Math.max(0, (usage.usedTokens / usage.tokenLimit) * 100))
     : 0;
+  // The account server label ("omnirush.ai", "localhost:8090 (local API)")
+  // only matters while connected; a signed-out footer keeps the sign-in hint.
+  const serverHost = connected ? status?.gatewayHost?.trim() || null : null;
   const accountDetail = usage
-    ? `${compactTokenCount(usage.remainingTokens)} tokens left today`
+    ? `${compactTokenCount(usage.remainingTokens)} tokens left today${serverHost ? ` · ${serverHost}` : ""}`
     : connected
-      ? "omnirush.ai models ready"
+      ? serverHost
+        ? `connected to ${serverHost}`
+        : "omnirush.ai models ready"
       : status?.reauthorizationRequired
         ? "Sign in again to continue"
         : "Use omnirush.ai models with your account";
+  const accountTooltip = connected
+    ? serverHost
+      ? `${accountLabel} · ${serverHost}`
+      : accountLabel
+    : "Sign in to omnirush.ai";
 
   return (
     <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
@@ -1016,9 +1026,10 @@ function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings:
             type="button"
             className="h-auto min-h-12 py-1.5"
             onClick={onOpenAccountSettings}
-            tooltip={connected ? accountLabel : "Sign in to omnirush.ai"}
+            tooltip={accountTooltip}
             aria-label={connected ? `${accountLabel} account` : "Sign in to omnirush.ai"}
             data-testid="native-account-profile"
+            data-account-server={serverHost ?? undefined}
           >
             <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-accent">
               <UserRound className="size-3.5" />

@@ -129,7 +129,7 @@ describe("OmniRush gateway broker", () => {
     expect(invalidated).toBe(1);
   });
 
-  test("sends the ultra variant selected in the desktop as reasoning.effort", async () => {
+  test("sends the max variant selected in the desktop as reasoning.effort", async () => {
     const calls: UpstreamCall[] = [];
     const broker = capturingBroker(calls);
     // The engine merges the variant options and runs the plugin hooks before
@@ -140,16 +140,16 @@ describe("OmniRush gateway broker", () => {
     const hookInput = {
       agent: "omnirush",
       model: { id: "gpt-6-astra", providerID: "omnirush" },
-      message: { id: "msg_ultra", model: { variant: "ultra" } },
+      message: { id: "msg_max", model: { variant: "max" } },
     };
-    await hooks["chat.params"](hookInput, { options: { reasoning_effort: "ultra" } });
+    await hooks["chat.params"](hookInput, { options: { reasoning_effort: "max" } });
     await hooks["chat.headers"](hookInput, headers);
 
     const response = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }, headers.headers), "responses");
 
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.body).toEqual({ model: "gpt-6-astra", input: "test", reasoning: { effort: "ultra" } });
+    expect(calls[0]?.body).toEqual({ model: "gpt-6-astra", input: "test", reasoning: { effort: "max" } });
     expect(calls[0]?.headers.has("x-omnirush-reasoning-effort")).toBe(false);
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer access-token");
   });
@@ -157,15 +157,15 @@ describe("OmniRush gateway broker", () => {
   test("keeps an effort the engine already emitted and the legacy top-level field", async () => {
     const calls: UpstreamCall[] = [];
     const broker = capturingBroker(calls);
-    const header = { "x-omnirush-reasoning-effort": "ultra" };
+    const header = { "x-omnirush-reasoning-effort": "max" };
 
-    await broker.handle(gatewayRequest({ model: "gpt-5.6-sol", input: "a", reasoning: { effort: "ultra", summary: "auto" } }, header), "responses");
+    await broker.handle(gatewayRequest({ model: "gpt-5.6-sol", input: "a", reasoning: { effort: "max", summary: "auto" } }, header), "responses");
     await broker.handle(gatewayRequest({ model: "gpt-5.6-sol", input: "b", reasoning_effort: "high" }, header), "responses/compact");
     await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "c" }, { "x-omnirush-reasoning-effort": "turbo" }), "responses");
     await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "d" }), "responses");
 
     expect(calls.map((call) => call.body)).toEqual([
-      { model: "gpt-5.6-sol", input: "a", reasoning: { effort: "ultra", summary: "auto" } },
+      { model: "gpt-5.6-sol", input: "a", reasoning: { effort: "max", summary: "auto" } },
       { model: "gpt-5.6-sol", input: "b", reasoning_effort: "high" },
       { model: "gpt-6-astra", input: "c" },
       { model: "gpt-6-astra", input: "d" },

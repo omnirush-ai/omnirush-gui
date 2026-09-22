@@ -2,6 +2,7 @@ import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { globalOpencodeConfigDir } from "@omnirush/paths";
 import type { SkillItem } from "./types.js";
 import { parseFrontmatter, buildFrontmatter } from "./frontmatter.js";
 import { exists } from "./utils.js";
@@ -10,6 +11,30 @@ import { ApiError } from "./errors.js";
 import { projectSkillsDir } from "./workspace-files.js";
 
 const INVALID_SKILL_DESCRIPTION = "ERROR: Invalid skill frontmatter";
+
+/**
+ * Directory names the engine scans for `<name>/SKILL.md` under a config root.
+ * OpenCode accepts both spellings (`.opencode/skill/` is its documented
+ * default, `.opencode/skills/` is what the desktop writes), so the GUI must
+ * list both or it hides skills the model can already use.
+ */
+const OPENCODE_SKILL_DIR_NAMES = ["skills", "skill"] as const;
+
+/**
+ * Global OpenCode config directory as the engine resolves it (honours
+ * OPENCODE_CONFIG_DIR and XDG_CONFIG_HOME before falling back to ~/.config).
+ */
+function globalSkillConfigDir(): string {
+  return globalOpencodeConfigDir({ env: process.env });
+}
+
+/** Home directory with the same env precedence @omnirush/paths uses (HOME / USERPROFILE first). */
+function resolveHomeDir(): string {
+  const fromEnv = process.platform === "win32"
+    ? process.env.USERPROFILE?.trim() || process.env.HOME?.trim()
+    : process.env.HOME?.trim();
+  return fromEnv || homedir();
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -118,7 +143,10 @@ async function parseSkillEntry(
       error: message,
     };
   }
-  const name = typeof data.name === "string" ? data.name : entryName;
+  // The engine registers a skill under its frontmatter `name`, not its folder
+  // name, so a folder/frontmatter mismatch is still a live skill for the model
+  // and must stay visible (and deletable) in the GUI under that name.
+  const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : entryName;
   const description = typeof data.description === "string" ? data.description : "";
   const trigger =
     typeof data.trigger === "string"
@@ -132,7 +160,6 @@ async function parseSkillEntry(
   } catch {
     return null;
   }
-  if (name !== entryName) return null;
   return {
     name,
     description,
@@ -189,18 +216,21 @@ export async function listSkills(workspaceRoot: string, includeGlobal: boolean):
   const roots = await findWorkspaceRoots(workspaceRoot);
   const dirs: { dir: string; scope: "project" | "global" }[] = [];
   for (const root of roots) {
-    const opencodeDir = join(root, ".opencode", "skills");
-    const claudeDir = join(root, ".claude", "skills");
-    dirs.push({ dir: opencodeDir, scope: "project" });
-    dirs.push({ dir: claudeDir, scope: "project" });
+    for (const dirName of OPENCODE_SKILL_DIR_NAMES) {
+      dirs.push({ dir: join(root, ".opencode", dirName), scope: "project" });
+    }
+    dirs.push({ dir: join(root, ".claude", "skills"), scope: "project" });
   }
 
   if (includeGlobal) {
-    const globalOmniRush = join(homedir(), ".config", "opencode", "skills");
-    const globalClaude = join(homedir(), ".claude", "skills");
-    const globalAgents = join(homedir(), ".agents", "skills");
-    const globalAgentLegacy = join(homedir(), ".agent", "skills");
-    dirs.push({ dir: globalOmniRush, scope: "global" });
+    const globalConfigDir = globalSkillConfigDir();
+    for (const dirName of OPENCODE_SKILL_DIR_NAMES) {
+      dirs.push({ dir: join(globalConfigDir, dirName), scope: "global" });
+    }
+    const home = resolveHomeDir();
+    const globalClaude = join(home, ".claude", "skills");
+    const globalAgents = join(home, ".agents", "skills");
+    const globalAgentLegacy = join(home, ".agent", "skills");
     dirs.push({ dir: globalClaude, scope: "global" });
     dirs.push({ dir: globalAgents, scope: "global" });
     dirs.push({ dir: globalAgentLegacy, scope: "global" });

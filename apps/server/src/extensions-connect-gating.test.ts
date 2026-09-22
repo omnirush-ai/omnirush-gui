@@ -256,10 +256,10 @@ describe("Connect-aware legacy extension gating", () => {
     const actions = await listActions(base);
     expect(actionKeys(actions)).toEqual([
       "google-workspace/status",
-      "openai-image-generation/image_generate",
-      "openai-image-generation/status",
       "omnirush-cloud-uploads/drive_upload_file",
       "omnirush-cloud-uploads/gmail_create_draft_with_attachments",
+      "openai-image-generation/image_generate",
+      "openai-image-generation/status",
     ]);
 
     const gated = await callCalendarListEvents(base);

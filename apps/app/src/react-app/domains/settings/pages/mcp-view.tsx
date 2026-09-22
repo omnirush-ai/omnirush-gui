@@ -120,6 +120,11 @@ import {
 } from "../library";
 import { AddLibraryItemModal } from "./add-library-item-modal";
 import { LibraryAddControl } from "./library-add-control";
+import {
+  LibraryAddWorkspaceSkillModal,
+  workspaceSkillAddAvailable,
+  type WorkspaceSkillDraft,
+} from "./library-add-workspace-skill-modal";
 import { libraryConnectorCues } from "../library-connector-cues";
 import {
   denAddUrl,
@@ -225,6 +230,13 @@ export type McpViewProps = {
     kind: LibraryAuthorableKind,
     input: CreateLibraryItemInput,
   ) => Promise<string>;
+  /**
+   * Write a workspace-local skill (`.opencode/skills/<name>/SKILL.md`) through
+   * the local server. Offered when the member is not signed in to OmniRush.ai
+   * Cloud, so an omnirush.ai account alone can still add skills. Must reject
+   * with a message when the server refuses the skill.
+   */
+  createWorkspaceSkill?: (input: WorkspaceSkillDraft) => Promise<void>;
   /** Reload composer command and agent lists after a Library create. */
   onLibraryListsRefresh?: () => Promise<void> | void;
   onRefresh?: () => void;
@@ -461,6 +473,7 @@ export function McpView(props: McpViewProps) {
   const [layout, setLayout] = useState<ExtensionLayout>(readExtensionLayout);
   const [claudeImportOpen, setClaudeImportOpen] = useState(false);
   const [addAuthorableKind, setAddAuthorableKind] = useState<LibraryAuthorableKind | null>(null);
+  const [workspaceSkillModalOpen, setWorkspaceSkillModalOpen] = useState(false);
   const [connectorPresets, setConnectorPresets] = useState<DenExternalMcpPreset[]>([]);
   const [, setExtensionStateVersion] = useState(0);
 
@@ -580,17 +593,29 @@ export function McpView(props: McpViewProps) {
     cloudSignedIn: libraryCloudSignedIn,
     allowManageExtensions: props.allowManageExtensions,
   };
+  // Without a Cloud organization the Den authoring modal is unavailable, but a
+  // workspace-local skill file is still a first-class engine input.
+  const workspaceSkillAdd = workspaceSkillAddAvailable({
+    cloudSignedIn: libraryCloudSignedIn,
+    allowManageExtensions: props.allowManageExtensions,
+    canCreateWorkspaceSkill: typeof props.createWorkspaceSkill === "function",
+  });
   const libraryAddKinds = libraryAddKindsForFilter(filter).filter((kind) => (
     libraryAddAction(kind, libraryAddOptions) !== null
+      || (kind === "skill" && workspaceSkillAdd)
   ));
   const skillAddPending = filter === "skill"
     && !libraryCloudSignedIn
+    && !workspaceSkillAdd
     && denAuth.status === "checking"
     && Boolean(cloudSession.authToken.trim())
     && Boolean(cloudSession.activeOrganization?.id.trim());
   const handleAddKind = (kind: LibraryAddKind) => {
     const action = libraryAddAction(kind, libraryAddOptions);
-    if (!action) return;
+    if (!action) {
+      if (kind === "skill" && workspaceSkillAdd) setWorkspaceSkillModalOpen(true);
+      return;
+    }
     if (action.type === "workspace-mcp") {
       setAddMcpModalOpen(true);
       return;
@@ -1647,6 +1672,21 @@ export function McpView(props: McpViewProps) {
         onClose={() => setAddAuthorableKind(null)}
         onCreate={handleCreateLibraryItem}
       />
+
+      {props.createWorkspaceSkill ? (
+        <LibraryAddWorkspaceSkillModal
+          open={workspaceSkillModalOpen}
+          workspaceRoot={props.selectedWorkspaceRoot}
+          busy={props.busy}
+          onClose={() => setWorkspaceSkillModalOpen(false)}
+          onCreate={props.createWorkspaceSkill}
+          onCreated={() => {
+            // The store's skill refresh lands the new card; keep the user on
+            // the skills list so it appears in place.
+            setInventoryFilter("skill");
+          }}
+        />
+      ) : null}
 
       {props.allowManageExtensions && props.previewClaudePlugin && props.installClaudePlugin ? (
         <ClaudePluginImportModal

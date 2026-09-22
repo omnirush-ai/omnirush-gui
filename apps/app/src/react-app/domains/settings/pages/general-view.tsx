@@ -12,6 +12,8 @@ import {
   UserRoundCheck,
 } from "lucide-react";
 
+import type { OmniRushAccountSignOutReason } from "@omnirush/types/desktop-ipc";
+
 import { t } from "../../../../i18n";
 import type { SettingsTab } from "../../../../app/types";
 import {
@@ -85,6 +87,41 @@ function compactTokenCount(value: number): string {
   }).format(Math.max(0, value));
 }
 
+export type AccountSignOutOutcome = {
+  remoteRevoked: boolean;
+  /** Absent when the desktop bridge predates the outcome reasons. */
+  reason?: OmniRushAccountSignOutReason;
+};
+
+/**
+ * The settings line shown after sign-out. It names the account server and
+ * says exactly what happened to the remote device session.
+ */
+export function accountSignOutMessage(outcome: AccountSignOutOutcome, server?: string | null): string {
+  const host = server?.trim() || "the account server";
+  switch (outcome.reason) {
+    case "revoked":
+      return `Signed out on this device and revoked its device session on ${host}.`;
+    case "already_revoked":
+      return `Signed out on this device. ${host} had already revoked this device session.`;
+    case "endpoint_missing":
+      return `Signed out on this device. ${host} has no remote sign-out endpoint, so the device session was not revoked there.`;
+    case "unreachable":
+      return `Signed out on this device. ${host} could not be reached, so the device session was not revoked there.`;
+    default:
+      return outcome.remoteRevoked
+        ? `Signed out on this device and revoked its device session on ${host}.`
+        : `Signed out on this device. The device session on ${host} could not be revoked.`;
+  }
+}
+
+/** Names the account server the app is connected to, or will connect to on sign-in. */
+export function accountServerLine(account: Pick<NativeAccountStatus, "connected" | "gatewayHost">): string | null {
+  const host = account.gatewayHost?.trim();
+  if (!host) return null;
+  return account.connected ? `Connected to ${host}` : `Account server: ${host}`;
+}
+
 export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   const [account, setAccount] = useState<NativeAccountStatus | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
@@ -111,16 +148,22 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
 
   async function signOutAccount() {
     setAccountBusy(true);
+    // Capture the server before sign-out: afterwards the status reports the
+    // default server the next sign-in will use, not the one just left.
+    const server = account?.gatewayHost ?? null;
     try {
       const result = await omnirushAccountSignOut();
-      setAccount({ connected: false, gatewayConfigured: account?.gatewayConfigured ?? false });
-      setAccountMessage(result.remoteRevoked
-        ? "Signed out on this Mac and revoked its device session."
-        : "Signed out on this Mac. The remote session could not be reached.");
+      const next = await omnirushAccountStatus().catch(() => null);
+      setAccount(next ?? { connected: false, gatewayConfigured: account?.gatewayConfigured ?? false });
+      setAccountMessage(accountSignOutMessage(result, server));
+    } catch (error) {
+      setAccountMessage(error instanceof Error ? error.message : "The account could not be signed out.");
     } finally {
       setAccountBusy(false);
     }
   }
+
+  const serverLine = account ? accountServerLine(account) : null;
 
   return (
     <div className="w-full max-w-3xl space-y-8">
@@ -139,6 +182,11 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
               </div>
               {account.connected && account.email ? (
                 <div className="truncate text-[11px] text-dls-secondary">{account.email}</div>
+              ) : null}
+              {serverLine ? (
+                <div className="truncate text-[11px] text-dls-secondary" data-testid="account-server">
+                  {serverLine}
+                </div>
               ) : null}
               <div className="mt-0.5 text-[11px] text-dls-secondary">
                 {accountMessage || (account.connected
@@ -165,7 +213,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                 Sign out
               </button>
             ) : (
-              <button type="button" disabled={accountBusy || !account.gatewayConfigured} onClick={() => void connectAccount()} className="rounded-lg bg-dls-text px-3 py-2 text-[12px] font-medium text-dls-bg disabled:opacity-50">
+              <button type="button" disabled={accountBusy || !account.gatewayConfigured} onClick={() => void connectAccount()} className="rounded-lg bg-dls-text px-3 py-2 text-[12px] font-medium text-dls-background disabled:opacity-50">
                 {accountBusy ? "Waiting…" : "Sign in"}
               </button>
             )}

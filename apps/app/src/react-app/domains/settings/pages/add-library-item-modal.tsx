@@ -203,7 +203,7 @@ function McpConnectionFields(props: {
         </button>
       ) : null}
       {connection.authType === "oauth" && connection.useOAuthClient ? (
-        <div className="flex flex-col gap-3 rounded-xl bg-dls-bg p-4">
+        <div className="flex flex-col gap-3 rounded-xl bg-dls-background p-4">
           <p className="text-xs text-dls-secondary">{t("extensions.add_mcp_oauth_app_hint")}</p>
           <TextInput
             label={t("extensions.add_mcp_oauth_client_id_label")}
@@ -488,7 +488,7 @@ export function AddLibraryItemModal(props: AddLibraryItemModalProps) {
                 </div>
               </div>
               {components.length === 0 ? (
-                <div className="mt-4 rounded-3xl border border-dashed border-dls-border bg-dls-bg px-6 py-10 text-center text-sm text-dls-secondary">
+                <div className="mt-4 rounded-3xl border border-dashed border-dls-border bg-dls-background px-6 py-10 text-center text-sm text-dls-secondary">
                   {t("extensions.add_plugin_inside_empty")}
                 </div>
               ) : (

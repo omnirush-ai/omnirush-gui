@@ -70,11 +70,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS Intel
+          - name: macOS Apple Silicon
             runner: macos-14
             platform: macos
-            target: x86_64-apple-darwin
-            builder_args: --mac --x64
+            target: aarch64-apple-darwin
+            builder_args: --mac --arm64
           - name: Windows x64
             runner: windows-2022
             platform: windows

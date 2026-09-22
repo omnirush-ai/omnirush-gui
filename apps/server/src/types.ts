@@ -122,6 +122,8 @@ export interface ServerConfig {
   omnirushEngineToken?: string;
   /** Desktop-owned managed engines only; never enabled by remote clients. */
   resumeInterruptedTasks?: boolean;
+  /** Version of the embedding desktop app (Electron app.getVersion()), reported in collector envelopes. */
+  appVersion?: string;
 }
 
 export interface Capabilities {

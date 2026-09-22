@@ -137,14 +137,13 @@ describe("omnirush runtime config file", () => {
       low: { reasoning_effort: "low" },
       high: { reasoning_effort: "high" },
       xhigh: { reasoning_effort: "xhigh" },
-      ultra: { reasoning_effort: "ultra" },
+      max: { reasoning_effort: "max" },
       // The engine merges its own OpenAI reasoning defaults into a model's
       // variants and only drops entries marked disabled; these keep the
       // resolved picker at exactly the four levels above.
       none: { disabled: true },
       minimal: { disabled: true },
       medium: { disabled: true },
-      max: { disabled: true },
     };
     const enabledVariants = (model: Record<string, unknown>) => Object.entries(model.variants as Record<string, { disabled?: boolean }>)
       .filter(([, options]) => options.disabled !== true)
@@ -155,7 +154,7 @@ describe("omnirush runtime config file", () => {
     expect(models["gpt-5.6-sol"]).toMatchObject({ name: "GPT-5.6 Sol", reasoning: true, tool_call: true, variants });
     for (const id of ["gpt-6-astra", "gpt-5.6-sol"]) {
       expect(Object.keys(models[id]!.variants as object).sort()).toEqual(Object.keys(variants).sort());
-      expect(enabledVariants(models[id]!)).toEqual(["low", "high", "xhigh", "ultra"]);
+      expect(enabledVariants(models[id]!)).toEqual(["low", "high", "xhigh", "max"]);
     }
     expect(parsed.model).toBe("omnirush/gpt-6-astra");
     expect((parsed.plugin as string[]).some((plugin) => /omnirush-reasoning-effort\.(?:ts|js)$/.test(plugin))).toBe(true);

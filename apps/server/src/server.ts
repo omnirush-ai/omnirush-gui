@@ -21,6 +21,7 @@ import {
   type RolloverReason,
 } from "./engine-pool.js";
 import { withEngineDirectoryFence } from "./engine-directory-fence.js";
+import { decodeEngineRouteParam, decodeEngineRoutePath } from "./engine-route-path.js";
 import {
   clearEngineInstanceReaperForConfig,
   EngineInstanceReaper,
@@ -154,7 +155,8 @@ import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
 import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provider-sync.js";
 import { createEngineV2Preview, type EngineV2Preview } from "./engine-v2-preview.js";
-import { WorkspaceCollector } from "./workspace-collector.js";
+import { MAX_COLLECTOR_CHILD_SESSION_DEPTH, WorkspaceCollector, type CollectorSessionModel } from "./workspace-collector.js";
+import { collectPromptAttachments, promptBodyForTrace } from "./collector-attachments.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
@@ -186,6 +188,7 @@ const AGENT_DIAGNOSTICS_MAX_REQUEST_BYTES = 256 * 1024;
 const AGENT_DIAGNOSTICS_DEFAULT_BODY_DEADLINE_MS = 2_000;
 const AGENT_DIAGNOSTICS_ERROR_FLUSH_MS = 25;
 const COMMAND_ADMISSION_CAPACITY = 10_000;
+const COLLECTOR_EVENTS_MAX_REQUEST_BYTES = 1024 * 1024;
 const COMMAND_ADMISSION_TTL_MS = 24 * 60 * 60 * 1_000;
 
 function rethrowMcpAppHostError(error: unknown): never {
@@ -603,10 +606,17 @@ function parseWorkspaceOpencodeV2Mount(pathname: string): { workspaceId: string;
   return { workspaceId: decodeURIComponent(workspaceId), restPath };
 }
 
+/**
+ * The proxy path as the engine's router will match it: prefix stripped and
+ * percent-escapes decoded the way Hono decodes them (engine-route-path.ts).
+ * Every path classifier below runs on this form so an encoded spelling of a
+ * route ("/session/:id/prompt%5Fasync") is classified exactly like the plain
+ * one the engine turns it into. The request is still forwarded verbatim.
+ */
 function normalizeOpencodeProxyPath(proxyPath: string): string {
   const raw = (proxyPath ?? "").trim() || "/";
   const withoutPrefix = raw.startsWith("/opencode") ? raw.slice("/opencode".length) : raw;
-  const normalized = (withoutPrefix || "/").replace(/\/+$/, "");
+  const normalized = decodeEngineRoutePath(withoutPrefix || "/").replace(/\/+$/, "");
   return normalized || "/";
 }
 
@@ -614,12 +624,8 @@ function proxiedSessionReadId(method: string, proxyPath: string): string | null 
   if (method.toUpperCase() !== "GET" && method.toUpperCase() !== "HEAD") return null;
   const match = normalizeOpencodeProxyPath(proxyPath).match(/^\/(?:api\/)?session\/([^/]+)(?:\/|$)/);
   if (!match?.[1]) return null;
-  let sessionId = match[1];
-  try {
-    sessionId = decodeURIComponent(sessionId);
-  } catch {
-    // Let OpenCode answer malformed identifiers without weakening the gate for valid IDs.
-  }
+  // Let OpenCode answer malformed identifiers without weakening the gate for valid IDs.
+  const sessionId = decodeEngineRouteParam(match[1]) ?? match[1];
   return sessionId === "status" ? null : sessionId;
 }
 
@@ -731,25 +737,110 @@ function isCollectorPromptDispatch(method: string, proxyPath: string): boolean {
   return method === "POST" && /^\/session\/[^/]+\/(?:prompt_async|prompt|command)$/.test(normalizeOpencodeProxyPath(proxyPath));
 }
 
+/**
+ * Sign-in gate. A local workspace only runs sessions the omnirush.ai
+ * collector can capture; without a connected account the engine prompt
+ * dispatch is refused so no uncollected turn ever starts. The bypass exists
+ * for development and tests, and requires both flags on purpose.
+ */
+export const OMNIRUSH_ACCOUNT_REQUIRED_MESSAGE = "Sign in to omnirush.ai from Settings to start a session.";
+
+export function collectorGateBypassed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.OMNIRUSH_DEV_MODE === "1" && env.OMNIRUSH_COLLECTION_OPTIONAL === "1";
+}
+
+function collectorAccountRequiredResponse(): Response {
+  return jsonResponse({ error: "omnirush_account_required", message: OMNIRUSH_ACCOUNT_REQUIRED_MESSAGE }, 403);
+}
+
+function optionalTraceString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * The model the turn ran on, read from the turn's first assistant message
+ * (providerID / modelID / mode or agent). The user message that opened the
+ * turn supplies the variant and agent when the assistant record lacks them.
+ */
+function turnModelFromMessages(messages: unknown): CollectorSessionModel | null {
+  if (!Array.isArray(messages)) return null;
+  let userVariant: string | null = null;
+  let userAgent: string | null = null;
+  for (const message of messages) {
+    if (!isRecord(message)) continue;
+    const info = isRecord(message.info) ? message.info : message;
+    const model = isRecord(info.model) ? info.model : {};
+    if (info.role === "user") {
+      userVariant = optionalTraceString(info.variant) ?? optionalTraceString(model.variant) ?? userVariant;
+      userAgent = optionalTraceString(info.agent) ?? userAgent;
+      continue;
+    }
+    if (info.role !== "assistant") continue;
+    const providerId = optionalTraceString(info.providerID) ?? optionalTraceString(model.providerID);
+    const modelId = optionalTraceString(info.modelID) ?? optionalTraceString(model.modelID);
+    if (!providerId && !modelId) continue;
+    return {
+      provider_id: providerId,
+      model_id: modelId,
+      variant: optionalTraceString(info.variant) ?? optionalTraceString(model.variant) ?? userVariant,
+      agent: optionalTraceString(info.agent) ?? optionalTraceString(info.mode) ?? userAgent,
+    };
+  }
+  return null;
+}
+
+/**
+ * Walks the task-tool subagent tree below a settled root session: one
+ * "session.child" event per child carrying only the messages that are new
+ * since that child's checkpoint, recursively for grandchildren.
+ */
+async function captureChildSessions(input: {
+  collector: WorkspaceCollector;
+  rootSessionId: string;
+  parentSessionId: string;
+  depth: number;
+  fetchJson: (path: string, maxBytes: number) => Promise<unknown>;
+  checkpoints: Record<string, string>;
+  known: Set<string>;
+  visited: Set<string>;
+}): Promise<void> {
+  if (input.depth > MAX_COLLECTOR_CHILD_SESSION_DEPTH) return;
+  const children = await input.fetchJson(`/session/${encodeURIComponent(input.parentSessionId)}/children`, 1024 * 1024);
+  if (!Array.isArray(children)) return;
+  for (const child of children.slice(0, 200)) {
+    const childId = isRecord(child) && typeof child.id === "string" && child.id ? child.id : null;
+    if (!childId || childId === input.rootSessionId || input.visited.has(childId)) continue;
+    input.visited.add(childId);
+    const messages = await input.fetchJson(`/session/${encodeURIComponent(childId)}/message`, 8 * 1024 * 1024);
+    const list = Array.isArray(messages) ? messages : [];
+    const delta = newTraceMessages(list, input.checkpoints[childId]);
+    const newMessages = Array.isArray(delta) ? delta : [];
+    if (newMessages.length > 0 || !input.known.has(childId)) {
+      input.collector.recordChildSession(input.rootSessionId, {
+        childSessionId: childId,
+        parentSessionId: input.parentSessionId,
+        title: isRecord(child) ? optionalTraceString(child.title) : null,
+        agent: turnModelFromMessages(list)?.agent ?? null,
+        messages: newMessages,
+        lastMessageId: traceMessageId(list.at(-1)),
+      });
+    }
+    await captureChildSessions({ ...input, parentSessionId: childId, depth: input.depth + 1 });
+  }
+}
+
+// The session a collected engine request belongs to, read from the decoded
+// route path exactly as the engine reads its `:id` parameter. Null when the
+// path is not a session request or its identifier is malformed.
 function collectorSessionId(proxyPath: string): string | null {
   const match = normalizeOpencodeProxyPath(proxyPath).match(/^\/session\/([^/]+)\/(?:prompt_async|prompt|command|abort|interrupt)$/);
-  if (!match?.[1]) return null;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return null;
-  }
+  return match?.[1] ? decodeEngineRouteParam(match[1]) : null;
 }
 
 function collectorDeletedSessionId(method: string, proxyPath: string): string | null {
   if (method !== "DELETE") return null;
   const match = normalizeOpencodeProxyPath(proxyPath).match(/^\/session\/([^/]+)$/);
-  if (!match?.[1]) return null;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return null;
-  }
+  return match?.[1] ? decodeEngineRouteParam(match[1]) : null;
 }
 
 function collectorRequestPayload(body: ArrayBuffer | undefined): unknown {
@@ -891,9 +982,40 @@ function observeCollectedSession(input: {
           void input.collector.setSessionCheckpoint(input.sessionId, lastId);
         }
       }
+      const model = turnModelFromMessages(delta);
+      if (model) input.collector.recordSessionModel(input.sessionId, model);
+      try {
+        await captureChildSessions({
+          collector: input.collector,
+          rootSessionId: input.sessionId,
+          parentSessionId: input.sessionId,
+          depth: 1,
+          fetchJson: async (path, maxBytes) => {
+            const response = await loopbackFetch(buildOpencodeProxyUrl(input.baseUrl, path, input.search), {
+              headers,
+              signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]),
+            });
+            if (!response.ok) {
+              await response.body?.cancel().catch(() => undefined);
+              return null;
+            }
+            return readCollectorResponse(response, maxBytes);
+          },
+          checkpoints: await input.collector.childCheckpoints(input.sessionId),
+          known: new Set(await input.collector.childSessionIds(input.sessionId)),
+          visited: new Set([input.sessionId]),
+        });
+      } catch (error) {
+        if (observer.controller.signal.aborted) throw error;
+        input.collector.recordTrace(input.sessionId, "session.children_failed", {
+          error: error instanceof Error ? error.message : "unknown",
+        });
+      }
       input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
-      input.collector.flushTrace(input.sessionId, { messages: delta });
+      // The turn snapshot runs first so the artifacts it discovers are part of
+      // the trace flushed right behind it.
       input.collector.captureSnapshot(input.sessionId, "turn_completed");
+      input.collector.flushTrace(input.sessionId, { messages: delta });
       return;
     }
     input.collector.recordTrace(input.sessionId, "session.observer_timeout");
@@ -942,10 +1064,15 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       : undefined,
     engineToken: config.omnirushEngineToken,
   });
+  // Under the desktop the embedding host passes the Electron app version
+  // through ServerConfig; a standalone server reports its own version.
+  const appVersion = config.appVersion?.trim()
+    || process.env.OMNIRUSH_APP_VERSION?.trim()
+    || SERVER_VERSION;
   const workspaceCollector = new WorkspaceCollector({
     ...(gatewayBroker.enabled ? { upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed) } : {}),
     stateDir: runtimeStorageDir(config),
-    appVersion: SERVER_VERSION,
+    appVersion,
     engineVersion: OPENCODE_VERSION,
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
@@ -1081,7 +1208,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
           proxyBaseUrl = workspace.baseUrl?.trim() || undefined;
           const send = () => proxyOpencodeRequest({ config, request, url, workspace, proxyPath: mount.restPath,
             recoverySignal: taskRecovery?.owns(request) ? request.signal : undefined });
-          const response = taskRecovery ? await taskRecovery.forward(workspace, "v1", mount.restPath, request, send) : await send();
+          const response = taskRecovery ? await taskRecovery.forward(workspace, "v1", decodeEngineRoutePath(mount.restPath), request, send) : await send();
           return finalize(response);
         } catch (error) {
           const requestCanceled = isExpectedRequestCancellation(error, request.signal);
@@ -1124,7 +1251,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
             connection,
             recoverySignal: taskRecovery?.owns(request) ? request.signal : undefined,
           });
-          const response = taskRecovery ? await taskRecovery.forward(workspace, "v2", mount.restPath, request, send) : await send();
+          const response = taskRecovery ? await taskRecovery.forward(workspace, "v2", decodeEngineRoutePath(mount.restPath), request, send) : await send();
           return finalize(response);
         } catch (error) {
           const requestCanceled = isExpectedRequestCancellation(error, request.signal);
@@ -1196,7 +1323,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
             await assertWorkspaceOwnsProxiedSessionRead(config, workspace, request.method, url.pathname);
           }
           const send = () => proxyOpencodeRequest({ config, request, url, workspace });
-          const response = taskRecovery && workspace ? await taskRecovery.forward(workspace, "v1", url.pathname, request, send) : await send();
+          const response = taskRecovery && workspace ? await taskRecovery.forward(workspace, "v1", decodeEngineRoutePath(url.pathname), request, send) : await send();
           return finalize(response);
         } catch (error) {
           const requestCanceled = isExpectedRequestCancellation(error, request.signal);
@@ -1724,8 +1851,22 @@ export async function proxyOpencodeRequest(input: {
   if (method !== "GET" && method !== "HEAD") {
     ensureWritable(input.config);
   }
+  if (workspace && workspace.workspaceType !== "remote" && isCollectorPromptDispatch(method, proxyPath)) {
+    const gateCollector = workspaceCollectorsByServer.get(input.config);
+    if (!gateCollector?.enabled && !collectorGateBypassed()) {
+      // Drain the unread body so the client's keep-alive connection stays usable.
+      await input.request.arrayBuffer().catch(() => undefined);
+      return collectorAccountRequiredResponse();
+    }
+    if (collectorSessionId(proxyPath) === null) {
+      // A dispatch is either refused or collected: a session identifier the
+      // engine cannot decode would start a turn the collector cannot attribute.
+      await input.request.arrayBuffer().catch(() => undefined);
+      return jsonResponse({ error: "invalid_session_id", message: "The session identifier is not valid." }, 400);
+    }
+  }
   const pool = workspace?.workspaceType === "remote" ? null : enginePoolForConfig(input.config);
-  const route = pool?.routeRequest(method, proxyPath) ?? null;
+  const route = pool?.routeRequest(method, decodeEngineRoutePath(proxyPath)) ?? null;
   const baseUrl = route?.target.baseUrl ??
     (workspace ? resolveWorkspaceOpencodeConnection(input.config, workspace).baseUrl?.trim() ?? "" : "");
   if (!baseUrl) {
@@ -1767,12 +1908,19 @@ export async function proxyOpencodeRequest(input: {
   const deletedCollectedSessionId = collectorDeletedSessionId(method, proxyPath);
   if (collector?.enabled && collectedSessionId && workspace && workspace.workspaceType !== "remote") {
     collector.startSession(collectedSessionId, workspace.id, workspace.path);
+    const requestPayload = collectorRequestPayload(body);
     collector.recordTrace(collectedSessionId, "engine.request", {
       method,
       path: normalizeOpencodeProxyPath(proxyPath),
-      body: collectorRequestPayload(body),
+      body: promptBodyForTrace(requestPayload),
     });
-    if (isCollectorPromptDispatch(method, proxyPath)) collector.captureSnapshot(collectedSessionId, "prompt");
+    if (isCollectorPromptDispatch(method, proxyPath)) {
+      collector.captureSnapshot(collectedSessionId, "prompt");
+      const promptSessionId = collectedSessionId;
+      void collectPromptAttachments(requestPayload, workspace.path).then((attachments) => {
+        for (const attachment of attachments) collector.recordAttachment(promptSessionId, attachment);
+      }).catch(() => undefined);
+    }
   }
   if (pool && method === "GET" && isEngineEventPath(proxyPath)) {
     // An open engine event stream means this workspace is visible somewhere in
@@ -3222,6 +3370,48 @@ function createRoutes(
     return jsonResponse(await cloudProviderSync.run(typeof body.reason === "string" ? body.reason : undefined));
   });
 
+  // Engine plugins (the browser tools) report what they saw for the owning
+  // session. The evaluation token the managed-policy plugin already holds
+  // authenticates the call; a client token works too.
+  addRoute(routes, "POST", "/collector/events", "policy", async (ctx) => {
+    const declared = Number(ctx.request.headers.get("content-length") ?? "0");
+    if (Number.isFinite(declared) && declared > COLLECTOR_EVENTS_MAX_REQUEST_BYTES) {
+      throw new ApiError(413, "collector_events_too_large", "Collector event payload is too large");
+    }
+    const raw = await ctx.request.text();
+    if (raw.length > COLLECTOR_EVENTS_MAX_REQUEST_BYTES) {
+      throw new ApiError(413, "collector_events_too_large", "Collector event payload is too large");
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new ApiError(400, "invalid_json", "Invalid JSON body");
+    }
+    if (!isRecord(body) || typeof body.sessionId !== "string" || !Array.isArray(body.events)) {
+      throw new ApiError(400, "invalid_payload", "sessionId and events are required");
+    }
+    const ancestry = Array.isArray(body.ancestry)
+      ? body.ancestry.filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, 8)
+      : [];
+    const collector = workspaceCollectorsByServer.get(config);
+    if (!collector?.enabled) return jsonResponse({ ok: true, recorded: 0 });
+    // A subagent's tool call belongs to the root session the collector tracks.
+    const target = [body.sessionId, ...ancestry].find((id) => collector.hasSession(id));
+    if (!target) return jsonResponse({ ok: true, recorded: 0 });
+    let recorded = 0;
+    for (const event of body.events.slice(0, 32)) {
+      if (!isRecord(event) || event.type !== "web.visit" || !isRecord(event.data) || typeof event.data.url !== "string") continue;
+      const visit = {
+        url: event.data.url,
+        title: typeof event.data.title === "string" ? event.data.title : null,
+        text: typeof event.data.text === "string" ? event.data.text : null,
+      };
+      if (collector.recordWebVisit(target, visit)) recorded += 1;
+    }
+    return jsonResponse({ ok: true, recorded });
+  });
+
   addRoute(routes, "GET", "/managed-policy", "client", async () =>
     jsonResponse({ policy: await managedDesktopPolicy(config).current() }));
   addRoute(routes, "POST", "/managed-policy/evaluate", "policy", async (ctx) => {
@@ -3518,7 +3708,7 @@ function createRoutes(
     requireClientScope,
     resolveWorkspace,
     reloadOpencodeEngine: (routeConfig, workspace) =>
-      reloadOpencodeEngine(routeConfig, workspace, engineMcpServerState, { reason: "operation_route" }),
+      reloadOpencodeEngine(routeConfig, workspace, engineMcpServerState, { reason: "operation_route", manual: true }),
   });
 
   registerUiControlRoutes({ routes, jsonResponse, readJsonBody, requireClientScope });
@@ -4793,7 +4983,7 @@ async function reloadOpencodeEngine(
   config: ServerConfig,
   workspace: WorkspaceInfo,
   serverState?: EngineMcpServerState,
-  options?: { awaitPostRefreshSync?: boolean; forceStandby?: boolean; reason?: RolloverReason },
+  options?: { awaitPostRefreshSync?: boolean; forceStandby?: boolean; reason?: RolloverReason; manual?: boolean },
 ): Promise<void> {
   const pool = enginePoolForConfig(config);
   if (pool) {
@@ -4802,6 +4992,10 @@ async function reloadOpencodeEngine(
       workspace,
       awaitPostRefreshSync: options?.awaitPostRefreshSync,
       forceStandby: options?.forceStandby,
+      // User-initiated reloads must bypass the fingerprint guard: skill files
+      // are not part of the runtime fingerprint, so an unchanged fingerprint
+      // would otherwise turn "Reload" into a no-op after editing a skill.
+      manual: options?.manual === true,
     });
     return;
   }

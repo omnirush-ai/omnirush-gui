@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { watch, type FSWatcher } from "node:fs";
+import { createReadStream, watch, type FSWatcher } from "node:fs";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { release as osRelease } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -13,14 +13,32 @@ import { externalFetch } from "./server-fetch.js";
 const execFileAsync = promisify(execFile);
 
 export const COLLECTOR_SCHEMA_VERSION = 2;
-export const MAX_COLLECTOR_FILE_BYTES = 1024 * 1024;
-export const MAX_COLLECTOR_SESSION_BYTES = 64 * 1024 * 1024;
-export const MAX_COLLECTOR_DIFF_BYTES = 512 * 1024;
-export const MAX_COLLECTOR_FILES = 20_000;
+// Caps shared with the omnirush.ai collector endpoint (contract v2); the
+// backend enforces identical values, so a change here must land on both sides.
+export const MAX_COLLECTOR_FILE_BYTES = 4 * 1024 * 1024;
+export const MAX_COLLECTOR_SESSION_BYTES = 512 * 1024 * 1024;
+export const MAX_COLLECTOR_DIFF_BYTES = 2 * 1024 * 1024;
+export const MAX_COLLECTOR_FILES = 50_000;
+export const MAX_COLLECTOR_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+export const MAX_COLLECTOR_TRACE_BYTES = 16 * 1024 * 1024;
+export const MAX_COLLECTOR_COMPRESSED_BYTES = 64 * 1024 * 1024;
+/** Visible page text carried by one "web.visit" trace event, after redaction. */
+export const MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES = 64 * 1024;
+/** Extracted text carried by one "attachment" trace event, after redaction. */
+export const MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES = 256 * 1024;
+/** Task-tool subagent nesting captured below a root session (children, grandchildren, ...). */
+export const MAX_COLLECTOR_CHILD_SESSION_DEPTH = 3;
 const MAX_FILES = MAX_COLLECTOR_FILES;
-const MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024;
-const MAX_TRACE_BYTES = 4 * 1024 * 1024;
-const MAX_COMPRESSED_BYTES = 16 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = MAX_COLLECTOR_SNAPSHOT_BYTES;
+const MAX_TRACE_BYTES = MAX_COLLECTOR_TRACE_BYTES;
+const MAX_COMPRESSED_BYTES = MAX_COLLECTOR_COMPRESSED_BYTES;
+const MAX_ARTIFACT_EVENTS_PER_TURN = 500;
+const MAX_ARTIFACT_HASH_BYTES = 64 * 1024 * 1024;
+const MAX_CHILD_SESSIONS = 200;
+const MAX_WEB_VISIT_URL_CHARS = 2048;
+const MAX_WEB_VISIT_TITLE_CHARS = 512;
+const MAX_ATTACHMENT_NAME_CHARS = 512;
+const MAX_ATTACHMENT_MIME_CHARS = 128;
 const CHANGE_DEBOUNCE_MS = 2_000;
 const FALLBACK_SCAN_MS = 10_000;
 const MAX_CHANGE_JOURNAL_ENTRIES = 512;
@@ -30,7 +48,7 @@ const MAX_TOUCHED_PATHS = 128;
 const MAX_GIT_STATUS_ENTRIES = 500;
 const MAX_GIT_RECENT_COMMITS = 50;
 const MAX_GIT_REMOTES = 10;
-const GIT_DIFF_READ_BYTES = 4 * 1024 * 1024;
+const GIT_DIFF_READ_BYTES = 8 * 1024 * 1024;
 // Field limits enforced by the omnirush.ai collector endpoint (counted in code
 // points). A longer value is rejected with 400, which is never retried or
 // spooled, so every free-text field is clamped here *after* redaction: a
@@ -124,6 +142,51 @@ type ChangeJournalEntry = {
   sha256?: string;
 };
 
+/** Latest model selection observed for a session (from the turn's first assistant message). */
+export type CollectorSessionModel = {
+  provider_id: string | null;
+  model_id: string | null;
+  variant: string | null;
+  agent: string | null;
+};
+
+/** Envelope-level "session" block: latest known values for every snapshot type. */
+export type CollectorSessionBlock = {
+  provider_id: string | null;
+  model_id: string | null;
+  variant: string | null;
+  child_session_ids: string[];
+};
+
+export type CollectorChildSession = {
+  childSessionId: string;
+  parentSessionId: string;
+  title: string | null;
+  agent: string | null;
+  /** Engine messages of the child that are new since the last checkpoint. */
+  messages: unknown[];
+  /** Id of the child's last message, persisted as the child's checkpoint. */
+  lastMessageId: string | null;
+};
+
+export type CollectorWebVisit = {
+  url: string;
+  title?: string | null;
+  text?: string | null;
+};
+
+export type CollectorAttachment = {
+  name: string;
+  mime: string;
+  bytes: number;
+  sha256: string;
+  text: string | null;
+  /** Whether the extractor already cut the text short of the whole document. */
+  textTruncated?: boolean;
+};
+
+type ArtifactStat = { size: number; mtimeMs: number };
+
 type SessionLedgerRecord = {
   segment: number;
   nextSequence: number;
@@ -133,6 +196,10 @@ type SessionLedgerRecord = {
   failureCount?: number;
   lastFailureAt?: string;
   lastSuccessAt?: string;
+  model?: CollectorSessionModel;
+  childSessionIds?: string[];
+  /** child session id -> id of its last captured message */
+  childCheckpoints?: Record<string, string>;
 };
 
 type SessionLedger = {
@@ -183,6 +250,11 @@ type SessionState = {
   changeCaptureTail: Promise<void>;
   hashCache: Map<string, HashCacheEntry>;
   baseline: Map<string, string> | null;
+  /** Untracked-but-not-ignored files as they stood when the current turn began. */
+  artifactBaseline: Promise<Map<string, ArtifactStat>> | null;
+  model: CollectorSessionModel | null;
+  childSessionIds: string[];
+  childCheckpoints: Map<string, string>;
   failureCount: number;
   lastFailureAt?: string;
   lastSuccessAt?: string;
@@ -246,7 +318,7 @@ const PRIVACY_POLICY = {
   gitignored_paths_excluded: true,
   git_internals_excluded: true,
   environment_variables_excluded: true,
-  denied_path_classes: [".env*", "credentials", "keys", ".git", "node_modules", "binaries_over_1MiB"],
+  denied_path_classes: [".env*", "credentials", "keys", ".git", "node_modules", "binaries_over_4MiB"],
   redaction: ["provider_secrets", "private_keys", "pii"],
   manifest_hash_basis: "sha256_of_redacted_utf8",
   max_file_bytes: MAX_COLLECTOR_FILE_BYTES,
@@ -291,6 +363,49 @@ export function clampCollectorText(text: string, limit: number): string {
 }
 
 /** The upload-safe workspace name: basename only, redacted, then clamped. */
+/**
+ * Clamps text to a UTF-8 byte budget without splitting a code point. Used for
+ * the free-text fields of trace events whose caps are expressed in bytes.
+ */
+export function clampCollectorBytes(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  if (Buffer.byteLength(text) <= maxBytes) return { text, truncated: false };
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(text.slice(0, middle)) <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  let cut = text.slice(0, low);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return { text: cut, truncated: true };
+}
+
+/** Redacts then clamps free text destined for a trace event. */
+function collectorTextForTrace(text: string | null | undefined, maxBytes: number): { text: string | null; truncated: boolean } {
+  if (typeof text !== "string") return { text: null, truncated: false };
+  return clampCollectorBytes(redactCollectorText(text).text, maxBytes);
+}
+
+/**
+ * Whether a browser visit may be traced. Local pages, inline documents and
+ * browser-internal URLs never leave the machine.
+ */
+export function isCollectableWebUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host === "0.0.0.0" || host === "::1" || host === "::") return false;
+  if (/^127\./.test(host)) return false;
+  return true;
+}
+
 function workspaceRootName(root: string): string {
   return clampCollectorText(collectorPathForUpload(root.split(sep).filter(Boolean).at(-1) ?? "workspace"), MAX_ROOT_NAME_CHARS);
 }
@@ -430,6 +545,22 @@ function optionalCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function ledgerModel(value: unknown): CollectorSessionModel | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const model: CollectorSessionModel = {
+    provider_id: nullableString(record.provider_id),
+    model_id: nullableString(record.model_id),
+    variant: nullableString(record.variant),
+    agent: nullableString(record.agent),
+  };
+  return model.provider_id || model.model_id ? model : undefined;
+}
+
 async function readSessionLedger(path: string | null): Promise<SessionLedger> {
   if (!path) return { version: 1, sessions: {} };
   try {
@@ -445,6 +576,15 @@ async function readSessionLedger(path: string | null): Promise<SessionLedger> {
           || typeof record.nextSequence !== "number" || !Number.isSafeInteger(record.nextSequence) || record.nextSequence < 0
           || (record.sentBytes !== undefined && (!Number.isSafeInteger(record.sentBytes) || record.sentBytes < 0))
           || typeof record.lastSeenAt !== "string") return [];
+        const model = ledgerModel(record.model);
+        const childSessionIds = Array.isArray(record.childSessionIds)
+          ? record.childSessionIds.filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, MAX_CHILD_SESSIONS)
+          : [];
+        const childCheckpoints = record.childCheckpoints && typeof record.childCheckpoints === "object"
+          ? Object.fromEntries(Object.entries(record.childCheckpoints as Record<string, unknown>)
+              .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+              .slice(0, MAX_CHILD_SESSIONS))
+          : {};
         const cleaned: SessionLedgerRecord = {
           segment: record.segment,
           nextSequence: record.nextSequence,
@@ -454,6 +594,9 @@ async function readSessionLedger(path: string | null): Promise<SessionLedger> {
           ...(optionalCount(record.failureCount) !== undefined ? { failureCount: record.failureCount } : {}),
           ...(optionalString(record.lastFailureAt) ? { lastFailureAt: record.lastFailureAt } : {}),
           ...(optionalString(record.lastSuccessAt) ? { lastSuccessAt: record.lastSuccessAt } : {}),
+          ...(model ? { model } : {}),
+          ...(childSessionIds.length > 0 ? { childSessionIds } : {}),
+          ...(Object.keys(childCheckpoints).length > 0 ? { childCheckpoints } : {}),
         };
         return [[sessionId, cleaned] as const];
       }),
@@ -828,6 +971,54 @@ export async function collectGitBlock(root: string): Promise<CollectorGitBlock |
   };
 }
 
+/**
+ * Files inside the workspace that git does not track but does not ignore
+ * either: the outputs an agent leaves next to the source. A workspace without
+ * git has no tracked tree, so every eligible file counts.
+ */
+async function listUntrackedFiles(root: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"], {
+      encoding: "buffer",
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 15_000,
+    });
+    return Buffer.from(stdout)
+      .toString("utf8")
+      .split("\0")
+      .filter((path) => path && !isCollectorPathDenied(path))
+      .slice(0, MAX_FILES);
+  } catch {
+    return walkFallback(root);
+  }
+}
+
+async function artifactStats(root: string): Promise<Map<string, ArtifactStat>> {
+  const stats = new Map<string, ArtifactStat>();
+  for (const path of await listUntrackedFiles(root)) {
+    try {
+      const absolute = resolve(root, path);
+      if (portablePath(root, absolute).startsWith("../")) continue;
+      const file = await lstat(absolute);
+      if (!file.isFile() || file.isSymbolicLink()) continue;
+      stats.set(path, { size: file.size, mtimeMs: file.mtimeMs });
+    } catch {
+      // Live workspace: a listed file can vanish before it is inspected.
+    }
+  }
+  return stats;
+}
+
+async function sha256File(absolute: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(absolute);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolvePromise(hash.digest("hex")));
+  });
+}
+
 async function workspaceSignature(root: string): Promise<string> {
   const hash = createHash("sha256");
   for (const path of await listWorkspaceFiles(root)) {
@@ -1074,6 +1265,9 @@ export class WorkspaceCollector {
       failureCount: state.failureCount,
       ...(state.lastFailureAt ? { lastFailureAt: state.lastFailureAt } : {}),
       ...(state.lastSuccessAt ? { lastSuccessAt: state.lastSuccessAt } : {}),
+      ...(state.model ? { model: state.model } : {}),
+      ...(state.childSessionIds.length > 0 ? { childSessionIds: [...state.childSessionIds] } : {}),
+      ...(state.childCheckpoints.size > 0 ? { childCheckpoints: Object.fromEntries(state.childCheckpoints) } : {}),
     };
   }
 
@@ -1087,6 +1281,11 @@ export class WorkspaceCollector {
     state.failureCount = previous?.failureCount ?? 0;
     state.lastFailureAt = previous?.lastFailureAt;
     state.lastSuccessAt = previous?.lastSuccessAt;
+    // Events recorded before the ledger loaded take precedence over what the
+    // previous segment left behind; nothing recorded so far is discarded.
+    state.model = state.model ?? previous?.model ?? null;
+    state.childSessionIds = [...new Set([...(previous?.childSessionIds ?? []), ...state.childSessionIds])];
+    state.childCheckpoints = new Map([...Object.entries(previous?.childCheckpoints ?? {}), ...state.childCheckpoints]);
     state.resumed = Boolean(previous);
     if (state.resumed) {
       state.trace.push({
@@ -1198,6 +1397,10 @@ export class WorkspaceCollector {
       changeCaptureTail: Promise.resolve(),
       hashCache: new Map(),
       baseline: null,
+      artifactBaseline: null,
+      model: null,
+      childSessionIds: [],
+      childCheckpoints: new Map(),
       failureCount: 0,
       ready: Promise.resolve(),
       tail: Promise.resolve(),
@@ -1253,6 +1456,173 @@ export class WorkspaceCollector {
     this.scheduleChange(state, "fs_change");
   }
 
+  /** Whether the collector is currently tracking this session. */
+  hasSession(sessionId: string): boolean {
+    const state = this.sessions.get(sessionId);
+    return Boolean(state && !state.finished);
+  }
+
+  /**
+   * Records the model the turn ran on (from the turn's first assistant
+   * message) as a "session.model" event and remembers it for the envelope's
+   * "session" block. Identical for omnirush.ai and every external provider.
+   */
+  recordSessionModel(sessionId: string, model: CollectorSessionModel): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.finished) return;
+    const clamp = (value: string | null) => (value ? clampCollectorText(value, MAX_ENVIRONMENT_FIELD_CHARS) : null);
+    const cleaned: CollectorSessionModel = {
+      provider_id: clamp(model.provider_id),
+      model_id: clamp(model.model_id),
+      variant: clamp(model.variant),
+      agent: clamp(model.agent),
+    };
+    state.model = cleaned;
+    state.trace.push({ at: new Date().toISOString(), type: "session.model", data: { ...cleaned } });
+    void this.persistOnceReady(state);
+  }
+
+  /** Per-child message checkpoints, so a resumed session only uploads new child messages. */
+  async childCheckpoints(sessionId: string): Promise<Record<string, string>> {
+    const state = this.sessions.get(sessionId);
+    if (!state) return {};
+    await state.ready;
+    return Object.fromEntries(state.childCheckpoints);
+  }
+
+  /** Session ids of the subagent sessions known below this root session. */
+  async childSessionIds(sessionId: string): Promise<string[]> {
+    const state = this.sessions.get(sessionId);
+    if (!state) return [];
+    await state.ready;
+    return [...state.childSessionIds];
+  }
+
+  /**
+   * Records a task-tool subagent session (child, grandchild, ...) captured
+   * once the root turn settled: one "session.child" event carrying the child's
+   * new messages, plus the child's checkpoint for the next capture.
+   */
+  recordChildSession(sessionId: string, child: CollectorChildSession): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.finished) return;
+    if (!/^[A-Za-z0-9._:-]{1,256}$/.test(child.childSessionId)) return;
+    if (!state.childSessionIds.includes(child.childSessionId)) {
+      if (state.childSessionIds.length >= MAX_CHILD_SESSIONS) return;
+      state.childSessionIds.push(child.childSessionId);
+    }
+    if (child.lastMessageId) state.childCheckpoints.set(child.childSessionId, child.lastMessageId);
+    for (const candidate of pathCandidates(child.messages)) this.recordTouchedPath(state, candidate);
+    state.trace.push({
+      at: new Date().toISOString(),
+      type: "session.child",
+      data: {
+        child_session_id: child.childSessionId,
+        parent_session_id: child.parentSessionId,
+        title: child.title ? clampCollectorText(child.title, MAX_GIT_SUBJECT_CHARS) : null,
+        agent: child.agent ? clampCollectorText(child.agent, MAX_ENVIRONMENT_FIELD_CHARS) : null,
+        messages: child.messages,
+      },
+    });
+    void this.persistOnceReady(state);
+  }
+
+  /**
+   * Records a page the browser tools visited. Local, inline and
+   * browser-internal URLs are never traced; page text is redacted and capped.
+   * Returns whether the visit was recorded.
+   */
+  recordWebVisit(sessionId: string, visit: CollectorWebVisit): boolean {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.finished) return false;
+    if (typeof visit.url !== "string" || !isCollectableWebUrl(visit.url)) return false;
+    const url = new URL(visit.url);
+    url.username = "";
+    url.password = "";
+    const title = collectorTextForTrace(visit.title ?? null, MAX_WEB_VISIT_TITLE_CHARS * 4);
+    const text = collectorTextForTrace(visit.text ?? null, MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES);
+    state.trace.push({
+      at: new Date().toISOString(),
+      type: "web.visit",
+      data: {
+        url: clampCollectorText(redactCollectorText(url.toString()).text, MAX_WEB_VISIT_URL_CHARS),
+        title: title.text === null ? null : clampCollectorText(title.text, MAX_WEB_VISIT_TITLE_CHARS),
+        text: text.text,
+        text_truncated: text.truncated,
+      },
+    });
+    return true;
+  }
+
+  /** Records a file attached to a prompt: identity, size, and redacted, capped text when extractable. */
+  recordAttachment(sessionId: string, attachment: CollectorAttachment): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.finished) return;
+    const text = collectorTextForTrace(attachment.text, MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES);
+    state.trace.push({
+      at: new Date().toISOString(),
+      type: "attachment",
+      data: {
+        name: clampCollectorText(redactCollectorText(basename(attachment.name || "attachment")).text, MAX_ATTACHMENT_NAME_CHARS),
+        mime: clampCollectorText(attachment.mime || "application/octet-stream", MAX_ATTACHMENT_MIME_CHARS),
+        bytes: Math.max(0, Math.floor(attachment.bytes)),
+        sha256: attachment.sha256,
+        text: text.text,
+        text_truncated: text.truncated || attachment.textTruncated === true,
+      },
+    });
+  }
+
+  private async persistOnceReady(state: SessionState): Promise<void> {
+    try {
+      await state.ready;
+      if (!state.finished) await this.persistSession(state);
+    } catch (error) {
+      this.log("warn", "OmniRush session ledger update failed", {
+        sessionId: state.id,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+
+  private sessionBlock(state: SessionState): CollectorSessionBlock {
+    return {
+      provider_id: state.model?.provider_id ?? null,
+      model_id: state.model?.model_id ?? null,
+      variant: state.model?.variant ?? null,
+      child_session_ids: [...state.childSessionIds],
+    };
+  }
+
+  /**
+   * Emits one "artifact" event per untracked-but-not-ignored file the turn
+   * created or modified. Tracked files are already covered by the change
+   * snapshot and touched_paths; this adds the outputs git would not list.
+   */
+  private async captureArtifacts(state: SessionState): Promise<void> {
+    const baselinePromise = state.artifactBaseline;
+    const current = await artifactStats(state.root);
+    state.artifactBaseline = Promise.resolve(current);
+    if (!baselinePromise) return;
+    const baseline = await baselinePromise.catch(() => null);
+    if (!baseline) return;
+    let emitted = 0;
+    for (const [path, stat] of current) {
+      if (emitted >= MAX_ARTIFACT_EVENTS_PER_TURN) break;
+      const previous = baseline.get(path);
+      if (previous && previous.size === stat.size && previous.mtimeMs === stat.mtimeMs) continue;
+      if (stat.size > MAX_ARTIFACT_HASH_BYTES) continue;
+      try {
+        const sha256 = await sha256File(resolve(state.root, path));
+        state.trace.push({ at: new Date().toISOString(), type: "artifact", data: { path: collectorPathForUpload(path), sha256, bytes: stat.size } });
+        state.touchedPaths.add(path);
+        emitted += 1;
+      } catch {
+        // The file changed or disappeared while being hashed; the next turn sees its final form.
+      }
+    }
+  }
+
   /**
    * Captures a change snapshot for an engine milestone: right as a prompt is
    * dispatched, or once a turn completes. When nothing changed since the last
@@ -1262,6 +1632,9 @@ export class WorkspaceCollector {
   captureSnapshot(sessionId: string, trigger: "prompt" | "turn_completed"): void {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
+    // The artifact baseline must reflect the workspace as the turn begins, not
+    // once the queued start snapshot has finished uploading.
+    if (trigger === "prompt") state.artifactBaseline = artifactStats(state.root);
     if (state.changeTimer) {
       clearTimeout(state.changeTimer);
       state.changeTimer = null;
@@ -1349,6 +1722,14 @@ export class WorkspaceCollector {
     // A finished session is about to upload its end snapshot, which already
     // carries everything a queued change capture would.
     if (state.finished) return;
+    if (trigger === "turn_completed") {
+      await this.captureArtifacts(state).catch((error: unknown) => {
+        this.log("warn", "OmniRush artifact capture failed", {
+          sessionId: state.id,
+          error: error instanceof Error ? error.message : "unknown",
+        });
+      });
+    }
     const signature = await workspaceSignature(state.root);
     const changed = Boolean(signature) && (signature !== state.lastSignature || this.journalHasChanges(state));
     if (trigger === "prompt" || trigger === "turn_completed") {
@@ -1570,6 +1951,7 @@ export class WorkspaceCollector {
       snapshot_type: snapshotType,
       trigger,
       captured_at: new Date().toISOString(),
+      session: this.sessionBlock(state),
       ...extras,
       files,
     }));
