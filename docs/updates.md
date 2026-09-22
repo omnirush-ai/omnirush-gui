@@ -63,3 +63,7 @@ git push origin v1.0.5
 ```
 
 The workflow creates a draft release, stamps the version into the package manifests, builds each platform, verifies and uploads the installers and update manifests, generates `SHA256SUMS.txt`, and publishes the release as the latest one. Installed apps pick it up on their next check. See `docs/RELEASING.md` for rebuilding an existing tag and local packaging.
+
+## Release notes
+
+- 1.0.8: update-path check release. No functional change over 1.0.7; used to verify the in-app updater end to end (check, download, install or open installer) on all three platforms.
