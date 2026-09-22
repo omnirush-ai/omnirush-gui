@@ -47,24 +47,24 @@ describe("resolveDenBaseUrls", () => {
     expect(resolved.apiBaseUrl).toBe("https://api.den.example");
   });
 
-  test("derives the api subdomain for hosted omnirushlabs.com deployments", () => {
-    const resolved = resolveDenBaseUrls({ baseUrl: "https://staging.omnirushlabs.com" });
-    expect(resolved.baseUrl).toBe("https://staging.omnirushlabs.com");
-    expect(resolved.apiBaseUrl).toBe("https://api.staging.omnirushlabs.com");
+  test("never invents an api subdomain: only explicit api hosts skip the same-origin proxy", () => {
+    const resolved = resolveDenBaseUrls({ baseUrl: "https://app.den.example" });
+    expect(resolved.baseUrl).toBe("https://app.den.example");
+    expect(resolved.apiBaseUrl).toBe("https://app.den.example/api/den");
   });
 
-  test("uses the nested hosted API origin for the hosted web default", () => {
-    const resolved = resolveDenBaseUrls({ baseUrl: "https://app.omnirushlabs.com" });
-    expect(resolved.baseUrl).toBe("https://app.omnirushlabs.com");
-    expect(resolved.apiBaseUrl).toBe("https://api.app.omnirushlabs.com");
+  test("resolves to empty base URLs when no control plane is configured", () => {
+    const resolved = resolveDenBaseUrls({ baseUrl: null });
+    expect(resolved.baseUrl).toBe("");
+    expect(resolved.apiBaseUrl).toBe("");
   });
 });
 
 describe("getDenMcpUrl", () => {
-  test("never targets the bare web-app origin", () => {
+  test("never targets the bare web-app origin and is empty without a control plane", () => {
     const url = getDenMcpUrl();
     expect(isLegacyWebAppMcpUrl(url)).toBe(false);
-    expect(url.endsWith("/mcp")).toBe(true);
+    expect(url === "" || url.endsWith("/api/den/mcp")).toBe(true);
   });
 });
 
@@ -86,24 +86,15 @@ describe("isLegacyWebAppMcpUrl", () => {
 });
 
 describe("resolveCloudMcpResourceUrl", () => {
-  test("heals hosted minted web-app resources to the direct API origin", () => {
-    expect(resolveCloudMcpResourceUrl("https://app.omnirushlabs.com/mcp")).toBe(
-      "https://api.app.omnirushlabs.com/mcp",
-    );
-    expect(resolveCloudMcpResourceUrl("https://app.omnirushlabs.com/api/den/mcp")).toBe(
-      "https://api.app.omnirushlabs.com/mcp",
-    );
-  });
-
-  test("heals non-hosted legacy web-app resources through the /api/den proxy", () => {
+  test("heals legacy web-app resources through the /api/den proxy", () => {
     expect(resolveCloudMcpResourceUrl("https://app.omnirush.software/mcp/")).toBe(
       "https://app.omnirush.software/api/den/mcp",
     );
   });
 
   test("keeps healthy resources verbatim", () => {
-    expect(resolveCloudMcpResourceUrl("https://api.app.omnirushlabs.com/mcp")).toBe(
-      "https://api.app.omnirushlabs.com/mcp",
+    expect(resolveCloudMcpResourceUrl("https://api.den.example/mcp")).toBe(
+      "https://api.den.example/mcp",
     );
     expect(resolveCloudMcpResourceUrl("https://app.example.com/api/den/mcp")).toBe(
       "https://app.example.com/api/den/mcp",

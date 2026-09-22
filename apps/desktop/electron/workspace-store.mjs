@@ -116,21 +116,25 @@ const DEFAULT_DESKTOP_BOOTSTRAP_PATH = resolveDesktopBootstrapPath({ homeDir: os
 // LOCALAPPDATA and XDG_CONFIG_HOME. Keep reading that file when the canonical one
 // is missing so existing installs keep their deployment config.
 const LEGACY_DESKTOP_BOOTSTRAP_PATH = resolveLegacyDesktopBootstrapPath({ homeDir: os.homedir() });
-const HOSTED_DESKTOP_WEB_URL = "https://app.omnirushlabs.com";
-const HOSTED_DESKTOP_API_URL = "https://api.omnirushlabs.com";
+// The retired hosted control plane. omnirush.ai has no hosted Den, and these
+// hosts no longer resolve in DNS: older builds materialized them as the
+// bootstrap default, so a file that still points at them is a stale artifact,
+// not a configuration. It is rejected on read (defaults apply instead) and on
+// write, and nothing here ever contacts these hosts.
+const RETIRED_HOSTED_CONTROL_PLANE_HOSTS = new Set([
+  "omnirushlabs.com",
+  "app.omnirushlabs.com",
+  "api.omnirushlabs.com",
+  "api.app.omnirushlabs.com",
+]);
 
-function bootstrapUrlOrigin(value) {
-  if (typeof value !== "string" || !value.trim()) return "";
+export function isRetiredHostedControlPlaneUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return false;
   try {
-    return new URL(value.trim()).origin;
+    return RETIRED_HOSTED_CONTROL_PLANE_HOSTS.has(new URL(value.trim()).hostname.toLowerCase());
   } catch {
-    return value.trim().replace(/\/+$/, "");
+    return false;
   }
-}
-
-function isHostedDesktopBootstrapConfig(config) {
-  const baseUrlOrigin = bootstrapUrlOrigin(config?.baseUrl);
-  return baseUrlOrigin === HOSTED_DESKTOP_WEB_URL || baseUrlOrigin === HOSTED_DESKTOP_API_URL;
 }
 
 export function createWorkspaceStore({
@@ -210,6 +214,9 @@ export function createWorkspaceStore({
     const baseUrl = typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "";
     if (!baseUrl) {
       throw new Error("baseUrl is required");
+    }
+    if (isRetiredHostedControlPlaneUrl(baseUrl) || isRetiredHostedControlPlaneUrl(input?.apiBaseUrl)) {
+      throw new Error("baseUrl points at the retired hosted control plane, which no longer exists");
     }
 
     // The handoff grant is a one-time, short-lived (~5 min) desktop sign-in
@@ -310,8 +317,7 @@ export function createWorkspaceStore({
   }
 
   function compareDesktopBootstrapCandidates(left, right) {
-    const classDifference = Number(!isHostedDesktopBootstrapConfig(left.normalized)) - Number(!isHostedDesktopBootstrapConfig(right.normalized));
-    return classDifference || desktopBootstrapCandidateTimeMs(left) - desktopBootstrapCandidateTimeMs(right);
+    return desktopBootstrapCandidateTimeMs(left) - desktopBootstrapCandidateTimeMs(right);
   }
 
   async function readDesktopBootstrapCandidate(candidatePath) {

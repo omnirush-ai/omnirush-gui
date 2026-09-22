@@ -83,10 +83,14 @@ const ORG_SCOPE_HEADER = "x-omnirush-org-id";
 const DEFAULT_DEN_TIMEOUT_MS = 12_000;
 
 export const DEFAULT_DEN_AUTH_NAME = "omnirush.ai User";
+// omnirush.ai ships without a hosted Den control plane, so the build default
+// is empty: a Den base URL exists only when VITE_DEN_BASE_URL,
+// desktop-bootstrap.json, a connect link, the local gateway, or the user's
+// settings provide one. Nothing may contact a control plane by default.
 const BUILD_DEN_BASE_URL =
   (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_BASE_URL === "string"
     ? import.meta.env.VITE_DEN_BASE_URL
-    : "").trim() || "https://app.omnirushlabs.com";
+    : "").trim();
 const BUILD_DEN_REQUIRE_SIGNIN =
   (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_REQUIRE_SIGNIN === "string"
     ? /^(1|true|yes|on)$/i.test(import.meta.env.VITE_DEN_REQUIRE_SIGNIN.trim())
@@ -110,8 +114,7 @@ function readForceEnvDenSettings(): boolean {
     : false);
 }
 
-export const HOSTED_DEFAULT_DEN_BASE_URL = "https://app.omnirushlabs.com";
-export const HOSTED_DEFAULT_DEN_API_BASE_URL = "https://api.app.omnirushlabs.com";
+/** Empty unless the build pins a control plane (see BUILD_DEN_BASE_URL). */
 export const DEFAULT_DEN_BASE_URL = BUILD_DEN_BASE_URL;
 export const DEN_INFERENCE_PATH = "/dashboard/inference";
 
@@ -701,16 +704,23 @@ export function denOriginComparisonKey(input: string | null | undefined): string
 }
 
 /**
- * True when the effective Den control plane is not the hosted omnirush.ai Cloud
- * (app.omnirushlabs.com). Self-hosted deployments point the app at their own
- * control plane via VITE_DEN_BASE_URL or the desktop bootstrap config, so
- * hosted-only surfaces (e.g. omnirush.ai Models upsells) should stay hidden.
+ * omnirush.ai has no hosted Den: every configured control plane is
+ * self-hosted, so hosted-only surfaces (e.g. omnirush.ai Models upsells)
+ * always stay hidden.
  */
 export function isSelfHostedControlPlane(): boolean {
-  return (
-    denOriginComparisonKey(readDenSettings().baseUrl) !==
-    denOriginComparisonKey(HOSTED_DEFAULT_DEN_BASE_URL)
-  );
+  return true;
+}
+
+/**
+ * True when some source (build env, desktop-bootstrap.json, a connect link,
+ * the local gateway, or the user's settings) provides a Den control plane.
+ * Den-backed features must check this before making any request instead of
+ * assuming a default host exists.
+ */
+export function isDenControlPlaneConfigured(): boolean {
+  const settings = readDenSettings();
+  return Boolean(normalizeDenBaseUrl(settings.baseUrl) || normalizeDenBaseUrl(settings.apiBaseUrl));
 }
 
 export function getDenInferenceUrl(baseUrl?: string | null): string {
@@ -720,22 +730,6 @@ export function getDenInferenceUrl(baseUrl?: string | null): string {
 
 function isHostedWebAppHost(hostname: string): boolean {
   return hostname.trim().toLowerCase().startsWith("app.");
-}
-
-function directHostedApiMcpResourceUrl(input: URL): string | null {
-  if (input.protocol !== "https:" || input.hostname.toLowerCase() !== "app.omnirushlabs.com") {
-    return null;
-  }
-  const pathname = input.pathname.replace(/\/+$/, "");
-  if (pathname !== "/mcp" && pathname !== "/api/den/mcp") {
-    return null;
-  }
-  const output = new URL(input.toString());
-  output.hostname = "api.app.omnirushlabs.com";
-  output.pathname = "/mcp";
-  output.search = "";
-  output.hash = "";
-  return output.toString().replace(/\/+$/, "");
 }
 
 function stripDenApiBasePath(input: string | null | undefined): string | null {
@@ -775,27 +769,16 @@ function ensureDenApiBasePath(input: string | null | undefined): string | null {
   }
 }
 
-const HOSTED_DEN_APEX_HOST = "omnirushlabs.com";
-
-function isHostedDenHost(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
-  return normalized === HOSTED_DEN_APEX_HOST || normalized.endsWith(`.${HOSTED_DEN_APEX_HOST}`);
-}
-
 /**
  * The deterministic API origin for a Den base URL, without runtime config.
  *
- * Only two shapes are known ahead of time:
- * - An explicit API host (`api.*`) is already the API origin.
- * - Hosted omnirush.ai Cloud (`*.omnirushlabs.com`) serves its API at the
- *   `api.`-prefixed host.
- *
- * Every other deployment (self-hosted single host, localhost, tunnel or
- * sandbox preview hosts with single-label wildcard certificates) keeps the
- * same-origin `/api/den` proxy. Inventing `api.<host>` there produced
- * unreachable origins and TLS names the deployment's certificate cannot
- * cover, which broke desktop sign-in. Runtime config (`denApiUrl`) remains
- * the source of truth when present.
+ * Only one shape is known ahead of time: an explicit API host (`api.*`) is
+ * already the API origin. Every other deployment (self-hosted single host,
+ * localhost, tunnel or sandbox preview hosts with single-label wildcard
+ * certificates) keeps the same-origin `/api/den` proxy. Inventing `api.<host>`
+ * there produced unreachable origins and TLS names the deployment's
+ * certificate cannot cover, which broke desktop sign-in. Runtime config
+ * (`denApiUrl`) remains the source of truth when present.
  */
 function denApiOriginForDenBaseUrl(input: string | null | undefined): string | null {
   const normalized = normalizeDenBaseUrl(input);
@@ -804,12 +787,8 @@ function denApiOriginForDenBaseUrl(input: string | null | undefined): string | n
   try {
     const url = new URL(normalized);
     const hostname = url.hostname.toLowerCase();
-    const isExplicitApiHost = hostname === "api" || hostname.startsWith("api.");
-    if (!isExplicitApiHost && !isHostedDenHost(hostname)) {
+    if (hostname !== "api" && !hostname.startsWith("api.")) {
       return null;
-    }
-    if (!isExplicitApiHost) {
-      url.hostname = `api.${hostname}`;
     }
     url.pathname = "";
     url.search = "";
@@ -828,11 +807,13 @@ export function resolveDenBaseUrls(input: { baseUrl?: string | null; apiBaseUrl?
 
   if (gatewayOrigin) {
     const normalizedGatewayOrigin = normalizeDenBaseUrl(gatewayOrigin) ?? gatewayOrigin;
+    // Behind the gateway the Den web app is served from the gateway itself
+    // unless a different web base was configured explicitly.
     const gatewayBaseUrl =
       normalizedBaseUrl && denOriginComparisonKey(normalizedBaseUrl) !== denOriginComparisonKey(normalizedGatewayOrigin)
         ? normalizedBaseUrl
-        : DEFAULT_DEN_BASE_URL;
-    const baseUrl = stripDenApiBasePath(gatewayBaseUrl) ?? DEFAULT_DEN_BASE_URL;
+        : DEFAULT_DEN_BASE_URL || normalizedGatewayOrigin;
+    const baseUrl = stripDenApiBasePath(gatewayBaseUrl) ?? gatewayBaseUrl;
 
     return {
       baseUrl,
@@ -876,16 +857,20 @@ function resolveDenClientBaseUrls(options: { baseUrl: string; apiBaseUrl?: strin
   return resolveDenBaseUrls(options);
 }
 
-/** The MCP endpoint served from the resolved Den API base URL. */
+/**
+ * The MCP endpoint served from the resolved Den API base URL, or an empty
+ * string when no control plane is configured.
+ */
 export function getDenMcpUrl(): string {
   const { apiBaseUrl } = resolveDenBaseUrls(readDenBootstrapConfig());
+  if (!normalizeDenBaseUrl(apiBaseUrl)) return "";
   return `${apiBaseUrl.replace(/\/+$/, "")}/mcp`;
 }
 
 /**
  * Detects MCP URLs written by older builds that pointed `/mcp` at the bare
- * web-app origin (e.g. `https://app.omnirushlabs.com/mcp`). Nothing serves
- * MCP there — those entries fail with a 404 and must be reconfigured.
+ * web-app origin (e.g. `https://app.example.com/mcp`). Nothing serves MCP
+ * there — those entries fail with a 404 and must be reconfigured.
  */
 export function isLegacyWebAppMcpUrl(input: string | null | undefined): boolean {
   if (!input) return false;
@@ -900,10 +885,10 @@ export function isLegacyWebAppMcpUrl(input: string | null | undefined): boolean 
 /**
  * Resolve the URL the cloud MCP entry should connect to from a minted
  * token's `resource`. Older den-api builds mint the bare web-app origin
- * (`https://app.omnirushlabs.com/mcp`) where nothing serves MCP — heal
- * those to the `/api/den` proxy on the same origin instead of trusting
- * them verbatim. Returns null when the resource is unusable so callers
- * can keep their bootstrap-derived URL.
+ * (`https://app.example.com/mcp`) where nothing serves MCP — heal those to
+ * the `/api/den` proxy on the same origin instead of trusting them
+ * verbatim. Returns null when the resource is unusable so callers can keep
+ * their bootstrap-derived URL.
  */
 export function resolveCloudMcpResourceUrl(resource: string | null | undefined): string | null {
   const trimmed = resource?.trim() ?? "";
@@ -911,8 +896,6 @@ export function resolveCloudMcpResourceUrl(resource: string | null | undefined):
   try {
     const url = new URL(trimmed);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    const directHostedApiResource = directHostedApiMcpResourceUrl(url);
-    if (directHostedApiResource) return directHostedApiResource;
     if (isLegacyWebAppMcpUrl(trimmed)) {
       url.pathname = "/api/den/mcp";
     }
@@ -1007,11 +990,9 @@ async function resolveDenBootstrapConfigWithRuntimeApi(
   if (!isDesktopRuntime()) {
     return resolved;
   }
-  if (
-    resolved.source === "default"
-    && resolved.requireSignin === false
-    && resolved.baseUrl === HOSTED_DEFAULT_DEN_BASE_URL
-  ) {
+  // No control plane means no runtime-config probe: the empty default must
+  // never turn into a request.
+  if (!normalizeDenBaseUrl(resolved.baseUrl)) {
     return resolved;
   }
 
@@ -1261,7 +1242,7 @@ export async function initializeDenBootstrapConfig(): Promise<DenBootstrapConfig
   // recovery placeholder, not a real hosted selection, so retained
   // credentials remain quarantined until an authoritative read succeeds.
   desktopBootstrapConfig = resolveDenBootstrapConfig({
-    baseUrl: HOSTED_DEFAULT_DEN_BASE_URL,
+    baseUrl: BUILD_DEN_BASE_URL,
     requireSignin: BUILD_DEN_REQUIRE_SIGNIN,
   });
   desktopBootstrapResolution = "unresolved";
@@ -1393,7 +1374,11 @@ function canUseCloudWebAuthReturn(origin: string): boolean {
 }
 
 export function buildDenAuthUrl(baseUrl: string, mode: "sign-in" | "sign-up"): string {
-  const target = new URL(resolveDenBaseUrls(baseUrl).baseUrl);
+  const resolvedBaseUrl = resolveDenBaseUrls(baseUrl).baseUrl;
+  if (!normalizeDenBaseUrl(resolvedBaseUrl)) {
+    throw new Error("No Den control plane is configured. Set your organization's server URL before signing in.");
+  }
+  const target = new URL(resolvedBaseUrl);
   target.searchParams.set("mode", mode);
   const webReturnOrigin =
     isWebDeployment() && typeof window !== "undefined" ? window.location.origin : null;

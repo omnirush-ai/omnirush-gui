@@ -127,7 +127,6 @@ import {
   workspaceSetRuntimeActive,
   workspaceSetSelected,
   desktopBridge,
-  readDesktopDistributionInfo,
   type WorkspaceInfo,
   type WorkspaceList,
   revealDesktopItemInDir,
@@ -2536,12 +2535,14 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             installUpdateAndRestart={electronUpdaterState.installUpdateAndRestart}
             releaseChannel={local.prefs.releaseChannel ?? "stable"}
             onReleaseChannelChange={electronUpdaterState.setReleaseChannel}
+            // The shell reports an Alpha feed only for distributions that
+            // ship one; the public build never does.
             alphaChannelSupported={
               isElectronRuntime() &&
-              isMacPlatform() &&
-              readDesktopDistributionInfo().flavor === "public" &&
+              electronUpdaterState.alphaChannelSupported &&
               desktopConfig.config.allowAlphaUpdates !== false
             }
+            installMode={electronUpdaterState.installMode}
           />
         );
       case "environment":

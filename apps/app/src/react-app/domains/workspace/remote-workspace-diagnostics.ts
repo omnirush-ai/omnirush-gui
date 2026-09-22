@@ -104,7 +104,7 @@ function rejectedTokenMessage(target: RemoteWorkspaceConnectionTarget) {
 }
 
 function remoteSupportMessage(message: string) {
-  return `${message} Upgrade the omnirush.ai host and try again. If this continues, contact team@omnirushlabs.com.`;
+  return `${message} Upgrade the omnirush.ai host and try again. If this continues, open an issue at https://github.com/omnirush-ai/omnirush-gui/issues.`;
 }
 
 export function redactRemoteDiagnosticText(value: string): string {

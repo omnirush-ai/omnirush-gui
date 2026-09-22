@@ -41,11 +41,24 @@ function subscribeToDenSettings(onStoreChange: () => void) {
   return () => window.removeEventListener(denSettingsChangedEvent, onStoreChange);
 }
 
+function currentPageOrigin() {
+  if (typeof window === "undefined") return "";
+  const origin = window.location?.origin?.trim() ?? "";
+  return /^https?:\/\//i.test(origin) ? origin : "";
+}
+
+/**
+ * The Den billing page for omnirush.ai Web. The gate and the workspace
+ * takeover only render behind the gateway, where the Den web app is served
+ * from the page's own origin, so an unconfigured base URL resolves there
+ * instead of producing an empty link.
+ */
 export function denWebBillingUrl(baseUrl: string) {
+  const base = baseUrl.trim() || currentPageOrigin();
   try {
-    return new URL("/dashboard/web", baseUrl).toString();
+    return new URL("/dashboard/web", base).toString();
   } catch {
-    return baseUrl;
+    return base;
   }
 }
 

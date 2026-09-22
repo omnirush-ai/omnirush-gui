@@ -367,8 +367,8 @@ function RoadmapSectionBlock({ section }: { section: RoadmapSection }) {
 }
 
 export function OmniRushRoadmap({
-  feedbackHref = "https://omnirushlabs.com/feedback?source=roadmap",
-  docsHref = "https://omnirushlabs.com/docs",
+  feedbackHref = "https://github.com/omnirush-ai/omnirush-gui/issues/new?source=roadmap",
+  docsHref = "https://github.com/omnirush-ai/omnirush-gui#readme",
 }: {
   feedbackHref?: string
   docsHref?: string

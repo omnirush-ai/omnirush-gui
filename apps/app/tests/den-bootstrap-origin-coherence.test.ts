@@ -452,7 +452,9 @@ describe("den bootstrap and retained session origin coherence", () => {
 
     const config = await initializeDenBootstrapConfig();
 
-    expect(config.baseUrl.length).toBeGreaterThan(0);
+    // No build default control plane exists, so the placeholder stays empty
+    // instead of pointing at a host nobody configured.
+    expect(config.baseUrl).toBe("");
     expect(getDenBootstrapResolution()).toBe("unresolved");
     const settings = readDenSettings();
     expect(settings.authToken).toBeNull();

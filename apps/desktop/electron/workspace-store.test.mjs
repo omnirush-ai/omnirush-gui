@@ -505,7 +505,7 @@ test("explicit desktop bootstrap path still reads its configured bootstrap", asy
   });
 });
 
-test("desktop bootstrap prefers an older legacy organization config over a newer canonical hosted default", async () => {
+test("desktop bootstrap prefers an older legacy organization config over a newer canonical retired hosted default", async () => {
   await withIsolatedBootstrapStore(async ({ store, canonicalPath, legacyPath }) => {
     await writeBootstrapConfig(canonicalPath, {
       baseUrl: "https://app.omnirushlabs.com/api/den/",
@@ -528,7 +528,7 @@ test("desktop bootstrap prefers an older legacy organization config over a newer
   });
 });
 
-test("desktop bootstrap keeps an older canonical organization config over a newer legacy hosted default", async () => {
+test("desktop bootstrap keeps an older canonical organization config over a newer legacy retired hosted default", async () => {
   await withIsolatedBootstrapStore(async ({ store, canonicalPath, legacyPath }) => {
     await writeBootstrapConfig(canonicalPath, {
       baseUrl: "https://omnirush.organization.internal.example",
@@ -548,6 +548,28 @@ test("desktop bootstrap keeps an older canonical organization config over a newe
     assert.equal(config.fromFile, true);
     const persisted = JSON.parse(await readFile(canonicalPath, "utf8"));
     assert.equal(persisted.baseUrl, "https://omnirush.organization.internal.example");
+  });
+});
+
+test("a bootstrap that points at the retired hosted control plane is rejected on read and write", async () => {
+  await withIsolatedBootstrapStore(async ({ store, canonicalPath }) => {
+    await writeBootstrapConfig(canonicalPath, {
+      baseUrl: "https://app.omnirushlabs.com",
+      requireSignin: false,
+      writtenAt: "2026-07-10T13:00:00.000Z",
+    });
+
+    const config = await store.getDesktopBootstrapConfig();
+    assert.equal(config.fromFile, false);
+    assert.equal(config.baseUrl, store.readDesktopBootstrapConfigSync().baseUrl);
+    await assert.rejects(
+      store.setDesktopBootstrapConfig({ baseUrl: "https://api.app.omnirushlabs.com", requireSignin: false }),
+      /retired hosted control plane/,
+    );
+    await assert.rejects(
+      store.setDesktopBootstrapConfig({ baseUrl: "https://den.example.com", apiBaseUrl: "https://api.omnirushlabs.com", requireSignin: false }),
+      /retired hosted control plane/,
+    );
   });
 });
 
@@ -657,12 +679,12 @@ test("enterprise activation is preserved, required activation is overrideable, a
       forceRequireSignin: true,
     });
     await store.setDesktopBootstrapConfig({
-      baseUrl: "https://app.omnirushlabs.com",
+      baseUrl: "https://den.example.com",
       requireSignin: false,
       requireActivation: false,
       enterpriseActivation: {
         activatedAt: "2026-07-27T12:00:00.000Z",
-        denBaseUrl: "https://app.omnirushlabs.com",
+        denBaseUrl: "https://den.example.com",
       },
     });
 
@@ -671,7 +693,7 @@ test("enterprise activation is preserved, required activation is overrideable, a
     assert.equal(config.requireActivation, false);
     assert.deepEqual(config.enterpriseActivation, {
       activatedAt: "2026-07-27T12:00:00.000Z",
-      denBaseUrl: "https://app.omnirushlabs.com",
+      denBaseUrl: "https://den.example.com",
     });
     const persisted = JSON.parse(await readFile(canonicalPath, "utf8"));
     assert.equal(persisted.requireSignin, true);
@@ -685,7 +707,7 @@ test("enterprise activation is preserved, required activation is overrideable, a
 test("an omitted requireActivation is never materialized into the shared bootstrap file", async () => {
   await withIsolatedBootstrapStore(async ({ store, canonicalPath }) => {
     await store.setDesktopBootstrapConfig({
-      baseUrl: "https://app.omnirushlabs.com",
+      baseUrl: "https://den.example.com",
       requireSignin: true,
     });
 

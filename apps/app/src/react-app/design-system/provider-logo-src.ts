@@ -62,7 +62,7 @@ const PROVIDER_DOMAINS: Record<string, string> = {
   ollama: "ollama.com",
   xai: "x.ai",
   opencode: "opencode.ai",
-  omnirush: "omnirushlabs.com",
+  omnirush: "omnirush.ai",
   abacus: "abacus.ai",
 };
 

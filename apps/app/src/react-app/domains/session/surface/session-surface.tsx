@@ -177,7 +177,7 @@ function sanitizedInspectorDiagnosticText(value: string) {
 
 const MARKDOWN_PRIMITIVE_EVAL_TEXT = `# Markdown proof heading
 
-This shared renderer keeps **bold proof text**, inline \`renderMarkdownHtml\`, and [omnirush.ai link](https://omnirushlabs.com) readable in one message.
+This shared renderer keeps **bold proof text**, inline \`renderMarkdownHtml\`, and [omnirush.ai link](https://omnirush.ai) readable in one message.
 
 \`\`\`ts
 const pipeline = "shared markdown primitive";
@@ -363,7 +363,7 @@ function createChatTranscriptEvalMessages(sessionId: string) {
         },
         {
           type: "text",
-          text: "Your plan is drafted — details in [omnirush.ai](https://omnirushlabs.com). Search token: chat-transcript-proof.",
+          text: "Your plan is drafted — details in [omnirush.ai](https://omnirush.ai). Search token: chat-transcript-proof.",
         },
       ],
       // `completed` makes the finished turn fold behind a real

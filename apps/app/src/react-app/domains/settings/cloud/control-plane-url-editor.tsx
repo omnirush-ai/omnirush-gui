@@ -29,7 +29,7 @@ export function ControlPlaneUrlEditor(props: ControlPlaneUrlEditorProps) {
         label={props.label}
         value={props.value}
         onChange={(event) => props.onValueChange(event.currentTarget.value)}
-        placeholder={props.placeholder ?? DEFAULT_DEN_BASE_URL}
+        placeholder={props.placeholder ?? (DEFAULT_DEN_BASE_URL || "https://den.example.com")}
         hint={props.hint}
         disabled={props.disabled}
       />

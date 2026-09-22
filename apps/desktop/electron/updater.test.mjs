@@ -2,15 +2,22 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import {
+  detectDeveloperIdSignature,
+  developerIdSignatureFromCodesignOutput,
+  electronUpdaterFeedUrl,
+  macAppBundlePath,
+  normalizeElectronUpdaterChannel,
   preventPendingUpdaterInstall,
   registerUpdaterIpc,
+  selectManualInstallerArtifact,
   staleUpdaterStatePaths,
   targetedStableUpdaterFeed,
+  updaterFeedOptions,
 } from "./updater.mjs";
 import {
   cacheVerifiedRecoveryArtifact,
@@ -25,6 +32,8 @@ import {
 } from "./recovery.mjs";
 
 const fakeApp = { getPath: (key) => (key === "home" ? "/Users/test" : `/Users/test/${key}`) };
+const STABLE_FEED = "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download";
+const ALPHA_FEED = "https://updates.example.com/alpha";
 
 // Unpackaged builds resolve their version from package.json, so release bumps
 // must not require touching this test.
@@ -34,7 +43,7 @@ const desktopVersion = JSON.parse(
 
 let isolatedUpdaterImportId = 0;
 
-function fakeUpdaterHarness({ version }) {
+function fakeUpdaterHarness({ version, files }) {
   const listeners = new Map();
   const calls = [];
   const feeds = [];
@@ -47,7 +56,7 @@ function fakeUpdaterHarness({ version }) {
     allowDowngrade: false,
     on: (name, fn) => listeners.set(name, fn),
     setFeedURL: (feed) => feeds.push(feed),
-    checkForUpdates: async () => ({ updateInfo: { version } }),
+    checkForUpdates: async () => ({ updateInfo: { version, ...(files ? { files } : {}) } }),
     downloadUpdate: async () => {
       calls.push("download");
       downloadFeeds.push(feeds.at(-1));
@@ -59,10 +68,11 @@ function fakeUpdaterHarness({ version }) {
   return { updater, listeners, calls, feeds, downloadFeeds };
 }
 
-async function registerFakeUpdaterIpc({ version }) {
+async function registerFakeUpdaterIpc({ version, files = undefined, ...options }) {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "omnirush-updater-test-"));
   const handlers = new Map();
-  const harness = fakeUpdaterHarness({ version });
+  const harness = fakeUpdaterHarness({ version, files });
+  const sent = [];
   isolatedUpdaterImportId += 1;
   const updaterModuleUrl = new URL(
     `./updater.mjs?updater-lifecycle=${isolatedUpdaterImportId}`,
@@ -71,17 +81,26 @@ async function registerFakeUpdaterIpc({ version }) {
   const { registerUpdaterIpc: registerIsolatedUpdaterIpc } = await import(
     updaterModuleUrl.href
   );
+  const app = {
+    isPackaged: true,
+    getVersion: () => "0.17.0",
+    getPath: (key) => path.join(tempDir, key),
+    quit: () => harness.calls.push("quit"),
+  };
   registerIsolatedUpdaterIpc({
-    app: {
-      isPackaged: true,
-      getVersion: () => "0.17.0",
-      getPath: (key) => path.join(tempDir, key),
-    },
+    app,
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
-    getMainWindow: () => null,
+    getMainWindow: () => ({
+      webContents: { send: (channel, data) => sent.push({ channel, data }) },
+      isDestroyed: () => false,
+    }),
     loadAutoUpdater: async () => ({ autoUpdater: harness.updater }),
+    // The default harness models a Developer ID signed app (or a non-macOS
+    // platform): in-place installs through electron-updater.
+    isDeveloperIdSigned: async () => true,
+    ...options,
   });
-  return { tempDir, handlers, ...harness };
+  return { tempDir, handlers, sent, app, ...harness };
 }
 
 describe("staleUpdaterStatePaths", () => {
@@ -93,6 +112,28 @@ describe("staleUpdaterStatePaths", () => {
 
   it("is a no-op off macOS", { skip: process.platform === "darwin" }, () => {
     assert.deepEqual(staleUpdaterStatePaths(fakeApp), []);
+  });
+});
+
+describe("update feeds", () => {
+  it("has no public Alpha feed: alpha normalizes to stable unless a distribution ships a feed", () => {
+    const publicFeed = updaterFeedOptions();
+    assert.equal(publicFeed.alphaFeedUrl, null);
+    assert.equal(normalizeElectronUpdaterChannel("alpha", publicFeed), "stable");
+    assert.equal(normalizeElectronUpdaterChannel("stable", publicFeed), "stable");
+    assert.equal(electronUpdaterFeedUrl("alpha", publicFeed), STABLE_FEED);
+
+    const distributionFeed = updaterFeedOptions({ alphaFeedUrl: `${ALPHA_FEED}/` });
+    assert.equal(distributionFeed.alphaFeedUrl, ALPHA_FEED);
+    assert.equal(normalizeElectronUpdaterChannel("alpha", distributionFeed), "alpha");
+    assert.equal(electronUpdaterFeedUrl("alpha", distributionFeed), ALPHA_FEED);
+    assert.equal(electronUpdaterFeedUrl("stable", distributionFeed), STABLE_FEED);
+  });
+
+  it("never enables Alpha for parallel manifest channels", () => {
+    const enterprise = updaterFeedOptions({ manifestChannel: "enterprise", alphaFeedUrl: ALPHA_FEED });
+    assert.equal(enterprise.alphaFeedUrl, null);
+    assert.equal(normalizeElectronUpdaterChannel("alpha", enterprise), "stable");
   });
 });
 
@@ -390,6 +431,7 @@ releaseDate: '2026-08-11T00:00:00.000Z'
         platform: "darwin",
         arch: "arm64",
         distribution: "public",
+        isDeveloperIdSigned: async () => true,
       });
       const listed = await handlers.get("omnirush:recovery:list")(null, {
         versions: [], minimumVersion: "0.0.0",
@@ -440,6 +482,7 @@ releaseDate: '2026-08-11T00:00:00.000Z'
         platform: "darwin",
         arch: "arm64",
         distribution: "public",
+        isDeveloperIdSigned: async () => true,
       });
       const listed = await handlers.get("omnirush:recovery:list")(null, {
         versions: ["1.9.0"], minimumVersion: "0.0.0",
@@ -479,6 +522,7 @@ releaseDate: '2026-08-11T00:00:00.000Z'
           { version: "1.2.2", verified: false, artifactUrl: "https://tampered.invalid/omnirush.dmg" },
         ]),
       },
+      isDeveloperIdSigned: async () => true,
     });
     await handlers.get("omnirush:recovery:list")(null, {});
     assert.equal((await handlers.get("omnirush:recovery:use")(null, "1.2.2")).ok, false);
@@ -517,8 +561,11 @@ describe("downloaded update lifecycle", () => {
       assert.equal(typeof download, "function");
       assert.equal(typeof install, "function");
 
-      assert.equal((await check(null, "stable")).available, true);
-      assert.deepEqual(await download(), { ok: true });
+      const checked = await check(null, "stable");
+      assert.equal(checked.available, true);
+      assert.equal(checked.installMode, "in-place");
+      assert.equal(checked.alphaChannelSupported, false);
+      assert.deepEqual(await download(), { ok: true, mode: "in-place" });
       assert.equal(updater.autoInstallOnAppQuit, true);
       assert.deepEqual(calls, ["download"], "downloading must not quit the app");
       updater.checkForUpdates = async () => {
@@ -527,7 +574,7 @@ describe("downloaded update lifecycle", () => {
       const failedCheck = await check(null, "stable");
       assert.equal(failedCheck.available, false);
       assert.match(failedCheck.reason, /network flake/);
-      assert.deepEqual(await install(), { ok: true });
+      assert.deepEqual(await install(), { ok: true, mode: "in-place" });
       assert.deepEqual(calls, ["download", "quitAndInstall"]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -547,11 +594,11 @@ describe("downloaded update lifecycle", () => {
       assert.equal(typeof install, "function");
 
       assert.equal((await check(null, "stable")).available, true);
-      assert.deepEqual(await download(), { ok: true });
+      assert.deepEqual(await download(), { ok: true, mode: "in-place" });
       const onError = listeners.get("error");
       assert.equal(typeof onError, "function");
       onError(new Error("network flake"));
-      assert.deepEqual(await install(), { ok: true });
+      assert.deepEqual(await install(), { ok: true, mode: "in-place" });
       assert.deepEqual(calls, ["download", "quitAndInstall"]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -571,7 +618,7 @@ describe("downloaded update lifecycle", () => {
       assert.equal(typeof install, "function");
 
       assert.equal((await check(null, "stable")).available, true);
-      assert.deepEqual(await download(), { ok: true });
+      assert.deepEqual(await download(), { ok: true, mode: "in-place" });
       updater.checkForUpdates = async () => ({
         updateInfo: { version: "0.17.0" },
       });
@@ -583,6 +630,194 @@ describe("downloaded update lifecycle", () => {
       });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("macOS code signature detection", () => {
+  it("derives the bundle path from the running executable", () => {
+    assert.equal(
+      macAppBundlePath("/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai"),
+      "/Applications/OmniRush.ai.app",
+    );
+    assert.equal(macAppBundlePath("/usr/local/bin/node"), null);
+    assert.equal(macAppBundlePath(undefined), null);
+  });
+
+  it("accepts only a Developer ID signature", () => {
+    assert.equal(developerIdSignatureFromCodesignOutput(
+      "Identifier=ai.omnirush.desktop\nAuthority=Developer ID Application: OmniRush (TEAMID)\nAuthority=Developer ID Certification Authority",
+    ), true);
+    assert.equal(developerIdSignatureFromCodesignOutput(
+      "Identifier=ai.omnirush.desktop\nSignature=adhoc\nAuthority=Developer ID Application: forged",
+    ), false);
+    assert.equal(developerIdSignatureFromCodesignOutput("Identifier=ai.omnirush.desktop\nSignature=adhoc"), false);
+    assert.equal(developerIdSignatureFromCodesignOutput("Identifier=ai.omnirush.desktop"), false);
+    assert.equal(developerIdSignatureFromCodesignOutput(""), false);
+  });
+
+  it("treats spawn failures and non-bundle executables as ad-hoc", async () => {
+    const execPath = "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai";
+    const failing = (_command, _args, _options, callback) => callback(new Error("spawn failed"), "", "");
+    assert.equal(await detectDeveloperIdSignature(execPath, failing), false);
+
+    const invocations = [];
+    const signed = (command, args, _options, callback) => {
+      invocations.push([command, ...args]);
+      callback(null, "", "Authority=Developer ID Application: OmniRush (TEAMID)\n");
+    };
+    assert.equal(await detectDeveloperIdSignature(execPath, signed), true);
+    assert.deepEqual(invocations, [["/usr/bin/codesign", "-dv", "--verbose=2", "/Applications/OmniRush.ai.app"]]);
+    assert.equal(await detectDeveloperIdSignature("/usr/local/bin/node", signed), false);
+  });
+});
+
+describe("manual installer artifacts", () => {
+  const files = [
+    { url: "omnirush-mac-arm64-1.2.3.zip", sha512: "zip-checksum", size: 10 },
+    { url: "omnirush-mac-arm64-1.2.3.dmg", sha512: "arm64-checksum", size: 20 },
+    { url: "omnirush-mac-x64-1.2.3.dmg", sha512: "x64-checksum", size: 30 },
+  ];
+
+  it("selects the DMG for the running architecture relative to the feed directory", () => {
+    assert.deepEqual(selectManualInstallerArtifact({ version: "1.2.3", files }, STABLE_FEED, "arm64"), {
+      version: "1.2.3",
+      url: `${STABLE_FEED}/omnirush-mac-arm64-1.2.3.dmg`,
+      sha512: "arm64-checksum",
+      size: 20,
+      fileName: "omnirush-mac-arm64-1.2.3.dmg",
+    });
+    assert.equal(selectManualInstallerArtifact({ version: "1.2.3", files }, STABLE_FEED, "x64")?.sha512, "x64-checksum");
+  });
+
+  it("rejects manifests without a checksummed DMG or with a foreign download origin", () => {
+    assert.equal(selectManualInstallerArtifact({ version: "1.2.3", files: [files[0]] }, STABLE_FEED, "arm64"), null);
+    assert.equal(selectManualInstallerArtifact({
+      version: "1.2.3",
+      files: [{ url: "omnirush-mac-arm64-1.2.3.dmg", sha512: "", size: 20 }],
+    }, STABLE_FEED, "arm64"), null);
+    assert.equal(selectManualInstallerArtifact({
+      version: "1.2.3",
+      files: [{ url: "https://tampered.invalid/omnirush-mac-arm64-1.2.3.dmg", sha512: "x", size: 20 }],
+    }, STABLE_FEED, "arm64"), null);
+  });
+});
+
+describe("macOS manual installer fallback", () => {
+  const manualInstallerHarness = async ({ bytes, sha512 = createHash("sha512").update(bytes).digest("base64"), ...options }) => {
+    const fetched = [];
+    const opened = [];
+    const harness = await registerFakeUpdaterIpc({
+      version: "0.17.1",
+      files: [
+        { url: "omnirush-mac-arm64-0.17.1.zip", sha512: "zip-checksum", size: 1 },
+        { url: "omnirush-mac-arm64-0.17.1.dmg", sha512, size: bytes.length },
+      ],
+      platform: "darwin",
+      arch: "arm64",
+      isDeveloperIdSigned: async () => false,
+      electronNet: { fetch: async (url) => {
+        fetched.push(url);
+        return new Response(bytes);
+      } },
+      shell: { openPath: async (filePath) => {
+        opened.push(filePath);
+        return "";
+      } },
+      quitDelayMs: 0,
+      ...options,
+    });
+    return { ...harness, fetched, opened };
+  };
+
+  it("downloads the manifest DMG and opens it instead of invoking Squirrel on an ad-hoc signed app", async () => {
+    const bytes = Buffer.from("dmg-bytes-for-manual-install");
+    const { tempDir, handlers, calls, sent, fetched, opened } = await manualInstallerHarness({ bytes });
+    try {
+      const check = handlers.get("omnirush:updater:check");
+      const download = handlers.get("omnirush:updater:download");
+      const install = handlers.get("omnirush:updater:installAndRestart");
+      const getChannel = handlers.get("omnirush:updater:getChannel");
+
+      assert.equal((await getChannel()).installMode, "manual-dmg");
+      const checked = await check(null, "stable");
+      assert.equal(checked.available, true);
+      assert.equal(checked.installMode, "manual-dmg");
+
+      assert.deepEqual(await download(), { ok: true, mode: "manual-dmg" });
+      assert.deepEqual(fetched, [`${STABLE_FEED}/omnirush-mac-arm64-0.17.1.dmg`]);
+      assert.deepEqual(calls, [], "electron-updater's zip download must not run");
+      const progress = sent.filter((event) => event.channel === "omnirush:updater:download-progress");
+      assert.equal(progress.at(-1)?.data.transferred, bytes.length);
+      assert.equal(progress.at(-1)?.data.total, bytes.length);
+      assert.equal(progress.at(-1)?.data.percent, 100);
+
+      const installed = await install();
+      const expectedPath = path.join(tempDir, "userData", "app-update-installer", "omnirush-mac-arm64-0.17.1.dmg");
+      assert.deepEqual(installed, { ok: true, mode: "manual-dmg", path: expectedPath });
+      assert.deepEqual(opened, [expectedPath]);
+      assert.deepEqual(readFileSync(expectedPath), bytes);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(calls, ["quit"], "quitAndInstall must never run for an ad-hoc signed app");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an installer whose checksum does not match the manifest", async () => {
+    const bytes = Buffer.from("tampered-dmg");
+    const { tempDir, handlers, calls, opened } = await manualInstallerHarness({ bytes, sha512: "expected-checksum" });
+    try {
+      const check = handlers.get("omnirush:updater:check");
+      const download = handlers.get("omnirush:updater:download");
+      const install = handlers.get("omnirush:updater:installAndRestart");
+
+      assert.equal((await check(null, "stable")).available, true);
+      const result = await download();
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /checksum did not match/);
+      assert.deepEqual(await install(), { ok: false, reason: "update-not-downloaded" });
+      assert.deepEqual(opened, []);
+      assert.deepEqual(calls, []);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails the download when the manifest lists no DMG for this architecture", async () => {
+    const bytes = Buffer.from("x64-only");
+    const { tempDir, handlers, fetched } = await manualInstallerHarness({ bytes, arch: "x64" });
+    try {
+      const check = handlers.get("omnirush:updater:check");
+      const download = handlers.get("omnirush:updater:download");
+      assert.equal((await check(null, "stable")).available, true);
+      const result = await download();
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /does not list a macOS installer/);
+      assert.deepEqual(fetched, []);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the Squirrel path for Developer ID signed macOS apps and other platforms", async () => {
+    for (const options of [
+      { platform: "darwin", arch: "arm64", isDeveloperIdSigned: async () => true },
+      { platform: "linux", arch: "x64", isDeveloperIdSigned: async () => false },
+      { platform: "win32", arch: "x64", isDeveloperIdSigned: async () => { throw new Error("not consulted"); } },
+    ]) {
+      const { tempDir, handlers, calls } = await registerFakeUpdaterIpc({ version: "0.17.1", ...options });
+      try {
+        const check = handlers.get("omnirush:updater:check");
+        const download = handlers.get("omnirush:updater:download");
+        const install = handlers.get("omnirush:updater:installAndRestart");
+        assert.equal((await check(null, "stable")).installMode, "in-place");
+        assert.deepEqual(await download(), { ok: true, mode: "in-place" });
+        assert.deepEqual(await install(), { ok: true, mode: "in-place" });
+        assert.deepEqual(calls, ["download", "quitAndInstall"]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     }
   });
 });
@@ -608,32 +843,66 @@ describe("release channel changes", () => {
         ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
         getMainWindow: () => null,
         manifestChannel: "enterprise",
+        alphaFeedUrl: ALPHA_FEED,
       });
 
       const setChannel = handlers.get("omnirush:updater:setChannel");
       assert.equal(typeof setChannel, "function");
       assert.deepEqual(await setChannel(null, "alpha"), {
         channel: "stable",
-        feedUrl: "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download",
+        feedUrl: STABLE_FEED,
         currentVersion: desktopVersion,
+        alphaChannelSupported: false,
+        installMode: "in-place",
       });
     } finally {
       await rm(userData, { recursive: true, force: true });
     }
   });
 
-  it("does not let a check overwrite the selected channel", {
-    skip: process.platform !== "darwin",
-  }, async () => {
+  it("normalizes a persisted or requested alpha channel to stable on the public distribution", async () => {
+    const { tempDir, handlers, feeds } = await registerFakeUpdaterIpc({ version: "0.18.0" });
+    try {
+      const channelPath = path.join(tempDir, "userData", "electron-updater-channel.v1.json");
+      await mkdir(path.dirname(channelPath), { recursive: true });
+      await writeFile(channelPath, JSON.stringify({ channel: "alpha" }), "utf8");
+
+      const check = handlers.get("omnirush:updater:check");
+      const setChannel = handlers.get("omnirush:updater:setChannel");
+      const getChannel = handlers.get("omnirush:updater:getChannel");
+
+      const persisted = await getChannel();
+      assert.equal(persisted.channel, "stable");
+      assert.equal(persisted.feedUrl, STABLE_FEED);
+      assert.equal(persisted.alphaChannelSupported, false);
+
+      const requested = await check(null, "alpha");
+      assert.equal(requested.channel, "stable");
+      assert.equal(requested.feedUrl, STABLE_FEED);
+      assert.equal(feeds.at(-1)?.url, STABLE_FEED);
+      assert.ok(feeds.every((feed) => feed.url === STABLE_FEED), "no feed may point at an Alpha release");
+
+      const selected = await setChannel(null, "alpha");
+      assert.equal(selected.channel, "stable");
+      assert.equal(JSON.parse(await readFile(channelPath, "utf8")).channel, "stable");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a check overwrite the selected channel", async () => {
     const { tempDir, handlers } = await registerFakeUpdaterIpc({
       version: "0.18.0",
+      alphaFeedUrl: ALPHA_FEED,
     });
     try {
       const check = handlers.get("omnirush:updater:check");
       const setChannel = handlers.get("omnirush:updater:setChannel");
       const getChannel = handlers.get("omnirush:updater:getChannel");
 
-      assert.equal((await setChannel(null, "alpha")).channel, "alpha");
+      const selected = await setChannel(null, "alpha");
+      assert.equal(selected.channel, "alpha");
+      assert.equal(selected.alphaChannelSupported, true);
       assert.equal((await check(null, "stable")).channel, "stable");
       assert.equal((await getChannel()).channel, "alpha");
     } finally {
@@ -641,32 +910,27 @@ describe("release channel changes", () => {
     }
   });
 
-  it("downloads from the channel used by the successful check", {
-    skip: process.platform !== "darwin",
-  }, async () => {
+  it("downloads from the channel used by the successful check", async () => {
     const { tempDir, handlers, downloadFeeds } = await registerFakeUpdaterIpc({
       version: "0.18.0-alpha.1",
+      alphaFeedUrl: ALPHA_FEED,
     });
     try {
       const check = handlers.get("omnirush:updater:check");
       const download = handlers.get("omnirush:updater:download");
 
       assert.equal((await check(null, "alpha")).channel, "alpha");
-      assert.deepEqual(await download(), { ok: true });
-      assert.equal(
-        downloadFeeds.at(-1)?.url,
-        "https://github.com/omnirush-ai/omnirush-gui/releases/download/alpha-macos-latest",
-      );
+      assert.deepEqual(await download(), { ok: true, mode: "in-place" });
+      assert.equal(downloadFeeds.at(-1)?.url, ALPHA_FEED);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("keeps Alpha selected when a Stable check is already in flight", {
-    skip: process.platform !== "darwin",
-  }, async () => {
+  it("keeps Alpha selected when a Stable check is already in flight", async () => {
     const { tempDir, handlers, updater, feeds } = await registerFakeUpdaterIpc({
       version: "0.18.0",
+      alphaFeedUrl: ALPHA_FEED,
     });
     /** @type {{ finish: null | (() => void) }} */
     const stableCheckControl = { finish: null };
@@ -701,10 +965,7 @@ describe("release channel changes", () => {
         )).channel,
         "alpha",
       );
-      assert.equal(
-        feeds.at(-1)?.url,
-        "https://github.com/omnirush-ai/omnirush-gui/releases/download/alpha-macos-latest",
-      );
+      assert.equal(feeds.at(-1)?.url, ALPHA_FEED);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

@@ -195,16 +195,17 @@ describe("gateway runtime mode", () => {
     unsubscribe();
   });
 
-  test("keeps Den web on the configured origin and Den API calls on the gateway origin", () => {
+  test("serves Den web from the gateway origin and Den API calls through its proxy when no web base is configured", () => {
     const storage = installWindow({ origin: "https://gw.example", gateway: true });
-    storage.setItem("omnirush.den.baseUrl", "https://app.omnirushlabs.com");
     storage.setItem("omnirush.den.authToken", "den-session-token");
 
+    // There is no hosted default web base: the gateway itself serves the Den
+    // web app unless a different origin was configured explicitly.
     expect(resolveDenBaseUrls("https://gw.example")).toEqual({
-      baseUrl: "https://app.omnirushlabs.com",
+      baseUrl: "https://gw.example",
       apiBaseUrl: "https://gw.example/api/den",
     });
-    expect(readDenSettings().baseUrl).toBe("https://app.omnirushlabs.com");
+    expect(readDenSettings().baseUrl).toBe("https://gw.example");
     expect(readDenSettings().apiBaseUrl).toBe("https://gw.example/api/den");
     expect(readDenSettings().authToken).toBe("den-session-token");
   });
@@ -214,7 +215,7 @@ describe("gateway runtime mode", () => {
 
     const authUrl = new URL(buildDenAuthUrl(readDenSettings().baseUrl, "sign-up"));
 
-    expect(authUrl.origin).toBe("https://app.omnirushlabs.com");
+    expect(authUrl.origin).toBe("https://gw.example");
     expect(authUrl.searchParams.get("mode")).toBe("sign-up");
     expect(authUrl.searchParams.get("webAuth")).toBe("1");
     expect(authUrl.searchParams.get("webAuthReturn")).toBe("https://gw.example");
@@ -242,7 +243,7 @@ describe("gateway runtime mode", () => {
     await client.getSession();
 
     expect(requestedUrls).toEqual([
-      "https://app.omnirushlabs.com/api/auth/sign-in/email",
+      "https://gw.example/api/auth/sign-in/email",
       "https://gw.example/api/den/v1/me",
     ]);
   });
@@ -335,7 +336,8 @@ describe("gateway runtime mode", () => {
     const second = readDenBootstrapConfig();
 
     expect(second).toBe(first);
-    expect(first.baseUrl).toBe("https://app.omnirushlabs.com");
+    // Without a configured web base the gateway serves the Den web app too.
+    expect(first.baseUrl).toBe("https://web.omnirushlabs.com");
     expect(first.apiBaseUrl).toBe("https://web.omnirushlabs.com/api/den");
   });
 
@@ -557,24 +559,25 @@ describe("non-gateway connection modes", () => {
   test("VITE_DEN_API_BASE_URL pins Den API calls to the proxy while sign-in stays on the web base", () => {
     const previous = process.env.VITE_DEN_API_BASE_URL;
     process.env.VITE_DEN_API_BASE_URL = "http://127.0.0.1:5178/api/den";
-    installWindow({ origin: "http://127.0.0.1:5178" });
+    const storage = installWindow({ origin: "http://127.0.0.1:5178" });
+    storage.setItem("omnirush.den.baseUrl", "https://den.example.com");
 
     try {
       const settings = readDenSettings();
-      expect(settings.baseUrl).toBe("https://app.omnirushlabs.com");
+      expect(settings.baseUrl).toBe("https://den.example.com");
       expect(settings.apiBaseUrl).toBe("http://127.0.0.1:5178/api/den");
 
       // Every Den client derives its API base the same way, so requests go
       // through the same-origin proxy even when created from the web base.
       const client = createDenClient({ baseUrl: settings.baseUrl, token: "den-token" });
       expect(client.baseUrls.apiBaseUrl).toBe("http://127.0.0.1:5178/api/den");
-      expect(client.baseUrls.baseUrl).toBe("https://app.omnirushlabs.com");
+      expect(client.baseUrls.baseUrl).toBe("https://den.example.com");
 
       // Sign-in still opens the real Den web app, not the proxy origin.
-      // Loopback cannot use webAuth return URLs against hosted Den, so the
+      // Loopback cannot use webAuth return URLs against a remote Den, so the
       // URL uses desktopAuth (copy link / paste grant) instead.
       const authUrl = new URL(buildDenAuthUrl(settings.baseUrl, "sign-in"));
-      expect(authUrl.origin).toBe("https://app.omnirushlabs.com");
+      expect(authUrl.origin).toBe("https://den.example.com");
       expect(authUrl.searchParams.get("desktopAuth")).toBe("1");
       expect(authUrl.searchParams.get("webAuth")).toBeNull();
     } finally {
@@ -583,11 +586,12 @@ describe("non-gateway connection modes", () => {
   });
 
   test("loopback web auth uses desktop handoff instead of an unapprovable webAuth return URL", () => {
-    installWindow({ origin: "http://127.0.0.1:5178" });
+    const storage = installWindow({ origin: "http://127.0.0.1:5178" });
+    storage.setItem("omnirush.den.baseUrl", "https://den.example.com");
 
     const authUrl = new URL(buildDenAuthUrl(readDenSettings().baseUrl, "sign-in"));
 
-    expect(authUrl.origin).toBe("https://app.omnirushlabs.com");
+    expect(authUrl.origin).toBe("https://den.example.com");
     expect(authUrl.searchParams.get("desktopAuth")).toBe("1");
     expect(authUrl.searchParams.get("desktopScheme")).toBe("omnirush");
     expect(authUrl.searchParams.get("webAuth")).toBeNull();
@@ -603,7 +607,8 @@ describe("non-gateway connection modes", () => {
     try {
       await initializeDenBootstrapConfig();
       expect(storage.getItem("omnirush.den.baseUrl")).toBeNull();
-      expect(readDenSettings().baseUrl).toBe("https://app.omnirushlabs.com");
+      // No build default exists, so the cleared setting leaves no control plane.
+      expect(readDenSettings().baseUrl).toBe("");
     } finally {
       restoreEnv("VITE_OMNIRUSH_FORCE_ENV_SETTINGS", previous);
     }

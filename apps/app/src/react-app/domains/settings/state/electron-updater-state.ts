@@ -1,7 +1,8 @@
 /** @jsxImportSource react */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import type { DenDesktopConfig } from "../../../../app/lib/den";
+import { isDenControlPlaneConfigured, type DenDesktopConfig } from "../../../../app/lib/den";
+import type { UpdaterInstallMode } from "../../../../app/lib/desktop";
 import {
   isAlphaChannelAllowedByDesktopConfig,
   isAlphaUpdateAllowed,
@@ -17,7 +18,7 @@ import { t } from "../../../../i18n";
 import { useUpdateCheckRequestStore } from "./update-check-request";
 
 export type SettingsUpdateStatus = {
-  state: "idle" | "checking" | "available" | "blocked" | "downloading" | "ready" | "error";
+  state: "idle" | "checking" | "available" | "blocked" | "downloading" | "ready" | "installer-opened" | "error";
   lastCheckedAt?: number | null;
   version?: string;
   date?: string;
@@ -51,6 +52,13 @@ type UseElectronUpdaterStateOptions = {
 export type ElectronUpdaterEnvState = {
   appVersion: string | null;
   updateEnv: { supported?: boolean; reason?: string | null } | null;
+  /** How the shell applies updates; null until the bridge reports it. */
+  installMode: UpdaterInstallMode | null;
+  /**
+   * Whether this distribution ships an Alpha feed. null until the bridge
+   * reports it so a stored Alpha preference is not rewritten before we know.
+   */
+  alphaChannelSupported: boolean | null;
 };
 
 export const ELECTRON_UPDATER_UNSUPPORTED_REASON = "Electron updater bridge is unavailable.";
@@ -59,6 +67,8 @@ export function unsupportedElectronUpdaterEnvState(): ElectronUpdaterEnvState {
   return {
     appVersion: null,
     updateEnv: { supported: false, reason: ELECTRON_UPDATER_UNSUPPORTED_REASON },
+    installMode: null,
+    alphaChannelSupported: null,
   };
 }
 
@@ -83,6 +93,7 @@ export function resolveCheckedUpdateState(input: {
 
 type ElectronUpdaterEnvAction =
   | { type: "app-version"; appVersion: string | null }
+  | { type: "capabilities"; installMode?: UpdaterInstallMode | null; alphaChannelSupported?: boolean | null }
   | { type: "unsupported"; reason: string };
 
 function electronUpdaterEnvReducer(
@@ -92,12 +103,29 @@ function electronUpdaterEnvReducer(
   switch (action.type) {
     case "app-version":
       return { ...state, appVersion: action.appVersion };
+    case "capabilities": {
+      const installMode = action.installMode ?? state.installMode;
+      const alphaChannelSupported = action.alphaChannelSupported ?? state.alphaChannelSupported;
+      if (installMode === state.installMode && alphaChannelSupported === state.alphaChannelSupported) return state;
+      return { ...state, installMode, alphaChannelSupported };
+    }
     case "unsupported":
       return {
         ...state,
         updateEnv: { supported: false, reason: action.reason },
       };
   }
+}
+
+function capabilitiesFromBridge(state: {
+  installMode?: UpdaterInstallMode;
+  alphaChannelSupported?: boolean;
+} | null | undefined): ElectronUpdaterEnvAction {
+  return {
+    type: "capabilities",
+    installMode: state?.installMode === "manual-dmg" || state?.installMode === "in-place" ? state.installMode : null,
+    alphaChannelSupported: typeof state?.alphaChannelSupported === "boolean" ? state.alphaChannelSupported : null,
+  };
 }
 
 function electronUpdaterBridge(): ElectronUpdaterBridge | null {
@@ -108,10 +136,25 @@ function electronUpdaterBridge(): ElectronUpdaterBridge | null {
   return window.__OMNIRUSH_ELECTRON__?.updater ?? null;
 }
 
-function describeError(error: unknown) {
-  if (error instanceof Error) return error.message;
+// Electron wraps every rejected ipcRenderer.invoke as
+// "Error invoking remote method '<channel>': Error: <message>", sometimes
+// nested when a bridge call fails inside another. Only the innermost message
+// means anything to the person reading the Updates page.
+const REMOTE_METHOD_ERROR_PREFIX = /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/;
+
+export function stripRemoteMethodErrorPrefix(message: string): string {
+  let current = message.trim();
+  for (;;) {
+    const next = current.replace(REMOTE_METHOD_ERROR_PREFIX, "").trim();
+    if (next === current || !next) return current;
+    current = next;
+  }
+}
+
+export function describeError(error: unknown): string {
+  if (error instanceof Error) return stripRemoteMethodErrorPrefix(error.message);
   const serialized = safeStringify(error);
-  return serialized && serialized !== "{}" ? serialized : String(error);
+  return stripRemoteMethodErrorPrefix(serialized && serialized !== "{}" ? serialized : String(error));
 }
 
 function releaseNotesToText(value: unknown): string | undefined {
@@ -158,8 +201,10 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
     updateEnv: isElectronRuntime()
       ? null
       : { supported: false, reason: ELECTRON_UPDATER_UNSUPPORTED_REASON },
+    installMode: null,
+    alphaChannelSupported: null,
   });
-  const { appVersion, updateEnv } = envState;
+  const { appVersion, updateEnv, installMode, alphaChannelSupported } = envState;
   const updateStatusRef = useRef(updateStatus);
   updateStatusRef.current = updateStatus;
   const lastAutoCheckAtRef = useRef(0);
@@ -171,13 +216,18 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
   const downloadedReleaseChannelRef = useRef<ReleaseChannel | null>(null);
   const desktopConfigRef = useRef(desktopConfig);
   desktopConfigRef.current = desktopConfig;
-  const policyReleaseChannel = resolveDesktopUpdateChannel(
-    releaseChannel,
-    desktopConfig,
-  );
+  // Until the shell reports whether this distribution ships an Alpha feed,
+  // the stored preference is left alone; once it says no, Alpha collapses to
+  // Stable everywhere (the public build has no Alpha feed).
+  const policyReleaseChannel = alphaChannelSupported === false
+    ? "stable"
+    : resolveDesktopUpdateChannel(releaseChannel, desktopConfig);
 
   const resolvePolicyReleaseChannel = useCallback(
     async (channel: ReleaseChannel) => {
+      if (channel === "alpha" && alphaChannelSupported === false) {
+        return { channel: "stable" as const, desktopConfig };
+      }
       if (
         channel !== "alpha" ||
         !isAlphaChannelAllowedByDesktopConfig(desktopConfig)
@@ -194,7 +244,7 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
         desktopConfig: freshDesktopConfig,
       };
     },
-    [desktopConfig, refreshDesktopConfig],
+    [alphaChannelSupported, desktopConfig, refreshDesktopConfig],
   );
 
   useEffect(() => {
@@ -233,10 +283,19 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
       .then(async (state) => {
         if (cancelled) return;
         dispatchEnvState({ type: "app-version", appVersion: state.currentVersion ?? null });
-        if (state.channel && state.channel !== policyReleaseChannel && bridge.setChannel) {
+        dispatchEnvState(capabilitiesFromBridge(state));
+        // The shell already normalized an unsupported Alpha selection to
+        // Stable; mirror that instead of asking it to switch again.
+        const shellChannel = state.channel ?? null;
+        if (shellChannel && shellChannel !== policyReleaseChannel && bridge.setChannel) {
+          if (state.alphaChannelSupported === false && policyReleaseChannel === "alpha") {
+            onReleaseChannelChange(shellChannel);
+            return;
+          }
           const nextState = await bridge.setChannel(policyReleaseChannel);
           if (cancelled) return;
           dispatchEnvState({ type: "app-version", appVersion: nextState.currentVersion ?? null });
+          dispatchEnvState(capabilitiesFromBridge(nextState));
           if (nextState.channel && nextState.channel !== policyReleaseChannel) {
             onReleaseChannelChange(nextState.channel);
           }
@@ -319,11 +378,12 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
       if (!result?.ok) {
         setUpdateStatus({
           state: "error",
-          message: result?.reason ?? "Update download failed.",
+          message: result?.reason ? stripRemoteMethodErrorPrefix(result.reason) : "Update download failed.",
           failedAction: "download",
         });
         return;
       }
+      dispatchEnvState(capabilitiesFromBridge({ installMode: result.mode }));
       if (
         releaseChannelResolution.channel === "alpha" &&
         !isAlphaChannelAllowedByDesktopConfig(desktopConfigRef.current)
@@ -389,9 +449,13 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
         await bridge.setChannel?.(activeReleaseChannel);
         if (!isCurrentRequest()) return;
       }
-      if (manual && activeReleaseChannel === "stable") {
+      // Den's release inventory only exists when a control plane is
+      // configured. omnirush.ai ships without one: the GitHub feed the shell
+      // reads is then the only authority, and no other host is contacted.
+      if (manual && activeReleaseChannel === "stable" && isDenControlPlaneConfigured()) {
         const channelState = await bridge.getChannel?.();
         if (!isCurrentRequest()) return;
+        dispatchEnvState(capabilitiesFromBridge(channelState));
         const currentVersion = channelState?.currentVersion ?? appVersion;
         if (!currentVersion) {
           throw new Error("Could not determine the installed omnirush.ai version.");
@@ -430,6 +494,7 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
       let result = await bridge.check(activeReleaseChannel, targetVersion);
       if (!isCurrentRequest()) return;
       dispatchEnvState({ type: "app-version", appVersion: result.currentVersion ?? null });
+      dispatchEnvState(capabilitiesFromBridge(result));
       let checkedReleaseChannel = result.channel ?? activeReleaseChannel;
       if (
         !result.reason &&
@@ -467,7 +532,7 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
       if (result.reason) {
         setUpdateStatus({
           state: "error",
-          message: result.reason,
+          message: stripRemoteMethodErrorPrefix(result.reason),
           failedAction: "check",
         });
         return;
@@ -606,9 +671,19 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
         }
         setUpdateStatus({
           state: "error",
-          message: result?.reason ?? "Update install failed.",
+          message: result?.reason ? stripRemoteMethodErrorPrefix(result.reason) : "Update install failed.",
           failedAction: "install",
         });
+        return;
+      }
+      if (result.mode === "manual-dmg") {
+        // The shell opened the DMG and quits shortly; leave the instructions
+        // on screen instead of a stale "Ready to install" button.
+        dispatchEnvState(capabilitiesFromBridge({ installMode: "manual-dmg" }));
+        setUpdateStatus((current) => ({
+          ...(current ?? {}),
+          state: "installer-opened",
+        }));
       }
     } catch (error) {
       if (!isCurrentReleaseChannel()) return;
@@ -635,6 +710,7 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
         const state = await bridge.setChannel(allowedReleaseChannel);
         if (releaseChannelRequestRef.current !== requestId) return;
         dispatchEnvState({ type: "app-version", appVersion: state.currentVersion ?? null });
+        dispatchEnvState(capabilitiesFromBridge(state));
         if (state.channel && state.channel !== allowedReleaseChannel) {
           onReleaseChannelChange(state.channel);
         }
@@ -654,6 +730,8 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
   return {
     appVersion,
     updateEnv,
+    installMode,
+    alphaChannelSupported: alphaChannelSupported === true,
     updateStatus,
     checkForUpdates,
     downloadUpdate,

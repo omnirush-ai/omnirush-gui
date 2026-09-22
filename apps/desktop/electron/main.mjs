@@ -120,6 +120,10 @@ const DESKTOP_DISTRIBUTION = resolveDesktopDistribution({
   isPackaged: app.isPackaged,
   packageFlavor: Reflect.get(desktopPackageMetadata, "omnirushDistribution"),
   environmentFlavor: process.env.OMNIRUSH_DESKTOP_DISTRIBUTION,
+  // Optional electron-builder extraMetadata for distributions that run their
+  // own Alpha feed. The public build has none, so its Alpha channel is off.
+  packageAlphaUpdateFeedUrl: Reflect.get(desktopPackageMetadata, "omnirushAlphaUpdateFeedUrl"),
+  environmentAlphaUpdateFeedUrl: process.env.OMNIRUSH_DESKTOP_ALPHA_UPDATE_FEED_URL,
 });
 const TAURI_APP_IDENTIFIER = DESKTOP_DISTRIBUTION.appIdentifier;
 const DEV_APP_IDENTIFIER = `${DESKTOP_DISTRIBUTION.appIdentifier}.dev`;
@@ -160,7 +164,7 @@ if (BLANK_SLATE_LAUNCH.enabled || process.env.OMNIRUSH_ELECTRON_USE_MOCK_KEYCHAI
 }
 const RELEASE_DOWNLOAD_BASE_URL = "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download";
 const RELEASE_PAGE_URL = "https://github.com/omnirush-ai/omnirush-gui/releases/latest";
-const DOCS_PAGE_URL = "https://omnirushlabs.com/docs";
+const DOCS_PAGE_URL = "https://github.com/omnirush-ai/omnirush-gui#readme";
 const applicationMenu = createApplicationMenu({
   appName: APP_NAME,
   docsUrl: DOCS_PAGE_URL,
@@ -1012,7 +1016,10 @@ if (extraLaunchArgs) {
   }
 }
 configureFakeMediaForTests(app, envFlagEnabled("OMNIRUSH_ELECTRON_FAKE_MEDIA"));
-const DEFAULT_DEN_BASE_URL = "https://app.omnirushlabs.com";
+// omnirush.ai has no hosted Den control plane. The default stays empty so no
+// code path contacts one automatically; a Den base URL only exists when
+// desktop-bootstrap.json, a connect link, or the user provides it explicitly.
+const DEFAULT_DEN_BASE_URL = "";
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:4096";
 const FORCE_DESKTOP_REQUIRE_SIGNIN =
   DESKTOP_DISTRIBUTION.requireSignin || envFlagEnabled("OMNIRUSH_FORCE_SIGNIN");
@@ -1330,7 +1337,7 @@ const legacyRunnerBaseUrls = [
   initialRunnerBootstrap.baseUrl
     ? `${String(initialRunnerBootstrap.baseUrl).replace(/\/+$/, "")}/api/den`
     : null,
-  `${DEFAULT_DEN_BASE_URL}/api/den`,
+  DEFAULT_DEN_BASE_URL ? `${DEFAULT_DEN_BASE_URL}/api/den` : null,
 ].map((value) => normalizeRunnerBaseUrl(value)).filter(Boolean);
 const desktopAutomationRunner = createDesktopAutomationRunner({
   // v1 credentials predate token audiences. Keep them usable during the Den
@@ -2798,6 +2805,7 @@ const { ensureAutoUpdater } = registerUpdaterIpc({
   manifestChannel: DESKTOP_DISTRIBUTION.flavor === "public"
     ? "latest"
     : DESKTOP_DISTRIBUTION.flavor,
+  alphaFeedUrl: DESKTOP_DISTRIBUTION.alphaUpdateFeedUrl,
   electronNet,
   shell,
   distribution: DESKTOP_DISTRIBUTION.flavor,

@@ -1,5 +1,6 @@
-import { readFile, mkdir, writeFile, rm } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFile, mkdir, open, rename, writeFile, rm } from "node:fs/promises";
+import { createReadStream, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,8 @@ import {
 } from "./recovery.mjs";
 
 const ELECTRON_UPDATER_CHANNEL_FILENAME = "electron-updater-channel.v1.json";
+// Where a manually installed update (macOS DMG) is staged before it is opened.
+const INSTALLER_CACHE_DIRECTORY = "app-update-installer";
 
 // In dev mode, app.getVersion() returns the Electron framework version
 // (e.g. "35.7.5") instead of the OmniRush.ai app version. Read from
@@ -43,14 +46,33 @@ function resolveAppVersion(app) {
   }
   return _cachedAppVersion;
 }
-const ELECTRON_UPDATER_FEEDS = Object.freeze({
-  stable: "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download",
-  alpha: "https://github.com/omnirush-ai/omnirush-gui/releases/download/alpha-macos-latest",
-});
 
-function normalizeElectronUpdaterChannel(value, manifestChannel = "latest") {
-  if (manifestChannel !== "latest") return "stable";
-  if (value === "alpha" && process.platform === "darwin") return "alpha";
+// The public distribution reads `latest*.yml` from the latest GitHub release.
+// There is no public Alpha feed: the Alpha channel exists only when a
+// distribution ships its own feed directory (see updaterFeedOptions).
+export const STABLE_UPDATER_FEED_URL = "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download";
+
+/**
+ * Feed selection shared by every updater IPC handler. `manifestChannel` picks
+ * the manifest name electron-updater reads (`latest` for the public build,
+ * the distribution flavor otherwise) and `alphaFeedUrl` is the only thing that
+ * can enable the Alpha channel. Without it a persisted or requested "alpha"
+ * normalizes back to stable instead of probing a feed that does not exist.
+ */
+export function updaterFeedOptions({ manifestChannel = "latest", alphaFeedUrl = null } = {}) {
+  const normalizedAlphaFeedUrl = typeof alphaFeedUrl === "string" ? alphaFeedUrl.trim().replace(/\/+$/, "") : "";
+  return Object.freeze({
+    manifestChannel,
+    alphaFeedUrl: manifestChannel === "latest" && normalizedAlphaFeedUrl ? normalizedAlphaFeedUrl : null,
+  });
+}
+
+function alphaChannelSupported(feedOptions) {
+  return feedOptions.alphaFeedUrl !== null;
+}
+
+export function normalizeElectronUpdaterChannel(value, feedOptions = updaterFeedOptions()) {
+  if (value === "alpha" && alphaChannelSupported(feedOptions)) return "alpha";
   return "stable";
 }
 
@@ -58,18 +80,18 @@ function electronUpdaterChannelPath(app) {
   return path.join(app.getPath("userData"), ELECTRON_UPDATER_CHANNEL_FILENAME);
 }
 
-async function readElectronUpdaterChannel(app, manifestChannel = "latest") {
+async function readElectronUpdaterChannel(app, feedOptions) {
   try {
     const raw = await readFile(electronUpdaterChannelPath(app), "utf8");
     const parsed = JSON.parse(raw);
-    return normalizeElectronUpdaterChannel(parsed?.channel, manifestChannel);
+    return normalizeElectronUpdaterChannel(parsed?.channel, feedOptions);
   } catch {
     return "stable";
   }
 }
 
-async function writeElectronUpdaterChannel(app, channel, manifestChannel = "latest") {
-  const normalized = normalizeElectronUpdaterChannel(channel, manifestChannel);
+async function writeElectronUpdaterChannel(app, channel, feedOptions) {
+  const normalized = normalizeElectronUpdaterChannel(channel, feedOptions);
   const outputPath = electronUpdaterChannelPath(app);
   await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(
@@ -80,8 +102,10 @@ async function writeElectronUpdaterChannel(app, channel, manifestChannel = "late
   return normalized;
 }
 
-function electronUpdaterFeedUrl(channel, manifestChannel = "latest") {
-  return ELECTRON_UPDATER_FEEDS[normalizeElectronUpdaterChannel(channel, manifestChannel)];
+export function electronUpdaterFeedUrl(channel, feedOptions = updaterFeedOptions()) {
+  return normalizeElectronUpdaterChannel(channel, feedOptions) === "alpha"
+    ? feedOptions.alphaFeedUrl
+    : STABLE_UPDATER_FEED_URL;
 }
 
 function normalizeStableTargetVersion(value) {
@@ -179,29 +203,30 @@ export function targetedStableUpdaterFeed(currentVersion, targetVersion, allowOl
   return `https://github.com/omnirush-ai/omnirush-gui/releases/download/v${normalizedTarget}`;
 }
 
-function updaterChannelState(app, channel, targetVersion = null, manifestChannel = "latest") {
-  const normalized = normalizeElectronUpdaterChannel(channel, manifestChannel);
+function updaterChannelState(app, channel, targetVersion, feedOptions) {
+  const normalized = normalizeElectronUpdaterChannel(channel, feedOptions);
   const currentVersion = resolveAppVersion(app);
   return {
     channel: normalized,
     feedUrl: targetVersion
       ? targetedStableUpdaterFeed(currentVersion, targetVersion)
-      : electronUpdaterFeedUrl(normalized, manifestChannel),
+      : electronUpdaterFeedUrl(normalized, feedOptions),
     currentVersion,
+    alphaChannelSupported: alphaChannelSupported(feedOptions),
   };
 }
 
 async function applyElectronUpdaterFeed(
   app,
   updater,
-  targetVersion = null,
-  manifestChannel = "latest",
+  targetVersion,
+  feedOptions,
   allowOlder = false,
   channelOverride,
 ) {
   const channel = channelOverride === undefined
-    ? await readElectronUpdaterChannel(app, manifestChannel)
-    : normalizeElectronUpdaterChannel(channelOverride, manifestChannel);
+    ? await readElectronUpdaterChannel(app, feedOptions)
+    : normalizeElectronUpdaterChannel(channelOverride, feedOptions);
   if (targetVersion && channel !== "stable") {
     throw new Error("Version-specific update feeds are supported only on the stable channel.");
   }
@@ -211,8 +236,9 @@ async function applyElectronUpdaterFeed(
         channel,
         feedUrl: targetedStableUpdaterFeed(currentVersion, targetVersion, allowOlder),
         currentVersion,
+        alphaChannelSupported: alphaChannelSupported(feedOptions),
       }
-    : updaterChannelState(app, channel, null, manifestChannel);
+    : updaterChannelState(app, channel, null, feedOptions);
   updater.allowPrerelease = state.channel === "alpha";
   // Moving from alpha back to stable can be a semver downgrade; still show
   // the latest stable so users can return to the stable channel deliberately.
@@ -226,7 +252,7 @@ async function applyElectronUpdaterFeed(
     updater.setFeedURL({
       provider: "generic",
       url: state.feedUrl,
-      ...(manifestChannel !== "latest" ? { channel: manifestChannel } : {}),
+      ...(feedOptions.manifestChannel !== "latest" ? { channel: feedOptions.manifestChannel } : {}),
     });
   }
   return state;
@@ -284,6 +310,109 @@ async function cleanStaleUpdaterState(app, shipItDefaultsDomain) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// macOS code-signature detection.
+//
+// Squirrel.Mac only swaps in an update whose code signature validates against
+// the running app. Community builds are ad-hoc signed (no Developer ID), so an
+// in-place install is guaranteed to fail there; those builds download the DMG
+// and open it for a manual drag-to-Applications install instead.
+// ---------------------------------------------------------------------------
+
+export function macAppBundlePath(execPath) {
+  const value = typeof execPath === "string" ? execPath : "";
+  const marker = ".app/Contents/";
+  const index = value.indexOf(marker);
+  return index === -1 ? null : value.slice(0, index + ".app".length);
+}
+
+export function developerIdSignatureFromCodesignOutput(output) {
+  const text = String(output ?? "");
+  if (!text.trim()) return false;
+  if (/Signature=adhoc/.test(text)) return false;
+  return /Authority=Developer ID Application/.test(text);
+}
+
+/**
+ * Resolves true only when the bundle that owns `execPath` carries a Developer
+ * ID signature. Any spawn failure, unexpected output, or a path outside an
+ * .app bundle counts as ad-hoc: treating an unknown signature as swappable
+ * would only trade a clear manual install for a silent Squirrel failure.
+ *
+ * @param {string} [execPath]
+ * @param {Function} [run] execFile-compatible spawner, injectable for tests.
+ */
+export function detectDeveloperIdSignature(execPath = process.execPath, run = execFile) {
+  const bundlePath = macAppBundlePath(execPath);
+  if (!bundlePath) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    try {
+      run(
+        "/usr/bin/codesign",
+        ["-dv", "--verbose=2", bundlePath],
+        { encoding: "utf8", maxBuffer: 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) {
+            resolve(false);
+            return;
+          }
+          resolve(developerIdSignatureFromCodesignOutput(`${stdout ?? ""}\n${stderr ?? ""}`));
+        },
+      );
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+function installerAssetArch(arch) {
+  return arch === "x64" ? "x64" : "arm64";
+}
+
+/**
+ * Picks the DMG the update manifest lists for this architecture and resolves
+ * it against the feed directory, exactly like electron-updater resolves the
+ * zip it would hand to Squirrel. Returns null when the manifest has no
+ * matching installer or no checksum to verify it with.
+ */
+export function selectManualInstallerArtifact(info, feedUrl, arch) {
+  const files = Array.isArray(info?.files) ? info.files : [];
+  const assetArch = `-${installerAssetArch(arch)}-`;
+  const candidate = files.find((file) =>
+    typeof file?.url === "string"
+    && file.url.endsWith(".dmg")
+    && file.url.includes(assetArch)
+    && typeof file.sha512 === "string"
+    && file.sha512.trim(),
+  );
+  if (!candidate || typeof feedUrl !== "string" || !feedUrl) return null;
+  let url;
+  try {
+    url = new URL(candidate.url, `${feedUrl.replace(/\/+$/, "")}/`);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.origin !== new URL(feedUrl).origin) return null;
+  const size = Number(candidate.size);
+  return {
+    version: typeof info?.version === "string" ? info.version : null,
+    url: url.toString(),
+    sha512: candidate.sha512.trim(),
+    size: Number.isInteger(size) && size > 0 ? size : null,
+    fileName: path.basename(url.pathname),
+  };
+}
+
+async function fileMatchesSha512(filePath, expected) {
+  return new Promise((resolve) => {
+    const hash = createHash("sha512");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", () => resolve(false));
+    stream.on("end", () => resolve(hash.digest("base64") === expected));
+  });
+}
+
 // electron-updater wiring. Packaged-only; dev builds skip this so the
 // updater doesn't try to probe a non-existent release channel.
 export function preventPendingUpdaterInstall(updater) {
@@ -296,6 +425,7 @@ export function registerUpdaterIpc({
   getMainWindow,
   loadAutoUpdater = () => import("electron-updater"),
   manifestChannel = "latest",
+  alphaFeedUrl = null,
   shipItDefaultsDomain = SHIP_IT_DEFAULTS_DOMAIN,
   electronNet = null,
   shell = null,
@@ -303,12 +433,19 @@ export function registerUpdaterIpc({
   platform = process.platform,
   arch = process.arch,
   env = process.env,
+  execPath = process.execPath,
+  isDeveloperIdSigned = () => detectDeveloperIdSignature(execPath),
+  quitDelayMs = 1500,
 }) {
+  const feedOptions = updaterFeedOptions({ manifestChannel, alphaFeedUrl });
   let autoUpdaterInstance = null;
   let autoUpdaterLoadPromise = null;
+  let installModePromise = null;
   let checkedUpdateVersion = null;
   let checkedUpdateTargetVersion = null;
   let checkedUpdateChannel = null;
+  let checkedInstallerArtifact = null;
+  let downloadedInstallerPath = null;
   let updateDownloaded = false;
   let recoveryReleases = [];
   const recoveryWitness = { installRequests: [], openedArtifactUrls: [], quitRequested: false };
@@ -329,6 +466,49 @@ export function registerUpdaterIpc({
     } catch {
       // Window may be closed; swallow send failures.
     }
+  }
+
+  // "in-place": electron-updater swaps the app (Squirrel.Mac, NSIS, AppImage).
+  // "manual-dmg": the running macOS app is not Developer ID signed, so the
+  // update is downloaded as a DMG and opened for the user to drag over.
+  function resolveInstallMode() {
+    if (!installModePromise) {
+      installModePromise = (async () => {
+        if (platform !== "darwin" || !app.isPackaged) return "in-place";
+        try {
+          return (await isDeveloperIdSigned()) ? "in-place" : "manual-dmg";
+        } catch {
+          return "manual-dmg";
+        }
+      })();
+    }
+    return installModePromise;
+  }
+
+  async function describeChannelState(channel, targetVersion = null) {
+    return {
+      ...updaterChannelState(app, channel, targetVersion, feedOptions),
+      installMode: await resolveInstallMode(),
+    };
+  }
+
+  function clearCheckedUpdate() {
+    checkedUpdateVersion = null;
+    checkedUpdateTargetVersion = null;
+    checkedUpdateChannel = null;
+    checkedInstallerArtifact = null;
+  }
+
+  function recordCheckedUpdate(info, channelState, targetVersion, installMode) {
+    const currentVersion = resolveAppVersion(app);
+    const available = Boolean(info?.version && isVersionNewer(info.version, currentVersion));
+    checkedUpdateVersion = available ? info.version : null;
+    checkedUpdateTargetVersion = available ? targetVersion : null;
+    checkedUpdateChannel = available ? channelState.channel : null;
+    checkedInstallerArtifact = available && installMode === "manual-dmg"
+      ? selectManualInstallerArtifact(info, channelState.feedUrl, arch)
+      : null;
+    return available;
   }
 
   async function ensureAutoUpdater() {
@@ -370,7 +550,7 @@ export function registerUpdaterIpc({
                 delta: info.delta ?? 0,
               });
             });
-            await applyElectronUpdaterFeed(app, autoUpdaterInstance, null, manifestChannel);
+            await applyElectronUpdaterFeed(app, autoUpdaterInstance, null, feedOptions);
           }
         } catch (error) {
           console.warn("[updater] electron-updater not available", error);
@@ -380,6 +560,72 @@ export function registerUpdaterIpc({
       })();
     }
     return autoUpdaterLoadPromise;
+  }
+
+  /**
+   * Downloads the manifest-listed installer with a streaming sha512 check and
+   * the same progress events electron-updater emits, so the Updates page shows
+   * one download experience regardless of install mode.
+   */
+  async function downloadManualInstaller(artifact) {
+    if (!electronNet?.fetch) throw new Error("Installer downloads are unavailable in this package.");
+    const response = await electronNet.fetch(artifact.url, {
+      headers: { Accept: "application/octet-stream, */*" },
+    });
+    if (!response.ok) throw new Error(`Installer download failed with HTTP ${response.status}.`);
+    const directory = path.join(app.getPath("userData"), INSTALLER_CACHE_DIRECTORY);
+    await rm(directory, { recursive: true, force: true });
+    await mkdir(directory, { recursive: true });
+    const destination = path.join(directory, artifact.fileName);
+    const partialPath = `${destination}.part`;
+    const headerLength = Number(response.headers?.get?.("content-length"));
+    const total = artifact.size ?? (Number.isInteger(headerLength) && headerLength > 0 ? headerLength : 0);
+    const hash = createHash("sha512");
+    const startedAt = Date.now();
+    let transferred = 0;
+    const reportProgress = (delta) => {
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      sendToRenderer("omnirush:updater:download-progress", {
+        bytesPerSecond: Math.round(transferred / elapsedSeconds),
+        percent: total > 0 ? Math.min(100, (transferred / total) * 100) : 0,
+        transferred,
+        total,
+        delta,
+      });
+    };
+    const handle = await open(partialPath, "w");
+    try {
+      const reader = typeof response.body?.getReader === "function" ? response.body.getReader() : null;
+      if (reader) {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = Buffer.from(value);
+          hash.update(chunk);
+          await handle.write(chunk);
+          transferred += chunk.length;
+          reportProgress(chunk.length);
+        }
+      } else {
+        const bytes = Buffer.from(await response.arrayBuffer());
+        hash.update(bytes);
+        await handle.write(bytes);
+        transferred = bytes.length;
+        reportProgress(bytes.length);
+      }
+    } finally {
+      await handle.close();
+    }
+    if (hash.digest("base64") !== artifact.sha512) {
+      await rm(partialPath, { force: true });
+      throw new Error("The downloaded installer checksum did not match the release manifest.");
+    }
+    if (artifact.size !== null && transferred !== artifact.size) {
+      await rm(partialPath, { force: true });
+      throw new Error("The downloaded installer size did not match the release manifest.");
+    }
+    await rename(partialPath, destination);
+    return destination;
   }
 
   async function resolveRecoveryArtifact(version) {
@@ -544,9 +790,11 @@ export function registerUpdaterIpc({
     }
     const currentVersion = resolveAppVersion(app);
     const updater = await ensureAutoUpdater();
-    if (updater && app.isPackaged) {
+    // An ad-hoc signed macOS app cannot be swapped by Squirrel, so recovery
+    // there opens the verified installer exactly like a manual update.
+    if (updater && app.isPackaged && (await resolveInstallMode()) === "in-place") {
       try {
-        await applyElectronUpdaterFeed(app, updater, release.version, manifestChannel, true);
+        await applyElectronUpdaterFeed(app, updater, release.version, feedOptions, true);
         const result = await updater.checkForUpdates();
         if (compareVersions(result?.updateInfo?.version ?? "", release.version) !== 0) {
           throw new Error("Recovery manifest resolved to a different version.");
@@ -596,33 +844,35 @@ export function registerUpdaterIpc({
   }));
 
   ipcMain.handle("omnirush:updater:getChannel", async () => queueUpdaterOperation(async () => {
-    const channel = await readElectronUpdaterChannel(app, manifestChannel);
-    return updaterChannelState(app, channel, null, manifestChannel);
+    const channel = await readElectronUpdaterChannel(app, feedOptions);
+    return describeChannelState(channel);
   }));
 
   ipcMain.handle("omnirush:updater:setChannel", async (_event, rawChannel) => queueUpdaterOperation(async () => {
-    const channel = await writeElectronUpdaterChannel(app, rawChannel, manifestChannel);
-    checkedUpdateVersion = null;
-    checkedUpdateTargetVersion = null;
-    checkedUpdateChannel = null;
+    const channel = await writeElectronUpdaterChannel(app, rawChannel, feedOptions);
+    clearCheckedUpdate();
+    downloadedInstallerPath = null;
     updateDownloaded = false;
+    const installMode = await resolveInstallMode();
     const updater = await ensureAutoUpdater();
     if (updater) {
       // A channel change invalidates any previously downloaded update. This
       // also prevents an Alpha build from installing automatically on quit
       // after an organization policy moves the desktop back to Stable.
       preventPendingUpdaterInstall(updater);
-      return applyElectronUpdaterFeed(app, updater, null, manifestChannel, false, channel);
+      const state = await applyElectronUpdaterFeed(app, updater, null, feedOptions, false, channel);
+      return { ...state, installMode };
     }
-    return updaterChannelState(app, channel, null, manifestChannel);
+    return describeChannelState(channel);
   }));
 
   ipcMain.handle("omnirush:updater:check", async (_event, rawChannel, rawTargetVersion) => queueUpdaterOperation(async () => {
     // A check selects a feed for this operation only. The persisted preference
     // belongs exclusively to setChannel so a stale check cannot undo a choice.
     const channel = rawChannel === undefined
-      ? await readElectronUpdaterChannel(app, manifestChannel)
-      : normalizeElectronUpdaterChannel(rawChannel, manifestChannel);
+      ? await readElectronUpdaterChannel(app, feedOptions)
+      : normalizeElectronUpdaterChannel(rawChannel, feedOptions);
+    const installMode = await resolveInstallMode();
     const updater = await ensureAutoUpdater();
     try {
       const targetVersion = rawTargetVersion === undefined
@@ -632,8 +882,8 @@ export function registerUpdaterIpc({
         throw new Error("Target update version must use the stable x.y.z format.");
       }
       const channelState = updater
-        ? await applyElectronUpdaterFeed(app, updater, targetVersion, manifestChannel, false, channel)
-        : updaterChannelState(app, channel, targetVersion, manifestChannel);
+        ? { ...(await applyElectronUpdaterFeed(app, updater, targetVersion, feedOptions, false, channel)), installMode }
+        : await describeChannelState(channel, targetVersion);
       if (!updater) return { available: false, reason: "unavailable", ...channelState };
 
       const result = await updater.checkForUpdates();
@@ -642,11 +892,11 @@ export function registerUpdaterIpc({
       if (targetVersion && compareVersions(info?.version ?? "", targetVersion) !== 0) {
         throw new Error(`Target update manifest did not resolve to v${targetVersion}.`);
       }
-      const available = Boolean(info?.version && isVersionNewer(info.version, currentVersion));
-      checkedUpdateVersion = available ? info.version : null;
-      checkedUpdateTargetVersion = available ? targetVersion : null;
-      checkedUpdateChannel = available ? channelState.channel : null;
-      if (!available) updateDownloaded = false;
+      const available = recordCheckedUpdate(info, channelState, targetVersion, installMode);
+      if (!available) {
+        updateDownloaded = false;
+        downloadedInstallerPath = null;
+      }
       return {
         available,
         currentVersion,
@@ -656,19 +906,12 @@ export function registerUpdaterIpc({
         ...channelState,
       };
     } catch (error) {
-      checkedUpdateVersion = null;
-      checkedUpdateTargetVersion = null;
-      checkedUpdateChannel = null;
+      clearCheckedUpdate();
       // A transient failed check must not invalidate an already-downloaded update.
       return {
         available: false,
         reason: String(error?.message ?? error),
-        ...updaterChannelState(
-          app,
-          channel,
-          null,
-          manifestChannel,
-        ),
+        ...await describeChannelState(channel),
       };
     }
   }));
@@ -676,12 +919,13 @@ export function registerUpdaterIpc({
   ipcMain.handle("omnirush:updater:download", async () => queueUpdaterOperation(async () => {
     const updater = await ensureAutoUpdater();
     if (!updater) return { ok: false, reason: "unavailable" };
+    const installMode = await resolveInstallMode();
     try {
-      await applyElectronUpdaterFeed(
+      const channelState = await applyElectronUpdaterFeed(
         app,
         updater,
         checkedUpdateTargetVersion,
-        manifestChannel,
+        feedOptions,
         false,
         checkedUpdateChannel ?? undefined,
       );
@@ -695,9 +939,7 @@ export function registerUpdaterIpc({
         ) {
           throw new Error(`Target update manifest did not resolve to v${checkedUpdateTargetVersion}.`);
         }
-        checkedUpdateVersion = info?.version && isVersionNewer(info.version, currentVersion)
-          ? info.version
-          : null;
+        recordCheckedUpdate(info, channelState, checkedUpdateTargetVersion, installMode);
       }
       if (!checkedUpdateVersion) {
         return { ok: false, reason: "No update available." };
@@ -705,15 +947,27 @@ export function registerUpdaterIpc({
       await cacheCurrentHealthyRelease().catch((error) => {
         console.warn("[updater] could not cache the current healthy installer", error);
       });
+      if (installMode === "manual-dmg") {
+        // Squirrel.Mac would refuse the zip electron-updater downloads for an
+        // ad-hoc signed app, so fetch the DMG the same manifest lists instead.
+        // The download is plain HTTPS plus the manifest's sha512.
+        if (!checkedInstallerArtifact || checkedInstallerArtifact.version !== checkedUpdateVersion) {
+          throw new Error("The release manifest does not list a macOS installer for this update.");
+        }
+        downloadedInstallerPath = await downloadManualInstaller(checkedInstallerArtifact);
+        updateDownloaded = true;
+        return { ok: true, mode: "manual-dmg" };
+      }
       // Clear any stuck ShipIt state from a prior aborted install so this
       // download applies cleanly on quit.
       await cleanStaleUpdaterState(app, shipItDefaultsDomain);
       updater.autoInstallOnAppQuit = true;
       await updater.downloadUpdate();
       updateDownloaded = true;
-      return { ok: true };
+      return { ok: true, mode: "in-place" };
     } catch (error) {
       updateDownloaded = false;
+      downloadedInstallerPath = null;
       return { ok: false, reason: String(error?.message ?? error) };
     }
   }));
@@ -722,12 +976,34 @@ export function registerUpdaterIpc({
     if (!updateDownloaded) return { ok: false, reason: "update-not-downloaded" };
     const updater = await ensureAutoUpdater();
     if (!updater) return { ok: false, reason: "unavailable" };
+    const installMode = await resolveInstallMode();
+    if (installMode === "manual-dmg") {
+      if (!downloadedInstallerPath || !checkedInstallerArtifact) {
+        return { ok: false, reason: "update-not-downloaded" };
+      }
+      if (!shell?.openPath) return { ok: false, reason: "This package cannot open the downloaded installer." };
+      try {
+        if (!(await fileMatchesSha512(downloadedInstallerPath, checkedInstallerArtifact.sha512))) {
+          updateDownloaded = false;
+          downloadedInstallerPath = null;
+          return { ok: false, reason: "The downloaded installer could not be verified. Download it again." };
+        }
+        const openError = await shell.openPath(downloadedInstallerPath);
+        if (openError) return { ok: false, reason: openError };
+        // Let the renderer show its instructions and Finder mount the image
+        // before this copy quits; the user replaces it from the DMG.
+        setTimeout(() => app.quit(), quitDelayMs);
+        return { ok: true, mode: "manual-dmg", path: downloadedInstallerPath };
+      } catch (error) {
+        return { ok: false, reason: String(error?.message ?? error) };
+      }
+    }
     try {
       // Re-assert the in-place-write default right before the swap; the ShipIt
       // defaults domain may have been wiped when stale state was cleaned.
       await enableSquirrelDirectContentsWrite();
       updater.quitAndInstall(false, true);
-      return { ok: true };
+      return { ok: true, mode: "in-place" };
     } catch (error) {
       return { ok: false, reason: String(error?.message ?? error) };
     }

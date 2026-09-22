@@ -143,7 +143,7 @@ describe("resolveRemoteWorkspaceConnectionTarget", () => {
     expect(target.ok).toBe(false);
     if (target.ok) return;
     expect(target.state.status).toBe("error");
-    expect(target.state.message).toContain("OmniRush.ai remote workers");
+    expect(target.state.message).toContain("omnirush.ai remote workers");
   });
 
   test("does not run OmniRush.ai probes against stale OmniRush.ai fields on non-OmniRush.ai remotes", () => {
@@ -158,7 +158,7 @@ describe("resolveRemoteWorkspaceConnectionTarget", () => {
 
     expect(target.ok).toBe(false);
     if (target.ok) return;
-    expect(target.state.message).toContain("OmniRush.ai remote workers");
+    expect(target.state.message).toContain("omnirush.ai remote workers");
   });
 });
 
@@ -185,8 +185,8 @@ describe("testRemoteWorkspaceConnection", () => {
     expect(result.ok).toBe(false);
     expect(result.state.status).toBe("error");
     expect(result.state.message).toContain("Token is missing");
-    expect(result.state.message).toContain("Upgrade the OmniRush.ai host");
-    expect(result.state.message).toContain("team@omnirushlabs.com");
+    expect(result.state.message).toContain("Upgrade the omnirush.ai host");
+    expect(result.state.message).toContain("https://github.com/omnirush-ai/omnirush-gui/issues");
   });
 
   test("reports unhealthy health responses as endpoint failures", async () => {
@@ -200,8 +200,8 @@ describe("testRemoteWorkspaceConnection", () => {
     expect(result.ok).toBe(false);
     expect(result.state.status).toBe("error");
     expect(result.state.message).toContain("unhealthy response");
-    expect(result.state.message).toContain("Upgrade the OmniRush.ai host");
-    expect(result.state.message).toContain("team@omnirushlabs.com");
+    expect(result.state.message).toContain("Upgrade the omnirush.ai host");
+    expect(result.state.message).toContain("https://github.com/omnirush-ai/omnirush-gui/issues");
   });
 
   test("uses fallback OmniRush.ai tokens saved on older workspace records", async () => {
@@ -234,8 +234,8 @@ describe("testRemoteWorkspaceConnection", () => {
     expect(result.ok).toBe(false);
     expect(result.state.status).toBe("error");
     expect(result.state.message).toContain("Token was rejected by worker.example.com");
-    expect(result.state.message).toContain("Upgrade the OmniRush.ai host");
-    expect(result.state.message).toContain("team@omnirushlabs.com");
+    expect(result.state.message).toContain("Upgrade the omnirush.ai host");
+    expect(result.state.message).toContain("https://github.com/omnirush-ai/omnirush-gui/issues");
   });
 
   test("reports a missing workspace separately from a dead worker", async () => {
@@ -251,8 +251,8 @@ describe("testRemoteWorkspaceConnection", () => {
     expect(result.ok).toBe(false);
     expect(result.state.status).toBe("error");
     expect(result.state.message).toContain("Workspace ws_remote was not found");
-    expect(result.state.message).toContain("Upgrade the OmniRush.ai host");
-    expect(result.state.message).toContain("team@omnirushlabs.com");
+    expect(result.state.message).toContain("Upgrade the omnirush.ai host");
+    expect(result.state.message).toContain("https://github.com/omnirush-ai/omnirush-gui/issues");
   });
 
   test("uses workspace list when the saved remote target is not workspace-scoped", async () => {
@@ -299,8 +299,8 @@ describe("testRemoteWorkspaceConnection", () => {
     expect(result.ok).toBe(false);
     expect(result.state.status).toBe("error");
     expect(result.state.message).toContain("Token was rejected by worker.example.com");
-    expect(result.state.message).toContain("Upgrade the OmniRush.ai host");
-    expect(result.state.message).toContain("team@omnirushlabs.com");
+    expect(result.state.message).toContain("Upgrade the omnirush.ai host");
+    expect(result.state.message).toContain("https://github.com/omnirush-ai/omnirush-gui/issues");
   });
 
   test("reports unauthorized workspace status separately from bad credentials", async () => {
@@ -316,8 +316,8 @@ describe("testRemoteWorkspaceConnection", () => {
     expect(result.ok).toBe(false);
     expect(result.state.status).toBe("error");
     expect(result.state.message).toContain("is not authorized");
-    expect(result.state.message).toContain("Upgrade the OmniRush.ai host");
-    expect(result.state.message).toContain("team@omnirushlabs.com");
+    expect(result.state.message).toContain("Upgrade the omnirush.ai host");
+    expect(result.state.message).toContain("https://github.com/omnirush-ai/omnirush-gui/issues");
   });
 
   test("reports endpoint reachability failures from the health probe", async () => {
@@ -333,8 +333,8 @@ describe("testRemoteWorkspaceConnection", () => {
     expect(result.ok).toBe(false);
     expect(result.state.status).toBe("error");
     expect(result.state.message).toContain("Cannot reach worker.example.com");
-    expect(result.state.message).toContain("Upgrade the OmniRush.ai host");
-    expect(result.state.message).toContain("team@omnirushlabs.com");
+    expect(result.state.message).toContain("Upgrade the omnirush.ai host");
+    expect(result.state.message).toContain("https://github.com/omnirush-ai/omnirush-gui/issues");
   });
 
   test("redacts token-like values from diagnostic error messages", async () => {

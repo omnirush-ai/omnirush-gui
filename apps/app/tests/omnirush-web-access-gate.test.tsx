@@ -3,9 +3,24 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { parseDenOmniRushWebAccess } from "../src/app/lib/den";
 import {
+  denWebBillingUrl,
   OmniRushWebAccessGateScreen,
   resolveOmniRushWebAccessGateState,
 } from "../src/react-app/domains/cloud/omnirush-web-access-gate";
+
+const originalWindow = globalThis.window;
+
+function withWindowOrigin(origin: string | null, run: () => void) {
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: origin === null ? undefined : { location: { origin } },
+  });
+  try {
+    run();
+  } finally {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
+  }
+}
 
 function billingWeb(input: Record<string, unknown>) {
   return { billing: { stripe: { web: input } } };
@@ -129,5 +144,28 @@ describe("omnirush.ai Web product-origin gate", () => {
     expect(unavailable).toContain('data-state="error"');
     expect(unavailable).toContain("omnirush.ai Web remains locked");
     expect(unavailable).toContain("Retry");
+  });
+});
+
+describe("omnirush.ai Web billing URL", () => {
+  test("resolves the billing page on the configured Den web base", () => {
+    expect(denWebBillingUrl("https://den.example.test/")).toBe("https://den.example.test/dashboard/web");
+    expect(denWebBillingUrl("https://den.example.test/api/den")).toBe("https://den.example.test/dashboard/web");
+  });
+
+  test("falls back to the page origin behind the gateway when no Den base is configured", () => {
+    withWindowOrigin("https://gw.example", () => {
+      expect(denWebBillingUrl("")).toBe("https://gw.example/dashboard/web");
+      expect(denWebBillingUrl("   ")).toBe("https://gw.example/dashboard/web");
+    });
+  });
+
+  test("never invents a link from a non-web origin or without a window", () => {
+    withWindowOrigin("file://", () => {
+      expect(denWebBillingUrl("")).toBe("");
+    });
+    withWindowOrigin(null, () => {
+      expect(denWebBillingUrl("")).toBe("");
+    });
   });
 });

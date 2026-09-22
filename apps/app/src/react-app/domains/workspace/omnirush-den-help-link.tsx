@@ -12,8 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const SUPPORT_EMAIL = "team@omnirushlabs.com";
-const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}?subject=omnirush.ai%20Den%20remote%20worker%20upgrade`;
+const SUPPORT_ISSUES_URL = "https://github.com/omnirush-ai/omnirush-gui/issues";
+const SUPPORT_NEW_ISSUE_URL = `${SUPPORT_ISSUES_URL}/new?title=${encodeURIComponent("Den remote worker upgrade")}`;
 
 /**
  * Small inline link rendered inside the remote-worker error card. When clicked,
@@ -48,12 +48,14 @@ export function OmniRushDenHelpLink() {
             <p>To get back online, you have two options:</p>
             <ul className="ml-4 list-disc space-y-2">
               <li>
-                Email{" "}
+                Open an issue at{" "}
                 <a
-                  href={SUPPORT_MAILTO}
+                  href={SUPPORT_ISSUES_URL}
+                  target="_blank"
+                  rel="noreferrer"
                   className="font-medium text-blue-11 hover:underline"
                 >
-                  {SUPPORT_EMAIL}
+                  {SUPPORT_ISSUES_URL}
                 </a>{" "}
                 and ask us to upgrade your worker.
               </li>
@@ -72,10 +74,10 @@ export function OmniRushDenHelpLink() {
             <Button
               type="button"
               onClick={() => {
-                window.location.href = SUPPORT_MAILTO;
+                window.open(SUPPORT_NEW_ISSUE_URL, "_blank", "noopener,noreferrer");
               }}
             >
-              Email support
+              Open an issue
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -78,7 +78,16 @@ export function ForcedSigninPage({ developerMode }: ForcedSigninPageProps) {
 
   const openBrowserAuth = useCallback(
     (mode: "sign-in" | "sign-up") => {
-      const url = buildDenAuthUrl(baseUrl, mode);
+      let url: string;
+      try {
+        url = buildDenAuthUrl(baseUrl, mode);
+      } catch (error) {
+        // No control plane configured: surface it next to the server URL
+        // field instead of failing silently inside the click handler.
+        setStatusMessage(null);
+        setAuthError(error instanceof Error ? error.message : t("den.error_base_url"));
+        return;
+      }
       markDesktopSignInInitiated();
       setSigninFallbackUrl(url);
       setStatusMessage(

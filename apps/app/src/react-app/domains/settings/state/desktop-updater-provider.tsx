@@ -70,6 +70,10 @@ export function DesktopUpdateButton() {
   const appName = useBrandAppName();
   const [confirmRestart, setConfirmRestart] = useState(false);
   if (updater?.updateStatus?.state !== "ready") return null;
+  // macOS builds without a Developer ID signature cannot swap themselves:
+  // the shell opens the downloaded DMG and quits, so say that instead of
+  // promising a restart.
+  const manualInstall = updater.installMode === "manual-dmg";
   return (
     <>
       <Tooltip>
@@ -82,22 +86,32 @@ export function DesktopUpdateButton() {
             className="mac:titlebar-no-drag h-7 gap-1.5 rounded-lg border border-foreground/[0.06] bg-foreground/[0.04] px-2.5 text-xs font-medium text-foreground/80 shadow-none transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
           >
             <RotateCw className="size-3.5 opacity-70" strokeWidth={1.75} aria-hidden="true" />
-            {t("settings.update_restart_button")}
+            {manualInstall ? t("settings.update_open_installer_button") : t("settings.update_restart_button")}
           </Button>
         } />
-        <TooltipContent side="bottom" align="end">{t("settings.update_on_quit_hint")}</TooltipContent>
+        <TooltipContent side="bottom" align="end">
+          {manualInstall ? t("settings.update_manual_install_hint") : t("settings.update_on_quit_hint")}
+        </TooltipContent>
       </Tooltip>
       <AlertDialog open={confirmRestart} onOpenChange={setConfirmRestart}>
         <AlertDialogContent className="max-w-[340px] gap-0 rounded-[15px] border border-border p-6 ring-0 sm:max-w-[340px]">
           <RotateCw className="mb-3 size-6 text-muted-foreground" aria-hidden="true" />
-          <AlertDialogTitle className="mb-2 text-[19px] leading-tight tracking-tight">{t("settings.update_restart_now_title", undefined, { appName })}</AlertDialogTitle>
-          <AlertDialogDescription className="text-xs leading-[1.75]">{t("settings.update_restart_now_message", undefined, { appName })}</AlertDialogDescription>
+          <AlertDialogTitle className="mb-2 text-[19px] leading-tight tracking-tight">
+            {manualInstall
+              ? t("settings.update_open_installer_now_title")
+              : t("settings.update_restart_now_title", undefined, { appName })}
+          </AlertDialogTitle>
+          <AlertDialogDescription className="text-xs leading-[1.75]">
+            {manualInstall
+              ? t("settings.update_open_installer_now_message", undefined, { appName })
+              : t("settings.update_restart_now_message", undefined, { appName })}
+          </AlertDialogDescription>
           <AlertDialogFooter className="mt-5">
             <AlertDialogCancel variant="ghost" size="sm" className="rounded-[7px] text-[11px] text-muted-foreground">{t("settings.update_keep_working")}</AlertDialogCancel>
             <AlertDialogAction size="sm" className="rounded-[7px] text-[11px]" onClick={() => {
               setConfirmRestart(false);
               void updater.installUpdateAndRestart();
-            }}>{t("settings.update_restart_confirm_action")}</AlertDialogAction>
+            }}>{manualInstall ? t("settings.update_open_installer_button") : t("settings.update_restart_confirm_action")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

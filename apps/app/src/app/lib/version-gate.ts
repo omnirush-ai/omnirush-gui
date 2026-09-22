@@ -6,6 +6,7 @@
 
 import {
   createDenClient,
+  isDenControlPlaneConfigured,
   readDenSettings,
   type DenAppVersionMetadata,
   type DenDesktopConfig,
@@ -341,10 +342,15 @@ export async function resolveAutomaticStableDesktopUpdate(input: {
  * this returns `false` — the caller must treat that as "do not surface
  * the update".
  *
+ * Without a configured control plane (omnirush.ai ships none) there is no
+ * inventory to consult: the GitHub release feed the shell reads is the only
+ * authority, so the update is supported and no other host is contacted.
+ *
  * No-op safe: callers can invoke this without any Den auth; the client
  * will omit the token when none is persisted.
  */
 export async function isUpdateSupportedByDen(updateVersion: string): Promise<boolean> {
+  if (!isDenControlPlaneConfigured()) return true;
   const latestAppVersion = await readDenLatestAppVersion();
   if (!latestAppVersion) return false;
   const comparison = compareVersions(updateVersion, latestAppVersion);
@@ -364,6 +370,7 @@ export async function isAlphaUpdateAllowed(
   currentVersion?: string | null,
 ): Promise<boolean> {
   if (!isAlphaChannelAllowedByDesktopConfig(desktopConfig)) return false;
+  if (!isDenControlPlaneConfigured()) return true;
   const latestAppVersion = await readDenLatestAppVersion();
   if (!latestAppVersion) return false;
   return isAlphaUpdateAllowedByVersionCeiling({

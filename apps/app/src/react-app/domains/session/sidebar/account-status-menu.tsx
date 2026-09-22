@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { t } from "@/i18n";
 import { usePlatform } from "../../../kernel/platform";
 import { isDenSessionRestoring, useDenAuth } from "../../cloud/den-auth-provider";
+import { useDenControlPlaneConfigured } from "../../cloud/use-den-control-plane-configured";
 import { useDesktopRestriction } from "../../cloud/desktop-config-provider";
 import { useControlAction, type OmniRushControlAction } from "../../../shell/control/control-provider";
 import { useShellConfig } from "../../../shell/shell-config";
@@ -48,7 +49,7 @@ import {
 } from "../../connections/omnirush-connect-status";
 import type { SessionCloudMcpMaintenanceState } from "../../connections/use-session-mcp-maintenance";
 
-const DOCS_URL = "https://omnirushlabs.com/docs";
+const DOCS_URL = "https://github.com/omnirush-ai/omnirush-gui#readme";
 const BOOT_STARTED_AT = Date.now();
 const INITIALIZING_MS = 15_000;
 
@@ -193,6 +194,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   const [pasteBusy, setPasteBusy] = useState(false);
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [manualAuthOpen, setManualAuthOpen] = useState(false);
+  const denControlPlaneConfigured = useDenControlPlaneConfigured();
   const [initializing, setInitializing] = useState(
     () => Date.now() - BOOT_STARTED_AT < INITIALIZING_MS,
   );
@@ -281,8 +283,18 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   const showStatus = shellConfig.statusBar && (runtimeStatus !== null || connectStatus !== null);
 
   const openSignIn = () => {
+    let url: string;
+    try {
+      url = buildDenAuthUrl(readDenBootstrapConfig().baseUrl, "sign-up");
+    } catch (error) {
+      // No control plane configured: show the reason in the manual sign-in
+      // panel (a pasted sign-in link carries its own server URL).
+      setPasteError(error instanceof Error ? error.message : t("den.error_base_url"));
+      setManualAuthOpen(true);
+      return;
+    }
     markDesktopSignInInitiated();
-    platform.openLink(buildDenAuthUrl(readDenBootstrapConfig().baseUrl, "sign-up"));
+    platform.openLink(url);
   };
 
   const submitPastedCode = async () => {
@@ -471,18 +483,20 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
             onPointerDown={(event) => event.stopPropagation()}
             onKeyDown={(event) => event.stopPropagation()}
           >
-            <Button
-              type="button"
-              className="h-11 w-full justify-between px-3 text-sm"
-              onClick={openSignIn}
-              data-testid="account-cloud-signin-button"
-            >
-              <span className="inline-flex min-w-0 items-center gap-2">
-                <UserRound className="size-3.5" />
-                <span className="truncate">Sign in to omnirush.ai Cloud</span>
-              </span>
-              <ArrowUpRight className="size-3.5" />
-            </Button>
+            {denControlPlaneConfigured ? (
+              <Button
+                type="button"
+                className="h-11 w-full justify-between px-3 text-sm"
+                onClick={openSignIn}
+                data-testid="account-cloud-signin-button"
+              >
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <UserRound className="size-3.5" />
+                  <span className="truncate">Sign in to omnirush.ai Cloud</span>
+                </span>
+                <ArrowUpRight className="size-3.5" />
+              </Button>
+            ) : null}
 
             <button
               type="button"

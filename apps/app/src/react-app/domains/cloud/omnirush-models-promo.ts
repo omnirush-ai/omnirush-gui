@@ -4,11 +4,9 @@ import {
   buildDenAuthUrl,
   getDenInferenceUrl,
   isSelfHostedControlPlane,
-  HOSTED_DEFAULT_DEN_BASE_URL,
   readDenBootstrapConfig,
   readDenSettings,
 } from "../../../app/lib/den";
-import { isDefaultControlPlaneUrl } from "../settings/cloud/control-plane-url";
 import { denSettingsChangedEvent } from "../../../app/lib/den-session-events";
 import { useSyncExternalStore } from "react";
 
@@ -31,8 +29,10 @@ export function areOmniRushModelsPromosDisabled() {
   return isSelfHostedControlPlane();
 }
 
-export function isOmniRushModelsPromoEligibleForDenBaseUrl(baseUrl: string) {
-  return !areOmniRushModelsPromosDisabled() && isDefaultControlPlaneUrl(baseUrl, HOSTED_DEFAULT_DEN_BASE_URL);
+export function isOmniRushModelsPromoEligibleForDenBaseUrl(_baseUrl: string) {
+  // The promo advertised the hosted omnirush.ai Cloud models, which no
+  // control plane serves any more.
+  return !areOmniRushModelsPromosDisabled();
 }
 
 export function isOmniRushModelsPromoEligible() {

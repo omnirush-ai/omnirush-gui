@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { formatBytes, formatRelativeTime } from "../../../../app/utils";
 import { t } from "../../../../i18n";
 import type { ReleaseChannel } from "../../../../app/types";
+import type { UpdaterInstallMode } from "../../../../app/lib/desktop";
 import type { SettingsUpdateStatus } from "../state/electron-updater-state";
 import {
   LayoutSectionItem,
@@ -82,11 +83,17 @@ export type UpdatesViewProps = {
    */
   onReleaseChannelChange?: (next: ReleaseChannel) => void;
   /**
-   * Whether the alpha channel is available on this platform. Alpha is
-   * macOS-only today; other platforms should receive `false` so the
-   * toggle is hidden.
+   * Whether this distribution ships an Alpha feed. The public build does
+   * not, so the channel selector stays hidden unless the desktop shell
+   * reports a feed.
    */
   alphaChannelSupported?: boolean;
+  /**
+   * How the shell applies a downloaded update. "manual-dmg" (macOS builds
+   * without a Developer ID signature) opens the installer instead of
+   * restarting in place, so the buttons say so.
+   */
+  installMode?: UpdaterInstallMode | null;
 };
 
 export function UpdatesView(props: UpdatesViewProps) {
@@ -104,6 +111,10 @@ export function UpdatesView(props: UpdatesViewProps) {
       ? t("settings.update_download_failed")
       : t("settings.update_check_failed");
   const updateNotes = props.updateStatus?.notes ?? null;
+  const manualInstall = props.installMode === "manual-dmg";
+  const installButtonLabel = manualInstall
+    ? t("settings.update_open_installer_button")
+    : t("settings.update_install_button");
 
   const updateRestartActiveRunsMessage =
     updateState === "ready" && props.anyActiveRuns
@@ -131,7 +142,7 @@ export function UpdatesView(props: UpdatesViewProps) {
                         ? t("settings.update_blocked_version", undefined, { version: updateVersion ?? "" })
                       : updateState === "downloading"
                         ? t("settings.update_downloading")
-                        : updateState === "ready"
+                        : updateState === "ready" || updateState === "installer-opened"
                           ? t("settings.update_ready_version", undefined, { version: updateVersion ?? "" })
                           : updateState === "error"
                             ? updateErrorTitle
@@ -179,7 +190,7 @@ export function UpdatesView(props: UpdatesViewProps) {
                         }}
                         disabled={props.busy}
                       >
-                        {t("settings.update_install_button")}
+                        {installButtonLabel}
                       </Button>
                     ) : null}
                   </div>
@@ -204,6 +215,20 @@ export function UpdatesView(props: UpdatesViewProps) {
                 </Alert>
               ) : null}
 
+              {updateState === "ready" && manualInstall ? (
+                <Alert>
+                  <Info />
+                  <AlertDescription>{t("settings.update_manual_install_hint")}</AlertDescription>
+                </Alert>
+              ) : null}
+
+              {updateState === "installer-opened" ? (
+                <Alert>
+                  <Info />
+                  <AlertDescription>{t("settings.update_installer_opened")}</AlertDescription>
+                </Alert>
+              ) : null}
+
               {updateRestartActiveRunsMessage ? (
                 <Alert>
                   <Info />
@@ -215,7 +240,7 @@ export function UpdatesView(props: UpdatesViewProps) {
                 open={confirmRestartOpen}
                 title={t("settings.update_restart_confirm_title")}
                 message={t("settings.update_restart_confirm_message")}
-                confirmLabel={t("settings.update_install_button")}
+                confirmLabel={installButtonLabel}
                 cancelLabel={t("common.cancel")}
                 onConfirm={() => {
                   setConfirmRestartOpen(false);
@@ -247,7 +272,7 @@ export function UpdatesView(props: UpdatesViewProps) {
               <LayoutSectionItemHeader>
                 <LayoutSectionItemTitle>Release channel</LayoutSectionItemTitle>
                 <LayoutSectionItemDescription>
-                  Stable gets fully tested releases. Alpha includes the very latest changes but may be less polished (macOS only).
+                  Stable gets fully tested releases. Alpha includes the very latest changes but may be less polished.
                 </LayoutSectionItemDescription>
                 <LayoutSectionItemHeaderActions>
                   <Select

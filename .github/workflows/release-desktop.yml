@@ -75,16 +75,19 @@ jobs:
             platform: macos
             target: aarch64-apple-darwin
             builder_args: --mac --arm64
+            update_manifest: latest-mac.yml
           - name: Windows x64
             runner: windows-2022
             platform: windows
             target: x86_64-pc-windows-msvc
             builder_args: --win --x64
+            update_manifest: latest.yml
           - name: Linux x64
             runner: ubuntu-22.04
             platform: linux
             target: x86_64-unknown-linux-gnu
             builder_args: --linux --x64
+            update_manifest: latest-linux.yml
     runs-on: ${{ matrix.runner }}
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
@@ -152,9 +155,28 @@ jobs:
         shell: bash
         run: node apps/desktop/scripts/verify-packaged-imports.mjs
 
-      - name: Verify and upload installers
+      # electron-updater discovers updates through this manifest. A release
+      # without it (or with checksums that do not match the uploaded
+      # installers) leaves every installed app unable to update.
+      - name: Verify update manifest
+        env:
+          UPDATE_MANIFEST: ${{ matrix.update_manifest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "apps/desktop/dist-electron/$UPDATE_MANIFEST" ]; then
+            echo "electron-builder did not emit apps/desktop/dist-electron/$UPDATE_MANIFEST; in-app updates would 404." >&2
+            find apps/desktop/dist-electron -maxdepth 1 -type f -print >&2 || true
+            exit 1
+          fi
+          node apps/desktop/scripts/verify-update-manifest.mjs \
+            --manifest "apps/desktop/dist-electron/$UPDATE_MANIFEST" \
+            --version "$RELEASE_VERSION"
+
+      - name: Verify and upload installers and update manifest
         env:
           GH_TOKEN: ${{ github.token }}
+          UPDATE_MANIFEST: ${{ matrix.update_manifest }}
         shell: bash
         run: |
           set -euo pipefail
@@ -165,6 +187,12 @@ jobs:
             find apps/desktop/dist-electron -maxdepth 1 -type f -print >&2 || true
             exit 1
           fi
+          manifest="apps/desktop/dist-electron/$UPDATE_MANIFEST"
+          if [ ! -f "$manifest" ]; then
+            echo "Update manifest $manifest is missing; refusing to publish installers the app cannot update to." >&2
+            exit 1
+          fi
+          assets+=("$manifest")
           printf 'Uploading %s\n' "${assets[@]}"
           gh release upload "$RELEASE_TAG" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \

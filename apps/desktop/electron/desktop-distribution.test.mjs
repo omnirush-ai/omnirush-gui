@@ -8,6 +8,7 @@ import {
   desktopActivationRequired,
   enterpriseActivationComplete,
   enterprisePreactivationCommandAllowed,
+  normalizeAlphaUpdateFeedUrl,
   resolveDesktopDistribution,
 } from "./desktop-distribution.mjs";
 
@@ -20,6 +21,7 @@ describe("resolveDesktopDistribution", () => {
       protocolScheme: "omnirush",
       requireSignin: false,
       requireActivation: false,
+      alphaUpdateFeedUrl: null,
     });
   });
 
@@ -37,6 +39,7 @@ describe("resolveDesktopDistribution", () => {
         protocolScheme: "omnirush",
         requireSignin: true,
         requireActivation: false,
+        alphaUpdateFeedUrl: null,
       },
     );
   });
@@ -55,6 +58,7 @@ describe("resolveDesktopDistribution", () => {
       protocolScheme: "omnirush",
       requireSignin: true,
       requireActivation: true,
+      alphaUpdateFeedUrl: null,
     });
   });
 
@@ -78,6 +82,45 @@ describe("resolveDesktopDistribution", () => {
       }).flavor,
       "enterprise",
     );
+  });
+
+  it("enables an Alpha feed only from immutable package metadata in packaged builds", () => {
+    assert.deepEqual(
+      resolveDesktopDistribution({
+        isPackaged: true,
+        packageFlavor: "public",
+        environmentFlavor: "public",
+        packageAlphaUpdateFeedUrl: "https://updates.example.com/alpha/",
+        environmentAlphaUpdateFeedUrl: "https://ignored.example.com/alpha",
+      }),
+      { ...PUBLIC_DESKTOP_DISTRIBUTION, alphaUpdateFeedUrl: "https://updates.example.com/alpha" },
+    );
+    assert.equal(
+      resolveDesktopDistribution({
+        isPackaged: true,
+        packageFlavor: "public",
+        environmentAlphaUpdateFeedUrl: "https://ignored.example.com/alpha",
+      }),
+      PUBLIC_DESKTOP_DISTRIBUTION,
+    );
+    assert.equal(
+      resolveDesktopDistribution({
+        isPackaged: false,
+        packageFlavor: "public",
+        environmentAlphaUpdateFeedUrl: "https://dev.example.com/alpha",
+      }).alphaUpdateFeedUrl,
+      "https://dev.example.com/alpha",
+    );
+  });
+
+  it("accepts only a plain https feed directory for Alpha updates", () => {
+    assert.equal(normalizeAlphaUpdateFeedUrl("https://updates.example.com/alpha/"), "https://updates.example.com/alpha");
+    assert.equal(normalizeAlphaUpdateFeedUrl("http://updates.example.com/alpha"), null);
+    assert.equal(normalizeAlphaUpdateFeedUrl("https://user:secret@updates.example.com/alpha"), null);
+    assert.equal(normalizeAlphaUpdateFeedUrl("https://updates.example.com/alpha?token=1"), null);
+    assert.equal(normalizeAlphaUpdateFeedUrl("not a url"), null);
+    assert.equal(normalizeAlphaUpdateFeedUrl(""), null);
+    assert.equal(normalizeAlphaUpdateFeedUrl(undefined), null);
   });
 });
 

@@ -9,6 +9,7 @@ import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-ico
 import { t } from "../../../../i18n";
 import { buildDenAuthUrl, readDenBootstrapConfig } from "../../../../app/lib/den";
 import { markDesktopSignInInitiated } from "../../../../app/lib/den-sign-in-intent";
+import { useDenControlPlaneConfigured } from "../../cloud/use-den-control-plane-configured";
 import { type OmniRushServerClient, type OmniRushServerStatus } from "../../../../app/lib/omnirush-server";
 import { getDisplaySessionTitle } from "../../../../app/lib/session-title";
 import type { BootPhase } from "../../../../app/lib/startup-boot";
@@ -475,12 +476,21 @@ export function SessionPage(props: SessionPageProps) {
   const activeSidePanel = sessionSidePanel;
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
-  const showCloudSignIn = shellConfig.cloudSignin && !denAuth.isSignedIn && denAuth.status !== "checking";
+  const denControlPlaneConfigured = useDenControlPlaneConfigured();
+  const showCloudSignIn =
+    shellConfig.cloudSignin && denControlPlaneConfigured && !denAuth.isSignedIn && denAuth.status !== "checking";
   const openCloudSignIn = useCallback(() => {
-    const baseUrl = readDenBootstrapConfig().baseUrl;
+    let url: string;
+    try {
+      // Label stays "Sign in"; opens the sign-up tab so new users aren't defaulted into sign-in.
+      url = buildDenAuthUrl(readDenBootstrapConfig().baseUrl, "sign-up");
+    } catch {
+      // No control plane configured: the button is hidden in that state, and
+      // the sign-in intent must not be marked without a URL to open.
+      return;
+    }
     markDesktopSignInInitiated();
-    // Label stays "Sign in"; opens the sign-up tab so new users aren't defaulted into sign-in.
-    platform.openLink(buildDenAuthUrl(baseUrl, "sign-up"));
+    platform.openLink(url);
   }, [platform]);
 
   useReactRenderWatchdog("SessionPage", {

@@ -1,8 +1,10 @@
 const ENV_FEEDBACK_URL = String(import.meta.env.VITE_OMNIRUSH_FEEDBACK_URL ?? "").trim();
 const ENV_APP_VERSION = String(import.meta.env.VITE_OMNIRUSH_APP_VERSION ?? "").trim();
 
+// Feedback lands in the public issue tracker unless a deployment provides its
+// own form; the query parameters below become context for the report.
 export const DEFAULT_FEEDBACK_URL =
-  ENV_FEEDBACK_URL || "https://omnirushlabs.com/feedback";
+  ENV_FEEDBACK_URL || "https://github.com/omnirush-ai/omnirush-gui/issues/new";
 
 type FeedbackUrlOptions = {
   entrypoint: string;

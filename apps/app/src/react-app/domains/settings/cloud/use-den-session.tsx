@@ -221,7 +221,16 @@ export function useDenSession({
 
   const openBrowserAuth = React.useCallback(
     (mode: "sign-in" | "sign-up") => {
-      const url = buildDenAuthUrl(baseUrl, mode);
+      let url: string;
+      try {
+        url = buildDenAuthUrl(baseUrl, mode);
+      } catch (error) {
+        // No control plane configured: say so next to the server URL field
+        // instead of failing silently inside the click handler.
+        setStatusMessage(null);
+        setAuthError(error instanceof Error ? error.message : t("den.error_base_url"));
+        return;
+      }
       const usesPasteHandoff = new URL(url).searchParams.get("desktopAuth") === "1";
       markDesktopSignInInitiated();
       setSigninFallbackUrl(url);

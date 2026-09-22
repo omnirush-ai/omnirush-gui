@@ -23,6 +23,7 @@ import { AttributionStep, type AttributionSource } from "../domains/onboarding/a
 import { CreateWorkspaceModal } from "../domains/workspace/create-workspace-modal";
 import type { CreateWorkspaceOptions } from "../domains/workspace/types";
 import { useDenAuth } from "../domains/cloud/den-auth-provider";
+import { useDenControlPlaneConfigured } from "../domains/cloud/use-den-control-plane-configured";
 import { JoinOrganizationDialog } from "../domains/cloud/join-organization-dialog";
 import { resolveOmniRushConnection } from "./omnirush-connection";
 import { captureAnalyticsEvent } from "../../app/lib/analytics";
@@ -132,6 +133,7 @@ export function WelcomeRoute() {
   const navigate = useNavigate();
   const local = useLocal();
   const platform = usePlatform();
+  const denControlPlaneConfigured = useDenControlPlaneConfigured();
   const denAuth = useDenAuth();
   const [state, dispatch] = useReducer(welcomeReducer, initialWelcomeState);
   const [manualFolder, setManualFolder] = useState("");
@@ -347,10 +349,18 @@ export function WelcomeRoute() {
   }, [handleCreateWorkspace, manualFolder]);
 
   const handleTeamSignIn = useCallback(() => {
+    // Resolve the sign-in URL before any side effect: without a control plane
+    // there is nothing to open, so onboarding and the sign-in intent must not
+    // be marked. The button is hidden in that state (see onTeamSignIn below).
+    let url: string;
+    try {
+      url = buildDenAuthUrl(readDenSettings().baseUrl || DEFAULT_DEN_BASE_URL, "sign-in");
+    } catch {
+      return;
+    }
     markOnboardingComplete();
-    const settings = readDenSettings();
     markDesktopSignInInitiated();
-    platform.openLink(buildDenAuthUrl(settings.baseUrl || DEFAULT_DEN_BASE_URL, "sign-in"));
+    platform.openLink(url);
   }, [markOnboardingComplete, platform]);
 
   const finishOnboarding = useCallback(() => {
@@ -392,7 +402,7 @@ export function WelcomeRoute() {
         onManualFolderChange={setManualFolder}
         onUseManualFolder={handleUseManualFolder}
         showManualFolder={import.meta.env.DEV && isDesktopRuntime()}
-        onTeamSignIn={handleTeamSignIn}
+        onTeamSignIn={denControlPlaneConfigured ? handleTeamSignIn : undefined}
         onJoinOrganization={() => setJoinOrganizationOpen(true)}
       />
       <JoinOrganizationDialog

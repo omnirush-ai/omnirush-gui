@@ -5,7 +5,7 @@ declare const expect: (value: unknown) => {
   toBe: (expected: unknown) => void;
 };
 
-import { DEFAULT_DEN_BASE_URL, HOSTED_DEFAULT_DEN_BASE_URL, setDenBootstrapConfig } from "../../../app/lib/den";
+import { DEFAULT_DEN_BASE_URL, setDenBootstrapConfig } from "../../../app/lib/den";
 import {
   hasOmniRushModelsAvailable,
   isOmniRushModelsPromoEligible,
@@ -20,8 +20,9 @@ afterEach(async () => {
 });
 
 describe("omnirush.ai Models promo eligibility", () => {
-  test("allows promotions on the default Den URL after normalization", () => {
-    expect(isOmniRushModelsPromoEligibleForDenBaseUrl(`${HOSTED_DEFAULT_DEN_BASE_URL}/api/den/`)).toBe(true);
+  test("never promotes hosted models: omnirush.ai has no hosted control plane", () => {
+    expect(isOmniRushModelsPromoEligibleForDenBaseUrl("https://den.example.com/api/den/")).toBe(false);
+    expect(isOmniRushModelsPromoEligible()).toBe(false);
   });
 
   test("suppresses promotions for custom configured Den URLs", async () => {

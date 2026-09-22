@@ -147,6 +147,14 @@ export type RecoveryActionResult = {
 // Electron bridge surface
 // ---------------------------------------------------------------------------
 
+/**
+ * How the desktop shell applies a downloaded update. "in-place" is
+ * electron-updater's swap (Squirrel.Mac, NSIS, AppImage); "manual-dmg" means
+ * the running macOS app is not Developer ID signed, so the shell downloads
+ * the DMG and opens it for a drag-to-Applications install instead.
+ */
+export type UpdaterInstallMode = "in-place" | "manual-dmg";
+
 declare global {
   interface Window {
     __omnirushRecoveryControl?: {
@@ -212,11 +220,15 @@ declare global {
           channel: "stable" | "alpha";
           feedUrl: string;
           currentVersion: string;
+          installMode?: UpdaterInstallMode;
+          alphaChannelSupported?: boolean;
         }>;
         setChannel?: (channel: "stable" | "alpha") => Promise<{
           channel: "stable" | "alpha";
           feedUrl: string;
           currentVersion: string;
+          installMode?: UpdaterInstallMode;
+          alphaChannelSupported?: boolean;
         }>;
         check?: (channel?: "stable" | "alpha", targetVersion?: string) => Promise<{
           available: boolean;
@@ -227,9 +239,11 @@ declare global {
           channel?: "stable" | "alpha";
           feedUrl?: string;
           reason?: string;
+          installMode?: UpdaterInstallMode;
+          alphaChannelSupported?: boolean;
         }>;
-        download?: () => Promise<{ ok: boolean; reason?: string }>;
-        installAndRestart?: () => Promise<{ ok: boolean; reason?: string }>;
+        download?: () => Promise<{ ok: boolean; reason?: string; mode?: UpdaterInstallMode }>;
+        installAndRestart?: () => Promise<{ ok: boolean; reason?: string; mode?: UpdaterInstallMode; path?: string }>;
       };
       recovery?: {
         recordHealthy?: () => Promise<unknown>;

@@ -69,7 +69,7 @@ describe("Den sign-out", () => {
     expect(requests).toEqual(["https://api.den.test/api/auth/sign-out"]);
   });
 
-  test("routes hosted desktop sign-out to the nested hosted API default", async () => {
+  test("routes desktop sign-out through the same-origin API proxy by default", async () => {
     const requests: string[] = [];
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -85,11 +85,11 @@ describe("Den sign-out", () => {
     });
 
     await createDenClient({
-      baseUrl: "https://app.omnirushlabs.com",
+      baseUrl: "https://den.example.com",
       token: "tok_test",
     }).signOut();
 
-    expect(requests).toEqual(["https://api.app.omnirushlabs.com/api/auth/sign-out"]);
+    expect(requests).toEqual(["https://den.example.com/api/den/api/auth/sign-out"]);
   });
 
   test("keeps legacy desktop proxy API bases working for sign-out", async () => {
