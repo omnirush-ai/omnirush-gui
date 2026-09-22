@@ -1994,6 +1994,7 @@ export function createRuntimeManager({
         ? {
             ...gatewayCredentials,
             persist: (credentials) => omnirushGatewayCredentials.save(credentials),
+            invalidate: () => omnirushGatewayCredentials.clear({ revokeRemote: false }),
           }
         : undefined,
     });

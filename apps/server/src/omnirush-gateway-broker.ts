@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import { externalFetch } from "./server-fetch.js";
-import type { OmniRushGatewayCredentials } from "./types.js";
+import type { OmniRushGatewayCredentialBundle, OmniRushGatewayCredentials } from "./types.js";
 
 type BrokerOptions = {
   credentials?: OmniRushGatewayCredentials;
@@ -62,6 +62,41 @@ function collectorUrl(gatewayUrl: string): string {
   return url.toString();
 }
 
+/**
+ * Set by the omnirush-reasoning-effort engine plugin; keep the two
+ * definitions identical. The header is consumed here and never forwarded.
+ */
+const REASONING_EFFORT_HEADER = "x-omnirush-reasoning-effort";
+const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requestedReasoningEffort(request: Request): string | null {
+  const effort = request.headers.get(REASONING_EFFORT_HEADER)?.trim().toLowerCase() ?? "";
+  return REASONING_EFFORTS.has(effort) ? effort : null;
+}
+
+/**
+ * Guarantee the selected effort reaches omnirush.ai as Responses-API
+ * `reasoning.effort`. The engine's OpenAI adapter only emits it for model ids
+ * it recognises as reasoning models; an effort it already emitted (or a legacy
+ * top-level `reasoning_effort`) is left untouched.
+ */
+function withReasoningEffort(body: ArrayBuffer, effort: string): ArrayBuffer | string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    return body;
+  }
+  if (!isRecord(parsed) || typeof parsed.reasoning_effort === "string") return body;
+  const reasoning = isRecord(parsed.reasoning) ? parsed.reasoning : {};
+  if (typeof reasoning.effort === "string") return body;
+  return JSON.stringify({ ...parsed, reasoning: { ...reasoning, effort } });
+}
+
 function responseHeaders(headers: Headers): Headers {
   const result = new Headers();
   for (const [name, value] of headers) {
@@ -78,6 +113,7 @@ export class OmniRushGatewayBroker {
   private state: CredentialState | null;
   private readonly engineToken: string;
   private readonly persist?: OmniRushGatewayCredentials["persist"];
+  private readonly invalidate?: OmniRushGatewayCredentials["invalidate"];
   private readonly fetcher: typeof externalFetch;
   private refreshInFlight: Promise<boolean> | null = null;
 
@@ -92,6 +128,7 @@ export class OmniRushGatewayBroker {
       : null;
     this.engineToken = options.engineToken?.trim() ?? "";
     this.persist = options.credentials?.persist;
+    this.invalidate = options.credentials?.invalidate;
     this.fetcher = options.fetch ?? externalFetch;
   }
 
@@ -111,13 +148,23 @@ export class OmniRushGatewayBroker {
 
     const body = request.method === "GET"
       ? undefined
-      : await request.arrayBuffer();
+      : await this.requestBody(request, normalizedPath);
     const tokenUsed = this.state.accessToken;
     let response = await this.forward(request, normalizedPath, body, tokenUsed);
-    const credentialAlreadyRotated = this.state.accessToken !== tokenUsed;
-    if (response.status === 401 && (credentialAlreadyRotated || await this.refresh(tokenUsed))) {
+    const credentialAlreadyRotated = this.state?.accessToken !== tokenUsed;
+    if (response.status === 401 && this.state && (credentialAlreadyRotated || await this.refresh(tokenUsed))) {
       await response.body?.cancel().catch(() => undefined);
       response = await this.forward(request, normalizedPath, body);
+    }
+    if (response.status === 401 && !this.state) {
+      await response.body?.cancel().catch(() => undefined);
+      return Response.json({
+        error: {
+          message: "Your omnirush.ai session has expired. Sign in again from Settings.",
+          type: "authentication_error",
+          code: "omnirush_account_required",
+        },
+      }, { status: 401 });
     }
     return new Response(response.body, {
       status: response.status,
@@ -140,15 +187,22 @@ export class OmniRushGatewayBroker {
       signal: AbortSignal.timeout(30_000),
     });
     let response = await send();
-    const credentialAlreadyRotated = this.state.accessToken !== tokenUsed;
-    if (response.status === 401 && (credentialAlreadyRotated || await this.refresh(tokenUsed))) {
+    const credentialAlreadyRotated = this.state?.accessToken !== tokenUsed;
+    if (response.status === 401 && this.state && (credentialAlreadyRotated || await this.refresh(tokenUsed))) {
       await response.body?.cancel().catch(() => undefined);
       response = await send();
     }
     return response;
   }
 
-  private forward(request: Request, path: string, body: ArrayBuffer | undefined, accessToken?: string): Promise<Response> {
+  private async requestBody(request: Request, path: string): Promise<ArrayBuffer | string> {
+    const body = await request.arrayBuffer();
+    const effort = requestedReasoningEffort(request);
+    if (!effort || (path !== "responses" && path !== "responses/compact")) return body;
+    return withReasoningEffort(body, effort);
+  }
+
+  private forward(request: Request, path: string, body: ArrayBuffer | string | undefined, accessToken?: string): Promise<Response> {
     if (!this.state) throw new Error("OmniRush gateway credentials are unavailable");
     const headers = new Headers();
     headers.set("Authorization", `Bearer ${accessToken ?? this.state.accessToken}`);
@@ -185,6 +239,10 @@ export class OmniRushGatewayBroker {
     });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
+      if (response.status === 401 || response.status === 403) {
+        this.state = null;
+        void this.invalidate?.().catch(() => undefined);
+      }
       return false;
     }
     const payload: unknown = await response.json();
@@ -198,7 +256,7 @@ export class OmniRushGatewayBroker {
     return true;
   }
 
-  private async persistLatest(credentials: CredentialState, attempt = 0): Promise<void> {
+  private async persistLatest(credentials: OmniRushGatewayCredentialBundle, attempt = 0): Promise<void> {
     if (!this.persist) return;
     try {
       await this.persist(credentials);

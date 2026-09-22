@@ -101,7 +101,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
     try {
       await omnirushAccountConnect();
       setAccount(await omnirushAccountStatus());
-      setAccountMessage("Account connected. Astra is ready.");
+      setAccountMessage("Account connected. omnirush.ai models are ready.");
     } catch (error) {
       setAccountMessage(error instanceof Error ? error.message : "The account could not be connected.");
     } finally {
@@ -112,9 +112,11 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   async function signOutAccount() {
     setAccountBusy(true);
     try {
-      await omnirushAccountSignOut();
+      const result = await omnirushAccountSignOut();
       setAccount({ connected: false, gatewayConfigured: account?.gatewayConfigured ?? false });
-      setAccountMessage("Signed out on this Mac.");
+      setAccountMessage(result.remoteRevoked
+        ? "Signed out on this Mac and revoked its device session."
+        : "Signed out on this Mac. The remote session could not be reached.");
     } finally {
       setAccountBusy(false);
     }
@@ -142,7 +144,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                 {accountMessage || (account.connected
                   ? account.usage
                     ? `${compactTokenCount(account.usage.remainingTokens)} of ${compactTokenCount(account.usage.tokenLimit)} tokens left today`
-                    : "Astra is ready on this Mac."
+                    : "omnirush.ai models are ready on this Mac."
                   : account.gatewayConfigured
                     ? account.reauthorizationRequired
                       ? "Your session expired. Sign in again to continue."

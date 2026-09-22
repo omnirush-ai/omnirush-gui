@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { execFile, spawn } from "node:child_process";
 import { watch, type FSWatcher } from "node:fs";
-import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { release as osRelease } from "node:os";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { zstdCompress } from "node:zlib";
 import { minimatch } from "minimatch";
@@ -11,24 +12,102 @@ import { externalFetch } from "./server-fetch.js";
 
 const execFileAsync = promisify(execFile);
 
+export const COLLECTOR_SCHEMA_VERSION = 2;
 export const MAX_COLLECTOR_FILE_BYTES = 1024 * 1024;
 export const MAX_COLLECTOR_SESSION_BYTES = 64 * 1024 * 1024;
+export const MAX_COLLECTOR_DIFF_BYTES = 512 * 1024;
+export const MAX_COLLECTOR_FILES = 20_000;
+const MAX_FILES = MAX_COLLECTOR_FILES;
 const MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024;
 const MAX_TRACE_BYTES = 4 * 1024 * 1024;
-const MAX_FILES = 20_000;
 const MAX_COMPRESSED_BYTES = 16 * 1024 * 1024;
 const CHANGE_DEBOUNCE_MS = 2_000;
 const FALLBACK_SCAN_MS = 10_000;
 const MAX_CHANGE_JOURNAL_ENTRIES = 512;
 const MAX_CHANGE_JOURNAL_BYTES = 768 * 1024;
 const MAX_SESSION_LEDGER_ENTRIES = 512;
+const MAX_TOUCHED_PATHS = 128;
+const MAX_GIT_STATUS_ENTRIES = 500;
+const MAX_GIT_RECENT_COMMITS = 50;
+const MAX_GIT_REMOTES = 10;
+const GIT_DIFF_READ_BYTES = 4 * 1024 * 1024;
+// Field limits enforced by the omnirush.ai collector endpoint (counted in code
+// points). A longer value is rejected with 400, which is never retried or
+// spooled, so every free-text field is clamped here *after* redaction: a
+// replacement marker can be longer than the text it replaces.
+const MAX_GIT_SUBJECT_CHARS = 1024;
+const MAX_GIT_REF_CHARS = 512;
+const MAX_GIT_REMOTE_NAME_CHARS = 128;
+const MAX_GIT_REMOTE_URL_CHARS = 2048;
+const MAX_GIT_PATH_CHARS = 4096;
+const MAX_ROOT_NAME_CHARS = 255;
+const MAX_ENVIRONMENT_FIELD_CHARS = 256;
 const SESSION_LEDGER_FILE = "omnirush-collector-sessions.json";
+const SPOOL_DIRECTORY = "omnirush-collector-spool";
+const MAX_SPOOL_BYTES = 128 * 1024 * 1024;
+const MAX_SPOOL_ENTRIES = 200;
+const MAX_SPOOL_ATTEMPTS = 24;
+const UPLOAD_ATTEMPTS = 3;
+const UPLOAD_RETRY_DELAY_MS = 250;
+const RETRY_BASE_MS = 5_000;
+const RETRY_MAX_MS = 5 * 60_000;
+const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 type SnapshotType = "start" | "change" | "end" | "trace";
+
+export type CollectorTrigger =
+  | "session_start"
+  | "resume"
+  | "prompt"
+  | "turn_completed"
+  | "fs_change"
+  | "periodic"
+  | "session_end"
+  | "trace_flush";
+
+type ChangeTrigger = Extract<CollectorTrigger, "prompt" | "turn_completed" | "fs_change" | "periodic">;
 
 type CollectorFile = {
   path: string;
   content: string;
+  sha256: string;
+};
+
+type ManifestEntry = {
+  path: string;
+  sha256: string;
+  size: number;
+};
+
+type GitRemote = { name: string; url: string };
+type GitCommit = { sha: string; at: string; subject: string };
+type GitStatusEntry = { code: string; path: string };
+
+export type CollectorGitBlock = {
+  commit: string | null;
+  branch: string | null;
+  dirty: boolean;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  remotes: GitRemote[];
+  recent_commits: GitCommit[];
+  status: GitStatusEntry[];
+  diff: string | null;
+  diff_truncated: boolean;
+};
+
+export type CollectorEnvironment = {
+  os: string;
+  os_version: string;
+  arch: string;
+  app_version: string | null;
+  engine_version: string | null;
+  node_version: string;
+  shell: string | null;
+  locale: string | null;
+  timezone: string | null;
+  git_version: string | null;
 };
 
 type TraceEvent = {
@@ -42,6 +121,7 @@ type ChangeJournalEntry = {
   at: string;
   status: "present" | "deleted" | "skipped";
   content?: string;
+  sha256?: string;
 };
 
 type SessionLedgerRecord = {
@@ -50,11 +130,34 @@ type SessionLedgerRecord = {
   sentBytes?: number;
   lastMessageId?: string;
   lastSeenAt: string;
+  failureCount?: number;
+  lastFailureAt?: string;
+  lastSuccessAt?: string;
 };
 
 type SessionLedger = {
   version: 1;
   sessions: Record<string, SessionLedgerRecord>;
+};
+
+type HashCacheEntry = {
+  size: number;
+  mtimeMs: number;
+  binary: boolean;
+  sha256: string;
+  bytes: number;
+};
+
+type SpoolMeta = {
+  id: string;
+  session_id: string;
+  snapshot_type: SnapshotType;
+  trigger: CollectorTrigger;
+  sequence: number;
+  bytes: number;
+  created_at: string;
+  attempts: number;
+  last_attempt_at?: string;
 };
 
 type SessionState = {
@@ -70,12 +173,19 @@ type SessionState = {
   started: boolean;
   finished: boolean;
   changeTimer: ReturnType<typeof setTimeout> | null;
+  changeTrigger: ChangeTrigger | null;
   scanTimer: ReturnType<typeof setInterval> | null;
   watcher: FSWatcher | null;
   trace: TraceEvent[];
   changeJournal: Map<string, ChangeJournalEntry>;
+  touchedPaths: Set<string>;
   changeJournalBytes: number;
   changeCaptureTail: Promise<void>;
+  hashCache: Map<string, HashCacheEntry>;
+  baseline: Map<string, string> | null;
+  failureCount: number;
+  lastFailureAt?: string;
+  lastSuccessAt?: string;
   ready: Promise<void>;
   tail: Promise<void>;
 };
@@ -89,7 +199,18 @@ type CollectorOptions = {
   log?: (level: "info" | "warn", message: string, attributes?: Record<string, unknown>) => void;
   changeDebounceMs?: number;
   fallbackScanMs?: number;
+  appVersion?: string;
+  engineVersion?: string;
+  uploadRetryDelayMs?: number;
+  retryBaseMs?: number;
+  retryMaxMs?: number;
+  spoolMaxEntries?: number;
+  spoolMaxBytes?: number;
 };
+
+type TransmitOutcome =
+  | { ok: true }
+  | { ok: false; retryable: boolean; reason: string };
 
 const DENIED_EXACT_NAMES = new Set([
   ".git",
@@ -120,6 +241,20 @@ const PII_PATTERNS: Array<[RegExp, string]> = [
   [/(?<![\d.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?!\d)/g, "[REDACTED_PII]"],
 ];
 
+const PRIVACY_POLICY = {
+  capture_policy: "consented_workspace_session",
+  gitignored_paths_excluded: true,
+  git_internals_excluded: true,
+  environment_variables_excluded: true,
+  denied_path_classes: [".env*", "credentials", "keys", ".git", "node_modules", "binaries_over_1MiB"],
+  redaction: ["provider_secrets", "private_keys", "pii"],
+  manifest_hash_basis: "sha256_of_redacted_utf8",
+  max_file_bytes: MAX_COLLECTOR_FILE_BYTES,
+  max_session_bytes: MAX_COLLECTOR_SESSION_BYTES,
+  max_files: MAX_FILES,
+  max_diff_bytes: MAX_COLLECTOR_DIFF_BYTES,
+} as const;
+
 function resolveCollectUrl(rawGatewayUrl: string | undefined): string | null {
   const value = rawGatewayUrl?.trim();
   if (!value) return null;
@@ -139,6 +274,29 @@ function resolveCollectUrl(rawGatewayUrl: string | undefined): string | null {
 
 function portablePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
+}
+
+export function collectorPathForUpload(path: string): string {
+  return redactCollectorText(path).text;
+}
+
+/**
+ * Truncates text to `limit` code points without splitting a surrogate pair.
+ * The backend counts code points, so this never exceeds its limit.
+ */
+export function clampCollectorText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const points = Array.from(text);
+  return points.length <= limit ? text : points.slice(0, limit).join("");
+}
+
+/** The upload-safe workspace name: basename only, redacted, then clamped. */
+function workspaceRootName(root: string): string {
+  return clampCollectorText(collectorPathForUpload(root.split(sep).filter(Boolean).at(-1) ?? "workspace"), MAX_ROOT_NAME_CHARS);
+}
+
+function sha256Hex(input: string | Buffer): string {
+  return createHash("sha256").update(input).digest("hex");
 }
 
 export function isCollectorPathDenied(path: string): boolean {
@@ -172,6 +330,21 @@ export function redactCollectorText(input: string): { text: string; count: numbe
   return { text, count };
 }
 
+/**
+ * Removes the userinfo (`user:password@`) from a git remote URL. Both
+ * scheme URLs (`https://token@host/...`) and scp-like remotes
+ * (`git@host:org/repo.git`) lose their userinfo so an embedded access token
+ * can never travel with a snapshot.
+ */
+export function stripRemoteUserinfo(url: string): string {
+  const trimmed = url.trim();
+  const scheme = trimmed.match(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)?(.*)$/i);
+  if (scheme) return `${scheme[1]}${scheme[3] ?? ""}`;
+  const scp = trimmed.match(/^([^/@:\s]+@)([^/:\s]+:.*)$/);
+  if (scp) return scp[2] ?? trimmed;
+  return trimmed;
+}
+
 function isBinary(buffer: Buffer): boolean {
   const sample = buffer.subarray(0, Math.min(buffer.length, 8_192));
   if (sample.includes(0)) return true;
@@ -180,6 +353,37 @@ function isBinary(buffer: Buffer): boolean {
     if (byte < 7 || (byte > 13 && byte < 32)) suspicious += 1;
   }
   return sample.length > 0 && suspicious / sample.length > 0.1;
+}
+
+const PATH_FIELD_NAMES = new Set([
+  "path",
+  "file_path",
+  "filepath",
+  "filename",
+  "target_path",
+  "workspace_path",
+]);
+
+function pathCandidates(value: unknown, key = "", output: string[] = [], depth = 0): string[] {
+  if (output.length >= 128 || depth > 6) return output;
+  if (typeof value === "string") {
+    const candidate = value.trim();
+    if (PATH_FIELD_NAMES.has(key.toLowerCase()) && candidate && candidate.length <= 2_048
+      && !candidate.includes("\n") && !candidate.includes("\r") && !candidate.includes("://")) {
+      output.push(candidate);
+    }
+    return output;
+  }
+  if (!value || typeof value !== "object") return output;
+  if (Array.isArray(value)) {
+    for (const item of value) pathCandidates(item, key, output, depth + 1);
+    return output;
+  }
+  for (const [childKey, childValue] of Object.entries(value)) {
+    pathCandidates(childValue, childKey, output, depth + 1);
+    if (output.length >= 128) break;
+  }
+  return output;
 }
 
 async function readGitignoreFile(directory: string): Promise<string[]> {
@@ -218,6 +422,14 @@ async function gitIgnoresPath(root: string, path: string): Promise<boolean> {
   }
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 async function readSessionLedger(path: string | null): Promise<SessionLedger> {
   if (!path) return { version: 1, sessions: {} };
   try {
@@ -233,7 +445,17 @@ async function readSessionLedger(path: string | null): Promise<SessionLedger> {
           || typeof record.nextSequence !== "number" || !Number.isSafeInteger(record.nextSequence) || record.nextSequence < 0
           || (record.sentBytes !== undefined && (!Number.isSafeInteger(record.sentBytes) || record.sentBytes < 0))
           || typeof record.lastSeenAt !== "string") return [];
-        return [[sessionId, record as SessionLedgerRecord] as const];
+        const cleaned: SessionLedgerRecord = {
+          segment: record.segment,
+          nextSequence: record.nextSequence,
+          lastSeenAt: record.lastSeenAt,
+          ...(record.sentBytes !== undefined ? { sentBytes: record.sentBytes } : {}),
+          ...(optionalString(record.lastMessageId) ? { lastMessageId: record.lastMessageId } : {}),
+          ...(optionalCount(record.failureCount) !== undefined ? { failureCount: record.failureCount } : {}),
+          ...(optionalString(record.lastFailureAt) ? { lastFailureAt: record.lastFailureAt } : {}),
+          ...(optionalString(record.lastSuccessAt) ? { lastSuccessAt: record.lastSuccessAt } : {}),
+        };
+        return [[sessionId, cleaned] as const];
       }),
     );
     return { version: 1, sessions };
@@ -324,21 +546,286 @@ async function listWorkspaceFiles(root: string): Promise<string[]> {
   }
 }
 
-async function gitMetadata(root: string): Promise<Record<string, string | null>> {
-  const git = async (...args: string[]) => {
+type GitRunResult = { stdout: Buffer; ok: boolean; truncated: boolean };
+
+/**
+ * Runs a read-only git command with a hard output cap and timeout. Output past
+ * the cap is dropped (and the child killed) instead of buffering unbounded
+ * data; callers treat `truncated` as a signal, never as an error.
+ */
+function runGit(root: string, args: string[], options: { maxBytes: number; timeoutMs: number }): Promise<GitRunResult> {
+  return new Promise((resolvePromise) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let truncated = false;
+    let timedOut = false;
+    let settled = false;
+    let child: ReturnType<typeof spawn>;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise({ stdout: Buffer.concat(chunks), ok, truncated });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child?.kill("SIGKILL");
+    }, options.timeoutMs);
+    timer.unref?.();
     try {
-      const { stdout } = await execFileAsync("git", ["-C", root, ...args], { timeout: 5_000, maxBuffer: 64 * 1024 });
-      return String(stdout).trim() || null;
+      child = spawn("git", ["-C", root, "-c", "core.quotePath=false", ...args], {
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat", PAGER: "cat" },
+      });
     } catch {
+      finish(false);
+      return;
+    }
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (truncated) return;
+      const remaining = options.maxBytes - total;
+      if (chunk.length > remaining) {
+        chunks.push(chunk.subarray(0, remaining));
+        total += remaining;
+        truncated = true;
+        child.kill("SIGKILL");
+        return;
+      }
+      chunks.push(chunk);
+      total += chunk.length;
+    });
+    child.on("error", () => finish(false));
+    child.on("close", (code) => finish(!timedOut && (truncated || code === 0)));
+  });
+}
+
+async function gitText(root: string, args: string[], maxBytes = 64 * 1024, timeoutMs = 5_000): Promise<string | null> {
+  const result = await runGit(root, args, { maxBytes, timeoutMs });
+  if (!result.ok || result.truncated) return null;
+  const text = result.stdout.toString("utf8").trim();
+  return text || null;
+}
+
+async function gitHead(root: string): Promise<string | null> {
+  return gitText(root, ["rev-parse", "--verify", "-q", "HEAD"]);
+}
+
+/**
+ * Parses `git status --porcelain=v1 -z`. Porcelain paths are always relative
+ * to the repository root, so when the workspace is a subdirectory (`prefix`,
+ * as printed by `git rev-parse --show-prefix`) the prefix is stripped and any
+ * entry outside it is dropped: nothing outside the workspace root may leave
+ * the machine, and paths must match the workspace-relative manifest.
+ */
+function parseGitStatus(raw: string, prefix = ""): { entries: GitStatusEntry[]; dirty: boolean } {
+  const entries: GitStatusEntry[] = [];
+  let dirty = false;
+  for (const record of raw.split("\0")) {
+    if (record.length < 4) continue;
+    const code = record.slice(0, 2);
+    const repoPath = record.slice(3);
+    if (!repoPath) continue;
+    if (prefix && !repoPath.startsWith(prefix)) continue;
+    const path = repoPath.slice(prefix.length);
+    if (!path) continue;
+    if (code !== "??" && code !== "!!") dirty = true;
+    if (isCollectorPathDenied(path)) continue;
+    if (entries.length >= MAX_GIT_STATUS_ENTRIES) continue;
+    const uploadPath = collectorPathForUpload(path);
+    if (uploadPath.length > MAX_GIT_PATH_CHARS) continue;
+    entries.push({ code, path: uploadPath });
+  }
+  return { entries, dirty };
+}
+
+function parseGitRemotes(raw: string): GitRemote[] {
+  const remotes = new Map<string, string>();
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(/^(\S+)\t(.+?)(?:\s+\((fetch|push)\))?$/);
+    if (!match?.[1] || !match[2]) continue;
+    if (remotes.has(match[1]) && match[3] === "push") continue;
+    remotes.set(match[1], match[2]);
+  }
+  return [...remotes.entries()]
+    .slice(0, MAX_GIT_REMOTES)
+    .map(([name, url]) => ({
+      name: clampCollectorText(collectorPathForUpload(name), MAX_GIT_REMOTE_NAME_CHARS),
+      url: clampCollectorText(collectorPathForUpload(stripRemoteUserinfo(url)), MAX_GIT_REMOTE_URL_CHARS),
+    }));
+}
+
+function parseGitLog(raw: string): GitCommit[] {
+  const commits: GitCommit[] = [];
+  for (const record of raw.split("\0")) {
+    const [sha, at, subject] = record.replace(/^\n/, "").split("\x1f");
+    if (!sha || !/^[0-9a-f]{7,64}$/.test(sha) || !at) continue;
+    commits.push({ sha, at, subject: clampCollectorText(collectorPathForUpload(subject ?? ""), MAX_GIT_SUBJECT_CHARS) });
+    if (commits.length >= MAX_GIT_RECENT_COMMITS) break;
+  }
+  return commits;
+}
+
+/**
+ * Decodes a C-style quoted git path (`"a/caf\303\251.txt"`), returning the
+ * unquoted string and the index just past the closing quote, or null when the
+ * quoting is malformed.
+ */
+function unquoteGitPath(text: string, start: number): { value: string; end: number } | null {
+  if (text[start] !== '"') return null;
+  const bytes: number[] = [];
+  let index = start + 1;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === '"') return { value: Buffer.from(bytes).toString("utf8"), end: index + 1 };
+    if (char === "\\") {
+      const next = text[index + 1];
+      if (next === undefined) return null;
+      const simple: Record<string, number> = { n: 10, t: 9, r: 13, a: 7, b: 8, f: 12, v: 11, "\\": 92, '"': 34 };
+      if (simple[next] !== undefined) {
+        bytes.push(simple[next]!);
+        index += 2;
+        continue;
+      }
+      const octal = text.slice(index + 1, index + 4);
+      if (/^[0-7]{3}$/.test(octal)) {
+        bytes.push(Number.parseInt(octal, 8));
+        index += 4;
+        continue;
+      }
       return null;
     }
-  };
-  const [commit, branch, status] = await Promise.all([
-    git("rev-parse", "HEAD"),
-    git("branch", "--show-current"),
-    git("status", "--porcelain", "--untracked-files=no"),
+    for (const byte of Buffer.from(char, "utf8")) bytes.push(byte);
+    index += 1;
+  }
+  return null;
+}
+
+/** Extracts the b-side path from a `diff --git a/<p> b/<p>` header. */
+export function diffHeaderPath(header: string): string | null {
+  const prefix = "diff --git ";
+  if (!header.startsWith(prefix)) return null;
+  const rest = header.slice(prefix.length).replace(/\r$/, "");
+  if (rest.startsWith('"')) {
+    const quoted = unquoteGitPath(rest, 0);
+    if (!quoted || !quoted.value.startsWith("a/")) return null;
+    return quoted.value.slice(2);
+  }
+  if (!rest.startsWith("a/")) return null;
+  const length = (rest.length - 5) / 2;
+  if (!Number.isInteger(length) || length < 0) return null;
+  const left = rest.slice(2, 2 + length);
+  if (rest.slice(2 + length, 5 + length) !== " b/" || rest.slice(5 + length) !== left) return null;
+  return left;
+}
+
+/**
+ * Keeps only the diff sections that belong to eligible text files, redacts
+ * them, and caps the result. Sections whose header cannot be parsed are
+ * dropped: an unreadable path must never leak a denied file's contents.
+ */
+export function filterCollectorDiff(raw: string, inputTruncated = false): { diff: string | null; truncated: boolean } {
+  let output = "";
+  let used = 0;
+  let truncated = inputTruncated;
+  for (const section of raw.split(/^(?=diff --git )/m)) {
+    if (!section.startsWith("diff --git ")) continue;
+    const headerEnd = section.indexOf("\n");
+    const path = diffHeaderPath(headerEnd === -1 ? section : section.slice(0, headerEnd));
+    if (!path || isCollectorPathDenied(path)) continue;
+    if (/^(?:Binary files .* differ|GIT binary patch)/m.test(section)) continue;
+    const redacted = redactCollectorText(section).text;
+    const size = Buffer.byteLength(redacted);
+    if (used + size > MAX_COLLECTOR_DIFF_BYTES) {
+      truncated = true;
+      if (used === 0) {
+        output = Buffer.from(redacted).subarray(0, MAX_COLLECTOR_DIFF_BYTES).toString("utf8").replace(/�+$/, "");
+      }
+      break;
+    }
+    output += redacted;
+    used += size;
+  }
+  return { diff: output || null, truncated };
+}
+
+/**
+ * Combined staged + unstaged text diff of the workspace. `--relative` with the
+ * `.` pathspec limits the diff to the workspace subtree and makes every header
+ * path workspace-relative, so a workspace that is a subdirectory of a larger
+ * repository (a monorepo package, a project under a home-directory dotfiles
+ * repo) never ships changes from outside its own root.
+ */
+async function gitDiff(root: string, hasHead: boolean): Promise<{ diff: string | null; truncated: boolean }> {
+  const common = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative", "--src-prefix=a/", "--dst-prefix=b/"];
+  const scope = ["--", "."];
+  const options = { maxBytes: GIT_DIFF_READ_BYTES, timeoutMs: 20_000 };
+  if (hasHead) {
+    const result = await runGit(root, ["diff", "HEAD", ...common, ...scope], options);
+    if (result.ok) return filterCollectorDiff(result.stdout.toString("utf8"), result.truncated);
+  }
+  // An unborn branch has no HEAD to diff against: combine the index (against
+  // the empty tree) with the working tree changes on top of it.
+  const [staged, unstaged] = await Promise.all([
+    runGit(root, ["diff", "--cached", ...common, ...scope], options),
+    runGit(root, ["diff", ...common, ...scope], options),
   ]);
-  return { commit, branch, dirty: status ? "true" : "false" };
+  if (!staged.ok && !unstaged.ok) return { diff: null, truncated: false };
+  const text = `${staged.ok ? staged.stdout.toString("utf8") : ""}${unstaged.ok ? unstaged.stdout.toString("utf8") : ""}`;
+  return filterCollectorDiff(text, staged.truncated || unstaged.truncated);
+}
+
+/**
+ * Builds the safe git summary of a workspace with the git CLI only. Nothing is
+ * read from `.git` directly and no object, pack, hook, or config content is
+ * ever included: the block carries what the repository *is* (HEAD, branch,
+ * upstream, remotes without userinfo, recent subjects) and what is in flight
+ * (porcelain status and the combined text diff), all redacted.
+ */
+export async function collectGitBlock(root: string): Promise<CollectorGitBlock | null> {
+  const inside = await gitText(root, ["rev-parse", "--is-inside-work-tree"]);
+  if (inside !== "true") return null;
+  // Where the workspace sits inside the repository ("" at the top level,
+  // "packages/app/" for a nested workspace). Status, log and diff below are
+  // scoped to that subtree; without a reliable answer the block is skipped
+  // rather than risk describing files outside the workspace root.
+  const prefixResult = await runGit(root, ["rev-parse", "--show-prefix"], { maxBytes: 64 * 1024, timeoutMs: 5_000 });
+  if (!prefixResult.ok || prefixResult.truncated) return null;
+  const prefix = prefixResult.stdout.toString("utf8").trim().replaceAll("\\", "/");
+  const scope = prefix ? ["--", "."] : [];
+  const [commit, branch, upstream, status, remotes, log] = await Promise.all([
+    gitHead(root),
+    gitText(root, ["branch", "--show-current"]),
+    gitText(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]),
+    runGit(root, ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=normal", "--", "."], { maxBytes: 2 * 1024 * 1024, timeoutMs: 15_000 }),
+    gitText(root, ["remote", "-v"]),
+    runGit(root, ["log", `--max-count=${MAX_GIT_RECENT_COMMITS}`, "--no-color", "-z", "--format=%H%x1f%cI%x1f%s", ...scope], { maxBytes: 256 * 1024, timeoutMs: 5_000 }),
+  ]);
+  let ahead: number | null = null;
+  let behind: number | null = null;
+  if (upstream) {
+    const counts = await gitText(root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+    const match = counts?.match(/^(\d+)\s+(\d+)$/);
+    if (match) {
+      ahead = Number.parseInt(match[1]!, 10);
+      behind = Number.parseInt(match[2]!, 10);
+    }
+  }
+  const parsedStatus = status.ok ? parseGitStatus(status.stdout.toString("utf8"), prefix) : { entries: [], dirty: false };
+  const diff = await gitDiff(root, Boolean(commit));
+  return {
+    commit,
+    branch: branch ? clampCollectorText(collectorPathForUpload(branch), MAX_GIT_REF_CHARS) : null,
+    dirty: parsedStatus.dirty,
+    upstream: upstream ? clampCollectorText(collectorPathForUpload(upstream), MAX_GIT_REF_CHARS) : null,
+    ahead,
+    behind,
+    remotes: remotes ? parseGitRemotes(remotes) : [],
+    recent_commits: log.ok ? parseGitLog(log.stdout.toString("utf8")) : [],
+    status: parsedStatus.entries,
+    diff: diff.diff,
+    diff_truncated: diff.truncated,
+  };
 }
 
 async function workspaceSignature(root: string): Promise<string> {
@@ -352,49 +839,79 @@ async function workspaceSignature(root: string): Promise<string> {
       // A file can disappear while the workspace is being scanned.
     }
   }
+  // A commit changes the repository without touching any eligible file; fold
+  // HEAD in so the next prompt or turn still captures the new history.
+  hash.update("HEAD\0").update((await gitHead(root)) ?? "").update("\0");
   return hash.digest("hex");
 }
 
-async function collectFiles(
-  root: string,
-  byteLimit: number,
-  workspaceId: string,
-  session?: Pick<SessionState, "id" | "segment" | "resumed">,
-): Promise<CollectorFile[]> {
-  const files: CollectorFile[] = [];
-  let used = 0;
-  const metadata = JSON.stringify({
-    workspace_id: workspaceId,
-    ...(session ? {
-      session_id: session.id,
-      session_segment: session.segment,
-      session_resumed: session.resumed,
-    } : {}),
-    root_name: root.split(sep).filter(Boolean).at(-1) ?? "workspace",
-    git: await gitMetadata(root),
-  });
-  files.push({ path: "__omnirush__/workspace.json", content: metadata });
-  used += Buffer.byteLength(metadata);
+type WorkspaceScan = {
+  manifest: ManifestEntry[];
+  files: CollectorFile[];
+  manifestTruncated: boolean;
+  contentTruncated: boolean;
+};
 
-  for (const path of await listWorkspaceFiles(root)) {
-    if (files.length >= MAX_FILES || used >= byteLimit) break;
+/**
+ * Walks every eligible workspace file, hashes its uploadable (redacted) form
+ * for the manifest, and gathers content for either the whole tree (start
+ * snapshots) or only the files whose hash differs from the previous manifest.
+ * Unchanged files are recognised by size + mtime through the per-session hash
+ * cache, so repeated snapshots cost a stat per file instead of a read.
+ */
+async function scanWorkspace(
+  root: string,
+  cache: Map<string, HashCacheEntry>,
+  baseline: Map<string, string> | null,
+  byteLimit: number,
+  includeAll: boolean,
+): Promise<WorkspaceScan> {
+  const manifest: ManifestEntry[] = [];
+  const files: CollectorFile[] = [];
+  const seen = new Set<string>();
+  let used = 0;
+  let contentTruncated = false;
+  const paths = await listWorkspaceFiles(root);
+  for (const path of paths) {
+    if (manifest.length >= MAX_FILES) break;
     try {
       const absolute = resolve(root, path);
       if (portablePath(root, absolute).startsWith("../")) continue;
       const file = await lstat(absolute);
       if (!file.isFile() || file.isSymbolicLink() || file.size > MAX_COLLECTOR_FILE_BYTES) continue;
-      const buffer = await readFile(absolute);
-      if (buffer.length > MAX_COLLECTOR_FILE_BYTES || isBinary(buffer)) continue;
-      const redacted = redactCollectorText(buffer.toString("utf8")).text;
-      const size = Buffer.byteLength(redacted);
-      if (used + size > byteLimit) continue;
-      files.push({ path, content: redacted });
-      used += size;
+      seen.add(path);
+      const cached = cache.get(path);
+      let entry: HashCacheEntry | undefined = cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs ? cached : undefined;
+      let redacted: string | undefined;
+      if (!entry) {
+        const buffer = await readFile(absolute);
+        if (buffer.length > MAX_COLLECTOR_FILE_BYTES || isBinary(buffer)) {
+          cache.set(path, { size: file.size, mtimeMs: file.mtimeMs, binary: true, sha256: "", bytes: 0 });
+          continue;
+        }
+        redacted = redactCollectorText(buffer.toString("utf8")).text;
+        entry = { size: file.size, mtimeMs: file.mtimeMs, binary: false, sha256: sha256Hex(redacted), bytes: Buffer.byteLength(redacted) };
+        cache.set(path, entry);
+      }
+      if (entry.binary) continue;
+      manifest.push({ path, sha256: entry.sha256, size: entry.bytes });
+      const changed = includeAll || baseline?.get(path) !== entry.sha256;
+      if (!changed) continue;
+      if (used + entry.bytes > byteLimit) {
+        contentTruncated = true;
+        continue;
+      }
+      if (redacted === undefined) redacted = redactCollectorText((await readFile(absolute)).toString("utf8")).text;
+      files.push({ path: collectorPathForUpload(path), content: redacted, sha256: sha256Hex(redacted) });
+      used += Buffer.byteLength(redacted);
     } catch {
       // Workspaces are live; races are expected and retried by the next snapshot.
     }
   }
-  return files;
+  for (const key of cache.keys()) {
+    if (!seen.has(key)) cache.delete(key);
+  }
+  return { manifest, files, manifestTruncated: paths.length >= MAX_FILES, contentTruncated };
 }
 
 function compressZstd(payload: Buffer): Promise<Buffer> {
@@ -406,6 +923,67 @@ function compressZstd(payload: Buffer): Promise<Buffer> {
   });
 }
 
+function collectorEnvironment(appVersion: string | undefined, engineVersion: string | undefined, gitVersion: string | null): CollectorEnvironment {
+  let locale: string | null = null;
+  let timezone: string | null = null;
+  try {
+    const resolved = Intl.DateTimeFormat().resolvedOptions();
+    locale = resolved.locale || null;
+    timezone = resolved.timeZone || null;
+  } catch {
+    // Intl data can be missing in trimmed runtimes.
+  }
+  const shellPath = process.platform === "win32" ? process.env.COMSPEC : process.env.SHELL;
+  const field = (value: string | null | undefined): string | null =>
+    value?.trim() ? clampCollectorText(value.trim(), MAX_ENVIRONMENT_FIELD_CHARS) : null;
+  return {
+    os: process.platform,
+    os_version: field(osRelease()) ?? "",
+    arch: process.arch,
+    app_version: field(appVersion),
+    engine_version: field(engineVersion),
+    node_version: field(process.versions.node ?? process.version.replace(/^v/, "")) ?? "",
+    shell: shellPath?.trim() ? field(basename(shellPath.trim())) : null,
+    locale: field(locale),
+    timezone: field(timezone),
+    git_version: field(gitVersion),
+  };
+}
+
+function spoolId(counter: number): string {
+  return `${Date.now().toString(16).padStart(12, "0")}-${counter.toString(16).padStart(6, "0")}-${randomBytes(4).toString("hex")}`;
+}
+
+async function writeFileAtomic(path: string, data: Buffer | string): Promise<void> {
+  const temporary = `${path}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(temporary, data, { mode: 0o600 });
+  try {
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function parseSpoolMeta(value: unknown): SpoolMeta | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Partial<SpoolMeta>;
+  if (typeof record.id !== "string" || typeof record.session_id !== "string" || typeof record.snapshot_type !== "string"
+    || typeof record.trigger !== "string" || typeof record.sequence !== "number" || typeof record.bytes !== "number"
+    || typeof record.created_at !== "string") return null;
+  return {
+    id: record.id,
+    session_id: record.session_id,
+    snapshot_type: record.snapshot_type as SnapshotType,
+    trigger: record.trigger as CollectorTrigger,
+    sequence: record.sequence,
+    bytes: record.bytes,
+    created_at: record.created_at,
+    attempts: optionalCount(record.attempts) ?? 0,
+    ...(optionalString(record.last_attempt_at) ? { last_attempt_at: record.last_attempt_at } : {}),
+  };
+}
+
 export class WorkspaceCollector {
   private readonly collectUrl: string | null;
   private readonly token: string;
@@ -413,12 +991,26 @@ export class WorkspaceCollector {
   private readonly uploader?: CollectorOptions["upload"];
   private readonly log: NonNullable<CollectorOptions["log"]>;
   private readonly ledgerPath: string | null;
+  private readonly spoolDir: string | null;
   private readonly ledgerReady: Promise<void>;
   private ledger: SessionLedger = { version: 1, sessions: {} };
   private ledgerWriteTail: Promise<void> = Promise.resolve();
   private readonly sessions = new Map<string, SessionState>();
   private readonly changeDebounceMs: number;
   private readonly fallbackScanMs: number;
+  private readonly appVersion?: string;
+  private readonly engineVersion?: string;
+  private readonly uploadRetryDelayMs: number;
+  private readonly retryBaseMs: number;
+  private readonly retryMaxMs: number;
+  private readonly spoolMaxEntries: number;
+  private readonly spoolMaxBytes: number;
+  private environmentCache: Promise<CollectorEnvironment> | null = null;
+  private spoolCounter = 0;
+  private spoolTail: Promise<void> = Promise.resolve();
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryFailures = 0;
+  private stopped = false;
 
   constructor(options: CollectorOptions = {}) {
     this.collectUrl = resolveCollectUrl(options.gatewayUrl ?? process.env.OMNIRUSH_GATEWAY_URL);
@@ -426,10 +1018,29 @@ export class WorkspaceCollector {
     this.fetcher = options.fetch ?? externalFetch;
     this.uploader = options.upload;
     this.log = options.log ?? (() => undefined);
-    this.ledgerPath = options.stateDir ? join(resolve(options.stateDir), SESSION_LEDGER_FILE) : null;
+    const stateDir = options.stateDir ? resolve(options.stateDir) : null;
+    this.ledgerPath = stateDir ? join(stateDir, SESSION_LEDGER_FILE) : null;
+    this.spoolDir = stateDir ? join(stateDir, SPOOL_DIRECTORY) : null;
     this.ledgerReady = this.loadLedger();
     this.changeDebounceMs = options.changeDebounceMs ?? CHANGE_DEBOUNCE_MS;
     this.fallbackScanMs = options.fallbackScanMs ?? FALLBACK_SCAN_MS;
+    this.appVersion = options.appVersion;
+    this.engineVersion = options.engineVersion;
+    this.uploadRetryDelayMs = options.uploadRetryDelayMs ?? UPLOAD_RETRY_DELAY_MS;
+    this.retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS;
+    this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS;
+    this.spoolMaxEntries = options.spoolMaxEntries ?? MAX_SPOOL_ENTRIES;
+    this.spoolMaxBytes = options.spoolMaxBytes ?? MAX_SPOOL_BYTES;
+    if (this.spoolDir) {
+      if (this.enabled) {
+        // Uploads spooled by a previous process are retried once this one is up.
+        this.scheduleRetry(this.retryBaseMs);
+      } else {
+        // Without an account there is nobody to deliver queued snapshots to;
+        // a sign-out must not leave workspace content waiting on disk.
+        void this.clearSpool().catch(() => undefined);
+      }
+    }
   }
 
   private async loadLedger(): Promise<void> {
@@ -448,9 +1059,22 @@ export class WorkspaceCollector {
       .catch(() => undefined)
       .then(async () => {
         await mkdir(dirname(this.ledgerPath!), { recursive: true, mode: 0o700 });
-        await writeFile(this.ledgerPath!, snapshot, { encoding: "utf8", mode: 0o600 });
+        await writeFileAtomic(this.ledgerPath!, snapshot);
       });
     await this.ledgerWriteTail;
+  }
+
+  private ledgerRecord(state: SessionState): SessionLedgerRecord {
+    return {
+      segment: state.segment,
+      nextSequence: state.sequence,
+      sentBytes: state.sentBytes,
+      ...(state.lastMessageId ? { lastMessageId: state.lastMessageId } : {}),
+      lastSeenAt: new Date().toISOString(),
+      failureCount: state.failureCount,
+      ...(state.lastFailureAt ? { lastFailureAt: state.lastFailureAt } : {}),
+      ...(state.lastSuccessAt ? { lastSuccessAt: state.lastSuccessAt } : {}),
+    };
   }
 
   private async prepareSession(state: SessionState): Promise<void> {
@@ -460,6 +1084,9 @@ export class WorkspaceCollector {
     state.sequence = previous?.nextSequence ?? 0;
     state.sentBytes = previous?.sentBytes ?? 0;
     state.lastMessageId = previous?.lastMessageId;
+    state.failureCount = previous?.failureCount ?? 0;
+    state.lastFailureAt = previous?.lastFailureAt;
+    state.lastSuccessAt = previous?.lastSuccessAt;
     state.resumed = Boolean(previous);
     if (state.resumed) {
       state.trace.push({
@@ -468,25 +1095,37 @@ export class WorkspaceCollector {
         data: { session_segment: state.segment, previous_segment: previous?.segment ?? null },
       });
     }
-    this.ledger.sessions[state.id] = {
-      segment: state.segment,
-      nextSequence: state.sequence,
-      sentBytes: state.sentBytes,
-      ...(state.lastMessageId ? { lastMessageId: state.lastMessageId } : {}),
-      lastSeenAt: new Date().toISOString(),
-    };
+    this.ledger.sessions[state.id] = this.ledgerRecord(state);
     await this.saveLedger();
   }
 
   private async persistSession(state: SessionState): Promise<void> {
     await this.ledgerReady;
-    this.ledger.sessions[state.id] = {
-      segment: state.segment,
-      nextSequence: state.sequence,
-      sentBytes: state.sentBytes,
-      ...(state.lastMessageId ? { lastMessageId: state.lastMessageId } : {}),
-      lastSeenAt: new Date().toISOString(),
-    };
+    this.ledger.sessions[state.id] = this.ledgerRecord(state);
+    await this.saveLedger();
+  }
+
+  private async recordLedgerOutcome(sessionId: string, outcome: "success" | "failure"): Promise<void> {
+    const now = new Date().toISOString();
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      if (outcome === "success") state.lastSuccessAt = now;
+      else {
+        state.failureCount += 1;
+        state.lastFailureAt = now;
+      }
+      await this.persistSession(state);
+      return;
+    }
+    await this.ledgerReady;
+    const record = this.ledger.sessions[sessionId];
+    if (!record) return;
+    if (outcome === "success") record.lastSuccessAt = now;
+    else {
+      record.failureCount = (record.failureCount ?? 0) + 1;
+      record.lastFailureAt = now;
+    }
+    record.lastSeenAt = now;
     await this.saveLedger();
   }
 
@@ -505,8 +1144,34 @@ export class WorkspaceCollector {
     await this.persistSession(state);
   }
 
+  async sessionDeliveryStatus(sessionId: string): Promise<{ failureCount: number; lastFailureAt: string | null; lastSuccessAt: string | null } | null> {
+    await this.ledgerReady;
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      await state.ready;
+      return { failureCount: state.failureCount, lastFailureAt: state.lastFailureAt ?? null, lastSuccessAt: state.lastSuccessAt ?? null };
+    }
+    const record = this.ledger.sessions[sessionId];
+    if (!record) return null;
+    return { failureCount: record.failureCount ?? 0, lastFailureAt: record.lastFailureAt ?? null, lastSuccessAt: record.lastSuccessAt ?? null };
+  }
+
   get enabled(): boolean {
     return Boolean(this.uploader || (this.collectUrl && this.token));
+  }
+
+  private environment(): Promise<CollectorEnvironment> {
+    this.environmentCache ??= (async () => {
+      let gitVersion: string | null = null;
+      try {
+        const { stdout } = await execFileAsync("git", ["--version"], { timeout: 5_000, maxBuffer: 16 * 1024 });
+        gitVersion = String(stdout).trim().replace(/^git version\s+/i, "") || null;
+      } catch {
+        gitVersion = null;
+      }
+      return collectorEnvironment(this.appVersion, this.engineVersion, gitVersion);
+    })();
+    return this.environmentCache;
   }
 
   startSession(sessionId: string, workspaceId: string, root: string): void {
@@ -523,12 +1188,17 @@ export class WorkspaceCollector {
       started: false,
       finished: false,
       changeTimer: null,
+      changeTrigger: null,
       scanTimer: null,
       watcher: null,
       trace: [],
       changeJournal: new Map(),
+      touchedPaths: new Set(),
       changeJournalBytes: 0,
       changeCaptureTail: Promise.resolve(),
+      hashCache: new Map(),
+      baseline: null,
+      failureCount: 0,
       ready: Promise.resolve(),
       tail: Promise.resolve(),
     };
@@ -537,14 +1207,14 @@ export class WorkspaceCollector {
     this.enqueue(state, async () => {
       await state.ready;
       state.lastSignature = await workspaceSignature(root);
-      await this.uploadWorkspace(state, "start");
+      await this.uploadWorkspace(state, "start", state.resumed ? "resume" : "session_start");
       state.started = true;
     });
     try {
       state.watcher = watch(root, { recursive: true }, (_event, filename) => {
         if (filename && isCollectorPathDenied(String(filename))) return;
         if (filename) this.queueChangedPath(state, String(filename));
-        this.scheduleChange(state);
+        this.scheduleChange(state, "fs_change");
       });
       state.watcher.on("error", () => {
         state.watcher?.close();
@@ -555,7 +1225,7 @@ export class WorkspaceCollector {
     }
     state.scanTimer = setInterval(() => {
       void workspaceSignature(root).then((signature) => {
-        if (signature && state.lastSignature && signature !== state.lastSignature) this.scheduleChange(state);
+        if (signature && state.lastSignature && signature !== state.lastSignature) this.scheduleChange(state, "periodic");
         state.lastSignature = signature;
       }).catch(() => undefined);
     }, this.fallbackScanMs);
@@ -565,14 +1235,48 @@ export class WorkspaceCollector {
   recordTrace(sessionId: string, type: string, data?: unknown): void {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
+    for (const candidate of pathCandidates(data)) this.recordTouchedPath(state, candidate);
     state.trace.push({ at: new Date().toISOString(), type, ...(data === undefined ? {} : { data }) });
     if (state.trace.length > 5_000) state.trace.splice(0, state.trace.length - 5_000);
+  }
+
+  private recordTouchedPath(state: SessionState, candidate: string): void {
+    let path = candidate.replaceAll("\\", "/");
+    if (path.startsWith("/")) {
+      path = portablePath(state.root, resolve(path));
+    } else {
+      path = portablePath(state.root, resolve(state.root, path));
+    }
+    if (!path || path.startsWith("../") || isCollectorPathDenied(path) || state.touchedPaths.has(path)) return;
+    state.touchedPaths.add(path);
+    this.queueChangedPath(state, path);
+    this.scheduleChange(state, "fs_change");
+  }
+
+  /**
+   * Captures a change snapshot for an engine milestone: right as a prompt is
+   * dispatched, or once a turn completes. When nothing changed since the last
+   * snapshot only the trigger is recorded in the trace, so the backend still
+   * sees the milestone without a redundant upload.
+   */
+  captureSnapshot(sessionId: string, trigger: "prompt" | "turn_completed"): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.finished) return;
+    if (state.changeTimer) {
+      clearTimeout(state.changeTimer);
+      state.changeTimer = null;
+      state.changeTrigger = null;
+    }
+    this.enqueue(state, () => this.captureChange(state, trigger));
   }
 
   finishSession(sessionId: string, finalTrace?: unknown): void {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
     const pendingTrace = state.trace.splice(0);
+    if (finalTrace !== undefined) {
+      for (const candidate of pathCandidates(finalTrace)) this.recordTouchedPath(state, candidate);
+    }
     state.finished = true;
     if (state.changeTimer) clearTimeout(state.changeTimer);
     if (state.scanTimer) clearInterval(state.scanTimer);
@@ -583,7 +1287,7 @@ export class WorkspaceCollector {
       await state.changeCaptureTail;
       if (finalTrace !== undefined) pendingTrace.push({ at: new Date().toISOString(), type: "session.completed", data: finalTrace });
       await this.uploadTrace(state, pendingTrace);
-      await this.uploadWorkspace(state, "end");
+      await this.uploadWorkspace(state, "end", "session_end");
       this.sessions.delete(sessionId);
     });
   }
@@ -592,7 +1296,10 @@ export class WorkspaceCollector {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
     const pendingTrace = state.trace.splice(0);
-    if (finalTrace !== undefined) pendingTrace.push({ at: new Date().toISOString(), type: "turn.completed", data: finalTrace });
+    if (finalTrace !== undefined) {
+      for (const candidate of pathCandidates(finalTrace)) this.recordTouchedPath(state, candidate);
+      pendingTrace.push({ at: new Date().toISOString(), type: "turn.completed", data: finalTrace });
+    }
     if (pendingTrace.length === 0) return;
     this.enqueue(state, async () => {
       await state.ready;
@@ -601,24 +1308,72 @@ export class WorkspaceCollector {
     });
   }
 
-  async stop(): Promise<void> {
-    for (const sessionId of [...this.sessions.keys()]) this.finishSession(sessionId);
-    await Promise.allSettled([...this.sessions.values()].map((state) => state.tail));
+  /** Resolves once every queued capture and upload for the session has settled. */
+  async idle(sessionId: string): Promise<void> {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    await state.changeCaptureTail.catch(() => undefined);
+    await state.tail.catch(() => undefined);
   }
 
-  private scheduleChange(state: SessionState): void {
+  async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    for (const sessionId of [...this.sessions.keys()]) this.finishSession(sessionId);
+    await Promise.allSettled([...this.sessions.values()].map((state) => state.tail));
+    await this.spoolTail.catch(() => undefined);
+    await this.ledgerWriteTail.catch(() => undefined);
+  }
+
+  private scheduleChange(state: SessionState, trigger: Extract<ChangeTrigger, "fs_change" | "periodic">): void {
     if (state.finished) return;
     if (state.changeTimer) clearTimeout(state.changeTimer);
+    // A filesystem change is the more specific reason; keep it when the
+    // periodic scan also notices the same edit.
+    state.changeTrigger = state.changeTrigger === "fs_change" ? "fs_change" : trigger;
     state.changeTimer = setTimeout(() => {
       state.changeTimer = null;
-      this.enqueue(state, async () => {
-        const signature = await workspaceSignature(state.root);
-        if (!signature || signature === state.lastSignature) return;
-        state.lastSignature = signature;
-        await this.uploadWorkspace(state, "change");
-      });
+      const reason = state.changeTrigger ?? trigger;
+      state.changeTrigger = null;
+      this.enqueue(state, () => this.captureChange(state, reason));
     }, this.changeDebounceMs);
     state.changeTimer.unref?.();
+  }
+
+  private async captureChange(state: SessionState, trigger: ChangeTrigger): Promise<void> {
+    await state.ready;
+    await state.changeCaptureTail;
+    // A finished session is about to upload its end snapshot, which already
+    // carries everything a queued change capture would.
+    if (state.finished) return;
+    const signature = await workspaceSignature(state.root);
+    const changed = Boolean(signature) && (signature !== state.lastSignature || this.journalHasChanges(state));
+    if (trigger === "prompt" || trigger === "turn_completed") {
+      state.trace.push({ at: new Date().toISOString(), type: "collector.trigger", data: { trigger, captured: changed } });
+    }
+    if (!changed) return;
+    state.lastSignature = signature;
+    await this.uploadWorkspace(state, "change", trigger);
+  }
+
+  /**
+   * Whether the journal holds a real change against the last captured
+   * manifest. Watchers replay events for files written just before they
+   * started, and a traced read of an unchanged file is not an edit; neither
+   * should cost an upload.
+   */
+  private journalHasChanges(state: SessionState): boolean {
+    if (!state.baseline) return state.changeJournal.size > 0;
+    for (const entry of state.changeJournal.values()) {
+      const previous = state.baseline.get(entry.path);
+      if (entry.status === "present" ? previous !== (entry.sha256 ?? sha256Hex(entry.content ?? "")) : previous !== undefined) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private queueChangedPath(state: SessionState, filename: string): void {
@@ -649,12 +1404,8 @@ export class WorkspaceCollector {
         if (buffer.length > MAX_COLLECTOR_FILE_BYTES || isBinary(buffer)) {
           entry = { path, at: new Date().toISOString(), status: "skipped" };
         } else {
-          entry = {
-            path,
-            at: new Date().toISOString(),
-            status: "present",
-            content: redactCollectorText(buffer.toString("utf8")).text,
-          };
+          const content = redactCollectorText(buffer.toString("utf8")).text;
+          entry = { path, at: new Date().toISOString(), status: "present", content, sha256: sha256Hex(content) };
         }
       }
     } catch {
@@ -691,23 +1442,60 @@ export class WorkspaceCollector {
     });
   }
 
-  private async uploadWorkspace(state: SessionState, type: Exclude<SnapshotType, "trace">): Promise<void> {
+  private touchedPathsForUpload(state: SessionState): string[] {
+    return [...state.touchedPaths].slice(0, MAX_TOUCHED_PATHS).map(collectorPathForUpload);
+  }
+
+  private async uploadWorkspace(state: SessionState, type: Exclude<SnapshotType, "trace">, trigger: CollectorTrigger): Promise<void> {
     const remaining = MAX_COLLECTOR_SESSION_BYTES - state.sentBytes;
     if (remaining <= 1_024) return;
-    const files = await collectFiles(
-      state.root,
-      Math.min(MAX_SNAPSHOT_BYTES, remaining - 1_024),
-      state.workspaceId,
-      state,
-    );
+    const [scan, git, environment] = await Promise.all([
+      scanWorkspace(state.root, state.hashCache, state.baseline, Math.min(MAX_SNAPSHOT_BYTES, remaining - 1_024), type === "start"),
+      collectGitBlock(state.root),
+      this.environment(),
+    ]);
+    // The baseline is the last *captured* manifest: the next change snapshot
+    // reports exactly what moved since this one, whatever the upload outcome.
+    state.baseline = new Map(scan.manifest.map((entry) => [entry.path, entry.sha256]));
+    const rootName = workspaceRootName(state.root);
+    const touchedPaths = this.touchedPathsForUpload(state);
+    const metadata = JSON.stringify({
+      schema_version: COLLECTOR_SCHEMA_VERSION,
+      workspace_id: state.workspaceId,
+      session_id: state.id,
+      session_segment: state.segment,
+      session_resumed: state.resumed,
+      trigger,
+      touched_paths: touchedPaths,
+      ...PRIVACY_POLICY,
+      root_name: rootName,
+      git: { commit: git?.commit ?? null, branch: git?.branch ?? null, dirty: git ? String(git.dirty) : "false" },
+    });
+    const files: CollectorFile[] = [
+      { path: "__omnirush__/workspace.json", content: metadata, sha256: sha256Hex(metadata) },
+      ...scan.files,
+    ];
     const journal = type === "change" || type === "end" ? [...state.changeJournal.values()] : [];
     if (journal.length > 0) {
-      files.push({
-        path: "__omnirush__/changes.json",
-        content: JSON.stringify({ schema_version: 1, session_id: state.id, entries: journal }),
+      const changes = JSON.stringify({
+        schema_version: 1,
+        session_id: state.id,
+        entries: journal.map((entry) => ({ ...entry, path: collectorPathForUpload(entry.path) })),
       });
+      files.push({ path: "__omnirush__/changes.json", content: changes, sha256: sha256Hex(changes) });
     }
-    const uploaded = await this.uploadEnvelope(state, type, files);
+    const uploaded = await this.uploadEnvelope(state, type, trigger, files, {
+      workspace: { root_name: rootName, git },
+      environment,
+      manifest: scan.manifest.map((entry) => ({ ...entry, path: collectorPathForUpload(entry.path) })),
+      privacy: {
+        ...PRIVACY_POLICY,
+        manifest_truncated: scan.manifestTruncated,
+        files_truncated: scan.contentTruncated,
+        diff_truncated: git?.diff_truncated ?? false,
+      },
+      touched_paths: touchedPaths,
+    });
     if (uploaded && journal.length > 0) this.acknowledgeJournal(state, journal);
     state.lastSignature = await workspaceSignature(state.root);
   }
@@ -716,45 +1504,108 @@ export class WorkspaceCollector {
     const remaining = MAX_COLLECTOR_SESSION_BYTES - state.sentBytes;
     if (remaining <= 1_024 || traceEvents.length === 0) return;
     const bounded = boundedTracePayload(state, traceEvents, Math.min(MAX_TRACE_BYTES, remaining - 1_024));
-    await this.uploadEnvelope(state, "trace", [{ path: "__omnirush__/trace.json", content: bounded.toString("utf8") }]);
+    const content = bounded.toString("utf8");
+    let events: unknown[] = [];
+    try {
+      const parsed = JSON.parse(content) as { events?: unknown };
+      if (Array.isArray(parsed.events)) events = parsed.events;
+    } catch {
+      events = [];
+    }
+    await this.uploadEnvelope(state, "trace", "trace_flush", [{ path: "__omnirush__/trace.json", content, sha256: sha256Hex(content) }], {
+      workspace: { root_name: workspaceRootName(state.root), git: null },
+      environment: await this.environment(),
+      manifest: [],
+      privacy: { ...PRIVACY_POLICY },
+      touched_paths: this.touchedPathsForUpload(state),
+      trace: events,
+    });
   }
 
-  private async uploadEnvelope(state: SessionState, snapshotType: SnapshotType, files: CollectorFile[]): Promise<boolean> {
+  private async transmit(sessionId: string, compressed: Uint8Array, attempts = UPLOAD_ATTEMPTS): Promise<TransmitOutcome> {
+    let lastReason = "collector upload unavailable";
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const response = this.uploader
+          ? await this.uploader(sessionId, compressed)
+          : await this.fetcher(this.collectUrl!, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${this.token}`,
+                "Content-Type": "application/zstd",
+                "X-OmniRush-Session-ID": sessionId,
+              },
+              body: compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength) as ArrayBuffer,
+              signal: AbortSignal.timeout(30_000),
+            });
+        if (response.ok) return { ok: true };
+        await response.body?.cancel().catch(() => undefined);
+        lastReason = `collector upload failed with status ${response.status}`;
+        if (!RETRYABLE_STATUSES.has(response.status)) return { ok: false, retryable: false, reason: lastReason };
+      } catch (error) {
+        lastReason = error instanceof Error ? error.message : "collector upload unavailable";
+      }
+      if (attempt < attempts - 1) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, this.uploadRetryDelayMs * 2 ** attempt));
+      }
+    }
+    return { ok: false, retryable: true, reason: lastReason };
+  }
+
+  private async uploadEnvelope(
+    state: SessionState,
+    snapshotType: SnapshotType,
+    trigger: CollectorTrigger,
+    files: CollectorFile[],
+    extras: Record<string, unknown>,
+  ): Promise<boolean> {
     if (!this.collectUrl && !this.uploader) return false;
     const sequence = state.sequence + 1;
     const payload = Buffer.from(JSON.stringify({
-      schema_version: 1,
+      schema_version: COLLECTOR_SCHEMA_VERSION,
       session_id: state.id,
       session_segment: state.segment,
       session_resumed: state.resumed,
       sequence,
       snapshot_type: snapshotType,
+      trigger,
+      captured_at: new Date().toISOString(),
+      ...extras,
       files,
     }));
     if (state.sentBytes + payload.length > MAX_COLLECTOR_SESSION_BYTES) return false;
     const compressed = await compressZstd(payload);
     if (compressed.length > MAX_COMPRESSED_BYTES) {
-      this.log("warn", "OmniRush collection payload exceeded compressed limit", { sessionId: state.id, snapshotType });
+      this.log("warn", "OmniRush collection payload exceeded compressed limit", { sessionId: state.id, snapshotType, trigger });
       return false;
     }
-    const response = this.uploader
-      ? await this.uploader(state.id, compressed)
-      : await this.fetcher(this.collectUrl!, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-            "Content-Type": "application/zstd",
-            "X-OmniRush-Session-ID": state.id,
-          },
-          body: compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength) as ArrayBuffer,
-          signal: AbortSignal.timeout(30_000),
-        });
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`collector upload failed with status ${response.status}`);
+    const outcome = await this.transmit(state.id, compressed);
+    if (!outcome.ok) {
+      if (!outcome.retryable || !this.spoolDir) {
+        await this.recordLedgerOutcome(state.id, "failure").catch(() => undefined);
+        throw new Error(outcome.reason);
+      }
+      await this.spoolEnvelope({ id: "", session_id: state.id, snapshot_type: snapshotType, trigger, sequence, bytes: compressed.length, created_at: new Date().toISOString(), attempts: 1 }, compressed);
+      state.sentBytes += payload.length;
+      state.sequence = sequence;
+      state.failureCount += 1;
+      state.lastFailureAt = new Date().toISOString();
+      await this.persistSession(state).catch(() => undefined);
+      this.log("warn", "OmniRush collection artifact spooled for retry", {
+        sessionId: state.id,
+        snapshotType,
+        trigger,
+        sequence,
+        compressedBytes: compressed.length,
+        reason: outcome.reason,
+      });
+      this.retryFailures += 1;
+      this.scheduleRetry();
+      return true;
     }
     state.sentBytes += payload.length;
     state.sequence = sequence;
+    state.lastSuccessAt = new Date().toISOString();
     await this.persistSession(state).catch((error: unknown) => {
       this.log("warn", "OmniRush session ledger update failed", {
         sessionId: state.id,
@@ -764,9 +1615,174 @@ export class WorkspaceCollector {
     this.log("info", "OmniRush collection artifact uploaded", {
       sessionId: state.id,
       snapshotType,
+      trigger,
+      sequence,
       fileCount: files.length,
       compressedBytes: compressed.length,
     });
     return true;
+  }
+
+  // --- durable retry spool -------------------------------------------------
+
+  private spoolLocked<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.spoolTail.catch(() => undefined).then(operation);
+    this.spoolTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async listSpool(): Promise<SpoolMeta[]> {
+    if (!this.spoolDir) return [];
+    let names: string[];
+    try {
+      names = await readdir(this.spoolDir);
+    } catch {
+      return [];
+    }
+    const entries: SpoolMeta[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const id = name.slice(0, -".json".length);
+      try {
+        const meta = parseSpoolMeta(JSON.parse(await readFile(join(this.spoolDir, name), "utf8")));
+        if (!meta || meta.id !== id) throw new Error("invalid spool entry");
+        await lstat(join(this.spoolDir, `${id}.zst`));
+        entries.push(meta);
+      } catch {
+        await this.removeSpoolEntry(id);
+      }
+    }
+    return entries.sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  private async removeSpoolEntry(id: string): Promise<void> {
+    if (!this.spoolDir) return;
+    await Promise.all([
+      rm(join(this.spoolDir, `${id}.json`), { force: true }),
+      rm(join(this.spoolDir, `${id}.zst`), { force: true }),
+    ]).catch(() => undefined);
+  }
+
+  private async writeSpoolMeta(meta: SpoolMeta): Promise<void> {
+    await writeFileAtomic(join(this.spoolDir!, `${meta.id}.json`), JSON.stringify(meta));
+  }
+
+  private spoolEnvelope(meta: SpoolMeta, compressed: Uint8Array): Promise<void> {
+    return this.spoolLocked(async () => {
+      if (!this.spoolDir) return;
+      await mkdir(this.spoolDir, { recursive: true, mode: 0o700 });
+      const id = spoolId(++this.spoolCounter);
+      // Payload first, then the metadata that makes the entry visible: a crash
+      // in between leaves an orphan that the next listing removes.
+      await writeFileAtomic(join(this.spoolDir, `${id}.zst`), Buffer.from(compressed));
+      await this.writeSpoolMeta({ ...meta, id });
+      await this.enforceSpoolBounds();
+    });
+  }
+
+  private async enforceSpoolBounds(): Promise<void> {
+    const entries = await this.listSpool();
+    let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+    let count = entries.length;
+    for (const entry of entries) {
+      if (count <= this.spoolMaxEntries && total <= this.spoolMaxBytes) break;
+      await this.removeSpoolEntry(entry.id);
+      total -= entry.bytes;
+      count -= 1;
+      this.log("warn", "OmniRush collection spool dropped its oldest entry", {
+        sessionId: entry.session_id,
+        snapshotType: entry.snapshot_type,
+        sequence: entry.sequence,
+      });
+    }
+  }
+
+  private scheduleRetry(delayMs?: number): void {
+    if (!this.spoolDir || this.stopped || this.retryTimer) return;
+    const backoff = Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** Math.max(0, this.retryFailures - 1));
+    const delay = delayMs ?? Math.round(backoff * (0.85 + Math.random() * 0.3));
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.drainSpool().catch(() => undefined);
+    }, delay);
+    this.retryTimer.unref?.();
+  }
+
+  /** Delivers spooled uploads oldest first, stopping at the first failure. */
+  drainSpool(): Promise<{ delivered: number; pending: number }> {
+    return this.spoolLocked(async () => {
+      let delivered = 0;
+      if (!this.spoolDir || !this.enabled) return { delivered, pending: 0 };
+      const entries = await this.listSpool();
+      let pending = entries.length;
+      for (const entry of entries) {
+        if (this.stopped) break;
+        let compressed: Buffer;
+        try {
+          compressed = await readFile(join(this.spoolDir, `${entry.id}.zst`));
+        } catch {
+          await this.removeSpoolEntry(entry.id);
+          pending -= 1;
+          continue;
+        }
+        const outcome = await this.transmit(entry.session_id, compressed, 1);
+        if (outcome.ok) {
+          await this.removeSpoolEntry(entry.id);
+          await this.recordLedgerOutcome(entry.session_id, "success").catch(() => undefined);
+          this.retryFailures = 0;
+          delivered += 1;
+          pending -= 1;
+          this.log("info", "OmniRush collection artifact delivered from spool", {
+            sessionId: entry.session_id,
+            snapshotType: entry.snapshot_type,
+            trigger: entry.trigger,
+            sequence: entry.sequence,
+            attempts: entry.attempts + 1,
+          });
+          continue;
+        }
+        if (!outcome.retryable || entry.attempts + 1 >= MAX_SPOOL_ATTEMPTS) {
+          await this.removeSpoolEntry(entry.id);
+          pending -= 1;
+          this.log("warn", "OmniRush collection artifact dropped from spool", {
+            sessionId: entry.session_id,
+            snapshotType: entry.snapshot_type,
+            sequence: entry.sequence,
+            reason: outcome.reason,
+          });
+          continue;
+        }
+        await this.writeSpoolMeta({ ...entry, attempts: entry.attempts + 1, last_attempt_at: new Date().toISOString() }).catch(() => undefined);
+        await this.recordLedgerOutcome(entry.session_id, "failure").catch(() => undefined);
+        this.retryFailures += 1;
+        this.scheduleRetry();
+        break;
+      }
+      return { delivered, pending };
+    });
+  }
+
+  /** Number of spooled uploads and their compressed size on disk. */
+  spoolStatus(): Promise<{ entries: number; bytes: number }> {
+    return this.spoolLocked(async () => {
+      const entries = await this.listSpool();
+      return { entries: entries.length, bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0) };
+    });
+  }
+
+  /**
+   * Discards every spooled upload. Wire this to sign-out and consent
+   * withdrawal: once the account is gone nothing may stay queued on disk.
+   */
+  clearSpool(): Promise<void> {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.retryFailures = 0;
+    return this.spoolLocked(async () => {
+      if (!this.spoolDir) return;
+      await rm(this.spoolDir, { recursive: true, force: true });
+    });
   }
 }

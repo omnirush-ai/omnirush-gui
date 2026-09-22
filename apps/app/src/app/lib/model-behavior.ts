@@ -1,5 +1,6 @@
 import type { ProviderListItem } from "../types";
 import type { ModelBehaviorOption } from "../types";
+import { OMNIRUSH_REASONING_EFFORTS } from "../constants";
 import { t } from "../../i18n";
 
 type ProviderModel = ProviderListItem["models"][string];
@@ -11,6 +12,7 @@ const WELL_KNOWN_VARIANT_ORDER = [
   "medium",
   "high",
   "xhigh",
+  "ultra",
   "max",
 ] as const;
 
@@ -22,6 +24,7 @@ const VARIANT_DEFAULT_SCORE: Record<string, number> = {
   medium: VARIANT_DEFAULT_TARGET,
   high: 4,
   xhigh: 5,
+  ultra: 6,
   max: 6,
 };
 
@@ -106,15 +109,26 @@ const providerFamily = (providerID: string, providerName?: string | null) => {
   return normalizedId;
 };
 
+const isOmniRushProvider = (providerID: string) => providerID.trim().toLowerCase() === "omnirush";
+
 const usesGlmDisplayAliases = (
-  _providerID: string,
+  providerID: string,
   model: ProviderModel,
   _providerName?: string | null,
 ) => {
-  return [model.id, model.name].some(
+  return !isOmniRushProvider(providerID) && [model.id, model.name].some(
     (value) => value?.trim().toLowerCase().includes("gpt") === true,
   );
 };
+
+/**
+ * omnirush.ai models offer exactly the contract's effort levels. The engine
+ * merges its own OpenAI defaults (none, minimal, medium, max) into a reasoning
+ * model's variants, so the reported keys are filtered to the allow-list rather
+ * than trusted, which also keeps the picker default at "high".
+ */
+const omnirushVariantKeys = (keys: string[]) =>
+  keys.filter((key) => (OMNIRUSH_REASONING_EFFORTS as readonly string[]).includes(key));
 
 const getBehaviorTitle = (
   providerID: string,
@@ -186,7 +200,7 @@ const getVariantDescription = (
   if (key === "high") return family === "anthropic"
     ? t("model_behavior.desc_high_anthropic")
     : t("model_behavior.desc_high");
-  if (key === "xhigh" || key === "max") return family === "anthropic"
+  if (key === "xhigh" || key === "ultra" || key === "max") return family === "anthropic"
     ? t("model_behavior.desc_max_anthropic")
     : t("model_behavior.desc_max");
   return t("model_behavior.desc_generic", { label: label.toLowerCase() });
@@ -198,9 +212,11 @@ export const getModelBehaviorOptions = (
   providerName?: string | null,
 ): ModelBehaviorOption[] => {
   const reportedVariantKeys = sortVariantKeys(getVariantKeys(model));
-  const variantKeys = usesGlmDisplayAliases(providerID, model, providerName)
-    ? reportedVariantKeys.filter((key) => key === "low" || key === "high" || key === "xhigh")
-    : reportedVariantKeys;
+  const variantKeys = isOmniRushProvider(providerID)
+    ? omnirushVariantKeys(reportedVariantKeys)
+    : usesGlmDisplayAliases(providerID, model, providerName)
+      ? reportedVariantKeys.filter((key) => key === "low" || key === "high" || key === "xhigh")
+      : reportedVariantKeys;
   if (!variantKeys.length) return [];
   return variantKeys.map((key) => {
     const label = getVariantLabel(key);

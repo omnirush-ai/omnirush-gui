@@ -5,6 +5,7 @@ import {
   MODEL_PREF_KEY,
   SESSION_MODEL_PREF_KEY,
   VARIANT_PREF_KEY,
+  isOmniRushModelID,
 } from "../../app/constants";
 import type { ModelRef } from "../../app/types";
 import {
@@ -156,8 +157,9 @@ export function readStoredDefaultModel(): ModelRef {
     const stored = window.localStorage.getItem(MODEL_PREF_KEY);
     const parsed = parseModelRef(stored);
     // Public OmniRush releases previously persisted a retired managed model.
-    // Keep external provider choices, but migrate the built-in route to Astra.
-    if (parsed?.providerID === "omnirush" && parsed.modelID !== DEFAULT_MODEL.modelID) {
+    // Keep external provider choices and every current omnirush.ai model, but
+    // migrate retired built-in routes to the default model.
+    if (parsed?.providerID === "omnirush" && !isOmniRushModelID(parsed.modelID)) {
       writeStoredDefaultModel(DEFAULT_MODEL);
       return DEFAULT_MODEL;
     }

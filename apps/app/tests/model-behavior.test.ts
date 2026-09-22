@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ProviderListItem } from "../src/app/types";
+import { OMNIRUSH_REASONING_EFFORTS } from "../src/app/constants";
 import {
   getModelBehaviorOptions,
+  getModelBehaviorSummary,
   nextModelBehaviorValue,
   previousModelBehaviorValue,
 } from "../src/app/lib/model-behavior";
@@ -77,7 +79,86 @@ const model: ProviderModel = {
   },
 };
 
+const omnirushModel = (id: string, name: string): ProviderModel => ({
+  ...model,
+  id,
+  name,
+  providerID: "omnirush",
+  api: { id, url: "http://127.0.0.1:8090/omnirush-gateway/v1", npm: "@ai-sdk/openai" },
+  variants: {
+    low: { reasoning_effort: "low" },
+    high: { reasoning_effort: "high" },
+    xhigh: { reasoning_effort: "xhigh" },
+    ultra: { reasoning_effort: "ultra" },
+  },
+});
+
+const OMNIRUSH_MODELS = [
+  omnirushModel("gpt-6-astra", "GPT 6 Astra"),
+  omnirushModel("gpt-5.6-sol", "GPT-5.6 Sol"),
+];
+
 describe("model behavior options", () => {
+  test("offers low, high, xhigh and ultra for every omnirush.ai model", () => {
+    for (const internal of OMNIRUSH_MODELS) {
+      const options = getModelBehaviorOptions("omnirush", internal, "omnirush.ai");
+      expect(options.map(({ value, label }) => ({ value, label }))).toEqual([
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+        { value: "xhigh", label: "Xhigh" },
+        { value: "ultra", label: "Ultra" },
+      ]);
+      expect(nextModelBehaviorValue(options, "xhigh")).toBe("ultra");
+      expect(nextModelBehaviorValue(options, "ultra")).toBe("low");
+      expect(previousModelBehaviorValue(options, "low")).toBe("ultra");
+
+      const summary = getModelBehaviorSummary("omnirush", internal, "ultra", "omnirush.ai");
+      expect(summary.value).toBe("ultra");
+      expect(summary.label).toBe("Ultra");
+      expect(getModelBehaviorSummary("omnirush", internal, null, "omnirush.ai").value).toBe("high");
+    }
+  });
+
+  test("hides the effort levels the engine adds on its own to omnirush.ai models", () => {
+    expect([...OMNIRUSH_REASONING_EFFORTS]).toEqual(["low", "high", "xhigh", "ultra"]);
+    for (const internal of OMNIRUSH_MODELS) {
+      // What GET /config/providers reports once the engine has merged its
+      // OpenAI reasoning defaults into the configured variants.
+      const reported: ProviderModel = {
+        ...internal,
+        variants: {
+          ...internal.variants,
+          none: { reasoningEffort: "none", reasoningSummary: "auto" },
+          minimal: { reasoningEffort: "minimal" },
+          medium: { reasoningEffort: "medium", reasoningSummary: "auto" },
+          max: { reasoningEffort: "max" },
+        },
+      };
+      const options = getModelBehaviorOptions("omnirush", reported, "omnirush.ai");
+      expect(options.map((option) => option.value)).toEqual(["low", "high", "xhigh", "ultra"]);
+      expect(getModelBehaviorSummary("omnirush", reported, null, "omnirush.ai").value).toBe("high");
+      expect(getModelBehaviorSummary("omnirush", reported, "medium", "omnirush.ai").value).toBe("high");
+      expect(getModelBehaviorSummary("omnirush", reported, "ultra", "omnirush.ai").value).toBe("ultra");
+    }
+  });
+
+  test("shows both omnirush.ai models under the omnirush.ai provider with their display names", () => {
+    expect(OMNIRUSH_MODELS.map((internal) => resolveModelDisplayName(internal.id, internal.name)))
+      .toEqual(["GPT 6 Astra", "GPT-5.6 Sol"]);
+    for (const internal of OMNIRUSH_MODELS) {
+      expect(resolveModelProviderDisplayName("omnirush", internal.id, "omnirush.ai", internal.name)).toBe("omnirush.ai");
+      expect(resolveModelProviderIconId("omnirush", internal.id, internal.name)).toBe("omnirush");
+    }
+    expect(dedupeModelOptions([
+      { providerID: "omnirush", modelID: "gpt-6-astra" },
+      { providerID: "omnirush", modelID: "gpt-5.6-sol" },
+      { providerID: "omnirush", modelID: "gpt-6-astra" },
+    ])).toEqual([
+      { providerID: "omnirush", modelID: "gpt-6-astra" },
+      { providerID: "omnirush", modelID: "gpt-5.6-sol" },
+    ]);
+  });
+
   test("uses only the raw effort values reported by the model", () => {
     const options = getModelBehaviorOptions("openai", model);
 
@@ -91,6 +172,7 @@ describe("model behavior options", () => {
   test("keeps model and provider identities truthful", () => {
     expect(resolveModelDisplayName("gpt-6-astra", "GPT-6 Astra")).toBe("GPT 6 Astra");
     expect(resolveModelProviderDisplayName("omnirush", "gpt-6-astra")).toBe("omnirush.ai");
+    expect(resolveModelProviderDisplayName("omnirush", "gpt-5.6-sol")).toBe("omnirush.ai");
     expect(resolveModelDisplayName("gpt-5.6-sol", "GPT-5.6 Sol")).toBe("GPT-5.6 Sol");
     expect(resolveModelDisplayName("gpt-5.6-terra", "GPT-5.6 Terra")).toBe("GPT-5.6 Terra");
     expect(resolveModelDisplayName("claude-sonnet-4", "Claude Sonnet 4")).toBe("Claude Sonnet 4");

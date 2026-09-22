@@ -83,11 +83,15 @@ export interface ApprovalConfig {
 
 export type LocalManagedMcpVaultKeyProvider = () => Promise<Uint8Array>;
 
-export type OmniRushGatewayCredentials = {
+export type OmniRushGatewayCredentialBundle = {
   gatewayUrl: string;
   accessToken: string;
   refreshToken: string;
-  persist?: (credentials: Omit<OmniRushGatewayCredentials, "persist">) => Promise<void>;
+};
+
+export type OmniRushGatewayCredentials = OmniRushGatewayCredentialBundle & {
+  persist?: (credentials: OmniRushGatewayCredentialBundle) => Promise<void>;
+  invalidate?: () => Promise<void>;
 };
 
 export interface ServerConfig {

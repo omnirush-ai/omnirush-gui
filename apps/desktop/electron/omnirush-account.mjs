@@ -10,7 +10,7 @@ const KEYCHAIN_SERVICES = {
   accessToken: "ai.omnirush.desktop.gateway-access",
   refreshToken: "ai.omnirush.desktop.gateway-refresh",
 };
-const DEFAULT_GATEWAY_URL = "https://api.omnirush.ai/omnirush/v1";
+const DEFAULT_GATEWAY_URL = "https://omnirush.ai/omnirush/v1";
 const DEV_GATEWAY_URL = "http://localhost:8090/omnirush/v1";
 
 function normalizeCredential(value) {
@@ -102,6 +102,7 @@ export function createDesktopOmniRushAccountStore({
   sleep = (milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
 }) {
   let cached = null;
+  let refreshInFlight = null;
   const signedOutPath = `${filePath}.signed-out`;
 
   async function safeStorage() {
@@ -168,30 +169,57 @@ export function createDesktopOmniRushAccountStore({
   }
 
   async function configuredGatewayUrl() {
+    // Development builds keep using omnirush.ai. Only an explicit
+    // OMNIRUSH_GATEWAY_URL, or OMNIRUSH_DEV_MODE=1 together with
+    // OMNIRUSH_LOCAL_API=1, points the account service at a local API.
+    const localApiSelected = env.OMNIRUSH_DEV_MODE === "1" && env.OMNIRUSH_LOCAL_API === "1";
     return normalizeGatewayUrl(env.OMNIRUSH_GATEWAY_URL)
       ?? normalizeGatewayUrl(await readMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform))
-      ?? (env.OMNIRUSH_DEV_MODE === "1" ? DEV_GATEWAY_URL : DEFAULT_GATEWAY_URL);
+      ?? (localApiSelected ? DEV_GATEWAY_URL : DEFAULT_GATEWAY_URL);
   }
 
   async function refresh(credentials) {
-    const refreshUrl = controlPlaneBase(credentials.gatewayUrl);
-    refreshUrl.pathname += "/device/refresh";
-    const response = await fetchImpl(refreshUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: credentials.refreshToken }),
-      signal: AbortSignal.timeout(20_000),
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = (async () => {
+      const refreshUrl = controlPlaneBase(credentials.gatewayUrl);
+      refreshUrl.pathname += "/device/refresh";
+      const response = await fetchImpl(refreshUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: credentials.refreshToken }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.status === 401 || response.status === 403) return null;
+      if (!response.ok) throw new Error(`Account refresh unavailable (${response.status})`);
+      const payload = await response.json();
+      const refreshed = validCredentials({
+        gatewayUrl: payload.gateway_url ?? credentials.gatewayUrl,
+        accessToken: payload.access_token,
+        refreshToken: payload.refresh_token,
+      });
+      if (!refreshed) throw new Error("Account service returned invalid credentials");
+      await save(refreshed);
+      return refreshed;
+    })().finally(() => {
+      refreshInFlight = null;
     });
-    if (!response.ok) return null;
-    const payload = await response.json();
-    const refreshed = validCredentials({
-      gatewayUrl: payload.gateway_url ?? credentials.gatewayUrl,
-      accessToken: payload.access_token,
-      refreshToken: payload.refresh_token,
-    });
-    if (!refreshed) return null;
-    await save(refreshed);
-    return refreshed;
+    return refreshInFlight;
+  }
+
+  async function remoteLogout(credentials) {
+    const logoutUrl = controlPlaneBase(credentials.gatewayUrl);
+    logoutUrl.pathname += "/device/logout";
+    try {
+      const response = await fetchImpl(logoutUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: credentials.refreshToken }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
   }
 
   async function fetchProfile(credentials, allowRefresh = true) {
@@ -274,6 +302,7 @@ export function createDesktopOmniRushAccountStore({
       };
     } catch (error) {
       if (error instanceof InvalidAccountCredentialsError) {
+        await clear({ revokeRemote: false });
         return {
           connected: false,
           gatewayConfigured,
@@ -297,10 +326,16 @@ export function createDesktopOmniRushAccountStore({
     }
   }
 
-  async function clear() {
+  async function clear({ revokeRemote = true } = {}) {
+    const credentials = cached ?? await load();
+    const remoteRevoked = !credentials || !revokeRemote
+      ? !credentials || !revokeRemote
+      : await remoteLogout(credentials);
     cached = null;
     await rm(filePath, { force: true });
+    await mkdir(path.dirname(signedOutPath), { recursive: true });
     await writeFile(signedOutPath, "signed-out\n", { mode: 0o600 });
+    return { remoteRevoked };
   }
 
   return { load, save, authorize, status, clear };

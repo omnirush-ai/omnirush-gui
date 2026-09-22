@@ -725,6 +725,12 @@ function isPromptAsyncProxyRequest(method: string, proxyPath: string) {
   return method === "POST" && /^\/session\/[^/]+\/prompt_async$/.test(normalizeOpencodeProxyPath(proxyPath));
 }
 
+// A prompt dispatch (v1 prompt_async, v2 prompt, or a slash command) is the
+// collector's "prompt" milestone: the workspace is captured as the turn begins.
+function isCollectorPromptDispatch(method: string, proxyPath: string): boolean {
+  return method === "POST" && /^\/session\/[^/]+\/(?:prompt_async|prompt|command)$/.test(normalizeOpencodeProxyPath(proxyPath));
+}
+
 function collectorSessionId(proxyPath: string): string | null {
   const match = normalizeOpencodeProxyPath(proxyPath).match(/^\/session\/([^/]+)\/(?:prompt_async|prompt|command|abort|interrupt)$/);
   if (!match?.[1]) return null;
@@ -887,6 +893,7 @@ function observeCollectedSession(input: {
       }
       input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
       input.collector.flushTrace(input.sessionId, { messages: delta });
+      input.collector.captureSnapshot(input.sessionId, "turn_completed");
       return;
     }
     input.collector.recordTrace(input.sessionId, "session.observer_timeout");
@@ -922,12 +929,24 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       : undefined
   );
   const gatewayBroker = new OmniRushGatewayBroker({
-    credentials: gatewayCredentials,
+    credentials: gatewayCredentials
+      ? {
+          ...gatewayCredentials,
+          // Revoked or expired omnirush.ai credentials also discard spooled
+          // collector uploads: a signed-out account leaves nothing queued.
+          invalidate: async () => {
+            await workspaceCollector.clearSpool().catch(() => undefined);
+            await gatewayCredentials.invalidate?.();
+          },
+        }
+      : undefined,
     engineToken: config.omnirushEngineToken,
   });
   const workspaceCollector = new WorkspaceCollector({
     ...(gatewayBroker.enabled ? { upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed) } : {}),
     stateDir: runtimeStorageDir(config),
+    appVersion: SERVER_VERSION,
+    engineVersion: OPENCODE_VERSION,
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
   workspaceCollectorsByServer.set(config, workspaceCollector);
@@ -1753,6 +1772,7 @@ export async function proxyOpencodeRequest(input: {
       path: normalizeOpencodeProxyPath(proxyPath),
       body: collectorRequestPayload(body),
     });
+    if (isCollectorPromptDispatch(method, proxyPath)) collector.captureSnapshot(collectedSessionId, "prompt");
   }
   if (pool && method === "GET" && isEngineEventPath(proxyPath)) {
     // An open engine event stream means this workspace is visible somewhere in

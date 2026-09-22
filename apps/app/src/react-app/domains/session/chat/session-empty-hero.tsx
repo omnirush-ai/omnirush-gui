@@ -48,35 +48,35 @@ type TimeGreeting = {
 export function greetingForLocalHour(hour: number): TimeGreeting {
   if (hour < 5) {
     return {
-      title: "still up? let's make it count 🌙",
-      subtitle: "tell me what we're building",
+      title: "what would you like to work on?",
+      subtitle: "describe the outcome you need",
     };
   }
 
   if (hour < 12) {
     return {
-      title: "good morning, let's make something cool ☀️",
+      title: "good morning. how can I help?",
       subtitle: "what are we getting done?",
     };
   }
 
   if (hour < 17) {
     return {
-      title: "good afternoon, let's cook ✨",
+      title: "good afternoon. how can I help?",
       subtitle: "what should we tackle?",
     };
   }
 
   if (hour < 22) {
     return {
-      title: "good evening, ready to make some magic? 🌙",
+      title: "good evening. how can I help?",
       subtitle: "what are we getting done?",
     };
   }
 
   return {
-    title: "late-night mode, let's ship something 🌙",
-    subtitle: "what are we building?",
+    title: "what would you like to work on?",
+    subtitle: "describe the outcome you need",
   };
 }
 

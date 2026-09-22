@@ -123,15 +123,42 @@ describe("omnirush runtime config file", () => {
       name: "omnirush.ai",
       env: ["OMNIRUSH_ACCESS_TOKEN"],
       options: { baseURL: "http://127.0.0.1:8090/omnirush/v1" },
-      models: {
-        "gpt-6-astra": {
-          name: "Astra",
-          reasoning: true,
-          tool_call: true,
-        },
-      },
     });
     expect(JSON.stringify(parsed)).not.toContain("access-token");
+  });
+
+  test("exposes every omnirush.ai model with the shared effort levels, default first", () => {
+    const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({}, {
+      baseUrl: "http://127.0.0.1:8090/omnirush/v1",
+    });
+    const providers = parsed.provider as Record<string, { models: Record<string, Record<string, unknown>> }>;
+    const models = providers.omnirush!.models;
+    const variants = {
+      low: { reasoning_effort: "low" },
+      high: { reasoning_effort: "high" },
+      xhigh: { reasoning_effort: "xhigh" },
+      ultra: { reasoning_effort: "ultra" },
+      // The engine merges its own OpenAI reasoning defaults into a model's
+      // variants and only drops entries marked disabled; these keep the
+      // resolved picker at exactly the four levels above.
+      none: { disabled: true },
+      minimal: { disabled: true },
+      medium: { disabled: true },
+      max: { disabled: true },
+    };
+    const enabledVariants = (model: Record<string, unknown>) => Object.entries(model.variants as Record<string, { disabled?: boolean }>)
+      .filter(([, options]) => options.disabled !== true)
+      .map(([key]) => key);
+
+    expect(Object.keys(models)).toEqual(["gpt-6-astra", "gpt-5.6-sol"]);
+    expect(models["gpt-6-astra"]).toMatchObject({ name: "GPT 6 Astra", reasoning: true, tool_call: true, variants });
+    expect(models["gpt-5.6-sol"]).toMatchObject({ name: "GPT-5.6 Sol", reasoning: true, tool_call: true, variants });
+    for (const id of ["gpt-6-astra", "gpt-5.6-sol"]) {
+      expect(Object.keys(models[id]!.variants as object).sort()).toEqual(Object.keys(variants).sort());
+      expect(enabledVariants(models[id]!)).toEqual(["low", "high", "xhigh", "ultra"]);
+    }
+    expect(parsed.model).toBe("omnirush/gpt-6-astra");
+    expect((parsed.plugin as string[]).some((plugin) => /omnirush-reasoning-effort\.(?:ts|js)$/.test(plugin))).toBe(true);
   });
 
   test("derives the desktop loopback gateway from the server config without process-global credentials", async () => {

@@ -18,10 +18,23 @@ export const VARIANT_PREF_KEY = "omnirush.modelVariant";
 export { LANGUAGE_PREF_KEY } from "../i18n";
 export const HIDE_TITLEBAR_PREF_KEY = "omnirush.hideTitlebar";
 
+/** Models served by the omnirush.ai account route; the first entry is the default. */
+export const OMNIRUSH_MODEL_IDS = ["gpt-6-astra", "gpt-5.6-sol"] as const;
+
 export const DEFAULT_MODEL: ModelRef = {
   providerID: "omnirush",
-  modelID: "gpt-6-astra",
+  modelID: OMNIRUSH_MODEL_IDS[0],
 };
+
+export function isOmniRushModelID(modelID: string): boolean {
+  return (OMNIRUSH_MODEL_IDS as readonly string[]).includes(modelID.trim().toLowerCase());
+}
+
+/**
+ * Effort levels offered for every omnirush.ai model, in picker order. Must
+ * match the variants the server's runtime config declares for the models.
+ */
+export const OMNIRUSH_REASONING_EFFORTS = ["low", "high", "xhigh", "ultra"] as const;
 
 export const SUGGESTED_PLUGINS: SuggestedPlugin[] = [];
 

@@ -2057,9 +2057,9 @@ const desktopCommandHandlers = {
       return result;
   },
   "omnirushAccountSignOut": async () => {
-      await omnirushAccountStore.clear();
+      const result = await omnirushAccountStore.clear();
       await runtimeManager.omnirushServerRestart({});
-      return { connected: false };
+      return { connected: false, remoteRevoked: result.remoteRevoked };
   },
   "automationRunnerConfigure": async (event, ...args) => {
       return desktopAutomationRunner.configure(args[0] ?? null);

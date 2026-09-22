@@ -1003,10 +1003,10 @@ function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings:
   const accountDetail = usage
     ? `${compactTokenCount(usage.remainingTokens)} tokens left today`
     : connected
-      ? "Astra ready"
+      ? "omnirush.ai models ready"
       : status?.reauthorizationRequired
         ? "Sign in again to continue"
-        : "Use Astra with your account";
+        : "Use omnirush.ai models with your account";
 
   return (
     <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">

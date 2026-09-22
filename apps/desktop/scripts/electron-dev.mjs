@@ -12,7 +12,8 @@ const electronHelperDir = resolve(desktopRoot, "resources", "helpers");
 // Browser automation is approval-free in local development unless explicitly
 // disabled. Set this here as well as in the workspace scripts so direct
 // `@omnirush/desktop` launches behave the same as `pnpm dev` and
-// `pnpm dev:electron`.
+// `pnpm dev:electron`. Dev mode alone keeps the omnirush.ai account service;
+// export OMNIRUSH_LOCAL_API=1 (or OMNIRUSH_GATEWAY_URL) to target a local API.
 process.env.OMNIRUSH_DEV_MODE ??= "1";
 process.env.OMNIRUSH_BROWSER_AUTO_APPROVE ??= "1";
 

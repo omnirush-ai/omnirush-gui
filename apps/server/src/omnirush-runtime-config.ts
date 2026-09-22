@@ -23,6 +23,7 @@ import {
   omnirushAnthropicAdaptiveThinkingPluginPath,
   omnirushAnthropicToolSchemaPluginPath,
   omnirushTitleRecoveryPluginPath,
+  omnirushReasoningEffortPluginPath,
   omnirushOfficeAttachmentsPluginPath,
   omnirushSpreadsheetsPluginPath,
   omnirushChromeDevtoolsPluginPath,
@@ -44,7 +45,24 @@ import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js"
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
 
 const INTERNAL_PROVIDER_ID = "omnirush";
-const INTERNAL_MODEL_ID = "gpt-6-astra";
+const INTERNAL_DEFAULT_MODEL_ID = "gpt-6-astra";
+/**
+ * Effort levels offered for every omnirush.ai model, in picker order. Clients
+ * send these literal values; the backend maps "ultra" to the upstream maximum.
+ */
+const INTERNAL_REASONING_EFFORTS = ["low", "high", "xhigh", "ultra"] as const;
+/**
+ * Effort levels the engine adds on its own to every reasoning model served by
+ * the OpenAI adapter (it merges its defaults into the configured variants and
+ * drops only entries marked disabled). Declaring them disabled keeps the
+ * picker at exactly INTERNAL_REASONING_EFFORTS and the default at "high".
+ */
+const INTERNAL_HIDDEN_EFFORTS = ["none", "minimal", "medium", "max"] as const;
+/** Models served by the omnirush.ai account route. The default comes first. */
+const INTERNAL_MODELS: ReadonlyArray<{ id: string; name: string }> = [
+  { id: INTERNAL_DEFAULT_MODEL_ID, name: "GPT 6 Astra" },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+];
 
 type InternalGatewayRuntime = {
   baseUrl: string;
@@ -84,27 +102,43 @@ function resolveConfiguredInternalGatewayRuntime(
   return resolveInternalGatewayRuntime(env);
 }
 
+function internalGatewayModel(name: string): Record<string, unknown> {
+  return {
+    name,
+    reasoning: true,
+    tool_call: true,
+    structured_output: true,
+    temperature: true,
+    // Keep the effort controls visible in the desktop model picker. The
+    // selected variant is merged into the request options by the engine; the
+    // omnirush-reasoning-effort plugin and the local gateway broker make sure
+    // it reaches the outgoing request as reasoning.effort for every model.
+    variants: {
+      ...Object.fromEntries(
+        INTERNAL_REASONING_EFFORTS.map((effort) => [effort, { reasoning_effort: effort }]),
+      ),
+      ...Object.fromEntries(
+        INTERNAL_HIDDEN_EFFORTS.map((effort) => [effort, { disabled: true }]),
+      ),
+    },
+    limit: { context: 400_000, output: 128_000 },
+    modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+  };
+}
+
 function internalGatewayProvider(runtime: InternalGatewayRuntime): Record<string, unknown> {
   return {
     // The native OpenAI provider uses the Responses API, which preserves
     // reasoning summaries, tool calls, and delegated task events. The generic
     // compatibility provider only emits /chat/completions and loses those
-    // Astra capabilities.
+    // capabilities.
     npm: "@ai-sdk/openai",
     name: "omnirush.ai",
     env: ["OMNIRUSH_ACCESS_TOKEN"],
     options: { baseURL: runtime.baseUrl },
-    models: {
-      [INTERNAL_MODEL_ID]: {
-        name: "Astra",
-        reasoning: true,
-        tool_call: true,
-        structured_output: true,
-        temperature: true,
-        limit: { context: 400_000, output: 128_000 },
-        modalities: { input: ["text", "image", "pdf"], output: ["text"] },
-      },
-    },
+    models: Object.fromEntries(
+      INTERNAL_MODELS.map((model) => [model.id, internalGatewayModel(model.name)]),
+    ),
   };
 }
 
@@ -139,7 +173,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   return {
     ...engineConfig,
     ...(internalGateway
-      ? { model: `${INTERNAL_PROVIDER_ID}/${INTERNAL_MODEL_ID}` }
+      ? { model: `${INTERNAL_PROVIDER_ID}/${INTERNAL_DEFAULT_MODEL_ID}` }
       : {}),
     ...(runtimeConfig.managedPolicy?.allowCustomProviders === false ? { enabled_providers: [
       ...Object.keys(provider).filter((id) => /^(?:lpr_|omnirush$)/i.test(id)),
@@ -181,6 +215,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       omnirushPdfAttachmentsPluginPath(),
       omnirushAnthropicAdaptiveThinkingPluginPath(),
       omnirushAnthropicToolSchemaPluginPath(),
+      omnirushReasoningEffortPluginPath(),
       omnirushTitleRecoveryPluginPath(),
       ...runtimePluginList(runtimeConfig),
     ],

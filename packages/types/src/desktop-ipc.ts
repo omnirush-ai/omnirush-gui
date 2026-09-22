@@ -528,7 +528,7 @@ export type DesktopCommandMap = {
     args: [options?: { gatewayUrl?: string; deviceName?: string }];
     result: { connected: true; userCode: string };
   };
-  omnirushAccountSignOut: { args: []; result: { connected: false } };
+  omnirushAccountSignOut: { args: []; result: { connected: false; remoteRevoked: boolean } };
   automationRunnerConfigure: {
     args: [configuration: { baseUrl: string; token: string; runnerId: string } | null];
     result: { connected: boolean };

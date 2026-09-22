@@ -83,6 +83,45 @@ test("device authorization polls, encrypts, and restores the account", async () 
   ]);
 });
 
+async function authorizeOrigin(env) {
+  const requested = [];
+  const options = await storeOptions({
+    env,
+    fetchImpl: async (url) => {
+      requested.push(String(url));
+      return Response.json({ detail: "unavailable" }, { status: 503 });
+    },
+  });
+  const store = createDesktopOmniRushAccountStore(options);
+  await assert.rejects(store.authorize({ gatewayUrl: undefined, deviceName: "Test Mac", openVerification: async () => undefined }));
+  assert.equal(requested.length, 1);
+  return requested[0];
+}
+
+test("defaults the account service to omnirush.ai, even in development mode", async () => {
+  assert.equal(await authorizeOrigin({}), "https://omnirush.ai/omnirush/device/authorize");
+  assert.equal(await authorizeOrigin({ OMNIRUSH_DEV_MODE: "1" }), "https://omnirush.ai/omnirush/device/authorize");
+  assert.equal(await authorizeOrigin({ OMNIRUSH_LOCAL_API: "1" }), "https://omnirush.ai/omnirush/device/authorize");
+});
+
+test("selects the local API only with OMNIRUSH_DEV_MODE=1 and OMNIRUSH_LOCAL_API=1", async () => {
+  assert.equal(
+    await authorizeOrigin({ OMNIRUSH_DEV_MODE: "1", OMNIRUSH_LOCAL_API: "1" }),
+    "http://localhost:8090/omnirush/device/authorize",
+  );
+});
+
+test("an explicit OMNIRUSH_GATEWAY_URL always wins", async () => {
+  assert.equal(
+    await authorizeOrigin({ OMNIRUSH_GATEWAY_URL: "https://staging.example/omnirush/v1" }),
+    "https://staging.example/omnirush/device/authorize",
+  );
+  assert.equal(
+    await authorizeOrigin({ OMNIRUSH_DEV_MODE: "1", OMNIRUSH_LOCAL_API: "1", OMNIRUSH_GATEWAY_URL: "https://staging.example/omnirush/v1" }),
+    "https://staging.example/omnirush/device/authorize",
+  );
+});
+
 test("profile lookup refreshes an expired device credential and persists the rotation", async () => {
   const options = await storeOptions({
     env: {
@@ -127,6 +166,40 @@ test("profile lookup refreshes an expired device credential and persists the rot
 });
 
 test("sign out prevents legacy credentials from being imported again", async () => {
+  let logoutBody = null;
+  const options = await storeOptions({
+    env: {
+      OMNIRUSH_DEV_MODE: "1",
+      OMNIRUSH_GATEWAY_URL: "http://localhost:8090/omnirush/v1",
+      OMNIRUSH_ACCESS_TOKEN: "legacy-access",
+      OMNIRUSH_REFRESH_TOKEN: "legacy-refresh",
+    },
+    fetchImpl: async (url, init = {}) => {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith("/device/me")) {
+        return Response.json({
+          email: "person@example.com",
+          status: "active",
+          usage: { token_limit: 100000, used_tokens: 0, remaining_tokens: 100000 },
+        });
+      }
+      if (pathname.endsWith("/device/logout")) {
+        logoutBody = JSON.parse(init.body);
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected request ${url}`);
+    },
+  });
+  const store = createDesktopOmniRushAccountStore(options);
+  assert.equal((await store.status()).connected, true);
+  const result = await store.clear();
+  assert.equal(result.remoteRevoked, true);
+  assert.deepEqual(logoutBody, { refresh_token: "legacy-refresh" });
+  const restarted = createDesktopOmniRushAccountStore(options);
+  assert.equal((await restarted.status()).connected, false);
+});
+
+test("sign out clears the local account when remote revocation is unavailable", async () => {
   const options = await storeOptions({
     env: {
       OMNIRUSH_DEV_MODE: "1",
@@ -135,21 +208,15 @@ test("sign out prevents legacy credentials from being imported again", async () 
       OMNIRUSH_REFRESH_TOKEN: "legacy-refresh",
     },
     fetchImpl: async (url) => {
-      if (new URL(url).pathname.endsWith("/device/me")) {
-        return Response.json({
-          email: "person@example.com",
-          status: "active",
-          usage: { token_limit: 100000, used_tokens: 0, remaining_tokens: 100000 },
-        });
-      }
-      throw new Error(`Unexpected request ${url}`);
+      if (new URL(url).pathname.endsWith("/device/logout")) throw new Error("offline");
+      return Response.json({ email: "person@example.com", status: "active" });
     },
   });
   const store = createDesktopOmniRushAccountStore(options);
   assert.equal((await store.status()).connected, true);
-  await store.clear();
-  const restarted = createDesktopOmniRushAccountStore(options);
-  assert.equal((await restarted.status()).connected, false);
+  const result = await store.clear();
+  assert.equal(result.remoteRevoked, false);
+  assert.equal((await createDesktopOmniRushAccountStore(options).status()).connected, false);
 });
 
 test("marks an irrecoverably expired device session as signed out", async () => {
