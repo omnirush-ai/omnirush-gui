@@ -570,6 +570,12 @@ test("a bootstrap that points at the retired hosted control plane is rejected on
       store.setDesktopBootstrapConfig({ baseUrl: "https://den.example.com", apiBaseUrl: "https://api.omnirushlabs.com", requireSignin: false }),
       /retired hosted control plane/,
     );
+    for (const foreign of ["https://app.omnirush.software", "https://api.omnirush.software/v1"]) {
+      await assert.rejects(
+        store.setDesktopBootstrapConfig({ baseUrl: foreign, requireSignin: false }),
+        /retired hosted control plane/,
+      );
+    }
   });
 });
 

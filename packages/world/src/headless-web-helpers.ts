@@ -50,8 +50,18 @@ export function buildDetachedRespawnArgs(argv: string[]): string[] {
   return argv.filter((arg) => arg !== "--detach");
 }
 
+/**
+ * Reduce a Den proxy target to its origin. There is no default: omnirush.ai
+ * runs no hosted Den, so callers must pass the Den web origin explicitly
+ * (OMNIRUSH_DEV_DEN_PROXY_TARGET for the headless web launcher).
+ */
 export function normalizeDenTarget(value: string | undefined): string {
-  const raw = (value ?? "https://app.omnirushlabs.com").trim();
+  const raw = (value ?? "").trim();
+  if (!raw) {
+    throw new Error(
+      "A Den proxy target is required (set OMNIRUSH_DEV_DEN_PROXY_TARGET to your Den web origin, e.g. http://127.0.0.1:3005). omnirush.ai runs no hosted Den, so there is no default.",
+    );
+  }
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   return new URL(withProtocol).origin;
 }

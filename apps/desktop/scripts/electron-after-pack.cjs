@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const asar = require("@electron/asar");
+const { verifyBundledUiMcp } = require("./ui-mcp-bundle.cjs");
 
 const computerUseHelperAppName = "OmniRush.ai Computer Use.app";
 
@@ -51,6 +52,23 @@ function resolveAppAsarPath(context) {
     return appPath ? path.join(appPath, "Contents", "Resources", "app.asar") : null;
   }
   return path.join(context.appOutDir, "resources", "app.asar");
+}
+
+function resolveResourcesDir(context) {
+  if (context.electronPlatformName === "darwin") {
+    const appPath = resolveMacAppPath(context);
+    return appPath ? path.join(appPath, "Contents", "Resources") : null;
+  }
+  return path.join(context.appOutDir, "resources");
+}
+
+// The UI-control extension launches <resources>/omnirush-ui-mcp/index.mjs with
+// the app's own binary; a package without it must not ship.
+function verifyUiControlMcpBundle(context) {
+  const resourcesDir = resolveResourcesDir(context);
+  if (!resourcesDir) throw new Error(`Missing packaged resources directory under ${context.appOutDir}`);
+  const problems = verifyBundledUiMcp(resourcesDir);
+  if (problems.length) throw new Error(problems.join("\n"));
 }
 
 function normalizeAsarEntryPath(entry, separator) {
@@ -139,6 +157,7 @@ function copyExecutableTargetToAlias(sidecarsDir, targetName, aliasName) {
 
 async function afterPack(context) {
   verifyRuntimeDependencies(context);
+  verifyUiControlMcpBundle(context);
   const triple = targetTriple(context.electronPlatformName, context.arch);
   if (!triple) return;
 

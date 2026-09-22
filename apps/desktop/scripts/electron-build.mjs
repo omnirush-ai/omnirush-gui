@@ -12,6 +12,7 @@ const electronHelperDir = resolve(desktopRoot, "resources", "helpers");
 const electronRoot = resolve(desktopRoot, "electron");
 const packagedServerRoot = resolve(desktopRoot, "server");
 const packagedRuntimeRoot = resolve(desktopRoot, ".electron-runtime", "node_modules");
+const packagedUiMcpRoot = resolve(desktopRoot, ".electron-runtime", "omnirush-ui-mcp");
 const sentryBuildConfigPath = resolve(desktopRoot, ".electron-runtime", "omnirush-sentry.json");
 
 const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
@@ -49,6 +50,9 @@ function writeSentryBuildConfig() {
 run(nodeCmd, [resolve(__dirname, "prepare-sidecar.mjs"), "--force", "--outdir", electronSidecarDir], desktopRoot);
 run(nodeCmd, [resolve(__dirname, "prepare-computer-use-helper.mjs"), "--force", "--outdir", electronHelperDir], desktopRoot);
 run(nodeCmd, [resolve(__dirname, "prepare-runtime-node-modules.mjs"), "--outdir", packagedRuntimeRoot], desktopRoot);
+// The built-in UI-control MCP ships inside the app as one bundled module and
+// runs under the app's own binary; packaged builds never resolve it from npm.
+run(nodeCmd, [resolve(__dirname, "prepare-ui-mcp.mjs"), "--outdir", packagedUiMcpRoot], desktopRoot);
 writeSentryBuildConfig();
 // Build the server TS → JS so Electron can import it in-process
 // CI already compiles this exact checkout in the required build job.

@@ -1,13 +1,16 @@
 name: omnirush-ui-mcp
 
+# omnirush-ui-mcp is a private workspace package. The desktop build bundles it
+# into the app (apps/desktop/scripts/prepare-ui-mcp.mjs) and runs it by path,
+# so there is deliberately no npm publish job: nothing should ever be launched
+# as `npx omnirush-ui-mcp`.
+
 on:
   push:
     branches: [dev]
     paths:
       - "packages/omnirush-ui-mcp/**"
       - ".github/workflows/ci-omnirush-ui-mcp.yml"
-    tags:
-      - "omnirush-ui-mcp-v*"
   pull_request:
     branches: [dev]
     paths:
@@ -23,7 +26,7 @@ defaults:
 
 jobs:
   check:
-    name: Syntax & dry-run publish
+    name: Syntax check
     runs-on: ubuntu-latest
 
     steps:
@@ -34,54 +37,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.4.0
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Syntax check
         run: node --check index.mjs
 
-      - name: Dry-run publish
-        run: npm publish --dry-run --access public
-
-  publish:
-    name: Publish to npm
-    needs: check
-    if: startsWith(github.ref, 'refs/tags/omnirush-ui-mcp-v')
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.4.0
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Syntax check
-        run: node --check index.mjs
-
-      - name: Publish
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Stays private
+        run: node -e "const p=require('./package.json'); if (p.private !== true || p.publishConfig) { console.error('omnirush-ui-mcp must stay private and unpublished'); process.exit(1); }"

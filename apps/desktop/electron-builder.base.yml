@@ -12,6 +12,12 @@ files:
 extraResources:
   - from: .electron-runtime/omnirush-sentry.json
     to: omnirush-sentry.json
+  # Bundled UI-control MCP (scripts/prepare-ui-mcp.mjs). Launched with the app's
+  # own binary and ELECTRON_RUN_AS_NODE=1; never fetched from a registry.
+  - from: .electron-runtime/omnirush-ui-mcp
+    to: omnirush-ui-mcp
+    filter:
+      - index.mjs
   - from: ../app/dist
     to: app-dist
   - from: server/dist/opencode-plugins

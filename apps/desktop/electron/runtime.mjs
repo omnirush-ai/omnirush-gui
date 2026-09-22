@@ -1381,6 +1381,7 @@ export function createRuntimeManager({
   localManagedMcpVaultKey,
   omnirushGatewayCredentials = null,
   appVersion = null,
+  omnirushUiMcpLaunch = () => null,
   workspaceMkdir = mkdir,
   workspacePlatform = process.platform,
 }) {
@@ -2000,6 +2001,9 @@ export function createRuntimeManager({
       opencodeCwd: managedOpencodeWorkdir(),
       localManagedMcpVaultKey,
       appVersion: typeof appVersion === "string" && appVersion.trim() ? appVersion.trim() : undefined,
+      // Bundled UI-control MCP launch for the startup migration of persisted
+      // `npx -y omnirush-ui-mcp` entries; null removes those entries instead.
+      omnirushUiMcp: omnirushUiMcpLaunch() ?? null,
       omnirushGatewayCredentials: gatewayCredentials
         ? {
             ...gatewayCredentials,

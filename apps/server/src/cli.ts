@@ -26,6 +26,7 @@ import { findManagedEngineWorkspace } from "./workspaces.js";
 import { keepOmniRushRuntimeConfigFileFresh, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
 import { migrateOmniRushCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
 import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
+import { migrateLegacyOmniRushUiMcpCommand } from "./omnirush-ui-mcp-migration.js";
 import { resolveOpencodeModelsEnv } from "./opencode-models-url.js";
 import { assertOpencodeConfigCompat } from "./opencode-config-compat.js";
 import { startWorkerActivityHeartbeat } from "./worker-activity-heartbeat.js";
@@ -52,6 +53,10 @@ let enginePool: EnginePool | null = null;
 
 if (!config.readOnly) {
   await ensureLocalWorkspaceFiles(config.workspaces);
+  // A standalone server has no bundled UI-control MCP: remove any persisted
+  // `npx -y omnirush-ui-mcp` entry rather than letting the engine resolve it.
+  // First among the runtime-DB migrations (see migrateLegacyOmniRushUiMcpCommand).
+  await migrateLegacyOmniRushUiMcpCommand(config, null);
   await migrateOmniRushCloudMcpRuntimeConfig(config);
   await migrateWorkspaceRuntimeConfigToEngineGlobal(config);
 }

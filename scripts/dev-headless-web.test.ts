@@ -168,7 +168,7 @@ describe("dev-headless-web helpers", () => {
       runtimeManifestPath: "/repo/tmp/dev-headless-web.json",
       webLogPath: "/repo/tmp/dev-web.log",
       headlessLogPath: "/repo/tmp/dev-headless.log",
-      denTarget: "https://app.omnirushlabs.com",
+      denTarget: "https://den.example.com",
       pid: 42,
       webPid: 43,
       omnirushServerPid: 44,
@@ -177,7 +177,7 @@ describe("dev-headless-web helpers", () => {
 
     expect(manifest.mode).toBe("local-server");
     expect(manifest.healthUrl).toBe("http://127.0.0.1:8778/health");
-    expect(manifest.denTarget).toBe("https://app.omnirushlabs.com");
+    expect(manifest.denTarget).toBe("https://den.example.com");
     expect(manifest.denApiUrl).toBe("http://127.0.0.1:5178/api/den");
     expect(manifest.token).toBe("client-token");
     expect(manifest.notes).toContain("same-origin");
@@ -203,13 +203,18 @@ describe("dev-headless-web helpers", () => {
   });
 
   test("normalizes Den targets to origins", () => {
-    expect(normalizeDenTarget("https://app.omnirushlabs.com/api/den")).toBe(
-      "https://app.omnirushlabs.com",
+    expect(normalizeDenTarget("https://den.example.com/api/den")).toBe(
+      "https://den.example.com",
     );
     expect(normalizeDenTarget("http://127.0.0.1:3005")).toBe(
       "http://127.0.0.1:3005",
     );
-    expect(normalizeDenTarget(undefined)).toBe("https://app.omnirushlabs.com");
+    expect(normalizeDenTarget("den.example.com")).toBe("https://den.example.com");
+  });
+
+  test("requires an explicit Den target instead of defaulting to a hosted Den", () => {
+    expect(() => normalizeDenTarget(undefined)).toThrow(/OMNIRUSH_DEV_DEN_PROXY_TARGET/);
+    expect(() => normalizeDenTarget("   ")).toThrow(/no hosted Den/);
   });
 
   test("detached respawn forwards args except --detach", () => {

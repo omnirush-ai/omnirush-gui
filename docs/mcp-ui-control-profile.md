@@ -53,28 +53,46 @@ Inside OmniRush.ai, agents control the app through the semantic tools (`omnirush
 
 ## Install
 
-```bash
-npm install -g omnirush-ui-mcp
-```
-
-Or run without installing:
+Nothing to install. The UI-control MCP ships inside the OmniRush.ai desktop app
+as a single bundled file and runs with the app's own binary in Node mode:
 
 ```bash
-npx omnirush-ui-mcp
+ELECTRON_RUN_AS_NODE=1 "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai" \
+  "/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"
 ```
 
-> The package is [`omnirush-ui-mcp` on npm](https://www.npmjs.com/package/omnirush-ui-mcp).
+The paths above are the macOS default. **Settings -> Extensions -> UI Control**
+shows the exact command, environment, and client config for your installation.
+
+> `omnirush-ui-mcp` is **not** published on npm. Never configure it as
+> `npx omnirush-ui-mcp` or install it with `npm install`: a package with that
+> name on a public registry is not the UI-control MCP. omnirush-server refuses
+> to store or launch any MCP command that resolves `omnirush-ui-mcp` by name
+> (`npx`, `bunx`, `pnpm dlx`, `yarn dlx`, `npm exec`, a global install). On
+> startup the desktop app rewrites a stored `npx -y omnirush-ui-mcp` command to
+> the bundled one; a standalone server removes it, and UI control is
+> reconnected from the desktop app.
+>
+> Configs outside the app are not migrated. If desktop 1.0.8 or earlier gave
+> you the `npx` snippet for Claude Desktop, Cursor, or OpenCode, or wrote it
+> into a workspace `opencode.json`, replace it with the command shown in
+> **Settings -> Extensions -> UI Control**.
 
 ## Add to OpenCode
 
-Add the MCP server to your workspace or global `opencode.json`:
+Add the MCP server to your workspace or global `opencode.json`, using the
+command shown in the app:
 
 ```json
 {
   "mcp": {
     "omnirush-ui": {
       "type": "local",
-      "command": ["npx", "-y", "omnirush-ui-mcp"],
+      "command": [
+        "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
+        "/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"
+      ],
+      "environment": { "ELECTRON_RUN_AS_NODE": "1" },
       "enabled": true
     }
   }
@@ -95,8 +113,9 @@ Both use the same MCP config shape. Add to your `claude_desktop_config.json` or 
 {
   "mcpServers": {
     "omnirush-ui": {
-      "command": "npx",
-      "args": ["-y", "omnirush-ui-mcp"]
+      "command": "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
+      "args": ["/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"],
+      "env": { "ELECTRON_RUN_AS_NODE": "1" }
     }
   }
 }
@@ -113,8 +132,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const transport = new StdioClientTransport({
-  command: "npx",
-  args: ["-y", "omnirush-ui-mcp"],
+  command: "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
+  args: ["/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"],
+  env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
 });
 const client = new Client({ name: "my-app", version: "1.0.0" });
 await client.connect(transport);
@@ -252,4 +272,4 @@ The exact list depends on the current OmniRush.ai route and state. Common action
 3. `omnirush-ui-mcp` reads the discovery file, proxies MCP tool calls to the bridge, and returns structured results.
 4. The bridge calls `window.__omnirushControl` inside the Electron renderer to snapshot state and execute actions.
 
-The bridge and discovery file are implementation details — you never need to touch them directly. Just point your MCP client at `omnirush-ui-mcp`.
+The bridge and discovery file are implementation details — you never need to touch them directly. Just point your MCP client at the bundled `omnirush-ui-mcp/index.mjs` shown in the app.

@@ -62,7 +62,7 @@ test("first run signs in through the browser, then shares a skill with a colleag
           appName: "OmniRush.ai", clientName: "Install Journey", requireSignin: true,
           logoUrl: null, iconUrl: null, desktopVersion: "0.18.0", distribution: "cloud",
           // A session-backed local/preview install must not jump to a configured hosted default.
-          webUrl: url.searchParams.has("token") ? `${webUrl}/ignored-config-path` : "https://app.omnirushlabs.com",
+          webUrl: url.searchParams.has("token") ? `${webUrl}/ignored-config-path` : "https://configured-default.example.com",
           apiUrl,
         });
       };

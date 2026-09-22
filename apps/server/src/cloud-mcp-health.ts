@@ -676,11 +676,6 @@ function normalizeCloudEndpointUrl(value: string): string | null {
     if (url.search || url.hash) return null;
     const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
     if (!normalizedPath.endsWith("/mcp/agent")) return null;
-    if (url.protocol === "https:" && url.hostname.toLowerCase() === "app.omnirushlabs.com" && normalizedPath === "/api/den/mcp/agent") {
-      url.hostname = "api.app.omnirushlabs.com";
-      url.pathname = "/mcp/agent";
-      return url.toString();
-    }
     url.pathname = normalizedPath;
     return url.toString();
   } catch {
@@ -694,11 +689,6 @@ function canonicalizeCloudMcpConfig(config: Record<string, unknown>): Record<str
   return normalizedUrl ? { ...config, url: normalizedUrl } : config;
 }
 
-const BUILT_IN_CLOUD_MCP_ORIGINS = new Set([
-  "https://api.omnirushlabs.com",
-  "https://api.app.omnirushlabs.com",
-]);
-
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "[::1]" || normalized === "::1";
@@ -709,9 +699,10 @@ function isLoopbackHostname(hostname: string): boolean {
  * account-global desired config by a collaborator-scoped client.
  *
  * The desired config is global: one write reconfigures Connect for every
- * workspace this server hosts. Built-in OmniRush.ai Cloud origins, the
- * administrator-activated enterprise Den origin, and loopback (local
- * development Dens) are trusted; anything else requires owner scope so a
+ * workspace this server hosts. Only the administrator-activated enterprise Den
+ * origin and loopback (local development Dens) are trusted. There are no
+ * built-in hosted origins (omnirush.ai runs no hosted Den and the retired
+ * hosted Den domains are not ours); anything else requires owner scope so a
  * collaborator on one shared workspace cannot silently redirect every other
  * workspace's Connect tools to an attacker-controlled endpoint.
  */
@@ -729,7 +720,6 @@ export async function isTrustedCloudMcpEndpointForGlobalPersist(rawUrl: string):
   }
   if (isLoopbackHostname(url.hostname)) return true;
   if (url.protocol !== "https:") return false;
-  if (BUILT_IN_CLOUD_MCP_ORIGINS.has(url.origin)) return true;
   const { readActivatedEnterpriseDenOrigin } = await import("./enterprise-den-origin.js");
   const enterpriseOrigin = await readActivatedEnterpriseDenOrigin();
   return enterpriseOrigin !== null && url.origin === enterpriseOrigin;

@@ -46,51 +46,6 @@
       "override": null
     },
     {
-      "host": "api.omnirush.software",
-      "kind": "fetched",
-      "components": ["server"],
-      "purpose": "Legacy hosted Connect API origin inherited from the upstream product and not operated by omnirush.ai. It remains only in a built-in Connect endpoint trust list.",
-      "requirement": "optional",
-      "blockedEffect": "None for omnirush.ai installs; only configurations that still point at this legacy origin are affected.",
-      "override": "self-hosted Den API origin"
-    },
-    {
-      "host": "api.omnirushlabs.com",
-      "kind": "fetched",
-      "components": ["installer", "server"],
-      "purpose": "Retired hosted Den public API origin. It remains only in built-in endpoint trust lists and the bootstrap CLI default, and is contacted only if a configuration points at it.",
-      "requirement": "optional",
-      "blockedEffect": "None. Retired hosted service: omnirush.ai runs no hosted Den and this host no longer resolves.",
-      "override": "installer apiUrl / self-hosted Den API origin"
-    },
-    {
-      "host": "api.app.omnirushlabs.com",
-      "kind": "fetched",
-      "components": ["desktop", "renderer", "server"],
-      "purpose": "Retired hosted Den API origin. It remains only in a built-in Connect endpoint trust list and is contacted only if a Den configuration points at it.",
-      "requirement": "optional",
-      "blockedEffect": "None. Retired hosted service: omnirush.ai runs no hosted Den and this host no longer resolves.",
-      "override": "desktop apiBaseUrl / self-hosted Den API origin"
-    },
-    {
-      "host": "app.omnirush.software",
-      "kind": "fetched",
-      "components": ["server"],
-      "purpose": "Legacy hosted Cloud web origin inherited from the upstream product and not operated by omnirush.ai. It remains only in a built-in Connect endpoint trust list.",
-      "requirement": "optional",
-      "blockedEffect": "None for omnirush.ai installs; only configurations that still point at this legacy origin are affected.",
-      "override": "desktop base URL (self-hosted Den replaces this host)"
-    },
-    {
-      "host": "app.omnirushlabs.com",
-      "kind": "fetched",
-      "components": ["desktop", "renderer", "bootstrap"],
-      "purpose": "Retired hosted Den web origin. It remains only in built-in endpoint trust lists and the bootstrap CLI default; the desktop has no default Den and contacts it only if someone configures it as the Den base URL.",
-      "requirement": "optional",
-      "blockedEffect": "None. Retired hosted service: omnirush.ai runs no hosted Den and this host no longer resolves.",
-      "override": "desktop base URL (self-hosted Den replaces this host)"
-    },
-    {
       "host": "cdn.simpleicons.org",
       "kind": "fetched",
       "components": ["renderer"],
@@ -301,9 +256,9 @@
       "host": "registry.npmjs.org",
       "kind": "subprocess",
       "components": ["desktop", "renderer"],
-      "purpose": "npx package resolution for omnirush-ui-mcp and development-only MCP helper commands.",
-      "requirement": "required-in-practice",
-      "blockedEffect": "The OmniRush.ai UI-control MCP is silently unavailable when npx cannot download omnirush-ui-mcp.",
+      "purpose": "npx package resolution for local MCP servers a user or administrator configures with an npx command. The built-in UI-control MCP is bundled with the desktop app and never uses npx.",
+      "requirement": "opt-in",
+      "blockedEffect": "User-configured npx MCP servers cannot download their packages.",
       "override": "npm registry configuration used by npx"
     },
     {

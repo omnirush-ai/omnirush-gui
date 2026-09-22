@@ -28,7 +28,7 @@ describe("Agent Plugins v1", () => {
       entries: [{
         config: {
           type: "streamable-http",
-          url: "https://api.omnirushlabs.com/mcp/agent",
+          url: "https://replace-with-your-den-api-origin.invalid/mcp/agent",
         },
         name: "omnirush",
         valid: true,

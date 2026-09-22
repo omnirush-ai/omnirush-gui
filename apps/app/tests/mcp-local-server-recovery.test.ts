@@ -119,3 +119,99 @@ describe("bundled Computer Use setup", () => {
     expect(saved).toEqual([]);
   });
 });
+
+describe("bundled UI-control setup", () => {
+  const bundledCommand = [
+    "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
+    "/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs",
+  ];
+  const bundledEnvironment = {
+    ELECTRON_RUN_AS_NODE: "1",
+    OMNIRUSH_UI_CONTROL_DISCOVERY: "/Users/me/Library/Application Support/ai.omnirush.desktop/omnirush-ui-control.json",
+  };
+
+  async function connectUiControl(desktop: {
+    command?: () => Promise<unknown>;
+    environment?: () => Promise<unknown>;
+  } | null) {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        __OMNIRUSH_ELECTRON__: desktop
+          ? {
+            invokeDesktop: async (name: string) => {
+              if (name === "getOmniRushUiMcpCommand") return desktop.command ? desktop.command() : null;
+              if (name === "getOmniRushUiMcpEnvironment") return desktop.environment ? desktop.environment() : null;
+              return null;
+            },
+          }
+          : {},
+      },
+    });
+    const server = createOmniRushServerStore({
+      startupPreference: () => "server", documentVisible: () => true, developerMode: () => false,
+      runtimeWorkspaceId: () => "setup-workspace", activeClient: () => null,
+      selectedWorkspaceDisplay: () => ({ id: "setup-workspace", name: "Setup", path: "/tmp/setup", preset: "starter", workspaceType: "local" }),
+      restartLocalServer: async () => false, createRemoteWorkspaceFlow: async () => false,
+    });
+    const saved: Array<Parameters<ReturnType<typeof createOmniRushServerClient>["addMcp"]>[1]> = [];
+    const client = {
+      ...createOmniRushServerClient({ baseUrl: "http://127.0.0.1:1" }),
+      addMcp: async (_workspace: string, payload: Parameters<ReturnType<typeof createOmniRushServerClient>["addMcp"]>[1]) => { saved.push(payload); return { items: [] }; },
+      listMcp: async () => ({ items: [] }),
+    };
+    const getSnapshot: typeof server.getSnapshot = () => ({ ...server.getSnapshot(), omnirushServerStatus: "connected", omnirushServerClient: client });
+    const store = createConnectionsStore({
+      checkDesktopAppRestriction: () => false, client: () => null, setClient: () => {},
+      projectDir: () => "/tmp/setup", selectedWorkspaceId: () => "setup-workspace", selectedWorkspaceRoot: () => "/tmp/setup",
+      workspaceType: () => "local", omnirushServer: { ...server, getSnapshot }, runtimeWorkspaceId: () => "setup-workspace", developerMode: () => false,
+    });
+    const entry = MCP_QUICK_CONNECT.find((item) => item.serverName === "omnirush-ui");
+    if (!entry) throw new Error("UI-control catalog entry missing");
+    const result = await store.connectMcp(entry);
+    return { entry, result, saved };
+  }
+
+  test("the catalog carries no npx fallback for the unpublished package", () => {
+    const entry = MCP_QUICK_CONNECT.find((item) => item.serverName === "omnirush-ui");
+    expect(entry?.command).toEqual([]);
+    expect(JSON.stringify(MCP_QUICK_CONNECT)).not.toContain("omnirush-ui-mcp");
+  });
+
+  test("saves the bundled desktop launch with its Node-mode environment", async () => {
+    const { result, saved } = await connectUiControl({
+      command: async () => bundledCommand,
+      environment: async () => bundledEnvironment,
+    });
+    expect(result).toEqual({ ok: true });
+    expect(saved).toEqual([{
+      name: "omnirush-ui",
+      config: { type: "local", enabled: true, command: bundledCommand, environment: bundledEnvironment },
+    }]);
+    expect(JSON.stringify(saved)).not.toContain("npx");
+  });
+
+  test("a missing bundle fails without saving an npx command", async () => {
+    const { result, saved } = await connectUiControl({
+      command: async () => { throw new Error("The OmniRush.ai UI-control MCP is missing from this build. Reinstall OmniRush.ai."); },
+      environment: async () => bundledEnvironment,
+    });
+    expect(result).toEqual({ ok: false, error: "The OmniRush.ai UI-control MCP is missing from this build. Reinstall OmniRush.ai." });
+    expect(saved).toEqual([]);
+  });
+
+  test("outside the desktop app it fails without saving anything", async () => {
+    const { result, saved } = await connectUiControl(null);
+    expect(result.ok).toBe(false);
+    expect(saved).toEqual([]);
+  });
+
+  test("never saves the app binary without ELECTRON_RUN_AS_NODE", async () => {
+    const { result, saved } = await connectUiControl({
+      command: async () => bundledCommand,
+      environment: async () => { throw new Error("bridge unavailable"); },
+    });
+    expect(result).toEqual({ ok: false, error: "bridge unavailable" });
+    expect(saved).toEqual([]);
+  });
+});

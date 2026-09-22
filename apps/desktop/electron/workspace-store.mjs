@@ -120,12 +120,17 @@ const LEGACY_DESKTOP_BOOTSTRAP_PATH = resolveLegacyDesktopBootstrapPath({ homeDi
 // hosts no longer resolve in DNS: older builds materialized them as the
 // bootstrap default, so a file that still points at them is a stale artifact,
 // not a configuration. It is rejected on read (defaults apply instead) and on
-// write, and nothing here ever contacts these hosts.
+// write, and nothing here ever contacts these hosts. The omnirush.software
+// hosts are the upstream product's hosted origins; they were never ours and
+// have no DNS, so they are rejected the same way.
 const RETIRED_HOSTED_CONTROL_PLANE_HOSTS = new Set([
   "omnirushlabs.com",
   "app.omnirushlabs.com",
   "api.omnirushlabs.com",
   "api.app.omnirushlabs.com",
+  "omnirush.software",
+  "app.omnirush.software",
+  "api.omnirush.software",
 ]);
 
 export function isRetiredHostedControlPlaneUrl(value) {

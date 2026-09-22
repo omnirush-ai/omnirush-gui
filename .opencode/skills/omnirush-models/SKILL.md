@@ -22,8 +22,10 @@ Managed file:
 
 `ee/apps/inference/scripts/build-models.mjs` reads `omnirush-models.json` and
 generates the OmniRush.ai provider overlay in memory. It selects the API URL from
-`OMNIRUSH_DEV_MODE`: dev uses `http://127.0.0.1:8791/api/v1`, otherwise prod
-uses `https://inference.omnirushlabs.com/api/v1`.
+`OMNIRUSH_DEV_MODE`: dev uses `http://127.0.0.1:8791/api/v1`; the non-dev value
+hard-coded there points at the retired hosted `inference.omnirushlabs.com`
+domain, which omnirush.ai no longer owns. Do not treat that origin as a live
+endpoint or copy it into new configuration.
 
 Do not inspect the full `base.json` in chat. Use the scripts so the large source
 model body stays out of context.

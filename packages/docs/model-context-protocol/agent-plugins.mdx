@@ -15,12 +15,15 @@ The package contains:
 
 - `plugin.json`, targeting the published Agent Plugins 1.0.0 schema for broad
   client compatibility;
-- `mcp.json`, pointing at the OmniRush.ai Connect Streamable HTTP endpoint;
+- `mcp.json`, with a placeholder OmniRush.ai Connect Streamable HTTP endpoint
+  (`https://replace-with-your-den-api-origin.invalid/mcp/agent`) that you
+  replace with your Den API origin plus `/mcp/agent`. The reserved `.invalid`
+  domain never resolves, so an unedited package fails closed;
 - an `omnirush-connect` skill that teaches the agent to search for an exact
   organizational capability before executing it.
 
-Install or copy the complete package directory using your client's Agent
-Plugins workflow. The standard does not define a registry or one universal
+Set the endpoint in `mcp.json`, then install or copy the complete package
+directory using your client's Agent Plugins workflow. The standard does not define a registry or one universal
 installation command, so the last installation step depends on the client.
 
 The package does not contain credentials or an `Authorization` header. Your

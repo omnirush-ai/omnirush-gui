@@ -1,6 +1,7 @@
 {
   "name": "omnirush-ui-mcp",
   "version": "0.2.0",
+  "private": true,
   "description": "MCP server for OmniRush.ai app context and semantic UI control",
   "author": "OmniRush.ai <info@omnirush.ai>",
   "license": "MIT",
@@ -19,9 +20,6 @@
     "type": "git",
     "url": "git+https://github.com/omnirush-ai/omnirush-gui.git",
     "directory": "packages/omnirush-ui-mcp"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

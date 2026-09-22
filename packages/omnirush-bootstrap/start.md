@@ -24,13 +24,16 @@ node packages/omnirush-bootstrap/bin/omnirush.mjs install \
   --json
 ```
 
-In production, download the bootstrap script, inspect it, then run it. Do not
-pipe remote scripts directly into a shell. The script downloads the
+Otherwise, download the bootstrap script from the install origin your
+organization's administrator gave you, inspect it, then run it. Do not pipe
+remote scripts directly into a shell. The script downloads the
 `omnirush-bootstrap` CLI (a single dependency-free Node file) and installs it
-into `$HOME/.local/bin` - no npm or npx required.
+into `$HOME/.local/bin` - no npm or npx required. There is no public hosted
+install origin: the former hosted domain is retired, so never substitute a
+guessed URL.
 
 ```bash
-curl -fsSLo /tmp/omnirush-install.sh https://omnirushlabs.com/install.sh
+curl -fsSLo /tmp/omnirush-install.sh https://<your-install-origin>/install.sh
 less /tmp/omnirush-install.sh
 sh /tmp/omnirush-install.sh
 ```
@@ -47,7 +50,7 @@ Install the desktop app for this OS from the manifest:
 
 ```bash
 omnirush-bootstrap install app \
-  --manifest https://omnirushlabs.com/install-manifest.json \
+  --manifest https://<your-install-origin>/install-manifest.json \
   --json
 ```
 
@@ -71,9 +74,12 @@ for teammate email addresses to invite. Invites only go out once the workspace
 is claimed (a provisional workspace has no authenticated owner yet to send them
 as) - they fire automatically the moment a human claims ownership.
 
+`--base-url` is required and must be your organization's Den API origin;
+omnirush.ai runs no hosted Den.
+
 ```bash
 omnirush-bootstrap cloud bootstrap-workspace \
-  --base-url https://api.omnirushlabs.com \
+  --base-url https://<your-den-api-origin> \
   --workspace-name "<workspace-name>" \
   --skill-name "First OmniRush.ai Skill" \
   --claim-roles owner \
@@ -126,13 +132,13 @@ If the user says yes:
    the agent they are currently using. The server URL is:
 
    ```text
-   https://api.omnirushlabs.com/mcp/agent
+   https://<your-den-api-origin>/mcp/agent
    ```
 
 3. For Codex, run:
 
    ```bash
-   codex mcp add omnirush --url https://api.omnirushlabs.com/mcp/agent
+   codex mcp add omnirush --url https://<your-den-api-origin>/mcp/agent
    codex mcp login omnirush
    ```
 

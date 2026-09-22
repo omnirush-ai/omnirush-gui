@@ -197,8 +197,10 @@ export const MCP_QUICK_CONNECT: McpDirectoryInfo[] = [
     serverName: "omnirush-ui",
     get description() { return t("mcp.quick_connect_omnirush_ui_desc"); },
     type: "local",
-    // Dev builds replace this with the local checkout path before writing config.
-    command: ["npx", "-y", "omnirush-ui-mcp"],
+    // Resolved by the desktop at connect time (getOmniRushUiMcpCommand): the
+    // MCP ships inside the app and runs under the app's own binary. It is not
+    // published on npm, so there is deliberately no `npx` fallback here.
+    command: [],
     oauth: false,
     kind: "ui-control",
     iconSrc: "/omnirush-mark.png",

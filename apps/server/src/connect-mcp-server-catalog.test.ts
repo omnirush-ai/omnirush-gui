@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,11 +22,41 @@ import type { ServerConfig } from "./types.js";
 
 const roots: string[] = [];
 const previousRuntimeDb = process.env.OMNIRUSH_RUNTIME_DB;
+const previousBootstrapPath = process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH;
+
+/** The administrator-activated enterprise Den origin every trusted fixture uses. */
+const DEN = "https://den.example.com";
+
+/** Hosted Den origins that are retired and must never be trusted by default. */
+const RETIRED_HOSTED_ORIGINS = [
+  "https://api.omnirushlabs.com",
+  "https://app.omnirushlabs.com",
+  "https://api.app.omnirushlabs.com",
+  "https://api.omnirush.software",
+  "https://app.omnirush.software",
+];
+
+async function activateEnterpriseDen(origin: string | null): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "omnirush-connect-mcp-bootstrap-"));
+  roots.push(root);
+  const path = join(root, "desktop-bootstrap.json");
+  await writeFile(path, JSON.stringify(origin
+    ? { baseUrl: origin, enterpriseActivation: { activatedAt: "2026-09-22T00:00:00.000Z", denBaseUrl: origin } }
+    : {}), "utf8");
+  process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH = path;
+}
+
+beforeEach(async () => {
+  // Never read the real desktop-bootstrap.json of whoever runs the tests.
+  await activateEnterpriseDen(DEN);
+});
 
 afterEach(async () => {
   while (roots.length) await rm(roots.pop() ?? "", { recursive: true, force: true });
   if (previousRuntimeDb === undefined) delete process.env.OMNIRUSH_RUNTIME_DB;
   else process.env.OMNIRUSH_RUNTIME_DB = previousRuntimeDb;
+  if (previousBootstrapPath === undefined) delete process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH;
+  else process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH = previousBootstrapPath;
 });
 
 async function fixtureConfig(): Promise<ServerConfig> {
@@ -58,7 +88,7 @@ function indexFetcher(
     connectionId: "emc_01k28e8q8pf8r9sff9mhyqxved",
     name: "Project Atlas",
     description: null,
-    url: "https://api.omnirushlabs.com/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved",
+    url: "https://den.example.com/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved",
   }],
 ) {
   return async (url: string, init?: RequestInit) => {
@@ -90,7 +120,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
     const index = await readOmniRushConnectMcpServerIndex({
       type: "remote",
-      url: "https://api.omnirushlabs.com/mcp/agent",
+      url: "https://den.example.com/mcp/agent",
       headers: { Authorization: "Bearer member-token" },
     }, "Bearer private-app-host-token", indexFetcher(requests));
 
@@ -105,22 +135,85 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
       === CONNECT_MCP_APP_HOST_CAPABILITY)).toBe(true);
   });
 
-  test("keeps hosted api-origin provider proxies on the credential-bound app gateway origin", async () => {
+  test("keeps same-origin provider proxies below a Den gateway prefix", async () => {
     const index = await readOmniRushConnectMcpServerIndex({
       type: "remote",
-      url: "https://app.omnirushlabs.com/api/den/mcp/agent",
-    }, "Bearer private-app-host-token", indexFetcher([]));
+      url: `${DEN}/api/den/mcp/agent`,
+    }, "Bearer private-app-host-token", indexFetcher([], [{
+      connectionId: "emc_01k28e8q8pf8r9sff9mhyqxved",
+      name: "Project Atlas",
+      description: null,
+      url: `${DEN}/api/den/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved`,
+    }]));
 
     expect(index?.servers[0]?.url).toBe(
-      "https://app.omnirushlabs.com/api/den/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved",
+      `${DEN}/api/den/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved`,
     );
+  });
+
+  test("never sends the App-host credential to a retired hosted origin", async () => {
+    // No activation: the retired hosts used to be trusted without one.
+    await activateEnterpriseDen(null);
+    for (const origin of RETIRED_HOSTED_ORIGINS) {
+      for (const path of ["/mcp/agent", "/api/den/mcp/agent"]) {
+        const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
+        const index = await readOmniRushConnectMcpServerIndex({
+          type: "remote",
+          url: `${origin}${path}`,
+          headers: { Authorization: "Bearer member-token" },
+        }, "Bearer private-app-host-token", indexFetcher(requests, [{
+          connectionId: "emc_01retired",
+          name: "Retired",
+          description: null,
+          url: `${origin}/mcp/agent/connections/emc_01retired`,
+        }]));
+        expect(index).toBeNull();
+        expect(requests).toEqual([]);
+      }
+    }
+
+    const config = await fixtureConfig();
+    for (const origin of RETIRED_HOSTED_ORIGINS) {
+      let requests = 0;
+      const result = await reconcileOmniRushConnectMcpServers({
+        config,
+        workspace: config.workspaces[0]!,
+        cloudMcp: { type: "remote", url: `${origin}/mcp/agent`, headers: { Authorization: "Bearer member-token" } },
+        appHostAuthorization: "Bearer private-app-host-token",
+        fetcher: async () => {
+          requests += 1;
+          return new Response(null, { status: 500 });
+        },
+      });
+      expect(requests).toBe(0);
+      expect(result.status).toBe("unavailable");
+      expect((await readOmniRushConnectMcpAppHostCatalog(config, "ws_1")).servers).toEqual([]);
+    }
+  });
+
+  test("the activated Den origin is trusted and a retired hosted origin next to it is not", async () => {
+    const trusted: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
+    expect(await readOmniRushConnectMcpServerIndex(
+      { type: "remote", url: `${DEN}/mcp/agent` },
+      "Bearer private-app-host-token",
+      indexFetcher(trusted),
+    )).not.toBeNull();
+    expect(trusted.length).toBeGreaterThan(0);
+
+    const retired: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
+    expect(await readOmniRushConnectMcpServerIndex(
+      { type: "remote", url: `${RETIRED_HOSTED_ORIGINS[0]}/mcp/agent` },
+      "Bearer private-app-host-token",
+      indexFetcher(retired),
+    )).toBeNull();
+    expect(retired).toEqual([]);
   });
 
   test("reconciles only OmniRush.ai-owned proxy entries and preserves user MCPs", async () => {
     const config = await fixtureConfig();
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
-        "omnirush-cloud": { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+        "omnirush-cloud": { type: "remote", url: "https://den.example.com/mcp/agent" },
         "user-server": { type: "remote", url: "https://user.example/mcp" },
         "omnirush-connect-stale": { type: "remote", url: "https://cloud.example/stale" },
       },
@@ -131,7 +224,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
       workspace: config.workspaces[0]!,
       cloudMcp: {
         type: "remote",
-        url: "https://api.omnirushlabs.com/mcp/agent",
+        url: "https://den.example.com/mcp/agent",
         headers: { Authorization: "Bearer member-token" },
       },
       appHostAuthorization: "Bearer private-app-host-token",
@@ -145,7 +238,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
       directNames: [],
       removedNames: ["omnirush-connect-stale"],
     });
-    expect(runtime.mcp?.["omnirush-cloud"]).toEqual({ type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" });
+    expect(runtime.mcp?.["omnirush-cloud"]).toEqual({ type: "remote", url: "https://den.example.com/mcp/agent" });
     expect(runtime.mcp?.["user-server"]).toEqual({ type: "remote", url: "https://user.example/mcp" });
     expect(runtime.mcp?.["omnirush-connect-stale"]).toBeUndefined();
     expect(Object.keys(runtime.mcp ?? {}).some((name) => name.startsWith("omnirush-connect-"))).toBe(false);
@@ -156,7 +249,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
         connectionId,
         name: "Project Atlas",
         description: null,
-        url: `https://api.omnirushlabs.com/mcp/agent/connections/${connectionId}`,
+        url: `https://den.example.com/mcp/agent/connections/${connectionId}`,
         exposeDirectly: false,
       }],
     });
@@ -172,12 +265,12 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
         "user-server": { type: "remote", url: "https://user.example/mcp" },
-        "omnirush-direct-revoked-abc123": { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent/connections/emc_01revoked" },
+        "omnirush-direct-revoked-abc123": { type: "remote", url: "https://den.example.com/mcp/agent/connections/emc_01revoked" },
       },
     }));
     const cloudMcp = {
       type: "remote",
-      url: "https://api.omnirushlabs.com/mcp/agent",
+      url: "https://den.example.com/mcp/agent",
       enabled: true,
       headers: { Authorization: "Bearer member-token" },
     };
@@ -187,8 +280,8 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
       cloudMcp,
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [
-        { ...direct, description: null, url: `https://api.omnirushlabs.com/mcp/agent/connections/${directId}`, exposeDirectly: true },
-        { connectionId: boundedId, name: "Bounded", description: null, url: `https://api.omnirushlabs.com/mcp/agent/connections/${boundedId}` },
+        { ...direct, description: null, url: `https://den.example.com/mcp/agent/connections/${directId}`, exposeDirectly: true },
+        { connectionId: boundedId, name: "Bounded", description: null, url: `https://den.example.com/mcp/agent/connections/${boundedId}` },
       ]),
     });
 
@@ -201,7 +294,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const runtime = await readRuntimeOpencodeConfig(config, "ws_1");
     expect(runtime.mcp?.[directName]).toEqual({
       type: "remote",
-      url: `https://api.omnirushlabs.com/mcp/agent/connections/${directId}`,
+      url: `https://den.example.com/mcp/agent/connections/${directId}`,
       enabled: true,
       headers: { Authorization: "Bearer member-token" },
       oauth: false,
@@ -218,7 +311,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
       cloudMcp,
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [
-        { ...direct, description: null, url: `https://api.omnirushlabs.com/mcp/agent/connections/${directId}`, exposeDirectly: false },
+        { ...direct, description: null, url: `https://den.example.com/mcp/agent/connections/${directId}`, exposeDirectly: false },
       ]),
     });
     expect(revoked.directNames).toEqual([]);
@@ -232,10 +325,10 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const result = await reconcileOmniRushConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.example.com/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [
-        { connectionId: directId, name: "Linear", description: null, url: `https://api.omnirushlabs.com/mcp/agent/connections/${directId}`, exposeDirectly: true },
+        { connectionId: directId, name: "Linear", description: null, url: `https://den.example.com/mcp/agent/connections/${directId}`, exposeDirectly: true },
       ]),
     });
     expect(result.status).toBe("synced");
@@ -246,12 +339,12 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
   test("an unavailable index purges directly exposed entries instead of trusting a stale catalog", async () => {
     const config = await fixtureConfig();
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
-      mcp: { "omnirush-direct-linear-abc123": { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent/connections/emc_01x" } },
+      mcp: { "omnirush-direct-linear-abc123": { type: "remote", url: "https://den.example.com/mcp/agent/connections/emc_01x" } },
     }));
     const result = await reconcileOmniRushConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.example.com/mcp/agent" },
       fetcher: async () => new Response(null, { status: 404 }),
     });
     expect(result).toEqual({
@@ -269,14 +362,14 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
-        "omnirush-cloud": { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+        "omnirush-cloud": { type: "remote", url: "https://den.example.com/mcp/agent" },
       },
     }));
     await writeOmniRushConnectMcpAppHostAuthorization(
       config,
       "ws_1",
       "Bearer private-app-host-token",
-      "https://api.omnirushlabs.com/mcp/agent",
+      "https://den.example.com/mcp/agent",
     );
 
     const result = await refreshOmniRushConnectMcpAppHostCatalog(config, "ws_1", indexFetcher(requests));
@@ -291,14 +384,14 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const connectionId = "emc_01lastknowngood";
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
-        "omnirush-cloud": { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+        "omnirush-cloud": { type: "remote", url: "https://den.example.com/mcp/agent" },
       },
     }));
     await writeOmniRushConnectMcpAppHostAuthorization(
       config,
       "ws_1",
       "Bearer private-app-host-token",
-      "https://api.omnirushlabs.com/mcp/agent",
+      "https://den.example.com/mcp/agent",
     );
     await writeOmniRushConnectMcpAppHostCatalog(config, "ws_1", {
       schemaVersion: "omnirush.connect/mcp-servers/1",
@@ -306,7 +399,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
         connectionId,
         name: "Last known good",
         description: null,
-        url: `https://api.omnirushlabs.com/mcp/agent/connections/${connectionId}`,
+        url: `https://den.example.com/mcp/agent/connections/${connectionId}`,
         exposeDirectly: false,
       }],
     });
@@ -329,7 +422,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const result = await reconcileOmniRushConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.example.com/mcp/agent" },
       fetcher: async () => new Response(null, { status: 404 }),
     });
     expect(result).toEqual({
@@ -353,7 +446,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const result = await reconcileOmniRushConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.example.com/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], []),
     });
@@ -375,7 +468,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     await reconcileOmniRushConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.example.com/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher(trustedRequests),
     });
@@ -402,7 +495,7 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     const result = await reconcileOmniRushConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.example.com/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [{
         connectionId: "emc_01crossorigin",
@@ -416,18 +509,18 @@ describe("OmniRush.ai Connect MCP server catalog", () => {
     expect((await readOmniRushConnectMcpAppHostCatalog(config, "ws_1")).servers).toEqual([]);
   });
 
-  test("rejects a hosted api-origin descriptor that is not the exact connection proxy", async () => {
+  test("rejects a connection proxy on a sibling api origin instead of translating it", async () => {
     const config = await fixtureConfig();
     const result = await reconcileOmniRushConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://app.omnirushlabs.com/api/den/mcp/agent" },
+      cloudMcp: { type: "remote", url: `${DEN}/api/den/mcp/agent` },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [{
         connectionId: "emc_01crossorigin",
-        name: "Wrong proxy path",
+        name: "Sibling api origin",
         description: null,
-        url: "https://api.omnirushlabs.com/mcp/agent/connections/another-connection",
+        url: "https://api.den.example.com/mcp/agent/connections/emc_01crossorigin",
       }]),
     });
 

@@ -5,6 +5,8 @@ import { sanitizeDiagnosticString } from "./diagnostic-sanitizer.js";
 import { readJsoncFile } from "./jsonc.js";
 import { opencodeConfigPath } from "./workspace-files.js";
 import { validateMcpConfig, validateMcpName, validateUserMcpName } from "./validators.js";
+import { ApiError } from "./errors.js";
+import { isOmniRushUiMcpRegistryEntry, OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE } from "./omnirush-ui-mcp-command.js";
 import {
   readRuntimeOpencodeConfig,
   runtimeMcpMap,
@@ -703,6 +705,15 @@ export async function setMcpEnabled(
   if (!Object.prototype.hasOwnProperty.call(mcpMap, name)) return false;
   const current = mcpMap[name];
   if (!current || typeof current !== "object" || Array.isArray(current)) return false;
+  if (isOmniRushUiMcpRegistryEntry(current)) {
+    // Never re-enable a registry launch of omnirush-ui-mcp. Disabling one
+    // removes it: the runtime store does not keep such entries and the
+    // engine never receives them, so there is nothing left to toggle.
+    if (enabled) throw new ApiError(400, "unsafe_mcp_command", OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE);
+    delete mcpMap[name];
+    await writeRuntimeOpencodeConfig(serverConfig, workspaceId, (currentConfig) => ({ ...currentConfig, mcp: mcpMap }));
+    return true;
+  }
   try {
     validateMcpConfig({ ...(current as Record<string, unknown>), enabled });
   } catch {

@@ -271,6 +271,25 @@ describe("omnirush runtime config file", () => {
     expect(mcp.posthog).toBeUndefined();
   });
 
+  test("never injects a registry launch of omnirush-ui-mcp, whatever the snapshot holds", () => {
+    const bundled = {
+      type: "local",
+      command: [
+        "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
+        "/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs",
+      ],
+      environment: { ELECTRON_RUN_AS_NODE: "1" },
+    };
+    const built = buildOmniRushRuntimeConfigObjectFromSnapshot({
+      mcp: {
+        "omnirush-ui": { type: "local", command: ["npx", "-y", "omnirush-ui-mcp"], enabled: true },
+        "ui-bunx": { type: "local", command: ["bunx", "omnirush-ui-mcp@latest"] },
+        "ui-bundled": bundled,
+      },
+    });
+    expect(built.mcp).toEqual({ "ui-bundled": bundled });
+  });
+
   test("omnirush prompt states identity, repo memory, artifacts, and Connect routing once, without the removed Memory Bank", async () => {
     const { config } = await setup();
     await writeOmniRushRuntimeConfigFile(config);

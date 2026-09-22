@@ -125,14 +125,22 @@ const taxonomyDesc: Record<ExtensionTaxonomy, string> = {
   plugin: "Extends omnirush.ai with additional capabilities managed by your organization.",
 };
 
-const uiControlClientConfig = `{
-  "mcpServers": {
-    "omnirush-ui": {
-      "command": "npx",
-      "args": ["-y", "omnirush-ui-mcp"]
-    }
-  }
-}`;
+// The UI-control MCP ships inside the desktop app and is not published on
+// npm, so client snippets are built from the desktop's own launch command.
+function uiControlClientConfig(command: string[], environment?: Record<string, string>) {
+  const [executable, ...args] = command;
+  return JSON.stringify({
+    mcpServers: {
+      "omnirush-ui": {
+        command: executable,
+        args,
+        ...(environment ? { env: environment } : {}),
+      },
+    },
+  }, null, 2);
+}
+
+const uiControlLaunchUnavailable = "Open this page in the omnirush.ai desktop app to see the launch command.";
 
 function uiControlOpencodeConfig(command: string[], environment?: Record<string, string>) {
   return JSON.stringify({
@@ -146,18 +154,6 @@ function uiControlOpencodeConfig(command: string[], environment?: Record<string,
     },
   }, null, 2);
 }
-
-const fallbackUiControlCommand = ["npx", "-y", "omnirush-ui-mcp"];
-
-const fallbackUiControlOpencodeConfig = `{
-  "mcp": {
-    "omnirush-ui": {
-      "type": "local",
-      "command": ["npx", "-y", "omnirush-ui-mcp"],
-      "enabled": true
-    }
-  }
-}`;
 
 /**
  * Strip YAML-like frontmatter from the beginning of a skill content string.
@@ -492,7 +488,7 @@ export function ExtensionDetailModal({
               {uiControl ? (
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Launch</span>
-                  <span className="max-w-[300px] truncate font-mono text-xs text-card-foreground">{(launchCommand ?? fallbackUiControlCommand).join(" ")}</span>
+                  <span className="max-w-[300px] truncate font-mono text-xs text-card-foreground">{launchCommand?.length ? launchCommand.join(" ") : "Desktop app only"}</span>
                 </div>
               ) : null}
 
@@ -773,7 +769,9 @@ interface UiControlConnectionDetailsProps {
 function UiControlConnectionDetails(props: UiControlConnectionDetailsProps) {
   "use memo";
 
-  const opencodeConfig = props.launchCommand ? uiControlOpencodeConfig(props.launchCommand, props.environment) : fallbackUiControlOpencodeConfig;
+  const launchCommand = props.launchCommand?.length ? props.launchCommand : null;
+  const clientConfig = launchCommand ? uiControlClientConfig(launchCommand, props.environment) : uiControlLaunchUnavailable;
+  const opencodeConfig = launchCommand ? uiControlOpencodeConfig(launchCommand, props.environment) : uiControlLaunchUnavailable;
 
   return (
     <div className="space-y-4">
@@ -784,7 +782,7 @@ function UiControlConnectionDetails(props: UiControlConnectionDetailsProps) {
         <CardContent>
           <div className="flex flex-col gap-2 text-sm leading-relaxed text-muted-foreground">
             <div>omnirush.ai desktop starts a private localhost bridge automatically.</div>
-            <div>Your MCP client starts <span className="font-mono text-card-foreground">omnirush-ui-mcp</span> over stdio; the wrapper discovers the bridge and proxies UI tools to it.</div>
+            <div>Your MCP client starts the UI-control MCP bundled with omnirush.ai over stdio; it discovers the bridge and proxies UI tools to it. It is not an npm package, so never install it with npx.</div>
             <div>Do not point clients at the random localhost bridge URL directly.</div>
           </div>
         </CardContent>
@@ -796,7 +794,7 @@ function UiControlConnectionDetails(props: UiControlConnectionDetailsProps) {
         </CardHeader>
         <CardContent>
           <pre className="max-h-[180px] overflow-x-auto rounded-xl border border-border p-3 text-xs leading-relaxed text-card-foreground">
-            <code>{uiControlClientConfig}</code>
+            <code>{clientConfig}</code>
           </pre>
         </CardContent>
       </Card>

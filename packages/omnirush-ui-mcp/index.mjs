@@ -9,18 +9,15 @@
  *
  * Requires OmniRush.ai desktop running with the local UI control bridge active.
  *
- * Usage:
- *   npx omnirush-ui-mcp
+ * This package is not published on npm and must never be launched through
+ * `npx`: anyone could register the name. The desktop build bundles this file
+ * with its dependencies (apps/desktop/scripts/prepare-ui-mcp.mjs) into
+ * <resources>/omnirush-ui-mcp/index.mjs and runs it with the app's own binary:
  *
- * MCP config (OpenCode / Claude Desktop / Cursor / etc.):
- *   {
- *     "mcpServers": {
- *       "omnirush-ui": {
- *         "command": "npx",
- *         "args": ["-y", "omnirush-ui-mcp"]
- *       }
- *     }
- *   }
+ *   ELECTRON_RUN_AS_NODE=1 "<OmniRush.ai binary>" "<resources>/omnirush-ui-mcp/index.mjs"
+ *
+ * Settings -> Extensions -> UI Control shows the exact command and MCP client
+ * config for this installation. From a checkout: node packages/omnirush-ui-mcp/index.mjs
  */
 
 import { readFile } from "node:fs/promises";

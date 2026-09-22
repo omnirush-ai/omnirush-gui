@@ -37,6 +37,7 @@ import { findManagedEngineWorkspace } from "./workspaces.js";
 import { keepOmniRushRuntimeConfigFileFresh, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
 import { migrateOmniRushCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
 import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
+import { migrateLegacyOmniRushUiMcpCommand, type OmniRushUiMcpLaunch } from "./omnirush-ui-mcp-migration.js";
 import { resolveOpencodeModelsEnv } from "./opencode-models-url.js";
 import { assertOpencodeConfigCompat } from "./opencode-config-compat.js";
 import type { ServeResult } from "./serve-node.js";
@@ -56,6 +57,12 @@ export type EmbeddedServerOptions = CliArgs & {
   resumeInterruptedTasks?: boolean;
   /** Version of the embedding desktop app, reported as environment.app_version by the collector. */
   appVersion?: string;
+  /**
+   * How the embedding desktop launches its bundled UI-control MCP. Persisted
+   * entries still using `npx -y omnirush-ui-mcp` are rewritten to it before
+   * the engine starts; without it they are removed instead.
+   */
+  omnirushUiMcp?: OmniRushUiMcpLaunch | null;
 };
 
 export type EmbeddedServerHandle = {
@@ -186,6 +193,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
   if (!config.readOnly) {
     await ensureLocalWorkspaceFiles(config.workspaces);
+    // First among the runtime-DB migrations: the store drops leftover
+    // registry launches on any write, before this could rewrite them.
+    await migrateLegacyOmniRushUiMcpCommand(config, options.omnirushUiMcp ?? null);
     await migrateOmniRushCloudMcpRuntimeConfig(config);
     await migrateWorkspaceRuntimeConfigToEngineGlobal(config);
   }

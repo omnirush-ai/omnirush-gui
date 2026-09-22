@@ -32,6 +32,7 @@ import {
   openComputerUseSetupApp,
 } from "./computer-use.mjs";
 import { createUiControlServer } from "./ui-control-server.mjs";
+import { resolveOmniRushUiMcpLaunch } from "./omnirush-ui-mcp.mjs";
 import { createApplicationMenu } from "./app-menu.mjs";
 import { applyBrandAppName } from "./brand-app-name.mjs";
 import { createBrowserLoginSync } from "./browser-login-sync.mjs";
@@ -1315,9 +1316,30 @@ const omnirushAccountStore = createDesktopOmniRushAccountStore({
   loadSafeStorage: () => require("electron").safeStorage,
 });
 
+function omnirushUiMcpLaunch() {
+  return resolveOmniRushUiMcpLaunch({
+    devMode: process.env.OMNIRUSH_DEV_MODE === "1",
+    packaged: app.isPackaged,
+    execPath: process.execPath,
+    resourcesPath: process.resourcesPath,
+    repoRoot: path.resolve(__dirname, "../../.."),
+    userDataPath: app.getPath("userData"),
+  });
+}
+
 const runtimeManager = createRuntimeManager({
   app,
   desktopRoot: path.resolve(__dirname, ".."),
+  // Rewrites persisted `npx -y omnirush-ui-mcp` entries to the bundled launch
+  // before the engine starts. Null (bundle missing) removes them instead.
+  omnirushUiMcpLaunch: () => {
+    try {
+      return omnirushUiMcpLaunch();
+    } catch (error) {
+      console.warn("[ui-control] bundled UI-control MCP unavailable", error);
+      return null;
+    }
+  },
   listLocalWorkspacePaths: () => workspaceStore.listLocalWorkspacePaths(),
   // When OMNIRUSH_ENCRYPTION_KEY is set, skip the safeStorage provider so it does not shadow the documented env override used by CI/headless/enterprise.
   localManagedMcpVaultKey: process.env.OMNIRUSH_ENCRYPTION_KEY?.trim()
@@ -1918,10 +1940,7 @@ const desktopCommandHandlers = {
       }
   },
   "getOmniRushUiMcpCommand": async (event, ...args) => {
-      if (process.env.OMNIRUSH_DEV_MODE === "1") {
-        return ["node", path.resolve(__dirname, "../../..", "packages/omnirush-ui-mcp/index.mjs")];
-      }
-      return ["npx", "-y", "omnirush-ui-mcp"];
+      return omnirushUiMcpLaunch().command;
   },
   "getComputerUseState": async () => getComputerUseState(),
   "computerUseAction": async (event, value) => {
@@ -1951,9 +1970,9 @@ const desktopCommandHandlers = {
       return checkComputerUsePermissions();
   },
   "getOmniRushUiMcpEnvironment": async (event, ...args) => {
-      return {
-        OMNIRUSH_UI_CONTROL_DISCOVERY: path.join(app.getPath("userData"), "omnirush-ui-control.json"),
-      };
+      // Carries ELECTRON_RUN_AS_NODE=1 for packaged launches: the command is
+      // this app's own binary, which must run the bundled MCP as plain Node.
+      return omnirushUiMcpLaunch().environment;
   },
   "getDesktopBootstrapConfig": async (event, ...args) => {
       return workspaceStore.getDesktopBootstrapConfig();

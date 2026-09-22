@@ -1,7 +1,8 @@
 import React, { type CSSProperties } from "react"
 import { Body, Button, Container, Head, Heading, Hr, Html, Img, Preview, Section, Text } from "@react-email/components"
 
-const LOGO_URL = "https://omnirushlabs.com/email/omnirush-mark.png"
+// Served by the console app at the omnirush.ai edge (512x512 PNG).
+const LOGO_URL = "https://omnirush.ai/omnirush-mark.png"
 
 export type OrganizationInviteEmailProps = {
   inviteLink: string
@@ -27,7 +28,7 @@ export function OrganizationInviteEmail({
       <Body style={styles.body}>
         <Container style={styles.frame}>
           <Section style={styles.brand}>
-            <Img src={LOGO_URL} width="31" height="24" alt="OmniRush.ai" style={styles.brandLogo} />
+            <Img src={LOGO_URL} width="24" height="24" alt="OmniRush.ai" style={styles.brandLogo} />
             <span style={styles.brandName}>OmniRush.ai</span>
           </Section>
           <Section style={styles.card}>

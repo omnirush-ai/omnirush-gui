@@ -332,7 +332,8 @@ test(title, { timeout: 240_000 }, async ({ evidence }) => {
   needs(requirements);
   const apiUrl = requiredEnv("OMNIRUSH_EVAL_LIVE_DEN_API_URL").replace(/\/+$/, "");
   const agentMailApiKey = requiredEnv("AGENTMAIL_API_KEY");
-  const webUrl = apiUrl === "https://api.omnirushlabs.com" ? "https://app.omnirushlabs.com" : apiUrl;
+  // No hosted Den: a split web origin must be configured explicitly.
+  const webUrl = (process.env.OMNIRUSH_EVAL_LIVE_DEN_WEB_URL?.trim() || apiUrl).replace(/\/+$/, "");
   const den: DenRef = { apiUrl, webUrl };
   const runStartedAt = new Date().toISOString();
   const timestamp = runStartedAt.replace(/\D/g, "");

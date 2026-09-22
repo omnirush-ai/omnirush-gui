@@ -6,6 +6,11 @@ export * from "./gen/types.gen.js";
 export { DenClient };
 
 export type DenClientConfig = Config & {
+  /**
+   * Your Den API origin, e.g. `https://den.example.com`. Required: omnirush.ai
+   * runs no hosted Den, so there is no default to fall back to.
+   */
+  baseUrl: string;
   /** Den user session token. Session-only operations require this credential. */
   token?: string;
   /** Organization API key, sent verbatim in x-api-key. */
@@ -14,9 +19,24 @@ export type DenClientConfig = Config & {
   orgId?: string;
 };
 
-export function createDenClient(config: DenClientConfig = {}) {
-  const { token, apiKey, orgId, ...options } = config;
-  const client = createClient({ baseUrl: "https://api.omnirushlabs.com", ...options });
+export const MISSING_DEN_BASE_URL_MESSAGE =
+  "createDenClient requires an explicit baseUrl (your Den API origin, e.g. https://den.example.com). omnirush.ai runs no hosted Den, so there is no default.";
+
+function requireBaseUrl(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(MISSING_DEN_BASE_URL_MESSAGE);
+  const baseUrl = value.trim();
+  try {
+    const url = new URL(baseUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("unsupported protocol");
+  } catch {
+    throw new Error(`${MISSING_DEN_BASE_URL_MESSAGE} Received: ${JSON.stringify(baseUrl)}`);
+  }
+  return baseUrl;
+}
+
+export function createDenClient(config: DenClientConfig) {
+  const { token, apiKey, orgId, ...options } = config ?? ({} as DenClientConfig);
+  const client = createClient({ ...options, baseUrl: requireBaseUrl(options.baseUrl) });
   // Interceptors preserve all supported header forms and per-request overrides.
   client.interceptors.request.use((request) => {
     if (token && !request.headers.has("authorization")) request.headers.set("authorization", `Bearer ${token}`);

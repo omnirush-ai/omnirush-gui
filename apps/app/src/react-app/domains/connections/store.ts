@@ -73,6 +73,8 @@ type SetStateAction<T> = T | ((current: T) => T);
 // was written and every sync tick re-wrote the MCP config.
 const CLOUD_MCP_REFRESH_MARGIN_MS = 24 * 60 * 60 * 1000;
 const LOCAL_OMNIRUSH_SERVER_RECOVERY_TIMEOUT_MS = 30_000;
+const OMNIRUSH_UI_MCP_UNAVAILABLE = "UI control requires the omnirush.ai desktop app. Restart omnirush.ai or reinstall the app.";
+const COMPUTER_USE_HELPER_UNAVAILABLE = "Computer Use helper app is unavailable. Restart omnirush.ai or reinstall the app.";
 
 async function withLocalOmniRushServerRecoveryTimeout<T>(
   task: Promise<T>,
@@ -378,7 +380,7 @@ export function createConnectionsStore(options: {
       if (config?.type === "local" && config.enabled !== false && Array.isArray(command)
         && typeof command[0] === "string" && command[0].endsWith("/ComputerUse")
         && ((command.length === 2 && command[1] === "mcp") || (command.length === 3 && command[1] === "relay"))) {
-        const currentCommand = await resolveDesktopCommand("getComputerUseMcpCommand", false);
+        const currentCommand = await resolveDesktopCommand("getComputerUseMcpCommand", COMPUTER_USE_HELPER_UNAVAILABLE);
         const bundled = currentCommand && (command[0] === currentCommand[0]
           || command[0].endsWith("/omnirush.ai Computer Use.app/Contents/MacOS/ComputerUse"));
         if (bundled && JSON.stringify(command) !== JSON.stringify(currentCommand)) {
@@ -437,52 +439,60 @@ export function createConnectionsStore(options: {
     };
   };
 
-  const resolveDesktopCommand = async (commandName: "getComputerUseMcpCommand" | "getOmniRushUiMcpCommand", fallbackOnError = true) => {
+  const resolveDesktopCommand = async (
+    commandName: "getComputerUseMcpCommand" | "getOmniRushUiMcpCommand",
+    unavailableMessage: string,
+  ) => {
     try {
       const command = await window.__OMNIRUSH_ELECTRON__?.invokeDesktop?.(commandName);
       if (Array.isArray(command) && command.every((part) => typeof part === "string") && command.length > 0) {
         return command;
       }
     } catch (error) {
-      if (!fallbackOnError) {
-        throw error instanceof Error
-          ? error
-          : new Error("Computer Use helper app is unavailable. Restart omnirush.ai or reinstall the app.");
-      }
-      // Fall through to the published package command in the manifest/catalog.
+      // Built-in local MCPs ship inside the desktop app. Never fall back to a
+      // catalog command that would resolve a package from a registry.
+      throw error instanceof Error ? error : new Error(unavailableMessage);
     }
     return null;
   };
 
+  const isOmniRushUiMcpEntry = (entry: McpDirectoryInfo) =>
+    extensionResource(entry.extensionManifest, "mcp")?.localCommandRef === "omnirush.uiMcp"
+      || entry.serverName === "omnirush-ui";
+
   const resolveLocalMcpCommand = async (entry: McpDirectoryInfo) => {
     const mcpResource = extensionResource(entry.extensionManifest, "mcp");
     if (mcpResource?.localCommandRef === "omnirush.computerUseMcp") {
-      const command = await resolveDesktopCommand("getComputerUseMcpCommand", false);
+      const command = await resolveDesktopCommand("getComputerUseMcpCommand", COMPUTER_USE_HELPER_UNAVAILABLE);
       if (!command) throw new Error("Computer Use requires the bundled omnirush.ai helper on macOS.");
       return command;
     }
-    if (mcpResource?.localCommandRef === "omnirush.uiMcp" || entry.serverName === "omnirush-ui") {
-      const command = await resolveDesktopCommand("getOmniRushUiMcpCommand");
-      return command ?? entry.command;
+    if (isOmniRushUiMcpEntry(entry)) {
+      const command = await resolveDesktopCommand("getOmniRushUiMcpCommand", OMNIRUSH_UI_MCP_UNAVAILABLE);
+      if (!command) throw new Error(OMNIRUSH_UI_MCP_UNAVAILABLE);
+      return command;
     }
     return entry.command;
   };
 
   const resolveLocalMcpEnvironment = async (entry: McpDirectoryInfo) => {
-    if (entry.serverName !== "omnirush-ui") return undefined;
+    if (!isOmniRushUiMcpEntry(entry)) return undefined;
+    // Required, not best-effort: packaged launches run the app's own binary and
+    // need ELECTRON_RUN_AS_NODE=1 from this environment to act as Node.
+    let environment: unknown;
     try {
-      const environment = await window.__OMNIRUSH_ELECTRON__?.invokeDesktop?.("getOmniRushUiMcpEnvironment");
-      if (environment && typeof environment === "object" && !Array.isArray(environment)) {
-        return Object.fromEntries(
-          Object.entries(environment).filter((entry): entry is [string, string] =>
-            typeof entry[0] === "string" && typeof entry[1] === "string"
-          ),
-        );
-      }
-    } catch {
-      // Discovery fallback in omnirush-ui-mcp still handles normal launches.
+      environment = await window.__OMNIRUSH_ELECTRON__?.invokeDesktop?.("getOmniRushUiMcpEnvironment");
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(OMNIRUSH_UI_MCP_UNAVAILABLE);
     }
-    return undefined;
+    if (!environment || typeof environment !== "object" || Array.isArray(environment)) {
+      throw new Error(OMNIRUSH_UI_MCP_UNAVAILABLE);
+    }
+    return Object.fromEntries(
+      Object.entries(environment).filter((item): item is [string, string] =>
+        typeof item[0] === "string" && typeof item[1] === "string"
+      ),
+    );
   };
 
   /**
@@ -1008,6 +1018,11 @@ export function createConnectionsStore(options: {
             : {
                 type: "local" as const,
                 command: (mcpEntryConfig["command"] as string[]) ?? entry.command!,
+                // Keep the resolved environment: the bundled UI-control MCP
+                // runs the app binary and needs ELECTRON_RUN_AS_NODE=1.
+                ...(mcpEntryConfig["environment"]
+                  ? { environment: mcpEntryConfig["environment"] as Record<string, string> }
+                  : {}),
                 enabled: true,
               };
 

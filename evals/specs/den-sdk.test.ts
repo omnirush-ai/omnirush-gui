@@ -12,18 +12,22 @@ test.skipIf(!available)(
   async ({ evidence, place }) => {
     console.log(`placement: ${place.kind} (PR lane resolved by testkit)`);
     await using den = await server({ place, web: false, org: { name: "SDK integration", members: {} } });
-    let defaultUrl = "";
-    const defaultClient = createDenClient({
+    // There is no hosted Den, so the SDK has no default origin and refuses to
+    // build a client without one.
+    expect(() => createDenClient({} as Parameters<typeof createDenClient>[0])).toThrow(/explicit baseUrl/);
+    let transportUrl = "";
+    const transportClient = createDenClient({
+      baseUrl: "https://den.example.com",
       fetch: async (input, init) => {
         const request = new Request(input, init);
-        defaultUrl = request.url;
-        // Route the default production URL to the isolated test server.
+        transportUrl = request.url;
+        // Route the configured origin to the isolated test server.
         return fetch(new Request(`${den.ref.apiUrl}${new URL(request.url).pathname}`, request));
       },
     });
-    const defaultHealth = await defaultClient.getHealth();
-    expect(defaultUrl).toBe("https://api.omnirushlabs.com/health");
-    expect(defaultHealth.response.status).toBe(200);
+    const transportHealth = await transportClient.getHealth();
+    expect(transportUrl).toBe("https://den.example.com/health");
+    expect(transportHealth.response.status).toBe(200);
     const anonymous = createDenClient({ baseUrl: den.ref.apiUrl });
     const health = await anonymous.getHealth();
     expect(health.response.status).toBe(200);
@@ -32,8 +36,8 @@ test.skipIf(!available)(
     expect(denied.data).toBeUndefined();
     evidence.recordAssertionEvidence("Public health and protected identity", "Health succeeds without credentials; identity returns 401 with no data.",
       health.response.status === 200 && denied.response.status === 401 && denied.data === undefined);
-    evidence.recordAssertionEvidence("Default URL and custom transport", "The default HTTPS health URL is passed to the custom fetch, which reaches the isolated Den successfully.",
-      defaultUrl === "https://api.omnirushlabs.com/health" && defaultHealth.response.status === 200);
+    evidence.recordAssertionEvidence("Explicit base URL and custom transport", "A client without a base URL is refused; the configured HTTPS health URL is passed to the custom fetch, which reaches the isolated Den successfully.",
+      transportUrl === "https://den.example.com/health" && transportHealth.response.status === 200);
 
     const session = createDenClient({ baseUrl: den.ref.apiUrl, token: den.admin.token });
     const identity = await session.getV1Me({ throwOnError: true });

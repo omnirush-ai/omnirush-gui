@@ -144,6 +144,35 @@ describe("validateMcpConfig", () => {
     expect(() => validateMcpConfig({ type: "remote", url: "javascript:alert(1)" })).toThrow();
   });
 
+  test("rejects a registry launch of omnirush-ui-mcp with 400 unsafe_mcp_command", () => {
+    for (const command of [
+      ["npx", "-y", "omnirush-ui-mcp"],
+      ["bunx", "omnirush-ui-mcp@latest"],
+      ["pnpm", "dlx", "omnirush-ui-mcp"],
+      ["sh", "-c", "npx -y omnirush-ui-mcp"],
+    ]) {
+      let error: unknown;
+      try {
+        validateMcpConfig({ type: "local", command, enabled: true });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({ status: 400, code: "unsafe_mcp_command" });
+    }
+    // The command is checked whatever the declared type.
+    expect(() => validateMcpConfig({ type: "remote", url: "https://example.com", command: ["npx", "-y", "omnirush-ui-mcp"] }))
+      .toThrow("not published on npm");
+    // The bundled launch runs the file by path and stays valid.
+    expect(() => validateMcpConfig({
+      type: "local",
+      command: [
+        "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
+        "/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs",
+      ],
+      environment: { ELECTRON_RUN_AS_NODE: "1" },
+    })).not.toThrow();
+  });
+
   test("rejects local without command", () => {
     expect(() => validateMcpConfig({ type: "local" })).toThrow();
     expect(() => validateMcpConfig({ type: "local", command: [] })).toThrow();

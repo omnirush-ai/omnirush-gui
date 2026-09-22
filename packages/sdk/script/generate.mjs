@@ -36,7 +36,9 @@ try {
     plugins: [
       { name: "@hey-api/typescript", exportFromIndex: false },
       { name: "@hey-api/sdk", instance: "DenClient", exportFromIndex: false, auth: false, paramsStructure: "flat" },
-      { name: "@hey-api/client-fetch", exportFromIndex: false, baseUrl: "https://api.omnirushlabs.com" },
+      // No default base URL: omnirush.ai runs no hosted Den, so callers must
+      // pass their own Den API origin (createDenClient enforces it).
+      { name: "@hey-api/client-fetch", exportFromIndex: false, baseUrl: false },
     ],
   });
   const generatedFiles = await files(output);

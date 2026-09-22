@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +52,9 @@ const HOST_TOKEN = "owt_cloud_mcp_host";
 const APP_HOST_AUTHORIZATION = "Bearer owt_secret_app_host_token";
 const previousRuntimeDb = process.env.OMNIRUSH_RUNTIME_DB;
 const previousDevMode = process.env.OMNIRUSH_DEV_MODE;
+const previousBootstrapPath = process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH;
+/** Administrator-activated enterprise Den origin: trusted for collaborator reconciles. */
+const DEN = "https://den.example.com";
 const stops: Array<() => void | Promise<void>> = [];
 const roots: string[] = [];
 const runtimeDbRoots: string[] = [];
@@ -74,6 +77,19 @@ afterEach(async () => {
   else process.env.OMNIRUSH_RUNTIME_DB = previousRuntimeDb;
   if (previousDevMode === undefined) delete process.env.OMNIRUSH_DEV_MODE;
   else process.env.OMNIRUSH_DEV_MODE = previousDevMode;
+  if (previousBootstrapPath === undefined) delete process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH;
+  else process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH = previousBootstrapPath;
+});
+
+beforeEach(async () => {
+  // Trust decisions read desktop activation state; never read the real one.
+  const root = await createRoot("omnirush-cloud-mcp-bootstrap-");
+  const path = join(root, "desktop-bootstrap.json");
+  await writeFile(path, JSON.stringify({
+    baseUrl: DEN,
+    enterpriseActivation: { activatedAt: "2026-09-22T00:00:00.000Z", denBaseUrl: DEN },
+  }), "utf8");
+  process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH = path;
 });
 
 async function createRoot(prefix = "omnirush-cloud-mcp-"): Promise<string> {
@@ -281,7 +297,7 @@ function delivery(body: Record<string, unknown>): Record<string, unknown> {
 
 const CLOUD_CONFIG: CloudConfig = {
   type: "remote",
-  url: "https://api.omnirushlabs.com/mcp/agent",
+  url: `${DEN}/mcp/agent`,
   enabled: true,
   headers: { Authorization: "Bearer owt_secret_cloud_token" },
   oauth: false,
@@ -442,7 +458,7 @@ describe("omnirush-cloud MCP strict reconcile", () => {
     const omnirush = await startOmniRush([workspace("ws_1", root, `http://127.0.0.1:${mock.server.port}`)]);
 
     const cases: Array<{ config: Record<string, unknown>; code: string }> = [
-      { config: { ...CLOUD_CONFIG, url: "https://api.omnirushlabs.com/mcp" }, code: "cloud_endpoint_invalid" },
+      { config: { ...CLOUD_CONFIG, url: `${DEN}/mcp` }, code: "cloud_endpoint_invalid" },
       { config: { ...CLOUD_CONFIG, enabled: false }, code: "cloud_mcp_disabled" },
       { config: { ...CLOUD_CONFIG, headers: {} }, code: "invalid_mcp_token" },
       { config: { ...CLOUD_CONFIG, oauth: {} }, code: "invalid_mcp_token" },
@@ -484,6 +500,29 @@ describe("omnirush-cloud MCP strict reconcile", () => {
     expect(mock.requests.some((request) => request.method === "POST" && request.pathname === "/mcp")).toBe(false);
   });
 
+  test("a collaborator token cannot globally persist a retired hosted Cloud MCP endpoint", async () => {
+    const root = await createRoot();
+    const mock = startMockOpencode();
+    const omnirush = await startOmniRush([workspace("ws_1", root, `http://127.0.0.1:${mock.server.port}`)]);
+
+    // These hosted origins were built-in trusted before the hosted Den was
+    // retired; they are not ours any more and need the owner like any other.
+    for (const url of [
+      "https://api.omnirushlabs.com/mcp/agent",
+      "https://api.app.omnirushlabs.com/mcp/agent",
+      "https://app.omnirushlabs.com/api/den/mcp/agent",
+      "https://api.omnirush.software/mcp/agent",
+      "https://app.omnirush.software/api/den/mcp/agent",
+    ]) {
+      const response = await reconcile(omnirush.base, "ws_1", { config: { ...CLOUD_CONFIG, url } });
+      expect(response.status).toBe(403);
+    }
+
+    expect((await readGlobalRuntimeOpencodeConfig(omnirush.config)).mcp?.["omnirush-cloud"]).toBeUndefined();
+    expect((await readRuntimeOpencodeConfig(omnirush.config, "ws_1")).mcp?.["omnirush-cloud"]).toBeUndefined();
+    expect(mock.requests.some((request) => request.method === "POST" && request.pathname === "/mcp")).toBe(false);
+  });
+
   test("normalizes a harmless trailing slash on the Cloud MCP endpoint", async () => {
     const root = await createRoot();
     const mock = startMockOpencode();
@@ -503,7 +542,7 @@ describe("omnirush-cloud MCP strict reconcile", () => {
     const omnirush = await startOmniRush([workspace("ws_1", root, `http://127.0.0.1:${mock.server.port}`)]);
     await writeRuntimeOpencodeConfig(omnirush.config, "ws_1", (current) => ({
       ...current,
-      mcp: { "omnirush-cloud": { ...CLOUD_CONFIG, url: "https://api.omnirushlabs.com/mcp" } },
+      mcp: { "omnirush-cloud": { ...CLOUD_CONFIG, url: `${DEN}/mcp` } },
     }));
 
     const body = await responseRecord(await getHealth(omnirush.base));

@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   calculateCloudMcpDesiredRevision,
   clearOmniRushCloudMcpProbeFlights,
   cloudMcpTokenHealthFromConfig,
+  isTrustedCloudMcpEndpointForGlobalPersist,
   OMNIRUSH_CLOUD_EXPECTED_TOOLS,
   OMNIRUSH_CLOUD_PLUGIN_CANARIES,
   migrateOmniRushCloudMcpRuntimeConfig,
@@ -34,7 +35,10 @@ const workspace: WorkspaceInfo = {
 };
 
 const previousRuntimeDb = process.env.OMNIRUSH_RUNTIME_DB;
+const previousBootstrapPath = process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH;
 const previousFetch = globalThis.fetch;
+/** Administrator-activated enterprise Den origin used by trusted fixtures. */
+const DEN = "https://den.example.com";
 const roots: string[] = [];
 const runtimeDbRoots: string[] = [];
 const stops: Array<() => void> = [];
@@ -60,6 +64,22 @@ afterEach(async () => {
   }
   if (previousRuntimeDb === undefined) delete process.env.OMNIRUSH_RUNTIME_DB;
   else process.env.OMNIRUSH_RUNTIME_DB = previousRuntimeDb;
+  if (previousBootstrapPath === undefined) delete process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH;
+  else process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH = previousBootstrapPath;
+});
+
+async function activateEnterpriseDen(origin: string | null): Promise<void> {
+  const root = await createRoot("omnirush-cloud-mcp-bootstrap-");
+  const path = join(root, "desktop-bootstrap.json");
+  await writeFile(path, JSON.stringify(origin
+    ? { baseUrl: origin, enterpriseActivation: { activatedAt: "2026-09-22T00:00:00.000Z", denBaseUrl: origin } }
+    : {}), "utf8");
+  process.env.OMNIRUSH_DESKTOP_BOOTSTRAP_PATH = path;
+}
+
+beforeEach(async () => {
+  // Trust decisions read desktop activation state; never read the real one.
+  await activateEnterpriseDen(DEN);
 });
 
 async function createRoot(prefix: string): Promise<string> {
@@ -328,7 +348,7 @@ describe("cloud MCP health foundation", () => {
   test("desired revisions detect token changes without exposing reusable auth fingerprints", async () => {
     const config = {
       type: "remote",
-      url: "https://api.omnirushlabs.com/mcp/agent",
+      url: `${DEN}/mcp/agent`,
       headers: { Authorization: "Bearer owt_super_secret" },
       oauth: false,
     };
@@ -397,7 +417,7 @@ describe("cloud MCP health foundation", () => {
     process.env.OMNIRUSH_RUNTIME_DB = await createRuntimeDbPath("omnirush-cloud-migration-runtime-");
     // Trusted origins: promotion to account-global scope refuses anything else.
     const older = { type: "remote", url: "http://127.0.0.1:4801/mcp/agent", enabled: true, headers: { Authorization: "Bearer older" }, oauth: false };
-    const newer = { ...older, url: "https://api.omnirushlabs.com/mcp/agent", headers: { Authorization: "Bearer newer" } };
+    const newer = { ...older, url: `${DEN}/mcp/agent`, headers: { Authorization: "Bearer newer" } };
     await writeRuntimeOpencodeConfig(config, workspaceA.id, () => ({
       plugin: ["keep-a"],
       mcp: { "omnirush-cloud": older, posthog: { type: "remote", url: "https://posthog.example/mcp" } },
@@ -451,6 +471,48 @@ describe("cloud MCP health foundation", () => {
     // Not promoted and not destroyed: the entry keeps its pre-migration
     // workspace-scoped blast radius.
     expect((await readRuntimeOpencodeConfig(config, workspaceA.id)).mcp?.["omnirush-cloud"]).toEqual(untrusted);
+  });
+
+  test("does not promote a retired hosted endpoint to account-global scope", async () => {
+    await activateEnterpriseDen(null);
+    const root = await createRoot("omnirush-cloud-migration-retired-");
+    const workspaceA = { ...workspace, id: "ws_a", path: join(root, "a") };
+    const config = serverConfig(root, workspaceA);
+    config.workspaces = [workspaceA];
+    process.env.OMNIRUSH_RUNTIME_DB = await createRuntimeDbPath("omnirush-cloud-migration-retired-runtime-");
+    const retired = { type: "remote", url: "https://api.omnirushlabs.com/mcp/agent", enabled: true, headers: { Authorization: "Bearer stale" }, oauth: false };
+    await writeRuntimeOpencodeConfig(config, workspaceA.id, () => ({ mcp: { "omnirush-cloud": retired } }));
+
+    expect(await migrateOmniRushCloudMcpRuntimeConfig(config)).toEqual({ config: null, changed: false });
+    expect((await readGlobalRuntimeOpencodeConfig(config)).mcp?.["omnirush-cloud"]).toBeUndefined();
+    expect((await readRuntimeOpencodeConfig(config, workspaceA.id)).mcp?.["omnirush-cloud"]).toEqual(retired);
+  });
+
+  test("trusts only loopback and the activated Den origin for a global Connect endpoint", async () => {
+    expect(await isTrustedCloudMcpEndpointForGlobalPersist(`${DEN}/mcp/agent`)).toBe(true);
+    expect(await isTrustedCloudMcpEndpointForGlobalPersist(`${DEN}/api/den/mcp/agent`)).toBe(true);
+    expect(await isTrustedCloudMcpEndpointForGlobalPersist("http://127.0.0.1:4801/mcp/agent")).toBe(true);
+    expect(await isTrustedCloudMcpEndpointForGlobalPersist("https://evil.example/mcp/agent")).toBe(false);
+
+    const retired = [
+      "https://api.omnirushlabs.com/mcp/agent",
+      "https://api.app.omnirushlabs.com/mcp/agent",
+      "https://app.omnirushlabs.com/api/den/mcp/agent",
+      "https://api.omnirush.software/mcp/agent",
+      "https://app.omnirush.software/api/den/mcp/agent",
+    ];
+    for (const activation of [DEN, null]) {
+      await activateEnterpriseDen(activation);
+      for (const url of retired) {
+        expect(await isTrustedCloudMcpEndpointForGlobalPersist(url)).toBe(false);
+      }
+    }
+
+    // The app-gateway endpoint is no longer rewritten onto the retired api
+    // host: it keeps its own origin, so trusting that api host (the old
+    // rewrite target) does not make the gateway endpoint trusted.
+    await activateEnterpriseDen("https://api.app.omnirushlabs.com");
+    expect(await isTrustedCloudMcpEndpointForGlobalPersist("https://app.omnirushlabs.com/api/den/mcp/agent")).toBe(false);
   });
 
   test("does not mutate legacy rows while the server is read-only", async () => {

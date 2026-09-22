@@ -43,6 +43,7 @@ import {
   type RuntimeOpencodeConfig,
 } from "./runtime-opencode-config-store.js";
 import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js";
+import { isOmniRushUiMcpRegistryEntry } from "./omnirush-ui-mcp-command.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
 
 const INTERNAL_PROVIDER_ID = "omnirush";
@@ -223,8 +224,11 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       ...runtimePluginList(runtimeConfig),
     ],
     ...(disabledProviders.length ? { disabled_providers: disabledProviders } : {}),
+    // Registry launches of omnirush-ui-mcp are never delivered, whatever the
+    // runtime DB holds: the MCP ships inside the desktop app, not on npm.
     mcp: Object.fromEntries(Object.entries(runtimeMcpMap(runtimeConfig))
-      .filter(([name]) => !name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX))),
+      .filter(([name, entry]) => !name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX)
+        && !isOmniRushUiMcpRegistryEntry(entry))),
     ...(Object.keys(provider).length ? { provider } : {}),
   };
 }

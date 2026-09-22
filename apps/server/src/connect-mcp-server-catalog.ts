@@ -26,18 +26,6 @@ export const CONNECT_DIRECT_MCP_SERVER_NAME_PREFIX = "omnirush-direct-";
 export const CONNECT_MCP_APP_HOST_CAPABILITY_HEADER = "x-omnirush-mcp-client-capabilities";
 export const CONNECT_MCP_APP_HOST_CAPABILITY = "mcp-app-host-v1";
 
-const BUILTIN_APP_HOST_CLOUD_ORIGINS = new Set([
-  "https://api.omnirushlabs.com",
-  "https://app.omnirushlabs.com",
-  "https://api.omnirush.software",
-  "https://app.omnirush.software",
-]);
-
-const BUILTIN_APP_HOST_GATEWAY_PROXY_ORIGINS = new Map([
-  ["https://app.omnirushlabs.com", "https://api.omnirushlabs.com"],
-  ["https://app.omnirush.software", "https://api.omnirush.software"],
-]);
-
 const indexSchema = z.object({
   schemaVersion: z.literal(CONNECT_MCP_SERVER_INDEX_SCHEMA_VERSION),
   servers: z.array(z.object({
@@ -124,20 +112,10 @@ function normalizeAppHostProxyUrl(
   }
   if (cloudEndpoint.username || cloudEndpoint.password || serverEndpoint.username || serverEndpoint.password) return null;
   if (serverEndpoint.search || serverEndpoint.hash) return null;
-  if (serverEndpoint.origin === cloudEndpoint.origin) return serverEndpoint.toString();
-
-  // Hosted Desktop talks to Den through the app-origin gateway, while Den's
-  // authenticated member index names its canonical api-origin proxy. Keep the
-  // credential on the configured app origin by translating only this exact,
-  // built-in proxy pair and exact per-connection path. Arbitrary cross-origin
-  // descriptors still fail closed.
-  if (BUILTIN_APP_HOST_GATEWAY_PROXY_ORIGINS.get(cloudEndpoint.origin) !== serverEndpoint.origin) return null;
-  const cloudTerminalPath = "/mcp/agent";
-  if (!cloudEndpoint.pathname.endsWith(cloudTerminalPath) || cloudEndpoint.search || cloudEndpoint.hash) return null;
-  const expectedServerPath = `/mcp/agent/connections/${encodeURIComponent(server.connectionId)}`;
-  if (serverEndpoint.pathname !== expectedServerPath) return null;
-  const gatewayPrefix = cloudEndpoint.pathname.slice(0, -cloudTerminalPath.length);
-  return new URL(`${gatewayPrefix}${serverEndpoint.pathname}`, cloudEndpoint.origin).toString();
+  // The private App-host credential stays on the trusted Cloud MCP origin.
+  // The built-in hosted app/api proxy pairs were retired with the hosted Den
+  // domains, so a descriptor on any other origin fails closed.
+  return serverEndpoint.origin === cloudEndpoint.origin ? serverEndpoint.toString() : null;
 }
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -156,7 +134,10 @@ async function trustedAppHostCloudEndpoint(cloudMcp: Record<string, unknown>): P
     return false;
   }
   if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return false;
-  if (BUILTIN_APP_HOST_CLOUD_ORIGINS.has(endpoint.origin)) return true;
+  // No built-in hosted origins: omnirush.ai runs no hosted Den and the
+  // retired hosted Den domains are not ours. Only loopback (development) and
+  // the administrator-activated Den origin may receive the private App-host
+  // credential.
   if (process.env.OMNIRUSH_DEV_MODE === "1" && isLoopbackHostname(endpoint.hostname)) return true;
   const activatedEnterpriseOrigin = await readActivatedEnterpriseDenOrigin();
   return activatedEnterpriseOrigin !== null && endpoint.origin === activatedEnterpriseOrigin;

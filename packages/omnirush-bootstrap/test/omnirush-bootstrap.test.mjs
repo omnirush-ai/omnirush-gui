@@ -83,13 +83,13 @@ try {
   writeFileSync(
     bootstrapPath,
     JSON.stringify({
-      baseUrl: "https://api.omnirushlabs.com",
-      apiBaseUrl: "https://api.omnirushlabs.com",
+      baseUrl: "https://den.example.com",
+      apiBaseUrl: "https://den.example.com",
       requireSignin: false,
       prepared: { orgId: "org_test", orgName: "Test Org", skillId: "cob_test", skillTitle: "Test Skill", skillPath: "/tmp/skill.md" },
       claimLinks: [
-        { id: "wcl_owner", role: "owner", token: "test-owner-token", url: "https://app.omnirushlabs.com/workspace-claim?token=test-owner-token", expiresAt: "2030-01-01T00:00:00.000Z" },
-        { id: "wcl_member", role: "member", token: "test-member-token", url: "https://app.omnirushlabs.com/workspace-claim?token=test-member-token", expiresAt: "2030-01-01T00:00:00.000Z" },
+        { id: "wcl_owner", role: "owner", token: "test-owner-token", url: "https://den.example.com/workspace-claim?token=test-owner-token", expiresAt: "2030-01-01T00:00:00.000Z" },
+        { id: "wcl_member", role: "member", token: "test-member-token", url: "https://den.example.com/workspace-claim?token=test-member-token", expiresAt: "2030-01-01T00:00:00.000Z" },
       ],
     }),
     "utf8",
@@ -110,7 +110,7 @@ try {
   const claimLinkByRoleJson = JSON.parse(claimLinkByRole.stdout)
   assert.equal(claimLinkByRoleJson.claimLinks.length, 1)
   assert.equal(claimLinkByRoleJson.claimLinks[0].role, "owner")
-  assert.equal(claimLinkByRoleJson.claimLinks[0].url, "https://app.omnirushlabs.com/workspace-claim?token=test-owner-token")
+  assert.equal(claimLinkByRoleJson.claimLinks[0].url, "https://den.example.com/workspace-claim?token=test-owner-token")
 
   const claimLinkMissingRole = spawnSync(process.execPath, [cli, "cloud", "claim-link", "--desktop-bootstrap-path", bootstrapPath, "--role", "admin"], {
     encoding: "utf8",
@@ -181,13 +181,23 @@ try {
     },
   )
 
+  // cloud bootstrap-workspace has no default Den: omnirush.ai runs no hosted
+  // Den, so omitting --base-url must fail before any network request.
+  const withoutBaseUrl = spawnSync(
+    process.execPath,
+    [cli, "cloud", "bootstrap-workspace", "--workspace-name", "No Base URL", "--json"],
+    { encoding: "utf8", env: { ...process.env, HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" } },
+  )
+  assert.notEqual(withoutBaseUrl.status, 0)
+  assert.match(withoutBaseUrl.stderr, /missing_required_flag: --base-url/)
+  assert.doesNotMatch(withoutBaseUrl.stderr, /den_api_unhealthy|fetch failed/)
+
   // Regression test: the desktop-bootstrap.json `baseUrl` field is the
   // browser-facing web origin (used by the app's Sign In button / claim
-  // links). It must NOT silently become the API origin. Previously
-  // --prepare-desktop wrote the same `--base-url` value into both `baseUrl`
-  // and `apiBaseUrl`, so a normal `--base-url https://api.omnirushlabs.com`
-  // run broke the desktop app's Sign In flow (it opened
-  // `https://api.omnirushlabs.com/?mode=sign-in...` and showed raw API JSON).
+  // links), which can differ from the API origin. An explicit --web-base-url
+  // must be written as `baseUrl` and never collapse into `apiBaseUrl`
+  // (a split deployment otherwise opens `<api-origin>/?mode=sign-in...` and
+  // shows raw API JSON).
   await withStubDenApi(
     () => ({
       ok: true,

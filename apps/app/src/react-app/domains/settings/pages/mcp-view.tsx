@@ -784,6 +784,8 @@ export function McpView(props: McpViewProps) {
   useEffect(() => {
     if (!isDesktopRuntime()) return;
     void (async () => {
+      // The bundled UI-control MCP can be missing from a broken build; that
+      // must not hide the Computer Use launch details, so resolve separately.
       try {
         const command = await window.__OMNIRUSH_ELECTRON__?.invokeDesktop?.("getOmniRushUiMcpCommand");
         if (Array.isArray(command) && command.every((part) => typeof part === "string")) {
@@ -797,13 +799,16 @@ export function McpView(props: McpViewProps) {
             ),
           ));
         }
+      } catch {
+        setOmniRushUiMcpCommand(null);
+        setOmniRushUiMcpEnvironment(null);
+      }
+      try {
         const computerUseCommand = await window.__OMNIRUSH_ELECTRON__?.invokeDesktop?.("getComputerUseMcpCommand");
         if (Array.isArray(computerUseCommand) && computerUseCommand.every((part) => typeof part === "string")) {
           setComputerUseMcpCommand(computerUseCommand);
         }
       } catch {
-        setOmniRushUiMcpCommand(null);
-        setOmniRushUiMcpEnvironment(null);
         setComputerUseMcpCommand(null);
       }
     })();

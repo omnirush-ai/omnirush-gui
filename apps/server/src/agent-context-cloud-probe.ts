@@ -26,10 +26,6 @@ const REQUIRED_TOOL_IDS = ["search_capabilities", "execute_capability"] as const
 const BEARER = /^Bearer [A-Za-z0-9\-._~+/]+=*$/;
 const REQUEST_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const REQUIRED_TERMINAL_PATH = "/mcp/agent";
-const DEFAULT_TRUSTED_ORIGINS = new Set([
-  "https://app.omnirushlabs.com",
-  "https://api.omnirushlabs.com",
-]);
 
 export type CloudCatalogProbeStatus = "observed" | "not-performed" | "failed";
 
@@ -139,7 +135,6 @@ export type CloudRuntimeEngineDifferential =
  * misconfiguration — without the report ever carrying a hostname.
  */
 export type CloudEndpointTrustSource =
-  | "builtin-cloud"
   | "loopback"
   | "administrator-env"
   | "enterprise-activation"
@@ -261,7 +256,6 @@ function resolveTrustSource(
   activatedEnterpriseOrigin?: string | null,
 ): CloudEndpointTrustSource {
   if (isLoopbackHostname(endpoint.hostname)) return "loopback";
-  if (DEFAULT_TRUSTED_ORIGINS.has(endpoint.origin)) return "builtin-cloud";
   if (activatedEnterpriseOrigin && endpoint.origin === activatedEnterpriseOrigin) {
     return "enterprise-activation";
   }
@@ -295,14 +289,13 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 /**
- * Origins the credentialed diagnostic request may reach: built-in OmniRush.ai
- * Cloud origins plus exact administrator-configured diagnostic origins. An
- * enterprise/on-prem Den origin must be provisioned through the same explicit
- * administrator setting; the desktop bootstrap's Den activation state is not
- * visible to this server process, so it can never widen this list implicitly.
+ * Origins the credentialed diagnostic request may reach: the activated
+ * enterprise/on-prem Den origin plus exact administrator-configured diagnostic
+ * origins. There are no built-in hosted origins: omnirush.ai runs no hosted
+ * Den, and the retired hosted Den domains are not ours to send credentials to.
  */
 function configuredTrustedOrigins(activatedEnterpriseOrigin?: string | null): Set<string> {
-  const origins = new Set(DEFAULT_TRUSTED_ORIGINS);
+  const origins = new Set<string>();
   // The activated enterprise/on-prem control-plane origin is administrator
   // provisioned (written only after a signed activation claim verifies), so
   // it joins the allowlist as an exact origin without an explicit override.

@@ -31,7 +31,6 @@ import { assertWorldName } from "./store.ts";
 
 const DEFAULT_WEB_PORT = "5178";
 const DEFAULT_SERVER_PORT = "8778";
-const DEFAULT_DEN_TARGET = "https://app.omnirushlabs.com";
 
 export interface HeadlessWebLaunchOptions {
   repoRoot: string;
@@ -772,8 +771,10 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
   const headlessLogPath = runtimePaths.headlessLogPath;
   const omnirushUrl = `http://${clientHost}:${omnirushPort}`;
   const webUrl = `http://${clientHost}:${webPort}`;
+  // There is no hosted Den to proxy by default: the Den proxy is wired only
+  // when a target is given. Forcing it on without a target is an error.
   const denProxyEnabled = env.OMNIRUSH_DEV_HEADLESS_WEB_DEN_PROXY === undefined
-    ? true
+    ? Boolean(env.OMNIRUSH_DEV_DEN_PROXY_TARGET?.trim())
     : readBool(env.OMNIRUSH_DEV_HEADLESS_WEB_DEN_PROXY);
   const denTarget = denProxyEnabled ? normalizeDenTarget(env.OMNIRUSH_DEV_DEN_PROXY_TARGET) : null;
   const denApiUrl = denTarget ? `${webUrl}/api/den` : null;
@@ -797,7 +798,7 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
     ...(denTarget && denApiUrl ? {
       OMNIRUSH_DEV_HEADLESS_DEN_TARGET: denTarget,
       VITE_DEN_API_BASE_URL: env.VITE_DEN_API_BASE_URL ?? denApiUrl,
-      ...(denTarget === DEFAULT_DEN_TARGET ? {} : { VITE_DEN_BASE_URL: env.VITE_DEN_BASE_URL ?? denTarget }),
+      VITE_DEN_BASE_URL: env.VITE_DEN_BASE_URL ?? denTarget,
     } : {}),
   };
   const headlessEnv: NodeJS.ProcessEnv = {

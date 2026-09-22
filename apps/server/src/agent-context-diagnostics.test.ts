@@ -1085,12 +1085,7 @@ describe("agent context diagnostics analyzer", () => {
       "https://den.customer.example/custom/mcp/agent",
       "https://den.customer.example/custom/mcp/agent",
     ]);
-    const omniRushHostedOrigins = new Set([
-      "https://omnirushlabs.com",
-      "https://api.omnirushlabs.com",
-      "https://app.omnirushlabs.com",
-    ]);
-    expect(fetchCalls.some((call) => omniRushHostedOrigins.has(new URL(call.url).origin))).toBe(false);
+    expect(fetchCalls.some((call) => new URL(call.url).origin !== "https://den.customer.example")).toBe(false);
     expect(report.mcps).toContainEqual(expect.objectContaining({
       name: "omnirush-cloud",
       source: "config.remote",
@@ -1130,6 +1125,43 @@ describe("agent context diagnostics analyzer", () => {
     expect(check.message).toContain("mismatch");
     expect(fetchCalls).toEqual([]);
     expect(JSON.stringify(report)).not.toContain("den.other.example");
+  });
+
+  test("treats the retired hosted Den origins as untrusted", async () => {
+    const retiredEndpoints = [
+      "https://app.omnirushlabs.com/api/den/mcp/agent",
+      "https://api.omnirushlabs.com/mcp/agent",
+      "https://api.app.omnirushlabs.com/mcp/agent",
+      "https://app.omnirush.software/api/den/mcp/agent",
+      "https://api.omnirush.software/mcp/agent",
+    ];
+    for (const url of retiredEndpoints) {
+      for (const activatedOrigin of [null, "https://den.customer.example"]) {
+        const runtime = diagnosticRuntimeConfig();
+        if (!runtime.mcp) throw new Error("Expected the diagnostics MCP fixture.");
+        runtime.mcp["omnirush-cloud"] = { ...cloudConfig(), url };
+        const fixture = await createFixture({ runtime });
+        const fetchCalls: CatalogFetchCall[] = [];
+
+        const report = agentContextDiagnosticsReportSchema.parse(await runAgentContextDiagnostics({
+          config: fixture.config,
+          workspace: fixture.workspace,
+          request: emptyObservedRequest,
+          inspectRegistration: () => "connected",
+          dependencies: {
+            fetchImpl: catalogFetch(["search_capabilities", "execute_capability"], fetchCalls),
+            inspectEffectiveEngine: effectiveEngineInspection(runtime),
+            readActivatedEnterpriseOrigin: async () => activatedOrigin,
+          },
+        }));
+
+        expect(checkById(report, "cloud-tool-catalog")).toMatchObject({
+          code: "untrusted_endpoint",
+          details: { requestPerformed: false, trustSource: "untrusted" },
+        });
+        expect(fetchCalls).toEqual([]);
+      }
+    }
   });
 
   test("fails closed when the effective engine response is invalid or unavailable", async () => {

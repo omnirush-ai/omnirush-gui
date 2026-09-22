@@ -84,6 +84,13 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+# There is no hosted Den to fall back to: any Den-dependent option needs an
+# explicit --den-base-url.
+if [ -z "$DEN_BASE_URL" ] && { [ -n "$DEN_API_BASE_URL" ] || [ "$DEN_REQUIRE_SIGNIN" = 1 ]; }; then
+  echo "--den-api-base-url and --require-signin need --den-base-url <your Den web origin>; omnirush.ai runs no hosted Den." >&2
+  exit 1
+fi
+
 if [ -z "$REF" ]; then
   REF="$(git branch --show-current 2>/dev/null || true)"
   REF="${REF:-$(git rev-parse HEAD)}"
@@ -221,7 +228,7 @@ daytona exec "$SANDBOX" -- "bash -lc 'set -euo pipefail; cd /workspace; REF=\"$R
 
 echo ""
 echo "==> Starting OmniRush.ai sandbox dev stack..."
-daytona exec "$SANDBOX" -- "bash -lc 'set -euo pipefail; cd /workspace; DEN_BASE_URL=\"$DEN_BASE_URL\"; DEN_API_BASE_URL=\"$DEN_API_BASE_URL\"; DEN_REQUIRE_SIGNIN=\"$DEN_REQUIRE_SIGNIN\"; if [ -n \"\$DEN_BASE_URL\" ] || [ -n \"\$DEN_API_BASE_URL\" ] || [ \"\$DEN_REQUIRE_SIGNIN\" = 1 ]; then mkdir -p /workspace/.omnirush-daytona; DEN_BASE_URL=\"\$DEN_BASE_URL\" DEN_API_BASE_URL=\"\$DEN_API_BASE_URL\" DEN_REQUIRE_SIGNIN=\"\$DEN_REQUIRE_SIGNIN\" node -e '\''const fs = require(\"node:fs\"); const baseUrl = process.env.DEN_BASE_URL || \"https://app.omnirushlabs.com\"; const apiBaseUrl = process.env.DEN_API_BASE_URL || null; const requireSignin = process.env.DEN_REQUIRE_SIGNIN === \"1\"; fs.writeFileSync(\"/workspace/.omnirush-daytona/desktop-bootstrap.json\", JSON.stringify({ baseUrl, apiBaseUrl, requireSignin }, null, 2) + \"\\n\");'\''; fi; export DAYTONA_SECRETS_ENV=\"$DAYTONA_SECRETS_ENV\" DAYTONA_ELECTRON_EXTRA_LAUNCH_ARGS=\"$DAYTONA_ELECTRON_EXTRA_LAUNCH_ARGS\" OMNIRUSH_ELECTRON_REMOTE_DEBUG_PORT=$CDP_PORT OMNIRUSH_ELECTRON_FAKE_MEDIA=\"$OMNIRUSH_ELECTRON_FAKE_MEDIA\" OMNIRUSH_WORKSPACE_DIR=/workspace OMNIRUSH_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT=1; if [ -f /workspace/.omnirush-daytona/desktop-bootstrap.json ]; then export OMNIRUSH_DESKTOP_BOOTSTRAP_PATH=/workspace/.omnirush-daytona/desktop-bootstrap.json; fi; pnpm dev:sandbox'"
+daytona exec "$SANDBOX" -- "bash -lc 'set -euo pipefail; cd /workspace; DEN_BASE_URL=\"$DEN_BASE_URL\"; DEN_API_BASE_URL=\"$DEN_API_BASE_URL\"; DEN_REQUIRE_SIGNIN=\"$DEN_REQUIRE_SIGNIN\"; if [ -n \"\$DEN_BASE_URL\" ] || [ -n \"\$DEN_API_BASE_URL\" ] || [ \"\$DEN_REQUIRE_SIGNIN\" = 1 ]; then mkdir -p /workspace/.omnirush-daytona; DEN_BASE_URL=\"\$DEN_BASE_URL\" DEN_API_BASE_URL=\"\$DEN_API_BASE_URL\" DEN_REQUIRE_SIGNIN=\"\$DEN_REQUIRE_SIGNIN\" node -e '\''const fs = require(\"node:fs\"); const baseUrl = process.env.DEN_BASE_URL; const apiBaseUrl = process.env.DEN_API_BASE_URL || null; const requireSignin = process.env.DEN_REQUIRE_SIGNIN === \"1\"; fs.writeFileSync(\"/workspace/.omnirush-daytona/desktop-bootstrap.json\", JSON.stringify({ baseUrl, apiBaseUrl, requireSignin }, null, 2) + \"\\n\");'\''; fi; export DAYTONA_SECRETS_ENV=\"$DAYTONA_SECRETS_ENV\" DAYTONA_ELECTRON_EXTRA_LAUNCH_ARGS=\"$DAYTONA_ELECTRON_EXTRA_LAUNCH_ARGS\" OMNIRUSH_ELECTRON_REMOTE_DEBUG_PORT=$CDP_PORT OMNIRUSH_ELECTRON_FAKE_MEDIA=\"$OMNIRUSH_ELECTRON_FAKE_MEDIA\" OMNIRUSH_WORKSPACE_DIR=/workspace OMNIRUSH_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT=1; if [ -f /workspace/.omnirush-daytona/desktop-bootstrap.json ]; then export OMNIRUSH_DESKTOP_BOOTSTRAP_PATH=/workspace/.omnirush-daytona/desktop-bootstrap.json; fi; pnpm dev:sandbox'"
 
 echo ""
 echo "==> Waiting for Electron CDP on port $CDP_PORT (up to ${MAX_WAIT}s)..."

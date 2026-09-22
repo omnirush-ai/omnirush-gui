@@ -1,4 +1,5 @@
 import { ApiError } from "./errors.js";
+import { isOmniRushUiMcpRegistryCommand, OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE } from "./omnirush-ui-mcp-command.js";
 
 const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const COMMAND_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
@@ -63,6 +64,12 @@ export function validateMcpConfig(config: Record<string, unknown>): void {
     ) {
       throw new ApiError(400, "invalid_mcp_config", "Local MCP requires command array");
     }
+  }
+  // Checked for any entry carrying a command, whatever its type. OmniRush.ai
+  // does not publish omnirush-ui-mcp, so resolving it from a registry would
+  // run whatever someone else published under that name.
+  if (isOmniRushUiMcpRegistryCommand(config.command)) {
+    throw new ApiError(400, "unsafe_mcp_command", OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE);
   }
   if (type === "remote") {
     const url = config.url;

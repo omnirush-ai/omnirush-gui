@@ -8,12 +8,20 @@
 // This walks every JavaScript module inside each app.asar and verifies that
 // every relative import target exists inside the same archive.
 //
+// It also verifies that the resources directory next to each app.asar ships
+// the bundled UI-control MCP (omnirush-ui-mcp/index.mjs) as a self-contained
+// module: the app launches that file with its own binary and never falls back
+// to resolving the package from npm.
+//
 // Usage: node apps/desktop/scripts/verify-packaged-imports.mjs [app.asar ...]
 // With no arguments it scans apps/desktop/dist-electron/** for app.asar files.
 import { readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import asar from "@electron/asar";
+
+const { verifyBundledUiMcp } = createRequire(import.meta.url)("./ui-mcp-bundle.cjs");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distElectron = resolve(here, "..", "dist-electron");
@@ -102,6 +110,13 @@ for (const target of targets) {
     for (const line of missing) console.error(`  ${line}`);
   } else {
     console.log(`[verify-packaged-imports] ${target}: ${modules} modules, all relative imports resolve inside the archive`);
+  }
+  const uiMcpProblems = verifyBundledUiMcp(dirname(target));
+  if (uiMcpProblems.length) {
+    failed = true;
+    for (const line of uiMcpProblems) console.error(`[verify-packaged-imports] ${target}: ${line}`);
+  } else {
+    console.log(`[verify-packaged-imports] ${target}: bundled UI-control MCP is present and self-contained`);
   }
 }
 process.exit(failed ? 1 : 0);

@@ -1,6 +1,12 @@
 import { desktopConfigSchema, type DesktopConfig } from "@omnirush/types/den/desktop-policies-runtime";
 import { existsSync } from "node:fs";
 import { parseApprovalMode, type ApprovalMode } from "./approval-mode.js";
+import { ApiError } from "./errors.js";
+import {
+  isOmniRushUiMcpRegistryEntry,
+  OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE,
+  withoutOmniRushUiMcpRegistryEntries,
+} from "./omnirush-ui-mcp-command.js";
 import { importNodeSqlite, runtimeDbPath } from "./runtime-db.js";
 import type { ServerConfig } from "./types.js";
 import { createWorkspaceKvStore, isRecord } from "./workspace-kv-store.js";
@@ -275,18 +281,36 @@ export function mergeRuntimeOpencodeConfigLayers(
   });
 }
 
+/**
+ * The runtime config with every MCP entry that launches `omnirush-ui-mcp`
+ * from a package registry removed. Whatever an older build or a direct DB
+ * edit left behind, such an entry is never handed to the engine.
+ */
+export function withoutRegistryOmniRushUiMcp(config: RuntimeOpencodeConfig): RuntimeOpencodeConfig {
+  const mcp = runtimeMcpMap(config);
+  const allowed = withoutOmniRushUiMcpRegistryEntries(mcp);
+  if (allowed === mcp) return config;
+  const { mcp: _mcp, ...rest } = config;
+  return { ...rest, ...(Object.keys(allowed).length ? { mcp: allowed } : {}) };
+}
+
+/**
+ * The runtime config the engine actually runs with (ENGINE_GLOBAL row plus
+ * the workspace row). The dynamic engine MCP push reads MCP entries from
+ * here, so registry launches of `omnirush-ui-mcp` are filtered out.
+ */
 export async function readEffectiveRuntimeOpencodeConfig(
   config: ServerConfig,
   workspaceId: string,
 ): Promise<RuntimeOpencodeConfig> {
   if (isEngineGlobalRuntimeConfigId(workspaceId)) {
-    return await readRuntimeOpencodeConfig(config, workspaceId);
+    return withoutRegistryOmniRushUiMcp(await readRuntimeOpencodeConfig(config, workspaceId));
   }
   const [globalRuntime, workspaceRuntime] = await Promise.all([
     readGlobalRuntimeOpencodeConfig(config),
     readRuntimeOpencodeConfig(config, workspaceId),
   ]);
-  return mergeRuntimeOpencodeConfigLayers(globalRuntime, workspaceRuntime);
+  return withoutRegistryOmniRushUiMcp(mergeRuntimeOpencodeConfigLayers(globalRuntime, workspaceRuntime));
 }
 
 /**
@@ -524,6 +548,29 @@ export async function inspectRuntimeOpencodeConfig(
   return (await inspectRuntimeOpencodeConfigState(config, workspaceId, options)).config;
 }
 
+/**
+ * No writer may store an MCP entry that launches `omnirush-ui-mcp` from a
+ * package registry (addMcp, the MCP toggle, the workspace config PATCH route,
+ * plugin imports and migrations all write through here). A write that adds
+ * one fails with 400. One already in the row before this build (it survives
+ * only if the startup migration could not run) is dropped on the next write
+ * instead, so unrelated writes keep working and the row converges to clean.
+ */
+function refuseRegistryOmniRushUiMcp(
+  previous: RuntimeOpencodeConfig,
+  next: RuntimeOpencodeConfig,
+): RuntimeOpencodeConfig {
+  const mcp = runtimeMcpMap(next);
+  const blocked = Object.keys(mcp).filter((name) => isOmniRushUiMcpRegistryEntry(mcp[name]));
+  if (blocked.length === 0) return next;
+  const previousMcp = runtimeMcpMap(previous);
+  const added = blocked.filter((name) => !isOmniRushUiMcpRegistryEntry(previousMcp[name]));
+  if (added.length > 0) {
+    throw new ApiError(400, "unsafe_mcp_command", OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE, { mcp: added });
+  }
+  return normalizeRuntimeOpencodeConfig(withoutRegistryOmniRushUiMcp(next));
+}
+
 // All runtime writers share this queue. A provider refresh cannot overwrite a
 // newer Den policy, and ordinary config edits cannot replace managed policy.
 const runtimeWrites = new WeakMap<ServerConfig, Promise<unknown>>();
@@ -535,7 +582,8 @@ function updateRuntimeConfig(
   const pending = runtimeWrites.get(config) ?? Promise.resolve();
   const result = pending.catch(() => undefined).then(async () => {
     const row = await runtimeOpencodeConfigStore.getRow(config, workspaceId);
-    const next = normalizeRuntimeOpencodeConfig(updater(row?.value ?? {}));
+    const current = row?.value ?? {};
+    const next = refuseRegistryOmniRushUiMcp(current, normalizeRuntimeOpencodeConfig(updater(current)));
     const configJson = runtimeOpencodeConfigStore.serialize(next);
     if (row?.valueJson === configJson) return { config: next, changed: false };
     await runtimeOpencodeConfigStore.setSerialized(config, workspaceId, configJson, Date.now());

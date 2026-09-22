@@ -71,7 +71,7 @@ describe("getDenMcpUrl", () => {
 describe("isLegacyWebAppMcpUrl", () => {
   test("flags the legacy bare web-app MCP URL", () => {
     expect(isLegacyWebAppMcpUrl("https://app.omnirush.example.com/mcp")).toBe(true);
-    expect(isLegacyWebAppMcpUrl("https://app.omnirush.software/mcp/")).toBe(true);
+    expect(isLegacyWebAppMcpUrl("https://app.den.example.com/mcp/")).toBe(true);
   });
 
   test("accepts valid MCP URLs", () => {
@@ -87,8 +87,8 @@ describe("isLegacyWebAppMcpUrl", () => {
 
 describe("resolveCloudMcpResourceUrl", () => {
   test("heals legacy web-app resources through the /api/den proxy", () => {
-    expect(resolveCloudMcpResourceUrl("https://app.omnirush.software/mcp/")).toBe(
-      "https://app.omnirush.software/api/den/mcp",
+    expect(resolveCloudMcpResourceUrl("https://app.den.example.com/mcp/")).toBe(
+      "https://app.den.example.com/api/den/mcp",
     );
   });
 

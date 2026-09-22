@@ -38,7 +38,7 @@ See [Installer delivery](/start-here/installer-delivery) for the exact filenames
 ### Desktop runtime dependencies
 
 - The desktop fetches no model catalog by default: the engine uses the model list bundled with it. To refresh model metadata, point `OPENCODE_MODELS_URL` at an internal mirror of the model catalog (an `api.json` in the models.dev format).
-- The packaged desktop can start the UI-control MCP with `npx -y omnirush-ui-mcp`. In a fully isolated environment, provide an internal npm registry or npm mirror that can serve that package to `npx`. OmniRush.ai does not currently document a separate OmniRush.ai-specific registry override for this package; use standard npm configuration for the runtime account.
+- The UI-control MCP ships inside the packaged desktop and runs with the app's own binary, so it needs no npm registry. Only MCP servers you configure yourself with an `npx` command need an internal npm registry or mirror.
 - Disable, mirror, or manage desktop updates and GitHub release assets through your internal release process. Do not assume a built-in updater mirror setting unless it has been verified for the desktop release you ship.
 
 ### Feature dependencies

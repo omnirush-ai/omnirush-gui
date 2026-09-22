@@ -3,7 +3,7 @@
   "mcpServers": {
     "omnirush": {
       "type": "streamable-http",
-      "url": "https://api.omnirushlabs.com/mcp/agent"
+      "url": "https://replace-with-your-den-api-origin.invalid/mcp/agent"
     }
   }
 }

@@ -14,7 +14,6 @@ omnirush.ai
 github.com
 release-assets.githubusercontent.com
 objects.githubusercontent.com
-registry.npmjs.org
 ```
 
 If the desktop connects to a self-hosted Den, also allow its web origin (and its API origin when that is separate). omnirush.ai does not run a hosted Den.
@@ -22,7 +21,7 @@ If the desktop connects to a self-hosted Den, also allow its web origin (and its
 Common misses:
 
 - GitHub release downloads redirect away from `github.com`. Allow `release-assets.githubusercontent.com`, which is the current verified GitHub release-asset host, and `objects.githubusercontent.com`, which is kept for older clients and rollback paths.
-- `registry.npmjs.org` is used when packaged desktop builds start `npx -y omnirush-ui-mcp`. If it is blocked, the desktop can still open, but UI-control MCP is unavailable.
+- The built-in UI-control MCP ships inside the desktop app and runs with the app's own binary, so it needs no npm registry access. `registry.npmjs.org` is only reached by MCP servers you configure yourself with an `npx` command.
 - The desktop fetches no model catalog by default; the engine uses the model list bundled with it. Set `OPENCODE_MODELS_URL` to an approved internal mirror if you need fresher model metadata.
 
 ## Desktop and local runtime destinations
@@ -35,7 +34,7 @@ Common misses:
 | `github.com` | Required in practice unless mirrored | Installer/updater release URLs, GitHub issue links, and GitHub plugin source URLs. | Install/update downloads cannot start; GitHub links may not open. |
 | `release-assets.githubusercontent.com` | Required in practice unless mirrored | Current GitHub release-asset redirect target. | Downloads start from `github.com` and fail partway through. |
 | `objects.githubusercontent.com` | Required in practice for legacy/rollback | Legacy GitHub release-asset redirect target. | Older clients or rollback downloads can fail partway through. |
-| `registry.npmjs.org` | Required in practice unless npm is mirrored | `npx` package resolution for `omnirush-ui-mcp` and development-only helper commands. | OmniRush.ai UI-control MCP is unavailable. |
+| `registry.npmjs.org` | Opt-in | `npx` package resolution for local MCP servers a user or administrator configures with an `npx` command. The built-in UI-control MCP is bundled with the app and never uses it. | User-configured `npx` MCP servers cannot download their packages. |
 | Your model catalog mirror, if configured | Optional | Model catalog passed to the engine as `OPENCODE_MODELS_URL`. There is no default catalog. | The engine keeps the model list bundled with it. |
 | `cdn.simpleicons.org` | Optional | Provider icons when no local icon exists. | Some icons are missing. |
 | `www.google.com` | Optional | Favicon image service and embedded browser new-tab page. | Favicons or the browser panel new tab may not load. |

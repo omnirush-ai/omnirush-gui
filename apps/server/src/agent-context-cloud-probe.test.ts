@@ -10,7 +10,17 @@ import {
 } from "./agent-context-cloud-probe.js";
 
 const TOKEN = "Bearer ow_diagnostics_token_abcdefghijklmnopqrstuvwxyz";
-const ENDPOINT = "https://app.omnirushlabs.com/api/den/mcp/agent";
+/** Administrator-activated enterprise Den origin: the only non-loopback origin trusted by default. */
+const DEN_ORIGIN = "https://den.example.com";
+const ENDPOINT = `${DEN_ORIGIN}/api/den/mcp/agent`;
+/** Retired hosted Den origins that used to be trusted as built-ins. */
+const RETIRED_HOSTED_ORIGINS = [
+  "https://app.omnirushlabs.com",
+  "https://api.omnirushlabs.com",
+  "https://api.app.omnirushlabs.com",
+  "https://app.omnirush.software",
+  "https://api.omnirush.software",
+];
 const SESSION_ID = "diagnostics-session-id";
 const PROTOCOL_VERSION = "2025-06-18";
 
@@ -31,6 +41,7 @@ function input(overrides: Partial<ProbeOmniRushCloudCatalogInput> = {}): ProbeOm
     engineRegistration: { status: "connected", source: "engine_status", recordAgeMs: 1_000 },
     requestId: "11111111-1111-4111-8111-111111111111",
     env: {},
+    activatedEnterpriseOrigin: DEN_ORIGIN,
     ...values,
     ...(fetchImpl ? { fetchImpl: withCompletedHandshake(fetchImpl) } : {}),
   };
@@ -186,8 +197,8 @@ describe("OmniRush.ai Cloud catalog probe", () => {
       status: "observed",
       stage: "complete",
       code: "catalog_observed",
-      trustSource: "builtin-cloud",
-      enterpriseActivationPresent: false,
+      trustSource: "enterprise-activation",
+      enterpriseActivationPresent: true,
       networkCode: null,
       retryable: false,
       runtimeFamily: "bun",
@@ -293,11 +304,11 @@ describe("OmniRush.ai Cloud catalog probe", () => {
       [{ config: null }, "cloud_mcp_missing"],
       [{ config: { type: "local", enabled: true } }, "cloud_mcp_not_remote"],
       [{ config: { type: "remote", enabled: false, url: ENDPOINT } }, "cloud_mcp_disabled"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.omnirushlabs.com/api/den/mcp/agent?token=secret", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.omnirushlabs.com/api/den/mcp/agent/", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.omnirushlabs.com/api/den/mcp/agent/status", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.omnirushlabs.com/api/den/mcp/agentish", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "http://app.omnirushlabs.com/mcp/agent", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: "https://den.example.com/api/den/mcp/agent?token=secret", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: "https://den.example.com/api/den/mcp/agent/", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: "https://den.example.com/api/den/mcp/agent/status", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: "https://den.example.com/api/den/mcp/agentish", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: "http://den.example.com/mcp/agent", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
       [{ config: { type: "remote", enabled: true, url: "https://localhost.evil/mcp/agent", headers: { Authorization: TOKEN } } }, "untrusted_endpoint"],
     ];
     for (const [overrides, code] of cases) {
@@ -333,6 +344,34 @@ describe("OmniRush.ai Cloud catalog probe", () => {
         engineEvidenceAgeMs: 2_000,
       });
     }
+  });
+
+  test("rejects the retired hosted Den origins that used to be built-in", async () => {
+    let calls = 0;
+    const fetchImpl: CloudCatalogProbeFetch = async () => {
+      calls += 1;
+      return jsonResponse("unused");
+    };
+    for (const activatedEnterpriseOrigin of [null, DEN_ORIGIN]) {
+      for (const origin of RETIRED_HOSTED_ORIGINS) {
+        for (const path of ["/mcp/agent", "/api/den/mcp/agent"]) {
+          const blocked = await probeOmniRushCloudCatalog(input({
+            requestId: "retired-origin",
+            activatedEnterpriseOrigin,
+            config: { type: "remote", enabled: true, url: `${origin}${path}`, headers: { Authorization: TOKEN } },
+            fetchImpl,
+          }));
+          expect(blocked).toMatchObject({
+            performed: false,
+            status: "not-performed",
+            stage: "eligibility",
+            code: "untrusted_endpoint",
+            trustSource: "untrusted",
+          });
+        }
+      }
+    }
+    expect(calls).toBe(0);
   });
 
   test("allows exact loopback and explicitly configured HTTPS origins only", async () => {
@@ -1003,8 +1042,8 @@ describe("OmniRush.ai Cloud catalog probe", () => {
       retryable: false,
       runtimeFamily: "bun",
       transport: "test-seam",
-      trustSource: "builtin-cloud",
-      enterpriseActivationPresent: false,
+      trustSource: "enterprise-activation",
+      enterpriseActivationPresent: true,
       httpStatus: 200,
       durationMs: 1,
       toolsListPerformed: true,
@@ -1078,12 +1117,7 @@ describe("OmniRush.ai Cloud catalog probe", () => {
       enterpriseEndpoint,
       enterpriseEndpoint,
     ]);
-    const omniRushHostedOrigins = new Set([
-      "https://omnirushlabs.com",
-      "https://api.omnirushlabs.com",
-      "https://app.omnirushlabs.com",
-    ]);
-    expect(requestedUrls.some((url) => omniRushHostedOrigins.has(new URL(url).origin))).toBe(false);
+    expect(requestedUrls.some((url) => RETIRED_HOSTED_ORIGINS.includes(new URL(url).origin))).toBe(false);
     expect(activated).toMatchObject({
       performed: true,
       status: "observed",
@@ -1116,6 +1150,7 @@ describe("OmniRush.ai Cloud catalog probe", () => {
     const unactivated = await probeOmniRushCloudCatalog(input({
       requestId: "enterprise-absent",
       config: enterpriseConfig,
+      activatedEnterpriseOrigin: null,
       fetchImpl: async () => {
         unactivatedCalls += 1;
         return jsonResponse("enterprise-absent");

@@ -10,8 +10,8 @@ import { createDenClient } from "@omnirush/sdk";
 const den = createDenClient({
   apiKey: process.env.DEN_API_KEY,
   orgId: process.env.DEN_ORG_ID,
-  // Always set this to your self-hosted Den API origin: omnirush.ai runs no
-  // hosted Den, so the built-in default does not resolve.
+  // Required: your self-hosted Den API origin. omnirush.ai runs no hosted Den,
+  // so there is no default and createDenClient throws without one.
   baseUrl: "https://api.omnirush.example.com",
 });
 

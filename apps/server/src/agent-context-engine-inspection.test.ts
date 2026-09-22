@@ -24,7 +24,7 @@ describe("agent diagnostics effective engine inspection", () => {
         mcp: {
           "omnirush-cloud": {
             type: "remote",
-            url: "https://api.omnirushlabs.com/mcp/agent",
+            url: "https://den.example.com/mcp/agent",
             headers: { Authorization: "Bearer NOT_REPORTED" },
           },
         },

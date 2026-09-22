@@ -85,11 +85,12 @@ function printHelp() {
     "                   not print claim links preemptively.",
     "",
     "Options:",
+    "  --base-url       Your Den API origin. Required for cloud commands:",
+    "                   omnirush.ai runs no hosted Den, so there is no default.",
     "  --web-base-url   Browser-facing origin written into --prepare-desktop's",
     "                   config (used for the app's Sign In button and claim",
-    "                   links). Defaults to https://app.omnirushlabs.com when",
-    "                   --base-url is the hosted API (api.omnirushlabs.com);",
-    "                   set explicitly for self-hosted/custom deployments.",
+    "                   links). Defaults to --base-url; set it explicitly when",
+    "                   the Den web app is served from a different origin.",
     "  --json           Print machine-readable JSON",
     "  --version        Print version",
     "  --help           Show help",
@@ -145,24 +146,20 @@ function defaultDeviceKeyPath() {
 
 // The desktop app's `desktop-bootstrap.json` `baseUrl` field is the WEB origin
 // it opens in the user's browser for sign-in (e.g. for "Sign in" and claim
-// links) - it is a different host than the API origin used for CLI/API calls
-// (`--base-url`, `apiBaseUrl`). Reusing the API host here breaks sign-in: the
-// browser opens `https://api.omnirushlabs.com/?mode=sign-in...` and shows raw
-// API JSON instead of the sign-in page. Derive the correct web host instead
-// of assuming it equals the API host.
+// links). It can differ from the API origin used for CLI/API calls
+// (`--base-url`, `apiBaseUrl`); when it does, pass --web-base-url so the
+// browser does not land on raw API JSON. There is no hosted Den to special
+// case, so without --web-base-url the web origin defaults to the API origin
+// (a self-hosted den-web that proxies the API on the same origin).
 function deriveWebBaseUrl(apiBaseUrl) {
-  try {
-    const url = new URL(apiBaseUrl)
-    if (url.hostname === "api.omnirushlabs.com") {
-      return "https://app.omnirushlabs.com"
-    }
-    // Local/self-hosted dev: den-web commonly proxies the API at a different
-    // port on the same host (see ee/apps/den-web's /api/den proxy). Callers
-    // that need this to be exact should pass --web-base-url explicitly.
-    return apiBaseUrl
-  } catch {
-    return apiBaseUrl
-  }
+  return apiBaseUrl
+}
+
+function missingRequiredFlagMessage(name) {
+  const flag = `--${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
+  return name === "baseUrl"
+    ? `missing_required_flag: ${flag} (your Den API origin, e.g. https://den.example.com; omnirush.ai runs no hosted Den)`
+    : `missing_required_flag: ${flag}`
 }
 
 function slugifySkillName(value) {
@@ -796,7 +793,7 @@ async function runCloudOnboard(args) {
   const webBaseUrl = getFlag(args.flags, "web-base-url", deriveWebBaseUrl(baseUrl))?.replace(/\/$/, "")
 
   for (const [name, value] of Object.entries({ baseUrl, ownerEmail, ownerPassword, orgName, inviteEmail })) {
-    if (!value) throw new Error(`missing_required_flag: --${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`)
+    if (!value) throw new Error(missingRequiredFlagMessage(name))
   }
 
   const health = await request(baseUrl, "/health", { method: "GET" })
@@ -868,7 +865,7 @@ async function runCloudOnboard(args) {
 
 async function runCloudBootstrapWorkspace(args) {
   const json = hasFlag(args.flags, "json")
-  const baseUrl = getFlag(args.flags, "base-url", "https://api.omnirushlabs.com")?.replace(/\/$/, "")
+  const baseUrl = getFlag(args.flags, "base-url")?.replace(/\/$/, "")
   const workspaceName = getFlag(args.flags, "workspace-name")
   const skillName = getFlag(args.flags, "skill-name", "First OmniRush.ai Skill")
   const ownerEmail = getFlag(args.flags, "owner-email")
@@ -887,7 +884,7 @@ async function runCloudBootstrapWorkspace(args) {
     .filter(Boolean)
 
   for (const [name, value] of Object.entries({ baseUrl, workspaceName })) {
-    if (!value) throw new Error(`missing_required_flag: --${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`)
+    if (!value) throw new Error(missingRequiredFlagMessage(name))
   }
 
   const health = await request(baseUrl, "/health", { method: "GET" })
