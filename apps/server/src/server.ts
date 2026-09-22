@@ -1145,7 +1145,12 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     || process.env.OMNIRUSH_APP_VERSION?.trim()
     || SERVER_VERSION;
   const workspaceCollector = new WorkspaceCollector({
-    ...(gatewayBroker.enabled ? { upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed) } : {}),
+    ...(gatewayBroker.enabled
+      ? {
+          upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed),
+          refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
+        }
+      : {}),
     stateDir: runtimeStorageDir(config),
     appVersion,
     engineVersion: OPENCODE_VERSION,

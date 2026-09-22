@@ -25,6 +25,9 @@ import {
   filterCollectorDiff,
   isCollectableWebUrl,
   isCollectorPathDenied,
+  redactCollectorContent,
+  redactCollectorJson,
+  redactCollectorJsonText,
   redactCollectorText,
   stripRemoteUserinfo,
 } from "./workspace-collector.js";
@@ -959,5 +962,521 @@ describe("workspace collector trace additions", () => {
     for (const url of ["file:///tmp/a", "data:text/plain,a", "chrome://version", "about:blank", "http://localhost/", "http://app.localhost/", "http://127.0.0.1/", "http://[::1]/", "not a url"]) {
       expect(isCollectableWebUrl(url)).toBe(false);
     }
+  });
+});
+
+// --- collector secret rails --------------------------------------------------
+
+const AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+// Token samples are assembled at runtime so the source never contains a
+// contiguous token shape (GitHub push protection scans committed blobs).
+const sample = (prefix: string, ...rest: string[]) => prefix + rest.join("");
+const GITHUB_TOKEN = sample("ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123");
+
+describe("workspace collector secret rails", () => {
+  test("drops the incident file by name and counts it in the privacy manifest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-incident-"));
+    roots.push(root);
+    await git(root, "init", "-q");
+    await writeFile(join(root, "AWS master key"), `aws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = ${AWS_SECRET}\n`);
+    await writeFile(join(root, "app.ts"), "export const ok = true;\n");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-incident-1";
+    collector.startSession(sessionId, "workspace-incident", root);
+    collector.recordTrace(sessionId, "file.read", { path: "AWS master key" });
+    await collector.stop();
+
+    const start = uploads.find((item) => item.snapshot_type === "start")!;
+    expect(start.files.map((file) => file.path).sort()).toEqual(["__omnirush__/workspace.json", "app.ts"]);
+    expect(start.manifest.map((entry) => entry.path)).toEqual(["app.ts"]);
+    expect(start.privacy.denied_file_count).toBe(1);
+    expect(start.files.find((file) => file.path === "__omnirush__/workspace.json")?.content).toContain('"denied_file_count":1');
+    // The denied name never reaches the snapshot, manifest or touched paths
+    // (the raw tool argument in the trace event is the agent's own input).
+    for (const envelope of uploads) {
+      expect(envelope.touched_paths).toEqual([]);
+      expect(envelope.files.map((file) => file.path)).not.toContain("AWS master key");
+      expect(envelope.manifest.map((entry) => entry.path)).not.toContain("AWS master key");
+    }
+    const serialized = JSON.stringify(uploads);
+    expect(serialized).not.toContain(AWS_SECRET);
+    expect(serialized).not.toContain("AKIAIOSFODNN7EXAMPLE");
+  });
+
+  test("denies credential-named paths unless they carry a source or docs extension", () => {
+    for (const path of [
+      "AWS master key", "tokens/prod.csv", "backup/wallet.dat", "my-wallet", "seed.csv", "kubeconfig", "id_rsa.pub", "notes/passwords",
+      ".aws/config", ".gnupg/pubring.kbx", ".docker/config.json", "team/mnemonic", "prod secret", "api_key", ".netrc", "passwd",
+    ]) {
+      expect(isCollectorPathDenied(path)).toBe(true);
+    }
+    for (const path of [
+      "src/token/refresh.ts", "design-tokens/colors.ts", "prisma/seed/users.ts", "seed.sql", "password-reset.tsx", "keys.md",
+      "AWS master key.txt", "kubeconfig.yaml", "keyboard.ts", "hotkey.json", ".docker/daemon.json", "src/app.ts",
+    ]) {
+      expect(isCollectorPathDenied(path)).toBe(false);
+    }
+    // The pre-existing rules stay stricter than the extension carve-out.
+    for (const path of ["credentials.json", "secrets.ts", "secrets/config.yml", "keys/service.json", "server.key", ".env.production", "private-key.md"]) {
+      expect(isCollectorPathDenied(path)).toBe(true);
+    }
+  });
+
+  test("redacts every secret-named assignment form once and leaves obvious non-secrets alone", () => {
+    const secrets: Array<[string, string]> = [
+      [`aws_secret_access_key = ${AWS_SECRET}`, "aws_secret_access_key = [REDACTED]"],
+      ["password: hunter2hunter2", "password: [REDACTED]"],
+      ["client_secret: 'abcdefghijkl'", "client_secret: '[REDACTED]'"],
+      ['"token": "abcdefghijkl"', '"token": "[REDACTED]"'],
+      ['{"apiKey":"abcdefghijkl","x":1}', '{"apiKey":"[REDACTED]","x":1}'],
+      ["DB_PASSWD=hunter2abc", "DB_PASSWD=[REDACTED]"],
+      ['export API_KEY="abcdefghijkl"', 'export API_KEY="[REDACTED]"'],
+      ["mysql --password=hunter2abc -u root", "mysql --password=[REDACTED] -u root"],
+      ['const apiKey = "abcdefghijkl";', 'const apiKey = "[REDACTED]";'],
+      ["PRIVATE_KEY = abcdefghijkl", "PRIVATE_KEY = [REDACTED]"],
+      ["access_key: abcdefghijkl", "access_key: [REDACTED]"],
+      ["pwd=abcdefghijkl", "pwd=[REDACTED]"],
+      ["auth: abcdefghijkl", "auth: [REDACTED]"],
+      ["credentials = abcdefghijkl", "credentials = [REDACTED]"],
+      ["session_key: abcdefghijkl", "session_key: [REDACTED]"],
+      ["signing_key = abcdefghijkl", "signing_key = [REDACTED]"],
+      ["masterKey: abcdefghijkl", "masterKey: [REDACTED]"],
+      ["encryption_key = abcdefghijkl", "encryption_key = [REDACTED]"],
+      ["apikey: abcdefghijkl", "apikey: [REDACTED]"],
+      ["githubToken = abcdefghijkl", "githubToken = [REDACTED]"],
+      ["db.password: abcdefghijkl,", "db.password: [REDACTED],"],
+      ["  - password=abc12345 # note", "  - password=[REDACTED] # note"],
+      ["auth_token = abcdefgh1234", "auth_token = [REDACTED]"],
+      ["basic-auth: abcdefghijkl", "basic-auth: [REDACTED]"],
+      ["AUTH=abcdefghijkl", "AUTH=[REDACTED]"],
+      ["authorization: abcdefghijkl", "authorization: [REDACTED]"],
+      ["oauth_client_secret = abcdefghijkl", "oauth_client_secret = [REDACTED]"],
+      ["HTTPSecret = abcdefghijkl", "HTTPSecret = [REDACTED]"],
+      ["APIKey: abcdefghijkl", "APIKey: [REDACTED]"],
+      ["accessKey: abcdefghijkl", "accessKey: [REDACTED]"],
+      ["token2 = abcdefghijkl", "token2 = [REDACTED]"],
+    ];
+    for (const [input, expected] of secrets) {
+      expect(redactCollectorText(input)).toEqual({ text: expected, count: 1 });
+    }
+    const preserved = [
+      "token_length = abcdefghij", "token_ttl = abcdefghij", "auth_seconds = abcdefghij", "token_count = abcdefghij",
+      "secret_size = abcdefghij", "token_url = https://example.com/oauth/token", "secret_path = /var/run/secrets/x",
+      "secret_name = github-token-secret", "session_id = abcdefghij12", "auth_header = X-Auth-Token", "api-key-name: primary-key",
+      "token = getToken()", "password = process.env.PASSWORD", 'secret = os.environ["X"]', "token = env.TOKEN",
+      "password: ${PASSWORD}", "token=$(cat token.txt)", "password = abc123", "token: short", "auth: 12345678",
+      "const password = passwordInput.value.trim()", "token: true",
+      // Keyword families match whole key segments, never a substring of an ordinary word.
+      "author: Johnathan", "authors = Johnathan", "authored_by: Johnathan", "oauth_client_id = abcdefghijkl",
+      "tokenizer_class = BertTokenizer", "tokenize: whitespace", "keyboard_layout = qwerty-intl", "keywords = abcdefghijkl",
+      "pwdir = /home/user/project", "accessKeyId = abcdefghijkl", 'eos_token: "<|endoftext|>"',
+    ];
+    for (const input of preserved) expect(redactCollectorText(input)).toEqual({ text: input, count: 0 });
+  });
+
+  test("leaves a real package.json and a tokenizer config byte-identical", () => {
+    const packageJson = [
+      "{",
+      '  "name": "@acme/widgets",',
+      '  "version": "1.2.3",',
+      '  "description": "Token helpers for the Acme auth flow",',
+      '  "author": "sindresorhus",',
+      '  "keywords": ["token", "auth", "password", "keyboard"],',
+      '  "scripts": { "test": "bun test", "tokenize": "node scripts/tokenize.js" },',
+      '  "dependencies": { "jsonwebtoken": "^9.0.2", "keyboardjs": "2.7.0" },',
+      '  "authorship": "community-maintained"',
+      "}",
+      "",
+    ].join("\n");
+    expect(redactCollectorContent("package.json", packageJson)).toBe(packageJson);
+    expect(redactCollectorText(packageJson)).toEqual({ text: packageJson, count: 0 });
+    const tokenizerConfig = '{"tokenizer_class": "LlamaTokenizer", "bos_token": "<s>", "eos_token": "<|endoftext|>", "add_bos_token": true, "model_max_length": 4096, "clean_up_tokenization_spaces": false}';
+    expect(redactCollectorContent("tokenizer_config.json", tokenizerConfig)).toBe(tokenizerConfig);
+    expect(redactCollectorText(tokenizerConfig)).toEqual({ text: tokenizerConfig, count: 0 });
+    expect(redactCollectorText("tokenizer_class = LlamaTokenizer\nauth_token = abcdefgh1234\n"))
+      .toEqual({ text: "tokenizer_class = LlamaTokenizer\nauth_token = [REDACTED]\n", count: 1 });
+  });
+
+  test("redacts provider token shapes", () => {
+    const shapes: Array<[string, string]> = [
+      [GITHUB_TOKEN, GITHUB_TOKEN],
+      [sample("gho_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123"), "gho_"],
+      [sample("ghu_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123"), "ghu_"],
+      [sample("ghs_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123"), "ghs_"],
+      [sample("ghr_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123"), "ghr_"],
+      [sample("github_pat_", "11ABCDEFG0abcdefghijklmn_", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTU"), "github_pat_"],
+      [sample("xoxb-", "1234567890-", "1234567890123-", "AbCdEfGhIjKlMnOpQrStUvWx"), "xoxb-"],
+      [sample("xoxp-", "1234567890-", "1234567890123-", "AbCdEfGhIjKlMnOpQrStUvWx"), "xoxp-"],
+      [sample("AIza", "SyA1234567890abcdefghijklmnopqrstuvw"), "AIza"],
+      [sample("sk_live_", "abcdefghijklmnopqrstuvwx"), "sk_live_"],
+      [sample("sk_test_", "abcdefghijklmnopqrstuvwx"), "sk_test_"],
+      [sample("sk-proj-", "abcdefghijklmnopqrstuvwxyz0123"), "sk-proj-"],
+      [sample("sk-ant-", "api03-abcdefghijklmnopqrstuvwxyz0123-abc"), "sk-ant-"],
+      [["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"].join("."), "eyJ"],
+      [["MTIzNDU2Nzg5MDEyMzQ1Njc4OTAx", "GhIjKl", "abcdefghijklmnopqrstuvwxyz0123456"].join("."), "MTIz"],
+      ["Bearer abcdefghijklmnopqrstuvwxyz0123", "abcdefghijklmnopqrstuvwxyz0123"],
+      ["-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXk"],
+      ["-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGBF\n-----END PGP PRIVATE KEY BLOCK-----", "lQdGBF"],
+    ];
+    for (const [shape, marker] of shapes) {
+      const result = redactCollectorText(`value: ${shape} tail`);
+      expect(result.text).not.toContain(marker);
+      expect(result.text).toContain("[REDACTED] tail");
+      expect(result.count).toBe(1);
+    }
+    expect(redactCollectorText(`git clone https://oauth2:${GITHUB_TOKEN}@github.com/acme/widgets.git`))
+      .toEqual({ text: "git clone https://[REDACTED]@github.com/acme/widgets.git", count: 1 });
+    expect(redactCollectorText("DATABASE_URL=postgres://admin:s3cret@db.internal:5432/app"))
+      .toEqual({ text: "DATABASE_URL=postgres://[REDACTED]@db.internal:5432/app", count: 1 });
+    expect(redactCollectorText("Authorization: Bearer <token>").count).toBe(0);
+  });
+
+  test("redacts AWS secret access keys only near an access key id or an aws/secret name", () => {
+    expect(redactCollectorText(`AccessKeyId,SecretAccessKey\nAKIAIOSFODNN7EXAMPLE,${AWS_SECRET}\n`).text).toBe("AccessKeyId,SecretAccessKey\n[REDACTED],[REDACTED]\n");
+    expect(redactCollectorText(`id: AKIAIOSFODNN7EXAMPLE\n\n\n${AWS_SECRET}`).text).toBe("id: [REDACTED]\n\n\n[REDACTED]");
+    expect(redactCollectorText(`id: AKIAIOSFODNN7EXAMPLE\n\n\n\n${AWS_SECRET}`).text).toBe(`id: [REDACTED]\n\n\n\n${AWS_SECRET}`);
+    expect(redactCollectorText(`# aws profile\n${AWS_SECRET}`).text).toBe("# aws profile\n[REDACTED]");
+    expect(redactCollectorText(`${AWS_SECRET}\n\nsecret: yes`).text).toBe("[REDACTED]\n\nsecret: yes");
+    expect(redactCollectorText(AWS_SECRET).text).toBe(AWS_SECRET);
+    expect(redactCollectorText(AWS_SECRET, { context: "AWS master secret.txt" }).text).toBe("[REDACTED]");
+    // Not mixed case (a git sha), or not exactly 40 characters: left alone.
+    expect(redactCollectorText("aws sha 0123456789abcdef0123456789abcdef01234567").text).toContain("0123456789abcdef0123456789abcdef01234567");
+    expect(redactCollectorText(`aws ${AWS_SECRET}extra`).text).toContain(AWS_SECRET);
+  });
+
+  test("keeps a source file named after a token but redacts the literal inside it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-source-"));
+    roots.push(root);
+    await mkdir(join(root, "src", "token"), { recursive: true });
+    await writeFile(join(root, "src", "token", "github-token.ts"), `export const token = "${GITHUB_TOKEN}";\nexport const aws = "${AWS_SECRET}";\n`);
+    await writeFile(join(root, "src", "token", "prod.env"), `GITHUB_TOKEN=${GITHUB_TOKEN}\n`);
+    await writeFile(join(root, "README.md"), `Deploy with\n\n    export CLIENT_SECRET=${GITHUB_TOKEN}\n`);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    collector.startSession("session-source-1", "workspace-source", root);
+    await collector.stop();
+
+    const start = uploads.find((item) => item.snapshot_type === "start")!;
+    expect(start.manifest.map((entry) => entry.path).sort()).toEqual(["README.md", "src/token/github-token.ts"]);
+    expect(start.files.find((file) => file.path === "src/token/github-token.ts")?.content)
+      .toBe('export const token = "[REDACTED]";\nexport const aws = "[REDACTED]";\n');
+    expect(start.files.find((file) => file.path === "README.md")?.content).toBe("Deploy with\n\n    export CLIENT_SECRET=[REDACTED]\n");
+    expect(start.privacy.denied_file_count).toBe(1);
+    const serialized = JSON.stringify(uploads);
+    expect(serialized).not.toContain(GITHUB_TOKEN);
+    expect(serialized).not.toContain(AWS_SECRET);
+  });
+
+  test("scrubs the trace and .json files as JSON so escapes survive redaction", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-json-"));
+    roots.push(root);
+    await writeFile(join(root, "config.json"), '{\n  "note": "{\\"password\\":\\"hunter2abc\\"}",\n  "nested": {"apiKey": "abcdefghijkl", "author": "Jane <jane@example.com>"}\n}\n');
+    await writeFile(join(root, "settings.json"), '// JSON with comments falls back to text scrubbing\n{"password": "hunter2abc"}\n');
+    await writeFile(join(root, "data.json"), '{"a": 1.0, "b": [1, 2]}');
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-json-1";
+    collector.startSession(sessionId, "workspace-json", root);
+    collector.recordTrace(sessionId, "message", { text: 'line one\n@app.function(gpu="h100")\nx@example.com', token: GITHUB_TOKEN });
+    collector.flushTrace(sessionId);
+    await collector.stop();
+
+    const trace = uploads.find((item) => item.snapshot_type === "trace")!;
+    const parsed = JSON.parse(trace.files[0]!.content) as { events: Array<{ type: string; data?: Record<string, unknown> }> };
+    const expected = { text: 'line one\n@app.function(gpu="h100")\n[REDACTED_PII]', token: "[REDACTED]" };
+    expect(parsed.events.find((event) => event.type === "message")?.data).toEqual(expected);
+    expect(trace.trace?.find((event) => event.type === "message")?.data).toEqual(expected);
+
+    const start = uploads.find((item) => item.snapshot_type === "start")!;
+    const content = (path: string) => start.files.find((file) => file.path === path)!.content;
+    expect(JSON.parse(content("config.json"))).toEqual({
+      note: '{"password":"[REDACTED]"}',
+      nested: { apiKey: "[REDACTED]", author: "Jane <[REDACTED_PII]>" },
+    });
+    expect(content("config.json").startsWith('{\n  "note"')).toBe(true);
+    expect(content("config.json").endsWith("\n")).toBe(true);
+    expect(content("settings.json")).toBe('// JSON with comments falls back to text scrubbing\n{"password": "[REDACTED]"}\n');
+    expect(content("data.json")).toBe('{"a": 1.0, "b": [1, 2]}');
+    expect(start.manifest.find((entry) => entry.path === "config.json")?.sha256).toBe(sha256(content("config.json")));
+    expect(JSON.stringify(uploads)).not.toContain("hunter2abc");
+  });
+
+  test("never leaves a dangling backslash when scrubbing escaped text", () => {
+    const raw = JSON.stringify({ text: `line one\n@app.function(gpu="h100")\nx@example.com\njane@example.com\tAKIAIOSFODNN7EXAMPLE\nTOKEN=${GITHUB_TOKEN}` });
+    const result = redactCollectorText(raw);
+    expect(JSON.parse(result.text)).toEqual({ text: 'line one\n@app.function(gpu="h100")\n[REDACTED_PII]\n[REDACTED_PII]\t[REDACTED]\nTOKEN=[REDACTED]' });
+    expect(result.count).toBe(4);
+    expect(redactCollectorText("password=\"abcdefgh\\\"more\"").text).toBe("password=\"[REDACTED]\"");
+    // JSON carried inside a string of a non-JSON file keeps its escapes.
+    const embedded = JSON.stringify({ text: JSON.stringify({ password: "hunter2abc", user: "jane" }) });
+    expect(JSON.parse(redactCollectorText(embedded).text)).toEqual({ text: '{"password":"[REDACTED]","user":"jane"}' });
+    expect(redactCollectorText('log: {\\"token\\":\\"abcdefghijkl\\"} done').text).toBe('log: {\\"token\\":\\"[REDACTED]\\"} done');
+    expect(redactCollectorJsonText('{"a":{"toJSON":1},"secret":"abcdefghijkl","n":1e3}')).toBe('{"a":{"toJSON":1},"secret":"[REDACTED]","n":1000}');
+    expect(redactCollectorJsonText("not json")).toBeNull();
+    // "secrets" is a family word, the plural "tokens" deliberately is not (tokenizer configs).
+    expect(redactCollectorJson({ at: new Date(0), secrets: ["abcdefghijkl", "short"], tokens: ["abcdefghijkl"], "jane@example.com": 1 }))
+      .toEqual({ value: { at: "1970-01-01T00:00:00.000Z", secrets: ["[REDACTED]", "short"], tokens: ["abcdefghijkl"], "[REDACTED_PII]": 1 }, count: 2 });
+    expect(redactCollectorContent("nested/x.JSON", '{"password":"hunter2abc"}')).toBe('{"password":"[REDACTED]"}');
+    expect(redactCollectorContent("x.txt", '{"password":"hunter2abc"}')).toBe('{"password":"[REDACTED]"}');
+  });
+
+  test("scrubs diff hunks of JSON files as text", () => {
+    const raw = ["diff --git a/config.json b/config.json", "--- a/config.json", "+++ b/config.json", "@@ -1 +1 @@", '+  "password": "hunter2abc",', ""].join("\n");
+    const result = filterCollectorDiff(raw);
+    expect(result.diff).toContain('+  "password": "[REDACTED]",');
+    expect(result.diff).not.toContain("hunter2abc");
+  });
+
+  test("scrubs a 1 MiB line in bounded time", () => {
+    const mebibyte = 1024 * 1024;
+    const lines = [
+      "x".repeat(mebibyte),
+      "ABCDabcd0123/+".repeat(mebibyte / 14),
+      "token=a ".repeat(mebibyte / 8),
+      "Bearer ".repeat(mebibyte / 7),
+      "eyJaaaaaaaaaaaa.".repeat(mebibyte / 16),
+      "a.".repeat(mebibyte / 2),
+      "a-".repeat(mebibyte / 2),
+      "https://".repeat(mebibyte / 8),
+      "Ma.".repeat(mebibyte / 3),
+      "\\n".repeat(mebibyte / 2),
+      `secret: ${"A1b".repeat(mebibyte / 3)}`,
+    ];
+    for (const line of lines) {
+      const started = performance.now();
+      redactCollectorText(line);
+      expect(performance.now() - started).toBeLessThan(2_000);
+    }
+  }, 30_000);
+});
+
+// --- gateway auth: stale device tokens ---------------------------------------
+
+describe("workspace collector gateway auth", () => {
+  type Warning = { message: string; attributes?: Record<string, unknown> };
+
+  async function authHarness(respond: (attempt: number) => Response, refresh?: () => Promise<string | null>) {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-auth-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-collector-auth-state-"));
+    roots.push(root, stateDir);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const uploads: Envelope[] = [];
+    const warnings: Warning[] = [];
+    const counters = { attempts: 0, refreshes: 0 };
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (_sessionId, compressed) => {
+        counters.attempts += 1;
+        const response = respond(counters.attempts);
+        if (response.ok) uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope);
+        return response;
+      },
+      ...(refresh
+        ? {
+            refreshAccessToken: async () => {
+              counters.refreshes += 1;
+              return refresh();
+            },
+          }
+        : {}),
+      log: (level, message, attributes) => { if (level === "warn") warnings.push({ message, attributes }); },
+      fallbackScanMs: 60_000,
+      uploadRetryDelayMs: 1,
+      retryBaseMs: 60_000,
+    });
+    const sessionId = "session-auth-1234";
+    collector.startSession(sessionId, "workspace-auth", root);
+    await collector.idle(sessionId);
+    const rejected = warnings.filter((warning) => warning.message === "OmniRush collection upload rejected as unauthorized");
+    return { collector, sessionId, uploads, warnings, rejected, counters };
+  }
+
+  const unauthorized = (status: number, body: unknown = { error: "token_expired" }) => Response.json(body, { status });
+  const created = () => Response.json({ ok: true }, { status: 201 });
+
+  test("refreshes the access token after a 401 and retries the upload once", async () => {
+    const { collector, sessionId, uploads, rejected, counters } = await authHarness(
+      (attempt) => (attempt === 1 ? unauthorized(401) : created()),
+      async () => "fresh-token",
+    );
+    expect(counters).toEqual({ attempts: 2, refreshes: 1 });
+    expect(uploads.map((item) => [item.snapshot_type, item.sequence])).toEqual([["start", 1]]);
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    expect(await collector.sessionDeliveryStatus(sessionId)).toMatchObject({ failureCount: 0 });
+    expect(rejected).toEqual([{ message: "OmniRush collection upload rejected as unauthorized", attributes: { sessionId, status: 401, refreshed: true } }]);
+    await collector.stop();
+  });
+
+  test("sends the refreshed bearer when retrying over the collect endpoint", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-auth-fetch-"));
+    roots.push(root);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const bearers: string[] = [];
+    const collector = new WorkspaceCollector({
+      gatewayUrl: "https://gateway.example.test/v1",
+      accessToken: "stale-token",
+      fetch: async (_input: string, init?: RequestInit) => {
+        bearers.push(String(new Headers(init?.headers).get("authorization")));
+        return bearers.length === 1 ? unauthorized(401) : created();
+      },
+      refreshAccessToken: async () => "fresh-token",
+      fallbackScanMs: 60_000,
+      uploadRetryDelayMs: 1,
+    });
+    const sessionId = "session-auth-fetch-1234";
+    collector.startSession(sessionId, "workspace-auth", root);
+    await collector.idle(sessionId);
+    expect(bearers).toEqual(["Bearer stale-token", "Bearer fresh-token"]);
+    await collector.stop();
+    expect(bearers.at(-1)).toBe("Bearer fresh-token");
+  });
+
+  test("spools the upload when the gateway still rejects the refreshed token", async () => {
+    const { collector, sessionId, uploads, warnings, rejected, counters } = await authHarness(() => unauthorized(401), async () => "fresh-token");
+    expect(counters).toEqual({ attempts: 2, refreshes: 1 });
+    expect(uploads).toHaveLength(0);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 1 });
+    expect(await collector.sessionDeliveryStatus(sessionId)).toMatchObject({ failureCount: 1, lastSuccessAt: null });
+    expect(rejected).toHaveLength(1);
+    expect(warnings.map((warning) => warning.message)).toContain("OmniRush collection artifact spooled for retry");
+    await collector.stop();
+  });
+
+  test("spools the upload when the token refresh fails", async () => {
+    const { collector, sessionId, uploads, rejected, counters } = await authHarness(
+      (attempt) => (attempt === 1 ? unauthorized(401) : created()),
+      async () => { throw new Error("refresh endpoint unavailable"); },
+    );
+    expect(counters).toEqual({ attempts: 1, refreshes: 1 });
+    expect(uploads).toHaveLength(0);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 1 });
+    expect(rejected).toEqual([{
+      message: "OmniRush collection upload rejected as unauthorized",
+      attributes: { sessionId, status: 401, refreshed: false, refreshError: "refresh endpoint unavailable" },
+    }]);
+    await collector.stop();
+  });
+
+  test("spools the upload when no token refresh is available", async () => {
+    const { collector, uploads, rejected, counters } = await authHarness((attempt) => (attempt === 1 ? unauthorized(401) : created()));
+    expect(counters).toEqual({ attempts: 1, refreshes: 0 });
+    expect(uploads).toHaveLength(0);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 1 });
+    expect(rejected[0]?.attributes).toMatchObject({ status: 401, refreshed: false });
+    await collector.stop();
+  });
+
+  test("drops the upload without a refresh or spool entry when the account is signed out", async () => {
+    for (const status of [403, 401]) {
+      const { collector, sessionId, uploads, warnings, rejected, counters } = await authHarness(
+        () => unauthorized(status, { error: "omnirush_account_required" }),
+        async () => "fresh-token",
+      );
+      expect(counters).toEqual({ attempts: 1, refreshes: 0 });
+      expect(uploads).toHaveLength(0);
+      expect(rejected).toHaveLength(0);
+      expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+      expect(await collector.sessionDeliveryStatus(sessionId)).toMatchObject({ failureCount: 1, lastSuccessAt: null });
+      const failed = warnings.find((warning) => warning.message === "OmniRush collection operation failed");
+      expect(failed?.attributes).toMatchObject({ error: `collector upload failed with status ${status} (omnirush_account_required)` });
+      await collector.stop();
+    }
+  });
+});
+
+// --- snapshot cap ------------------------------------------------------------
+
+describe("workspace collector snapshot cap", () => {
+  const KIB = 1024;
+  const CAP = 3 * 1024 * 1024; // leaves 1 MiB for content once the 2 MiB wrapper margin is reserved
+  const NAMES = Array.from({ length: 20 }, (_, index) => `file-${String(index).padStart(2, "0")}.txt`);
+
+  /** Twenty files growing by 8 KiB each, 1.6 MiB in all: more than CAP leaves for content. */
+  async function largeWorkspace(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-cap-"));
+    roots.push(root);
+    const line = "alpha beta gamma delta\n";
+    await Promise.all(NAMES.map((name, index) => writeFile(join(root, name), line.repeat(Math.ceil(((index + 1) * 8 * KIB) / line.length)))));
+    return root;
+  }
+
+  async function capture(root: string, options: { snapshotMaxBytes?: number; touched?: string[] }) {
+    const uploads: Envelope[] = [];
+    const rawBytes: number[] = [];
+    const warnings: string[] = [];
+    const collector = new WorkspaceCollector({
+      upload: async (_sessionId, compressed) => {
+        const buffer = zstdDecompressSync(compressed);
+        rawBytes.push(buffer.length);
+        uploads.push(JSON.parse(buffer.toString("utf8")) as Envelope);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      log: (level, message) => { if (level === "warn") warnings.push(message); },
+      fallbackScanMs: 60_000,
+      ...(options.snapshotMaxBytes ? { snapshotMaxBytes: options.snapshotMaxBytes } : {}),
+    });
+    const sessionId = "session-cap-1234";
+    collector.startSession(sessionId, "workspace-cap", root);
+    for (const path of options.touched ?? []) collector.recordTrace(sessionId, "file.read", { path });
+    collector.flushTrace(sessionId);
+    await collector.stop();
+    const start = uploads.find((item) => item.snapshot_type === "start")!;
+    const startBytes = rawBytes[uploads.indexOf(start)]!;
+    const sent = start.files.map((file) => file.path).filter((path) => !path.startsWith("__omnirush__/"));
+    const manifestPaths = start.manifest.map((entry) => entry.path);
+    const size = (path: string) => start.manifest.find((entry) => entry.path === path)!.size;
+    const notes = uploads
+      .filter((item) => item.snapshot_type === "trace")
+      .flatMap((item) => item.trace ?? [])
+      .filter((event) => event.type === "collector.snapshot_cap");
+    return { start, startBytes, sent, manifestPaths, size, notes, warnings };
+  }
+
+  test("keeps touched files and the smallest others when a snapshot would exceed the cap", async () => {
+    const root = await largeWorkspace();
+    const touched = ["file-19.txt", "file-17.txt"];
+    const { start, startBytes, sent, manifestPaths, size, notes, warnings } = await capture(root, { snapshotMaxBytes: CAP, touched });
+    expect(startBytes).toBeLessThan(CAP);
+    expect([...manifestPaths].sort()).toEqual(NAMES);
+    for (const path of touched) expect(sent).toContain(path);
+    const omitted = NAMES.filter((path) => !sent.includes(path));
+    expect(omitted.length).toBeGreaterThan(0);
+    expect(sent.length).toBeGreaterThan(touched.length);
+    // Untouched content survives smallest first: nothing sent outranks anything omitted.
+    const untouchedSent = sent.filter((path) => !touched.includes(path));
+    expect(Math.max(...untouchedSent.map(size))).toBeLessThan(Math.min(...omitted.map(size)));
+    // files[] keeps the listing order the manifest uses.
+    expect(sent).toEqual(manifestPaths.filter((path) => sent.includes(path)));
+    expect(start.privacy).toMatchObject({
+      files_truncated: true,
+      snapshot_cap_omitted_count: omitted.length,
+      snapshot_cap_omitted_bytes: omitted.reduce((sum, path) => sum + size(path), 0),
+    });
+    expect(warnings.filter((message) => message === "OmniRush collection snapshot trimmed to the snapshot cap")).toHaveLength(1);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ data: { snapshot_type: "start", trigger: "session_start", omitted_count: omitted.length } });
+    expect(notes[0]?.data?.budget_bytes).toBeLessThan(CAP);
+  });
+
+  test("keeps the smallest touched files when the touched files alone exceed the cap", async () => {
+    const root = await largeWorkspace();
+    const { startBytes, sent, size, start } = await capture(root, { snapshotMaxBytes: CAP, touched: NAMES });
+    expect(startBytes).toBeLessThan(CAP);
+    const omitted = NAMES.filter((path) => !sent.includes(path));
+    expect(omitted.length).toBeGreaterThan(0);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(Math.max(...sent.map(size))).toBeLessThan(Math.min(...omitted.map(size)));
+    expect(start.privacy).toMatchObject({ snapshot_cap_omitted_count: omitted.length });
+  });
+
+  test("leaves a snapshot under the cap unchanged", async () => {
+    const root = await largeWorkspace();
+    const { start, sent, manifestPaths, notes, warnings } = await capture(root, { touched: ["file-19.txt"] });
+    expect(sent).toEqual(manifestPaths);
+    expect([...sent].sort()).toEqual(NAMES);
+    expect(start.privacy).toMatchObject({ files_truncated: false, snapshot_cap_omitted_count: 0, snapshot_cap_omitted_bytes: 0 });
+    expect(notes).toHaveLength(0);
+    expect(warnings).not.toContain("OmniRush collection snapshot trimmed to the snapshot cap");
   });
 });

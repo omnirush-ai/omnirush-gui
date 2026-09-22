@@ -34,6 +34,14 @@ export const MAX_COLLECTOR_CHILD_SESSION_DEPTH = 3;
 export const MAX_COLLECTOR_TRACE_EVENTS = 5_000;
 const MAX_FILES = MAX_COLLECTOR_FILES;
 const MAX_SNAPSHOT_BYTES = MAX_COLLECTOR_SNAPSHOT_BYTES;
+// Uncompressed room kept free inside MAX_SNAPSHOT_BYTES for what surrounds
+// files[]: the session and environment blocks, touched paths, the metadata and
+// change-journal files. The manifest and the git block are measured instead,
+// since either can be several MiB on its own.
+const SNAPSHOT_WRAPPER_MARGIN_BYTES = 2 * 1024 * 1024;
+// JSON punctuation plus the sha256 field of one files[] entry, on top of its
+// path and serialised content.
+const SNAPSHOT_FILE_ENTRY_OVERHEAD_BYTES = 128;
 const MAX_TRACE_BYTES = MAX_COLLECTOR_TRACE_BYTES;
 const MAX_COMPRESSED_BYTES = MAX_COLLECTOR_COMPRESSED_BYTES;
 const MAX_ARTIFACT_EVENTS_PER_TURN = 500;
@@ -74,6 +82,10 @@ const UPLOAD_RETRY_DELAY_MS = 250;
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+// A rejected bearer. The body tells a stale device token (refreshed once and
+// retried, spooled if still rejected) from the sign-in gate, which is final.
+const UNAUTHORIZED_STATUSES = new Set([401, 403]);
+const ACCOUNT_REQUIRED_MARKER = "omnirush_account_required";
 
 type SnapshotType = "start" | "change" | "end" | "trace";
 
@@ -271,6 +283,13 @@ type CollectorOptions = {
   accessToken?: string;
   fetch?: typeof externalFetch;
   upload?: (sessionId: string, compressed: Uint8Array) => Promise<Response>;
+  /**
+   * Asks the account layer for a fresh access token once the gateway rejects
+   * an upload as unauthorized. Resolves with the bearer to send next, or null
+   * when none can be issued; the upload is retried once when a token arrives
+   * and spooled when it does not.
+   */
+  refreshAccessToken?: () => Promise<string | null>;
   stateDir?: string;
   log?: (level: "info" | "warn", message: string, attributes?: Record<string, unknown>) => void;
   changeDebounceMs?: number;
@@ -282,15 +301,25 @@ type CollectorOptions = {
   retryMaxMs?: number;
   spoolMaxEntries?: number;
   spoolMaxBytes?: number;
+  /** Uncompressed envelope cap; the backend's MAX_SNAPSHOT_BYTES unless a test lowers it. */
+  snapshotMaxBytes?: number;
 };
 
 type TransmitOutcome =
   | { ok: true }
   | { ok: false; retryable: boolean; reason: string };
 
+// --- privacy rails -----------------------------------------------------------
+// The omnirush.ai backend applies the same denylist and scrubber server-side;
+// a rule changed here must land there too, and the desktop side may only ever
+// be the stricter of the two.
+
+// Unconditional denials, applied to every path component (directories too).
 const DENIED_EXACT_NAMES = new Set([
   ".git",
   ".ssh",
+  ".aws",
+  ".gnupg",
   "node_modules",
   "keys",
   "secrets",
@@ -304,17 +333,112 @@ const DENIED_EXACT_NAMES = new Set([
 
 const DENIED_SUFFIXES = [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"];
 const DENIED_CREDENTIAL_NAME = /(^|[._-])(?:credentials?|secrets?|private[_-]?keys?)([._-]|$)/i;
-const SECRET_PATTERNS: Array<[RegExp, string]> = [
-  [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, "[REDACTED]"],
-  [/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED]"],
-  [/\b(?:sk|rk|pk)-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]"],
-  [/^([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)\s*=\s*)([^\s#]{6,})$/gim, "$1[REDACTED]"],
+// Words (a component split on space, "_", "-" and ".") that mark a file as a
+// credential store: "AWS master key", "prod tokens.csv", "wallet.dat". A file
+// with a source-code or docs extension is kept and scrubbed instead.
+const DENIED_WORDS = new Set([
+  "key", "keys", "secret", "secrets", "token", "tokens", "password", "passwords", "passwd", "credential", "credentials",
+  "id_rsa", "id_ed25519", "netrc", "npmrc", "pypirc", "kubeconfig", "wallet", "seed", "mnemonic",
+]);
+const SCRUBBED_EXTENSIONS = new Set([
+  ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".kt", ".c", ".cc", ".cpp", ".h", ".hpp",
+  ".md", ".adoc", ".txt", ".json", ".yml", ".yaml", ".toml", ".cmake", ".sh", ".sql", ".css", ".html",
+]);
+
+const REDACTED = "[REDACTED]";
+const REDACTED_PII = "[REDACTED_PII]";
+
+/**
+ * Start-of-token guard shared by the text patterns: a match may not begin
+ * inside a word and never on the letter of a backslash escape, so a redaction
+ * can never eat that letter and leave a dangling `\` behind (which once turned
+ * the JSON-escaped `\n@app.function` into the invalid escape `\[REDACTED_PII]`).
+ * A token that directly follows an escape (`\njane@example.com`) still matches.
+ */
+function tokenPattern(source: string, flags = "g", notAfter = String.raw`[\w\\]`): RegExp {
+  return new RegExp(String.raw`(?:(?<!${notAfter})|(?<=\\[nrt]))${source}`, flags);
+}
+
+type Redaction = [RegExp, string | ((match: string, group: string) => string)];
+
+const PRIVATE_KEY_BLOCK: Redaction = [
+  /(?<!\\)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
+  REDACTED,
 ];
-const PII_PATTERNS: Array<[RegExp, string]> = [
-  [/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_PII]"],
-  [/(?<!\w)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})(?!\w)/g, "[REDACTED_PII]"],
-  [/(?<!\w)\d{3}-\d{2}-\d{4}(?!\w)/g, "[REDACTED_PII]"],
-  [/(?<![\d.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?!\d)/g, "[REDACTED_PII]"],
+
+/**
+ * One `key = value` assignment in INI, YAML, JSON, dotenv, shell (`export
+ * KEY=`) or source spelling: an optionally quoted key, `=` or `:` with
+ * optional blanks, then one run of 8+ non-space characters, optionally quoted
+ * (a JSON-escaped `\"` counts as a quote, for JSON carried inside a string).
+ * A backslash escape counts as one unit so the match never splits it. Whether
+ * the key names a secret is decided by isSecretAssignmentKey; the value by
+ * isSecretAssignmentValue. Every quantifier is bounded or anchored so a 1 MiB
+ * line costs linear time.
+ */
+// Pre-filter for the assignment regex: the key must at least contain a keyword
+// substring, so an ordinary assignment never consumes a value that holds a
+// secret one (`"text": "{\"password\":...}"`). The exact, segment-bounded
+// decision is isSecretAssignmentKey.
+const ASSIGNMENT_KEYWORD_SOURCE = String.raw`secret|passw(?:or)?d|pwd|token|credential|auth|(?:api|access|private|client|session|signing|master|encryption)[_.:-]?key`;
+const ASSIGNMENT_PATTERN = new RegExp(
+  String.raw`(?:(?<![\w.\\-])|(?<=\\[nrt]))(\\?["']?)((?=[\w.-]{0,63}?(?:${ASSIGNMENT_KEYWORD_SOURCE}))[A-Za-z_-][\w.-]{0,63})\1[ \t]*[=:][ \t]*`
+    + String.raw`(?:"((?:[^"\s\\]|\\\S){8,})"|'((?:[^'\s\\]|\\\S){8,})'|\\"((?:[^"\s\\]|\\[^"\s]){8,})\\"|((?:[^\s"',;&\\]|\\\S){8,}))`,
+  "gi",
+);
+/**
+ * Keyword families, matched against whole key segments (see keySegments): a
+ * key names a secret when one segment is listed here, or two adjacent
+ * segments (or one segment spelling both) form a listed pair, and its last
+ * segment is not an excluded word. So `auth_token`, `basic-auth`, `AUTH`,
+ * `authorization`, `oauth_client_secret`, `APIKey`, `accessKey` qualify;
+ * `author`, `authored`, `oauth_client_id`, `tokenizer_class`, `keyboard`,
+ * `keywords`, `pwdir`, `accessKeyId`, `token_url` do not.
+ */
+const SECRET_KEY_SEGMENTS = new Set([
+  "secret", "secrets", "password", "passwords", "passwd", "pwd", "token", "credential", "credentials",
+  "auth", "authorization", "authtoken", "authkey", "apikey",
+]);
+const SECRET_KEY_PAIRS: Array<[string, string]> = [
+  ["api", "key"], ["access", "key"], ["secret", "key"], ["private", "key"], ["client", "key"], ["client", "secret"],
+  ["session", "key"], ["signing", "key"], ["master", "key"], ["encryption", "key"],
+];
+const EXCLUDED_LAST_SEGMENTS = new Set(["length", "ttl", "seconds", "count", "size", "url", "path", "name", "id", "header"]);
+const CODE_EXPRESSION_VALUE = /^(?:process\.|os\.|env\.|\$\{|\$\()/;
+const MAX_ASSIGNMENT_DEPTH = 4;
+
+// An AWS secret access key is 40 base64 characters with no shape of its own,
+// so a candidate only counts near an access key id or an aws/secret key name.
+const AWS_SECRET_QUICK = /[A-Za-z0-9/+]{40}/;
+const AWS_SECRET_CANDIDATE = tokenPattern(String.raw`[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`, "g", String.raw`[A-Za-z0-9/+\\]`);
+const AWS_SECRET_CONTEXT = /(?:AKIA|ASIA)[0-9A-Z]{16}|aws|secret/i;
+const AWS_SECRET_CONTEXT_LINES = 3;
+
+// Runs before the assignment rule so `https://oauth2:<token>@host/...` keeps
+// its host instead of being read as an `oauth2:` assignment.
+const URL_USERINFO: Redaction = [
+  tokenPattern(String.raw`([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^\s/@\\]|\\\S)+@`, "gi"),
+  (_match, scheme) => `${scheme}${REDACTED}@`,
+];
+
+const SECRET_PATTERNS: Redaction[] = [
+  [tokenPattern(String.raw`(?:AKIA|ASIA)[0-9A-Z]{16}\b`), REDACTED],
+  [tokenPattern(String.raw`gh[pousr]_[A-Za-z0-9]{16,}\b`), REDACTED],
+  [tokenPattern(String.raw`github_pat_[A-Za-z0-9_]{16,}\b`), REDACTED],
+  [tokenPattern(String.raw`xox[abpr]-[A-Za-z0-9-]{10,}`), REDACTED],
+  [tokenPattern(String.raw`AIza[0-9A-Za-z_-]{30,}`), REDACTED],
+  [tokenPattern(String.raw`[sr]k_(?:live|test)_[A-Za-z0-9]{8,}\b`), REDACTED],
+  [tokenPattern(String.raw`sk-ant-[A-Za-z0-9_-]{16,}`), REDACTED],
+  [tokenPattern(String.raw`(?:sk|rk|pk)-(?:proj-)?[A-Za-z0-9_-]{16,}\b`), REDACTED],
+  [tokenPattern(String.raw`eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), REDACTED],
+  [tokenPattern(String.raw`[MN][A-Za-z0-9_-]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}`), REDACTED],
+  [tokenPattern(String.raw`Bearer[ \t]+[A-Za-z0-9_.~+/=-]{16,}`, "gi"), `Bearer ${REDACTED}`],
+];
+const PII_PATTERNS: Redaction[] = [
+  [tokenPattern(String.raw`[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,}\b`, "gi"), REDACTED_PII],
+  [tokenPattern(String.raw`(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})(?!\w)`), REDACTED_PII],
+  [tokenPattern(String.raw`\d{3}-\d{2}-\d{4}(?!\w)`), REDACTED_PII],
+  [tokenPattern(String.raw`(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?!\d)`, "g", String.raw`[\d.\\]`), REDACTED_PII],
 ];
 
 const PRIVACY_POLICY = {
@@ -322,8 +446,8 @@ const PRIVACY_POLICY = {
   gitignored_paths_excluded: true,
   git_internals_excluded: true,
   environment_variables_excluded: true,
-  denied_path_classes: [".env*", "credentials", "keys", ".git", "node_modules", "binaries_over_4MiB"],
-  redaction: ["provider_secrets", "private_keys", "pii"],
+  denied_path_classes: [".env*", "credentials", "keys", "secrets", "tokens", "passwords", ".aws", ".ssh", ".gnupg", ".git", "node_modules", "binaries_over_4MiB"],
+  redaction: ["provider_secrets", "secret_assignments", "private_keys", "pii"],
   manifest_hash_basis: "sha256_of_redacted_utf8",
   max_file_bytes: MAX_COLLECTOR_FILE_BYTES,
   max_session_bytes: MAX_COLLECTOR_SESSION_BYTES,
@@ -418,35 +542,230 @@ function sha256Hex(input: string | Buffer): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
-export function isCollectorPathDenied(path: string): boolean {
-  const parts = path.replaceAll("\\", "/").split("/").filter(Boolean);
-  return parts.some((part) => {
+function pathComponents(path: string): string[] {
+  return path.replaceAll("\\", "/").split("/").filter(Boolean);
+}
+
+/** The unconditional denials that apply to any component, directories included. */
+function hasDeniedComponent(parts: string[]): boolean {
+  return parts.some((part, index) => {
     const lower = part.toLowerCase();
     return lower.startsWith(".env")
       || DENIED_EXACT_NAMES.has(lower)
       || DENIED_SUFFIXES.some((suffix) => lower.endsWith(suffix))
-      || DENIED_CREDENTIAL_NAME.test(lower);
+      || DENIED_CREDENTIAL_NAME.test(lower)
+      || (lower === "config.json" && parts[index - 1]?.toLowerCase() === ".docker");
   });
 }
 
-export function redactCollectorText(input: string): { text: string; count: number } {
-  let text = input;
-  let count = 0;
-  for (const [pattern, replacement] of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    const matches = text.match(pattern);
-    count += matches?.length ?? 0;
-    pattern.lastIndex = 0;
-    text = text.replace(pattern, replacement);
+function hasDeniedWords(lower: string): boolean {
+  const words = lower.split(/[\s._-]+/).filter(Boolean);
+  return words.some((word, index) => DENIED_WORDS.has(word) || (index > 0 && DENIED_WORDS.has(`${words[index - 1]}_${word}`)));
+}
+
+function hasScrubbedExtension(lower: string): boolean {
+  const dot = lower.lastIndexOf(".");
+  return dot > 0 && SCRUBBED_EXTENSIONS.has(lower.slice(dot));
+}
+
+/**
+ * Whether a workspace-relative path may never leave the machine. Repository
+ * internals, dependency trees and the classic credential files are denied by
+ * name; beyond those, any component carrying a credential word ("AWS master
+ * key", "tokens/prod.csv") denies the file unless it has a source-code or docs
+ * extension, in which case it is kept and scrubbed like any other source file.
+ */
+export function isCollectorPathDenied(path: string): boolean {
+  const parts = pathComponents(path);
+  if (hasDeniedComponent(parts)) return true;
+  const name = parts.at(-1)?.toLowerCase();
+  if (!name || hasScrubbedExtension(name)) return false;
+  return parts.some((part) => hasDeniedWords(part.toLowerCase()));
+}
+
+/**
+ * Splits a key on `_`, `-`, `.`, `:`, whitespace, camelCase and letter/digit
+ * boundaries, lower-cased: `oauth_client_id` -> oauth, client, id;
+ * `accessKeyId` -> access, key, id; `HTTPSecret2` -> http, secret, 2.
+ */
+function keySegments(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/([A-Za-z])(\d)/g, "$1 $2")
+    .replace(/(\d)([A-Za-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[\s_.:-]+/)
+    .filter(Boolean);
+}
+
+function isSecretAssignmentKey(key: string): boolean {
+  const segments = keySegments(key);
+  const last = segments.at(-1);
+  if (last === undefined || EXCLUDED_LAST_SEGMENTS.has(last)) return false;
+  return segments.some((segment, index) => SECRET_KEY_SEGMENTS.has(segment)
+    || SECRET_KEY_PAIRS.some(([first, second]) => segment === `${first}${second}` || (segment === first && segments[index + 1] === second)));
+}
+
+/**
+ * 8+ non-space characters with a letter, and not a code expression, an
+ * angle-bracket placeholder (`<your-token>`, a tokenizer's `<|endoftext|>`)
+ * or an earlier redaction.
+ */
+function isSecretAssignmentValue(value: string): boolean {
+  return value.length >= 8
+    && !/\s/.test(value)
+    && /[A-Za-z]/.test(value)
+    && !value.startsWith("[REDACTED")
+    && !value.includes("(")
+    && !(value.startsWith("<") && value.endsWith(">"))
+    && !CODE_EXPRESSION_VALUE.test(value);
+}
+
+function applyRedaction(text: string, [pattern, replacement]: Redaction, tally: { count: number }): string {
+  pattern.lastIndex = 0;
+  return text.replace(pattern, (match: string, group?: string) => {
+    tally.count += 1;
+    return typeof replacement === "string" ? replacement : replacement(match, group ?? "");
+  });
+}
+
+/** Redacts the value of every secret-named assignment; one redaction per assignment. */
+function redactAssignments(text: string, tally: { count: number }, depth = 0): string {
+  ASSIGNMENT_PATTERN.lastIndex = 0;
+  return text.replace(ASSIGNMENT_PATTERN, (match: string, _quote: string, key: string, doubleQuoted?: string, singleQuoted?: string, escapedQuoted?: string, bare?: string) => {
+    const value = doubleQuoted ?? singleQuoted ?? escapedQuoted ?? bare ?? "";
+    const quote = doubleQuoted !== undefined ? '"' : singleQuoted !== undefined ? "'" : escapedQuoted !== undefined ? '\\"' : "";
+    const prefix = match.slice(0, match.length - value.length - quote.length * 2);
+    if (isSecretAssignmentKey(key) && isSecretAssignmentValue(value)) {
+      tally.count += 1;
+      return `${prefix}${quote}${REDACTED}${quote}`;
+    }
+    // An excluded key (`token_url=https://x/?token=...`) or a code expression
+    // can still carry a secret assignment inside its value.
+    if (depth >= MAX_ASSIGNMENT_DEPTH) return match;
+    return `${prefix}${quote}${redactAssignments(value, tally, depth + 1)}${quote}`;
+  });
+}
+
+/**
+ * Redacts 40-character mixed-case base64 runs that sit within three lines of
+ * an AWS access key id or of the words aws/secret (or whose surrounding
+ * context, such as the file path or JSON key, names them).
+ */
+function redactAwsSecrets(text: string, context: string | undefined, tally: { count: number }): string {
+  if (!AWS_SECRET_QUICK.test(text)) return text;
+  const lines = text.split("\n");
+  const contextual: Array<boolean | undefined> = new Array(lines.length);
+  const hasContext = (index: number): boolean => {
+    if (contextual[index] === undefined) contextual[index] = AWS_SECRET_CONTEXT.test(lines[index]!);
+    return contextual[index]!;
+  };
+  const nearContext = context !== undefined && AWS_SECRET_CONTEXT.test(context);
+  let changed = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.length < 40 || !AWS_SECRET_QUICK.test(line)) continue;
+    let nearby = nearContext;
+    const last = Math.min(lines.length - 1, index + AWS_SECRET_CONTEXT_LINES);
+    for (let other = Math.max(0, index - AWS_SECRET_CONTEXT_LINES); !nearby && other <= last; other += 1) nearby = hasContext(other);
+    if (!nearby) continue;
+    AWS_SECRET_CANDIDATE.lastIndex = 0;
+    lines[index] = line.replace(AWS_SECRET_CANDIDATE, (candidate: string) => {
+      if (!/[a-z]/.test(candidate) || !/[A-Z]/.test(candidate) || !/\d/.test(candidate)) return candidate;
+      tally.count += 1;
+      changed = true;
+      return REDACTED;
+    });
   }
-  for (const [pattern, replacement] of PII_PATTERNS) {
-    pattern.lastIndex = 0;
-    const matches = text.match(pattern);
-    count += matches?.length ?? 0;
-    pattern.lastIndex = 0;
-    text = text.replace(pattern, replacement);
+  return changed ? lines.join("\n") : text;
+}
+
+export type RedactCollectorTextOptions = {
+  /** Text that counts as context for context-dependent rules: the file path, or the JSON key a value sits under. */
+  context?: string;
+};
+
+/**
+ * Scrubs free text before upload: private key blocks, secret-named
+ * assignments, provider token shapes and personal identifiers. The output
+ * never contains a dangling backslash, so JSON-escaped text stays escapable.
+ */
+export function redactCollectorText(input: string, options: RedactCollectorTextOptions = {}): { text: string; count: number } {
+  const tally = { count: 0 };
+  let text = applyRedaction(input, PRIVATE_KEY_BLOCK, tally);
+  text = applyRedaction(text, URL_USERINFO, tally);
+  text = redactAssignments(text, tally);
+  text = redactAwsSecrets(text, options.context, tally);
+  for (const redaction of SECRET_PATTERNS) text = applyRedaction(text, redaction, tally);
+  for (const redaction of PII_PATTERNS) text = applyRedaction(text, redaction, tally);
+  return { text, count: tally.count };
+}
+
+function redactJsonValue(value: unknown, key: string | undefined, tally: { count: number }): unknown {
+  if (typeof value === "string") {
+    if (key !== undefined && isSecretAssignmentKey(key) && isSecretAssignmentValue(value)) {
+      tally.count += 1;
+      return REDACTED;
+    }
+    const result = redactCollectorText(value, { context: key });
+    tally.count += result.count;
+    return result.text;
   }
-  return { text, count };
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => redactJsonValue(item, key, tally));
+  const serializable = value as { toJSON?: unknown };
+  if (typeof serializable.toJSON === "function") return redactJsonValue((serializable.toJSON as () => unknown)(), key, tally);
+  const output: Record<string, unknown> = {};
+  for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+    const scrubbedKey = redactCollectorText(childKey);
+    tally.count += scrubbedKey.count;
+    output[scrubbedKey.text] = redactJsonValue(childValue, childKey, tally);
+  }
+  return output;
+}
+
+/**
+ * Scrubs a JSON value structurally: every string (keys included) goes through
+ * the text scrubber, and a string under a secret-named key is redacted whole,
+ * exactly as the `key: value` text rule would treat it. Serialising the result
+ * can never produce a broken escape, which scrubbing serialised JSON as text
+ * could.
+ */
+export function redactCollectorJson(value: unknown): { value: unknown; count: number } {
+  const tally = { count: 0 };
+  return { value: redactJsonValue(value, undefined, tally), count: tally.count };
+}
+
+/**
+ * Scrubs a JSON document as JSON, keeping its indentation style; the original
+ * text comes back untouched when nothing needed redacting, and null when the
+ * text is not valid JSON.
+ */
+export function redactCollectorJsonText(text: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const result = redactCollectorJson(parsed);
+  if (result.count === 0) return text;
+  const indent = /\n([ \t]+)\S/.exec(text)?.[1]?.slice(0, 10);
+  return `${JSON.stringify(result.value, null, indent)}${text.endsWith("\n") ? "\n" : ""}`;
+}
+
+/**
+ * Scrubs one workspace file for upload: `.json` files structurally (falling
+ * back to text when they do not parse), everything else as text with the path
+ * as context.
+ */
+export function redactCollectorContent(path: string, text: string): string {
+  if (/\.json$/i.test(path)) {
+    const json = redactCollectorJsonText(text);
+    if (json !== null) return json;
+  }
+  return redactCollectorText(text, { context: path }).text;
 }
 
 /**
@@ -616,31 +935,38 @@ function boundedTracePayload(
   events: TraceEvent[],
   maxBytes = MAX_TRACE_BYTES,
 ): Buffer {
-  const encode = (selected: TraceEvent[], truncated: boolean, includedCount = selected.length) => Buffer.from(redactCollectorText(JSON.stringify({
+  // The trace is scrubbed as a JSON value, never as serialised text: a text
+  // redaction inside an escaped string (`\n@app.function`) once left a
+  // dangling backslash that made the whole document unparseable.
+  const header = redactCollectorJson({
     schema_version: 1,
     session_id: state.id,
     workspace_id: state.workspaceId,
     session_segment: state.segment,
     session_resumed: state.resumed,
+  }).value as Record<string, unknown>;
+  const scrubbed = redactCollectorJson(events).value as TraceEvent[];
+  const encode = (selected: TraceEvent[], truncated: boolean, includedCount = selected.length) => Buffer.from(JSON.stringify({
+    ...header,
     trace_truncated: truncated,
     dropped_event_count: Math.max(0, events.length - includedCount),
     events: selected,
-  })).text);
+  }));
 
   // One encode settles the common case. Only an oversized trace pays for the
-  // search, which bisects on the prefix length: every probe is a full encode
-  // (serialize + redact), so probing once per event stalled the event loop
-  // for seconds at the MAX_COLLECTOR_TRACE_EVENTS cap.
-  let payload = encode(events, false);
+  // search, which bisects on the prefix length: every probe is a full
+  // serialisation, so probing once per event stalled the event loop for
+  // seconds at the MAX_COLLECTOR_TRACE_EVENTS cap.
+  let payload = encode(scrubbed, false);
   if (payload.byteLength <= maxBytes) return payload;
   let fits = 0;
-  let overflow = events.length;
+  let overflow = scrubbed.length;
   while (overflow - fits > 1) {
     const middle = Math.floor((fits + overflow) / 2);
-    if (encode(events.slice(0, middle), true).byteLength <= maxBytes) fits = middle;
+    if (encode(scrubbed.slice(0, middle), true).byteLength <= maxBytes) fits = middle;
     else overflow = middle;
   }
-  const selected = events.slice(0, fits);
+  const selected = scrubbed.slice(0, fits);
   payload = encode(selected, true);
   while (payload.byteLength > maxBytes && selected.length > 0) {
     selected.pop();
@@ -658,7 +984,10 @@ function boundedTracePayload(
   return payload;
 }
 
-async function walkFallback(root: string, directory = root, rules: string[] = [], output: string[] = []): Promise<string[]> {
+/** Eligible files plus the number of non-ignored paths the denylist dropped. */
+type WorkspaceListing = { paths: string[]; denied: number };
+
+async function walkFallback(root: string, directory = root, rules: string[] = [], listing: WorkspaceListing = { paths: [], denied: 0 }): Promise<WorkspaceListing> {
   const localRules = await readGitignoreFile(directory);
   const prefix = portablePath(root, directory);
   const ignoreRules = [...rules, ...localRules.map((rule) => {
@@ -671,31 +1000,44 @@ async function walkFallback(root: string, directory = root, rules: string[] = []
   try {
     entries = await readdir(directory, { withFileTypes: true });
   } catch {
-    return output;
+    return listing;
   }
   for (const entry of entries) {
-    if (output.length >= MAX_FILES) break;
+    if (listing.paths.length >= MAX_FILES) break;
     const fullPath = resolve(directory, entry.name);
     const path = portablePath(root, fullPath);
-    if (!path || isCollectorPathDenied(path) || ignoredByRules(path, ignoreRules)) continue;
-    if (entry.isDirectory()) await walkFallback(root, fullPath, ignoreRules, output);
-    else if (entry.isFile()) output.push(path);
+    if (!path || ignoredByRules(path, ignoreRules)) continue;
+    if (entry.isDirectory()) {
+      // Only the unconditional rules apply to a directory name: "src/token/"
+      // is walked so its source files can be kept and scrubbed.
+      if (hasDeniedComponent(pathComponents(path))) listing.denied += 1;
+      else await walkFallback(root, fullPath, ignoreRules, listing);
+    } else if (entry.isFile()) {
+      if (isCollectorPathDenied(path)) listing.denied += 1;
+      else listing.paths.push(path);
+    }
   }
-  return output;
+  return listing;
 }
 
-async function listWorkspaceFiles(root: string): Promise<string[]> {
+function filterListing(candidates: string[]): WorkspaceListing {
+  const listing: WorkspaceListing = { paths: [], denied: 0 };
+  for (const path of candidates) {
+    if (!path) continue;
+    if (isCollectorPathDenied(path)) listing.denied += 1;
+    else if (listing.paths.length < MAX_FILES) listing.paths.push(path);
+  }
+  return listing;
+}
+
+async function listWorkspaceFiles(root: string): Promise<WorkspaceListing> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-co", "--exclude-standard", "-z"], {
       encoding: "buffer",
       maxBuffer: 16 * 1024 * 1024,
       timeout: 15_000,
     });
-    return Buffer.from(stdout)
-      .toString("utf8")
-      .split("\0")
-      .filter((path) => path && !isCollectorPathDenied(path))
-      .slice(0, MAX_FILES);
+    return filterListing(Buffer.from(stdout).toString("utf8").split("\0"));
   } catch {
     return walkFallback(root);
   }
@@ -889,7 +1231,8 @@ export function filterCollectorDiff(raw: string, inputTruncated = false): { diff
     const path = diffHeaderPath(headerEnd === -1 ? section : section.slice(0, headerEnd));
     if (!path || isCollectorPathDenied(path)) continue;
     if (/^(?:Binary files .* differ|GIT binary patch)/m.test(section)) continue;
-    const redacted = redactCollectorText(section).text;
+    // A diff is text even when the file is JSON: hunks are not parseable documents.
+    const redacted = redactCollectorText(section, { context: path }).text;
     const size = Buffer.byteLength(redacted);
     if (used + size > MAX_COLLECTOR_DIFF_BYTES) {
       truncated = true;
@@ -995,13 +1338,9 @@ async function listUntrackedFiles(root: string): Promise<string[]> {
       maxBuffer: 16 * 1024 * 1024,
       timeout: 15_000,
     });
-    return Buffer.from(stdout)
-      .toString("utf8")
-      .split("\0")
-      .filter((path) => path && !isCollectorPathDenied(path))
-      .slice(0, MAX_FILES);
+    return filterListing(Buffer.from(stdout).toString("utf8").split("\0")).paths;
   } catch {
-    return walkFallback(root);
+    return (await walkFallback(root)).paths;
   }
 }
 
@@ -1033,7 +1372,7 @@ async function sha256File(absolute: string): Promise<string> {
 
 async function workspaceSignature(root: string): Promise<string> {
   const hash = createHash("sha256");
-  for (const path of await listWorkspaceFiles(root)) {
+  for (const path of (await listWorkspaceFiles(root)).paths) {
     try {
       const file = await lstat(resolve(root, path));
       if (!file.isFile() || file.isSymbolicLink() || file.size > MAX_COLLECTOR_FILE_BYTES) continue;
@@ -1053,7 +1392,89 @@ type WorkspaceScan = {
   files: CollectorFile[];
   manifestTruncated: boolean;
   contentTruncated: boolean;
+  /** Non-ignored paths the denylist kept out of the snapshot. */
+  deniedCount: number;
+  /** Changed files whose content the snapshot cap left out of files[]; their manifest entries remain. */
+  capOmittedCount: number;
+  /** Redacted bytes of those files. */
+  capOmittedBytes: number;
 };
+
+/** A changed file competing for the snapshot's content budget. */
+type SnapshotCandidate = {
+  path: string;
+  uploadPath: string;
+  absolute: string;
+  /** Position in the workspace listing; files[] keeps that order. */
+  order: number;
+  bytes: number;
+  /** Touched this session, or named by git status or the diff. */
+  priority: boolean;
+  /** Kept from the hashing read while the running total allowed it; re-read otherwise. */
+  content?: string;
+};
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+/**
+ * Paths whose content a capped snapshot keeps first: what the session touched
+ * plus what git reports as modified, keyed the way files[] names them.
+ */
+function snapshotPriorityPaths(touched: Iterable<string>, git: CollectorGitBlock | null): Set<string> {
+  const paths = new Set<string>();
+  for (const path of touched) paths.add(collectorPathForUpload(path));
+  for (const entry of git?.status ?? []) paths.add(entry.path);
+  for (const line of git?.diff?.split("\n") ?? []) {
+    const path = diffHeaderPath(line);
+    if (path) paths.add(collectorPathForUpload(path));
+  }
+  return paths;
+}
+
+/**
+ * Picks which changed files carry content, smallest first within each
+ * priority tier, and materialises them in listing order. Costs are measured
+ * on the JSON a file becomes, so escaping cannot push the envelope past what
+ * the raw byte count promised.
+ */
+async function selectSnapshotContent(
+  candidates: SnapshotCandidate[],
+  budget: number,
+): Promise<{ files: CollectorFile[]; omittedCount: number; omittedBytes: number }> {
+  const ordered = [...candidates].sort((a, b) => Number(b.priority) - Number(a.priority) || a.bytes - b.bytes || a.order - b.order);
+  const kept: Array<{ order: number; file: CollectorFile }> = [];
+  let used = 0;
+  let omittedCount = 0;
+  let omittedBytes = 0;
+  for (const candidate of ordered) {
+    const overhead = SNAPSHOT_FILE_ENTRY_OVERHEAD_BYTES + Buffer.byteLength(candidate.uploadPath);
+    // Serialised content is never shorter than the raw bytes, so a file that
+    // fails this estimate is omitted without being read.
+    if (used + overhead + candidate.bytes <= budget) {
+      let content = candidate.content;
+      if (content === undefined) {
+        try {
+          content = redactCollectorContent(candidate.path, (await readFile(candidate.absolute)).toString("utf8"));
+        } catch {
+          // Changed underneath the scan; the next snapshot sees its final form.
+          continue;
+        }
+      }
+      const cost = overhead + serializedBytes(content);
+      if (used + cost <= budget) {
+        kept.push({ order: candidate.order, file: { path: candidate.uploadPath, content, sha256: sha256Hex(content) } });
+        used += cost;
+        continue;
+      }
+    }
+    omittedCount += 1;
+    omittedBytes += candidate.bytes;
+  }
+  kept.sort((a, b) => a.order - b.order);
+  return { files: kept.map((item) => item.file), omittedCount, omittedBytes };
+}
 
 /**
  * Walks every eligible workspace file, hashes its uploadable (redacted) form
@@ -1061,6 +1482,11 @@ type WorkspaceScan = {
  * snapshots) or only the files whose hash differs from the previous manifest.
  * Unchanged files are recognised by size + mtime through the per-session hash
  * cache, so repeated snapshots cost a stat per file instead of a read.
+ *
+ * `byteLimit` bounds the serialised manifest plus files[] together. When the
+ * changed files do not all fit, content goes to `priorityPaths` first and to
+ * the smallest remaining files next; whatever is left out keeps its manifest
+ * entry so the backend still learns the file exists and what it hashes to.
  */
 async function scanWorkspace(
   root: string,
@@ -1068,13 +1494,14 @@ async function scanWorkspace(
   baseline: Map<string, string> | null,
   byteLimit: number,
   includeAll: boolean,
+  priorityPaths: ReadonlySet<string> = new Set(),
 ): Promise<WorkspaceScan> {
   const manifest: ManifestEntry[] = [];
-  const files: CollectorFile[] = [];
+  const candidates: SnapshotCandidate[] = [];
   const seen = new Set<string>();
-  let used = 0;
-  let contentTruncated = false;
-  const paths = await listWorkspaceFiles(root);
+  let retained = 0;
+  const listing = await listWorkspaceFiles(root);
+  const paths = listing.paths;
   for (const path of paths) {
     if (manifest.length >= MAX_FILES) break;
     try {
@@ -1092,7 +1519,7 @@ async function scanWorkspace(
           cache.set(path, { size: file.size, mtimeMs: file.mtimeMs, binary: true, sha256: "", bytes: 0 });
           continue;
         }
-        redacted = redactCollectorText(buffer.toString("utf8")).text;
+        redacted = redactCollectorContent(path, buffer.toString("utf8"));
         entry = { size: file.size, mtimeMs: file.mtimeMs, binary: false, sha256: sha256Hex(redacted), bytes: Buffer.byteLength(redacted) };
         cache.set(path, entry);
       }
@@ -1100,13 +1527,21 @@ async function scanWorkspace(
       manifest.push({ path, sha256: entry.sha256, size: entry.bytes });
       const changed = includeAll || baseline?.get(path) !== entry.sha256;
       if (!changed) continue;
-      if (used + entry.bytes > byteLimit) {
-        contentTruncated = true;
-        continue;
-      }
-      if (redacted === undefined) redacted = redactCollectorText((await readFile(absolute)).toString("utf8")).text;
-      files.push({ path: collectorPathForUpload(path), content: redacted, sha256: sha256Hex(redacted) });
-      used += Buffer.byteLength(redacted);
+      // Content already in hand stays in memory while it could still fit, so a
+      // snapshot under the budget never reads a file twice; beyond that point
+      // it is dropped and re-read only if the selection picks the file.
+      const keep = retained + entry.bytes <= byteLimit;
+      if (keep) retained += entry.bytes;
+      const uploadPath = collectorPathForUpload(path);
+      candidates.push({
+        path,
+        uploadPath,
+        absolute,
+        order: candidates.length,
+        bytes: entry.bytes,
+        priority: priorityPaths.has(uploadPath),
+        ...(keep && redacted !== undefined ? { content: redacted } : {}),
+      });
     } catch {
       // Workspaces are live; races are expected and retried by the next snapshot.
     }
@@ -1114,7 +1549,29 @@ async function scanWorkspace(
   for (const key of cache.keys()) {
     if (!seen.has(key)) cache.delete(key);
   }
-  return { manifest, files, manifestTruncated: paths.length >= MAX_FILES, contentTruncated };
+  const selected = await selectSnapshotContent(candidates, Math.max(0, byteLimit - serializedBytes(manifest)));
+  return {
+    manifest,
+    files: selected.files,
+    manifestTruncated: paths.length >= MAX_FILES,
+    contentTruncated: selected.omittedCount > 0,
+    deniedCount: listing.denied,
+    capOmittedCount: selected.omittedCount,
+    capOmittedBytes: selected.omittedBytes,
+  };
+}
+
+/**
+ * Whether an unauthorized response is the sign-in gate (the broker's or the
+ * gateway's `omnirush_account_required`) rather than a stale device token.
+ * Reading the body also releases the connection.
+ */
+async function responseSignalsAccountRequired(response: Response): Promise<boolean> {
+  try {
+    return (await response.text()).includes(ACCOUNT_REQUIRED_MARKER);
+  } catch {
+    return false;
+  }
 }
 
 function compressZstd(payload: Buffer): Promise<Buffer> {
@@ -1189,9 +1646,10 @@ function parseSpoolMeta(value: unknown): SpoolMeta | null {
 
 export class WorkspaceCollector {
   private readonly collectUrl: string | null;
-  private readonly token: string;
+  private token: string;
   private readonly fetcher: typeof externalFetch;
   private readonly uploader?: CollectorOptions["upload"];
+  private readonly refreshAccessToken?: CollectorOptions["refreshAccessToken"];
   private readonly log: NonNullable<CollectorOptions["log"]>;
   private readonly ledgerPath: string | null;
   private readonly spoolDir: string | null;
@@ -1208,6 +1666,7 @@ export class WorkspaceCollector {
   private readonly retryMaxMs: number;
   private readonly spoolMaxEntries: number;
   private readonly spoolMaxBytes: number;
+  private readonly snapshotMaxBytes: number;
   private environmentCache: Promise<CollectorEnvironment> | null = null;
   private spoolCounter = 0;
   private spoolTail: Promise<void> = Promise.resolve();
@@ -1220,6 +1679,7 @@ export class WorkspaceCollector {
     this.token = (options.accessToken ?? process.env.OMNIRUSH_ACCESS_TOKEN ?? "").trim();
     this.fetcher = options.fetch ?? externalFetch;
     this.uploader = options.upload;
+    this.refreshAccessToken = options.refreshAccessToken;
     this.log = options.log ?? (() => undefined);
     const stateDir = options.stateDir ? resolve(options.stateDir) : null;
     this.ledgerPath = stateDir ? join(stateDir, SESSION_LEDGER_FILE) : null;
@@ -1234,6 +1694,7 @@ export class WorkspaceCollector {
     this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS;
     this.spoolMaxEntries = options.spoolMaxEntries ?? MAX_SPOOL_ENTRIES;
     this.spoolMaxBytes = options.spoolMaxBytes ?? MAX_SPOOL_BYTES;
+    this.snapshotMaxBytes = options.snapshotMaxBytes ?? MAX_SNAPSHOT_BYTES;
     if (this.spoolDir) {
       if (this.enabled) {
         // Uploads spooled by a previous process are retried once this one is up.
@@ -1786,7 +2247,7 @@ export class WorkspaceCollector {
         if (buffer.length > MAX_COLLECTOR_FILE_BYTES || isBinary(buffer)) {
           entry = { path, at: new Date().toISOString(), status: "skipped" };
         } else {
-          const content = redactCollectorText(buffer.toString("utf8")).text;
+          const content = redactCollectorContent(path, buffer.toString("utf8"));
           entry = { path, at: new Date().toISOString(), status: "present", content, sha256: sha256Hex(content) };
         }
       }
@@ -1831,11 +2292,32 @@ export class WorkspaceCollector {
   private async uploadWorkspace(state: SessionState, type: Exclude<SnapshotType, "trace">, trigger: CollectorTrigger): Promise<void> {
     const remaining = MAX_COLLECTOR_SESSION_BYTES - state.sentBytes;
     if (remaining <= 1_024) return;
-    const [scan, git, environment] = await Promise.all([
-      scanWorkspace(state.root, state.hashCache, state.baseline, Math.min(MAX_SNAPSHOT_BYTES, remaining - 1_024), type === "start"),
-      collectGitBlock(state.root),
+    // The git block comes first: its status and diff name the files a capped
+    // snapshot must keep, and its measured size (the diff alone may reach its
+    // own cap) is what the fixed wrapper margin cannot promise to cover.
+    const git = await collectGitBlock(state.root);
+    const budget = Math.min(this.snapshotMaxBytes - SNAPSHOT_WRAPPER_MARGIN_BYTES - serializedBytes(git), remaining - 1_024);
+    const [scan, environment] = await Promise.all([
+      scanWorkspace(state.root, state.hashCache, state.baseline, budget, type === "start", snapshotPriorityPaths(state.touchedPaths, git)),
       this.environment(),
     ]);
+    if (scan.capOmittedCount > 0) {
+      this.appendTrace(state, "collector.snapshot_cap", {
+        snapshot_type: type,
+        trigger,
+        omitted_count: scan.capOmittedCount,
+        omitted_bytes: scan.capOmittedBytes,
+        budget_bytes: budget,
+      });
+      this.log("warn", "OmniRush collection snapshot trimmed to the snapshot cap", {
+        sessionId: state.id,
+        snapshotType: type,
+        trigger,
+        omittedCount: scan.capOmittedCount,
+        omittedBytes: scan.capOmittedBytes,
+        budgetBytes: budget,
+      });
+    }
     // The baseline is the last *captured* manifest: the next change snapshot
     // reports exactly what moved since this one, whatever the upload outcome.
     state.baseline = new Map(scan.manifest.map((entry) => [entry.path, entry.sha256]));
@@ -1850,6 +2332,7 @@ export class WorkspaceCollector {
       trigger,
       touched_paths: touchedPaths,
       ...PRIVACY_POLICY,
+      denied_file_count: scan.deniedCount,
       root_name: rootName,
       git: { commit: git?.commit ?? null, branch: git?.branch ?? null, dirty: git ? String(git.dirty) : "false" },
     });
@@ -1872,9 +2355,12 @@ export class WorkspaceCollector {
       manifest: scan.manifest.map((entry) => ({ ...entry, path: collectorPathForUpload(entry.path) })),
       privacy: {
         ...PRIVACY_POLICY,
+        denied_file_count: scan.deniedCount,
         manifest_truncated: scan.manifestTruncated,
         files_truncated: scan.contentTruncated,
         diff_truncated: git?.diff_truncated ?? false,
+        snapshot_cap_omitted_count: scan.capOmittedCount,
+        snapshot_cap_omitted_bytes: scan.capOmittedBytes,
       },
       touched_paths: touchedPaths,
     });
@@ -1904,31 +2390,71 @@ export class WorkspaceCollector {
     });
   }
 
+  private send(sessionId: string, compressed: Uint8Array): Promise<Response> {
+    if (this.uploader) return this.uploader(sessionId, compressed);
+    return this.fetcher(this.collectUrl!, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": "application/zstd",
+        "X-OmniRush-Session-ID": sessionId,
+      },
+      body: compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength) as ArrayBuffer,
+      signal: AbortSignal.timeout(30_000),
+    });
+  }
+
+  /** Asks the account layer for a fresh bearer; false when none arrived. */
+  private async refreshToken(): Promise<{ refreshed: boolean; error?: string }> {
+    if (!this.refreshAccessToken) return { refreshed: false };
+    try {
+      const token = (await this.refreshAccessToken())?.trim() ?? "";
+      if (!token) return { refreshed: false };
+      this.token = token;
+      return { refreshed: true };
+    } catch (error) {
+      return { refreshed: false, error: error instanceof Error ? error.message : "unknown" };
+    }
+  }
+
   private async transmit(sessionId: string, compressed: Uint8Array, attempts = UPLOAD_ATTEMPTS): Promise<TransmitOutcome> {
     let lastReason = "collector upload unavailable";
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let refreshAttempted = false;
+    let attempt = 0;
+    while (attempt < attempts) {
       try {
-        const response = this.uploader
-          ? await this.uploader(sessionId, compressed)
-          : await this.fetcher(this.collectUrl!, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${this.token}`,
-                "Content-Type": "application/zstd",
-                "X-OmniRush-Session-ID": sessionId,
-              },
-              body: compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength) as ArrayBuffer,
-              signal: AbortSignal.timeout(30_000),
-            });
+        const response = await this.send(sessionId, compressed);
         if (response.ok) return { ok: true };
-        await response.body?.cancel().catch(() => undefined);
         lastReason = `collector upload failed with status ${response.status}`;
+        if (UNAUTHORIZED_STATUSES.has(response.status)) {
+          // The sign-in gate is final: nothing is queued for an account that
+          // is gone. Any other rejection is a device token the gateway broker
+          // rotates moments later, so the upload gets one fresh token and one
+          // more try, and is spooled rather than dropped if still refused.
+          if (await responseSignalsAccountRequired(response)) {
+            return { ok: false, retryable: false, reason: `${lastReason} (${ACCOUNT_REQUIRED_MARKER})` };
+          }
+          if (refreshAttempted) return { ok: false, retryable: true, reason: lastReason };
+          refreshAttempted = true;
+          const refresh = await this.refreshToken();
+          this.log("warn", "OmniRush collection upload rejected as unauthorized", {
+            sessionId,
+            status: response.status,
+            refreshed: refresh.refreshed,
+            ...(refresh.error ? { refreshError: refresh.error } : {}),
+          });
+          if (!refresh.refreshed) return { ok: false, retryable: true, reason: lastReason };
+          // The retry with the fresh token is not one of the transport attempts.
+          continue;
+        }
+        await response.body?.cancel().catch(() => undefined);
         if (!RETRYABLE_STATUSES.has(response.status)) return { ok: false, retryable: false, reason: lastReason };
       } catch (error) {
         lastReason = error instanceof Error ? error.message : "collector upload unavailable";
       }
-      if (attempt < attempts - 1) {
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, this.uploadRetryDelayMs * 2 ** attempt));
+      attempt += 1;
+      if (attempt < attempts) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, this.uploadRetryDelayMs * 2 ** (attempt - 1)));
       }
     }
     return { ok: false, retryable: true, reason: lastReason };
@@ -1957,6 +2483,20 @@ export class WorkspaceCollector {
       files,
     }));
     if (state.sentBytes + payload.length > MAX_COLLECTOR_SESSION_BYTES) return false;
+    if (payload.length > this.snapshotMaxBytes) {
+      // The backend answers an oversized envelope with 422, which is never
+      // retried. The scan budget keeps this from happening; reaching it means
+      // the wrapper outgrew its margin, which deserves a loud line here rather
+      // than a lost upload and a rejection upstream.
+      this.log("warn", "OmniRush collection payload exceeded the snapshot cap", {
+        sessionId: state.id,
+        snapshotType,
+        trigger,
+        bytes: payload.length,
+        capBytes: this.snapshotMaxBytes,
+      });
+      return false;
+    }
     const compressed = await compressZstd(payload);
     if (compressed.length > MAX_COMPRESSED_BYTES) {
       this.log("warn", "OmniRush collection payload exceeded compressed limit", { sessionId: state.id, snapshotType, trigger });

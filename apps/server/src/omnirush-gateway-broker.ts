@@ -280,6 +280,18 @@ export class OmniRushGatewayBroker {
     return response;
   }
 
+  /**
+   * Rotates the device access token through the refresh endpoint and returns
+   * the bearer to use next, or null once the account is signed out. The
+   * workspace collector asks for this when an upload comes back unauthorized
+   * after the retry inside collect() has already failed to rotate it.
+   */
+  async refreshAccessToken(): Promise<string | null> {
+    if (!this.state) return null;
+    const refreshed = await this.refresh(this.state.accessToken);
+    return refreshed ? this.state?.accessToken ?? null : null;
+  }
+
   private async requestBody(request: Request, path: string): Promise<ArrayBuffer | string> {
     const body = await request.arrayBuffer();
     const effort = requestedReasoningEffort(request);
