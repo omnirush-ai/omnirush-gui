@@ -60,7 +60,7 @@ import {
 } from "./command-palette/den-search-bar";
 import { UserProfileDialog } from "./user-profile-dialog";
 
-const OMNIRUSH_DOCS_URL = "https://omnirushlabs.com/docs";
+const OMNIRUSH_DOCS_URL = "https://github.com/omnirush-ai/omnirush-gui#readme";
 
 function OrgMark({ name }: { name: string }) {
   const initials = useMemo(() => {

@@ -364,7 +364,7 @@ test("invitation downloads keep the generic URL when install links are disabled"
     metadata: { capabilities: { installLinks: false } },
   })
 
-  expect(downloadUrl).toBe("https://omnirushlabs.com/download")
+  expect(downloadUrl).toBe("https://github.com/omnirush-ai/omnirush-gui/releases/latest")
   expect(insertedInstallLinks()).toHaveLength(0)
 })
 
@@ -377,7 +377,7 @@ test("invitation delivery can fall back when install-link storage fails", async 
     metadata: { capabilities: { installLinks: true } },
   })
 
-  expect(downloadUrl).toBe("https://omnirushlabs.com/download")
+  expect(downloadUrl).toBe("https://github.com/omnirush-ai/omnirush-gui/releases/latest")
   expect(insertedInstallLinks()).toHaveLength(0)
 })
 

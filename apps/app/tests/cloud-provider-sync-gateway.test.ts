@@ -293,7 +293,7 @@ describe("cloud provider sync in gateway mode", () => {
   });
 
   test("returns a server-handled outcome without network calls or error state behind the gateway", async () => {
-    const storage = installWindow({ origin: "https://web.omnirushlabs.com", gateway: true });
+    const storage = installWindow({ origin: "https://web.omnirush.example.com", gateway: true });
     installCloudSession(storage);
     const requests: RecordedRequest[] = [];
     installProviderSyncFetch(requests);

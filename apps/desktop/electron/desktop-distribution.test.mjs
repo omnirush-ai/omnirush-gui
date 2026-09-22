@@ -166,7 +166,7 @@ describe("enterpriseActivationComplete", () => {
     assert.equal(enterpriseActivationComplete({
       enterpriseActivation: {
         activatedAt: "2026-07-27T10:00:00.000Z",
-        denBaseUrl: "https://app.omnirushlabs.com",
+        denBaseUrl: "https://omnirush.example.com",
       },
     }), true);
   });

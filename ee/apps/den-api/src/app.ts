@@ -318,7 +318,7 @@ app.get(
           "Authentication:",
           "- Use `Authorization: Bearer <session-token>` for user-authenticated routes that require a Den session.",
           "- Use `x-api-key: <den-api-key>` for organization API-key calls. API keys resolve to the issuing user and the organization member they were scoped to when created, so they can call ordinary user and organization routes without a separate signed-in session.",
-          "  Example: `curl https://api.omnirushlabs.com/v1/me -H \"x-api-key: den_...\"`.",
+          "  Example: `curl https://api.omnirush.example.com/v1/me -H \"x-api-key: den_...\"`.",
           "- Session-only flows still require a signed-in user session, including organization creation, invitation acceptance, active-organization switching, and MCP token minting.",
           "- Public routes like health and documentation do not require authentication.",
           "",

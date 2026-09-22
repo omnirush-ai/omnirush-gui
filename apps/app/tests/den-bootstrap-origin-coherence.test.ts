@@ -415,18 +415,18 @@ describe("den bootstrap and retained session origin coherence", () => {
   test("an explicitly configured hosted session keeps working", async () => {
     const storage = installWindow({
       shell: {
-        reads: [{ kind: "config", config: { baseUrl: "https://app.omnirushlabs.com", requireSignin: false, fromFile: true } }],
+        reads: [{ kind: "config", config: { baseUrl: "https://app.omnirush.example.com", requireSignin: false, fromFile: true } }],
       },
     });
     storage.setItem("omnirush.den.authToken", "hosted-token-1");
     storage.setItem("omnirush.den.activeOrgId", "org_hosted_1");
-    storage.setItem(STORAGE_SESSION_ORIGIN, "https://app.omnirushlabs.com");
+    storage.setItem(STORAGE_SESSION_ORIGIN, "https://app.omnirush.example.com");
 
     await initializeDenBootstrapConfig();
 
     expect(getDenBootstrapResolution()).toBe("resolved");
     const settings = readDenSettings();
-    expect(settings.baseUrl).toBe("https://app.omnirushlabs.com");
+    expect(settings.baseUrl).toBe("https://app.omnirush.example.com");
     expect(settings.authToken).toBe("hosted-token-1");
     expect(settings.activeOrgId).toBe("org_hosted_1");
   });

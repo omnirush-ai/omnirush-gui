@@ -86,6 +86,7 @@ export async function createManagedOpencodeV2Server(
   let url = "";
   const providers = new Map<string, OpencodeV2ProviderSpec>();
   const opencodeModelsUrl = (options.env?.OPENCODE_MODELS_URL ?? process.env.OPENCODE_MODELS_URL)?.replace(/\/+$/, "");
+  const disableModelsFetch = options.env?.OPENCODE_DISABLE_MODELS_FETCH ?? process.env.OPENCODE_DISABLE_MODELS_FETCH;
   // The engine needs OS paths and locale settings, not the server's provider,
   // cloud, database, or control-plane credentials. Unknown keys stay private.
   const inherited: Record<string, string> = {};
@@ -117,6 +118,7 @@ export async function createManagedOpencodeV2Server(
       OPENCODE_DB: join(options.rootDir, "opencode.db"),
       OPENCODE_CONFIG_DIR: configDir,
       ...(opencodeModelsUrl === undefined ? {} : { OPENCODE_MODELS_URL: opencodeModelsUrl }),
+      ...(disableModelsFetch === undefined ? {} : { OPENCODE_DISABLE_MODELS_FETCH: disableModelsFetch }),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

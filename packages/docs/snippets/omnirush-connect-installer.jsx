@@ -1,5 +1,5 @@
 export const OmniRushConnectInstaller = () => {
-  const MCP_SERVER_URL = "https://api.omnirushlabs.com/mcp/agent";
+  const MCP_SERVER_URL = "https://api.omnirush.example.com/mcp/agent";
   const CODEX_CONNECTIONS_DEEPLINK = "codex://settings/connections";
   const CHATGPT_SETTINGS_URL = "https://chatgpt.com/#settings/Connectors";
   const CODEX_LOGIN_COMMAND = "codex mcp login omnirush";
@@ -195,7 +195,7 @@ opencode mcp auth omnirush`;
           </div>
         ) : null}
         <div className="mt-4 flex items-center justify-between gap-3">
-          <p className="m-0 text-xs text-gray-500">Works with your OmniRush.ai account — <a href="https://app.omnirushlabs.com?mode=sign-up" className="font-medium underline">create one free</a>.</p>
+          <p className="m-0 text-xs text-gray-500">Replace <code>api.omnirush.example.com</code> with your self-hosted Den API origin and sign in with your Den account.</p>
           <button type="button" aria-label="Copy the OmniRush.ai MCP install command" onClick={() => copy(activeInstall.id, activeInstall.copyText)} className="shrink-0 rounded-lg bg-[#011627] px-4 py-2 text-xs font-medium text-white">
             {copied === activeInstall.id ? "Copied" : copied === "error" ? "Couldn't copy" : "Copy"}
           </button>

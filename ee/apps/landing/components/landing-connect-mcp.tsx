@@ -25,7 +25,7 @@ import {
 } from "./omnirush-connect-installer-config";
 import type { OmniRushConnectClientId } from "./omnirush-connect-installer-config";
 
-const DOCS_URL = "https://omnirushlabs.com/docs/cloud/run-in-the-cloud/cloud-mcp#connect-mcp-install-opencode";
+const DOCS_URL = "https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/cloud/run-in-the-cloud/cloud-mcp.mdx";
 const SIGNUP_URL = "https://app.omnirushlabs.com?mode=sign-up";
 
 type CopyMethod = "clipboard" | "execCommand" | "none";

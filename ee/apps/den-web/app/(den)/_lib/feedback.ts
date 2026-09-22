@@ -1,4 +1,4 @@
-export const OMNIRUSH_FEEDBACK_URL = "https://omnirushlabs.com/feedback";
+export const OMNIRUSH_FEEDBACK_URL = "https://github.com/omnirush-ai/omnirush-gui/issues/new";
 
 export function buildDenFeedbackUrl(options?: {
   pathname?: string;

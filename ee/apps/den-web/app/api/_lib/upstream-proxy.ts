@@ -55,7 +55,7 @@ const AUTH_COOKIE_PREFIXES = [
  *
  * We reflect those origins, and make that safe by stripping the cookie header
  * from the forwarded request: an instance-origin call is authenticated by its
- * bearer token alone and can never ride the viewer's app.omnirushlabs.com
+ * bearer token alone and can never ride the viewer's Den web origin
  * session. A hostile page on some other origin therefore gains nothing from the
  * reflection - it has no bearer token and its cookies are discarded.
  *

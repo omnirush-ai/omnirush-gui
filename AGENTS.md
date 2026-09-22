@@ -9,8 +9,9 @@ repo:
 - **Desktop app** (`apps/`, `packages/`) — local-first agent workspace: chat on
   files, skills, browser automation, scheduled automations, Anthropic-compatible
   plugins.
-- **OmniRush.ai MCP gateway** (`ee/apps/den-api`) — one URL
-  (`api.omnirushlabs.com/mcp/agent`) that brings org-assigned skills, plugins,
+- **OmniRush.ai MCP gateway** (`ee/apps/den-api`) — one URL per Den
+  deployment (`<den-api-origin>/mcp/agent`; omnirush.ai runs no hosted Den)
+  that brings org-assigned skills, plugins,
   and connections (Google Workspace, Microsoft 365, MCPs) into Codex, Claude
   Code, Cursor, or any MCP client via `search_capabilities` /
   `execute_capability`.

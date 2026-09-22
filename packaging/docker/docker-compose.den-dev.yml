@@ -16,7 +16,7 @@
 #   DEN_PUBLIC_HOST         — browser-facing host/IP for LAN access (set by den-dev-up.sh)
 #   DEN_BETTER_AUTH_URL     — browser-facing auth origin (default: http://<DEN_PUBLIC_HOST>:<DEN_WEB_PORT>)
 #   DEN_BETTER_AUTH_TRUSTED_ORIGINS — Better Auth trusted origins (defaults to DEN_CORS_ORIGINS)
-#   DEN_MCP_ADDITIONAL_RESOURCES — Extra public MCP resource URLs this deployment serves, e.g. https://api.omnirushlabs.com/mcp — needed when den-api is reachable on more than one public origin
+#   DEN_MCP_ADDITIONAL_RESOURCES — Extra public MCP resource URLs this deployment serves, e.g. https://den-api.example.com/mcp — needed when den-api is reachable on more than one public origin
 #   DEN_CORS_ORIGINS        — comma-separated trusted origins for Better Auth + CORS
 #   DEN_ORG_MODE            — single_org or multi_org (default: single_org)
 #   DEN_SINGLE_ORG_NAME / DEN_SINGLE_ORG_SLUG / DEN_SINGLE_ORG_OWNER_EMAILS

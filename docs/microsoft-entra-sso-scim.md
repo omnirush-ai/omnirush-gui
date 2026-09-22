@@ -55,18 +55,18 @@ the Entra group object mapping disabled.
    non-gallery enterprise application for OmniRush.ai.
 4. Assign at least one test user or test group under **Users and groups**.
 
-For the OmniRush.ai Labs test tenant, use:
+A test tenant setup looks like this (example values):
 
-- **Tenant ID**: `2b853de0-b14b-4433-90be-cced1b963647`
-- **OmniRush.ai SSO domain**: `omaromnirushlabs.onmicrosoft.com`
+- **Tenant ID**: `<tenant-id>`
+- **OmniRush.ai SSO domain**: `example.onmicrosoft.com`
 - **Test users**:
-  - `omar2@omaromnirushlabs.onmicrosoft.com`
-  - `omar_omnirushlabs.com#EXT#@omaromnirushlabs.onmicrosoft.com`
-- **OmniRush.ai organization**: `Omar Azure Test`
+  - `test-user@example.onmicrosoft.com`
+  - `someone_example.com#EXT#@example.onmicrosoft.com`
+- **OmniRush.ai organization**: `Entra SSO Test`
 
-As of July 7, 2026, both test users are assigned to the **OmniRush.ai Labs**
-enterprise application in Entra, and the OmniRush.ai Cloud org has the Enterprise
-entitlement needed to save SSO settings.
+Assign both test users to the enterprise application in Entra, and make sure the
+OmniRush.ai organization has the Enterprise entitlement needed to save SSO
+settings.
 
 ## Configure SAML SSO
 
@@ -119,13 +119,13 @@ ACS URL before SAML can be fully tested.
     Entra My Apps tile. For multi-org users, the org slug, Entra app, and ACS
     URL choose which OmniRush.ai organization they are entering.
 
-For the OmniRush.ai Labs test tenant, the OmniRush.ai SAML fields are:
+For that example test tenant, the OmniRush.ai SAML fields are:
 
 - **IdP Issuer URL**:
-  `https://sts.windows.net/2b853de0-b14b-4433-90be-cced1b963647/`
-- **Domain**: `omaromnirushlabs.onmicrosoft.com`
+  `https://sts.windows.net/<tenant-id>/`
+- **Domain**: `example.onmicrosoft.com`
 - **SAML Entry Point**:
-  `https://login.microsoftonline.com/2b853de0-b14b-4433-90be-cced1b963647/saml2`
+  `https://login.microsoftonline.com/<tenant-id>/saml2`
 - **Audience URL**: leave blank unless you also set a custom Entra Identifier.
   With the field blank, set Entra **Identifier (Entity ID)** to the OmniRush.ai
   auth URL, not to the `sts.windows.net` issuer.

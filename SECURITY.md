@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-OmniRush.ai is under active development and we prioritize fixes on the latest release and
-the current `dev` branch.
+omnirush.ai is under active development. Fixes land on the latest release, published at
+https://github.com/omnirush-ai/omnirush-gui/releases/latest.
 
 ## Reporting a vulnerability
 
@@ -11,8 +11,8 @@ Please do not open public GitHub issues for security vulnerabilities.
 
 Instead, report vulnerabilities privately to:
 
-- Email: `ben@omnirushlabs.com`
-- Subject: `[OmniRush.ai security] <short summary>`
+- Email: `info@omnirush.ai`
+- Subject: `security: <short summary>`
 
 Please include:
 

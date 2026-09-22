@@ -27,6 +27,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { Button } from "@/components/ui/button";
+import { DEFAULT_FEEDBACK_URL } from "@/app/lib/feedback";
 import { ChevronLeftIcon } from "lucide-react";
 import type { ModelOption, ModelRef } from "@/app/types";
 import { useCheckDesktopRestriction } from "../domains/cloud/desktop-config-provider";
@@ -346,7 +347,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       group: ACTIONS_GROUP,
       action: () => {
         props.onClose();
-        openUrl("https://omnirush.dev/docs");
+        openUrl("https://github.com/omnirush-ai/omnirush-gui#readme");
       },
     },
     {
@@ -357,7 +358,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       group: ACTIONS_GROUP,
       action: () => {
         props.onClose();
-        openUrl("https://omnirush.dev/feedback");
+        openUrl(DEFAULT_FEEDBACK_URL);
       },
     },
   ], [accessibleTargetCount, canMoveCurrentSessionToGroup, hasNestedModelPicker, props, sessionGroupCount, sessionNumberHelp]);

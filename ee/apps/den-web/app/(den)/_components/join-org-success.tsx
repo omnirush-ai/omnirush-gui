@@ -23,7 +23,7 @@ import { OnboardingCard } from "./onboarding-card";
 import { OnboardingShell } from "./onboarding-shell";
 import { OrganizationBrandIdentity, type OrganizationBrand } from "./organization-brand-identity";
 
-const OMNIRUSH_DOWNLOAD_URL = "https://omnirushlabs.com/download";
+const OMNIRUSH_DOWNLOAD_URL = "https://github.com/omnirush-ai/omnirush-gui/releases/latest";
 
 function ReturnToOmniRushStatus({
   omnirushUrl,

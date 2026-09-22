@@ -93,7 +93,7 @@ const tools: Tool[] = [
   {
     name: "navigate_to",
     description:
-      "Navigate the current tab to a key section of omnirushlabs.com. Use this when the user expresses intent to view pricing, download, enterprise, cloud, docs, trust, or feedback.",
+      "Navigate the current tab to a key section of this site. Use this when the user expresses intent to view pricing, download, enterprise, cloud, docs, trust, or feedback.",
     inputSchema: {
       type: "object",
       properties: {

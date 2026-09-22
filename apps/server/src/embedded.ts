@@ -37,7 +37,7 @@ import { findManagedEngineWorkspace } from "./workspaces.js";
 import { keepOmniRushRuntimeConfigFileFresh, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
 import { migrateOmniRushCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
 import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
-import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
+import { resolveOpencodeModelsEnv } from "./opencode-models-url.js";
 import { assertOpencodeConfigCompat } from "./opencode-config-compat.js";
 import type { ServeResult } from "./serve-node.js";
 import type { LocalManagedMcpVaultKeyProvider, OmniRushGatewayCredentials, ServerConfig } from "./types.js";
@@ -222,7 +222,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         || process.env.OMNIRUSH_MANAGED_OPENCODE_CWD?.trim()
         || workspace.path;
       await duringStartup(() => mkdir(cwd, { recursive: true }));
-      const opencodeModelsUrl = await duringStartup(() => resolveOpencodeModelsUrl());
+      const opencodeModelsEnv = await duringStartup(() => resolveOpencodeModelsEnv());
 
       const opencodeBin = options.opencodeBin || process.env.OMNIRUSH_OPENCODE_BIN;
       // Shared by the first spawn and by any later rollover standby, so a
@@ -237,7 +237,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         OMNIRUSH_SERVER_TOKEN: config.token,
         OMNIRUSH_POLICY_TOKEN: managedDesktopPolicy(config).evaluationToken,
         OPENCODE_CONFIG: runtimeConfigPath,
-        OPENCODE_MODELS_URL: opencodeModelsUrl,
+        ...opencodeModelsEnv,
       };
       engineSpawnTemplate = {
         bin: opencodeBin,

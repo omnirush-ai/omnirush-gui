@@ -8,7 +8,7 @@ export default function OrganizationInvitePreview(props: OrganizationInviteEmail
 }
 
 OrganizationInvitePreview.PreviewProps = {
-  inviteLink: "https://app.omnirushlabs.com/join-org?invite=invitation_preview",
+  inviteLink: "https://omnirush.example.com/join-org?invite=invitation_preview",
   invitedByName: "Ada Lovelace",
   invitedByEmail: "ada@example.com",
   organizationName: "OmniRush.ai Preview",

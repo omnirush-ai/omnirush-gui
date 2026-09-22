@@ -1,6 +1,6 @@
 # OmniRush.ai Cloud App (`ee/apps/den-web`)
 
-Frontend for `app.omnirushlabs.com`.
+Frontend for the Den web app (omnirush.ai runs no hosted instance).
 
 ## What it does
 
@@ -9,7 +9,7 @@ Frontend for `app.omnirushlabs.com`.
 - Lists and connects existing cloud workers.
 - Sends users to the organization billing page for subscription management.
 - Offers desktop handoff actions so users can open the generated worker directly in OmniRush.ai or copy the connect credentials manually.
-- Calls the Den API directly at the matching `api.*` origin (for example, `app.omnirushlabs.com` -> `api.app.omnirushlabs.com`), including Better Auth traffic.
+- Calls the Den API directly at the matching `api.*` origin (for example, `omnirush.example.com` -> `api.omnirush.example.com`), including Better Auth traffic.
 - Keeps a same-origin auth proxy (`/api/auth/*`) only for compatibility with already-registered auth callbacks that still land on the web host.
 
 ## Current hosted user flow
@@ -59,7 +59,7 @@ Tailwind 4 requires Safari 16.4+, Chrome 111+, or Firefox 128+; see the
 - `DEN_AUTH_FALLBACK_BASE` (server-only): fallback Den origin used if `DEN_API_BASE` serves an HTML/5xx error.
 - `DEN_WEB_PUBLIC_ORIGIN` (server/runtime): public origin used for metadata.
 - `DEN_WEB_OMNIRUSH_APP_CONNECT_URL` (runtime): Base URL for "Open in App" links.
-  - Example: `https://omnirushlabs.com/app`
+  - Example: `https://omnirush.example.com/app`
   - The web panel appends `/connect-remote` and injects worker URL/token params automatically.
 - `DEN_WEB_OMNIRUSH_WEB_URL` (runtime): URL opened by the dashboard Web tab.
   - default: `https://web.omnirushlabs.com`

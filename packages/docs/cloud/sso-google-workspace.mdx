@@ -17,7 +17,7 @@ You need:
 - An OmniRush.ai owner or super-admin.
 - A Google Workspace super administrator who can create custom SAML apps.
 - Control of DNS for the email domain you will associate with the connection.
-- The final OmniRush.ai auth origin, for example `https://app.omnirushlabs.com`.
+- The final OmniRush.ai auth origin, for example `https://omnirush.example.com`.
 
 Keep password or existing recovery access available until an OmniRush.ai owner has
 completed the Google SAML test and enabled SSO.
@@ -76,7 +76,7 @@ Return to the Google custom SAML app setup. In **Service Provider Details**, set
 | Google field | OmniRush.ai value |
 | --- | --- |
 | ACS URL | OmniRush.ai **ACS URL** |
-| Entity ID | The `entityID` from OmniRush.ai **Metadata URL**, normally `https://app.omnirushlabs.com` for OmniRush.ai Cloud |
+| Entity ID | The `entityID` from OmniRush.ai **Metadata URL**, normally your Den web origin such as `https://omnirush.example.com` |
 | Start URL | OmniRush.ai **Sign-in URL** |
 | Signed response | Leave unchecked unless support asks you to sign the whole SAML response |
 | Name ID format | Email address |
@@ -98,10 +98,10 @@ To confirm the OmniRush.ai service-provider entity ID, open the OmniRush.ai
 **Metadata URL** and look for:
 
 ```xml
-<EntityDescriptor entityID="https://app.omnirushlabs.com">
+<EntityDescriptor entityID="https://omnirush.example.com">
 ```
 
-For OmniRush.ai Cloud, that `entityID` is the same for the SSO test and for the
+That `entityID` is the same for the SSO test and for the
 real enabled login. The test uses the same saved SAML provider and ACS URL; only
 the post-authentication completion URL is test-specific.
 

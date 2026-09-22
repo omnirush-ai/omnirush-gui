@@ -155,7 +155,7 @@ describe("gateway runtime mode", () => {
   });
 
   test("resolves OmniRush.ai server traffic through the gateway origin with the Den session token", async () => {
-    const storage = installWindow({ origin: "https://web.omnirushlabs.com", gateway: true });
+    const storage = installWindow({ origin: "https://web.omnirush.example.com", gateway: true });
     storage.setItem("omnirush.den.authToken", "den-session-token");
     storage.setItem("omnirush.server.urlOverride", "https://direct-instance.example.com");
     storage.setItem("omnirush.server.token", "stale-instance-token");
@@ -163,7 +163,7 @@ describe("gateway runtime mode", () => {
     const connection = await resolveOmniRushConnection();
 
     expect(connection).toEqual({
-      normalizedBaseUrl: "https://web.omnirushlabs.com",
+      normalizedBaseUrl: "https://web.omnirush.example.com",
       resolvedToken: "den-session-token",
       resolvedHostToken: "",
       hostInfo: null,
@@ -172,7 +172,7 @@ describe("gateway runtime mode", () => {
   });
 
   test("keeps the OmniRush.ai server snapshot stable when options have not changed", () => {
-    installWindow({ origin: "https://web.omnirushlabs.com", gateway: true });
+    installWindow({ origin: "https://web.omnirush.example.com", gateway: true });
     const store = createTestOmniRushServerStore();
     const initialSnapshot = store.getSnapshot();
     let notifications = 0;
@@ -330,20 +330,20 @@ describe("gateway runtime mode", () => {
   });
 
   test("returns a stable gateway bootstrap snapshot for React external stores", () => {
-    installWindow({ origin: "https://web.omnirushlabs.com", gateway: true });
+    installWindow({ origin: "https://web.omnirush.example.com", gateway: true });
 
     const first = readDenBootstrapConfig();
     const second = readDenBootstrapConfig();
 
     expect(second).toBe(first);
     // Without a configured web base the gateway serves the Den web app too.
-    expect(first.baseUrl).toBe("https://web.omnirushlabs.com");
-    expect(first.apiBaseUrl).toBe("https://web.omnirushlabs.com/api/den");
+    expect(first.baseUrl).toBe("https://web.omnirush.example.com");
+    expect(first.apiBaseUrl).toBe("https://web.omnirush.example.com/api/den");
   });
 
   test("does not hydrate an instance bootstrap token into server storage behind the gateway", () => {
     const storage = installWindow({
-      origin: "https://web.omnirushlabs.com",
+      origin: "https://web.omnirush.example.com",
       gateway: true,
       bootstrapToken: "instance-token-must-not-store",
     });

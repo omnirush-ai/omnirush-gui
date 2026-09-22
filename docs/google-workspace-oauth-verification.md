@@ -5,11 +5,11 @@
 - Google Cloud project: `OmniRush.ai Google Workspace`
 - Project ID: `noted-victory-497500-f9`
 - OAuth app name: `OmniRush.ai`
-- Support email: `team@omnirushlabs.com`
-- Homepage: `https://omnirushlabs.com`
-- Privacy policy: `https://omnirushlabs.com/privacy`
-- Terms: `https://omnirushlabs.com/terms`
-- Authorized domain: `omnirushlabs.com`
+- Support email: `info@omnirush.ai`
+- Homepage: `https://omnirush.ai`
+- Privacy policy: not published yet (omnirush.ai has no privacy page to register)
+- Terms: not published yet (omnirush.ai has no terms page to register)
+- Authorized domain: `omnirush.ai`
 - Desktop OAuth client ID: `929071212606-pmkqimjhm2tnp68kbklnout0irllj99h.apps.googleusercontent.com`
 
 ## Phase 1 Scopes

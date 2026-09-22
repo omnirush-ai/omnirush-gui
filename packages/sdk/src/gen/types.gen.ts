@@ -1573,11 +1573,11 @@ export type GoogleWorkspaceShareDriveFileBody = {
    */
   type: "user" | "domain";
   /**
-   * Required when type=user; pass the person's email address, for example raghav@omnirushlabs.com.
+   * Required when type=user; pass the person's email address, for example someone@example.com.
    */
   emailAddress?: string;
   /**
-   * Required when type=domain; pass the organization's Google Workspace domain, for example omnirushlabs.com.
+   * Required when type=domain; pass the organization's Google Workspace domain, for example example.com.
    */
   domain?: string;
   /**

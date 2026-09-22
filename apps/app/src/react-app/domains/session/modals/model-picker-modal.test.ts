@@ -13,7 +13,7 @@ describe("resolveModelPickerEmptyState", () => {
       query: "",
       organizationModelsEmpty: true,
       restrictToCloud: true,
-      organizationModelsSettingsUrl: "https://app.omnirushlabs.com/dashboard/custom-llm-providers",
+      organizationModelsSettingsUrl: "https://app.omnirush.example.com/dashboard/custom-llm-providers",
     });
 
     expect(state?.messageKey).toBe("models.organization_models_empty");

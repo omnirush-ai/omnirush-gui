@@ -98,7 +98,7 @@ Surface and substrate are independent axes:
 Run a live spec only by exact name and with explicit consent and endpoint values:
 
 ```bash
-OMNIRUSH_EVAL_LIVE=1 OMNIRUSH_EVAL_LIVE_DEN_API_URL=https://api.omnirushlabs.com OMNIRUSH_EVAL_SECRET_LIVE_MAILBOX_EMAIL=<mailbox> pnpm evals:pr specs/prod-den-signup-invites.live.test.ts
+OMNIRUSH_EVAL_LIVE=1 OMNIRUSH_EVAL_LIVE_DEN_API_URL=https://api.omnirush.example.com OMNIRUSH_EVAL_SECRET_LIVE_MAILBOX_EMAIL=<mailbox> pnpm evals:pr specs/prod-den-signup-invites.live.test.ts
 ```
 
 The live Den is attached and never deleted. Timestamped plus-addressed identities,

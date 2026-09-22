@@ -39,6 +39,6 @@ describe("OrgDashboardShell layout", () => {
   test("links Docs to the public documentation site", () => {
     const source = readFileSync(shellPath, "utf8");
 
-    expect(source).toContain('const OMNIRUSH_DOCS_URL = "https://omnirushlabs.com/docs";');
+    expect(source).toContain('const OMNIRUSH_DOCS_URL = "https://github.com/omnirush-ai/omnirush-gui#readme";');
   });
 });

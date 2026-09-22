@@ -67,7 +67,7 @@ const notes = [
   "",
   ...body,
   "",
-  `Full changelog: https://omnirushlabs.com/docs/changelog · [Compare](${compareUrl})`,
+  `Full changelog: https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/changelog.mdx · [Compare](${compareUrl})`,
 ];
 if (preserved.length > 0) notes.push("", ...preserved);
 

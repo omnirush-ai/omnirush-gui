@@ -26,7 +26,7 @@ describe("Contact page affordances", () => {
 
     expect(html).toContain("Have questions about OmniRush.ai?");
     expect(html).toContain("Prefer to email us instead?");
-    expect(html).toContain("team@omnirushlabs.com");
+    expect(html).toContain("info@omnirush.ai");
     expect(html).toContain("Send question");
   });
 

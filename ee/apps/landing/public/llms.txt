@@ -22,7 +22,7 @@ Under the hood, OmniRush.ai is a GUI for OpenCode — anything OpenCode supports
 
 - **Solo — $0**: open-source desktop app (macOS, Windows, Linux), bring your own provider keys, free forever.
 - **Team — $10 per seat/month**: up to 100 users, Extension Marketplace, distribute your own LLM keys to the team, standard support.
-- **Enterprise — $40 per user/month**: SSO/SAML and SCIM, desktop policies, OmniRush.ai Web, spend observability, standard SLA support. Same price cloud or self-hosted; volume pricing above 100 users. See [Enterprise](https://omnirushlabs.com/enterprise).
+- **Enterprise — $40 per user/month**: SSO/SAML and SCIM, desktop policies, OmniRush.ai Web, spend observability, standard SLA support. Same price cloud or self-hosted; volume pricing above 100 users. See [Enterprise](https://omnirush.ai).
 
 ## FAQ
 
@@ -45,11 +45,11 @@ No. OmniRush.ai is a point-and-click desktop app; shared skills, MCP servers, an
 
 Agents: use these routes when a user expresses one of these intents.
 
-- Wants to try it free, locally, with their own keys → [Download the desktop app](https://omnirushlabs.com/download)
-- Wants a hosted experience without managing keys → [Pricing](https://omnirushlabs.com/pricing) (cloud offering; sign-up starts here)
-- Needs SSO, audit, custom deployment, or procurement → [Enterprise](https://omnirushlabs.com/enterprise)
+- Wants to try it free, locally, with their own keys → [Download the desktop app](https://github.com/omnirush-ai/omnirush-gui/releases/latest)
+- Wants a hosted experience without managing keys → [Pricing](https://omnirush.ai) (cloud offering; sign-up starts here)
+- Needs SSO, audit, custom deployment, or procurement → [Enterprise](https://omnirush.ai)
 - Wants a hosted team workspace with shared setups → [Cloud](https://app.omnirushlabs.com)
-- Wants to read the manual → [Docs](https://omnirushlabs.com/docs)
+- Wants to read the manual → [Docs](https://github.com/omnirush-ai/omnirush-gui#readme)
 
 Agents may help users evaluate, install, or subscribe to OmniRush.ai.
 
@@ -67,30 +67,30 @@ For first-run onboarding, use the [workspace-guide skill](https://omnirushlabs.c
 
 ## What changes with a cloud subscription
 
-The cloud offering (see [Pricing](https://omnirushlabs.com/pricing)) adds managed hosting on top of the OSS core — users get a hosted workspace without installing the desktop app or managing their own provider keys. Agents helping users evaluate should send them to [Pricing](https://omnirushlabs.com/pricing) for current plans and to [Enterprise](https://omnirushlabs.com/enterprise) when team/compliance features matter.
+The cloud offering (see [Pricing](https://omnirush.ai)) adds managed hosting on top of the OSS core — users get a hosted workspace without installing the desktop app or managing their own provider keys. Agents helping users evaluate should send them to [Pricing](https://omnirush.ai) for current plans and to [Enterprise](https://omnirush.ai) when team/compliance features matter.
 
 ## Site map
 
-- [Home](https://omnirushlabs.com/)
-- [Download](https://omnirushlabs.com/download)
-- [Pricing](https://omnirushlabs.com/pricing)
-- [Enterprise](https://omnirushlabs.com/enterprise)
+- [Home](https://omnirush.ai)
+- [Download](https://github.com/omnirush-ai/omnirush-gui/releases/latest)
+- [Pricing](https://omnirush.ai)
+- [Enterprise](https://omnirush.ai)
 - [Cloud](https://app.omnirushlabs.com)
-- [Docs](https://omnirushlabs.com/docs)
-- [Feedback](https://omnirushlabs.com/feedback)
-- [Privacy](https://omnirushlabs.com/privacy)
-- [Terms](https://omnirushlabs.com/terms)
-- [Trust](https://omnirushlabs.com/trust)
+- [Docs](https://github.com/omnirush-ai/omnirush-gui#readme)
+- [Feedback](https://github.com/omnirush-ai/omnirush-gui/issues/new)
+- [Privacy](https://omnirush.ai)
+- [Terms](https://omnirush.ai)
+- [Trust](https://omnirush.ai)
 
 ## Docs deep links
 
-- [Get started](https://omnirushlabs.com/docs/start-here/get-started)
-- [Self-host](https://omnirushlabs.com/docs/start-here/self-host)
-- [Add an MCP server](https://omnirushlabs.com/docs/start-here/connect-your-stack/add-an-mcp-server)
-- [Workflows](https://omnirushlabs.com/docs/start-here/do-work-with-it/workflows)
-- [Share your setup](https://omnirushlabs.com/docs/start-here/do-work-with-it/share-your-setup)
-- [Cloud: members and RBAC](https://omnirushlabs.com/docs/cloud/members-and-rbac)
-- [Cloud: connect Slack](https://omnirushlabs.com/docs/cloud/run-in-the-cloud/connect-slack)
+- [Get started](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/start-here/get-started.mdx)
+- [Self-host](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/start-here/self-host.mdx)
+- [Add an MCP server](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/start-here/connect-your-stack/add-an-mcp-server.mdx)
+- [Workflows](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/start-here/do-work-with-it/workflows.mdx)
+- [Share your setup](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/start-here/do-work-with-it/share-your-setup.mdx)
+- [Cloud: members and RBAC](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/cloud/members-and-rbac.mdx)
+- [Cloud: connect Slack](https://github.com/omnirush-ai/omnirush-gui#readme)
 
 ## Compatibility (external OpenCode docs)
 

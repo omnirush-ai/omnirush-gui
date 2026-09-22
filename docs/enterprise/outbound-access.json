@@ -49,45 +49,45 @@
       "host": "api.omnirush.software",
       "kind": "fetched",
       "components": ["server"],
-      "purpose": "Legacy hosted OmniRush.ai Connect API origin retained for older Cloud configurations.",
+      "purpose": "Legacy hosted Connect API origin inherited from the upstream product and not operated by omnirush.ai. It remains only in a built-in Connect endpoint trust list.",
       "requirement": "optional",
-      "blockedEffect": "Older hosted configurations that still use the legacy API origin cannot reconcile OmniRush.ai Connect or native MCP Apps.",
+      "blockedEffect": "None for omnirush.ai installs; only configurations that still point at this legacy origin are affected.",
       "override": "self-hosted Den API origin"
     },
     {
       "host": "api.omnirushlabs.com",
       "kind": "fetched",
       "components": ["installer", "server"],
-      "purpose": "Legacy hosted OmniRush.ai public API origin retained for older install and Cloud configurations.",
+      "purpose": "Retired hosted Den public API origin. It remains only in built-in endpoint trust lists and the bootstrap CLI default, and is contacted only if a configuration points at it.",
       "requirement": "optional",
-      "blockedEffect": "Older hosted install or API configurations that still use this legacy origin cannot reach OmniRush.ai Cloud.",
+      "blockedEffect": "None. Retired hosted service: omnirush.ai runs no hosted Den and this host no longer resolves.",
       "override": "installer apiUrl / self-hosted Den API origin"
     },
     {
       "host": "api.app.omnirushlabs.com",
       "kind": "fetched",
       "components": ["desktop", "renderer", "server"],
-      "purpose": "Hosted OmniRush.ai Den API origin derived from app.omnirushlabs.com for desktop Den API and OmniRush.ai Connect MCP calls.",
-      "requirement": "required-for-cloud",
-      "blockedEffect": "Hosted Cloud desktop configuration, telemetry, sign-out, and OmniRush.ai Connect MCP calls cannot reach the Den API.",
+      "purpose": "Retired hosted Den API origin. It remains only in a built-in Connect endpoint trust list and is contacted only if a Den configuration points at it.",
+      "requirement": "optional",
+      "blockedEffect": "None. Retired hosted service: omnirush.ai runs no hosted Den and this host no longer resolves.",
       "override": "desktop apiBaseUrl / self-hosted Den API origin"
     },
     {
       "host": "app.omnirush.software",
       "kind": "fetched",
       "components": ["server"],
-      "purpose": "Legacy hosted OmniRush.ai Cloud web origin retained for older desktop configurations.",
+      "purpose": "Legacy hosted Cloud web origin inherited from the upstream product and not operated by omnirush.ai. It remains only in a built-in Connect endpoint trust list.",
       "requirement": "optional",
-      "blockedEffect": "Older hosted configurations that still derive Den MCP calls from the legacy web origin cannot reconcile OmniRush.ai Connect or native MCP Apps.",
+      "blockedEffect": "None for omnirush.ai installs; only configurations that still point at this legacy origin are affected.",
       "override": "desktop base URL (self-hosted Den replaces this host)"
     },
     {
       "host": "app.omnirushlabs.com",
       "kind": "fetched",
       "components": ["desktop", "renderer", "bootstrap"],
-      "purpose": "Hosted OmniRush.ai Cloud web origin; the desktop derives Den API and MCP calls from this base URL.",
-      "requirement": "required-for-cloud",
-      "blockedEffect": "Hosted Cloud sign-in, org settings, marketplace, and remote workspace flows cannot load.",
+      "purpose": "Retired hosted Den web origin. It remains only in built-in endpoint trust lists and the bootstrap CLI default; the desktop has no default Den and contacts it only if someone configures it as the Den base URL.",
+      "requirement": "optional",
+      "blockedEffect": "None. Retired hosted service: omnirush.ai runs no hosted Den and this host no longer resolves.",
       "override": "desktop base URL (self-hosted Den replaces this host)"
     },
     {
@@ -226,15 +226,6 @@
       "override": "MCP server URL setting"
     },
     {
-      "host": "models.omnirushlabs.com",
-      "kind": "fetched",
-      "components": ["server"],
-      "purpose": "First-party OpenCode model catalog mirror passed to managed OpenCode as OPENCODE_MODELS_URL.",
-      "requirement": "required-in-practice",
-      "blockedEffect": "The model catalog is unavailable or degraded; model selection may be stale or incomplete.",
-      "override": "OPENCODE_MODELS_URL"
-    },
-    {
       "host": "oauth2.googleapis.com",
       "kind": "fetched",
       "components": ["server"],
@@ -271,6 +262,15 @@
       "override": null
     },
     {
+      "host": "omnirush.ai",
+      "kind": "fetched",
+      "components": ["desktop"],
+      "purpose": "omnirush.ai account sign-in (device authorization) and the model gateway at /omnirush/v1 that serves the Astra and Sol models.",
+      "requirement": "required",
+      "blockedEffect": "Sign-in fails and the Astra and Sol models are unavailable.",
+      "override": "OMNIRUSH_GATEWAY_URL"
+    },
+    {
       "host": "opencode.ai",
       "kind": "fetched",
       "components": ["desktop", "renderer", "server"],
@@ -287,24 +287,6 @@
       "requirement": "opt-in",
       "blockedEffect": "Configured native OpenRouter models cannot generate responses.",
       "override": "provider options.baseURL"
-    },
-    {
-      "host": "omnirush.dev",
-      "kind": "link-only",
-      "components": ["renderer"],
-      "purpose": "Documentation and feedback links in the command palette.",
-      "requirement": "optional",
-      "blockedEffect": "Those external support links will not open.",
-      "override": null
-    },
-    {
-      "host": "omnirushlabs.com",
-      "kind": "link-only",
-      "components": ["desktop", "renderer"],
-      "purpose": "Documentation, feedback, support, and sample OmniRush.ai links.",
-      "requirement": "optional",
-      "blockedEffect": "Documentation or feedback links do not open; core app networking is unaffected.",
-      "override": "VITE_OMNIRUSH_FEEDBACK_URL for the feedback link only"
     },
     {
       "host": "raw.githubusercontent.com",

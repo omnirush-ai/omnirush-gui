@@ -27,7 +27,7 @@ import { useOrgDashboard } from "../../_providers/org-dashboard-provider";
 import { useAutomations } from "../automation-data";
 import { usePlugins } from "../plugin-data";
 
-const OMNIRUSH_DOCS_URL = "https://omnirushlabs.com/docs";
+const OMNIRUSH_DOCS_URL = "https://github.com/omnirush-ai/omnirush-gui#readme";
 const RECENTS_STORAGE_KEY = "den.command-palette.recents";
 const RECENTS_LIMIT = 8;
 

@@ -95,17 +95,17 @@ describe("markdown safety and links", () => {
   });
 
   test("keeps chat file link actions separate from simple surface links", () => {
-    const markdown = `[Open docs](./docs/readme.md) and [OmniRush.ai](https://omnirushlabs.com)`;
+    const markdown = `[Open docs](./docs/readme.md) and [OmniRush.ai](https://omnirush.ai)`;
     const chatHtml = renderMarkdownHtml(markdown);
     expect(chatHtml).toContain("data-omnirush-link-chevron");
     expect(chatHtml).toContain("data-omnirush-link-href");
-    expect(chatHtml).toContain('href="https://omnirushlabs.com"');
+    expect(chatHtml).toContain('href="https://omnirush.ai"');
 
     const surfaceHtml = renderPrimitiveMarkdownHtml(markdown, "surface");
     expect(surfaceHtml).not.toContain("data-omnirush-link-chevron");
     expect(surfaceHtml).not.toContain("data-omnirush-link-href");
     expect(surfaceHtml).toContain('href="./docs/readme.md"');
-    expect(surfaceHtml).toContain('href="https://omnirushlabs.com"');
+    expect(surfaceHtml).toContain('href="https://omnirush.ai"');
   });
 
   test("marks chat inline file paths as keyboard-accessible artifact links", () => {

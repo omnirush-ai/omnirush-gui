@@ -5,9 +5,9 @@
   "description": "Use the skills, MCP connections, and connected services assigned to you through OmniRush.ai.",
   "author": {
     "name": "OmniRush.ai",
-    "url": "https://omnirushlabs.com"
+    "url": "https://omnirush.ai"
   },
-  "homepage": "https://omnirushlabs.com/docs/cloud/run-in-the-cloud/cloud-mcp",
+  "homepage": "https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/cloud/run-in-the-cloud/cloud-mcp.mdx",
   "repository": "https://github.com/omnirush-ai/omnirush-gui",
   "license": "MIT",
   "keywords": [

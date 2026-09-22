@@ -121,7 +121,7 @@ exists: `automation-index.ts`, `resource.ts`) — explicitly out of scope for v1
 `remoteSession.create` and `remoteSession.send` results include a standard
 MCP Apps `ui://` card (pattern: `plugin-flow-app.ts` +
 `packages/mcp-apps` renderer): session title, state, last activity, and an
-**Open in OmniRush.ai Web** link (`https://web.omnirushlabs.com/...` deep link,
+**Open in OmniRush.ai Web** link (`<omnirush-web-origin>/...` deep link,
 resolved from runtime config — same origin den-web's "Web tab" uses). Clients
 without MCP Apps get text fallback with the same URL.
 

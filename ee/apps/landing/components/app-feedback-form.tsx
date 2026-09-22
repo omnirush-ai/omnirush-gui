@@ -23,7 +23,7 @@ type Props = {
 type SubmitState = "idle" | "loading" | "success" | "error";
 
 const INITIAL_MESSAGE = "";
-const TEAM_EMAIL = "team@omnirushlabs.com";
+const TEAM_EMAIL = "info@omnirush.ai";
 
 export function AppFeedbackForm(props: Props) {
   const mode = props.mode ?? "feedback";

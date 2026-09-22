@@ -96,7 +96,7 @@ describe("buildCloudProviderConfig", () => {
       name: "omnirush.ai Models",
       providerConfig: {
         npm: "@openrouter/ai-sdk-provider",
-        api: "https://inference.omnirushlabs.com/api/v1",
+        api: "https://inference.omnirush.example.com/api/v1",
         env: ["OMNIRUSH_API_KEY"],
       },
       hasApiKey: true,

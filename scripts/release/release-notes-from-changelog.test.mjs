@@ -62,7 +62,7 @@ test("release notes are extracted for exactly one version and keep the signing n
     assert(notes.includes("- First target bullet.\n- Second target bullet."))
     const links = new Set(notes.match(/https?:\/\/[^\s)]+/g))
     assert(links.has("https://github.com/omnirush-ai/omnirush-gui/compare/v0.18.37...v0.18.38"))
-    assert(links.has("https://omnirushlabs.com/docs/changelog"))
+    assert(links.has("https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/changelog.mdx"))
     assert(notes.trimEnd().endsWith("*Windows installers are signed using Microsoft Artifact Signing.*"))
 
     assert(!notes.includes("Newer bullet"))

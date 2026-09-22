@@ -45,6 +45,25 @@ describe("managed OpenCode startup", () => {
     } finally { await managed.close(); }
   });
 
+  test("passes the model-catalog fetch switch to the next engine", async () => {
+    const root = await createRoot();
+    const bin = await writeExecutable(root, "catalog-env.mjs", [
+      "const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {",
+      "  if (new URL(request.url).pathname === '/env') return Response.json({ disableFetch: process.env.OPENCODE_DISABLE_MODELS_FETCH ?? null });",
+      "  return Response.json({ healthy: true, version: 'test', pid: process.pid });",
+      "} });",
+      "console.log(`opencode server listening on http://127.0.0.1:${server.port}`);",
+      "process.on('SIGTERM', () => { server.stop(true); process.exit(0); });",
+    ]);
+    const managed = await createManagedOpencodeV2Server({
+      bin, rootDir: root,
+      env: { OPENCODE_DISABLE_MODELS_FETCH: "1" },
+    });
+    try {
+      expect(await managed.fetchJson("/env")).toEqual({ status: 200, json: { disableFetch: "1" } });
+    } finally { await managed.close(); }
+  });
+
   test("spawns the engine with npm audit disabled so first-run installs never wait on the advisories endpoint", async () => {
     const root = await createRoot();
     const defaultDumpPath = join(root, "default-env.log");

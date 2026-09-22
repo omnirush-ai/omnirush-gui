@@ -15,7 +15,7 @@ describe("Den endpoint sources", () => {
     expect(describeDenEndpointSource({
       storedValue: "https://custom.example.com/",
       bootstrapValue: "http://127.0.0.1:8788",
-      buildDefault: "https://app.omnirushlabs.com",
+      buildDefault: "https://app.omnirush.example.com",
     })).toEqual({
       effective: "http://127.0.0.1:8788",
       source: "bootstrap",
@@ -26,7 +26,7 @@ describe("Den endpoint sources", () => {
     const endpoint = describeDenEndpointSource({
       storedValue: null,
       bootstrapValue: "http://127.0.0.1:8788/api/den",
-      buildDefault: "https://app.omnirushlabs.com/api/den",
+      buildDefault: "https://app.omnirush.example.com/api/den",
     });
 
     expect(endpoint).toEqual({
@@ -47,9 +47,9 @@ describe("Den endpoint sources", () => {
     expect(describeDenEndpointSource({
       storedValue: null,
       bootstrapValue: null,
-      buildDefault: "https://app.omnirushlabs.com/",
+      buildDefault: "https://app.omnirush.example.com/",
     })).toEqual({
-      effective: "https://app.omnirushlabs.com",
+      effective: "https://app.omnirush.example.com",
       source: "default",
     });
   });
@@ -57,7 +57,7 @@ describe("Den endpoint sources", () => {
   test("detects MCP targets that do not match the API origin", () => {
     const target = describeCloudMcpTarget({
       mcpUrl: "https://other.example.com/mcp/agent",
-      effectiveApiBaseUrl: "https://app.omnirushlabs.com/api/den",
+      effectiveApiBaseUrl: "https://app.omnirush.example.com/api/den",
     });
 
     expect(target.url).toBe("https://other.example.com/mcp/agent");
@@ -68,7 +68,7 @@ describe("Den endpoint sources", () => {
   test("handles a missing MCP URL", () => {
     expect(describeCloudMcpTarget({
       mcpUrl: null,
-      effectiveApiBaseUrl: "https://app.omnirushlabs.com/api/den",
+      effectiveApiBaseUrl: "https://app.omnirush.example.com/api/den",
     })).toEqual({
       url: null,
       isLocalhost: false,

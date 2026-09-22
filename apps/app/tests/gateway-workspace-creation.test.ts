@@ -41,7 +41,7 @@ afterEach(() => {
 
 describe("workspace creation policy", () => {
   test("disables workspace creation in gateway runtime", () => {
-    installWindow({ origin: "https://web.omnirushlabs.com", gateway: true });
+    installWindow({ origin: "https://web.omnirush.example.com", gateway: true });
     expect(canCreateWorkspaces()).toBe(false);
   });
 

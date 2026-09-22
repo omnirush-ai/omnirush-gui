@@ -12,7 +12,7 @@ import {
   type ManagedOpencodeV2Server,
   type OpencodeV2ProviderSpec,
 } from "./managed-opencode-v2.js";
-import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
+import { resolveOpencodeModelsEnv } from "./opencode-models-url.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import {
   isEngineGlobalRuntimeConfigId,
@@ -489,11 +489,11 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
     binSource = resolved.source;
     if (!enabled || !allowRunning) return;
     await mkdir(workspaceDir, { recursive: true });
-    const opencodeModelsUrl = await resolveOpencodeModelsUrl();
+    const opencodeModelsEnv = await resolveOpencodeModelsEnv();
     const managed = await createManagedOpencodeV2Server({
       bin: resolved.bin,
       rootDir,
-      env: { OPENCODE_MODELS_URL: opencodeModelsUrl, OMNIRUSH_SERVER_URL: `http://127.0.0.1:${config.port}`, OMNIRUSH_POLICY_TOKEN: managedDesktopPolicy(config).evaluationToken },
+      env: { ...opencodeModelsEnv, OMNIRUSH_SERVER_URL: `http://127.0.0.1:${config.port}`, OMNIRUSH_POLICY_TOKEN: managedDesktopPolicy(config).evaluationToken },
       permissions: async () => executionRules((await readGlobalRuntimeOpencodeConfig(config)).managedPolicy?.execution),
     });
     sidecar = managed;

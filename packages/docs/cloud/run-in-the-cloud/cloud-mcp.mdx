@@ -1,25 +1,29 @@
 ---
 title: "OmniRush.ai MCP Gateway"
 sidebarTitle: "Overview"
-description: "The OmniRush.ai MCP Gateway is one hosted endpoint that brings your organization's skills, plugins, and connections into Claude Code, Codex, Claude Desktop, Cursor, VS Code, or any MCP client."
+description: "The OmniRush.ai MCP Gateway is one endpoint on a self-hosted Den that brings your organization's skills, plugins, and connections into Claude Code, Codex, Claude Desktop, Cursor, VS Code, or any MCP client."
 ---
 
 import { OmniRushConnectInstaller } from "/snippets/omnirush-connect-installer.jsx";
 
-The OmniRush.ai MCP Gateway is one MCP endpoint for everything your organization has made available to you: skills, plugins, workflows, and connections. Instead of configuring one MCP server per service, your agent connects to the gateway once and discovers capabilities on demand. The public hosted endpoint is:
+The OmniRush.ai MCP Gateway is one MCP endpoint for everything your organization has made available to you: skills, plugins, workflows, and connections. Instead of configuring one MCP server per service, your agent connects to the gateway once and discovers capabilities on demand. The endpoint is the `/mcp/agent` path on your Den's API origin, for example:
 
 ```text
-https://api.omnirushlabs.com/mcp/agent
+https://api.omnirush.example.com/mcp/agent
 ```
+
+<Note>
+omnirush.ai does not run a hosted Den, so there is no public gateway endpoint. The gateway is part of a [self-hosted Den](/start-here/self-host); replace `api.omnirush.example.com` (API origin) and `omnirush.example.com` (web origin) on this page with your deployment's origins.
+</Note>
 
 This guide is for connecting an external MCP client to OmniRush.ai. To connect
 Gmail, calendar, Drive, Slack, Notion, Linear, or another service inside the
 OmniRush.ai desktop app, use
 [Connect your services](/start-here/connect-your-stack/connect-services).
 
-Your client opens a browser, you sign in to OmniRush.ai, choose the organization to authorize, and the client stores the OAuth token for that organization.
+Your client opens a browser, you sign in to your Den, choose the organization to authorize, and the client stores the OAuth token for that organization.
 
-`app.omnirushlabs.com/api/den` is an internal same-origin desktop proxy used by OmniRush.ai first-party flows. Do not paste it into external MCP clients.
+`omnirush.example.com/api/den` (the `/api/den` path on your Den web origin) is an internal same-origin desktop proxy used by OmniRush.ai first-party flows. Do not paste it into external MCP clients.
 
 <OmniRushConnectInstaller />
 
@@ -73,7 +77,7 @@ Add this MCP entry to your OpenCode config:
     "omnirush": {
       "type": "remote",
       "enabled": true,
-      "url": "https://api.omnirushlabs.com/mcp/agent",
+      "url": "https://api.omnirush.example.com/mcp/agent",
       "oauth": {}
     }
   }
@@ -105,7 +109,7 @@ Codex is setup-only for this PR until its native OAuth flow is rerun on this exa
 Add OmniRush.ai, then log in:
 
 ```sh
-codex mcp add omnirush --url https://api.omnirushlabs.com/mcp/agent
+codex mcp add omnirush --url https://api.omnirush.example.com/mcp/agent
 codex mcp login omnirush
 ```
 
@@ -123,7 +127,7 @@ Full guide: [OmniRush.ai MCP for Codex](/model-context-protocol/codex).
 Paste the OmniRush.ai Connect endpoint where Cursor asks for the remote MCP server URL, then start OAuth from Cursor's connection prompt:
 
 ```text
-https://api.omnirushlabs.com/mcp/agent
+https://api.omnirush.example.com/mcp/agent
 ```
 
 Cursor Web/Agents use an HTTPS OAuth callback. Cursor Desktop OAuth uses the private-use callback `cursor://anysphere.cursor-mcp/oauth/callback`, which OmniRush.ai accepts through an exact allowlist with PKCE S256 enforced, so intercepted authorization codes cannot be redeemed without the code verifier.
@@ -135,7 +139,7 @@ Full guide: [OmniRush.ai MCP for Cursor](/model-context-protocol/cursor).
 Open ChatGPT `Settings > MCP servers` ([open settings](https://chatgpt.com/#settings/Connectors)), paste the OmniRush.ai Connect endpoint, and start OAuth from ChatGPT's connection prompt:
 
 ```text
-https://api.omnirushlabs.com/mcp/agent
+https://api.omnirush.example.com/mcp/agent
 ```
 
 Full guide: [OmniRush.ai MCP for ChatGPT](/model-context-protocol/chatgpt).
@@ -146,9 +150,9 @@ The organization you choose in the browser is pinned into the token. Changing th
 
 ## What you can ask the agent
 
-Once connected, your agent can use OmniRush.ai capabilities from plain English in the composer. These flows are exercised end to end against a live OmniRush.ai Cloud deployment:
+Once connected, your agent can use OmniRush.ai capabilities from plain English in the composer. These flows are exercised end to end against a live Den deployment:
 
-- **Check your cloud identity** — "Which OmniRush.ai Cloud organization am I
+- **Check your cloud identity** — "Which OmniRush.ai organization am I
   connected to?" The agent reports the organization, your account, and your
   role.
 - **Invite teammates** — "Add omar@example.com to my organization." The agent
@@ -167,10 +171,10 @@ Org policy still applies: invitations respect seat limits and domain rules, and 
 
 OmniRush.ai Connect is a remote Streamable HTTP MCP server with OAuth:
 
-- The protected resource is exactly `https://api.omnirushlabs.com/mcp/agent`.
+- The protected resource is exactly the gateway URL, for example `https://api.omnirush.example.com/mcp/agent`.
 - Clients discover OAuth metadata with RFC9728 protected-resource discovery.
-- The authorization server and browser sign-in origin is `https://app.omnirushlabs.com/api/auth`.
-- OAuth authorize and token requests must include exactly one `resource` value: `https://api.omnirushlabs.com/mcp/agent`.
+- The authorization server and browser sign-in origin is the Den web origin's auth path, for example `https://omnirush.example.com/api/auth`.
+- OAuth authorize and token requests must include exactly one `resource` value: the gateway URL.
 - Clients that need registration use dynamic client registration as a fallback during discovery.
 - PKCE is required for public/dynamic clients, and only the `S256` code challenge method is supported.
 - Redirect URIs must be HTTPS callbacks or HTTP loopback callbacks such as `http://127.0.0.1:<port>/callback`. Private-use callback schemes are not accepted for public OAuth clients, except exact allowlisted callbacks for known native clients — currently Cursor Desktop's `cursor://anysphere.cursor-mcp/oauth/callback` — with PKCE S256 enforced.
@@ -179,7 +183,7 @@ OmniRush.ai Connect is a remote Streamable HTTP MCP server with OAuth:
 
 Clients normally refresh automatically. The values matter when diagnosing reconnects:
 
-- Public OAuth access tokens are JWTs signed and validated with EdDSA. The issuer is exactly `https://app.omnirushlabs.com/api/auth`, the audience is exactly `https://api.omnirushlabs.com/mcp/agent`, and access tokens expire after 45 minutes.
+- Public OAuth access tokens are JWTs signed and validated with EdDSA. The issuer is exactly the auth origin (for example `https://omnirush.example.com/api/auth`), the audience is exactly the gateway URL, and access tokens expire after 45 minutes.
 - Refresh tokens are opaque rotating grants with a 30-day inactivity window and a 30-second rotation overlap for near-simultaneous refreshes.
 - Each refresh revokes the previous refresh grant; because OmniRush.ai stores only token hashes, a replay during the overlap can issue another successor instead of returning prior plaintext.
 - Successor grants remain normal rotating grants. If an old refresh grant is replayed after the overlap, expired, or revoked, the client may receive `invalid_grant` and the client/user refresh-token family is revoked. Reconnect by logging out of the MCP entry and authenticating again.
@@ -210,15 +214,15 @@ MCP Apps from third-party providers — apps shipped by an MCP server your organ
 
 ## Troubleshooting
 
-- **401 missing or invalid token**: run the client's auth/login command again. Confirm the client points to `https://api.omnirushlabs.com/mcp/agent`.
+- **401 missing or invalid token**: run the client's auth/login command again. Confirm the client points to your Den's `/mcp/agent` URL.
 - **403 membership or scope error**: confirm you selected the right organization and still have membership and required permissions there.
 - **`invalid_grant`**: the refresh grant was expired, revoked, or replayed after the 30-second rotation overlap. Run logout, then auth/login again.
 - **429 rate limit**: wait for the response's `Retry-After` value before retrying.
-- **Support requests**: include the response `X-Request-Id` header plus any JSON body MCP `referenceId` or OAuth `reference_id` field so OmniRush.ai support can find the server-side trace.
+- **Support requests**: include the response `X-Request-Id` header plus any JSON body MCP `referenceId` or OAuth `reference_id` field so your Den operator can find the server-side trace.
 
 ## Requirements
 
-- An OmniRush.ai Cloud account and organization.
+- An account and organization on a self-hosted Den.
 - An MCP client that supports remote Streamable HTTP MCP servers.
 - OAuth support in the MCP client, including browser-based authorization.
 

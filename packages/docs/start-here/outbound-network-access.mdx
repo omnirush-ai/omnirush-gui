@@ -5,44 +5,42 @@ description: "Customer IT allowlist guidance for OmniRush.ai desktop, Den, deplo
 
 OmniRush.ai works best when customer IT approves outbound access by component. The canonical machine-readable source is [`docs/enterprise/outbound-access.json`](https://github.com/omnirush-ai/omnirush-gui/blob/main/docs/enterprise/outbound-access.json). CI guards that file with `node scripts/check-outbound-access.mjs`; this page is the published human-readable summary.
 
-## Minimum hosted desktop allowlist
+## Minimum desktop allowlist
 
-For a practical OmniRush.ai Cloud desktop install, allow TCP 443 to these hosts:
+For a practical omnirush.ai desktop install, allow TCP 443 to these hosts:
 
 ```text
-app.omnirushlabs.com
-api.app.omnirushlabs.com
+omnirush.ai
 github.com
 release-assets.githubusercontent.com
 objects.githubusercontent.com
 registry.npmjs.org
-models.omnirushlabs.com
 ```
+
+If the desktop connects to a self-hosted Den, also allow its web origin (and its API origin when that is separate). omnirush.ai does not run a hosted Den.
 
 Common misses:
 
 - GitHub release downloads redirect away from `github.com`. Allow `release-assets.githubusercontent.com`, which is the current verified GitHub release-asset host, and `objects.githubusercontent.com`, which is kept for older clients and rollback paths.
 - `registry.npmjs.org` is used when packaged desktop builds start `npx -y omnirush-ui-mcp`. If it is blocked, the desktop can still open, but UI-control MCP is unavailable.
-- `models.omnirushlabs.com` is the default OpenCode model catalog. Set `OPENCODE_MODELS_URL` to an approved internal mirror if the public catalog is blocked.
+- The desktop fetches no model catalog by default; the engine uses the model list bundled with it. Set `OPENCODE_MODELS_URL` to an approved internal mirror if you need fresher model metadata.
 
 ## Desktop and local runtime destinations
 
 | Host | Requirement | Why it is reached | What breaks when blocked |
 | --- | --- | --- | --- |
-| `app.omnirushlabs.com` | Required for OmniRush.ai Cloud | Hosted Cloud web origin. The desktop uses one base URL and derives Den API/MCP calls through `/api/den/...`. | Cloud sign-in, org settings, Collections, and remote workspace flows cannot load. |
-| `api.app.omnirushlabs.com` | Required for hosted install and OmniRush.ai Connect | Hosted public API and OmniRush.ai Connect MCP endpoint used by install and external-client flows. | Hosted install checks and public OmniRush.ai Connect fail. |
-| `app.omnirush.software`, `api.omnirush.software` | Required only for legacy hosted configurations | Older desktop configurations may still derive Cloud and OmniRush.ai Connect traffic from these legacy hosted origins. | Legacy configurations cannot reconcile OmniRush.ai Connect or native MCP Apps until moved to the current hosted origins. |
-| Your self-hosted Den web origin | Required for self-hosted desktop | Replaces `app.omnirushlabs.com` for signed-in desktop traffic. In the single-origin shape, API and MCP use `/api/den/...` on the same origin. | The desktop cannot sign in or reach Den. |
+| `omnirush.ai` | Required | omnirush.ai account sign-in and the model gateway (`/omnirush/v1`) that serves the Astra and Sol models. | Sign-in fails and the Astra and Sol models are unavailable. |
+| Your self-hosted Den web origin | Required for self-hosted desktop | The Den base URL the desktop is configured with; there is no hosted default. The desktop derives Den API/MCP calls from it through `/api/den/...` on the same origin. | The desktop cannot sign in to the Den or reach Den features. |
 | Your separate Den API origin, if configured | Required only for that topology | Used by one-time install-link exchange and external MCP clients when `DEN_API_PUBLIC_URL` points at a separate origin. | Install-link handoff or external MCP clients cannot complete. |
 | `github.com` | Required in practice unless mirrored | Installer/updater release URLs, GitHub issue links, and GitHub plugin source URLs. | Install/update downloads cannot start; GitHub links may not open. |
 | `release-assets.githubusercontent.com` | Required in practice unless mirrored | Current GitHub release-asset redirect target. | Downloads start from `github.com` and fail partway through. |
 | `objects.githubusercontent.com` | Required in practice for legacy/rollback | Legacy GitHub release-asset redirect target. | Older clients or rollback downloads can fail partway through. |
 | `registry.npmjs.org` | Required in practice unless npm is mirrored | `npx` package resolution for `omnirush-ui-mcp` and development-only helper commands. | OmniRush.ai UI-control MCP is unavailable. |
-| `models.omnirushlabs.com` | Required in practice unless mirrored | Default OpenCode model catalog passed as `OPENCODE_MODELS_URL`. | Model selection can be stale, incomplete, or unavailable. |
+| Your model catalog mirror, if configured | Optional | Model catalog passed to the engine as `OPENCODE_MODELS_URL`. There is no default catalog. | The engine keeps the model list bundled with it. |
 | `cdn.simpleicons.org` | Optional | Provider icons when no local icon exists. | Some icons are missing. |
 | `www.google.com` | Optional | Favicon image service and embedded browser new-tab page. | Favicons or the browser panel new tab may not load. |
 | `us.i.posthog.com` | Optional | Product analytics when analytics are enabled. | Analytics are dropped silently. |
-| `omnirushlabs.com`, `omnirush.dev`, `discord.gg`, `ollama.com`, `opencode.ai`, `linear.app`, `mail.google.com` | Optional or link-only | Docs, feedback, community, provider help, local model links, sample links, and generated Gmail links. | Links do not open; core app behavior is unaffected. |
+| `discord.gg`, `ollama.com`, `opencode.ai`, `linear.app`, `mail.google.com` | Optional or link-only | Docs, feedback, community, provider help, local model links, sample links, and generated Gmail links. | Links do not open; core app behavior is unaffected. |
 
 `code.claude.com` and `schemas.agentskills.io` appear in source or schema metadata. They are findable in the manifest, but OmniRush.ai does not fetch them for normal runtime behavior.
 

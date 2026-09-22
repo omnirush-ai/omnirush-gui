@@ -45,7 +45,7 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: metadataBaseFromOrigin(metadataOrigin),
     title: "OmniRush.ai Cloud",
     description:
-      "Share your OmniRush.ai setup with your team, manage billing, and use OmniRush.ai Cloud from app.omnirushlabs.com.",
+      "Share your OmniRush.ai setup with your team, manage billing, and use OmniRush.ai Cloud from your Den.",
     openGraph: {
       title: "OmniRush.ai Cloud",
       description:
@@ -56,7 +56,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title: "OmniRush.ai Cloud",
       description:
-        "Share your OmniRush.ai setup with your team and manage OmniRush.ai Cloud from app.omnirushlabs.com.",
+        "Share your OmniRush.ai setup with your team and manage OmniRush.ai Cloud from your Den.",
       images: ["/opengraph-image"]
     },
     icons: {

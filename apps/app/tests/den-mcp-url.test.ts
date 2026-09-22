@@ -11,18 +11,18 @@ import {
 describe("resolveDenBaseUrls", () => {
   test("adds the API proxy path to an explicit API base URL", () => {
     const resolved = resolveDenBaseUrls({
-      baseUrl: "https://app.omnirushlabs.com",
-      apiBaseUrl: "https://app.omnirushlabs.com",
+      baseUrl: "https://app.omnirush.example.com",
+      apiBaseUrl: "https://app.omnirush.example.com",
     });
-    expect(resolved.apiBaseUrl).toBe("https://app.omnirushlabs.com");
+    expect(resolved.apiBaseUrl).toBe("https://app.omnirush.example.com");
   });
 
   test("keeps an explicit API origin independent from the web base URL", () => {
     const resolved = resolveDenBaseUrls({
-      baseUrl: "https://app.omnirushlabs.com",
+      baseUrl: "https://app.omnirush.example.com",
       apiBaseUrl: "https://api.example.com",
     });
-    expect(resolved.baseUrl).toBe("https://app.omnirushlabs.com");
+    expect(resolved.baseUrl).toBe("https://app.omnirush.example.com");
     expect(resolved.apiBaseUrl).toBe("https://api.example.com");
   });
 
@@ -70,12 +70,12 @@ describe("getDenMcpUrl", () => {
 
 describe("isLegacyWebAppMcpUrl", () => {
   test("flags the legacy bare web-app MCP URL", () => {
-    expect(isLegacyWebAppMcpUrl("https://app.omnirushlabs.com/mcp")).toBe(true);
+    expect(isLegacyWebAppMcpUrl("https://app.omnirush.example.com/mcp")).toBe(true);
     expect(isLegacyWebAppMcpUrl("https://app.omnirush.software/mcp/")).toBe(true);
   });
 
   test("accepts valid MCP URLs", () => {
-    expect(isLegacyWebAppMcpUrl("https://app.omnirushlabs.com/api/den/mcp")).toBe(false);
+    expect(isLegacyWebAppMcpUrl("https://app.omnirush.example.com/api/den/mcp")).toBe(false);
     expect(isLegacyWebAppMcpUrl("http://127.0.0.1:8787/mcp")).toBe(false);
   });
 
@@ -109,7 +109,7 @@ describe("resolveCloudMcpResourceUrl", () => {
     expect(resolveCloudMcpResourceUrl("")).toBeNull();
     expect(resolveCloudMcpResourceUrl("   ")).toBeNull();
     expect(resolveCloudMcpResourceUrl("not a url")).toBeNull();
-    expect(resolveCloudMcpResourceUrl("ftp://app.omnirushlabs.com/mcp")).toBeNull();
+    expect(resolveCloudMcpResourceUrl("ftp://app.omnirush.example.com/mcp")).toBeNull();
   });
 });
 

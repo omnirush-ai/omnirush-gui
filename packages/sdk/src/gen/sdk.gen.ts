@@ -5809,7 +5809,7 @@ export class DenClient extends HeyApiClient {
   /**
    * Share a Google Drive file with a person or the organization
    *
-   * Creates a Drive permission for one file using the calling member's Google Workspace account. To share with one person pass type=user plus emailAddress; to share with the entire organization pass type=domain plus the org's Google Workspace domain (e.g. omnirushlabs.com). Sharing files not created through OmniRush.ai needs the Full Drive access feature enabled by an admin.
+   * Creates a Drive permission for one file using the calling member's Google Workspace account. To share with one person pass type=user plus emailAddress; to share with the entire organization pass type=domain plus the org's Google Workspace domain (e.g. example.com). Sharing files not created through OmniRush.ai needs the Full Drive access feature enabled by an admin.
    */
   public postV1CapabilitiesGoogleWorkspaceDriveFileShareByFileId<ThrowOnError extends boolean = false>(
     parameters: {

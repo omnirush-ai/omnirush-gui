@@ -7,7 +7,7 @@
   "homepage": "https://omnirush.ai",
   "author": {
     "name": "OmniRush.ai",
-    "email": "69191476+ogsamrat@users.noreply.github.com"
+    "email": "info@omnirush.ai"
   },
   "main": "electron/main.mjs",
   "type": "module",

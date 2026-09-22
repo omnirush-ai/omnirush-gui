@@ -88,8 +88,8 @@ function createOrganizationApp() {
 }
 
 test("normalizeToolBody parses JSON-encoded string bodies into objects", () => {
-  expect(invokeModule.normalizeToolBody('{"email":"ben+demogods@omnirushlabs.com","role":"member"}')).toEqual({
-    email: "ben+demogods@omnirushlabs.com",
+  expect(invokeModule.normalizeToolBody('{"email":"someone+demo@example.com","role":"member"}')).toEqual({
+    email: "someone+demo@example.com",
     role: "member",
   })
   expect(invokeModule.normalizeToolBody('  [{"a":1}]  ')).toEqual([{ a: 1 }])
@@ -110,12 +110,12 @@ test("invitation POST forwarded with an object body passes route validation", as
     env: {},
     operation: inviteOperation,
     principal,
-    toolInput: { body: { email: "ben+demogods@omnirushlabs.com", role: "member" } },
+    toolInput: { body: { email: "someone+demo@example.com", role: "member" } },
   })
 
   expect(result.isError).toBe(false)
   expect(JSON.parse(result.content[0]?.text ?? "")).toEqual({
-    received: { email: "ben+demogods@omnirushlabs.com", role: "member" },
+    received: { email: "someone+demo@example.com", role: "member" },
   })
 })
 
@@ -147,7 +147,7 @@ test("read-only MCP principals cannot invoke write operations", async () => {
     env: {},
     operation: inviteOperation,
     principal: createPrincipal(["mcp:read"]),
-    toolInput: { body: { email: "ben+demogods@omnirushlabs.com", role: "member" } },
+    toolInput: { body: { email: "someone+demo@example.com", role: "member" } },
   })
 
   expect(result.isError).toBe(true)
@@ -198,12 +198,12 @@ test("invitation POST forwarded with a JSON-encoded string body no longer fails 
     env: {},
     operation: inviteOperation,
     principal,
-    toolInput: { body: '{"email":"ben+demogods@omnirushlabs.com","role":"member"}' },
+    toolInput: { body: '{"email":"someone+demo@example.com","role":"member"}' },
   })
 
   expect(result.isError).toBe(false)
   expect(JSON.parse(result.content[0]?.text ?? "")).toEqual({
-    received: { email: "ben+demogods@omnirushlabs.com", role: "member" },
+    received: { email: "someone+demo@example.com", role: "member" },
   })
 })
 

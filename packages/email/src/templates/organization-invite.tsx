@@ -44,7 +44,7 @@ export function OrganizationInviteEmail({
           <Text style={styles.footer}>
             You received this email because someone invited you to an OmniRush.ai workspace.
             <br />
-            OmniRush.ai · omnirushlabs.com
+            omnirush.ai
           </Text>
         </Container>
       </Body>

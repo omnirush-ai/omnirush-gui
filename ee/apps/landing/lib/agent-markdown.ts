@@ -13,13 +13,13 @@ const home = `# OmniRush.ai
 
 ## Primary calls-to-action
 
-- **Download for free** — [Desktop](https://omnirushlabs.com/download)
+- **Download for free** — [Desktop](https://github.com/omnirush-ai/omnirush-gui/releases/latest)
 - **Open in your browser** — [OmniRush.ai Web](https://app.omnirushlabs.com)
-- **Team plans** — [Pricing](https://omnirushlabs.com/pricing) (first 5 seats free, then \\$10 per seat/mo)
+- **Team plans** — [Pricing](https://omnirush.ai) (first 5 seats free, then \\$10 per seat/mo)
 - **Sign in to the hosted workspace** — [Cloud](https://app.omnirushlabs.com)
-- **SSO / audit / procurement** — [Enterprise](https://omnirushlabs.com/enterprise)
-- **Docs** — [omnirushlabs.com/docs](https://omnirushlabs.com/docs)
-- **Migrate from Claude Cowork** — [Migration guide](https://omnirushlabs.com/docs/start-here/migrate-from-claude-cowork)
+- **SSO / audit / procurement** — [Enterprise](https://omnirush.ai)
+- **Docs** — [README](https://github.com/omnirush-ai/omnirush-gui#readme)
+- **Migrate from Claude Cowork** — [Migration guide](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/start-here/migrate-from-claude-cowork.mdx)
 
 ## How it compares
 
@@ -81,7 +81,7 @@ const pricing = `# OmniRush.ai pricing — free, team, and enterprise
 - Custom skill development and MCP consulting
 - Enterprise rollout support and custom commercial terms
 - Existing organizations already using SSO or desktop policies keep full access (grandfathered)
-- CTA: [Talk to us](https://omnirushlabs.com/enterprise#book)
+- CTA: [Talk to us](mailto:info@omnirush.ai?subject=Enterprise)
 
 Prices exclude taxes.
 `
@@ -107,9 +107,9 @@ const enterprise = `# A privacy-first alternative to Claude Cowork for your orga
 
 ## Next step
 
-- [Book a call](https://omnirushlabs.com/enterprise#book)
-- [Security Review](https://omnirushlabs.com/trust) — data handling, subprocessors, and incident SLA
-- See [Pricing](https://omnirushlabs.com/pricing) for tier comparison
+- [Email us](mailto:info@omnirush.ai?subject=Enterprise)
+- [Security Review](https://omnirush.ai) — data handling, subprocessors, and incident SLA
+- See [Pricing](https://omnirush.ai) for tier comparison
 `
 
 const trust = `# Trust & Security
@@ -145,7 +145,7 @@ const trust = `# Trust & Security
 
 ## Security contact
 
-Omar McAdam — team+security@omnirushlabs.com
+info@omnirush.ai (subject: security)
 `
 
 const glm52 = `# GLM 5.2 is now in OmniRush.ai — with 2x usage
@@ -173,8 +173,8 @@ Open OmniRush.ai, switch to GLM 5.2, and ask the chat to organize your tasks.
 ## Links
 
 - [Try GLM 5.2 in OmniRush.ai](https://app.omnirushlabs.com?mode=sign-up&intent=models)
-- [Download the app](https://omnirushlabs.com/download)
-- [Full changelog](https://omnirushlabs.com/docs/changelog)
+- [Download the app](https://github.com/omnirush-ai/omnirush-gui/releases/latest)
+- [Full changelog](https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/changelog.mdx)
 `
 
 const download = `# Get Started with OmniRush.ai
@@ -206,7 +206,7 @@ const connect = `# OmniRush.ai Connect
 - Works in OmniRush.ai and any MCP-compatible client
 - First 5 seats are free
 - [Get started free](https://app.omnirushlabs.com?mode=sign-up)
-- [Read the docs](https://omnirushlabs.com/docs)
+- [Read the docs](https://github.com/omnirush-ai/omnirush-gui#readme)
 `
 
 const cloud = `# OmniRush.ai Cloud
@@ -218,7 +218,7 @@ const cloud = `# OmniRush.ai Cloud
 - Manage members, policies, usage, and audit
 - OmniRush.ai Web and the Connect MCP gateway are built in
 - [Get started free](https://app.omnirushlabs.com?mode=sign-up)
-- [Explore Connect](https://omnirushlabs.com/connect)
+- [Explore Connect](https://omnirush.ai)
 `
 
 export const agentMarkdown: Record<string, string> = {

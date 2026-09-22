@@ -3,7 +3,7 @@
 import { buttonVariants } from "../../_components/ui/button";
 
 const ENTERPRISE_CONTACT_URL =
-  process.env.NEXT_PUBLIC_ENTERPRISE_CONTACT_URL || "https://omnirushlabs.com/enterprise#book";
+  process.env.NEXT_PUBLIC_ENTERPRISE_CONTACT_URL || "mailto:info@omnirush.ai?subject=Enterprise";
 
 type Props = {
   feature: string;

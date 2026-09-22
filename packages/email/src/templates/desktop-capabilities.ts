@@ -1,4 +1,4 @@
-export const DEFAULT_OMNIRUSH_DOWNLOAD_URL = "https://omnirushlabs.com/download"
+export const DEFAULT_OMNIRUSH_DOWNLOAD_URL = "https://github.com/omnirush-ai/omnirush-gui/releases/latest"
 
 export type DesktopCapability = {
   title: string

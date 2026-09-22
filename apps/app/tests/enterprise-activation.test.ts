@@ -57,7 +57,7 @@ describe("enterprise desktop activation", () => {
     expect(enterpriseActivationRequired(enterpriseDistribution, {
       enterpriseActivation: {
         activatedAt: "2026-07-27T12:00:00.000Z",
-        denBaseUrl: "https://app.omnirushlabs.com",
+        denBaseUrl: "https://app.omnirush.example.com",
       },
     })).toBe(false);
   });
@@ -76,10 +76,10 @@ describe("enterprise desktop activation", () => {
 
   test("uses the standard Den auth deep-link shape", () => {
     expect(parseDenAuthDeepLink(
-      "omnirush://den-auth?grant=one-time-grant&denBaseUrl=https%3A%2F%2Fapp.omnirushlabs.com",
+      "omnirush://den-auth?grant=one-time-grant&denBaseUrl=https%3A%2F%2Fapp.omnirush.example.com",
     )).toEqual({
       grant: "one-time-grant",
-      denBaseUrl: "https://app.omnirushlabs.com",
+      denBaseUrl: "https://app.omnirush.example.com",
     });
   });
 

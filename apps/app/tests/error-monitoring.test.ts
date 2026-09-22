@@ -51,10 +51,10 @@ describe("shouldMonitorWebErrors", () => {
 describe("sanitizePageUrl", () => {
   test("strips credential-bearing query strings and fragments", () => {
     expect(
-      sanitizePageUrl("https://app.omnirushlabs.com/signin?grant=secret-grant&omnirushToken=tok#accessToken=at"),
-    ).toBe("https://app.omnirushlabs.com/signin");
-    expect(sanitizePageUrl("https://app.omnirushlabs.com/chat/abc?accessToken=x")).toBe(
-      "https://app.omnirushlabs.com/chat/abc",
+      sanitizePageUrl("https://app.omnirush.example.com/signin?grant=secret-grant&omnirushToken=tok#accessToken=at"),
+    ).toBe("https://app.omnirush.example.com/signin");
+    expect(sanitizePageUrl("https://app.omnirush.example.com/chat/abc?accessToken=x")).toBe(
+      "https://app.omnirush.example.com/chat/abc",
     );
   });
 
@@ -70,7 +70,7 @@ describe("buildWebErrorEvent", () => {
       type: "TypeError",
       message: "x is not a function",
       stack: "TypeError: x is not a function\n  at boot",
-      url: "https://app.omnirushlabs.com/",
+      url: "https://app.omnirush.example.com/",
       release: "abc123",
       phase: "boot",
     });
@@ -80,7 +80,7 @@ describe("buildWebErrorEvent", () => {
     expect(event.environment).toBe("web");
     expect(event.release).toBe("abc123");
     expect(event.tags).toEqual({ boot_phase: "boot" });
-    expect(event.request).toEqual({ url: "https://app.omnirushlabs.com/" });
+    expect(event.request).toEqual({ url: "https://app.omnirush.example.com/" });
     expect(event.exception.values).toEqual([{ type: "TypeError", value: "x is not a function" }]);
     expect(event.extra).toEqual({ stack: "TypeError: x is not a function\n  at boot" });
     // Never any user/session/content fields.
@@ -102,7 +102,7 @@ describe("buildWebErrorEvent", () => {
     const event = buildWebErrorEvent({
       type: "Error",
       message: "m".repeat(5000),
-      url: "https://app.omnirushlabs.com/",
+      url: "https://app.omnirush.example.com/",
       phase: "runtime",
     });
     expect(event.exception.values[0].value).toHaveLength(1000);
@@ -116,7 +116,7 @@ describe("buildSentryEnvelope", () => {
     const event = buildWebErrorEvent({
       type: "Error",
       message: "boom",
-      url: "https://app.omnirushlabs.com/",
+      url: "https://app.omnirush.example.com/",
       phase: "runtime",
     });
     const lines = buildSentryEnvelope(event).split("\n");

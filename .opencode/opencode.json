@@ -17,13 +17,5 @@
       }
     }
   },
-  "plugin": ["opencode-chrome-devtools@1.0.4"],
-  "mcp": {
-    "omnirush": {
-      "type": "remote",
-      "enabled": true,
-      "url": "https://api.omnirushlabs.com/mcp/agent",
-      "oauth": {}
-    }
-  }
+  "plugin": ["opencode-chrome-devtools@1.0.4"]
 }

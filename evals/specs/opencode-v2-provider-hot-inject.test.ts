@@ -11,7 +11,7 @@ import {
   installOpencodeV2Binary,
   type ManagedOpencodeV2Server,
 } from "../../apps/server/src/managed-opencode-v2";
-import { resolveOpencodeModelsUrl } from "../../apps/server/src/opencode-models-url";
+import { resolveOpencodeModelsEnv } from "../../apps/server/src/opencode-models-url";
 
 
 interface WitnessRequest {
@@ -104,13 +104,13 @@ test("opencode v2 injects providers at runtime without an engine reload", { time
   let server: ManagedOpencodeV2Server | undefined;
 
   try {
-    const opencodeModelsUrl = await resolveOpencodeModelsUrl();
+    const opencodeModelsEnv = await resolveOpencodeModelsEnv();
     let occupiedPortRejected = false;
     try {
       const impostor = await createManagedOpencodeV2Server({
         bin: binary, rootDir: join(rootDir, "occupied-port"), port: witnessAddress.port,
         bootTimeoutMs: 10_000,
-        env: { OPENCODE_CONFIG: baseConfig, OPENCODE_MODELS_URL: opencodeModelsUrl },
+        env: { OPENCODE_CONFIG: baseConfig, ...opencodeModelsEnv },
       });
       await impostor.close();
     } catch {
@@ -128,7 +128,7 @@ test("opencode v2 injects providers at runtime without an engine reload", { time
       bin: binary,
       rootDir,
       env: {
-        OPENCODE_CONFIG: baseConfig, OPENCODE_MODELS_URL: opencodeModelsUrl,
+        OPENCODE_CONFIG: baseConfig, ...opencodeModelsEnv,
         OMNIRUSH_ENCRYPTION_KEY: "fixture-server-only", OMNIRUSH_TOKEN: "fixture-server-only",
         OMNIRUSH_HOST_TOKEN: "fixture-server-only", OMNIRUSH_SERVER_TOKEN: "fixture-server-only",
         OPENAI_API_KEY: "fixture-server-only", ANTHROPIC_API_KEY: "fixture-server-only",

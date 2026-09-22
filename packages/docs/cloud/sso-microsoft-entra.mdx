@@ -17,7 +17,7 @@ You need:
 - An OmniRush.ai organization with the Enterprise SSO entitlement.
 - Owner or super-admin access in that OmniRush.ai organization.
 - Admin access to a Microsoft Entra enterprise application.
-- The final OmniRush.ai auth origin, for example `https://app.omnirushlabs.com`.
+- The final OmniRush.ai auth origin, for example `https://omnirush.example.com`.
 
 OmniRush.ai keeps a new SSO configuration disabled until you verify the domain,
 complete a real authentication test, and explicitly enable SSO. Keep password or
@@ -37,9 +37,9 @@ Set:
 
 | Entra field | Value |
 | --- | --- |
-| Identifier (Entity ID) | The OmniRush.ai auth origin, for example `https://app.omnirushlabs.com` |
-| Reply URL (Assertion Consumer Service URL) | The ACS URL OmniRush.ai shows after saving SAML, for example `https://app.omnirushlabs.com/api/auth/sso/saml2/sp/acs/omnirush-sso-<org-id>` |
-| Sign on URL | The org-specific OmniRush.ai **Sign-in URL** shown after saving SAML, for example `https://app.omnirushlabs.com/sso/<org-slug>` |
+| Identifier (Entity ID) | The OmniRush.ai auth origin, for example `https://omnirush.example.com` |
+| Reply URL (Assertion Consumer Service URL) | The ACS URL OmniRush.ai shows after saving SAML, for example `https://omnirush.example.com/api/auth/sso/saml2/sp/acs/omnirush-sso-<org-id>` |
+| Sign on URL | The org-specific OmniRush.ai **Sign-in URL** shown after saving SAML, for example `https://omnirush.example.com/sso/<org-slug>` |
 | Relay State | Leave blank |
 
 The Entity ID must be the OmniRush.ai auth origin. Do not use the Entra tenant
@@ -150,7 +150,7 @@ explicitly approve the synchronized team using
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| `AADSTS700016: Application with identifier 'https://app.omnirushlabs.com' was not found` | Entra's Entity ID does not match OmniRush.ai's SAML issuer | Set **Identifier (Entity ID)** to the OmniRush.ai auth origin |
+| `AADSTS700016: Application with identifier 'https://omnirush.example.com' was not found` | Entra's Entity ID does not match OmniRush.ai's SAML issuer | Set **Identifier (Entity ID)** to the OmniRush.ai auth origin |
 | `/?error=saml_error&error_description=Invalid%20SAML%20response` | Entra is signing with a different certificate than the one saved in OmniRush.ai, or assertions are not signed | Confirm **Signing Option** is `Sign SAML assertion`, then paste Entra's active **Certificate (Base64)** into OmniRush.ai and save |
 | `/?error=unsolicited_response&error_description=IdP-initiated+SSO+not+allowed` | The deployment is running an older OmniRush.ai version that rejects IdP-initiated SAML | Upgrade OmniRush.ai, or launch from the org-specific OmniRush.ai **Sign-in URL** |
 | User reaches Microsoft but cannot continue | The user is not assigned to the enterprise application | Add the user under **Users and groups** |

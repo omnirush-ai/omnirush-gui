@@ -23,7 +23,7 @@ type FeedbackPayload = {
   context?: FeedbackContext;
 };
 
-const DEFAULT_INTERNAL_FEEDBACK_EMAIL = "team@omnirushlabs.com";
+const DEFAULT_INTERNAL_FEEDBACK_EMAIL = "info@omnirush.ai";
 
 function sanitizeValue(value: unknown, maxLength = 240) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";

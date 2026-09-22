@@ -60,9 +60,9 @@ describe("Den API browser origin", () => {
 
   test("omits cookies for public direct API endpoints", () => {
     expect(denApiCredentialsForEndpoint(
-      "https://api.app.omnirushlabs.com/v1/orgs/sso/resolve?email=omar%40omnirushlabs.com",
+      "https://api.app.omnirushlabs.com/v1/orgs/sso/resolve?email=someone%40example.com",
       "https://app.omnirushlabs.com",
-      "/v1/orgs/sso/resolve?email=omar%40omnirushlabs.com",
+      "/v1/orgs/sso/resolve?email=someone%40example.com",
     )).toBe("omit");
   });
 });

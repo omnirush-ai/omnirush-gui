@@ -26,7 +26,7 @@ import { findManagedEngineWorkspace } from "./workspaces.js";
 import { keepOmniRushRuntimeConfigFileFresh, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
 import { migrateOmniRushCloudMcpRuntimeConfig } from "./cloud-mcp-health.js";
 import { migrateWorkspaceRuntimeConfigToEngineGlobal } from "./runtime-opencode-config-store.js";
-import { resolveOpencodeModelsUrl } from "./opencode-models-url.js";
+import { resolveOpencodeModelsEnv } from "./opencode-models-url.js";
 import { assertOpencodeConfigCompat } from "./opencode-config-compat.js";
 import { startWorkerActivityHeartbeat } from "./worker-activity-heartbeat.js";
 import pkg from "../package.json" with { type: "json" };
@@ -78,7 +78,7 @@ if (!config.opencodeBaseUrl && process.env.OMNIRUSH_MANAGE_OPENCODE === "1") {
     keepOmniRushRuntimeConfigFileFresh(config);
     const managedOpencodeCwd = process.env.OMNIRUSH_MANAGED_OPENCODE_CWD?.trim() || workspace.path;
     await mkdir(managedOpencodeCwd, { recursive: true });
-    const opencodeModelsUrl = await resolveOpencodeModelsUrl();
+    const opencodeModelsEnv = await resolveOpencodeModelsEnv();
     const engineEnv: Record<string, string | undefined> = {
       ...(process.env.OMNIRUSH_DEV_MODE ? { OMNIRUSH_DEV_MODE: process.env.OMNIRUSH_DEV_MODE } : {}),
       ...(process.env.OMNIRUSH_UI_CONTROL_DISCOVERY ? { OMNIRUSH_UI_CONTROL_DISCOVERY: process.env.OMNIRUSH_UI_CONTROL_DISCOVERY } : {}),
@@ -86,7 +86,7 @@ if (!config.opencodeBaseUrl && process.env.OMNIRUSH_MANAGE_OPENCODE === "1") {
       OMNIRUSH_SERVER_TOKEN: config.token,
       OMNIRUSH_POLICY_TOKEN: managedDesktopPolicy(config).evaluationToken,
       OPENCODE_CONFIG: runtimeConfigPath,
-      OPENCODE_MODELS_URL: opencodeModelsUrl,
+      ...opencodeModelsEnv,
     };
     const engineSpawnTemplate: EngineSpawnTemplate = {
       bin: process.env.OMNIRUSH_OPENCODE_BIN,

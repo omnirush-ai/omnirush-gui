@@ -18,12 +18,13 @@ context.
 ## Server URL
 
 ```text
-https://api.omnirushlabs.com/mcp/agent
+https://api.omnirush.example.com/mcp/agent
 ```
 
-OAuth sign-in uses your OmniRush.ai account, and the organization you pick is
-pinned into the token. If you do not have an account, create a
-[free OmniRush.ai account](https://app.omnirushlabs.com?mode=sign-up).
+omnirush.ai does not run a hosted Den, so there is no public endpoint: use the
+`/mcp/agent` URL on the API origin of your [self-hosted Den](/start-here/self-host)
+(`api.omnirush.example.com` above is a placeholder). OAuth sign-in uses your
+account on that Den, and the organization you pick is pinned into the token.
 
 ## Connect
 
@@ -34,7 +35,7 @@ pinned into the token. If you do not have an account, create a
 3. Name it `OmniRush.ai` and set the URL to:
 
    ```text
-   https://api.omnirushlabs.com/mcp/agent
+   https://api.omnirush.example.com/mcp/agent
    ```
 
 4. Click `Connect`, then finish the browser sign-in and choose your
@@ -51,7 +52,7 @@ For Claude Desktop builds without custom connectors, open `Settings` >
   "mcpServers": {
     "omnirush": {
       "command": "npx",
-      "args": ["-y", "mcp-remote@latest", "https://api.omnirushlabs.com/mcp/agent"]
+      "args": ["-y", "mcp-remote@latest", "https://api.omnirush.example.com/mcp/agent"]
     }
   }
 }

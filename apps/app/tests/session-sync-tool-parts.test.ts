@@ -238,7 +238,7 @@ describe("tool part mapper", () => {
           type: "connect",
           label: "Connect Acme Tracker",
           surface: "omnirush_your_connections",
-          url: "https://app.omnirushlabs.com/dashboard/your-connections?connectionId=emc_acme",
+          url: "https://app.omnirush.example.com/dashboard/your-connections?connectionId=emc_acme",
         },
       },
     });

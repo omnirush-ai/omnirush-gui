@@ -14,7 +14,7 @@ A subscription entitles Customer to run the EE-licensed software in
 production for up to the number of users purchased, on OmniRush.ai Cloud or
 self-hosted, for the subscription term shown on the applicable order or
 checkout confirmation. Pricing is published at
-[omnirushlabs.com/pricing](https://omnirushlabs.com/pricing).
+[omnirush.ai](https://omnirush.ai).
 
 ## 2. Users
 
@@ -96,4 +96,4 @@ published retain the terms of those agreements.
 ## 11. Contact
 
 Different AI, Inc. (d/b/a OmniRush.ai Labs), 28 Geary St STE 650 Suite #188,
-San Francisco, CA 94108 — [sales@omnirushlabs.com](mailto:sales@omnirushlabs.com).
+San Francisco, CA 94108 — [info@omnirush.ai](mailto:info@omnirush.ai).

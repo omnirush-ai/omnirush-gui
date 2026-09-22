@@ -10,9 +10,10 @@ describe("OmniRush.ai capabilities knowledge plugin", () => {
     await plugin["experimental.chat.system.transform"]({}, output);
 
     const knowledge = output.system.join("\n");
-    expect(knowledge).toContain("https://api.omnirushlabs.com/mcp/agent");
-    expect(knowledge).toContain("app.omnirushlabs.com/api/den");
-    expect(knowledge).toContain("internal same-origin desktop proxy");
+    expect(knowledge).toContain("https://api.omnirush.example.com/mcp/agent");
+    expect(knowledge).toContain("omnirush.ai runs no hosted Den");
+    expect(knowledge).toContain("`/api/den` path is an internal same-origin desktop proxy");
+    expect(knowledge).not.toContain("omnirushlabs.com");
     expect(knowledge).toContain("search_capabilities");
     expect(knowledge).toContain("execute_capability");
     // Protocol and client-setup detail lives in the docs, reachable through
@@ -32,7 +33,7 @@ describe("OmniRush.ai capabilities knowledge plugin", () => {
     expect(knowledge).toContain("Settings > Debug");
     expect(knowledge).toContain("custom or local MCP server");
     expect(knowledge).not.toContain("Access tokens are opaque");
-    expect(knowledge).not.toContain("https://api.omnirushlabs.com/mcp`");
+    expect(knowledge).not.toContain("https://api.omnirush.example.com/mcp`");
     expect(knowledge).not.toContain("omnirush-ui-mcp");
     expect(knowledge).not.toContain("omnirush_extensions_export");
   });
@@ -112,8 +113,9 @@ describe("OmniRush.ai capabilities knowledge plugin", () => {
       path: "cloud/run-in-the-cloud/cloud-mcp.mdx",
     });
 
-    expect(read).toContain("https://api.omnirushlabs.com/mcp/agent");
-    expect(read).toContain("app.omnirushlabs.com/api/den");
+    expect(read).toContain("https://api.omnirush.example.com/mcp/agent");
+    expect(read).toContain("omnirush.example.com/api/den");
+    expect(read).not.toContain("omnirushlabs.com");
     expect(read).toContain("internal same-origin desktop proxy");
     expect(read).toContain("OpenCode | Verified");
     expect(read).toContain("Codex | Setup only");

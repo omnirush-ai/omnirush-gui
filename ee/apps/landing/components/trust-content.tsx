@@ -165,6 +165,6 @@ export const sectionAnchors = [
 /* ------------------------------------------------------------------ */
 
 export const securityContact = {
-  name: "Omar McAdam",
-  email: "team+security@omnirushlabs.com"
+  name: "omnirush.ai security (subject: security)",
+  email: "info@omnirush.ai"
 };

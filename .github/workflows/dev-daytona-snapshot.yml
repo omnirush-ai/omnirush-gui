@@ -1,4 +1,4 @@
-# web.omnirushlabs.com engine channel:
+# Hosted web workspace engine channel (Daytona snapshots):
 # Per-push snapshot builds from dev HEAD stay; the production pin moves only on
 # the nightly backstop, manual dispatch, or releases after the 2026-08-15
 # merge-burst update treadmill recycled every running cloud workspace 3 times.

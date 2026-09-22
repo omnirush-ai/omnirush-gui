@@ -44,7 +44,7 @@ pull requests, discussions, and direct interactions in official OmniRush.ai chan
 ## Reporting
 
 If you experience or witness unacceptable behavior, report it to
-`benjamin.shafii@gmail.com` with as much context as possible.
+`info@omnirush.ai` with as much context as possible.
 
 All reports will be reviewed and investigated promptly and fairly.
 

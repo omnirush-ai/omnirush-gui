@@ -86,7 +86,7 @@ export default function OpenGraphImage() {
             </div>
 
             <div style={{ fontSize: 24, lineHeight: 1.45, color: "#475569", display: "flex", maxWidth: 520 }}>
-              Share setups across your org, keep selected workflows available, and manage OmniRush.ai Cloud from app.omnirushlabs.com.
+              Share setups across your org, keep selected workflows available, and manage OmniRush.ai Cloud from your Den.
             </div>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>

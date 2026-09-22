@@ -38,7 +38,7 @@ Builds generate source maps. Sentry source maps are uploaded only when `DEN_OBSE
 
 ## Current routes
 
-- `GET /` -> `302 https://omnirushlabs.com`
+- `GET /` -> `302` to `DEN_MARKETING_URL` (defaults to the Den web URL)
 - `GET /health`
 - Better Auth mount at `/api/auth/*`
 - desktop handoff routes under `/v1/auth/*`

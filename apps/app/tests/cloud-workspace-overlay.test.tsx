@@ -443,7 +443,7 @@ describe("cloud workspace boot takeover", () => {
 
   test("offers Den purchase, recheck, and sign-out actions when Web access is required", async () => {
     const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
-    if (registeredDom) GlobalRegistrator.register({ url: "https://web.omnirushlabs.com/session" });
+    if (registeredDom) GlobalRegistrator.register({ url: "https://web.omnirush.example.com/session" });
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     const openedUrls: string[] = [];
     const container = document.createElement("div");

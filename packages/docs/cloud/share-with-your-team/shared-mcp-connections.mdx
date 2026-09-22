@@ -60,17 +60,10 @@ New MCP connections on one Den instance share this redirect URL:
 <DEN_API_PUBLIC_URL>/v1/mcp-connections/oauth/callback
 ```
 
-For the hosted OmniRush.ai Cloud instance, the dashboard is
-`https://app.omnirushlabs.com` and its public Den API origin is
-`https://api.omnirushlabs.com`. Register this exact redirect URL with the OAuth
-provider:
-
-```text
-https://api.omnirushlabs.com/v1/mcp-connections/oauth/callback
-```
-
-For a self-hosted instance whose public Den API is
-`https://api.omnirush.example.com`, register:
+omnirush.ai does not run a hosted Den, so there is no shared hosted redirect
+URL. For a self-hosted instance whose public Den API is
+`https://api.omnirush.example.com`, register this exact redirect URL with the
+OAuth provider:
 
 ```text
 https://api.omnirush.example.com/v1/mcp-connections/oauth/callback

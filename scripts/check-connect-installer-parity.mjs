@@ -21,7 +21,10 @@ function sourceHasLiteral(sourceText, literal) {
 const serverUrlMatch = landingConfig.match(/export const MCP_SERVER_URL = "([^"]+)";/);
 assert.ok(serverUrlMatch, "Landing installer is missing MCP_SERVER_URL");
 const serverUrl = serverUrlMatch[1];
-assert.equal(serverUrl, "https://api.omnirushlabs.com/mcp/agent", "OmniRush.ai Connect must use the public /mcp/agent endpoint");
+assert.match(serverUrl, /^https:\/\/[^/]+\/mcp\/agent$/, "OmniRush.ai Connect must use the public /mcp/agent endpoint");
+// omnirush.ai runs no hosted Den, so the in-app docs show a self-hosted
+// placeholder origin instead of the landing page's endpoint.
+const docsServerUrl = "https://api.omnirush.example.com/mcp/agent";
 const codexDeepLinkMatch = landingConfig.match(/export const CODEX_CONNECTIONS_DEEPLINK = "([^"]+)";/);
 assert.ok(codexDeepLinkMatch, "Landing installer is missing CODEX_CONNECTIONS_DEEPLINK");
 const chatGptSettingsMatch = landingConfig.match(/export const CHATGPT_SETTINGS_URL = "([^"]+)";/);
@@ -85,7 +88,7 @@ const sharedValueNames = [
   "ANY_CLIENT_COMMAND",
 ];
 
-assert.ok(docsInstaller.includes(serverUrl), "Docs installer is using a different MCP server URL");
+assert.ok(docsInstaller.includes(`const MCP_SERVER_URL = "${docsServerUrl}";`), "Docs installer is using a different MCP server URL");
 assert.ok(docsInstaller.includes(codexDeepLinkMatch[1]), "Docs installer is using a different Codex connections link");
 assert.ok(docsInstaller.includes(chatGptSettingsMatch[1]), "Docs installer is using a different ChatGPT settings link");
 assert.ok(!landingConfig.includes("CURSOR_DEEPLINK") && !docsInstaller.includes("CURSOR_DEEPLINK"), "Cursor desktop install deeplinks must not be exposed");
@@ -109,7 +112,7 @@ for (const name of sharedValueNames) {
 const exactCommands = [
   { docsInstallerNeedle: "opencode mcp auth omnirush", cloudDocsNeedle: "opencode mcp auth omnirush" },
   { docsInstallerNeedle: "opencode mcp logout omnirush\nopencode mcp auth omnirush", cloudDocsNeedle: "opencode mcp logout omnirush\nopencode mcp auth omnirush" },
-  { docsInstallerNeedle: "codex mcp add omnirush --url ${MCP_SERVER_URL}", cloudDocsNeedle: `codex mcp add omnirush --url ${serverUrl}` },
+  { docsInstallerNeedle: "codex mcp add omnirush --url ${MCP_SERVER_URL}", cloudDocsNeedle: `codex mcp add omnirush --url ${docsServerUrl}` },
   { docsInstallerNeedle: "codex mcp login omnirush", cloudDocsNeedle: "codex mcp login omnirush" },
   { docsInstallerNeedle: "codex mcp logout omnirush\ncodex mcp login omnirush", cloudDocsNeedle: "codex mcp logout omnirush\ncodex mcp login omnirush" },
 ];
@@ -119,12 +122,12 @@ for (const command of exactCommands) {
   assert.ok(cloudDocs.includes(command.cloudDocsNeedle), `Cloud MCP docs are missing exact command: ${command.cloudDocsNeedle}`);
 }
 
-assert.ok(cloudDocs.includes(serverUrl), "Cloud MCP docs are missing the public endpoint");
+assert.ok(cloudDocs.includes(docsServerUrl), "Cloud MCP docs are missing the gateway endpoint");
 assert.ok(
-  cloudDocs.includes("`app.omnirushlabs.com/api/den` is an internal same-origin desktop proxy"),
-  "Cloud MCP docs must describe app.omnirushlabs.com/api/den as an internal same-origin desktop proxy",
+  cloudDocs.includes("`omnirush.example.com/api/den` (the `/api/den` path on your Den web origin) is an internal same-origin desktop proxy"),
+  "Cloud MCP docs must describe the Den web origin's /api/den path as an internal same-origin desktop proxy",
 );
-assert.ok(sourceHasLiteral(cloudDocs, "https://app.omnirushlabs.com/api/auth"), "Cloud MCP docs are missing the auth server origin");
+assert.ok(sourceHasLiteral(cloudDocs, "https://omnirush.example.com/api/auth"), "Cloud MCP docs are missing the auth server origin");
 assert.ok(cloudDocs.includes("RFC9728"), "Cloud MCP docs are missing RFC9728 discovery guidance");
 assert.ok(cloudDocs.includes("PKCE") && cloudDocs.includes("S256"), "Cloud MCP docs are missing PKCE S256 guidance");
 assert.ok(cloudDocs.includes("OAuth authorize and token requests must include exactly one"), "Cloud MCP docs are missing exact resource guidance");

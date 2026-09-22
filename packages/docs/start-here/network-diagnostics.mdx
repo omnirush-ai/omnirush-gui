@@ -51,7 +51,7 @@ If the Den origin is not trusted, the diagnostic is skipped and sends no credent
 
 Den can run an optional, admin-triggered outbound diagnostic from the Den process. It exercises the real container DNS, proxy, TLS trust, firewall, service mesh, and NetworkPolicy path.
 
-- The default diagnostics origin is `https://diagnostic.omnirushlabs.com`.
+- Den's built-in default diagnostics origin belongs to the retired hosted service and no longer resolves, so set `DEN_DIAGNOSTICS_ORIGIN` to a diagnostics app you deploy (see below).
 - A workspace owner or super-admin starts the check; it is not a background dependency for Den.
 - The diagnostic token must be synthetic and at least 24 characters. Do not use provider or customer credentials.
 - To use an internal diagnostics origin, deploy the diagnostics app at an internally reachable supported runtime/origin, then set `DEN_DIAGNOSTICS_ORIGIN` and `DEN_DIAGNOSTICS_BEARER_TOKEN` for Den. The service README currently documents its runtime and retention model; do not assume a generic Kubernetes package unless your deployment path has been validated.

@@ -94,7 +94,7 @@ test("process profile hides an installed bootstrap before workspace-store loads"
     try {
       const store = createWorkspaceStore({
         app: { getPath: () => processBlankSlateProfile.userDataPath },
-        defaultDenBaseUrl: "https://api.omnirushlabs.com",
+        defaultDenBaseUrl: "https://api.omnirush.example.com",
         defaultRequireSignin: true,
         forceRequireSignin: true,
       });
@@ -117,7 +117,7 @@ test("process profile hides an installed bootstrap before workspace-store loads"
     });
     const result = JSON.parse(stdout);
     assert.deepEqual(result.bootstrap, {
-      baseUrl: "https://api.omnirushlabs.com",
+      baseUrl: "https://api.omnirush.example.com",
       requireSignin: true,
       fromFile: false,
     });

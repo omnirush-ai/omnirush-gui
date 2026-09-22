@@ -140,7 +140,7 @@ If the user says yes:
    the existing entry instead. To switch organizations or recover stale auth,
    run `codex mcp logout omnirush` before `codex mcp login omnirush`.
 4. For another agent, use its current instructions from
-   `https://omnirushlabs.com/docs/cloud/run-in-the-cloud/cloud-mcp`; do not guess
+   `https://github.com/omnirush-ai/omnirush-gui/blob/main/packages/docs/cloud/run-in-the-cloud/cloud-mcp.mdx`; do not guess
    unsupported client commands.
 5. Tell the user to restart or reopen the current agent after setup so the new
    MCP tools are loaded. Do not claim the connection works until the restarted

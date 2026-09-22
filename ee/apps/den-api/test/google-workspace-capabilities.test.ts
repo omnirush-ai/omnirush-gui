@@ -1355,10 +1355,10 @@ test("drive share grants user access and sends notification by default", async (
   resetFakeGoogle()
   const response = await request("/v1/capabilities/google-workspace/drive-file-share/file_1", {
     method: "POST",
-    body: { type: "user", emailAddress: "raghav@omnirushlabs.com" },
+    body: { type: "user", emailAddress: "someone@example.com" },
   })
   expect(response.status).toBe(200)
-  expect(lastDriveSharePayload).toEqual({ type: "user", role: "reader", emailAddress: "raghav@omnirushlabs.com" })
+  expect(lastDriveSharePayload).toEqual({ type: "user", role: "reader", emailAddress: "someone@example.com" })
   const url = new URL(expectString(lastDriveShareUrl, "drive share URL"))
   expect(url.pathname).toBe("/drive/v3/files/file_1/permissions")
   expect(url.searchParams.get("sendNotificationEmail")).toBe("true")
@@ -1373,10 +1373,10 @@ test("drive share grants domain access", async () => {
   resetFakeGoogle()
   const response = await request("/v1/capabilities/google-workspace/drive-file-share/file_1", {
     method: "POST",
-    body: { type: "domain", domain: "omnirushlabs.com", sendNotificationEmail: false },
+    body: { type: "domain", domain: "example.com", sendNotificationEmail: false },
   })
   expect(response.status).toBe(200)
-  expect(lastDriveSharePayload).toEqual({ type: "domain", role: "reader", domain: "omnirushlabs.com" })
+  expect(lastDriveSharePayload).toEqual({ type: "domain", role: "reader", domain: "example.com" })
   const url = new URL(expectString(lastDriveShareUrl, "drive share URL"))
   expect(url.searchParams.get("sendNotificationEmail")).toBe("false")
   const body: unknown = await response.json()
@@ -1400,7 +1400,7 @@ test("ordinary Drive share permission failures are not misclassified as missing 
   forceDriveShareForbidden = true
   const response = await request("/v1/capabilities/google-workspace/drive-file-share/file_1", {
     method: "POST",
-    body: { type: "user", emailAddress: "raghav@omnirushlabs.com" },
+    body: { type: "user", emailAddress: "someone@example.com" },
   })
   expect(response.status).toBe(502)
   const body = expectRecord(await response.json(), "Drive share forbidden response")
@@ -1514,7 +1514,7 @@ test("legacy accounts without recorded scopes retain existing non-Drive behavior
   resetFakeGoogle()
   const share = await request("/v1/capabilities/google-workspace/drive-file-share/file_1", {
     method: "POST",
-    body: { type: "user", emailAddress: "raghav@omnirushlabs.com" },
+    body: { type: "user", emailAddress: "someone@example.com" },
   })
   expect(share.status).toBe(200)
   expect(googleCallCount).toBe(1)
