@@ -29,6 +29,7 @@ import {
   redactCollectorJson,
   redactCollectorJsonText,
   redactCollectorText,
+  redactModeForPath,
   stripRemoteUserinfo,
 } from "./workspace-collector.js";
 
@@ -1136,13 +1137,128 @@ describe("workspace collector secret rails", () => {
     expect(redactCollectorText(`AccessKeyId,SecretAccessKey\nAKIAIOSFODNN7EXAMPLE,${AWS_SECRET}\n`).text).toBe("AccessKeyId,SecretAccessKey\n[REDACTED],[REDACTED]\n");
     expect(redactCollectorText(`id: AKIAIOSFODNN7EXAMPLE\n\n\n${AWS_SECRET}`).text).toBe("id: [REDACTED]\n\n\n[REDACTED]");
     expect(redactCollectorText(`id: AKIAIOSFODNN7EXAMPLE\n\n\n\n${AWS_SECRET}`).text).toBe(`id: [REDACTED]\n\n\n\n${AWS_SECRET}`);
-    expect(redactCollectorText(`# aws profile\n${AWS_SECRET}`).text).toBe("# aws profile\n[REDACTED]");
+    expect(redactCollectorText(`# aws profile\n# region eu-west-1\n${AWS_SECRET}`).text).toBe("# aws profile\n# region eu-west-1\n[REDACTED]");
     expect(redactCollectorText(`${AWS_SECRET}\n\nsecret: yes`).text).toBe("[REDACTED]\n\nsecret: yes");
     expect(redactCollectorText(AWS_SECRET).text).toBe(AWS_SECRET);
-    expect(redactCollectorText(AWS_SECRET, { context: "AWS master secret.txt" }).text).toBe("[REDACTED]");
+    expect(redactCollectorText(`\n\n${AWS_SECRET}`, { context: "AWS master secret.txt" }).text).toBe("\n\n[REDACTED]");
+    // The proximity pass needs three or more lines (two line breaks); a
+    // shorter document relies on the assignment rule or its JSON key.
+    expect(redactCollectorText(`# aws profile\n${AWS_SECRET}`).text).toBe(`# aws profile\n${AWS_SECRET}`);
+    expect(redactCollectorText(AWS_SECRET, { context: "AWS master secret.txt" }).text).toBe(AWS_SECRET);
+    expect(redactCollectorContent("creds.json", `{"aws_secret_access_key":"${AWS_SECRET}"}`)).toBe('{"aws_secret_access_key":"[REDACTED]"}');
+    expect(redactCollectorContent("creds.json", `{"Credentials":{"AccessKeyId":"AKIAIOSFODNN7EXAMPLE","SecretAccessKey":"${AWS_SECRET}"}}`))
+      .toBe('{"Credentials":{"AccessKeyId":"[REDACTED]","SecretAccessKey":"[REDACTED]"}}');
+    expect(redactCollectorContent("creds.env", `AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nAWS_SECRET_ACCESS_KEY=${AWS_SECRET}\n`))
+      .toBe("AWS_ACCESS_KEY_ID=[REDACTED]\nAWS_SECRET_ACCESS_KEY=[REDACTED]\n");
     // Not mixed case (a git sha), or not exactly 40 characters: left alone.
     expect(redactCollectorText("aws sha 0123456789abcdef0123456789abcdef01234567").text).toContain("0123456789abcdef0123456789abcdef01234567");
     expect(redactCollectorText(`aws ${AWS_SECRET}extra`).text).toContain(AWS_SECRET);
+  });
+
+  test("selects the value rule mode from the file extension", () => {
+    for (const path of ["src/app.js", "lib/x.cjs", "x.mjs", "a/b.ts", "c.tsx", "d.jsx", "e.py", "f.go", "g.rs", "h.java", "i.kt", "j.c", "k.cc", "l.cpp",
+      "m.h", "n.hpp", "o.rb", "p.php", "q.swift", "r.cs", "s.scala", "t.sh", "u.bash", "v.zsh", "w.ps1", "x.lua", "y.dart", "z.vue", "aa.svelte", "bundle.js.map", "UPPER.JS"]) {
+      expect(redactModeForPath(path)).toBe("source");
+    }
+    for (const path of [".env", ".env.local", "settings.ini", "app.cfg", "nginx.conf", "ci.yml", "compose.yaml", "Cargo.toml", "package.json",
+      "app.properties", "notes.txt", "README.md", "Makefile", "Dockerfile", ".bashrc", "archive.tar.gz", "src/token/prod.env"]) {
+      expect(redactModeForPath(path)).toBe("config");
+    }
+  });
+
+  test("value rule v2 leaves source-code assignments byte-identical and still redacts literal secrets", () => {
+    // Every false positive sampled from a v1.0.5 production upload, in the file type it came from.
+    const sampled: Array<[string, string]> = [
+      ["derived.js", "derived.token_estimate = estimate;"],
+      ["middleware.js", "const auth = req.headers.authorization || '';"],
+      ["app.js", "authMethod: 'github-app'"],
+      ["client.js", "token: config.token"],
+      ["metrics.yml", "credentials_file: /run/secrets/prod_metrics_token"],
+      ["pipeline.yml", "token_role: 'pipeline'"],
+      ["pipeline.yml", "token_owner: 'sample-owner'"],
+      ["oauth.js", "const githubOAuthConfig = githubOAuthEnabled"],
+      ["fixtures.js", "META_MUSE_API_KEY: 'synthetic'"],
+      ["heartbeat.py", "credential_hash: server.heartbeat_token_hash"],
+      ["atlas.js", "CONTRACT_POOL_ATLAS_READ_TOKEN_FILE: tokenFile"],
+      ["request.js", "Authorization: Bearer test-token"],
+      // The same lines survive CONFIG mode too, except the quoted 'synthetic' literal.
+      ["config.yml", "token: config.token"],
+      ["heartbeat.yml", "credential_hash: server.heartbeat_token_hash"],
+      ["atlas.yml", "CONTRACT_POOL_ATLAS_READ_TOKEN_FILE: tokenFile"],
+      ["request.txt", "Authorization: Bearer test-token"],
+      ["middleware.diff", "+const auth = req.headers.authorization || '';"],
+      // SOURCE mode: unquoted identifiers are references, paths are paths, short digitless literals are labels.
+      ["a.py", "token = someLongCamelCaseIdentifier2"],
+      ["a.py", "password = hunter2abc"],
+      ["settings.py", "AUTH_TIMEOUT = 30000000"],
+      ["a.py", "password = settings.DATABASE_PASSWORD_1"],
+      ["a.ts", 'const secret = "/etc/ssl/private/key1.pem";'],
+      ["a.ts", 'const secret = "./secrets/key1.pem";'],
+      ["a.ts", 'const secret = "../keys/key1.pem";'],
+      ["a.ts", 'const secret = "~/.aws/credentials1";'],
+      ["a.ts", 'const secret = "C:/Users/me/token1.txt";'],
+      ["a.go", 'password := "secrets/db/primary"'],
+      ["a.rb", 'password = "abcdefghijklmnopqrstuvwxyz"'],
+      ["a.rb", 'password = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"'],
+      ["a.rb", 'token = "abc${FOO}def12"'],
+      ["a.rb", 'token = "<your-token-1>"'],
+      ["a.rb", "token = getToken(12345678)"],
+      ["a.sh", 'TOKEN="$(cat token1.txt)"'],
+    ];
+    for (const [path, text] of sampled) expect(redactCollectorContent(path, text)).toBe(text);
+    expect(redactCollectorText("+const auth = req.headers.authorization || '';", { context: "middleware.js" })).toEqual({ text: "+const auth = req.headers.authorization || '';", count: 0 });
+    expect(filterCollectorDiff("diff --git a/m.js b/m.js\n+const auth = req.headers.authorization || '';\n").diff)
+      .toBe("diff --git a/m.js b/m.js\n+const auth = req.headers.authorization || '';\n");
+
+    const secrets: Array<[string, string, string]> = [
+      ["app.js", `const apiKey = "${sample("sk_live_", "abcdefghijklmnopqrstuvwx")}"`, 'const apiKey = "[REDACTED]"'],
+      ["settings.py", 'password = "hunter2abc"', 'password = "[REDACTED]"'],
+      ["settings.py", 'token = "Abcdefghijklmnopqrstuvwxyz1234"', 'token = "[REDACTED]"'],
+      ["settings.py", 'password = "12345678"', 'password = "[REDACTED]"'],
+      ["settings.py", 'auth = "AbCdEfGhIjKlMnOpQrStUv"', 'auth = "[REDACTED]"'],
+      ["settings.py", "SECRET = Ab1/Cd2+Ef3=", "SECRET = [REDACTED]"],
+      ["ci.yml", `token: ${GITHUB_TOKEN}`, "token: [REDACTED]"],
+      ["config.yml", 'api_key: "abcdef1234567890"', 'api_key: "[REDACTED]"'],
+      ["config.yml", "password: changeme1", "password: [REDACTED]"],
+      ["config.yml", "META_MUSE_API_KEY: 'synthetic'", "META_MUSE_API_KEY: '[REDACTED]'"],
+      ["config.yml", 'token: "config.token"', 'token: "[REDACTED]"'],
+      ["config.yml", "token: config-token", "token: [REDACTED]"],
+      ["request.http", "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "Authorization: Bearer [REDACTED]"],
+      ["request.js", "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "Authorization: Bearer [REDACTED]"],
+    ];
+    for (const [path, text, expected] of secrets) {
+      expect(redactCollectorContent(path, text)).toBe(expected);
+      expect(redactCollectorText(text, { mode: redactModeForPath(path) }).count).toBe(1);
+    }
+    // Excluded last segments never name a secret, in either mode.
+    for (const last of ["file", "filename", "dir", "mode", "method", "role", "owner", "type", "kind", "enabled", "estimate", "hash", "digest", "at",
+      "config", "client", "prefix", "suffix", "format", "scheme", "provider", "status", "state", "label", "description", "title", "class", "field",
+      "fields", "list", "names", "version", "timeout", "limit", "max", "min", "interval", "retries", "port"]) {
+      const line = `token_${last}: abcdefgh1234`;
+      expect(redactCollectorContent("x.yml", line)).toBe(line);
+      expect(redactCollectorContent("x.py", line)).toBe(line);
+    }
+  });
+
+  test("redacts a Bearer token only when it looks like a credential", () => {
+    const kept = [
+      "Authorization: Bearer test-token",
+      "Authorization: Bearer yourAccessTokenGoesHere",
+      "Authorization: Bearer your_access_token.goes.here",
+      "Authorization: Bearer ${ACCESS_TOKEN_GOES_HERE}",
+      "Authorization: Bearer <your-access-token-here>",
+      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+      "Authorization: Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    ];
+    for (const line of kept) expect(redactCollectorText(line)).toEqual({ text: line, count: 0 });
+    const redacted = [
+      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123",
+      "Authorization: Bearer a8f3b2c9d4e5f6a7b8c9d0e1",
+      "Authorization: Bearer Your-Access-Token-Goes-Here",
+      "Authorization: Bearer AbCdEfGhIjKlMnOpQrStUv/wx+yz==",
+    ];
+    for (const line of redacted) expect(redactCollectorText(line)).toEqual({ text: "Authorization: Bearer [REDACTED]", count: 1 });
+    expect(redactCollectorText("authorization: bearer abcdefghijklmnopqrstuvwxyz0123")).toEqual({ text: "authorization: bearer [REDACTED]", count: 1 });
   });
 
   test("keeps a source file named after a token but redacts the literal inside it", async () => {
@@ -1242,13 +1358,21 @@ describe("workspace collector secret rails", () => {
       "Ma.".repeat(mebibyte / 3),
       "\\n".repeat(mebibyte / 2),
       `secret: ${"A1b".repeat(mebibyte / 3)}`,
+      `secret: ${"a.".repeat(mebibyte / 2)}`,
+      `secret: ${"a.".repeat(mebibyte / 2)}/`,
+      `secret: ${"Ab/".repeat(mebibyte / 3)}`,
+      `secret: "${"a1.".repeat(mebibyte / 3)}"`,
+      `Bearer ${"aB".repeat(mebibyte / 2)}`,
+      `Bearer ${"a.".repeat(mebibyte / 2)}`,
     ];
     for (const line of lines) {
-      const started = performance.now();
-      redactCollectorText(line);
-      expect(performance.now() - started).toBeLessThan(2_000);
+      for (const mode of ["config", "source"] as const) {
+        const started = performance.now();
+        redactCollectorText(line, { mode });
+        expect(performance.now() - started).toBeLessThan(2_000);
+      }
     }
-  }, 30_000);
+  }, 60_000);
 });
 
 // --- gateway auth: stale device tokens ---------------------------------------

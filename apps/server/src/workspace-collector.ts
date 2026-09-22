@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { createReadStream, watch, type FSWatcher } from "node:fs";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { release as osRelease } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { zstdCompress } from "node:zlib";
 import { minimatch } from "minimatch";
@@ -403,8 +403,36 @@ const SECRET_KEY_PAIRS: Array<[string, string]> = [
   ["api", "key"], ["access", "key"], ["secret", "key"], ["private", "key"], ["client", "key"], ["client", "secret"],
   ["session", "key"], ["signing", "key"], ["master", "key"], ["encryption", "key"],
 ];
-const EXCLUDED_LAST_SEGMENTS = new Set(["length", "ttl", "seconds", "count", "size", "url", "path", "name", "id", "header"]);
-const CODE_EXPRESSION_VALUE = /^(?:process\.|os\.|env\.|\$\{|\$\()/;
+const EXCLUDED_LAST_SEGMENTS = new Set([
+  "length", "ttl", "seconds", "count", "size", "url", "path", "name", "id", "header",
+  "file", "filename", "dir", "mode", "method", "role", "owner", "type", "kind", "enabled", "estimate", "hash", "digest", "at",
+  "config", "client", "prefix", "suffix", "format", "scheme", "provider", "status", "state", "label", "description", "title",
+  "class", "field", "fields", "list", "names", "version", "timeout", "limit", "max", "min", "interval", "retries", "port",
+]);
+
+/**
+ * Value rule v2 (the backend applies the identical rule). A file whose
+ * extension names a programming language is scrubbed in SOURCE mode, where an
+ * assignment's value must look like a generated literal; everything else
+ * (.env*, ini, cfg, conf, yml, yaml, toml, json, properties, txt, md, no or
+ * unknown extension), plus git diffs and the trace, is scrubbed in CONFIG
+ * mode with the permissive rule.
+ */
+export type RedactMode = "source" | "config";
+const SOURCE_EXTENSIONS = new Set([
+  "js", "cjs", "mjs", "ts", "tsx", "jsx", "py", "go", "rs", "java", "kt", "c", "cc", "cpp", "h", "hpp", "rb", "php", "swift",
+  "cs", "scala", "sh", "bash", "zsh", "ps1", "lua", "dart", "vue", "svelte", "map",
+]);
+
+/** SOURCE for a programming-language extension (case-insensitive), CONFIG otherwise. */
+export function redactModeForPath(path: string): RedactMode {
+  return SOURCE_EXTENSIONS.has(extname(path).slice(1).toLowerCase()) ? "source" : "config";
+}
+
+// The value side of the assignment rule (see isSecretAssignmentValue).
+const CODE_EXPRESSION_VALUE = /^(?:process\.|os\.|env\.)/;
+const IDENTIFIER_VALUE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+const PATH_VALUE = /^(?:\/|\.\/|\.\.\/|~\/|[A-Za-z]:[\\/])/;
 const MAX_ASSIGNMENT_DEPTH = 4;
 
 // An AWS secret access key is 40 base64 characters with no shape of its own,
@@ -413,6 +441,9 @@ const AWS_SECRET_QUICK = /[A-Za-z0-9/+]{40}/;
 const AWS_SECRET_CANDIDATE = tokenPattern(String.raw`[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`, "g", String.raw`[A-Za-z0-9/+\\]`);
 const AWS_SECRET_CONTEXT = /(?:AKIA|ASIA)[0-9A-Z]{16}|aws|secret/i;
 const AWS_SECRET_CONTEXT_LINES = 3;
+// The proximity pass needs neighbouring lines to mean anything: a single-line
+// document (compact JSON, the trace) relies on its JSON key instead.
+const AWS_SECRET_MIN_LINES = 3;
 
 // Runs before the assignment rule so `https://oauth2:<token>@host/...` keeps
 // its host instead of being read as an `oauth2:` assignment.
@@ -432,8 +463,10 @@ const SECRET_PATTERNS: Redaction[] = [
   [tokenPattern(String.raw`(?:sk|rk|pk)-(?:proj-)?[A-Za-z0-9_-]{16,}\b`), REDACTED],
   [tokenPattern(String.raw`eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), REDACTED],
   [tokenPattern(String.raw`[MN][A-Za-z0-9_-]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}`), REDACTED],
-  [tokenPattern(String.raw`Bearer[ \t]+[A-Za-z0-9_.~+/=-]{16,}`, "gi"), `Bearer ${REDACTED}`],
 ];
+// `Bearer <token>`: the token part is decided by isBearerSecret. The character
+// class already excludes `${...}` and `<...>` placeholders.
+const BEARER_TOKEN = tokenPattern(String.raw`(Bearer[ \t]+)([A-Za-z0-9_.~+/=-]{16,})`, "gi");
 const PII_PATTERNS: Redaction[] = [
   [tokenPattern(String.raw`[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,}\b`, "gi"), REDACTED_PII],
   [tokenPattern(String.raw`(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})(?!\w)`), REDACTED_PII],
@@ -608,18 +641,48 @@ function isSecretAssignmentKey(key: string): boolean {
 }
 
 /**
- * 8+ non-space characters with a letter, and not a code expression, an
- * angle-bracket placeholder (`<your-token>`, a tokenizer's `<|endoftext|>`)
- * or an earlier redaction.
+ * A filesystem path: an absolute, relative, home or drive-letter prefix, or a
+ * `/` anywhere with no digit anywhere (`/run/secrets/x`, `C:/Users/me`).
  */
-function isSecretAssignmentValue(value: string): boolean {
-  return value.length >= 8
-    && !/\s/.test(value)
-    && /[A-Za-z]/.test(value)
-    && !value.startsWith("[REDACTED")
-    && !value.includes("(")
-    && !(value.startsWith("<") && value.endsWith(">"))
-    && !CODE_EXPRESSION_VALUE.test(value);
+function isFilesystemPathValue(value: string): boolean {
+  return PATH_VALUE.test(value) || (value.includes("/") && !/\d/.test(value));
+}
+
+/**
+ * Whether the value of a secret-named assignment is redacted (value rule v2).
+ * In both modes it must be 8+ characters with no whitespace, not a code
+ * expression (a `(`, `${` or `$(` anywhere, or a `process.` / `os.` / `env.`
+ * prefix), not an angle-bracket placeholder (`<your-token>`, a tokenizer's
+ * `<|endoftext|>`), not an earlier redaction and not a filesystem path.
+ * SOURCE mode then wants a literal that looks generated: an unquoted value
+ * with identifier or member-expression syntax is a reference (`config.token`,
+ * `tokenFile`, `req.headers.authorization`), never a literal, and the value
+ * must carry a digit or be 20+ characters of mixed case, so `'synthetic'`
+ * and `'github-app'` stay. CONFIG mode keeps the permissive rule (a letter
+ * anywhere), skipping only an unquoted dotted identifier such as YAML's
+ * `token: config.token`.
+ */
+function isSecretAssignmentValue(value: string, mode: RedactMode, quoted: boolean): boolean {
+  if (value.length < 8 || /\s/.test(value) || value.startsWith("[REDACTED")) return false;
+  if (value.includes("(") || value.includes("${") || value.includes("$(") || CODE_EXPRESSION_VALUE.test(value)) return false;
+  if (value.startsWith("<") && value.endsWith(">")) return false;
+  if (isFilesystemPathValue(value)) return false;
+  const identifier = !quoted && IDENTIFIER_VALUE.test(value);
+  if (mode === "source") {
+    return !identifier && (/\d/.test(value) || (value.length >= 20 && /[a-z]/.test(value) && /[A-Z]/.test(value)));
+  }
+  return /[A-Za-z]/.test(value) && !(identifier && value.includes("."));
+}
+
+/**
+ * The token after `Bearer` is a secret when it carries a digit, or is 20+
+ * characters of mixed case that are not a bare identifier or member
+ * expression (`Bearer yourAccessTokenGoesHere` is a placeholder; so is
+ * `Bearer test-token`, too short and digitless).
+ */
+function isBearerSecret(token: string): boolean {
+  if (/\d/.test(token)) return true;
+  return token.length >= 20 && /[a-z]/.test(token) && /[A-Z]/.test(token) && !IDENTIFIER_VALUE.test(token);
 }
 
 function applyRedaction(text: string, [pattern, replacement]: Redaction, tally: { count: number }): string {
@@ -631,31 +694,43 @@ function applyRedaction(text: string, [pattern, replacement]: Redaction, tally: 
 }
 
 /** Redacts the value of every secret-named assignment; one redaction per assignment. */
-function redactAssignments(text: string, tally: { count: number }, depth = 0): string {
+function redactAssignments(text: string, tally: { count: number }, mode: RedactMode, depth = 0): string {
   ASSIGNMENT_PATTERN.lastIndex = 0;
   return text.replace(ASSIGNMENT_PATTERN, (match: string, _quote: string, key: string, doubleQuoted?: string, singleQuoted?: string, escapedQuoted?: string, bare?: string) => {
     const value = doubleQuoted ?? singleQuoted ?? escapedQuoted ?? bare ?? "";
     const quote = doubleQuoted !== undefined ? '"' : singleQuoted !== undefined ? "'" : escapedQuoted !== undefined ? '\\"' : "";
     const prefix = match.slice(0, match.length - value.length - quote.length * 2);
-    if (isSecretAssignmentKey(key) && isSecretAssignmentValue(value)) {
+    if (isSecretAssignmentKey(key) && isSecretAssignmentValue(value, mode, bare === undefined)) {
       tally.count += 1;
       return `${prefix}${quote}${REDACTED}${quote}`;
     }
     // An excluded key (`token_url=https://x/?token=...`) or a code expression
     // can still carry a secret assignment inside its value.
     if (depth >= MAX_ASSIGNMENT_DEPTH) return match;
-    return `${prefix}${quote}${redactAssignments(value, tally, depth + 1)}${quote}`;
+    return `${prefix}${quote}${redactAssignments(value, tally, mode, depth + 1)}${quote}`;
+  });
+}
+
+/** Redacts `Bearer <token>` when the token part passes isBearerSecret. */
+function redactBearerTokens(text: string, tally: { count: number }): string {
+  BEARER_TOKEN.lastIndex = 0;
+  return text.replace(BEARER_TOKEN, (match: string, prefix: string, token: string) => {
+    if (!isBearerSecret(token)) return match;
+    tally.count += 1;
+    return `${prefix}${REDACTED}`;
   });
 }
 
 /**
  * Redacts 40-character mixed-case base64 runs that sit within three lines of
  * an AWS access key id or of the words aws/secret (or whose surrounding
- * context, such as the file path or JSON key, names them).
+ * context, such as the file path or JSON key, names them). Only a document of
+ * three or more lines (two or more line breaks) is scanned.
  */
 function redactAwsSecrets(text: string, context: string | undefined, tally: { count: number }): string {
   if (!AWS_SECRET_QUICK.test(text)) return text;
   const lines = text.split("\n");
+  if (lines.length < AWS_SECRET_MIN_LINES) return text;
   const contextual: Array<boolean | undefined> = new Array(lines.length);
   const hasContext = (index: number): boolean => {
     if (contextual[index] === undefined) contextual[index] = AWS_SECRET_CONTEXT.test(lines[index]!);
@@ -684,6 +759,8 @@ function redactAwsSecrets(text: string, context: string | undefined, tally: { co
 export type RedactCollectorTextOptions = {
   /** Text that counts as context for context-dependent rules: the file path, or the JSON key a value sits under. */
   context?: string;
+  /** Value rule mode; CONFIG when omitted (git diffs, the trace, JSON). See redactModeForPath. */
+  mode?: RedactMode;
 };
 
 /**
@@ -695,16 +772,18 @@ export function redactCollectorText(input: string, options: RedactCollectorTextO
   const tally = { count: 0 };
   let text = applyRedaction(input, PRIVATE_KEY_BLOCK, tally);
   text = applyRedaction(text, URL_USERINFO, tally);
-  text = redactAssignments(text, tally);
+  text = redactAssignments(text, tally, options.mode ?? "config");
   text = redactAwsSecrets(text, options.context, tally);
   for (const redaction of SECRET_PATTERNS) text = applyRedaction(text, redaction, tally);
+  text = redactBearerTokens(text, tally);
   for (const redaction of PII_PATTERNS) text = applyRedaction(text, redaction, tally);
   return { text, count: tally.count };
 }
 
 function redactJsonValue(value: unknown, key: string | undefined, tally: { count: number }): unknown {
   if (typeof value === "string") {
-    if (key !== undefined && isSecretAssignmentKey(key) && isSecretAssignmentValue(value)) {
+    // A JSON string is always a quoted literal, scrubbed in CONFIG mode.
+    if (key !== undefined && isSecretAssignmentKey(key) && isSecretAssignmentValue(value, "config", true)) {
       tally.count += 1;
       return REDACTED;
     }
@@ -758,14 +837,14 @@ export function redactCollectorJsonText(text: string): string | null {
 /**
  * Scrubs one workspace file for upload: `.json` files structurally (falling
  * back to text when they do not parse), everything else as text with the path
- * as context.
+ * as context and the value rule mode the extension selects.
  */
 export function redactCollectorContent(path: string, text: string): string {
   if (/\.json$/i.test(path)) {
     const json = redactCollectorJsonText(text);
     if (json !== null) return json;
   }
-  return redactCollectorText(text, { context: path }).text;
+  return redactCollectorText(text, { context: path, mode: redactModeForPath(path) }).text;
 }
 
 /**
