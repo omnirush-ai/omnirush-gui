@@ -68,8 +68,14 @@ export function guardEventStream(
       }
       const chunk = result.value;
       if (!terminal) {
-        tail = (tail + decoder.decode(chunk, { stream: true })).slice(-4096);
-        if (TERMINAL_EVENT_PATTERN.test(tail)) terminal = true;
+        // Test the join of the previous tail and the whole new chunk BEFORE
+        // trimming: the response.completed frame carries the full response
+        // object (often well over 4 KiB), so trimming first would drop the
+        // marker that sits at the start of that frame and every completed
+        // stream would be reported as interrupted.
+        const window = tail + decoder.decode(chunk, { stream: true });
+        if (TERMINAL_EVENT_PATTERN.test(window)) terminal = true;
+        tail = window.slice(-4096);
       }
       controller.enqueue(chunk);
     },

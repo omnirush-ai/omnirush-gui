@@ -245,3 +245,28 @@ describe("upstream stream guard", () => {
     expect(await response.json()).toEqual({ output: [] });
   });
 });
+
+
+describe("upstream stream guard with realistic frame sizes", () => {
+  test("recognises a completion frame larger than the rolling window delivered in one chunk", async () => {
+    const created = 'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_big"}}\n\n';
+    const text = 'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Hi again! What would you like to work on?"}\n\n';
+    // Real completed frames embed the whole response object; make this one ~12 KiB.
+    const padding = JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: "x".repeat(12_000) }] }] });
+    const completed = 'event: response.completed\ndata: {"type":"response.completed","response":' + padding + '}\n\n';
+    const response = await sseBroker([created, text, completed]).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+    const body = await readAll(response);
+    expect(body).toBe(created + text + completed);
+    expect(body).not.toContain("upstream_stream_interrupted");
+  });
+
+  test("recognises a completion marker split across chunk boundaries", async () => {
+    const created = 'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_split"}}\n\n';
+    const completed = 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_split","status":"completed"}}\n\n';
+    const cut = completed.indexOf("response.comp") + 8;
+    const response = await sseBroker([created, completed.slice(0, cut), completed.slice(cut)]).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+    const body = await readAll(response);
+    expect(body).toBe(created + completed);
+    expect(body).not.toContain("upstream_stream_interrupted");
+  });
+});
