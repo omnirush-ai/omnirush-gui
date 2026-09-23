@@ -122,10 +122,9 @@ const usesGlmDisplayAliases = (
 };
 
 /**
- * omnirush.ai models offer exactly the contract's effort levels. The engine
- * merges its own OpenAI defaults (none, minimal, medium, max) into a reasoning
- * model's variants, so the reported keys are filtered to the allow-list rather
- * than trusted, which also keeps the picker default at "high".
+ * omnirush.ai models offer their own catalog effort levels. The server
+ * disables every other known effort, so the engine reports exactly those; the
+ * filter only keeps an engine default outside the known set off the picker.
  */
 const omnirushVariantKeys = (keys: string[]) =>
   keys.filter((key) => (OMNIRUSH_REASONING_EFFORTS as readonly string[]).includes(key));

@@ -21,7 +21,7 @@ import {
   openModelPickerEvent,
   pendingModelPickerProviderIdsKey,
 } from "@/react-app/shell/new-providers-listener";
-import { resolveModelDisplayName, resolveModelProviderDisplayName } from "@/app/utils";
+import { resolveModelDisplayName, resolveModelProviderDisplayName, resolveOmniRushModelGroup } from "@/app/utils";
 import { isSupportedModelProvider } from "@/app/lib/provider-catalog";
 
 export type UseModelPickerInput = {
@@ -136,11 +136,13 @@ export function useModelPicker(input: UseModelPickerInput) {
       for (const id of modelIds) {
         const model = provider.models[id];
         const summary = getModelBehaviorSummary(provider.id, model, null, provider.name);
+        const group = resolveOmniRushModelGroup(provider.id, model.family);
         next.push({
           providerID: provider.id,
           modelID: id,
           title: resolveModelDisplayName(id, model.name),
           description: resolveModelProviderDisplayName(provider.id, id, provider.name, model.name),
+          ...(group ? { group } : {}),
           behaviorTitle: summary.title,
           behaviorLabel: summary.label,
           behaviorDescription: summary.description,

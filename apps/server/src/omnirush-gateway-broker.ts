@@ -16,10 +16,23 @@ type BrokerOptions = {
  * terminal event the engine keeps the turn open forever and the UI shows
  * nothing. The guard appends a synthetic Responses-API error event when the
  * upstream closes early or stalls, so the turn fails visibly and can be retried.
+ *
+ * Terminal is decided per SSE event, on its data: a Responses
+ * `response.completed`, `response.incomplete` or `response.failed`, the bare
+ * `data: [DONE]` sentinel (every Muse stream ends with one), or an error
+ * frame. Comment lines such as `: keepalive` carry no data and are never
+ * terminal.
  */
-const TERMINAL_EVENT_PATTERN = /"type":"(?:response\.(?:completed|failed|incomplete)|error)"/;
+const TERMINAL_RESPONSE_EVENTS = new Set(["response.completed", "response.incomplete", "response.failed"]);
+const TERMINAL_OR_ERROR_MARKER = /"(?:response\.(?:completed|incomplete|failed)|error)"/;
+/** An event larger than this passes through unread; the marker scan below then decides terminality. */
+const MAX_EVENT_BYTES = 16 * 1024 * 1024;
+const TERMINAL_EVENT_PATTERN = /"type":"(?:response\.(?:completed|failed|incomplete)|error)"|(?:^|[\r\n])data: ?\[DONE\][\r\n]/;
 export const STREAM_IDLE_TIMEOUT_MS = 180_000;
 export type StreamInterruption = "truncated" | "idle";
+
+const LF = 0x0a;
+const CR = 0x0d;
 
 function interruptedEvent(reason: StreamInterruption): Uint8Array {
   const message = reason === "idle"
@@ -33,55 +46,343 @@ function interruptedEvent(reason: StreamInterruption): Uint8Array {
   return new TextEncoder().encode(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
+const UNAVAILABLE_COPY = "this model is temporarily unavailable. Try again in a minute, or pick another model.";
+const BUSY_COPY = "this model is busy right now. Try again in a moment.";
+const STALLED_COPY = "the model stopped responding before it finished. Retry the request, or pick a lower effort.";
+const SETUP_COPY = "the model route is being set up. Try again later.";
+
+/**
+ * What the user reads for an omnirush.ai gateway error: the backend's own
+ * codes, and the relay codes it passes through (mid-stream as
+ * `upstream_<code>`). Kept in step with the console's chat copy.
+ */
+const GATEWAY_ERROR_COPY: Record<string, string> = {
+  model_unavailable: "this model is not available on your account right now. Pick another model.",
+  model_not_allowed: "this model is not available to your account. Pick another model.",
+  model_not_found: "this model is not available right now. Pick another model.",
+  model_input_not_supported: "this model cannot read that attachment. Remove the image or PDF, or pick another model.",
+  model_concurrency_limited: "too many answers are already running on this model. Wait for one to finish, then try again.",
+  model_request_too_large: "this request is too large to send. Remove an attachment or start a new session.",
+  reasoning_effort_not_allowed: "this model does not offer the selected effort. Pick another effort.",
+  unsupported_model_endpoint: "this model cannot run this kind of request. Pick another model.",
+  daily_grant_exhausted: "you have used today's model allowance. It refills at 00:00 UTC.",
+  grant_check_unavailable: "your model allowance could not be checked. Try again in a moment.",
+  account_inactive: "model access is paused for this account. Open your omnirush.ai dashboard to see why.",
+  consent_required: "accept the omnirush.ai data terms on your dashboard, then try again.",
+  consent_version_outdated: "the omnirush.ai data terms were updated. Accept the new version on your dashboard, then try again.",
+  internal_proxy_unavailable: "the model service did not respond. Try again in a moment.",
+  internal_proxy_not_configured: SETUP_COPY,
+  internal_proxy_ca_missing: SETUP_COPY,
+  muse_relay_not_configured: UNAVAILABLE_COPY,
+  model_upstream_auth_failed: UNAVAILABLE_COPY,
+  model_upstream_misconfigured: UNAVAILABLE_COPY,
+  model_upstream_unavailable: "the model service could not be reached. Try again in a moment.",
+  stream_interrupted: "the model stream ended before the response completed. Retry the request.",
+  idle_timeout: STALLED_COPY,
+  first_byte_timeout: STALLED_COPY,
+  request_timeout: STALLED_COPY,
+  provider_error: "the model provider could not complete this request.",
+  provider_unavailable: UNAVAILABLE_COPY,
+  provider_auth_error: UNAVAILABLE_COPY,
+  capacity_unavailable: UNAVAILABLE_COPY,
+  circuit_open: UNAVAILABLE_COPY,
+  maintenance: UNAVAILABLE_COPY,
+  draining: UNAVAILABLE_COPY,
+  auth_unavailable: UNAVAILABLE_COPY,
+  token_capacity: BUSY_COPY,
+  gateway_overload: BUSY_COPY,
+  queue_timeout: BUSY_COPY,
+  provider_rate_limited: BUSY_COPY,
+};
+
+/** Readable copy for a gateway error code, or null for a code it does not know. */
+export function gatewayErrorMessage(code: string, detail?: string | null): string | null {
+  const copy = GATEWAY_ERROR_COPY[code] ?? GATEWAY_ERROR_COPY[code.replace(/^upstream_/, "")];
+  if (!copy) return null;
+  // A provider error names what it refused ("Upstream returned an error: <why>").
+  const why = code.endsWith("provider_error")
+    ? detail?.replace(/^\s*upstream returned an error:?/i, "").trim().slice(0, 300)
+    : "";
+  return why ? `omnirush.ai: ${copy} (${why})` : `omnirush.ai: ${copy}`;
+}
+
+function stringField(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * An error frame the engine can show: the gateway's
+ * `{type:"error",sequence_number,error:{...}}`, OpenAI's flat
+ * `{type:"error",sequence_number,code,message}`, or a relay `event: error` /
+ * `{"error":{...}}` that reached the broker unrewritten. A frame the engine's
+ * AI SDK already parses and that has no readable copy passes unchanged;
+ * anything else becomes the nested shape with the copy. The SDK drops an
+ * error chunk without a numeric sequence_number (or with a non-string error
+ * type, code or message), which would end the turn silently, and the engine
+ * shows only a nested error's message.
+ */
+function errorEvent(block: Uint8Array, payload: Record<string, unknown>): Uint8Array {
+  const nested = isRecord(payload.error) ? payload.error : null;
+  const code = stringField(nested ? nested.code : payload.code);
+  const original = stringField(nested ? nested.message : payload.message);
+  const readable = code ? gatewayErrorMessage(code, original) : null;
+  const sequence = payload.sequence_number;
+  const parsed = payload.type === "error"
+    && typeof sequence === "number"
+    && (nested
+      ? typeof nested.type === "string" && typeof nested.code === "string" && typeof nested.message === "string"
+      : typeof payload.message === "string");
+  if (parsed && !readable) return block;
+  const param = stringField(nested ? nested.param : payload.param);
+  const frame = {
+    type: "error",
+    sequence_number: typeof sequence === "number" && Number.isFinite(sequence) ? sequence : -1,
+    error: {
+      type: stringField(nested?.type) ?? "server_error",
+      code: code ?? "upstream_error",
+      message: readable ?? original ?? `omnirush.ai: the model request failed (${code ?? "upstream_error"}).`,
+      ...(param ? { param } : {}),
+    },
+  };
+  return new TextEncoder().encode(`event: error\ndata: ${JSON.stringify(frame)}\n\n`);
+}
+
+function sseEventFields(block: Uint8Array): { name: string | null; data: string | null } {
+  let name: string | null = null;
+  const data: string[] = [];
+  for (const line of new TextDecoder().decode(block).split(/\r\n|\r|\n/)) {
+    if (!line || line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+    if (field === "event") name = value;
+    else if (field === "data") data.push(value);
+  }
+  return { name, data: data.length > 0 ? data.join("\n") : null };
+}
+
+/**
+ * Splits an SSE byte stream into whole events, forwarding each unchanged
+ * except error frames, which are normalized (errorEvent). A partial event is
+ * held until its blank line arrives; the engine cannot act on it earlier.
+ */
+class SseEventFramer {
+  terminal = false;
+  private buffer = new Uint8Array(4096);
+  private length = 0;
+  /** Where the blank-line scan resumes, and whether that offset starts a line. */
+  private scanned = 0;
+  private lineStart = true;
+  private unframed = false;
+  private tail = "";
+  private readonly decoder = new TextDecoder();
+
+  push(chunk: Uint8Array): Uint8Array[] {
+    if (this.unframed) {
+      this.scanUnframed(chunk);
+      return [chunk];
+    }
+    this.append(chunk);
+    const events: Uint8Array[] = [];
+    let start = 0;
+    for (let end = this.nextBoundary(); end >= 0; end = this.nextBoundary()) {
+      events.push(this.event(this.buffer.slice(start, end)));
+      start = end;
+    }
+    if (start > 0) {
+      this.buffer.copyWithin(0, start, this.length);
+      this.length -= start;
+      this.scanned -= start;
+    }
+    if (this.length > MAX_EVENT_BYTES) {
+      const oversized = this.buffer.slice(0, this.length);
+      this.length = 0;
+      this.unframed = true;
+      this.scanUnframed(oversized);
+      events.push(oversized);
+    }
+    return events;
+  }
+
+  /**
+   * The upstream closed: an event still missing its blank line is kept only
+   * when the stream already ended (a final `data: [DONE]` without one);
+   * otherwise it is dropped so the interruption frame stays well formed.
+   */
+  finish(): Uint8Array | null {
+    if (this.length === 0) return null;
+    const rest = this.buffer.slice(0, this.length);
+    this.length = 0;
+    const event = this.event(rest);
+    return this.terminal ? event : null;
+  }
+
+  private append(chunk: Uint8Array): void {
+    if (this.length + chunk.length > this.buffer.length) {
+      const grown = new Uint8Array(Math.max(this.buffer.length * 2, this.length + chunk.length));
+      grown.set(this.buffer.subarray(0, this.length));
+      this.buffer = grown;
+    }
+    this.buffer.set(chunk, this.length);
+    this.length += chunk.length;
+  }
+
+  /** The offset just past the next blank line (CRLF, LF or CR line endings), or -1. */
+  private nextBoundary(): number {
+    let index = this.scanned;
+    while (index < this.length) {
+      const byte = this.buffer[index];
+      if (byte !== LF && byte !== CR) {
+        this.lineStart = false;
+        index += 1;
+        continue;
+      }
+      let end = index + 1;
+      if (byte === CR) {
+        // CR or CRLF: the next byte decides.
+        if (end === this.length) break;
+        if (this.buffer[end] === LF) end += 1;
+      }
+      if (this.lineStart) {
+        this.scanned = end;
+        return end;
+      }
+      this.lineStart = true;
+      index = end;
+    }
+    this.scanned = index;
+    return -1;
+  }
+
+  private event(block: Uint8Array): Uint8Array {
+    const { name, data } = sseEventFields(block);
+    if (data === null) return block;
+    if (data.trim() === "[DONE]") {
+      this.terminal = true;
+      return block;
+    }
+    // Only a terminal or error payload can hold one of these as raw JSON (a
+    // quote inside a string value is escaped), so the text deltas that make
+    // up most of a stream are never parsed.
+    if (name !== "error" && !TERMINAL_OR_ERROR_MARKER.test(data)) return block;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return block;
+    }
+    if (!isRecord(payload)) return block;
+    const type = payload.type;
+    if (typeof type === "string" && TERMINAL_RESPONSE_EVENTS.has(type)) {
+      this.terminal = true;
+      return block;
+    }
+    if (type === "error" || (type === undefined && (name === "error" || isRecord(payload.error)))) {
+      this.terminal = true;
+      return errorEvent(block, payload);
+    }
+    return block;
+  }
+
+  private scanUnframed(chunk: Uint8Array): void {
+    if (this.terminal) return;
+    // Test the join of the previous tail and the whole new chunk BEFORE
+    // trimming, so a marker split across chunks is still seen.
+    const window = this.tail + this.decoder.decode(chunk, { stream: true });
+    if (TERMINAL_EVENT_PATTERN.test(window)) this.terminal = true;
+    this.tail = window.slice(-4096);
+  }
+}
+
 export function guardEventStream(
   body: ReadableStream<Uint8Array>,
   options: { idleMs?: number; onInterrupted?: (reason: StreamInterruption) => void } = {},
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
   const idleMs = options.idleMs ?? STREAM_IDLE_TIMEOUT_MS;
-  let tail = "";
-  let terminal = false;
+  const events = new SseEventFramer();
   const interrupt = (controller: ReadableStreamDefaultController<Uint8Array>, reason: StreamInterruption) => {
     options.onInterrupted?.(reason);
     controller.enqueue(interruptedEvent(reason));
     controller.close();
   };
+  const read = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const idle = new Promise<{ idle: true }>((resolve) => {
+      timer = setTimeout(() => resolve({ idle: true }), idleMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([reader.read(), idle]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const idle = new Promise<{ idle: true }>((resolve) => {
-        timer = setTimeout(() => resolve({ idle: true }), idleMs);
-        timer.unref?.();
-      });
-      const result = await Promise.race([reader.read(), idle]);
-      if (timer) clearTimeout(timer);
-      if ("idle" in result) {
-        await reader.cancel().catch(() => undefined);
-        interrupt(controller, "idle");
-        return;
+      // Read until at least one whole event can be forwarded: a pull that
+      // enqueues nothing would not be called again.
+      for (;;) {
+        const result = await read();
+        if ("idle" in result) {
+          await reader.cancel().catch(() => undefined);
+          interrupt(controller, "idle");
+          return;
+        }
+        if (result.done) {
+          const rest = events.finish();
+          if (!events.terminal) {
+            interrupt(controller, "truncated");
+            return;
+          }
+          if (rest) controller.enqueue(rest);
+          controller.close();
+          return;
+        }
+        const ready = events.push(result.value);
+        for (const event of ready) controller.enqueue(event);
+        if (ready.length > 0) return;
       }
-      if (result.done) {
-        if (terminal) controller.close();
-        else interrupt(controller, "truncated");
-        return;
-      }
-      const chunk = result.value;
-      if (!terminal) {
-        // Test the join of the previous tail and the whole new chunk BEFORE
-        // trimming: the response.completed frame carries the full response
-        // object (often well over 4 KiB), so trimming first would drop the
-        // marker that sits at the start of that frame and every completed
-        // stream would be reported as interrupted.
-        const window = tail + decoder.decode(chunk, { stream: true });
-        if (TERMINAL_EVENT_PATTERN.test(window)) terminal = true;
-        tail = window.slice(-4096);
-      }
-      controller.enqueue(chunk);
     },
     cancel(reason) {
       return reader.cancel(reason);
     },
+  });
+}
+
+/**
+ * A gateway error body with readable copy for the codes the gateway and the
+ * relay use (`{"detail":"<code>"}` from the gateway itself, or an
+ * OpenAI-shaped `{"error":{code,message}}`), in the OpenAI shape the engine
+ * reads its message from. Null leaves the body as it came.
+ */
+function readableErrorBody(text: string): string | null {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(payload)) return null;
+  const nested = isRecord(payload.error) ? payload.error : null;
+  const bareCode = stringField(payload.detail) ?? stringField(payload.error);
+  const code = bareCode ?? stringField(nested?.code);
+  if (!code) return null;
+  const message = gatewayErrorMessage(code, stringField(nested?.message))
+    ?? (bareCode ? `omnirush.ai could not complete the model request (${code}).` : null);
+  if (!message) return null;
+  const param = stringField(nested?.param);
+  return JSON.stringify({
+    error: { message, type: stringField(nested?.type) ?? "omnirush_error", code, ...(param ? { param } : {}) },
+  });
+}
+
+async function readableErrorResponse(response: Response): Promise<Response> {
+  const text = await response.text().catch(() => "");
+  return new Response(readableErrorBody(text) ?? text, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders(response.headers),
   });
 }
 
@@ -279,6 +580,11 @@ export class OmniRushGatewayBroker {
       }, { status: 401 });
     }
     const contentType = response.headers.get("content-type") ?? "";
+    // Sign-in failures keep their own answer above; every other gateway
+    // refusal reaches the user as readable copy instead of a bare code.
+    if (!response.ok && response.status !== 401 && contentType.includes("application/json")) {
+      return await readableErrorResponse(response);
+    }
     const streamed = response.ok && response.body && contentType.includes("text/event-stream");
     const responseBody = streamed && response.body
       ? guardEventStream(response.body, {
@@ -322,6 +628,19 @@ export class OmniRushGatewayBroker {
       },
       ...(init.body === undefined ? {} : { body: init.body }),
       ...(init.signal ? { signal: init.signal } : {}),
+    }));
+  }
+
+  /**
+   * The account's model catalog (`<gateway>/models`, the backend's
+   * GET /omnirush/v1/models), authenticated like collect(): the device bearer
+   * and the same bounded 401 refresh. Read by the model catalog sync.
+   */
+  modelCatalog(): Promise<Response> {
+    return this.withDeviceBearer((state) => this.fetcher(upstreamUrl(state.gatewayUrl, "models"), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(8_000),
     }));
   }
 

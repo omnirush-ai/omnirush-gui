@@ -45,26 +45,15 @@ import {
 import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js";
 import { isOmniRushUiMcpRegistryEntry } from "./omnirush-ui-mcp-command.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
+import {
+  builtinOmniRushModelCatalog,
+  engineModelsFromCatalog,
+  omnirushDefaultModelId,
+  readOmniRushModelCatalog,
+  type OmniRushModelCatalog,
+} from "./omnirush-model-catalog.js";
 
 const INTERNAL_PROVIDER_ID = "omnirush";
-const INTERNAL_DEFAULT_MODEL_ID = "gpt-6-astra";
-/**
- * Effort levels offered for every omnirush.ai model, in picker order. Clients
- * send these literal values; "max" is the upstream's top level.
- */
-const INTERNAL_REASONING_EFFORTS = ["low", "high", "xhigh", "max"] as const;
-/**
- * Effort levels the engine adds on its own to every reasoning model served by
- * the OpenAI adapter (it merges its defaults into the configured variants and
- * drops only entries marked disabled). Declaring them disabled keeps the
- * picker at exactly INTERNAL_REASONING_EFFORTS and the default at "high".
- */
-const INTERNAL_HIDDEN_EFFORTS = ["none", "minimal", "medium"] as const;
-/** Models served by the omnirush.ai account route. The default comes first. */
-const INTERNAL_MODELS: ReadonlyArray<{ id: string; name: string }> = [
-  { id: INTERNAL_DEFAULT_MODEL_ID, name: "GPT 6 Astra" },
-  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
-];
 
 type InternalGatewayRuntime = {
   baseUrl: string;
@@ -104,31 +93,7 @@ function resolveConfiguredInternalGatewayRuntime(
   return resolveInternalGatewayRuntime(env);
 }
 
-function internalGatewayModel(name: string): Record<string, unknown> {
-  return {
-    name,
-    reasoning: true,
-    tool_call: true,
-    structured_output: true,
-    temperature: true,
-    // Keep the effort controls visible in the desktop model picker. The
-    // selected variant is merged into the request options by the engine; the
-    // omnirush-reasoning-effort plugin and the local gateway broker make sure
-    // it reaches the outgoing request as reasoning.effort for every model.
-    variants: {
-      ...Object.fromEntries(
-        INTERNAL_REASONING_EFFORTS.map((effort) => [effort, { reasoning_effort: effort }]),
-      ),
-      ...Object.fromEntries(
-        INTERNAL_HIDDEN_EFFORTS.map((effort) => [effort, { disabled: true }]),
-      ),
-    },
-    limit: { context: 400_000, output: 128_000 },
-    modalities: { input: ["text", "image", "pdf"], output: ["text"] },
-  };
-}
-
-function internalGatewayProvider(runtime: InternalGatewayRuntime): Record<string, unknown> {
+function internalGatewayProvider(runtime: InternalGatewayRuntime, catalog: OmniRushModelCatalog): Record<string, unknown> {
   return {
     // The native OpenAI provider uses the Responses API, which preserves
     // reasoning summaries, tool calls, and delegated task events. The generic
@@ -138,9 +103,9 @@ function internalGatewayProvider(runtime: InternalGatewayRuntime): Record<string
     name: "omnirush.ai",
     env: ["OMNIRUSH_ACCESS_TOKEN"],
     options: { baseURL: runtime.baseUrl },
-    models: Object.fromEntries(
-      INTERNAL_MODELS.map((model) => [model.id, internalGatewayModel(model.name)]),
-    ),
+    // Only models come from the account's catalog; the provider fields above
+    // never do, so a catalog cannot route the engine past the local broker.
+    models: engineModelsFromCatalog(catalog),
   };
 }
 
@@ -148,14 +113,17 @@ export async function buildOmniRushRuntimeConfigObject(
   config?: ServerConfig,
 ): Promise<Record<string, unknown>> {
   // Workspace-independent by design: the injected engine config file is
-  // rendered from the ENGINE_GLOBAL runtime row plus static built-ins only,
-  // so workspace activation rewrites identical bytes and never varies the
-  // engine-pool fingerprint. Per-workspace MCPs reach the engine through the
-  // dynamic push path instead.
+  // rendered from the ENGINE_GLOBAL runtime row, the synced model catalog and
+  // static built-ins only, so workspace activation rewrites identical bytes
+  // and never varies the engine-pool fingerprint. Per-workspace MCPs reach the
+  // engine through the dynamic push path instead.
   const runtimeConfig = config ? await readGlobalRuntimeOpencodeConfig(config) : {};
+  const internalGateway = resolveConfiguredInternalGatewayRuntime(config);
   return buildOmniRushRuntimeConfigObjectFromSnapshot(
     runtimeConfig,
-    resolveConfiguredInternalGatewayRuntime(config),
+    internalGateway,
+    process.env,
+    internalGateway && config ? await readOmniRushModelCatalog(config) : undefined,
   );
 }
 
@@ -163,6 +131,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   runtimeConfig: RuntimeOpencodeConfig,
   internalGateway?: InternalGatewayRuntime,
   env: NodeJS.ProcessEnv = process.env,
+  catalog: OmniRushModelCatalog = builtinOmniRushModelCatalog(),
 ): Record<string, unknown> {
   const disabledProviders = runtimeDisabledProviderList(runtimeConfig);
   // OMNIRUSH_APPROVALS in the server environment wins over the persisted setting.
@@ -171,13 +140,13 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   const provider = {
     ...runtimeProviderMap(runtimeConfig),
     ...(internalGateway
-      ? { [INTERNAL_PROVIDER_ID]: internalGatewayProvider(internalGateway) }
+      ? { [INTERNAL_PROVIDER_ID]: internalGatewayProvider(internalGateway, catalog) }
       : {}),
   };
   return {
     ...engineConfig,
     ...(internalGateway
-      ? { model: `${INTERNAL_PROVIDER_ID}/${INTERNAL_DEFAULT_MODEL_ID}` }
+      ? { model: `${INTERNAL_PROVIDER_ID}/${omnirushDefaultModelId(catalog)}` }
       : {}),
     ...(runtimeConfig.managedPolicy?.allowCustomProviders === false ? { enabled_providers: [
       ...Object.keys(provider).filter((id) => /^(?:lpr_|omnirush$)/i.test(id)),

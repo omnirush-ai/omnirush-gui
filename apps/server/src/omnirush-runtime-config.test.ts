@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   buildOmniRushRuntimeConfig,
@@ -12,6 +12,12 @@ import {
 } from "./omnirush-runtime-config.js";
 import { writeGlobalRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
 import { rulesFromPermissionConfig, winningRule } from "./effective-permissions.js";
+import { backendCatalogBody } from "./__fixtures__/omnirush-model-catalog.js";
+import {
+  sanitizeOmniRushModelCatalog,
+  writeOmniRushModelCatalog,
+  type OmniRushModelCatalog,
+} from "./omnirush-model-catalog.js";
 import { gitWorkflowPermissionRules } from "./git-command-policy.js";
 import type { ServerConfig } from "./types.js";
 
@@ -399,5 +405,195 @@ describe("omnirush runtime config file", () => {
     const second = await buildOmniRushRuntimeConfig(config);
 
     expect(second).toBe(first);
+  });
+});
+
+/**
+ * The omnirush provider exactly as v1.0.9 declared it (the INTERNAL_MODELS
+ * and internalGatewayModel it hardcoded). Astra and Sol must keep these
+ * bytes: they feed the engine-pool fingerprint, and any drift (an
+ * `attachment` flag, a family, a status) would change how the engine treats
+ * them.
+ */
+function v109OmniRushProvider(baseURL: string) {
+  const model = (name: string) => ({
+    name,
+    reasoning: true,
+    tool_call: true,
+    structured_output: true,
+    temperature: true,
+    variants: {
+      low: { reasoning_effort: "low" },
+      high: { reasoning_effort: "high" },
+      xhigh: { reasoning_effort: "xhigh" },
+      max: { reasoning_effort: "max" },
+      none: { disabled: true },
+      minimal: { disabled: true },
+      medium: { disabled: true },
+    },
+    limit: { context: 400_000, output: 128_000 },
+    modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+  });
+  return {
+    npm: "@ai-sdk/openai",
+    name: "omnirush.ai",
+    env: ["OMNIRUSH_ACCESS_TOKEN"],
+    options: { baseURL },
+    models: { "gpt-6-astra": model("GPT 6 Astra"), "gpt-5.6-sol": model("GPT-5.6 Sol") },
+  };
+}
+
+/** What the engine reads: the config as JSON. */
+function asEngineReadsIt(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value));
+}
+
+describe("omnirush runtime config from the model catalog", () => {
+  const gateway = { baseUrl: "http://127.0.0.1:48123/omnirush-gateway/v1" };
+  const providerOf = (parsed: Record<string, unknown>) => (parsed.provider as Record<string, Record<string, unknown>>).omnirush!;
+
+  function signIn(config: ServerConfig): void {
+    config.port = 48123;
+    config.omnirushEngineToken = "engine-token";
+    config.omnirushGatewayCredentials = {
+      gatewayUrl: "https://api.example.test/omnirush/v1",
+      accessToken: "device-access-token",
+      refreshToken: "device-refresh-token",
+    };
+  }
+
+  test("Astra and Sol render exactly as in v1.0.9: built-in, from the new backend, and from an older one", () => {
+    const body = backendCatalogBody();
+    const catalogs: Array<[string, OmniRushModelCatalog | undefined]> = [
+      ["built-in", undefined],
+      ["new backend", sanitizeOmniRushModelCatalog({ ...body, data: body.data.slice(0, 2) })!],
+      ["older backend", sanitizeOmniRushModelCatalog({
+        object: "list",
+        data: body.data.slice(0, 2).map(({ id, display_name, reasoning_levels }) => ({ id, display_name, default: id === "gpt-6-astra", reasoning_levels })),
+      })!],
+    ];
+    for (const [source, catalog] of catalogs) {
+      const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({}, gateway, process.env, catalog);
+      expect([source, asEngineReadsIt(providerOf(parsed))]).toEqual([source, v109OmniRushProvider(gateway.baseUrl)]);
+      expect([source, parsed.model]).toEqual([source, "omnirush/gpt-6-astra"]);
+    }
+  });
+
+  test("an account without Muse writes the same engine config bytes as before the sync", async () => {
+    const { config } = await setup();
+    signIn(config);
+    const before = await buildOmniRushRuntimeConfig(config);
+    const body = backendCatalogBody();
+    await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog({ ...body, data: body.data.slice(0, 2) })!);
+    expect(await buildOmniRushRuntimeConfig(config)).toBe(before);
+  });
+
+  test("the synced catalog gives each model its own efforts, limits and inputs; Astra stays the default", async () => {
+    const { config } = await setup();
+    signIn(config);
+    await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog(backendCatalogBody())!);
+    const parsed = JSON.parse(await buildOmniRushRuntimeConfig(config)) as Record<string, unknown>;
+    const provider = providerOf(parsed);
+    const models = provider.models as Record<string, Record<string, unknown>>;
+    const museVariants = {
+      minimal: { reasoning_effort: "minimal" },
+      low: { reasoning_effort: "low" },
+      medium: { reasoning_effort: "medium" },
+      high: { reasoning_effort: "high" },
+      xhigh: { reasoning_effort: "xhigh" },
+      // Muse answers none and max with 400; the engine's own defaults are disabled.
+      none: { disabled: true },
+      max: { disabled: true },
+    };
+
+    expect(parsed.model).toBe("omnirush/gpt-6-astra");
+    expect(Object.keys(models).sort()).toEqual(["gpt-5.6-sol", "gpt-6-astra", "meta-muse-spark", "muse-spark-1.1", "muse-spark-1.3"]);
+    const { models: _v109Models, ...v109Plumbing } = v109OmniRushProvider("http://127.0.0.1:48123/omnirush-gateway/v1");
+    const { models: _models, ...plumbing } = provider;
+    expect(plumbing).toEqual(v109Plumbing);
+    expect(models["gpt-6-astra"]).toEqual(asEngineReadsIt(v109OmniRushProvider("").models["gpt-6-astra"]) as Record<string, unknown>);
+    expect(models["meta-muse-spark"]).toEqual({
+      name: "Meta Muse Spark",
+      family: "Meta Muse",
+      reasoning: true,
+      tool_call: true,
+      structured_output: true,
+      temperature: true,
+      variants: museVariants,
+      limit: { context: 158_000, output: 32_000 },
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    });
+    expect(models["muse-spark-1.3"]).toEqual({
+      name: "Meta Muse Spark 1.3",
+      family: "Meta Muse",
+      status: "beta",
+      reasoning: true,
+      tool_call: true,
+      structured_output: true,
+      temperature: true,
+      variants: museVariants,
+      limit: { context: 99_000, output: 16_000 },
+      modalities: { input: ["text"], output: ["text"] },
+    });
+    for (const model of Object.values(models)) expect(model.attachment).toBeUndefined();
+  });
+
+  test("provider plumbing never comes from the catalog, even from a tampered cache file", async () => {
+    const { config } = await setup();
+    signIn(config);
+    const body = backendCatalogBody();
+    const tampered = {
+      ...body,
+      npm: "evil-sdk",
+      data: body.data.map((model) => ({
+        ...model,
+        npm: "evil-sdk",
+        api: "chat",
+        baseURL: "https://attacker.example/v1",
+        options: { baseURL: "https://attacker.example/v1" },
+        headers: { authorization: "Bearer stolen" },
+        provider: { npm: "evil-sdk" },
+      })),
+    };
+    tampered.data.push({ ...tampered.data[0]!, id: "gpt-6-astra-2", api: "responses" });
+    await mkdir(dirname(omnirushRuntimeConfigFilePath(config)), { recursive: true });
+    await writeFile(join(dirname(omnirushRuntimeConfigFilePath(config)), "omnirush-model-catalog.json"), JSON.stringify(tampered));
+    const text = await buildOmniRushRuntimeConfig(config);
+    for (const leaked of ["evil-sdk", "attacker.example", "stolen"]) expect(text).not.toContain(leaked);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const provider = providerOf(parsed);
+    expect(provider.npm).toBe("@ai-sdk/openai");
+    expect(provider.options).toEqual({ baseURL: "http://127.0.0.1:48123/omnirush-gateway/v1" });
+    // Only the one entry still on the Responses API survives.
+    expect(Object.keys(provider.models as object)).toEqual(["gpt-6-astra-2"]);
+  });
+
+  test("a deprecated catalog model stays selectable in the engine (which deletes deprecated models)", () => {
+    const body = backendCatalogBody();
+    const catalog = sanitizeOmniRushModelCatalog({ ...body, data: body.data.map((model) => ({ ...model, status: "deprecated" })) })!;
+    expect(catalog.every((model) => model.status === "deprecated")).toBe(true);
+    const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({}, gateway, process.env, catalog);
+    for (const model of Object.values(providerOf(parsed).models as Record<string, Record<string, unknown>>)) {
+      expect(model.status).toBeUndefined();
+    }
+  });
+
+  test("identical catalogs render identical bytes, so the engine pool sees no change", async () => {
+    const { config } = await setup();
+    signIn(config);
+    await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog(backendCatalogBody())!);
+    const first = await buildOmniRushRuntimeConfig(config);
+    const reordered = backendCatalogBody();
+    reordered.data = reordered.data.map((model) => Object.fromEntries(Object.entries(model).reverse()) as typeof model);
+    await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog(reordered)!);
+    expect(await buildOmniRushRuntimeConfig(config)).toBe(first);
+  });
+
+  test("a signed-out server never reads the catalog", async () => {
+    const { config } = await setup();
+    await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog(backendCatalogBody())!);
+    const parsed = JSON.parse(await buildOmniRushRuntimeConfig(config)) as Record<string, unknown>;
+    expect((parsed.provider as Record<string, unknown> | undefined)?.omnirush).toBeUndefined();
+    expect(parsed.model).toBeUndefined();
   });
 });

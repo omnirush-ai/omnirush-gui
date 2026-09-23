@@ -1,1 +1,3 @@
 packages/sdk/src/gen/** linguist-generated=true
+# Recorded model streams: byte-exact SSE framing (CRLF-free, ends with a blank line).
+apps/server/src/__fixtures__/*.sse -text -whitespace

@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import type { ProviderListItem } from "../src/app/types";
-import { OMNIRUSH_REASONING_EFFORTS } from "../src/app/constants";
+import { DEFAULT_MODEL, MODEL_PREF_KEY, OMNIRUSH_REASONING_EFFORTS } from "../src/app/constants";
+import { readStoredDefaultModel } from "../src/react-app/kernel/model-config";
 import {
   getModelBehaviorOptions,
   getModelBehaviorSummary,
@@ -13,6 +14,7 @@ import {
   resolveModelDisplayName,
   resolveModelProviderDisplayName,
   resolveModelProviderIconId,
+  resolveOmniRushModelGroup,
 } from "../src/app/utils";
 import {
   isDirectModelProvider,
@@ -119,27 +121,48 @@ describe("model behavior options", () => {
     }
   });
 
-  test("hides the effort levels the engine adds on its own to omnirush.ai models", () => {
-    expect([...OMNIRUSH_REASONING_EFFORTS]).toEqual(["low", "high", "xhigh", "max"]);
+  test("offers each omnirush.ai model exactly the efforts the engine reports for it", () => {
+    expect([...OMNIRUSH_REASONING_EFFORTS]).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    // The server declares every other effort disabled per model, so the
+    // engine reports only the catalog's levels; anything outside the known
+    // set (an engine default such as "ultra") still stays off the picker.
+    const museSpark: ProviderModel = {
+      ...omnirushModel("meta-muse-spark", "Meta Muse Spark"),
+      family: "Meta Muse",
+      variants: {
+        minimal: { reasoning_effort: "minimal" },
+        low: { reasoning_effort: "low" },
+        medium: { reasoning_effort: "medium", reasoningEffort: "medium", reasoningSummary: "auto" },
+        high: { reasoning_effort: "high" },
+        xhigh: { reasoning_effort: "xhigh" },
+        ultra: { reasoningEffort: "ultra" },
+      },
+    };
+    const options = getModelBehaviorOptions("omnirush", museSpark, "omnirush.ai");
+    expect(options.map((option) => option.value)).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+    expect(getModelBehaviorSummary("omnirush", museSpark, null, "omnirush.ai").value).toBe("medium");
+    expect(getModelBehaviorSummary("omnirush", museSpark, "xhigh", "omnirush.ai").value).toBe("xhigh");
+    // An effort Muse does not offer (Astra's max) falls back to its default.
+    expect(getModelBehaviorSummary("omnirush", museSpark, "max", "omnirush.ai").value).toBe("medium");
+    expect(getModelBehaviorSummary("omnirush", museSpark, "ultra", "omnirush.ai").value).toBe("medium");
+
+    // Astra and Sol keep their v1.0.9 levels and default.
     for (const internal of OMNIRUSH_MODELS) {
-      // What GET /config/providers reports once the engine has merged its
-      // OpenAI reasoning defaults into the configured variants.
-      const reported: ProviderModel = {
-        ...internal,
-        variants: {
-          ...internal.variants,
-          none: { reasoningEffort: "none", reasoningSummary: "auto" },
-          minimal: { reasoningEffort: "minimal" },
-          medium: { reasoningEffort: "medium", reasoningSummary: "auto" },
-          max: { reasoningEffort: "max" },
-        },
-      };
-      const options = getModelBehaviorOptions("omnirush", reported, "omnirush.ai");
-      expect(options.map((option) => option.value)).toEqual(["low", "high", "xhigh", "max"]);
-      expect(getModelBehaviorSummary("omnirush", reported, null, "omnirush.ai").value).toBe("high");
-      expect(getModelBehaviorSummary("omnirush", reported, "medium", "omnirush.ai").value).toBe("high");
-      expect(getModelBehaviorSummary("omnirush", reported, "max", "omnirush.ai").value).toBe("max");
+      expect(getModelBehaviorOptions("omnirush", internal, "omnirush.ai").map((option) => option.value)).toEqual(["low", "high", "xhigh", "max"]);
+      expect(getModelBehaviorSummary("omnirush", internal, null, "omnirush.ai").value).toBe("high");
+      expect(getModelBehaviorSummary("omnirush", internal, "medium", "omnirush.ai").value).toBe("high");
     }
+  });
+
+  test("groups Meta Muse under its own family and keeps Astra and Sol under the provider", () => {
+    expect(resolveOmniRushModelGroup("omnirush", "Meta Muse")).toBe("Meta Muse");
+    expect(resolveOmniRushModelGroup("omnirush", undefined)).toBeUndefined();
+    expect(resolveOmniRushModelGroup("omnirush", "  ")).toBeUndefined();
+    // Only the omnirush.ai catalog's families group; other providers keep theirs.
+    expect(resolveOmniRushModelGroup("openai", "gpt")).toBeUndefined();
+    expect(resolveModelDisplayName("meta-muse-spark", "Meta Muse Spark")).toBe("Meta Muse Spark");
+    expect(resolveModelDisplayName("muse-spark-1.3", "Meta Muse Spark 1.3")).toBe("Meta Muse Spark 1.3");
+    expect(resolveModelProviderDisplayName("omnirush", "muse-spark-1.3", "omnirush.ai")).toBe("omnirush.ai");
   });
 
   test("shows both omnirush.ai models under the omnirush.ai provider with their display names", () => {
@@ -224,5 +247,41 @@ describe("model behavior options", () => {
   test("does not cycle backward with fewer than two effort values", () => {
     expect(previousModelBehaviorValue([], null)).toBeNull();
     expect(previousModelBehaviorValue([{ value: "high" }], "high")).toBeNull();
+  });
+});
+
+describe("stored default model", () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  afterEach(() => {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+
+  function storeDefault(value: string): Map<string, string> {
+    const items = new Map([[MODEL_PREF_KEY, value]]);
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: {
+          getItem: (key: string) => items.get(key) ?? null,
+          setItem: (key: string, next: string) => { items.set(key, next); },
+        },
+        dispatchEvent: () => true,
+      },
+    });
+    return items;
+  }
+
+  test("keeps a Meta Muse default instead of resetting it to Astra", () => {
+    const items = storeDefault("omnirush/meta-muse-spark");
+    expect(readStoredDefaultModel()).toEqual({ providerID: "omnirush", modelID: "meta-muse-spark" });
+    expect(items.get(MODEL_PREF_KEY)).toBe("omnirush/meta-muse-spark");
+  });
+
+  test("still moves a retired omnirush.ai route to the default, Astra", () => {
+    const items = storeDefault("omnirush/z-ai/glm-5.2");
+    expect(readStoredDefaultModel()).toEqual(DEFAULT_MODEL);
+    expect(DEFAULT_MODEL).toEqual({ providerID: "omnirush", modelID: "gpt-6-astra" });
+    expect(items.get(MODEL_PREF_KEY)).toBe("omnirush/gpt-6-astra");
   });
 });

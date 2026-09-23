@@ -425,6 +425,8 @@ export type ModelOption = {
   modelID: string;
   title: string;
   description?: string;
+  /** Picker group for an omnirush.ai model of another family (e.g. "Meta Muse"); others group by provider. */
+  group?: string;
   footer?: string;
   behaviorTitle: string;
   behaviorLabel: string;

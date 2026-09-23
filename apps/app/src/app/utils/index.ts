@@ -144,6 +144,16 @@ export function resolveModelProviderDisplayName(
   return reportedProviderName?.trim() || resolveProviderDisplayName(providerID);
 }
 
+/**
+ * The picker group of an omnirush.ai catalog model outside the provider's own
+ * line-up: the engine reports its catalog family (e.g. "Meta Muse"). Astra
+ * and Sol carry none and stay under the provider's name.
+ */
+export function resolveOmniRushModelGroup(providerID: string, family?: string | null): string | undefined {
+  if (providerID.trim().toLowerCase() !== "omnirush") return undefined;
+  return family?.trim() || undefined;
+}
+
 export function resolveModelProviderIconId(
   providerID: string,
   _modelID: string,

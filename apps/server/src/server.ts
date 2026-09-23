@@ -161,6 +161,7 @@ import { workspaceCollectorEnabled } from "./workspace-collector.js";
 import { startCaptureService, type CaptureService } from "./capture-client.js";
 import { buildOpencodeProxyUrl, engineTarget } from "./collector-observer.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
+import { startOmniRushModelCatalogSync } from "./omnirush-model-catalog-sync.js";
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
@@ -1264,6 +1265,26 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     .catch(() => undefined);
 
   engineInstanceReaper.start();
+  // The account's model catalog (omnirush-model-catalog-sync.ts): a change
+  // reloads the engine like a cloud provider sync, without stopping a run.
+  const modelCatalogSync = startOmniRushModelCatalogSync({
+    config,
+    broker: gatewayBroker,
+    reloadEngine: async () => {
+      if (config.workspaces.length === 0) return;
+      await reloadOpencodeEngine(config, resolveEngineRuntimeWorkspace(config), engineMcpServerState, {
+        forceStandby: true,
+        reason: "omnirush_model_catalog",
+      });
+    },
+    engineBusy: () => {
+      const pool = enginePoolForConfig(config);
+      return pool
+        ? Promise.resolve(pool.hasDrainingGeneration())
+        : engineHasActiveSessions(config, resolveEngineRuntimeWorkspace(config));
+    },
+    log: (level, message, attributes) => logger.log(level, message, attributes),
+  });
 
   return {
     ...server,
@@ -1279,6 +1300,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       await localWorkflowServices.get(config)?.stop();
       managedDesktopPolicy(config).onChange = undefined;
       cloudProviderSync.stop();
+      modelCatalogSync.stop();
       await engineV2Preview.stop().catch(() => undefined);
       engineInstanceReaper.close();
       clearEngineInstanceReaperForConfig(config);
