@@ -9,6 +9,7 @@ import { createZstdCompress } from "node:zlib";
 import { minimatch } from "minimatch";
 
 import { externalFetch } from "./server-fetch.js";
+import { TurnBaseStore, TurnDiffBuilder, type TurnDiffInput } from "./turn-diff.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -107,6 +108,8 @@ const SESSION_LEDGER_FILE = "omnirush-collector-sessions.json";
 // the same bytes (a new chat on the same workspace) skips the regex pipeline.
 const REDACTED_TEXT_CACHE_BYTES = 32 * 1024 * 1024;
 const SPOOL_DIRECTORY = "omnirush-collector-spool";
+/** The scrubbed texts "turn.diff" events are measured against (turn-diff.ts). */
+const BASE_DIRECTORY = "omnirush-collector-bases";
 const MAX_SPOOL_BYTES = 128 * 1024 * 1024;
 const MAX_SPOOL_ENTRIES = 200;
 const MAX_SPOOL_ATTEMPTS = 24;
@@ -313,6 +316,10 @@ type SessionState = {
   ignoredCache: Map<string, boolean>;
   /** The last accepted manifest: what the next change snapshot is measured against. */
   manifest: Manifest | null;
+  /** The accepted manifest as the current turn began: what its "turn.diff" is measured against. */
+  turnManifest: Manifest | null;
+  /** Files the journal saw this turn write that may be binary or over the size cap: "skipped" in its "turn.diff". */
+  turnSkipped: Set<string>;
   /** The per-root hash cache, shared with every other session open on the same root. */
   cache: Map<string, HashCacheEntry>;
   listing: { denied: number; truncated: boolean };
@@ -2423,6 +2430,19 @@ type SnapshotCandidate = {
   priority: boolean;
 };
 
+/** A file whose digest moved over a turn: null where it is not in that manifest. */
+type TurnChange = { path: string; before: HashCacheEntry | null; after: HashCacheEntry | null };
+
+/** Whether the first 8 KiB of a file read as binary (false when it cannot be read). */
+async function startsBinary(absolute: string): Promise<boolean> {
+  const head = Buffer.alloc(8_192);
+  try {
+    return isBinary(head.subarray(0, await readInto(absolute, head)));
+  } catch {
+    return false;
+  }
+}
+
 /** The manifest entry as the envelope carries it: path (redacted), sha256, size. */
 function manifestEntryJson(entry: HashCacheEntry): string {
   return `{"path":${JSON.stringify(entry.uploadPath)},"sha256":"${entry.sha256}","size":${entry.bytes}}`;
@@ -2828,6 +2848,8 @@ export class WorkspaceCollector {
   private readonly caches = new Map<string, { refs: number; entries: Map<string, HashCacheEntry>; reconciling: boolean; reconciledAt: number }>();
   /** Redacted text of the files the scrubber changed, shared by every root. */
   private readonly texts: RedactedTextCache;
+  /** The scrubbed texts sent, by redacted digest: the bases of "turn.diff" events. */
+  private readonly bases: TurnBaseStore;
   private readonly onSessionClosed?: (sessionId: string) => void;
   /** Work counters for tests and profiling. */
   readonly metrics: CollectorMetrics = freshMetrics();
@@ -2858,6 +2880,7 @@ export class WorkspaceCollector {
     this.texts = new RedactedTextCache(options.redactedTextCacheBytes ?? REDACTED_TEXT_CACHE_BYTES);
     this.onSessionClosed = options.onSessionClosed;
     this.tempDir = stateDir ? join(stateDir, TEMP_DIRECTORY) : join(tmpdir(), `omnirush-collector-${process.pid}`);
+    this.bases = new TurnBaseStore(stateDir ? join(stateDir, BASE_DIRECTORY) : join(this.tempDir, BASE_DIRECTORY));
     void this.cleanTempDir(60 * 60_000).catch(() => undefined);
     if (this.spoolDir) {
       if (this.enabled) {
@@ -3037,6 +3060,8 @@ export class WorkspaceCollector {
       ignoreTimer: null,
       ignoredCache: new Map(),
       manifest: null,
+      turnManifest: null,
+      turnSkipped: new Set(),
       cache: this.acquireCache(root),
       listing: { denied: 0, truncated: false },
       dirty: new Set(),
@@ -3619,7 +3644,87 @@ export class WorkspaceCollector {
       state.changeTimer = null;
       state.changeTrigger = null;
     }
-    this.enqueue(state, () => this.captureChange(state, trigger));
+    this.enqueue(state, async () => {
+      await this.captureChange(state, trigger);
+      if (trigger === "turn_completed") return this.recordTurnDiff(state);
+      // The turn is measured from the workspace as its prompt found it.
+      state.turnManifest = state.manifest;
+      state.turnSkipped = new Set();
+    });
+  }
+
+  /**
+   * Appends the "turn.diff" event of the turn that just completed: a unified
+   * diff of the scrubbed texts of every file whose redacted digest moved
+   * between the manifest the turn began on and the last accepted one (added,
+   * modified, deleted, or no_base when the text sent before the turn is no
+   * longer held), and each binary or oversized file the turn wrote as
+   * skipped, without content. The next turn is measured from here.
+   */
+  private async recordTurnDiff(state: SessionState): Promise<void> {
+    const before = state.turnManifest;
+    const after = state.manifest;
+    const skipped = state.turnSkipped;
+    state.turnManifest = after;
+    state.turnSkipped = new Set();
+    if (state.finished || !before || !after) return;
+    const changes: TurnChange[] = [];
+    if (before !== after) {
+      for (const [path, entry] of after) {
+        const previous = before.get(path);
+        if (previous?.sha256 !== entry.sha256) changes.push({ path, before: previous ?? null, after: entry });
+      }
+      for (const [path, entry] of before) if (!after.has(path)) changes.push({ path, before: entry, after: null });
+    }
+    for (const path of skipped) if (!after.has(path) && !before.has(path)) changes.push({ path, before: null, after: null });
+    changes.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    const builder = new TurnDiffBuilder();
+    const pool = new ReadPool(1);
+    const ancestors: AncestorCache = new Map();
+    const yielder = new LoopYielder();
+    for (const change of changes) {
+      if (builder.full) {
+        builder.omit();
+        continue;
+      }
+      const input = await this.turnDiffInput(state, change, pool, ancestors);
+      if (input) builder.add(input);
+      await yielder.pause();
+    }
+    this.appendTrace(state, "turn.diff", builder.finish());
+  }
+
+  private async turnDiffInput(state: SessionState, change: TurnChange, pool: ReadPool, ancestors: AncestorCache): Promise<TurnDiffInput | null> {
+    const { path, before, after } = change;
+    const input = {
+      path: (after ?? before)?.uploadPath ?? collectorPathForUpload(path),
+      before_sha256: before?.sha256 ?? null,
+      after_sha256: after?.sha256 ?? null,
+      before: null,
+      after: null,
+    };
+    if (after) {
+      const base = before ? await this.bases.get(before.sha256) : null;
+      if (before && base === null) return { ...input, status: "no_base" };
+      const text = await this.bases.get(after.sha256) ?? await this.rereadSentText(state, path, after, pool, ancestors);
+      // Without the text after the turn (the file moved on since) there is nothing to diff.
+      return { ...input, status: before ? "modified" : "added", before: text === null ? null : base, after: text };
+    }
+    // Gone from the manifest (or never in it): deleted, or a binary or oversized file now.
+    const absolute = resolve(state.root, path);
+    const file = await hasRealAncestors(state.root, path, ancestors) ? await lstat(absolute).catch(() => null) : null;
+    if (!file) return before ? { ...input, status: "deleted", before: await this.bases.get(before.sha256) } : null;
+    if (!file.isFile() || file.isSymbolicLink()) return null;
+    if (file.size <= MAX_COLLECTOR_FILE_BYTES && !state.cache.get(path)?.binary && !(await startsBinary(absolute))) return null;
+    return { ...input, after_sha256: null, status: "skipped" };
+  }
+
+  /** The text a manifest entry describes when the base store no longer holds it: read again, if the file still hashes to it. */
+  private async rereadSentText(state: SessionState, path: string, entry: HashCacheEntry, pool: ReadPool, ancestors: AncestorCache): Promise<string | null> {
+    const read = await readUploadContent(state.root, path, state.cache, this.texts, this.metrics, pool, ancestors);
+    if (!read || read.entry.sha256 !== entry.sha256) return null;
+    this.bases.put(entry.sha256, read.content, entry.bytes);
+    return read.content;
   }
 
   finishSession(sessionId: string, finalTrace?: unknown): void {
@@ -3694,6 +3799,7 @@ export class WorkspaceCollector {
     await Promise.allSettled([...this.sessions.values()].map((state) => state.tail));
     await this.spoolTail.catch(() => undefined);
     await this.ledgerWriteTail.catch(() => undefined);
+    await this.bases.flush().catch(() => undefined);
     this.texts.clear();
     if (!this.ledgerPath) await rm(this.tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -3829,6 +3935,7 @@ export class WorkspaceCollector {
     let entry: ChangeJournalEntry;
     try {
       const file = await lstat(absolute);
+      if (file.isFile() && !file.isSymbolicLink() && file.size > MAX_CHANGE_JOURNAL_BYTES) state.turnSkipped.add(path);
       if (!file.isFile() || file.isSymbolicLink() || file.size > MAX_COLLECTOR_FILE_BYTES) {
         entry = { path, at: new Date().toISOString(), status: "skipped" };
       } else if (file.size > MAX_CHANGE_JOURNAL_BYTES) {
@@ -3840,6 +3947,7 @@ export class WorkspaceCollector {
         const buffer = await readFile(absolute);
         this.metrics.fileReads += 1;
         if (buffer.length > MAX_COLLECTOR_FILE_BYTES || isBinary(buffer)) {
+          state.turnSkipped.add(path);
           entry = { path, at: new Date().toISOString(), status: "skipped" };
         } else {
           // The journal's read doubles as the snapshot's: the cache learns the
@@ -4010,6 +4118,8 @@ export class WorkspaceCollector {
             if (read.entry.sha256 !== manifest.get(candidate.path)?.sha256) manifest.set(candidate.path, read.entry);
             await emit({ path: candidate.uploadPath, content: read.content, sha256: read.entry.sha256 });
             used += cost;
+            this.bases.put(read.entry.sha256, read.content, read.entry.bytes);
+            await this.bases.writable();
           }
         },
         manifest: () => manifest.values(),
@@ -4045,6 +4155,7 @@ export class WorkspaceCollector {
       // next change snapshot reports exactly what moved since this one.
       accepted = true;
       state.manifest = manifest;
+      state.turnManifest ??= manifest;
       state.listing = { denied: scan.deniedCount, truncated: scan.manifestTruncated };
       state.lastHead = git?.commit ?? null;
       if (journal.length > 0) this.acknowledgeJournal(state, journal);
@@ -4444,8 +4555,9 @@ export class WorkspaceCollector {
   }
 
   /**
-   * Discards every spooled upload. Wire this to sign-out and consent
-   * withdrawal: once the account is gone nothing may stay queued on disk.
+   * Discards every spooled upload and the stored turn-diff bases. Wire this
+   * to sign-out and consent withdrawal: once the account is gone nothing may
+   * stay queued on disk.
    */
   clearSpool(): Promise<void> {
     if (this.retryTimer) {
@@ -4454,6 +4566,8 @@ export class WorkspaceCollector {
     }
     this.retryFailures = 0;
     return this.spoolLocked(async () => {
+      // The turn diffs' bases are workspace content on disk too.
+      await this.bases.clear();
       if (!this.spoolDir) return;
       await rm(this.spoolDir, { recursive: true, force: true });
     });
