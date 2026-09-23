@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -392,6 +392,91 @@ describe("ProjectArchiveLifecycle", () => {
     await subject.settled();
     expect(archiver.captures()).toHaveLength(2);
     expect(child.reads).toEqual({ session: 2, messages: 0 });
+  });
+
+  test("an engine too slow to answer at session start is read again a minute later, so a session whose first turn runs for hours still gets its base", async () => {
+    jest.useFakeTimers();
+    try {
+      const archiver = new FakeArchiver();
+      const { subject, logs } = lifecycle(archiver);
+      const root = await tempDir("root");
+      let engineUp = false;
+      const slow = engine({
+        session: () => {
+          if (!engineUp) throw new Error("TimeoutError: the engine did not answer");
+          return { id: "ses_retried_0001" };
+        },
+        messages: () => messages(2, true),
+      });
+      subject.sessionStarted({ sessionId: "ses_retried_0001", root, engine: slow.reader });
+      await subject.settled();
+      expect(archiver.captures()).toEqual([]);
+      expect(logs.map((log) => [log.attributes?.reason, log.attributes?.retryInMs])).toEqual([["the engine session could not be read", 60_000]]);
+
+      // The engine answers by the time the retry runs, with the first turn of this app run still going.
+      engineUp = true;
+      jest.advanceTimersByTime(59_999);
+      await subject.settled();
+      expect(slow.reads.session).toBe(1);
+      jest.advanceTimersByTime(1);
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_retried_0001 ${root} 2`]);
+      // Resolved: no further retry, and the turn's delta follows the base.
+      jest.advanceTimersByTime(60 * 60_000);
+      subject.turnCompleted("ses_retried_0001", messages(3));
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_retried_0001 ${root} 2`, `delta ses_retried_0001 ${root} 3`]);
+      expect(slow.reads).toEqual({ session: 2, messages: 1 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("an engine that stays unreadable is read again after 1, 2, 5 and 10 minutes, then at the session's next prompt or turn", async () => {
+    jest.useFakeTimers();
+    try {
+      const archiver = new FakeArchiver();
+      const { subject, logs } = lifecycle(archiver);
+      const root = await tempDir("root");
+      let engineUp = false;
+      const down = engine({ session: () => { if (!engineUp) throw new Error("ECONNREFUSED"); return { id: "ses_down_retry_01" }; } });
+      subject.sessionStarted({ sessionId: "ses_down_retry_01", root, engine: down.reader });
+      await subject.settled();
+      // A prompt while a retry is waiting reads the engine at once but does not add another retry.
+      subject.sessionStarted({ sessionId: "ses_down_retry_01", root, engine: down.reader });
+      await subject.settled();
+      expect(down.reads.session).toBe(2);
+      for (const minutes of [1, 2, 5, 10]) {
+        const reads = down.reads.session;
+        jest.advanceTimersByTime(minutes * 60_000 - 1);
+        await subject.settled();
+        expect(down.reads.session).toBe(reads);
+        jest.advanceTimersByTime(1);
+        await subject.settled();
+        expect(down.reads.session).toBe(reads + 1);
+      }
+      jest.advanceTimersByTime(24 * 60 * 60_000);
+      await subject.settled();
+      expect(down.reads.session).toBe(6);
+      expect(logs.map((log) => log.attributes?.retryInMs)).toEqual([60_000, undefined, 120_000, 300_000, 600_000, undefined]);
+
+      // Past the retries, the next completed turn still resolves it.
+      engineUp = true;
+      subject.turnCompleted("ses_down_retry_01", messages(1));
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_down_retry_01 ${root} 1`, `delta ses_down_retry_01 ${root} 1`]);
+
+      // A retry never runs once archiving stopped.
+      const stopped = engine({ session: () => { throw new Error("ECONNREFUSED"); } });
+      subject.sessionStarted({ sessionId: "ses_stopped_0001", root, engine: stopped.reader });
+      await subject.settled();
+      await subject.stop();
+      jest.advanceTimersByTime(60_000);
+      await subject.settled();
+      expect(stopped.reads.session).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("with the real archiver: base at session start, a delta per changed turn, and the next app run resumes the upload", async () => {

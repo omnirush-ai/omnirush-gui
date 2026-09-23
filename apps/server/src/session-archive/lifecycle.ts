@@ -115,7 +115,12 @@ type SessionRecord = {
   start: { root: string; engine: ArchiveEngineReads } | null;
   /** A start step is queued or running. */
   starting: boolean;
+  /** Engine reads retried on their own while unresolved, and the retry waiting (see unresolved()). */
+  retries?: { count: number; timer: ReturnType<typeof setTimeout> | null };
 };
+
+/** An unresolved session start reads the engine again after these waits, then only at its next prompt or turn. */
+const UNRESOLVED_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000];
 
 export class ProjectArchiveLifecycle {
   private readonly archiver: ProjectArchiver;
@@ -256,13 +261,14 @@ export class ProjectArchiveLifecycle {
    * archived), at which real path, and its base with `turns` completed turns
    * (read from the engine when null). The base is a no-op ("exists") when an
    * earlier app run captured it. False while the engine cannot be read: the
-   * session stays unresolved for its next prompt or completed turn.
+   * session stays unresolved, and is read again after a while (see
+   * unresolved()) and at its next prompt or completed turn.
    */
   private async resolve(sessionId: string, record: SessionRecord, turns: number | null): Promise<boolean> {
     const start = record.start;
     if (!start) return true;
     const parent = parentSessionId(await start.engine.session().catch(() => null));
-    if (parent === undefined) return this.unresolved(sessionId, "the engine session could not be read");
+    if (parent === undefined) return this.unresolved(sessionId, record, "the engine session could not be read");
     if (parent !== null) {
       record.start = null;
       return true;
@@ -273,7 +279,7 @@ export class ProjectArchiveLifecycle {
       return true;
     }
     const count = turns ?? completedTurnCount(await start.engine.messages().catch(() => null));
-    if (count === null) return this.unresolved(sessionId, "the engine messages could not be read");
+    if (count === null) return this.unresolved(sessionId, record, "the engine messages could not be read");
     record.start = null;
     record.root = root;
     const result = await this.archiver.captureBase(sessionId, root, count);
@@ -283,8 +289,37 @@ export class ProjectArchiveLifecycle {
     return true;
   }
 
-  private unresolved(sessionId: string, reason: string): false {
-    this.log("warn", "OmniRush project archive could not read the engine for a session; its next prompt or turn tries again", { sessionId, reason });
+  /**
+   * The engine could not be read for a session start (it can still be
+   * starting, or be busy with a large session). Besides the session's next
+   * prompt or completed turn, the start step runs again on its own after 1, 2,
+   * 5 and 10 minutes, so a session whose first turn runs for hours still gets
+   * its base; one retry waits at a time.
+   */
+  private unresolved(sessionId: string, record: SessionRecord, reason: string): false {
+    const retries = record.retries ??= { count: 0, timer: null };
+    const delay = retries.timer ? undefined : UNRESOLVED_RETRY_DELAYS_MS[retries.count];
+    if (delay !== undefined) {
+      retries.count += 1;
+      retries.timer = setTimeout(() => {
+        retries.timer = null;
+        if (!this.active || this.consentOff || this.sessions.get(sessionId) !== record || !record.start || record.starting) return;
+        record.starting = true;
+        this.schedule(sessionId, "base", async () => {
+          try {
+            if (this.sessions.get(sessionId) === record && record.start) await this.resolve(sessionId, record, null);
+          } finally {
+            record.starting = false;
+          }
+        });
+      }, delay);
+      retries.timer.unref?.();
+    }
+    this.log("warn", "OmniRush project archive could not read the engine for a session; its next prompt or turn tries again", {
+      sessionId,
+      reason,
+      ...(delay !== undefined ? { retryInMs: delay } : {}),
+    });
     return false;
   }
 

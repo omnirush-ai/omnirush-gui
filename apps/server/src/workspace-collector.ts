@@ -325,6 +325,14 @@ type SessionState = {
   turnManifest: TurnBaseline | null;
   /** When the current turn's prompt was sent (null before the first). */
   turnStartedAt: number | null;
+  /** A prompt was dispatched and its turn has not completed (its turn_completed milestone ends it). */
+  turnInProgress: boolean;
+  /**
+   * Edits were made on this session's root while it had no turn in progress
+   * and another session on the root had one: they are that turn's, and this
+   * session's own filesystem and periodic captures wait for its next milestone.
+   */
+  changesHeld: boolean;
   /**
    * Files the journal saw the turn write that may be binary or over the size
    * cap, with their mtime: "skipped" in its "turn.diff".
@@ -2203,6 +2211,8 @@ export type CollectorMetrics = {
   reconciles: number;
   capturesSkipped: number;
   capturesDeferred: number;
+  /** Filesystem and periodic captures left to another session on the same root (its turn made the edits). */
+  capturesHeld: number;
   ignoreCheckSpawns: number;
   watchEvents: number;
   envelopesWritten: number;
@@ -2213,7 +2223,7 @@ export type CollectorMetrics = {
 function freshMetrics(): CollectorMetrics {
   return {
     fileStats: 0, fileReads: 0, fileRedactions: 0, fullScans: 0, dirtyScans: 0, reconciles: 0,
-    capturesSkipped: 0, capturesDeferred: 0, ignoreCheckSpawns: 0, watchEvents: 0, envelopesWritten: 0, redactedTextHits: 0,
+    capturesSkipped: 0, capturesDeferred: 0, capturesHeld: 0, ignoreCheckSpawns: 0, watchEvents: 0, envelopesWritten: 0, redactedTextHits: 0,
   };
 }
 
@@ -3126,6 +3136,8 @@ export class WorkspaceCollector {
       manifest: null,
       turnManifest: null,
       turnStartedAt: null,
+      turnInProgress: false,
+      changesHeld: false,
       turnSkipped: new Map(),
       cache: this.acquireCache(root),
       listing: { denied: 0, truncated: false },
@@ -3710,6 +3722,9 @@ export class WorkspaceCollector {
     // just before may carry a later fraction of the same millisecond.
     if (trigger === "prompt") state.turnStartedAt = Date.now() + 1;
     const startedAt = state.turnStartedAt;
+    state.turnInProgress = trigger === "prompt";
+    // The milestone carries whatever edits were held back for another session's turn.
+    state.changesHeld = false;
     if (state.changeTimer) {
       clearTimeout(state.changeTimer);
       state.changeTimer = null;
@@ -3899,6 +3914,7 @@ export class WorkspaceCollector {
 
   private scheduleChange(state: SessionState, trigger: Extract<ChangeTrigger, "fs_change" | "periodic">): void {
     if (state.finished) return;
+    if (!state.turnInProgress && this.turnOnRootElsewhere(state)) state.changesHeld = true;
     if (state.changeTimer) clearTimeout(state.changeTimer);
     // A filesystem change is the more specific reason; keep it when the
     // periodic scan also notices the same edit.
@@ -3929,6 +3945,10 @@ export class WorkspaceCollector {
     // A finished session is about to upload its end snapshot, which already
     // carries everything a queued change capture would.
     if (state.finished) return;
+    if (!milestone && this.changesLeftToOthers(state)) {
+      this.metrics.capturesHeld += 1;
+      return;
+    }
     if (trigger === "turn_completed") {
       await this.captureArtifacts(state).catch((error: unknown) => {
         this.log("warn", "OmniRush artifact capture failed", {
@@ -3949,6 +3969,40 @@ export class WorkspaceCollector {
     }
     const captured = await this.uploadWorkspace(state, "change", trigger);
     if (milestone) this.appendTrace(state, "collector.trigger", { trigger, captured });
+  }
+
+  /** Whether another live session on `state`'s root has a turn in progress. */
+  private turnOnRootElsewhere(state: SessionState): boolean {
+    for (const other of this.sessions.values()) {
+      if (other !== state && !other.finished && other.cache === state.cache && other.turnInProgress) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a filesystem or periodic capture of `state` is left to the other
+   * sessions open on its root, so that one agent's edits are not uploaded
+   * again by every chat open on the same folder. It is when `state` has no
+   * turn in progress and another session on the root has one, and, once
+   * edits were held back that way, until `state`'s own next milestone
+   * (which carries them) as long as another session on the root still
+   * uploads its own changes. A session alone on its root is never held.
+   */
+  private changesLeftToOthers(state: SessionState): boolean {
+    if (state.turnInProgress) return false;
+    let uploading = false;
+    let shared = false;
+    for (const other of this.sessions.values()) {
+      if (other === state || other.finished || other.cache !== state.cache) continue;
+      if (other.turnInProgress) {
+        state.changesHeld = true;
+        return true;
+      }
+      shared = true;
+      if (!other.changesHeld) uploading = true;
+    }
+    if (!shared) state.changesHeld = false;
+    return state.changesHeld && uploading;
   }
 
   /** Whether anything could have moved since the last accepted snapshot; one `git rev-parse` at most. */

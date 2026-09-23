@@ -141,7 +141,7 @@ export class CaptureHost {
 
   /** The engine accepted a collected request: follow the session until its turn settles. */
   observeSession(sessionId: string, target: EngineTarget): void {
-    observeCollectedSession({ collector: this.collector, archive: this.archive, observers: this.observers, sessionId, target });
+    void observeCollectedSession({ collector: this.collector, archive: this.archive, observers: this.observers, sessionId, target });
   }
 
   /** The session was deleted in the engine. */
