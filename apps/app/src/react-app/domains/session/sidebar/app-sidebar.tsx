@@ -386,10 +386,6 @@ function SessionMenuContent({
             {t("workspace_list.rename_session")}
           </DropdownMenuItem>
         ) : null}
-        <DropdownMenuItem data-session-menu-copy-id onClick={() => void copySessionId(sessionId)}>
-          <Copy className="size-4" />
-          {t("session_management.copy_session_id")}
-        </DropdownMenuItem>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <Tag className="size-4" />
@@ -653,7 +649,7 @@ type SessionContextMenuProps = {
   isArchived: boolean;
 };
 
-export function SessionContextMenu({
+function SessionContextMenu({
   children,
   sessionId,
   workspaceId,

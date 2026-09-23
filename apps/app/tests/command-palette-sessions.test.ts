@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
+import { t } from "../src/i18n";
+import type { SessionOption } from "../src/react-app/shell/command-palette";
+import { rankPaletteItems, type PaletteItem } from "../src/react-app/shell/command-palette-search";
 import {
   buildCommandPaletteSplitSessions,
   buildCopySessionIdPaletteItem,
 } from "../src/react-app/shell/command-palette-sessions";
-import type { SessionOption } from "../src/react-app/shell/command-palette";
 
 const sessions: SessionOption[] = [
   {
@@ -53,27 +55,64 @@ describe("command palette split sessions", () => {
 });
 
 describe("command palette Copy session ID", () => {
-  test("is enabled with the selected session and copies its ID", () => {
+  test("shows the focused session's ID and copies it", () => {
     const copied: string[] = [];
     const item = buildCopySessionIdPaletteItem("ses_selected_1", (sessionId) => copied.push(sessionId));
 
-    expect(item.title).toBe("Copy session ID");
-    expect(item.disabled).toBe(false);
-    expect(item.detail).toBe("ses_selected_1");
-    item.action();
+    expect(item?.title).toBe("Session ID");
+    expect(item?.detail).toBe("ses_selected_1");
+    expect(item?.meta).toBe("Copy");
+    item?.action();
     expect(copied).toEqual(["ses_selected_1"]);
   });
 
-  test("stays listed but disabled until a session is selected", () => {
-    for (const selected of [null, undefined, "", "   "]) {
-      const copied: string[] = [];
-      const item = buildCopySessionIdPaletteItem(selected, (sessionId) => copied.push(sessionId));
+  test("is not offered until a session is focused", () => {
+    for (const focused of [null, undefined, "", "   "]) {
+      expect(buildCopySessionIdPaletteItem(focused, () => {})).toBeNull();
+    }
+  });
 
-      expect(item.id).toBe("session.copy-id");
-      expect(item.disabled).toBe(true);
-      expect(item.detail).toBe("Open a session to copy its ID");
-      item.action();
-      expect(copied).toEqual([]);
+  test("leaves copy, debug, report and share queries to the diagnostics items", () => {
+    // Mirrors the diagnostics items in session-route.tsx.
+    const diagnostics: PaletteItem[] = [
+      {
+        id: "diagnostics.copy",
+        title: t("session.cmd_diagnostics_copy_title"),
+        detail: t("session.cmd_diagnostics_copy_detail"),
+        searchText: "logs share diagnostics debug support bundle troubleshoot copy report issue",
+        action: () => {},
+      },
+      {
+        id: "diagnostics.export",
+        title: t("session.cmd_diagnostics_export_title"),
+        detail: t("session.cmd_diagnostics_export_detail"),
+        searchText: "logs export diagnostics debug support bundle save file json download",
+        action: () => {},
+      },
+    ];
+    const ranked = (sessionId: string, query: string, recentIds: string[] = []) => {
+      const copySessionId = buildCopySessionIdPaletteItem(sessionId, () => {});
+      return rankPaletteItems(query, copySessionId ? [copySessionId, ...diagnostics] : diagnostics, recentIds)
+        .flatMap((group) => group.items.map((item) => item.id));
+    };
+    const sessionId = "ses_5e0a1b2c3d4eAbCdEfGhIjKlMn";
+
+    expect(ranked(sessionId, "copy")).toEqual(["diagnostics.copy", "session.copy-id"]);
+    expect(ranked(sessionId, "debug")).toEqual(["diagnostics.export", "diagnostics.copy"]);
+    expect(ranked(sessionId, "report")).toEqual(["diagnostics.copy", "diagnostics.export"]);
+    expect(ranked(sessionId, "report issue")).toEqual(["diagnostics.copy", "diagnostics.export"]);
+    expect(ranked(sessionId, "share")).toEqual(["diagnostics.copy"]);
+    for (const query of ["session id", "copy session id", "copy id"]) {
+      expect(ranked(sessionId, query)[0]).toBe("session.copy-id");
+    }
+
+    // A recent use does not change that, nor does an ID that spells out the
+    // query words: the ID only matches on the detail line.
+    for (const query of ["copy", "debug", "report", "report issue", "share"]) {
+      expect(ranked(sessionId, query, ["session.copy-id"])).toEqual(ranked(sessionId, query));
+      const ids = ranked("ses_copy_debug_report_issue_share", query, ["session.copy-id"]);
+      expect(ids[0]?.startsWith("diagnostics.")).toBe(true);
+      expect(ids.indexOf("diagnostics.copy")).toBeLessThan(ids.indexOf("session.copy-id"));
     }
   });
 });

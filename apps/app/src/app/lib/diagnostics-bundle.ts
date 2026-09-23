@@ -28,7 +28,8 @@ export type DiagnosticsBundleContext = {
   omnirushServerStatus?: OmniRushServerStatus;
   omnirushServerUrl?: string;
   runtimeWorkspaceId?: string | null;
-  selectedSessionId?: string | null;
+  /** The session in the focused pane: the side chat while it has focus. */
+  focusedSession?: { workspaceId: string; sessionId: string } | null;
   selectedWorkspaceId?: string | null;
   cloudMcpHealth?: unknown;
 };
@@ -159,7 +160,8 @@ export function composeDiagnosticsBundleJson(input: DiagnosticsBundleInputs): st
       developerMode: context?.developerMode === true,
     },
     session: {
-      id: context?.selectedSessionId?.trim() || null,
+      id: context?.focusedSession?.sessionId ?? null,
+      workspaceId: context?.focusedSession?.workspaceId ?? null,
     },
     workspace: {
       id: context?.selectedWorkspaceId?.trim() || null,

@@ -112,29 +112,29 @@ describe("diagnostics bundle", () => {
     expect(parsed.omnirushServer.settings.tokenPresent).toBe(false);
   });
 
-  test("carries the selected session and workspace IDs for support", () => {
+  test("carries the focused session and selected workspace IDs for support", () => {
     const input = baseInputs();
     input.context = {
       ...input.context,
       runtimeWorkspaceId: "runtime-ws-1",
-      selectedSessionId: "ses_diagnostics_1",
+      focusedSession: { workspaceId: "ws-side-chat", sessionId: "ses_side_chat_1" },
       selectedWorkspaceId: "ws-diagnostics-1",
     };
 
     const parsed = JSON.parse(composeDiagnosticsBundleJson(input));
 
-    expect(parsed.session).toEqual({ id: "ses_diagnostics_1" });
+    expect(parsed.session).toEqual({ id: "ses_side_chat_1", workspaceId: "ws-side-chat" });
     expect(parsed.workspace.id).toBe("ws-diagnostics-1");
     expect(parsed.workspace.runtimeWorkspaceId).toBe("runtime-ws-1");
   });
 
-  test("reports no session when none is selected", () => {
+  test("reports no session when none is focused", () => {
     const input = baseInputs();
-    input.context = { ...input.context, selectedSessionId: null, selectedWorkspaceId: "" };
+    input.context = { ...input.context, focusedSession: null, selectedWorkspaceId: "" };
 
     const parsed = JSON.parse(composeDiagnosticsBundleJson(input));
 
-    expect(parsed.session).toEqual({ id: null });
+    expect(parsed.session).toEqual({ id: null, workspaceId: null });
     expect(parsed.workspace.id).toBeNull();
   });
 

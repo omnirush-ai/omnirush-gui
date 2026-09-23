@@ -1395,7 +1395,13 @@ export async function pinnedSessions(seed: Seed) {
 }
 
 export async function commandPaletteSearch(seed: Seed) {
-  return oneWorkspace(seed, `command-palette-search-${Date.now()}`);
+  const world = await oneWorkspace(seed, `command-palette-search-${Date.now()}`);
+  return {
+    ...world,
+    async readClipboard() {
+      return seed.evalIn(world.app, () => navigator.clipboard.readText(), { awaitPromise: true });
+    },
+  };
 }
 
 export async function archiveSessions(seed: Seed) {

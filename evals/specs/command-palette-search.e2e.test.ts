@@ -168,6 +168,23 @@ test("command palette searches settings by alias, navigates, records recents, an
     });
   }
 
-
-
+  await step("with no session open, copy leads to Copy diagnostics and no session ID is offered", async () => {
+    await user.press(paletteShortcut);
+    await user.see(paletteInput);
+    await user.type(paletteInput, "copy", { replace: true });
+    await user.see({ role: "option", label: /^Copy diagnostics/ });
+    await user.notSee({ role: "option", label: /^Session ID/ });
+    const highlighted = await probe.eventually(() => probe.dom("[data-command-palette-item][data-highlighted]"), {
+      within: 5_000,
+      label: "Copy diagnostics is the highlighted palette item",
+      until: (dom) => dom.elements[0]?.text.startsWith("Copy diagnostics") === true,
+    });
+    expect(highlighted.elements[0]?.text).toMatch(/^Copy diagnostics/);
+    await user.screenshot();
+    await user.press("Enter");
+    await user.see({ text: /^Diagnostics copied/ });
+    const bundle: unknown = JSON.parse(await world.readClipboard());
+    expect(bundle).toMatchObject({ session: { id: null, workspaceId: null }, workspace: { id: workspaceId } });
+    await waitForPaletteClose();
+  });
 });

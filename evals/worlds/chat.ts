@@ -220,7 +220,26 @@ export async function paletteSessionActions(seed: Seed) {
   const app = await seed.desktop({ name: "command-palette-pin-rename" });
   const workspace = await seed.workspace(app, seed.tmpPath("command-palette-pin-rename"));
   const session = await seedSessionRetry(seed, app, { title: "Palette pin rename probe" });
-  return { app, workspace, session };
+  return {
+    app,
+    workspace,
+    session,
+    async readClipboard() {
+      return seed.evalIn(app, () => navigator.clipboard.readText(), { awaitPromise: true });
+    },
+    async selectedText() {
+      return seed.evalIn(app, () => window.getSelection()?.toString() ?? "");
+    },
+    /** Reject clipboard writes the way a denied clipboard permission does. */
+    async blockClipboardWrites() {
+      await seed.evalIn(app, () => {
+        Object.defineProperty(navigator.clipboard, "writeText", {
+          configurable: true,
+          value: () => Promise.reject(new DOMException("Write permission denied.", "NotAllowedError")),
+        });
+      });
+    },
+  };
 }
 
 async function splitPaneQuestions(

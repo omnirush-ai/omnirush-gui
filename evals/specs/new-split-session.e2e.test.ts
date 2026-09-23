@@ -230,6 +230,21 @@ test("side chats keep questions, replies, and saved splits attached to their own
     await waitSplit(primary, first.secondary);
   });
 
+  await step("with the side chat focused, the palette's Session ID is the side chat's", async () => {
+    await user.click({ placeholder: "Describe your task...", nth: 1 });
+    await probe.eventually(facts, { within: 15_000, label: "the side pane takes focus", until: (value) => value.focused === "secondary" });
+    await user.press(shortcut);
+    await user.see(paletteInput);
+    await user.type(paletteInput, "session id", { replace: true });
+    await user.see({ role: "option", label: /^Session ID/ });
+    const item = await probe.dom('[data-command-palette-item="session.copy-id"]');
+    expect(item.elements[0]?.text).toContain(first.secondary);
+    expect(item.elements[0]?.text).not.toContain(primary);
+    await user.screenshot();
+    await user.press("Escape");
+    await user.notSee(paletteInput);
+  });
+
   await step("palette creation replaces the focused side pane without moving the main conversation", async () => {
     await using creation = await world.continuity.observeCreation();
     await palette("new split", /^Open side chat/);

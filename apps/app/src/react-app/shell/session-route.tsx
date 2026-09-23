@@ -2846,6 +2846,19 @@ export function SessionRoute() {
     },
   }), [developerMode]);
 
+  // A focused side chat is the conversation people are looking at, so its ID is
+  // the one to copy and report. It only shows beside the route's own session.
+  const focusedSideChat = useWorkbenchStore((state) => (
+    state.focusedPane === "secondary"
+    && state.primary?.workspaceId === selectedWorkspaceId
+    && state.primary.sessionId === selectedSessionId
+      ? state.secondary
+      : null
+  ));
+  const focusedSession = useMemo(() => (
+    focusedSideChat ?? (selectedSessionId ? { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId } : null)
+  ), [focusedSideChat, selectedSessionId, selectedWorkspaceId]);
+
   const buildCommandDiagnosticsBundle = useCallback(() => buildDiagnosticsBundleJson({
     anyActiveRuns: activeReloadBlockingSessions.length > 0,
     canReloadWorkspace: reloadCoordinator.canReloadWorkspaceEngine,
@@ -2855,7 +2868,7 @@ export function SessionRoute() {
     omnirushServerStatus: client ? "connected" : "disconnected",
     omnirushServerUrl: baseUrl,
     runtimeWorkspaceId: selectedWorkspaceEndpoint?.workspaceId ?? null,
-    selectedSessionId,
+    focusedSession,
     selectedWorkspaceId,
   }), [
     activeReloadBlockingSessions.length,
@@ -2863,17 +2876,17 @@ export function SessionRoute() {
     canCreateTask,
     client,
     developerMode,
+    focusedSession,
     omnirushServerHostInfoState,
     reloadCoordinator.canReloadWorkspaceEngine,
-    selectedSessionId,
     selectedWorkspaceEndpoint?.workspaceId,
     selectedWorkspaceId,
   ]);
 
-  const copySessionIdPaletteItem = useMemo(() => buildCopySessionIdPaletteItem(selectedSessionId, (sessionId) => {
+  const copySessionIdPaletteItem = useMemo(() => buildCopySessionIdPaletteItem(focusedSession?.sessionId, (sessionId) => {
     setCommandPaletteOpen(false);
     void copySessionId(sessionId);
-  }), [selectedSessionId]);
+  }), [focusedSession?.sessionId]);
 
   const diagnosticsCopyPaletteItem = useMemo<PaletteItem>(() => ({
     id: "diagnostics.copy",
@@ -3781,7 +3794,7 @@ export function SessionRoute() {
       currentSessionForGroupMove={currentSessionForGroupMove}
       currentSessionGroupId={currentSessionGroupId}
       onMoveCurrentSessionToGroup={handleMoveCurrentSessionToGroup}
-      extraItems={[...currentSessionActionPaletteItems, ...(sessionFindPaletteItem ? [sessionFindPaletteItem] : []), sessionSearchPaletteItem, ...terminalPaletteItems, ...(checkDesktopRestriction({ restriction: "allowControlSettings" }) ? [] : [developerModePaletteItem]), copySessionIdPaletteItem, diagnosticsCopyPaletteItem, diagnosticsExportPaletteItem, nextSessionTabPaletteItem, prevSessionTabPaletteItem, reloadConfigPaletteItem]}
+      extraItems={[...currentSessionActionPaletteItems, ...(sessionFindPaletteItem ? [sessionFindPaletteItem] : []), sessionSearchPaletteItem, ...terminalPaletteItems, ...(checkDesktopRestriction({ restriction: "allowControlSettings" }) ? [] : [developerModePaletteItem]), ...(copySessionIdPaletteItem ? [copySessionIdPaletteItem] : []), diagnosticsCopyPaletteItem, diagnosticsExportPaletteItem, nextSessionTabPaletteItem, prevSessionTabPaletteItem, reloadConfigPaletteItem]}
       listAgents={listAgents}
       selectedAgent={selectedAgent}
       onSelectAgent={setSelectedAgent}
