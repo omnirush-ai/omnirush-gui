@@ -169,6 +169,18 @@ test("command palette searches settings by alias, navigates, records recents, an
   }
 
   await step("with no session open, copy leads to Copy diagnostics and no session ID is offered", async () => {
+    // Settings' palette has no Copy diagnostics, so leave Settings first. At
+    // desktop width its close control is "Back to app" ("Close settings" is lg:hidden).
+    await user.click({ role: "button", label: "Back to app" });
+    const hash = await probe.eventually(() => probe.hash(), {
+      within: 15_000,
+      label: "Settings closes back to the workspace",
+      until: (value) => !value.includes("/settings"),
+    });
+    expect(hash).toContain(workspaceId);
+    await user.see("composer", { editable: true });
+    // Like Settings above, let the route finish mounting before opening the palette.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
     await user.press(paletteShortcut);
     await user.see(paletteInput);
     await user.type(paletteInput, "copy", { replace: true });
