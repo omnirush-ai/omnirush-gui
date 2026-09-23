@@ -2942,6 +2942,12 @@ export class WorkspaceCollector {
   /** The drain in progress: one at a time, and aborted by stop() and clearSpool(). */
   private draining: { run: Promise<{ delivered: number; pending: number }>; controller: AbortController } | null = null;
   private drainQueued: Promise<{ delivered: number; pending: number }> | null = null;
+  /**
+   * The signed-in account's uploads: clearSpool() (sign-out) aborts it and
+   * starts a new one, ending every upload in flight, and an envelope such an
+   * upload carried is not spooled.
+   */
+  private account = new AbortController();
   private stopped = false;
   private readonly minChangeIntervalMs: number;
   private readonly maxWatchedFiles: number;
@@ -4451,7 +4457,7 @@ export class WorkspaceCollector {
         if (cancel?.aborted) return { ok: false, retryable: true, reason: lastReason };
       }
       attempt += 1;
-      if (attempt < attempts) {
+      if (attempt < attempts && !cancel?.aborted) {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, this.uploadRetryDelayMs * 2 ** (attempt - 1)));
       }
     }
@@ -4550,13 +4556,19 @@ export class WorkspaceCollector {
         return false;
       }
       const compressed = await readFile(path);
-      const outcome = await this.transmit(state.id, compressed);
+      const account = this.account.signal;
+      const outcome = await this.transmit(state.id, compressed, UPLOAD_ATTEMPTS, account);
       if (!outcome.ok) {
-        if (!outcome.retryable || !this.spoolDir) {
+        if ((!outcome.retryable || !this.spoolDir) && !account.aborted) {
           await this.recordLedgerOutcome(state.id, "failure").catch(() => undefined);
           throw new Error(outcome.reason);
         }
-        await this.spoolEnvelopeFile({ id: "", session_id: state.id, snapshot_type: snapshotType, trigger, sequence, bytes: compressedBytes, created_at: new Date().toISOString(), attempts: 1 }, path);
+        const spooled = await this.spoolEnvelopeFile({ id: "", session_id: state.id, snapshot_type: snapshotType, trigger, sequence, bytes: compressedBytes, created_at: new Date().toISOString(), attempts: 1 }, path, account);
+        if (!spooled) {
+          // Signed out during the upload: the envelope is deleted, never queued for the next account.
+          this.log("info", "OmniRush collection artifact discarded at sign-out", { sessionId: state.id, snapshotType, trigger, sequence });
+          return false;
+        }
         state.sentBytes += bytes;
         state.sequence = sequence;
         state.failureCount += 1;
@@ -4641,10 +4653,18 @@ export class WorkspaceCollector {
     await writeFileAtomic(join(this.spoolDir!, `${meta.id}.json`), JSON.stringify(meta));
   }
 
-  /** Moves an already-compressed envelope file into the spool (same filesystem: a rename, no copy). */
-  private spoolEnvelopeFile(meta: SpoolMeta, sourcePath: string): Promise<void> {
+  /**
+   * Moves an already-compressed envelope file into the spool (same
+   * filesystem: a rename, no copy). Resolves false, the file deleted, when
+   * the account it was captured for signed out (checked under the spool
+   * lock, so clearSpool() never runs between the check and the move).
+   */
+  private spoolEnvelopeFile(meta: SpoolMeta, sourcePath: string, account: AbortSignal): Promise<boolean> {
     return this.spoolLocked(async () => {
-      if (!this.spoolDir) return;
+      if (!this.spoolDir || account.aborted) {
+        await rm(sourcePath, { force: true }).catch(() => undefined);
+        return false;
+      }
       await mkdir(this.spoolDir, { recursive: true, mode: 0o700 });
       const id = spoolId(++this.spoolCounter);
       const target = join(this.spoolDir, `${id}.zst`);
@@ -4655,6 +4675,7 @@ export class WorkspaceCollector {
       }
       await this.writeSpoolMeta({ ...meta, id });
       await this.enforceSpoolBounds();
+      return true;
     });
   }
 
@@ -4809,9 +4830,10 @@ export class WorkspaceCollector {
   }
 
   /**
-   * Discards every spooled upload and the stored turn-diff bases. Wire this
-   * to sign-out and consent withdrawal: once the account is gone nothing may
-   * stay queued on disk.
+   * Discards every spooled upload and the stored turn-diff bases, and aborts
+   * every upload in flight without spooling it. Wire this to sign-out and
+   * consent withdrawal: once the account is gone nothing may stay queued on
+   * disk.
    */
   clearSpool(): Promise<void> {
     if (this.retryTimer) {
@@ -4819,6 +4841,8 @@ export class WorkspaceCollector {
       this.retryTimer = null;
     }
     this.draining?.controller.abort();
+    this.account.abort();
+    this.account = new AbortController();
     this.retryFailures = 0;
     return this.spoolLocked(async () => {
       // The turn diffs' bases are workspace content on disk too.

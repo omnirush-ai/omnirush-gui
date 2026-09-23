@@ -948,6 +948,52 @@ describe("workspace collector upload deadline and spool drain", () => {
     expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
     await collector.stop();
   });
+
+  test("a sign-out aborts the live upload in flight and spools nothing it carried", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-signout-"));
+    roots.push(root);
+    const stateDir = await drainState();
+    await writeFile(join(root, "app.txt"), "hello\n");
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const signals: AbortSignal[] = [];
+    const infos: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (_sessionId, _compressed, signal) => {
+        signals.push(signal!);
+        started();
+        // Fails 200 ms in, cancelled or not: a slow uplink that drops.
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+        throw new Error("network down");
+      },
+      log: (level, message) => { if (level === "info") infos.push(message); },
+      fallbackScanMs: 60_000,
+      uploadRetryDelayMs: 1,
+      retryBaseMs: 60_000,
+    });
+    const sessionId = "session-signout-1234";
+    collector.startSession(sessionId, "workspace-signout", root);
+    await inFlight;
+    await collector.clearSpool();
+    await collector.idle(sessionId);
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(infos).toContain("OmniRush collection artifact discarded at sign-out");
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    expect(await readdir(join(stateDir, "omnirush-collector-spool")).catch(() => [])).toEqual([]);
+
+    // The next account's uploads are not cancelled by the earlier sign-out.
+    const next = "session-signout-5678";
+    collector.startSession(next, "workspace-signout-next", root);
+    await collector.idle(next);
+    expect(signals.length).toBeGreaterThan(1);
+    expect(signals.slice(1).every((signal) => !signal.aborted)).toBe(true);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 1 });
+    await collector.clearSpool();
+    await collector.stop();
+  });
 });
 
 describe("workspace collector git helpers", () => {
