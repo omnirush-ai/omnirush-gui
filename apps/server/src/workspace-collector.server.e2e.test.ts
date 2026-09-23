@@ -113,8 +113,12 @@ function startMockEngine(input: { provider: string; model: string; history?: Eng
   const prompts: unknown[] = [];
   const workflowPrompts: unknown[] = [];
   const received: string[] = [];
-  /** How long a prompt keeps the root session busy, and the error status its message route answers with (null: none). */
-  const control: { busyMs: number; rootMessagesStatus: number | null } = { busyMs: 50, rootMessagesStatus: null };
+  /**
+   * How long a prompt keeps the root session busy, the error status its
+   * message route answers with (null: none), and a body the status route
+   * answers with instead of JSON (null: none), which makes the observer fail.
+   */
+  const control: { busyMs: number; rootMessagesStatus: number | null; statusBody: string | null } = { busyMs: 50, rootMessagesStatus: null, statusBody: null };
   const message = (session: string, id: string, role: "user" | "assistant", text: string): EngineMessage => ({
     info: {
       id,
@@ -144,6 +148,7 @@ function startMockEngine(input: { provider: string; model: string; history?: Eng
       // matching, so "/session/ses_root/prompt%5Fasync" is a prompt dispatch.
       const pathname = decodeURI(url.pathname);
       if (pathname === "/session/status") {
+        if (control.statusBody !== null) return new Response(control.statusBody, { status: 200 });
         return Response.json({ ...(busy ? { ses_root: { type: "busy" } } : {}), ...(workflowBusy ? { ses_workflow: { type: "busy" } } : {}) });
       }
       if (["/permission", "/question"].includes(pathname)) return Response.json([]);
@@ -890,6 +895,26 @@ describe("project archive wiring", () => {
     // The subagent sessions are never archived, and the key was fetched once.
     expect(new Set(objects.map((object) => object.request.session_id))).toEqual(new Set(["ses_root"]));
     expect(archive.calls.filter((call) => call.path === "archives/key")).toHaveLength(1);
+  }, 60_000);
+
+  test("a turn the observer stops following (it failed) still gets its delta, numbered from the engine", async () => {
+    const { root, engine, archive, gateway, omnirush } = await archivedServer();
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
+    await waitFor(() => (archive.objects().length >= 1 ? true : undefined));
+    // The status route stops answering JSON: the observer fails before it sees the turn settle.
+    engine.control.statusBody = "not json";
+    await writeFile(join(root, "feature.txt"), "new work\n");
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    const objects = await waitFor(() => (archive.objects().some((object) => object.request.turn === 2) ? archive.objects() : undefined));
+    const failed = await waitFor(() => traces(gateway.uploads).find((envelope) => events(envelope).some((event) => event.type === "session.observer_failed")));
+    await omnirush.stop();
+
+    expect(events(failed).some((event) => event.type === "session.observer_failed")).toBe(true);
+    expect(objects.map((object) => [object.request.kind, object.request.turn])).toEqual([["base", 1], ["delta", 2]]);
+    const members = await openArchive(objects[1]!.object!);
+    expect(manifestOf(members)).toMatchObject({ kind: "delta", turn: 2, trigger: "turn" });
+    expect(members.map((member) => member.name)).toContain("feature.txt");
   }, 60_000);
 
   test("a chat whose history is past the 8 MiB read cap keeps each turn's transcript, turn snapshot and archive delta, and gets its base; a turn whose messages cannot be read keeps its snapshot and delta", async () => {

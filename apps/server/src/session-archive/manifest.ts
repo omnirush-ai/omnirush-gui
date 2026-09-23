@@ -35,6 +35,14 @@ export const OPEN_ENTRY_FLAGS =
   fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0) | (fsConstants.O_NOCTTY ?? 0);
 
 export type ArchiveKind = "base" | "delta";
+/**
+ * Why a delta was taken (manifest.json `trigger`): a completed turn, or a
+ * final archive of the folder after the last completed turn, which carries
+ * that turn's number again.
+ */
+export type ArchiveTrigger = "turn" | "final";
+/** What prompted a final archive (manifest.json `reason`). */
+export type FinalReason = "idle" | "turn_incomplete" | "session_deleted" | "app_quit" | "app_start";
 export type ArchiveEntryType = "file" | "dir" | "symlink";
 
 /** One manifest `files` item (section 5.4). */
@@ -94,6 +102,8 @@ export type ArchiveManifest = {
   turn: number;
   created_at: string;
   parent_archive_id: string | null;
+  trigger?: ArchiveTrigger;
+  reason?: FinalReason;
   workspace: { label: string; marker: string; git: ArchiveGit | null };
   files: ArchiveEntry[];
   deleted?: string[];
@@ -319,6 +329,8 @@ export type ScanOptions = {
   statConcurrency?: number;
   hashConcurrency?: number;
   metrics?: ScanMetrics;
+  /** Stops the scan between entries: it then rejects with the signal's reason. */
+  signal?: AbortSignal;
 };
 
 export type ScanResult = { entries: ScannedEntry[]; excluded: ExcludedCounts };
@@ -394,7 +406,7 @@ function statFields(stats: BigIntStats) {
 }
 
 /** SHA-256 of the first `size` bytes (the lstat size): pass 2 streams exactly those and detects any change. */
-async function hashFile(absolute: string, size: number, buffer: Buffer, metrics: ScanMetrics): Promise<string | null> {
+async function hashFile(absolute: string, size: number, buffer: Buffer, metrics: ScanMetrics, signal?: AbortSignal): Promise<string | null> {
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(absolute, OPEN_ENTRY_FLAGS);
@@ -408,6 +420,8 @@ async function hashFile(absolute: string, size: number, buffer: Buffer, metrics:
     const hash = createHash("sha256");
     let remaining = size;
     while (remaining > 0) {
+      // A stopped scan does not finish a big file first (the scan rejects right after).
+      if (signal?.aborted) return null;
       const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, remaining), null);
       if (bytesRead === 0) break;
       hash.update(buffer.subarray(0, bytesRead));
@@ -432,6 +446,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const concurrency = options.statConcurrency ?? STAT_CONCURRENCY;
   const metrics = options.metrics ?? emptyScanMetrics();
   const cache = options.hashCache;
+  const signal = options.signal;
   const excluded = emptyExcludedCounts();
   const prunedDirs = await excludedRelativeDirs(root, options.excludedDirs ?? []);
   const includeCredentials = options.includeCredentialFiles === true;
@@ -439,6 +454,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const toHash: ScannedEntry[] = [];
 
   const inspect = async (relDir: string, absDir: string, name: string, next: Array<{ rel: string; abs: string }>): Promise<void> => {
+    signal?.throwIfAborted();
     const rel = relDir ? [relDir, name].join("/") : name;
     const abs = join(absDir, name);
     let stats: BigIntStats;
@@ -499,6 +515,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   while (level.length > 0) {
     const names: Array<{ relDir: string; absDir: string; name: string }> = [];
     await forEachBounded(level, concurrency, async (dir) => {
+      signal?.throwIfAborted();
       let raw: Buffer[];
       try {
         raw = await readdir(dir.abs, { encoding: "buffer" });
@@ -523,9 +540,10 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const unreadable = new Set<ScannedEntry>();
   const buffers: Buffer[] = [];
   await forEachBounded(toHash, options.hashConcurrency ?? HASH_CONCURRENCY, async (entry) => {
+    signal?.throwIfAborted();
     const buffer = buffers.pop() ?? Buffer.allocUnsafe(HASH_READ_BYTES);
     try {
-      const sha256 = await hashFile(join(root, ...entry.path.split("/")), entry.size, buffer, metrics);
+      const sha256 = await hashFile(join(root, ...entry.path.split("/")), entry.size, buffer, metrics, signal);
       if (sha256 === null) {
         unreadable.add(entry);
         cache?.forget(entry.path);
@@ -537,6 +555,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
       buffers.push(buffer);
     }
   });
+  signal?.throwIfAborted();
   excluded.unreadable += unreadable.size;
   const kept = unreadable.size > 0 ? entries.filter((entry) => !unreadable.has(entry)) : entries;
   kept.sort((left, right) => compareArchivePaths(left.path, right.path));
@@ -616,6 +635,9 @@ export type ManifestInput = {
   turn: number;
   createdAt: Date;
   parentArchiveId: string | null;
+  /** Deltas only: a completed turn, or a final archive (then with its reason). */
+  trigger?: ArchiveTrigger;
+  reason?: FinalReason;
   label: string;
   marker: string;
   git: ArchiveGit | null;
@@ -643,6 +665,8 @@ export function manifestSource(input: ManifestInput): ManifestSource {
     turn: input.turn,
     created_at: input.createdAt.toISOString(),
     parent_archive_id: input.parentArchiveId,
+    ...(input.trigger ? { trigger: input.trigger } : {}),
+    ...(input.reason ? { reason: input.reason } : {}),
     workspace: { label: input.label, marker: input.marker, git: input.git },
   });
   const deleted = input.kind === "delta" ? `,"deleted":${JSON.stringify(input.deleted ?? [])}` : "";

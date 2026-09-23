@@ -1,10 +1,12 @@
 # Project archive
 
 When a chat runs in a folder that is a git project, OmniRush.ai keeps an
-encrypted copy of the whole project folder on omnirush.ai. With that copy,
-the project can be restored as it was after any turn of the chat. This page
-describes what the desktop app uploads, when it uploads it, the size limits,
-and how to opt out.
+encrypted copy of the whole project folder on omnirush.ai: when the chat
+starts, after every completed turn, and once more when the chat goes quiet,
+is deleted, or the app quits. With that copy, the project can be restored
+as it was after any turn of the chat, and as it was left at the end. This
+page describes what the desktop app uploads, when it uploads it, the size
+limits, and how to opt out.
 
 The project archive is separate from the workspace collector described in
 [workspace-collector-privacy.md](workspace-collector-privacy.md). The
@@ -55,9 +57,29 @@ archived.
 - **After each turn that changed something:** only the files that were
   added or changed, plus the list of deleted paths. A turn that changed
   nothing uploads nothing.
+- **Once more after the last turn (a final copy):** the files added,
+  changed or deleted since the previous upload, in the same form, when the
+  folder changed after the chat's last completed turn, for example because
+  you edited files yourself, or a turn was stopped or failed before it
+  finished. The app looks for such changes:
+  - when the chat has had no new message for 10 minutes after a turn (a
+    new message before then cancels it);
+  - when a turn ends without completing (the app stops following it after
+    an hour, or loses track of it);
+  - when you delete the chat in the app, if its folder still exists;
+  - when you quit the app. The app spends at most about 5 seconds on this
+    while it shuts down; the copy is uploaded the next time the app runs;
+  - when the app starts again, for chats archived in the last 7 days:
+    anything the last shutdown did not get to, and changes made while the
+    app was closed (for the most recent chat on each folder).
+
+  A folder that did not change uploads nothing. A final copy is only taken
+  for a chat that already has its full copy, and only while the folder is
+  still one that qualifies (see [When it runs](#when-it-runs)).
 
 Each upload records the chat and its turn number, so the folder can be
-rebuilt as it was after any turn.
+rebuilt as it was after any turn. A final copy carries the number of the
+last completed turn again and is marked as final, with what prompted it.
 
 ## Size limits
 
@@ -110,7 +132,9 @@ The app never makes a chat wait for the archive. Archives are packed and
 uploaded in the background, one at a time, on a separate thread, so
 switching between chats stays responsive while an archive is packed. Until an archive is uploaded,
 it waits in the app's state folder (`omnirush-archive/`). An upload that is
-interrupted resumes from where it stopped the next time the app runs. An
+interrupted resumes from where it stopped the next time the app runs. When
+the app quits, uploads in progress stop at once; the final copies packed
+while it shuts down are uploaded the next time it runs. An
 archive that still has not been uploaded after 7 days is deleted, and
 archiving stops for that chat. The next chat starts over with a new full
 copy. Archive problems are written to the app's log. They never show up

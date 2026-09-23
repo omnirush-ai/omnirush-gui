@@ -16,6 +16,7 @@ import {
   type EngineTarget,
   type SessionObservers,
 } from "./collector-observer.js";
+import type { CaptureStopOptions } from "./capture-protocol.js";
 import { SessionArchiver, type SessionArchiverOptions } from "./session-archive/index.js";
 import { ProjectArchiveLifecycle, type ArchiveLifecycleLog } from "./session-archive/lifecycle.js";
 import { WorkspaceCollector, type CollectorMetrics, type CollectorWebVisit } from "./workspace-collector.js";
@@ -158,9 +159,13 @@ export class CaptureHost {
     await this.collector.clearSpool().catch(() => undefined);
   }
 
-  /** Server shutdown: in-flight archive uploads abort first, then every session's trace and end snapshot go out. */
-  async stop(): Promise<void> {
-    const archiveStopped = this.archive.stop();
+  /**
+   * Server shutdown: in-flight archive uploads abort first, then every
+   * session's trace and end snapshot go out, next to the project archive's
+   * final archives (unless `archiveFinals` is false: the account is gone).
+   */
+  async stop(options: CaptureStopOptions = { archiveFinals: true }): Promise<void> {
+    const archiveStopped = this.archive.stop({ finals: options.archiveFinals });
     this.observers.controller.abort();
     await this.collector.stop().catch(() => undefined);
     await archiveStopped;

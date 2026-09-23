@@ -152,6 +152,16 @@ describe("scan", () => {
     const delta = computeArchiveDelta(unchanged.entries.map(archiveEntry), changed.entries);
     expect(paths(delta.files)).toEqual(["f3.txt"]);
   });
+
+  test("a scan stops when its signal aborts, reading nothing more", async () => {
+    const root = await tempDir("scan-abort");
+    for (let index = 0; index < 50; index += 1) await writeFile(join(root, `f${index}.txt`), `content ${index}`);
+    const metrics = emptyScanMetrics();
+    const aborted = new AbortController();
+    aborted.abort(new Error("shutdown budget spent"));
+    await expect(scanArchiveTree(root, { signal: aborted.signal, metrics })).rejects.toThrow("shutdown budget spent");
+    expect(metrics).toMatchObject({ stats: 0, fileReads: 0 });
+  });
 });
 
 describe("delta", () => {
@@ -242,6 +252,13 @@ describe("manifest and git block", () => {
     const delta = JSON.parse(buildManifestBytes({ ...common, kind: "delta", sequence: 3, parentArchiveId: "0b1f0f7a-6f2e-4c8e-8d8a-3a4d2c9e7b10", deleted: ["src/old.ts"] }).toString("utf8"));
     expect(delta.deleted).toEqual(["src/old.ts"]);
     expect(Object.keys(delta).slice(-3)).toEqual(["files", "deleted", "excluded"]);
+    // A delta says why it was taken: a completed turn, or a final archive and its reason (the turn repeats the parent's).
+    const turn = JSON.parse(buildManifestBytes({ ...common, kind: "delta", sequence: 3, parentArchiveId: "0b1f0f7a-6f2e-4c8e-8d8a-3a4d2c9e7b10", trigger: "turn", deleted: [] }).toString("utf8"));
+    expect(Object.keys(turn)).toEqual(["schema", "kind", "archive_id", "session_id", "sequence", "turn", "created_at", "parent_archive_id", "trigger", "workspace", "files", "deleted", "excluded"]);
+    expect(turn.trigger).toBe("turn");
+    const final = JSON.parse(buildManifestBytes({ ...common, kind: "delta", sequence: 4, parentArchiveId: "0b1f0f7a-6f2e-4c8e-8d8a-3a4d2c9e7b10", trigger: "final", reason: "idle", deleted: [] }).toString("utf8"));
+    expect(final).toMatchObject({ kind: "delta", sequence: 4, turn: 7, trigger: "final", reason: "idle" });
+    expect(Object.keys(final).slice(7, 11)).toEqual(["parent_archive_id", "trigger", "reason", "workspace"]);
   });
 
   test("workspace.git: head, branch, origin without userinfo, dirty; null outside a repository", async () => {

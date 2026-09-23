@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -225,6 +225,51 @@ describe("capture worker", () => {
     expect(slow.puts[0]!.abortedAfterMs!).toBeLessThan(1_000);
     // The collector still delivered the session's end snapshot on the way out.
     expect(sink.envelopes().map((item) => item.snapshot_type)).toContain("end");
+  }, 60_000);
+
+  test("stopping packs the project archive's final archives on the worker, unless the account is gone", async () => {
+    const results: string[][] = [];
+    for (const archiveFinals of [undefined, Promise.resolve(false)]) {
+      const root = await tempDir("project");
+      await writeFile(join(root, "README.md"), "# project\n");
+      await git(root, "init", "-q");
+      await git(root, "add", "README.md");
+      await git(root, "commit", "-q", "-m", "initial");
+      const archive = new FakeArchiveServer();
+      const engine = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: (request) => (new URL(request.url).pathname.endsWith("/message") ? Response.json([]) : Response.json({ id: "ses_final_stop_01" })),
+      });
+      cleanups.push(() => engine.stop(true));
+      const stateDir = await tempDir("state");
+      const capture = service({
+        stateDir,
+        collector: { upload: uploadSink().upload },
+        archive: {
+          enabled: true,
+          excludedDirs: [],
+          request: (path, init) => archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
+            method: init.method,
+            headers: { authorization: `Bearer ${archive.token}` },
+            ...(init.body === undefined ? {} : { body: init.body }),
+          }),
+          refreshAccessToken: async () => null,
+          fetch: archive.respond,
+          baseIdleMs: 0,
+        },
+      });
+      capture.startSession("ses_final_stop_01", "workspace-final", root);
+      capture.archiveSessionStarted("ses_final_stop_01", root, { baseUrl: `http://127.0.0.1:${engine.port}`, headers: [], search: "", engine: "v1" });
+      await capture.idle();
+      expect(archive.objects().map((object) => object.request.kind)).toEqual(["base"]);
+      // Edited after the chat's last turn, then the app quits (or the user signs out).
+      await writeFile(join(root, "notes.md"), "after the last turn\n");
+      await capture.stop(archiveFinals === undefined ? {} : { archiveFinals });
+      results.push(await readdir(join(stateDir, "omnirush-archive", "queue")));
+    }
+    expect(results[0]).toHaveLength(1);
+    expect(results[1]).toEqual([]);
   }, 60_000);
 
   test("OMNIRUSH_CAPTURE_WORKER=0 captures in-process with the same envelopes", async () => {

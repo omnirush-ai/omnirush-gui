@@ -1286,13 +1286,22 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
 
+  /** Whether the omnirush.ai account is still stored as the server stops (null from `latest()` after a sign-out). */
+  const accountStillStored = async (): Promise<boolean> => {
+    if (!gatewayCredentials) return false;
+    if (!gatewayCredentials.latest) return true;
+    return (await gatewayCredentials.latest()) !== null;
+  };
+
   return {
     ...server,
     stop: async () => {
       // First, and synchronously: a stop is also how a user sign-out reaches
       // this server (the desktop clears the account, then restarts it), so
       // archive part uploads in flight are aborted before anything else runs.
-      const captureStopped = capture.stop();
+      // The project archive packs its final archives only while the account
+      // is still stored (an app quit, a restart), never after a sign-out.
+      const captureStopped = capture.stop({ archiveFinals: accountStillStored() });
       let recoveryError: unknown;
       try { await taskRecovery?.stop(); } catch (error) { recoveryError = error; }
       await captureStopped;

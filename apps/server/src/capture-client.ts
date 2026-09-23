@@ -32,6 +32,8 @@ import { isCollectableWebUrl, workspaceCollectorEnabled, type CollectorWebVisit 
 const MAX_TRACED_REQUEST_BYTES = 4 * 1024 * 1024;
 /** Shutdown waits this long for the last traces and end snapshots before the worker is terminated. */
 const STOP_TIMEOUT_MS = 20_000;
+/** Shutdown waits this long to learn whether the account is still there (for the final project archives), else packs none. */
+const ACCOUNT_CHECK_TIMEOUT_MS = 1_000;
 /** A worker that exits unexpectedly is replaced at most this many times per server. */
 const MAX_WORKER_RESTARTS = 3;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
@@ -59,7 +61,12 @@ export type CaptureService = {
   observeSession(sessionId: string, target: EngineTarget): void;
   sessionDeleted(sessionId: string): void;
   signOut(): Promise<void>;
-  stop(): Promise<void>;
+  /**
+   * Stops capture. `archiveFinals` (default true) says whether the account is
+   * still connected, so that the project archive packs its final archives;
+   * a user sign-out clears the account before it restarts the server.
+   */
+  stop(options?: { archiveFinals?: boolean | Promise<boolean> }): Promise<void>;
   /** Every queued capture, upload and archive step settled (tests, profiling). */
   idle(): Promise<void>;
   diagnostics(): Promise<CaptureDiagnostics | null>;
@@ -167,15 +174,16 @@ class CaptureClient implements CaptureService {
     return isDiagnostics(value) ? value : null;
   }
 
-  stop(): Promise<void> {
-    this.stopping ??= this.shutdown();
+  stop(options: { archiveFinals?: boolean | Promise<boolean> } = {}): Promise<void> {
+    this.stopping ??= this.shutdown(options.archiveFinals ?? true);
     return this.stopping;
   }
 
-  private async shutdown(): Promise<void> {
+  private async shutdown(archiveFinals: boolean | Promise<boolean>): Promise<void> {
     // First, and synchronously: archive uploads this thread makes for the worker are aborted now.
     for (const { controller, channel } of this.served.values()) if (channel === "archive") controller.abort();
-    const done = this.dispatch({ kind: "call", id: null, method: "stop", args: [] }, [], true);
+    const finals = await withinTimeout(archiveFinals, ACCOUNT_CHECK_TIMEOUT_MS);
+    const done = this.dispatch({ kind: "call", id: null, method: "stop", args: [{ archiveFinals: finals }] }, [], true);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<void>((resolvePromise) => {
       timer = setTimeout(() => {
@@ -428,6 +436,21 @@ class CaptureClient implements CaptureService {
         return { kind: "result", id, ok: true, response: await serializeResponse(response) };
       }
     }
+  }
+}
+
+/** The answer if it comes within `ms`, else false (as for a failed check). */
+async function withinTimeout(answer: boolean | Promise<boolean>, ms: number): Promise<boolean> {
+  if (typeof answer === "boolean") return answer;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<boolean>((resolvePromise) => {
+    timer = setTimeout(() => resolvePromise(false), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([answer.catch(() => false), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -417,3 +417,199 @@ describe("SessionArchiver", () => {
     expect(manifestOf(members).excluded).toMatchObject({ app_state: 1 });
   });
 });
+
+describe("SessionArchiver final archives", () => {
+  const archiveIdOf = (result: Awaited<ReturnType<SessionArchiver["captureFinal"]>>) => (result.status === "queued" ? result.archiveId : "");
+
+  test("a final archive is a delta that repeats the last turn, says why in its manifest, and chains; nothing when unchanged, none without a base", async () => {
+    const server = new FakeArchiveServer();
+    const { root } = await project();
+    const state = await tempDir("state");
+    const subject = archiver(server, state);
+    const id = "ses_final_chain_1";
+
+    expect(await subject.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "no_base" });
+    expect((await subject.captureBase(id, root)).status).toBe("queued");
+    // Nothing changed since the base: no archive, no request.
+    expect(await subject.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "unchanged" });
+    await writeFile(join(root, "src/app.ts"), "export const app = 2;\n");
+    expect(await subject.captureDelta(id, root, 3)).toMatchObject({ status: "queued", sequence: 1 });
+
+    // The user edits after the turn: a final archive for turn 3, then another one.
+    await writeFile(join(root, "src/user.ts"), "export const user = 1;\n");
+    const idle = await subject.captureFinal(id, "idle");
+    expect(idle).toMatchObject({ status: "queued", kind: "delta", sequence: 2 });
+    await rm(join(root, "src/user.ts"));
+    await writeFile(join(root, "notes.md"), "later\n");
+    const quit = await subject.captureFinal(id, "app_quit");
+    expect(quit).toMatchObject({ status: "queued", kind: "delta", sequence: 3 });
+    // Turn 3 is archived: a delta for it again is stale; the next turn is 4.
+    expect(await subject.captureDelta(id, root, 3)).toEqual({ status: "skipped", reason: "stale_turn" });
+    await writeFile(join(root, "src/app.ts"), "export const app = 4;\n");
+    expect(await subject.captureDelta(id, root, 4)).toMatchObject({ status: "queued", sequence: 4 });
+    expect(await subject.drain()).toMatchObject({ uploaded: 5, pending: 0, dropped: 0 });
+
+    const objects = server.objects();
+    expect(objects.map((object) => [object.request.kind, object.request.sequence, object.request.turn])).toEqual([["base", 0, 0], ["delta", 1, 3], ["delta", 2, 3], ["delta", 3, 3], ["delta", 4, 4]]);
+    for (let index = 1; index < objects.length; index += 1) expect(objects[index]!.request.parent_archive_id).toBe(objects[index - 1]!.request.archive_id);
+    const manifests = await Promise.all(objects.map(async (object) => manifestOf(await openArchive(object.object!))));
+    expect("trigger" in manifests[0]!).toBe(false);
+    expect(manifests.slice(1).map((manifest) => [manifest.turn, manifest.trigger, manifest.reason])).toEqual([[3, "turn", undefined], [3, "final", "idle"], [3, "final", "app_quit"], [4, "turn", undefined]]);
+    expect(manifests[2]).toMatchObject({ archive_id: archiveIdOf(idle), sequence: 2, parent_archive_id: objects[1]!.request.archive_id });
+    expect((await openArchive(objects[2]!.object!)).map((member) => member.name)).toContain("src/user.ts");
+    expect(manifests[3]).toMatchObject({ archive_id: archiveIdOf(quit), deleted: ["src/user.ts"] });
+
+    // The server took a final archive: the chain point kept for a refusal is gone, one baseline is left.
+    expect(await subject.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "unchanged" });
+    expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "baselines"))).toHaveLength(1);
+  });
+
+  test("a server without final archives: the refused final is dropped once, the chain goes back, and the turn delta queued behind it is captured again", async () => {
+    const server = new FakeArchiveServer();
+    server.strictTurns = true;
+    const { root } = await project();
+    const state = await tempDir("state");
+    const logs: Array<{ level: string; message: string }> = [];
+    const subject = archiver(server, state, { log: (level, message) => logs.push({ level, message }) });
+    const id = "ses_old_backend_1";
+
+    expect((await subject.captureBase(id, root)).status).toBe("queued");
+    await writeFile(join(root, "turn1.txt"), "turn 1\n");
+    expect((await subject.captureDelta(id, root, 1)).status).toBe("queued");
+    expect(await subject.drain()).toMatchObject({ uploaded: 2 });
+
+    // Offline for a while: a final archive, then the next turn's delta chained on it.
+    await writeFile(join(root, "user.txt"), "edited after turn 1\n");
+    expect(await subject.captureFinal(id, "idle")).toMatchObject({ status: "queued", sequence: 2 });
+    await writeFile(join(root, "turn2.txt"), "turn 2\n");
+    expect(await subject.captureDelta(id, root, 2)).toMatchObject({ status: "queued", sequence: 3 });
+    expect(await subject.drain()).toMatchObject({ uploaded: 0, dropped: 2, blocked: null, disabled: false });
+
+    // Final archives are off until the app restarts (this also waits for the rewind).
+    await writeFile(join(root, "user.txt"), "edited again\n");
+    expect(await subject.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "unsupported" });
+    expect(await subject.drain()).toMatchObject({ uploaded: 1, pending: 0 });
+    const objects = server.objects();
+    expect(objects.map((object) => [object.request.sequence, object.request.turn])).toEqual([[0, 0], [1, 1], [2, 2]]);
+    expect(objects[2]!.request.parent_archive_id).toBe(objects[1]!.request.archive_id);
+    const recaptured = await openArchive(objects[2]!.object!);
+    expect(manifestOf(recaptured)).toMatchObject({ trigger: "turn", turn: 2, sequence: 2 });
+    // Both the final's changes and the turn's are in the delta captured again.
+    expect(recaptured.map((member) => member.name)).toEqual(expect.arrayContaining(["user.txt", "turn2.txt"]));
+
+    // Later turns keep uploading on the restored chain.
+    await writeFile(join(root, "turn3.txt"), "turn 3\n");
+    expect(await subject.captureDelta(id, root, 3)).toMatchObject({ status: "queued", sequence: 3 });
+    expect(await subject.drain()).toMatchObject({ uploaded: 1, pending: 0 });
+    expect(server.objects().map((object) => object.request.turn)).toEqual([0, 1, 2, 3]);
+    // One refused create, no retry loop; logged once, and the session was never stopped.
+    expect(server.callPaths().filter((path) => path === "POST archives 409")).toHaveLength(1);
+    expect(logs.filter((log) => log.message.includes("does not accept final"))).toHaveLength(1);
+    expect(logs.filter((log) => log.level === "warn")).toEqual([]);
+    expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "queue"))).toEqual([]);
+  });
+
+  test("shutdown captures final archives within its budget: a slow one is cut at the budget, and the next start checks that folder again", async () => {
+    const server = new FakeArchiveServer();
+    const fast = await project();
+    const slow = await project();
+    const state = await tempDir("state");
+    // A gate that hangs for the slow folder while `hang` is set (a scan that never ends would do the same).
+    let hang = true;
+    const detectors = [
+      async (root: string, options?: Parameters<typeof gitMarkerDetector>[1]) => {
+        if (hang && root === slow.root) await new Promise(() => undefined);
+        return gitMarkerDetector(root, options);
+      },
+      gitParentDetector,
+    ];
+    const first = archiver(server, state, { detectors });
+    // The start-time gate let both in before anything hung.
+    hang = false;
+    expect((await first.captureBase("ses_quit_fast_01", fast.root)).status).toBe("queued");
+    expect((await first.captureBase("ses_quit_slow_01", slow.root)).status).toBe("queued");
+    expect(await first.drain()).toMatchObject({ uploaded: 2 });
+    hang = true;
+    await writeFile(join(fast.root, "after.txt"), "after the last turn\n");
+    await writeFile(join(slow.root, "after.txt"), "after the last turn\n");
+
+    const stoppedAt = Date.now();
+    await first.stop({ finals: ["ses_quit_fast_01", "ses_quit_slow_01"], budgetMs: 400 });
+    const elapsed = Date.now() - stoppedAt;
+    expect(elapsed).toBeGreaterThanOrEqual(350);
+    expect(elapsed).toBeLessThan(1_500);
+    // Only the fast folder's final made it into the queue, nothing was uploaded at shutdown.
+    const queued = await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "queue"));
+    expect(queued).toHaveLength(1);
+    expect(server.objects()).toHaveLength(2);
+
+    // The next app start: the slow folder's session still has its final due.
+    hang = false;
+    const second = archiver(server, state, { detectors });
+    expect(await second.startFinalCandidates()).toEqual(expect.arrayContaining(["ses_quit_fast_01", "ses_quit_slow_01"]));
+    expect(await second.captureFinal("ses_quit_fast_01", "app_start")).toEqual({ status: "skipped", reason: "unchanged" });
+    expect(await second.captureFinal("ses_quit_slow_01", "app_start")).toMatchObject({ status: "queued", sequence: 1 });
+    expect(await second.drain()).toMatchObject({ uploaded: 2, pending: 0 });
+    const finals = await Promise.all(server.objects().slice(2).map(async (object) => [object.request.session_id, object.request.turn, manifestOf(await openArchive(object.object!)).reason]));
+    expect(finals.sort()).toEqual([["ses_quit_fast_01", 0, "app_quit"], ["ses_quit_slow_01", 0, "app_start"]]);
+  });
+
+  test("app start: a final for sessions whose folder may have changed while the app was closed; not for deleted, stopped or old ones", async () => {
+    const server = new FakeArchiveServer();
+    const { root } = await project();
+    const other = await project();
+    const state = await tempDir("state");
+    let clock = Date.now() - 8 * 24 * 60 * 60_000;
+    const subject = archiver(server, state, { now: () => new Date(clock) });
+    // Eight days ago: a chat on the other folder.
+    expect((await subject.captureBase("ses_start_old_01", other.root)).status).toBe("queued");
+    // Earlier today, two chats on this folder: one ended its day with a turn, the other was archived after its turn.
+    clock = Date.now() - 60 * 60_000;
+    expect((await subject.captureBase("ses_start_due_01", root)).status).toBe("queued");
+    await writeFile(join(root, "due.txt"), "turn\n");
+    expect((await subject.captureDelta("ses_start_due_01", root, 1)).status).toBe("queued");
+    expect((await subject.captureBase("ses_start_deleted", root)).status).toBe("queued");
+    clock = Date.now() - 30 * 60_000;
+    expect((await subject.captureBase("ses_start_last_01", root)).status).toBe("queued");
+    await writeFile(join(root, "last.txt"), "turn\n");
+    expect((await subject.captureDelta("ses_start_last_01", root, 2)).status).toBe("queued");
+    await writeFile(join(root, "gone.txt"), "last edit\n");
+    expect(await subject.captureFinal("ses_start_last_01", "app_quit")).toMatchObject({ status: "queued" });
+    // Deleted in the app: its final, and it is ended.
+    expect(await subject.captureFinal("ses_start_deleted", "session_deleted")).toMatchObject({ status: "queued" });
+    expect(await subject.drain()).toMatchObject({ pending: 0 });
+    await subject.stop();
+
+    // Edited while the app was closed.
+    await writeFile(join(root, "closed.txt"), "edited while closed\n");
+    clock = Date.now();
+    const next = archiver(server, state, { now: () => new Date(clock) });
+    // The most recent session on the folder, and the one whose final never came; newest first.
+    expect(await next.startFinalCandidates()).toEqual(["ses_start_last_01", "ses_start_due_01"]);
+    const last = await next.captureFinal("ses_start_last_01", "app_start");
+    expect(last).toMatchObject({ status: "queued", kind: "delta", sequence: 3 });
+    expect(await next.drain()).toMatchObject({ uploaded: 1 });
+    const object = server.objects().find((candidate) => candidate.request.archive_id === archiveIdOf(last))!;
+    expect(object.request).toMatchObject({ session_id: "ses_start_last_01", kind: "delta", sequence: 3, turn: 2 });
+    const members = await openArchive(object.object!);
+    expect(manifestOf(members)).toMatchObject({ trigger: "final", reason: "app_start", turn: 2 });
+    expect(members.map((member) => member.name)).toContain("closed.txt");
+    // Its final settles the session whose last turn had none; the folder's most recent archive is now that one.
+    clock += 1_000;
+    expect(await next.captureFinal("ses_start_due_01", "app_start")).toMatchObject({ status: "queued", sequence: 2 });
+    expect(await next.startFinalCandidates()).toEqual(["ses_start_due_01"]);
+  });
+
+  test("a session deleted with its folder gone gets no final, and is not checked at the next start", async () => {
+    const server = new FakeArchiveServer();
+    const { root } = await project();
+    const state = await tempDir("state");
+    const subject = archiver(server, state);
+    expect((await subject.captureBase("ses_deleted_gone", root)).status).toBe("queued");
+    await subject.drain();
+    await rm(root, { recursive: true, force: true });
+    expect(await subject.captureFinal("ses_deleted_gone", "session_deleted")).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(await subject.startFinalCandidates()).toEqual([]);
+    expect(server.objects()).toHaveLength(1);
+  });
+});

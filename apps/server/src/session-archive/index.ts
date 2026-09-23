@@ -1,11 +1,12 @@
 /**
  * SessionArchiver (section 13): the desktop side of the OmniRush project
  * archive. A session whose root holds a `.git` gets a base archive of the
- * whole folder at session start and a delta after every completed turn that
- * changed anything; each is sealed to the omnirush.ai archive key, queued
- * durably under the collector state dir and uploaded to S3 through presigned
- * multipart URLs. The embedded server drives it through lifecycle.ts; see
- * README.md.
+ * whole folder at session start, a delta after every completed turn that
+ * changed anything, and a final delta (the last turn's number again) when the
+ * folder changed after that turn; each is sealed to the omnirush.ai archive
+ * key, queued durably under the collector state dir and uploaded to S3
+ * through presigned multipart URLs. The embedded server drives it through
+ * lifecycle.ts; see README.md.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
@@ -26,6 +27,8 @@ import {
   readArchiveGit,
   scanArchiveTree,
   type ArchiveKind,
+  type ArchiveTrigger,
+  type FinalReason,
   type ScannedEntry,
 } from "./manifest.js";
 import { writeSealedArchive } from "./pack.js";
@@ -42,7 +45,7 @@ import {
 } from "./upload.js";
 
 export { gitMarkerDetector, gitParentDetector, isArchivableProject, type ArchivableProject, type ProjectMarkerDetector } from "./detect.js";
-export { isArchiveCredentialPath } from "./manifest.js";
+export { isArchiveCredentialPath, type ArchiveTrigger, type FinalReason } from "./manifest.js";
 export type { ArchiveApiRequest } from "./upload.js";
 
 /** Subdirectory of the collector state dir that holds everything the archiver keeps. */
@@ -56,6 +59,10 @@ const MAX_JOB_AGE_MS = 7 * 24 * 60 * 60_000;
 const JOB_RETRY_BASE_MS = 60_000;
 const JOB_RETRY_MAX_MS = 60 * 60_000;
 const SIGN_OUT_ABORT_TIMEOUT_MS = 5_000;
+/** At app start, sessions whose chain moved within this long may get a final archive (startFinalCandidates). */
+const START_FINAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
+/** At most this many sessions are scanned for a final archive at app start. */
+const MAX_START_FINALS = 10;
 
 export type SessionArchiverOptions = {
   /** As the collector: the archive routes are derived from it like the collect URL. */
@@ -93,7 +100,11 @@ export type CaptureSkipReason =
   /** Additions to the section 13.2 union: */
   | "unavailable"
   | "stale_turn"
-  | "failed";
+  | "failed"
+  /** Final archives only: cancelled by a new prompt or by the end of the shutdown budget. */
+  | "cancelled"
+  /** Final archives only: the server refused one (a backend without them); none until the app restarts. */
+  | "unsupported";
 
 export type CaptureResult =
   | { status: "queued"; archiveId: string; kind: ArchiveKind; sequence: number; size: number }
@@ -111,6 +122,14 @@ export type DrainResult = {
   disabled: boolean;
 };
 
+/** Where a chain continues from: its next sequence, last archive, last turn and the baseline of that archive. */
+const chainPointSchema = z.object({
+  next_sequence: z.number().int().nonnegative(),
+  last_archive_id: z.string().nullable(),
+  last_turn: z.number().int().nullable(),
+  baseline: z.string().nullable(),
+});
+
 const sessionStateSchema = z.object({
   v: z.literal(1),
   session_id: z.string(),
@@ -122,6 +141,18 @@ const sessionStateSchema = z.object({
   baseline: z.string().nullable(),
   stopped: z.string().nullable(),
   updated_at: z.string(),
+  // Added in 1.0.11; optional so that earlier records still load.
+  /**
+   * Set while final archives the server has not accepted yet are in the
+   * chain: the chain as it was before the first of them, whose baseline is
+   * kept. A server that refuses final archives sends the chain back to it
+   * (rewindRefusedFinal).
+   */
+  rewind: chainPointSchema.nullable().optional(),
+  /** A turn was captured since the last final archive: at app start the folder is checked once more. */
+  final_due: z.boolean().optional(),
+  /** When the session was deleted in the app: no final archive at app start. */
+  ended: z.string().nullable().optional(),
 });
 type SessionState = z.infer<typeof sessionStateSchema>;
 
@@ -145,6 +176,8 @@ const queueRecordSchema = z.object({
   session_key: z.string(),
   request: createRequestSchema,
   sealed_file: z.string(),
+  /** A delta's trigger (1.0.11 on): how a refused final is told from a broken chain. */
+  trigger: z.enum(["turn", "final"]).optional(),
   created_at: z.string(),
   attempts: z.number().int().nonnegative(),
   next_attempt_at: z.string().nullable(),
@@ -178,6 +211,17 @@ function errorSummary(error: unknown): string {
   return "unknown error";
 }
 
+/** How a capture was asked for. */
+type CaptureOptions = {
+  /** Deltas only: a completed turn, or a final archive with its reason. */
+  trigger?: ArchiveTrigger;
+  reason?: FinalReason;
+  /** A final archive of a session deleted in the app: its record is marked ended. */
+  ended?: boolean;
+  /** Cancels the capture until its commit. */
+  signal?: AbortSignal;
+};
+
 export class SessionArchiver {
   private readonly dir: string;
   private readonly dirs: { sessions: string; baselines: string; hashCache: string; queue: string; pending: string; tmp: string };
@@ -203,6 +247,10 @@ export class SessionArchiver {
   private drainAgain = false;
   private drainController: AbortController | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The server accepted a final archive in this app run: a later refusal is a real chain conflict. */
+  private finalsAccepted = false;
+  /** The server refused a final archive (a backend without them): none is captured until the app restarts. */
+  private finalsRefused = false;
 
   constructor(options: SessionArchiverOptions) {
     const stateDir = resolve(options.stateDir);
@@ -289,8 +337,85 @@ export class SessionArchiver {
       const key = await this.currentKey();
       if (key === "disabled") return { status: "skipped", reason: "disabled" };
       if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
-      return this.captureArchive(state, "delta", next, key, generation);
+      return this.captureArchive(state, "delta", next, key, generation, { trigger: "turn" });
     }));
+  }
+
+  /**
+   * A final archive: the folder after the last completed turn (the session
+   * went quiet, a turn ended without completing, the session was deleted,
+   * the app quits or starts again). A delta like any other, numbered with
+   * the last archived turn again, whose manifest says `"trigger": "final"`
+   * and why. Only for a session with a base, whose root the gate still
+   * accepts; nothing when the folder did not change. `signal` cancels it
+   * until its commit.
+   */
+  captureFinal(sessionId: string, reason: FinalReason, options: { signal?: AbortSignal } = {}): Promise<CaptureResult> {
+    const { signal } = options;
+    return this.guard("delta", sessionId, 0, async () => this.withSession(sessionId, async () => {
+      const generation = this.generation;
+      if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
+      if (this.disabled || !this.uploader.configured) return { status: "skipped", reason: "disabled" };
+      const state = await this.loadSession(sessionId);
+      if (!state || state.next_sequence === 0 || state.last_turn === null) return { status: "skipped", reason: "no_base" };
+      if (state.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
+      const ended = reason === "session_deleted";
+      const skip = async (skipReason: CaptureSkipReason): Promise<CaptureResult> => {
+        if (ended && generation === this.generation) await this.saveSession({ ...state, final_due: false, ended: this.now().toISOString(), updated_at: this.now().toISOString() });
+        return { status: "skipped", reason: skipReason };
+      };
+      if (this.finalsRefused) return skip("unsupported");
+      // The folder may be gone, or no longer what the start-time gate accepted.
+      const gate = await isArchivableProject(state.root, this.detectors, { appDirs: this.appDirs });
+      if (!gate.archivable) return skip("not_archivable");
+      const key = await this.currentKey(signal);
+      if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
+      if (key === "disabled") return { status: "skipped", reason: "disabled" };
+      if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
+      try {
+        return await this.captureArchive(state, "delta", state.last_turn, key, generation, { trigger: "final", reason, ended, ...(signal ? { signal } : {}) });
+      } catch (error) {
+        if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
+        throw error;
+      }
+    }));
+  }
+
+  /**
+   * The sessions to give a final archive once at app start: every session
+   * with a turn captured since its last final archive (the app quit before
+   * that final, or crashed), and the most recent session on each other
+   * folder (the folder may have changed while the app was closed). Only
+   * sessions whose chain moved within the last 7 days, not stopped and not
+   * deleted; the most recent first, at most 10.
+   */
+  async startFinalCandidates(): Promise<string[]> {
+    try {
+      await this.start();
+      if (this.disabled) return [];
+      const nowMs = this.now().getTime();
+      const sessions: SessionState[] = [];
+      for (const name of await readdir(this.dirs.sessions)) {
+        if (!name.endsWith(".json")) continue;
+        const parsed = sessionStateSchema.safeParse(await readJsonFile(join(this.dirs.sessions, name)));
+        if (!parsed.success || name !== `${stateKey(parsed.data.session_id)}.json`) continue;
+        const state = parsed.data;
+        if (state.stopped || state.ended || state.next_sequence === 0 || !(nowMs - Date.parse(state.updated_at) <= START_FINAL_WINDOW_MS)) continue;
+        sessions.push(state);
+      }
+      sessions.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+      const roots = new Set<string>();
+      const picked: string[] = [];
+      for (const state of sessions) {
+        const newestOnRoot = !roots.has(state.root);
+        roots.add(state.root);
+        if (state.final_due || newestOnRoot) picked.push(state.session_id);
+      }
+      return picked.slice(0, MAX_START_FINALS);
+    } catch (error) {
+      this.log("warn", "OmniRush archive could not list the sessions to check at start", { error: errorSummary(error) });
+      return [];
+    }
   }
 
   /** Uploads queued archives until the queue is empty or blocked; never throws. */
@@ -339,21 +464,56 @@ export class SessionArchiver {
     this.disabled = null;
     this.stoppedSessions.clear();
     this.resettingSessions.clear();
+    this.finalsAccepted = false;
+    this.finalsRefused = false;
     this.uploader.setAccessToken(null);
     this.started = null;
   }
 
   /**
-   * App shutdown: stops the drain and the retry timer; queued archives stay
-   * for the next start. A capture still packing never commits: the server
-   * that replaces this one (after a sign-out, maybe for another account)
-   * must not find it in the queue. Its changes go into the next delta.
+   * App shutdown: stops the drain and the retry timer at once; queued
+   * archives stay for the next start. With `finals`, a final archive of each
+   * of those sessions is captured first, one after the other, all within
+   * `budgetMs` (a session whose capture is still running goes last); captures
+   * already running may commit within the budget too. After it nothing
+   * commits: a capture still packing is dropped (the server that replaces
+   * this one after a sign-out must not find it queued), and the next start
+   * checks the folder again (startFinalCandidates).
    */
-  async stop(): Promise<void> {
+  async stop(options: { finals?: readonly string[]; budgetMs?: number } = {}): Promise<void> {
+    this.clearRetryTimer();
+    this.drainController?.abort();
+    const budgetMs = options.budgetMs ?? 0;
+    if (options.finals && options.finals.length > 0 && budgetMs > 0) await this.quitFinals(options.finals, budgetMs);
     this.generation += 1;
     this.clearRetryTimer();
     this.drainController?.abort();
     await this.draining?.catch(() => undefined);
+  }
+
+  /** stop()'s final archives: sessions with nothing running first; whatever is left at the deadline is cancelled. */
+  private async quitFinals(sessionIds: readonly string[], budgetMs: number): Promise<void> {
+    const controller = new AbortController();
+    const ordered = [...sessionIds.filter((id) => !this.sessionTails.has(id)), ...sessionIds.filter((id) => this.sessionTails.has(id))];
+    let done = 0;
+    const captures = (async () => {
+      for (const sessionId of ordered) {
+        if (controller.signal.aborted) return;
+        await this.captureFinal(sessionId, "app_quit", { signal: controller.signal });
+        done += 1;
+      }
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolvePromise) => {
+      timer = setTimeout(resolvePromise, budgetMs);
+      timer.unref?.();
+    });
+    await Promise.race([captures, deadline]);
+    clearTimeout(timer);
+    controller.abort();
+    if (done < ordered.length) {
+      this.log("info", "OmniRush archive shutdown budget ran out; the remaining folders are checked at the next start", { budgetMs, sessions: ordered.length, finished: done });
+    }
   }
 
   // --- captures -------------------------------------------------------------------------
@@ -420,9 +580,9 @@ export class SessionArchiver {
     }
   }
 
-  private async currentKey(): Promise<ArchiveKey | "disabled" | "unavailable"> {
+  private async currentKey(signal?: AbortSignal): Promise<ArchiveKey | "disabled" | "unavailable"> {
     if (this.key) return this.key;
-    const fetched = await this.uploader.fetchKey();
+    const fetched = await this.uploader.fetchKey(signal);
     if (fetched.status === "disabled") {
       await this.disable(fetched.code);
       return "disabled";
@@ -436,22 +596,23 @@ export class SessionArchiver {
    * One capture under the session's lock. The collection hints around it keep
    * a capture's per-entry garbage from stacking on top of the previous one's.
    */
-  private async captureArchive(state: SessionState, kind: ArchiveKind, turn: number, key: ArchiveKey, generation: number): Promise<CaptureResult> {
+  private async captureArchive(state: SessionState, kind: ArchiveKind, turn: number, key: ArchiveKey, generation: number, options: CaptureOptions = {}): Promise<CaptureResult> {
     hintGarbageCollection();
     try {
-      return await this.captureArchiveOnce(state, kind, turn, key, generation);
+      return await this.captureArchiveOnce(state, kind, turn, key, generation, options);
     } finally {
       hintGarbageCollection();
     }
   }
 
   /** Pass 1, delta, pass 2 and the commit protocol of section 13.4. */
-  private async captureArchiveOnce(state: SessionState, kind: ArchiveKind, turn: number, key: ArchiveKey, generation: number): Promise<CaptureResult> {
+  private async captureArchiveOnce(state: SessionState, kind: ArchiveKind, turn: number, key: ArchiveKey, generation: number, options: CaptureOptions): Promise<CaptureResult> {
     const sessionId = state.session_id;
     const sessionKey = stateKey(sessionId);
     const rootKey = stateKey(state.root);
+    const { signal } = options;
     const cache = await this.loadHashCache(rootKey);
-    const scanning = scanArchiveTree(state.root, { excludedDirs: this.appDirs, includeCredentialFiles: this.includeCredentials, hashCache: cache });
+    const scanning = scanArchiveTree(state.root, { excludedDirs: this.appDirs, includeCredentialFiles: this.includeCredentials, hashCache: cache, ...(signal ? { signal } : {}) });
     const gitReading = kind === "base" ? readArchiveGit(state.root) : null;
     const scan = await scanning;
     let files: ScannedEntry[] = scan.entries;
@@ -465,6 +626,7 @@ export class SessionArchiver {
       const delta = computeArchiveDelta(baseline, scan.entries);
       if (isArchiveDeltaEmpty(delta)) {
         if (cache.changed) await this.saveHashCache(rootKey, cache);
+        if (generation === this.generation) await this.noteUnchanged(state, options);
         return { status: "skipped", reason: "unchanged" };
       }
       files = delta.files;
@@ -482,6 +644,8 @@ export class SessionArchiver {
       turn,
       createdAt,
       parentArchiveId: kind === "base" ? null : state.last_archive_id,
+      ...(kind === "delta" && options.trigger ? { trigger: options.trigger } : {}),
+      ...(kind === "delta" && options.reason ? { reason: options.reason } : {}),
       label: archiveLabel(state.root),
       marker: state.marker,
       git,
@@ -493,7 +657,7 @@ export class SessionArchiver {
     let sealed: Awaited<ReturnType<typeof writeSealedArchive>>;
     try {
       sealed = await writeSealedArchive(
-        { root: state.root, manifest, createdAtSeconds: Math.floor(createdAt.getTime() / 1000), entries: files },
+        { root: state.root, manifest, createdAtSeconds: Math.floor(createdAt.getTime() / 1000), entries: files, ...(signal ? { signal } : {}) },
         { publicKey: key.publicKey },
         partial,
       );
@@ -501,9 +665,10 @@ export class SessionArchiver {
       await rm(partial, { force: true });
       throw error;
     }
-    if (generation !== this.generation || this.disabled || this.stoppedSessions.has(sessionId)) {
+    if (generation !== this.generation || this.disabled || this.stoppedSessions.has(sessionId) || signal?.aborted) {
       await rm(partial, { force: true });
-      return { status: "skipped", reason: this.disabled ? "disabled" : "stopped" };
+      if (this.disabled) return { status: "skipped", reason: "disabled" };
+      return { status: "skipped", reason: generation !== this.generation || this.stoppedSessions.has(sessionId) ? "stopped" : "cancelled" };
     }
     // 1-2: the sealed file and its queue record.
     const sealedFile = `${archiveId}.orseal`;
@@ -527,6 +692,7 @@ export class SessionArchiver {
       session_key: sessionKey,
       request,
       sealed_file: sealedFile,
+      ...(kind === "delta" && options.trigger ? { trigger: options.trigger } : {}),
       created_at: createdAt.toISOString(),
       attempts: 0,
       next_attempt_at: null,
@@ -539,17 +705,24 @@ export class SessionArchiver {
     for (const path of unstable) cache.forget(path);
     const baselineName = `${sessionKey}-${sequence}.json`;
     await writeChunksAtomic(join(this.dirs.baselines, baselineName), baselineChunks(scan.entries, unstable));
-    // 4: commit.
+    // 4: commit. Until the server has accepted a final archive, the first
+    // one keeps the chain point before it, baseline included.
     const previousBaseline = state.baseline;
+    const rewind = state.rewind ?? (options.trigger === "final" && !this.finalsAccepted
+      ? { next_sequence: state.next_sequence, last_archive_id: state.last_archive_id, last_turn: state.last_turn, baseline: state.baseline }
+      : null);
     await this.saveSession({
       ...state,
       next_sequence: sequence + 1,
       last_archive_id: archiveId,
       last_turn: turn,
       baseline: baselineName,
+      rewind,
+      final_due: options.trigger !== "final",
+      ...(options.ended ? { ended: this.now().toISOString() } : {}),
       updated_at: this.now().toISOString(),
     });
-    if (previousBaseline && previousBaseline !== baselineName) await rm(join(this.dirs.baselines, previousBaseline), { force: true });
+    if (previousBaseline && previousBaseline !== baselineName && previousBaseline !== rewind?.baseline) await rm(join(this.dirs.baselines, previousBaseline), { force: true });
     await this.saveHashCache(rootKey, cache);
     this.log("info", "OmniRush project archive queued", {
       sessionId,
@@ -557,12 +730,25 @@ export class SessionArchiver {
       kind,
       sequence,
       turn,
+      ...(options.trigger === "final" ? { trigger: "final", reason: options.reason } : {}),
       bytes: sealed.size,
       files: files.length,
       ...(deleted ? { deleted: deleted.length } : {}),
       ...(unstable.size > 0 ? { unstable: unstable.size } : {}),
     });
     return { status: "queued", archiveId, kind, sequence, size: sealed.size };
+  }
+
+  /** Nothing changed: after a turn the session's final is due (checked at the next start), a final settles it. */
+  private async noteUnchanged(state: SessionState, options: CaptureOptions): Promise<void> {
+    const final = options.trigger === "final";
+    if (final && !state.final_due && !options.ended) return;
+    await this.saveSession({
+      ...state,
+      final_due: !final,
+      ...(options.ended ? { ended: this.now().toISOString() } : {}),
+      updated_at: this.now().toISOString(),
+    });
   }
 
   // --- drain -----------------------------------------------------------------------------
@@ -642,6 +828,7 @@ export class SessionArchiver {
           await this.deleteJob(record);
           result.uploaded += 1;
           this.log("info", "OmniRush project archive uploaded", { sessionId, archiveId: record.archive_id, kind: record.request.kind, sequence: record.request.sequence, bytes: record.request.size });
+          if (record.trigger === "final") this.finalAccepted(sessionId, record.request.sequence);
           break;
         case "disabled":
           result.dropped += await this.disable(outcome.code);
@@ -652,7 +839,12 @@ export class SessionArchiver {
           this.log("warn", "OmniRush archive upload blocked; the queue is kept", { reason: outcome.reason });
           return false;
         case "stop_session":
-          result.dropped += await this.stopSession(sessionId, outcome.code);
+          if (record.trigger === "final" && outcome.code === "archive_parent_mismatch" && !this.finalsAccepted) {
+            // A server without final archives refuses the repeated turn number: not a broken chain.
+            result.dropped += await this.rewindRefusedFinal(record);
+          } else {
+            result.dropped += await this.stopSession(sessionId, outcome.code);
+          }
           held.add(sessionId);
           break;
         case "rekey":
@@ -749,6 +941,81 @@ export class SessionArchiver {
     if (state && !state.stopped) await this.saveSession({ ...state, stopped: code, updated_at: this.now().toISOString() });
   }
 
+  /**
+   * The server accepted a final archive: it takes them, and the chain up to
+   * `sequence` stands, so the session no longer needs its rewind point.
+   */
+  private finalAccepted(sessionId: string, sequence: number): void {
+    this.finalsAccepted = true;
+    const generation = this.generation;
+    void this.withSession(sessionId, async () => {
+      if (generation !== this.generation) return;
+      const state = await this.loadSession(sessionId);
+      const rewind = state?.rewind;
+      if (!state || !rewind || rewind.next_sequence > sequence) return;
+      if (rewind.baseline && rewind.baseline !== state.baseline) await rm(join(this.dirs.baselines, rewind.baseline), { force: true });
+      // Bookkeeping only: updated_at stays the time of the session's last archive.
+      await this.saveSession({ ...state, rewind: null });
+    }).catch((error) => this.log("warn", "OmniRush archive session update failed", { sessionId, error: errorSummary(error) }));
+  }
+
+  /**
+   * 409 archive_parent_mismatch on a final archive before any was accepted:
+   * a server that does not take final archives (their turn repeats the
+   * parent's). The final is dropped, with the jobs chained on it, and the
+   * chain goes back to where it was before it; a turn delta dropped with it
+   * is captured again on top, so later turns keep uploading. No final
+   * archive is captured again until the app restarts. Returns the jobs
+   * dropped.
+   */
+  private async rewindRefusedFinal(record: QueueRecord): Promise<number> {
+    const sessionId = record.request.session_id;
+    const from = record.request.sequence;
+    if (!this.finalsRefused) {
+      this.finalsRefused = true;
+      this.log("info", "The omnirush.ai server does not accept final project archives; none is captured until the app restarts", { sessionId, archiveId: record.archive_id });
+    }
+    const chained = (job: QueueRecord) => job.request.session_id === sessionId && job.request.sequence >= from;
+    const dropped = (await this.listQueue()).filter(chained);
+    // Held out of the drain until the chain is back where the server has it.
+    this.resettingSessions.add(sessionId);
+    const generation = this.generation;
+    let recaptured = false;
+    void this.withSession(sessionId, async () => {
+      if (generation !== this.generation) return;
+      // Jobs committed since (a capture that held the lock) are chained on it too.
+      const jobs = (await this.listQueue()).filter(chained);
+      const state = await this.loadSession(sessionId);
+      const rewind = state?.rewind;
+      if (!state || state.stopped) {
+        for (const job of jobs) await this.deleteJob(job);
+        return;
+      }
+      if (!rewind || rewind.next_sequence !== from) {
+        // Nothing to go back to: the chain ends as for any conflict.
+        this.stoppedSessions.set(sessionId, "archive_parent_mismatch");
+        await this.markStopped(sessionId, "archive_parent_mismatch");
+        return;
+      }
+      // The state first: a crash before the jobs go leaves them past next_sequence, which start() removes.
+      const restored: SessionState = { ...state, ...rewind, rewind: null, final_due: true, updated_at: this.now().toISOString() };
+      await this.saveSession(restored);
+      if (state.baseline && state.baseline !== rewind.baseline) await rm(join(this.dirs.baselines, state.baseline), { force: true });
+      for (const job of jobs) await this.deleteJob(job);
+      const turn = Math.max(-1, ...jobs.filter((job) => job.trigger !== "final").map((job) => job.request.turn));
+      if (turn > (restored.last_turn ?? -1) && this.key) {
+        const again = await this.captureArchive(restored, "delta", turn, this.key, generation, { trigger: "turn" });
+        recaptured = again.status === "queued";
+      }
+    })
+      .catch((error) => this.log("warn", "OmniRush archive session rewind failed", { sessionId, error: errorSummary(error) }))
+      .finally(() => {
+        this.resettingSessions.delete(sessionId);
+        if (recaptured && generation === this.generation) void this.drain();
+      });
+    return dropped.length;
+  }
+
   /** A base sealed to an unknown kid: forget it so the next capture seals a new base with the current key. */
   private async resetToNoBase(sessionId: string): Promise<number> {
     const dropped = (await this.listQueue()).filter((record) => record.request.session_id === sessionId);
@@ -765,7 +1032,8 @@ export class SessionArchiver {
       const state = await this.loadSession(sessionId);
       if (!state || state.stopped) return;
       if (state.baseline) await rm(join(this.dirs.baselines, state.baseline), { force: true });
-      await this.saveSession({ ...state, next_sequence: 0, last_archive_id: null, last_turn: null, baseline: null, updated_at: this.now().toISOString() });
+      if (state.rewind?.baseline) await rm(join(this.dirs.baselines, state.rewind.baseline), { force: true });
+      await this.saveSession({ ...state, next_sequence: 0, last_archive_id: null, last_turn: null, baseline: null, rewind: null, updated_at: this.now().toISOString() });
     })
       .catch((error) => this.log("warn", "OmniRush archive session reset failed", { sessionId, error: errorSummary(error) }))
       .finally(() => this.resettingSessions.delete(sessionId));
@@ -890,7 +1158,7 @@ export class SessionArchiver {
     }
     for (const name of pendingFiles) if (!kept.has(name)) await rm(join(this.dirs.pending, name), { force: true });
 
-    const namedBaselines = new Set([...sessions.values()].map((session) => session.baseline).filter((name) => name !== null));
+    const namedBaselines = new Set([...sessions.values()].flatMap((session) => [session.baseline, session.rewind?.baseline ?? null]).filter((name) => name !== null));
     for (const name of await readdir(this.dirs.baselines)) {
       if (!namedBaselines.has(name)) await rm(join(this.dirs.baselines, name), { force: true });
     }

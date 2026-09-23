@@ -5,7 +5,12 @@ session started in contains `.git`, the whole folder is uploaded:
 
 - at session start: a **base** archive, including `.git/` and gitignored content;
 - after every completed turn that changed anything: a **delta** archive with the
-  added and modified entries plus the deleted paths.
+  added and modified entries plus the deleted paths;
+- once more after the last completed turn, when the folder changed since the
+  last archive: a **final** archive, an ordinary delta that repeats the last
+  turn's number (when the session goes quiet, a turn ends without completing,
+  the session is deleted, the app quits, and at the next app start). See
+  "Final archives" below.
 
 Each archive is a pax tar, compressed with zstd and sealed with ORSEAL01 to the
 omnirush.ai archive key. It is queued durably under the collector state dir and
@@ -32,7 +37,7 @@ The user-facing description is `docs/project-archive.md`.
 | `upload.ts` | Multipart upload client over an injectable `fetch` (sections 7 and 13.5) |
 | `files.ts` | Atomic state-file writes and the GC hint |
 | `index.ts` | `SessionArchiver`: durable queue, crash recovery, drain |
-| `lifecycle.ts` | `ProjectArchiveLifecycle`: when the server calls the archiver (session start, turn end, session end, sign-out, shutdown), the engine-derived turn count, the child-session check, the consent-off window and the bounded background queue; `projectArchiveEnabled` (`OMNIRUSH_ARCHIVE_ENABLED`) |
+| `lifecycle.ts` | `ProjectArchiveLifecycle`: when the server calls the archiver (session start, turn end, a turn that ends without completing, session end, sign-out, shutdown, app start), the engine-derived turn count, the child-session check, the consent-off window, the quiet window before a final archive and the bounded background queue; `projectArchiveEnabled` (`OMNIRUSH_ARCHIVE_ENABLED`) |
 | `fake-archive-server.ts`, `test-helpers.ts` | Test support only |
 
 ## API
@@ -53,9 +58,11 @@ const archiver = new SessionArchiver({
 await archiver.start();                                   // crash recovery; idempotent
 await archiver.captureBase(sessionId, root, turn?);       // -> CaptureResult
 await archiver.captureDelta(sessionId, root, turn);       // -> CaptureResult
+await archiver.captureFinal(sessionId, reason, {signal}); // -> CaptureResult (a final archive)
+await archiver.startFinalCandidates();                    // -> session ids to check at app start
 await archiver.drain();                                   // -> DrainResult
 await archiver.signOut();                                 // drop everything
-await archiver.stop();                                    // shutdown
+await archiver.stop({finals?, budgetMs?});                // shutdown, final archives first
 archiver.setAccessToken(token);                           // token rotation (gatewayUrl mode only)
 await archiver.pendingStatus();                           // { jobs, bytes, disabled }
 ```
@@ -66,11 +73,13 @@ and reported in the result.
 `CaptureResult` is `{status: "queued", archiveId, kind, sequence, size}` or
 `{status: "skipped", reason}`. The reasons of section 13.2 are
 `not_archivable`, `disabled`, `exists`, `no_base`, `unchanged` and `stopped`.
-This implementation adds three more:
+This implementation adds five more:
 
 - `unavailable`: the key could not be fetched (offline, 5xx, 401/403). The session is remembered as base-pending, and the next `captureDelta` captures the base instead.
-- `stale_turn`: `turn` is not greater than the last archived turn. The server would reject it (`archive_parent_mismatch`). Nothing is consumed, and the changes go into the next delta.
+- `stale_turn`: `turn` is not greater than the last archived turn. A turn delta must move the turn on (the server answers `archive_parent_mismatch` to a lower one). Nothing is consumed; the lifecycle then takes a final archive, so the changes are not held back until the next turn.
 - `failed`: an invalid session id or turn, or an I/O failure during capture. A failed base is remembered as base-pending too.
+- `cancelled` (final archives): the `signal` aborted before the commit (a new prompt, or the end of the shutdown budget). Nothing is consumed.
+- `unsupported` (final archives): the server refused one in this app run (see "Final archives"). None is captured until the app restarts.
 
 `DrainResult` is `{uploaded, pending, dropped, blocked, disabled}`.
 `blocked` is the reason the drain stopped with the queue kept (401 after a
@@ -105,12 +114,13 @@ in `captureServicesByServer` and calls:
 
 | Server hook | Lifecycle call |
 | --- | --- |
-| `startServer` (`startCaptureService`) | `start()`: a drain when enabled; otherwise `signOut()` clears what a previous run left (a no-op, touching nothing, when there is no `omnirush-archive/`) |
+| `startServer` (`startCaptureService`) | `start()`: a drain and the app-start final archives when enabled; otherwise `signOut()` clears what a previous run left (a no-op, touching nothing, when there is no `omnirush-archive/`) |
 | A prompt dispatch on a local workspace (v1 `prompt_async`/`prompt`/`command`, v2 `prompt`/`prompt_async`/`command`/`generate`), after the collector's `startSession` | `sessionStarted({sessionId, root: workspace.path, engine})`, the engine reads built on the worker from the request's engine target |
 | The collector observer's `turn_completed` (on the worker), with the engine messages it just read (null when it could not read them) | `turnCompleted(sessionId, messages)` |
-| `collector.finishSession` (session deleted) | `sessionEnded(sessionId)`: forgets the session, kicks a drain |
+| The collector observer stops following a turn without seeing it settle: `session.observer_timeout` (after an hour) or `session.observer_failed` (for example the engine went away) | `turnIncomplete(sessionId)` |
+| `collector.finishSession` (session deleted) | `sessionEnded(sessionId)`: a final archive (`session_deleted`), then the session is forgotten; kicks a drain |
 | The broker's `invalidate` hook (revoked or expired account), before `clearSpool()` | `signOut()` |
-| Server shutdown and a failed start | `stop()`, started first: the main thread aborts the part uploads it is making for the worker at once, before the task-recovery checkpoint (up to 10 s), then the worker stops the archiver and the collector; the worker is terminated after 20 s at the latest. A user sign-out reaches the server this way too: the desktop clears the account, then restarts the server |
+| Server shutdown and a failed start | `stop({finals})`, started first: the main thread aborts the part uploads it is making for the worker at once, before the task-recovery checkpoint (up to 10 s), then the worker packs the final archives (at most `QUIT_FINAL_BUDGET_MS`, 5 s) and stops the archiver and the collector; the worker is terminated after 20 s at the latest. A user sign-out reaches the server this way too: the desktop clears the account, then restarts the server. So `server.ts` asks the account store (`omnirushGatewayCredentials.latest()`, at most 1 s) whether the account is still there, and without it no final archive is packed |
 
 What the lifecycle adds on top of the calls below:
 
@@ -120,7 +130,33 @@ What the lifecycle adds on top of the calls below:
 - **Turn numbers from the engine.** `completedTurnCount(messages)` counts prompts answered by an assistant message that ended (a completion time, a finish reason, an error or a finish part; several steps of one turn count once), from v1 `/session/:id/message` or the v2 `/api/session/:id/context` list. The v1 list is read a page at a time (`?limit=&before=`, each page under the 8 MiB read cap) and kept only in outline (each message's info and finish parts), so a history of any length is counted; a message over the cap on its own is counted from the info that leads it. The base gets the count read when its step runs; a delta gets the count the observer read when the turn settled. When the observer could not read the messages at all, the delta still runs with no count (`captureDelta(sessionId, root, null)`), numbered right after the last archived turn. The count survives restarts. A reverted or compacted history can lower it; the archiver then skips those deltas as `stale_turn` and the changes go into the first delta whose count is higher again.
 - **Real path.** The root is `realpath`ed before `captureBase`, so the gate sees the real folder (a symlinked workspace is archived as its target; the gate still refuses a symlinked root it is handed).
 - **Consent off.** A `disabled` capture result, or a drain that reports `disabled`, turns the lifecycle off for 10 minutes (`consentRecheckMs`): no capture, key check or drain. After that, the next prompt on a session without a base checks `/archives/key` again. No log line: the archiver logs the one `info`.
-- **Signed out stays out.** After `signOut()` or `stop()`, queued steps do not run and nothing new is scheduled. `SessionArchiver.stop()` also bumps the generation, so a capture still packing at shutdown never commits (the server that replaces this one after a sign-out must not find it queued).
+- **Signed out stays out.** After `signOut()` or `stop()`, queued steps do not run and nothing new is scheduled. `SessionArchiver.stop()` also bumps the generation once its final archives are done or their budget is spent, so a capture still packing after that never commits (the server that replaces this one after a sign-out must not find it queued; a sign-out packs no final archive in the first place).
+- **Final archives.** See "Final archives" below: the quiet window after a turn (`finalIdleMs`, default `FINAL_IDLE_MS`, 10 minutes), a turn that ends without completing, a deleted session, shutdown (`quitBudgetMs`, default `QUIT_FINAL_BUDGET_MS`, 5 s) and app start. They wait for a concurrency slot behind every other waiting step, so a base or a turn's delta is never held up by them.
+
+### Final archives
+
+The base and the turn deltas show the folder as each turn left it. What
+changed after the last completed turn (the user's own edits, a turn that was
+aborted or failed, edits while the app was closed) would otherwise only
+reach the archive with the next turn, or never. A final archive captures it:
+
+- **Wire.** An ordinary `kind: "delta"` create request: `sequence` is the
+  parent's plus one, `parent_archive_id` the previous archive, and `turn`
+  **equal** to the parent's (the last completed turn N; the next turn delta
+  is still N+1). Several final archives for one turn may follow each other.
+  Only the sealed `manifest.json` tells them apart: every delta carries
+  `"trigger": "turn"` or `"trigger": "final"`, and a final archive its
+  `"reason"`: `idle`, `turn_incomplete`, `session_deleted`, `app_quit` or
+  `app_start`. The other manifest fields are unchanged, and a base has
+  neither key. The queue record keeps the trigger too.
+- **When** (`lifecycle.ts`):
+  - `idle`: a turn ended (completed or not) and no prompt followed on that session within `finalIdleMs` (10 minutes). One per quiet window; a new prompt clears the timer and aborts a final archive that is queued or packing (`cancelled`).
+  - `turn_incomplete`: the observer stopped following a turn (`turnIncomplete`). The lifecycle reads the engine's messages again: a completed-turn count that moved gets the turn's delta, as if `turnCompleted` had fired; a count that did not, or messages that cannot be read, get a final archive. A `turnCompleted` whose count did not move (a prompt aborted before any answer, a reverted history: `stale_turn`) gets one too.
+  - `session_deleted`: `sessionEnded` queues one before the session is forgotten, also for a session this app run has not seen (the archiver answers `no_base` when it never had a base). The session's record is marked `ended`.
+  - `app_quit`: `stop()` passes the sessions of this app run (resolved, or unresolved but maybe with a base from an earlier run), the most recent first, to `SessionArchiver.stop({finals, budgetMs})`. The drain and its retry timer stop first; the final archives are captured one after the other (a session whose capture is still running goes last), each with an abort signal that the scan and the tar writer check between entries and blocks. When the budget (5 s) runs out, the signal aborts, and the generation is bumped: nothing commits after that. They are uploaded at the next start.
+  - `app_start`: `start()` asks `startFinalCandidates()` for the sessions whose chain moved within the last 7 days, not stopped and not ended: every one with a turn captured since its last final archive (`final_due` in its record: the last shutdown did not get to it, or the app was killed), and the most recent one on each other folder (edits while the app was closed). At most 10, the most recent first.
+- **Guards.** `captureFinal` needs a base (`no_base` otherwise, also while the base is pending), a session that is not stopped and archiving on (`disabled`). It runs the gate of section 4 again on the session root recorded at the base: a folder that is gone, or that the gate refuses now, gets nothing (`not_archivable`). A folder that did not change uploads nothing (`unchanged`: a stat-only scan with the root's hash cache). Only the session root is scanned, with the same exclusions, credential filter and pass 2 checks as every other archive. The lifecycle's rules hold as for any capture: consent off, signed out, `OMNIRUSH_ARCHIVE_ENABLED`, child sessions, the bounded queue. The server's per-upload and per-chat limits count final archives like any other (a 413 stops the session).
+- **A server without final archives.** A backend from before 1.0.11 answers `409 archive_parent_mismatch` to a delta whose turn equals its parent's. Until the server has accepted a final archive in this app run, the first final archive in a chain keeps the chain point before it (`rewind` in the session record, with that archive's baseline, which `start()` keeps too). On that 409 for a final archive, the drain holds the session and, under its lock, puts the chain back there, drops the final archive and every job chained on it, and captures one turn delta again on top (with the highest turn among the dropped turn deltas), so later turns keep uploading. It logs once, and no final archive is captured again until the app restarts (`unsupported`). Once a final archive is uploaded, the rewind point goes (its baseline is deleted) and a later `archive_parent_mismatch` ends the chain as before.
 
 The contract the lifecycle follows is the original wiring note below.
 
@@ -182,18 +218,17 @@ void sessionArchiver.captureBase(sessionId, root, completedTurns).then(() => ses
 void sessionArchiver.captureDelta(sessionId, root, completedTurns).then(() => sessionArchiver.drain());
 ```
 
-- `completedTurns` must strictly increase per session, across app restarts too. The server requires `turn > parent turn`. Derive it from the engine (the number of completed assistant turns in the session), not from an in-memory counter. A repeated or lower number is skipped as `stale_turn`.
+- `completedTurns` must strictly increase per session, across app restarts too. A turn delta needs `turn > parent turn` (only a final archive repeats the parent's turn). Derive it from the engine (the number of completed assistant turns in the session), not from an in-memory counter. A repeated or lower number is skipped as `stale_turn`.
 - An unchanged folder costs a stat-only scan, with no file content read (about 0.1 s for 20k entries, 1.5 s for 200k) and no upload.
 - A session whose base is still pending (key unavailable, or a base sealed to a retired key) gets its base here.
 
 #### 4. Session end (where `collector.finishSession(sessionId)` is called)
 
-No capture: the last completed turn's delta already covers the folder, and
-changes from an aborted turn go into the next delta if the session resumes.
-Keep the session state for resumption. Only kick the queue:
+The session was deleted: a final archive of what changed since its last
+archive, then kick the queue (as implemented, the lifecycle does both):
 
 ```ts
-void sessionArchiver.drain();
+void sessionArchiver.captureFinal(sessionId, "session_deleted").then(() => sessionArchiver.drain());
 ```
 
 #### 5. Sign-out (the broker's `invalidate` hook, next to `workspaceCollector.clearSpool()`)
@@ -220,10 +255,10 @@ token rotation.
 #### 6. App shutdown (where `workspaceCollector.stop()` is called)
 
 ```ts
-await sessionArchiver.stop();
+await sessionArchiver.stop({ finals: sessionIdsOfThisRun, budgetMs: 5_000 });
 ```
 
-This stops the drain and the retry timer and aborts the part PUT in flight at once (the part is sent again on resume). Queued archives stay on disk for step 1, and the upload is not aborted at the server.
+This stops the drain and the retry timer and aborts the part PUT in flight at once (the part is sent again on resume), then packs a final archive for each session in `finals` within `budgetMs` (none without them). Queued archives stay on disk for step 1, and the upload is not aborted at the server.
 
 #### Authentication
 
@@ -258,7 +293,7 @@ against a loopback sink).
 ## Behaviour notes
 
 - **Consent.** A 428, or a `503 archive_disabled`, from any route turns archiving off without error. Every queued archive is dropped (consent belongs to the user), sessions that lost a queued archive stop, and captures skip as `disabled` until a later `captureBase` finds the key route open again. A server without the routes (404 on `/archives/key`) counts as disabled.
-- **Stopping a session.** A chain-ending 409, a 413 or a 422 drops that session's jobs and stops the session. A 7-day-old job does the same. The next session starts over with a new base.
+- **Stopping a session.** A chain-ending 409, a 413 or a 422 drops that session's jobs and stops the session. A 7-day-old job does the same. The next session starts over with a new base. The exception is `archive_parent_mismatch` on a final archive before the server accepted one (see "Final archives").
 - **`409 archive_kid_unknown`.** Section 7.9 says to refetch the key and seal again. The plaintext is not kept, so:
   - on a **base**, the job is dropped and the session goes back to base-pending: the next `captureDelta` packs a new base with the current key;
   - on a **delta**, the chain cannot be re-sealed, so the session stops.
@@ -296,8 +331,8 @@ cd apps/server && bun --conditions=development test src/session-archive
   - an `unstable.json` member when files change between the passes;
   - a directory swapped for a symlink to an outside folder, before pass 2 and while pass 2 is inside it: zero-filled, nothing from outside in the tar; a file swapped for a FIFO does not block;
   - pax header edge cases;
-  - a multi-MiB `writeSealedArchive` round trip checked with the `zstd` CLI.
-- `manifest.test.ts`: UTF-8 byte order; the credential filter; the exclusions (credential, FIFO, app state, `__omnirush__`, unreadable, non-UTF-8); the hash cache; delta for add, modify (content and mode), delete, rename, file to dir, dir to file and symlink retarget; unstable re-send; `.git` changes; manifest JSON; the git block and its `path`; `git status` never rewriting `.git/index`.
+  - a multi-MiB `writeSealedArchive` round trip checked with the `zstd` CLI, and a stopped writer rejecting.
+- `manifest.test.ts`: UTF-8 byte order; the credential filter; the exclusions (credential, FIFO, app state, `__omnirush__`, unreadable, non-UTF-8); the hash cache; a stopped scan reading nothing; delta for add, modify (content and mode), delete, rename, file to dir, dir to file and symlink retarget; unstable re-send; `.git` changes; manifest JSON, with a delta's `trigger` and a final archive's `reason`; the git block and its `path`; `git status` never rewriting `.git/index`.
 - `detect.test.ts`: a `.git` dir; a gitfile; no `.git`; an invalid gitfile; a `.git` symlink; home, `/` and app dirs refused; `root_not_directory`; detector plug-ins; `git_parent` (nearest parent wins, a `.git` folder without `HEAD` there qualifies nothing, root `.git` preferred, dotfiles home, system dirs, posix and `path.win32` walks including `/Volumes/<disk>` homes and WSL shares).
 - `upload.test.ts` (in-process fake API and S3):
   - the happy path;
@@ -312,10 +347,11 @@ cd apps/server && bun --conditions=development test src/session-archive
   - replay, chain conflicts and an unknown kid;
   - backoff;
   - the broker request hook.
-- `lifecycle.test.ts` (fake archiver and engine, plus one run on the real archiver): the turn count on v1 and v2 message shapes; the feature flag; one base per root session per app run at the real path; child sessions ignored; deltas numbered from the engine and ordered after the base, and after the last archived turn when the messages could not be read; restart resume; a session whose start could not read the engine resolved at its next completed turn (its delta kept, also on the real archiver across an app restart), and a child resolved that way still ignored; signed-out start clearing; sign-out stopping queued steps; 428 off until the recheck; failures contained.
+- `lifecycle.test.ts` (fake archiver and engine, plus runs on the real archiver): the turn count on v1 and v2 message shapes; the feature flag; one base per root session per app run at the real path; child sessions ignored; deltas numbered from the engine and ordered after the base, and after the last archived turn when the messages could not be read; restart resume; a session whose start could not read the engine resolved at its next completed turn (its delta kept, also on the real archiver across an app restart), and a child resolved that way still ignored; signed-out start clearing; sign-out stopping queued steps; 428 off until the recheck; failures contained. Final archives: one idle final per quiet window, a new prompt cancelling a pending or packing one; a turn that ends without completing (delta when the engine's count moved, final otherwise or when the engine cannot be read, and a completed turn whose count did not move); a deleted session (child never); shutdown passing this run's sessions most recent first with the budget, and nothing without a budget, with consent off or with the account gone; app-start finals queued behind other steps; on the real archiver, the idle, quit and app-start finals of one session with the next turn's delta after them.
 - `../project-archive.test.ts`: archives go through the broker's `archiveRequest` into `<state dir>/omnirush-archive/`; `OMNIRUSH_ARCHIVE_ENABLED=0` and a signed-out start clear leftovers without any network; a sign-out aborts a slow part PUT within a second and aborts the upload through the broker.
+- `../capture-client.test.ts`: stopping the capture worker packs a final archive, and none when the account is gone.
 - `../omnirush-gateway-broker.test.ts`: `archiveRequest` URL, bearer, 401 refresh and path allowlist.
-- `../workspace-collector.server.e2e.test.ts` ("project archive wiring"): through the real proxy and observer, one base then a delta numbered 2 after a changed turn; a history past the 8 MiB read cap (one message over it alone) still gets its base, its turns' transcripts and deltas, and a turn whose messages cannot be read still gets its snapshot and delta; 428 checked once with the chat unaffected; the flag off sends nothing.
+- `../workspace-collector.server.e2e.test.ts` ("project archive wiring"): through the real proxy and observer, one base then a delta numbered 2 after a changed turn; a turn whose observer fails still gets its delta, numbered from the engine; a history past the 8 MiB read cap (one message over it alone) still gets its base, its turns' transcripts and deltas, and a turn whose messages cannot be read still gets its snapshot and delta; 428 checked once with the chat unaffected; the flag off sends nothing.
 - `index.test.ts`:
   - the whole folder: `.git/` and gitignored `node_modules/` and `dist/` present, `.env` and `id_rsa` absent unless `archiveIncludeCredentialFiles`; the base then a delta, each decrypted and checked;
   - no delta when nothing changed, `stale_turn` and `exists`;
@@ -325,4 +361,5 @@ cd apps/server && bun --conditions=development test src/session-archive
   - a crashed commit discarded;
   - a chain conflict and an unknown kid;
   - sign-out, and a slow part PUT aborted within a second of `signOut()` (the upload aborted with the credentials still held, nothing completed or sent afterwards) and of `stop()` (the job kept, resumed by the next start);
-  - the app's state dir under the root pruned.
+  - the app's state dir under the root pruned;
+  - final archives: none without a base or when unchanged; the equal-turn wire values (sequence, parent, turn), chained finals, `trigger` and `reason` in the manifest; a server without final archives (`strictTurns`): one refused create, the chain put back, the turn delta queued behind the final captured again, later turns uploaded, one log line; shutdown finals within the budget, a hanging one cut at it and captured at the next start; the app-start candidates (a final due, the most recent session per folder; not deleted or older than 7 days); a deleted session whose folder is gone.

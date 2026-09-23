@@ -139,6 +139,8 @@ export type PackInput = {
   createdAtSeconds: number;
   /** Exactly the manifest's `files`, in the same order. */
   entries: readonly ScannedEntry[];
+  /** Stops the writer between members and output blocks: it then rejects with the signal's reason. */
+  signal?: AbortSignal;
 };
 
 export type PackOutcome = { unstable: string[]; tarBytes: number };
@@ -176,6 +178,7 @@ class TarWriter {
   }
 
   private async rotate(): Promise<void> {
+    this.input.signal?.throwIfAborted();
     this.tarBytes += this.used;
     this.block = await this.emit(this.block);
     this.used = 0;
@@ -306,6 +309,7 @@ class TarWriter {
     await this.smallFile(MANIFEST_MEMBER, input.manifest);
     let members = 0;
     for (const entry of input.entries) {
+      input.signal?.throwIfAborted();
       members += 1;
       if (members % GC_HINT_MEMBERS === 0) hintGarbageCollection();
       if (entry.type === "dir") {

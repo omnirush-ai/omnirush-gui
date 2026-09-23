@@ -316,5 +316,10 @@ describe("pax tar writer", () => {
     }
     // An existing output file is never overwritten.
     await expect(writeSealedArchive({ root, manifest, createdAtSeconds: 0, entries }, { publicKey: testKeys.publicKey }, out)).rejects.toThrow();
+    // A stopped writer (the shutdown budget spent) rejects instead of finishing.
+    const stopped = new AbortController();
+    stopped.abort(new Error("shutdown budget spent"));
+    const cut = join(await tempDir("pack-sealed-cut"), "archive.orseal");
+    await expect(writeSealedArchive({ root, manifest, createdAtSeconds: 0, entries, signal: stopped.signal }, { publicKey: testKeys.publicKey }, cut)).rejects.toThrow("shutdown budget spent");
   });
 });

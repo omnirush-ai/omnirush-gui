@@ -10,6 +10,9 @@
 import type { CaptureHost, EngineTarget, PromptRecord } from "./capture-host.js";
 import type { CollectorWebVisit } from "./workspace-collector.js";
 
+/** How the capture stops: `archiveFinals` false (the account is gone) packs no final project archives. */
+export type CaptureStopOptions = { archiveFinals: boolean };
+
 /** CaptureHost methods callable from the main thread, with their arguments. */
 export type CaptureCalls = {
   startSession: [sessionId: string, workspaceId: string, root: string];
@@ -21,7 +24,7 @@ export type CaptureCalls = {
   observeSession: [sessionId: string, target: EngineTarget];
   sessionDeleted: [sessionId: string];
   signOut: [];
-  stop: [];
+  stop: [options?: CaptureStopOptions];
   idle: [];
   diagnostics: [];
 };
@@ -126,7 +129,7 @@ export function invokeCapture(host: CaptureHost, call: CaptureCall): unknown {
     case "signOut":
       return host.signOut();
     case "stop":
-      return host.stop();
+      return host.stop(...call.args);
     case "idle":
       return host.idle();
     case "diagnostics":

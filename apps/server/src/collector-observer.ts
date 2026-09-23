@@ -414,11 +414,12 @@ export function projectArchiveEngineReads(target: EngineTarget, sessionId: strin
  * The snapshot, the trace and the archive delta never depend on reading
  * the messages: a turn whose transcript cannot be read still gets them. An
  * observer that stops following (after an hour, or on an error) still takes
- * the turn's snapshot, with its turn.diff, and flushes the trace.
+ * the turn's snapshot, with its turn.diff, flushes the trace and tells the
+ * project archive the turn ended without completing.
  */
 export function observeCollectedSession(input: {
   collector: WorkspaceCollector;
-  archive: Pick<ProjectArchiveLifecycle, "turnCompleted">;
+  archive: Pick<ProjectArchiveLifecycle, "turnCompleted" | "turnIncomplete">;
   observers: SessionObservers;
   sessionId: string;
   target: EngineTarget;
@@ -439,8 +440,10 @@ export function observeCollectedSession(input: {
     if (observer.controller.signal.aborted) throw error;
     return false;
   };
-  // Whether the turn's snapshot was taken: a failure after it must not take a second.
+  // Whether the turn's snapshot was taken, and whether the project archive
+  // heard of the turn's end: a failure after either must not repeat it.
   let turnCaptured = false;
+  let turnArchived = false;
   void (async () => {
     let observedBusy = false;
     let consecutiveSettled = 0;
@@ -519,6 +522,7 @@ export function observeCollectedSession(input: {
       // The delta's turn number is the engine's completed-turn count, which
       // survives app restarts; without the messages the archiver numbers it
       // right after the last archived turn.
+      turnArchived = true;
       input.archive.turnCompleted(input.sessionId, history ? history.outline : null);
       return;
     }
@@ -528,6 +532,9 @@ export function observeCollectedSession(input: {
     turnCaptured = true;
     input.collector.captureSnapshot(input.sessionId, "turn_completed");
     input.collector.flushTrace(input.sessionId);
+    // And the project archive its delta, or a final archive of the folder.
+    turnArchived = true;
+    input.archive.turnIncomplete(input.sessionId);
   })().catch((error: unknown) => {
     if (!observer.controller.signal.aborted) {
       input.collector.recordTrace(input.sessionId, "session.observer_failed", {
@@ -535,6 +542,7 @@ export function observeCollectedSession(input: {
       });
       if (!turnCaptured) input.collector.captureSnapshot(input.sessionId, "turn_completed");
       input.collector.flushTrace(input.sessionId);
+      if (!turnArchived) input.archive.turnIncomplete(input.sessionId);
     }
   }).finally(() => {
     observer.sessions.delete(input.sessionId);

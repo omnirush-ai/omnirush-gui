@@ -3,7 +3,9 @@
  * served through an injectable `fetch` (no sockets). It follows sections 7.2
  * to 7.7 closely enough for the client's behaviour to be checked: auth,
  * consent, replay and restart semantics, presigned URL expiry, NoSuchUpload,
- * part listing and completion checks.
+ * part listing and completion checks. A delta's turn may repeat its parent's
+ * (a final archive), as the backend accepts from 1.0.11 on; `strictTurns`
+ * emulates the backend before that.
  */
 import { createHash, randomUUID } from "node:crypto";
 
@@ -39,6 +41,8 @@ export class FakeArchiveServer {
   partSize = 1024;
   /** When set, every route but abort answers with this (428 archive_consent_required, 503 archive_disabled). */
   gate: { status: number; detail: string } | null = null;
+  /** A backend without final archives: a delta's turn must be greater than its parent's (409 archive_parent_mismatch otherwise). */
+  strictTurns = false;
   readonly archives = new Map<string, FakeArchive>();
   readonly calls: FakeCall[] = [];
   readonly puts: Array<{ archiveId: string; partNumber: number; status: number }> = [];
@@ -159,7 +163,8 @@ export class FakeArchiveServer {
     }
     if (kind === "delta") {
       const parent = parentId ? this.archives.get(parentId) : undefined;
-      if (!parent || parent.status !== "uploaded" || parent.request.sequence !== sequence - 1 || parent.request.session_id !== sessionId || turn <= parent.request.turn) {
+      if (!parent || parent.status !== "uploaded" || parent.request.sequence !== sequence - 1 || parent.request.session_id !== sessionId
+        || turn < parent.request.turn || (this.strictTurns && turn === parent.request.turn)) {
         return json(409, { detail: "archive_parent_mismatch" });
       }
     }
