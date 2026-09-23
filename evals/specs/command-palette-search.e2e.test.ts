@@ -86,7 +86,7 @@ test("command palette searches settings by alias, navigates, records recents, an
   });
 
   await step("> restricts the palette to actions", async () => {
-    await user.see({ text: /Adjust how OmniRush.ai looks/ });
+    await user.see({ text: /Adjust how omnirush\.ai looks/ });
     // Settings closes route-owned overlays just after navigation; let that
     // transition settle before reopening the palette.
     await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -121,9 +121,9 @@ test("command palette searches settings by alias, navigates, records recents, an
     await user.see({ role: "option", label: /^Organization server/ });
     await user.see({ role: "option", label: /^Runtime/ });
     await user.see({ role: "option", label: /^Agent access diagnostics/ });
-    await user.see({ role: "option", label: /^OpenCode config sources/ });
+    await user.see({ role: "option", label: /^omnirush\.ai config sources/ });
     await user.see({ role: "option", label: /^Experimental engine/ });
-    await user.see({ role: "option", label: /^Developer/ });
+    await user.see({ role: "option", label: /^Workspace run mode/ });
     await user.screenshot();
     await user.type(paletteInput, "Disable Developer Mode", { replace: true });
     await user.click({ role: "option", label: /^Disable Developer Mode/ });
@@ -135,7 +135,7 @@ test("command palette searches settings by alias, navigates, records recents, an
     { query: "server url", title: "Organization server", id: "organization-server" },
     { query: "connection status", title: "Runtime", id: "runtime" },
     { query: "cloud mcp", title: "Agent access diagnostics", id: "agent-access" },
-    { query: "config sources", title: "OpenCode config sources", id: "config-sources" },
+    { query: "config sources", title: "omnirush.ai config sources", id: "config-sources" },
     { query: "chat engine", title: "Experimental engine", id: "experimental-engine" },
     { query: "deep link", title: "Developer", id: "developer" },
   ]) {
