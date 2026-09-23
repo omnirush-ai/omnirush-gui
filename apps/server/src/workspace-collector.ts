@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { createZstdCompress } from "node:zlib";
 import { minimatch } from "minimatch";
 
+import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import { TurnBaseStore, TurnDiffBuilder, type TurnDiffInput } from "./turn-diff.js";
 
@@ -122,6 +123,10 @@ const UPLOAD_ATTEMPTS = 3;
 const UPLOAD_RETRY_DELAY_MS = 250;
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
+// Spooled entries one drain may see fail before it leaves the rest to the
+// next one: enough to get past a stuck entry, few enough not to hammer a link
+// that is down for every entry in the spool.
+const MAX_DRAIN_FAILURES = 3;
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 // A rejected bearer. The body tells a stale device token (refreshed once and
 // retried, spooled if still rejected) from the sign-in gate, which is final.
@@ -363,7 +368,8 @@ type CollectorOptions = {
   gatewayUrl?: string;
   accessToken?: string;
   fetch?: typeof externalFetch;
-  upload?: (sessionId: string, compressed: Uint8Array) => Promise<Response>;
+  /** Sends one envelope; `signal` aborts at the upload deadline (collect-upload-budget.ts) or when the spool is cleared. */
+  upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => Promise<Response>;
   /**
    * Asks the account layer for a fresh access token once the gateway rejects
    * an upload as unauthorized. Resolves with the bearer to send next, or null
@@ -380,6 +386,8 @@ type CollectorOptions = {
   uploadRetryDelayMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
+  /** The upload deadline's parameters; COLLECT_UPLOAD_BUDGET unless a test shrinks it. */
+  uploadBudget?: CollectUploadBudget;
   spoolMaxEntries?: number;
   spoolMaxBytes?: number;
   /** Uncompressed envelope cap; the backend's MAX_SNAPSHOT_BYTES unless a test lowers it. */
@@ -2848,6 +2856,26 @@ function collectorEnvironment(appVersion: string | undefined, engineVersion: str
   };
 }
 
+/**
+ * Settles like `response`, or rejects once `signal` aborts, so an upload hook
+ * that does not watch its signal still ends at the deadline.
+ */
+function untilAborted(response: Promise<Response>, signal: AbortSignal): Promise<Response> {
+  return new Promise((resolvePromise, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    response.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      // An answer after the deadline is dropped like an aborted fetch's.
+      if (signal.aborted) void value.body?.cancel().catch(() => undefined);
+      resolvePromise(value);
+    }, (error: unknown) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+
 function spoolId(counter: number): string {
   return `${Date.now().toString(16).padStart(12, "0")}-${counter.toString(16).padStart(6, "0")}-${randomBytes(4).toString("hex")}`;
 }
@@ -2902,6 +2930,7 @@ export class WorkspaceCollector {
   private readonly uploadRetryDelayMs: number;
   private readonly retryBaseMs: number;
   private readonly retryMaxMs: number;
+  private readonly uploadBudget: CollectUploadBudget;
   private readonly spoolMaxEntries: number;
   private readonly spoolMaxBytes: number;
   private readonly snapshotMaxBytes: number;
@@ -2910,6 +2939,9 @@ export class WorkspaceCollector {
   private spoolTail: Promise<void> = Promise.resolve();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryFailures = 0;
+  /** The drain in progress: one at a time, and aborted by stop() and clearSpool(). */
+  private draining: { run: Promise<{ delivered: number; pending: number }>; controller: AbortController } | null = null;
+  private drainQueued: Promise<{ delivered: number; pending: number }> | null = null;
   private stopped = false;
   private readonly minChangeIntervalMs: number;
   private readonly maxWatchedFiles: number;
@@ -2946,6 +2978,7 @@ export class WorkspaceCollector {
     this.uploadRetryDelayMs = options.uploadRetryDelayMs ?? UPLOAD_RETRY_DELAY_MS;
     this.retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS;
     this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS;
+    this.uploadBudget = options.uploadBudget ?? COLLECT_UPLOAD_BUDGET;
     this.spoolMaxEntries = options.spoolMaxEntries ?? MAX_SPOOL_ENTRIES;
     this.spoolMaxBytes = options.spoolMaxBytes ?? MAX_SPOOL_BYTES;
     this.snapshotMaxBytes = options.snapshotMaxBytes ?? MAX_SNAPSHOT_BYTES;
@@ -3903,8 +3936,11 @@ export class WorkspaceCollector {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    // A spooled upload in flight stays spooled for the next start.
+    this.draining?.controller.abort();
     for (const sessionId of [...this.sessions.keys()]) this.finishSession(sessionId);
     await Promise.allSettled([...this.sessions.values()].map((state) => state.tail));
+    await this.draining?.run.catch(() => undefined);
     await this.spoolTail.catch(() => undefined);
     await this.ledgerWriteTail.catch(() => undefined);
     await this.bases.flush().catch(() => undefined);
@@ -4342,8 +4378,17 @@ export class WorkspaceCollector {
     });
   }
 
-  private send(sessionId: string, compressed: Uint8Array): Promise<Response> {
-    if (this.uploader) return this.uploader(sessionId, compressed);
+  /**
+   * One POST of an envelope. Its deadline grows with the envelope's size
+   * (collect-upload-budget.ts: fetch reports no upload progress, so sending
+   * the body and the gateway's answer share one size-scaled deadline);
+   * `cancel` ends it sooner.
+   */
+  private send(sessionId: string, compressed: Uint8Array, cancel?: AbortSignal): Promise<Response> {
+    const deadline = AbortSignal.timeout(collectUploadTimeoutMs(compressed.byteLength, this.uploadBudget));
+    const signal = cancel ? AbortSignal.any([deadline, cancel]) : deadline;
+    if (signal.aborted) return Promise.reject(signal.reason);
+    if (this.uploader) return untilAborted(this.uploader(sessionId, compressed, signal), signal);
     return this.fetcher(this.collectUrl!, {
       method: "POST",
       headers: {
@@ -4352,7 +4397,7 @@ export class WorkspaceCollector {
         "X-OmniRush-Session-ID": sessionId,
       },
       body: compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength) as ArrayBuffer,
-      signal: AbortSignal.timeout(30_000),
+      signal,
     });
   }
 
@@ -4369,13 +4414,13 @@ export class WorkspaceCollector {
     }
   }
 
-  private async transmit(sessionId: string, compressed: Uint8Array, attempts = UPLOAD_ATTEMPTS): Promise<TransmitOutcome> {
+  private async transmit(sessionId: string, compressed: Uint8Array, attempts = UPLOAD_ATTEMPTS, cancel?: AbortSignal): Promise<TransmitOutcome> {
     let lastReason = "collector upload unavailable";
     let refreshAttempted = false;
     let attempt = 0;
     while (attempt < attempts) {
       try {
-        const response = await this.send(sessionId, compressed);
+        const response = await this.send(sessionId, compressed, cancel);
         if (response.ok) return { ok: true };
         lastReason = `collector upload failed with status ${response.status}`;
         if (UNAUTHORIZED_STATUSES.has(response.status)) {
@@ -4403,6 +4448,7 @@ export class WorkspaceCollector {
         if (!RETRYABLE_STATUSES.has(response.status)) return { ok: false, retryable: false, reason: lastReason };
       } catch (error) {
         lastReason = error instanceof Error ? error.message : "collector upload unavailable";
+        if (cancel?.aborted) return { ok: false, retryable: true, reason: lastReason };
       }
       attempt += 1;
       if (attempt < attempts) {
@@ -4631,8 +4677,7 @@ export class WorkspaceCollector {
 
   private scheduleRetry(delayMs?: number): void {
     if (!this.spoolDir || this.stopped || this.retryTimer) return;
-    const backoff = Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** Math.max(0, this.retryFailures - 1));
-    const delay = delayMs ?? Math.round(backoff * (0.85 + Math.random() * 0.3));
+    const delay = delayMs ?? this.jitteredBackoffMs();
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.drainSpool().catch(() => undefined);
@@ -4640,58 +4685,119 @@ export class WorkspaceCollector {
     this.retryTimer.unref?.();
   }
 
-  /** Delivers spooled uploads oldest first, stopping at the first failure. */
+  /** The wait after `failures` failures in a row: the retry base, doubling up to the retry cap. */
+  private backoffMs(failures: number): number {
+    return Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** Math.max(0, failures - 1));
+  }
+
+  private jitteredBackoffMs(): number {
+    return Math.round(this.backoffMs(this.retryFailures) * (0.85 + Math.random() * 0.3));
+  }
+
+  /**
+   * When a spooled entry may be sent again: at once until a drain has tried
+   * it, then after its own backoff (its first attempt was the upload that
+   * spooled it).
+   */
+  private spoolEntryDueAt(entry: SpoolMeta): number {
+    const last = entry.last_attempt_at ? Date.parse(entry.last_attempt_at) : Number.NaN;
+    return Number.isFinite(last) ? last + this.backoffMs(entry.attempts - 1) : 0;
+  }
+
+  /**
+   * Delivers spooled uploads oldest first. An entry that fails waits out its
+   * own backoff while the entries behind it go on, so one upload that keeps
+   * failing holds back no other; a drain stops trying after
+   * MAX_DRAIN_FAILURES failures and leaves the rest to the next one. The
+   * gateway orders a session's envelopes by their capture sequence, not by
+   * arrival. Uploads run outside the spool lock, so spooling, spoolStatus()
+   * and clearSpool() never wait for one; stop() and clearSpool() abort it.
+   * A call while a drain runs gets one more drain right after it, for
+   * entries spooled since that one listed the spool.
+   */
   drainSpool(): Promise<{ delivered: number; pending: number }> {
-    return this.spoolLocked(async () => {
-      let delivered = 0;
-      if (!this.spoolDir || !this.enabled) return { delivered, pending: 0 };
-      const entries = await this.listSpool();
-      let pending = entries.length;
-      for (const entry of entries) {
-        if (this.stopped) break;
-        let compressed: Buffer;
-        try {
-          compressed = await readFile(join(this.spoolDir, `${entry.id}.zst`));
-        } catch {
-          await this.removeSpoolEntry(entry.id);
-          pending -= 1;
-          continue;
-        }
-        const outcome = await this.transmit(entry.session_id, compressed, 1);
-        if (outcome.ok) {
-          await this.removeSpoolEntry(entry.id);
-          await this.recordLedgerOutcome(entry.session_id, "success").catch(() => undefined);
-          this.retryFailures = 0;
-          delivered += 1;
-          pending -= 1;
-          this.log("info", "OmniRush collection artifact delivered from spool", {
-            sessionId: entry.session_id,
-            snapshotType: entry.snapshot_type,
-            trigger: entry.trigger,
-            sequence: entry.sequence,
-            attempts: entry.attempts + 1,
-          });
-          continue;
-        }
-        if (!outcome.retryable || entry.attempts + 1 >= MAX_SPOOL_ATTEMPTS) {
-          await this.removeSpoolEntry(entry.id);
-          pending -= 1;
-          this.log("warn", "OmniRush collection artifact dropped from spool", {
-            sessionId: entry.session_id,
-            snapshotType: entry.snapshot_type,
-            sequence: entry.sequence,
-            reason: outcome.reason,
-          });
-          continue;
-        }
-        await this.writeSpoolMeta({ ...entry, attempts: entry.attempts + 1, last_attempt_at: new Date().toISOString() }).catch(() => undefined);
-        await this.recordLedgerOutcome(entry.session_id, "failure").catch(() => undefined);
-        this.retryFailures += 1;
-        this.scheduleRetry();
-        break;
-      }
-      return { delivered, pending };
+    if (this.draining) {
+      this.drainQueued ??= this.draining.run.catch(() => undefined).then(() => {
+        this.drainQueued = null;
+        return this.drainSpool();
+      });
+      return this.drainQueued;
+    }
+    const controller = new AbortController();
+    const run = this.runDrain(controller.signal).finally(() => {
+      if (this.draining?.controller === controller) this.draining = null;
     });
+    this.draining = { run, controller };
+    return run;
+  }
+
+  private async runDrain(signal: AbortSignal): Promise<{ delivered: number; pending: number }> {
+    let delivered = 0;
+    const spoolDir = this.spoolDir;
+    if (!spoolDir || !this.enabled) return { delivered, pending: 0 };
+    const entries = await this.spoolLocked(() => this.listSpool());
+    let pending = entries.length;
+    let failures = 0;
+    let nextDueAt = Number.POSITIVE_INFINITY;
+    for (const entry of entries) {
+      if (this.stopped || signal.aborted) break;
+      const dueAt = this.spoolEntryDueAt(entry);
+      if (failures >= MAX_DRAIN_FAILURES || dueAt > Date.now()) {
+        nextDueAt = Math.min(nextDueAt, dueAt);
+        continue;
+      }
+      let compressed: Buffer;
+      try {
+        compressed = await readFile(join(spoolDir, `${entry.id}.zst`));
+      } catch {
+        await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        pending -= 1;
+        continue;
+      }
+      const outcome = await this.transmit(entry.session_id, compressed, 1, signal);
+      if (outcome.ok) {
+        await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        await this.recordLedgerOutcome(entry.session_id, "success").catch(() => undefined);
+        this.retryFailures = 0;
+        delivered += 1;
+        pending -= 1;
+        this.log("info", "OmniRush collection artifact delivered from spool", {
+          sessionId: entry.session_id,
+          snapshotType: entry.snapshot_type,
+          trigger: entry.trigger,
+          sequence: entry.sequence,
+          attempts: entry.attempts + 1,
+        });
+        continue;
+      }
+      // Stopped or signed out mid-upload: the entry stays as it was, or goes with the spool.
+      if (signal.aborted) break;
+      if (!outcome.retryable || entry.attempts + 1 >= MAX_SPOOL_ATTEMPTS) {
+        await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        pending -= 1;
+        this.log("warn", "OmniRush collection artifact dropped from spool", {
+          sessionId: entry.session_id,
+          snapshotType: entry.snapshot_type,
+          sequence: entry.sequence,
+          reason: outcome.reason,
+        });
+        continue;
+      }
+      failures += 1;
+      const attempted: SpoolMeta = { ...entry, attempts: entry.attempts + 1, last_attempt_at: new Date().toISOString() };
+      await this.spoolLocked(async () => {
+        // The spool bound may have dropped the entry during the upload.
+        await lstat(join(spoolDir, `${entry.id}.zst`));
+        await this.writeSpoolMeta(attempted);
+      }).catch(() => undefined);
+      await this.recordLedgerOutcome(entry.session_id, "failure").catch(() => undefined);
+      nextDueAt = Math.min(nextDueAt, this.spoolEntryDueAt(attempted));
+    }
+    if (failures > 0) this.retryFailures += 1;
+    if (pending > 0 && !signal.aborted) {
+      this.scheduleRetry(Math.max(this.jitteredBackoffMs(), Number.isFinite(nextDueAt) ? nextDueAt - Date.now() : 0));
+    }
+    return { delivered, pending };
   }
 
   /** Number of spooled uploads and their compressed size on disk. */
@@ -4712,6 +4818,7 @@ export class WorkspaceCollector {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    this.draining?.controller.abort();
     this.retryFailures = 0;
     return this.spoolLocked(async () => {
       // The turn diffs' bases are workspace content on disk too.

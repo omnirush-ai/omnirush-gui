@@ -866,7 +866,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     log: (level, message, attributes) => logger.log(level, message, attributes),
     collector: gatewayBroker.enabled
       ? {
-          upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed),
+          upload: (sessionId, compressed, signal) => gatewayBroker.collect(sessionId, compressed, signal),
           refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
         }
       : {},
