@@ -488,3 +488,66 @@ describe("ProjectArchiveLifecycle", () => {
     expect(manifestOf(latest)).toMatchObject({ kind: "delta", turn: 2 });
   });
 });
+
+describe("ProjectArchiveLifecycle base quiet period", () => {
+  const sleep = (ms: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+
+  function deferring(archiver: ProjectArchiver, baseIdleMs: number, baseMaxDeferMs: number) {
+    return new ProjectArchiveLifecycle({ archiver, enabled: true, log: () => undefined, consentRecheckMs: 60_000, baseIdleMs, baseMaxDeferMs });
+  }
+
+  test("bases wait until no prompt has been dispatched for baseIdleMs", async () => {
+    const archiver = new FakeArchiver();
+    const packedAt = new Map<string, number>();
+    archiver.base = async (sessionId) => {
+      packedAt.set(sessionId, Date.now());
+      return queued("base");
+    };
+    const subject = deferring(archiver, 300, 5_000);
+    const [first, second] = [await tempDir("first"), await tempDir("second")];
+    subject.sessionStarted({ sessionId: "ses_first_00001", root: first, engine: engine().reader });
+    await sleep(200);
+    const lastPromptAt = Date.now();
+    subject.sessionStarted({ sessionId: "ses_second_0001", root: second, engine: engine().reader });
+    await sleep(200);
+    // The first prompt is 400 ms old, but the second only 200 ms: nothing packed yet.
+    expect(archiver.captures()).toEqual([]);
+    await subject.settled();
+    expect(archiver.captures().map((call) => call.split(" ")[1]).sort()).toEqual(["ses_first_00001", "ses_second_0001"]);
+    for (const at of packedAt.values()) expect(at - lastPromptAt).toBeGreaterThanOrEqual(290);
+  });
+
+  test("a steady stream of prompts delays a base by at most baseMaxDeferMs", async () => {
+    const archiver = new FakeArchiver();
+    let packedAt = 0;
+    archiver.base = async () => {
+      packedAt = Date.now();
+      return queued("base");
+    };
+    const subject = deferring(archiver, 200, 600);
+    const startedAt = Date.now();
+    subject.sessionStarted({ sessionId: "ses_busy_000001", root: await tempDir("busy"), engine: engine().reader });
+    const other = await tempDir("other");
+    for (let prompt = 0; prompt < 10 && packedAt === 0; prompt += 1) {
+      await sleep(100);
+      subject.sessionStarted({ sessionId: "ses_other_00001", root: other, engine: engine().reader });
+    }
+    await subject.settled();
+    expect(packedAt - startedAt).toBeGreaterThanOrEqual(590);
+    expect(packedAt - startedAt).toBeLessThan(1_000);
+  });
+
+  test("stop and sign-out end the wait without packing", async () => {
+    for (const end of ["stop", "signOut"] as const) {
+      const archiver = new FakeArchiver();
+      const subject = deferring(archiver, 60_000, 120_000);
+      subject.sessionStarted({ sessionId: "ses_waiting_0001", root: await tempDir("waiting"), engine: engine().reader });
+      await sleep(50);
+      const endedAt = Date.now();
+      await subject[end]();
+      await subject.settled();
+      expect(Date.now() - endedAt).toBeLessThan(1_000);
+      expect(archiver.captures()).toEqual([]);
+    }
+  });
+});

@@ -244,3 +244,22 @@ export function promptBodyForTrace(payload: unknown): unknown {
   }
   return payload;
 }
+
+/**
+ * A v2 prompt body as recorded in the "engine.request" trace event. Inline
+ * file attachments (`files[].uri` data URLs, at the top level or under
+ * `prompt`) are replaced by a marker, as promptBodyForTrace does for v1 parts.
+ */
+export function v2PromptBodyForTrace(payload: unknown): unknown {
+  const stripFiles = (value: unknown): unknown => {
+    if (!isRecord(value) || !Array.isArray(value.files)) return value;
+    const files = value.files.map((file) => {
+      if (!isRecord(file) || typeof file.uri !== "string" || !file.uri.startsWith("data:")) return file;
+      const mime = (file.uri.slice(5).split(",")[0] ?? "").split(";")[0] || "application/octet-stream";
+      return { ...file, uri: `data:${mime};omitted`, omitted_uri_chars: file.uri.length };
+    });
+    return { ...value, files };
+  };
+  const stripped = stripFiles(promptBodyForTrace(payload));
+  return isRecord(stripped) && isRecord(stripped.prompt) ? { ...stripped, prompt: stripFiles(stripped.prompt) } : stripped;
+}

@@ -2630,6 +2630,77 @@ describe("workspace collector incremental snapshots", () => {
     }
   });
 
+  test("a resumed session's start snapshot carries every file again, even when its earlier start never reached the backend", async () => {
+    const root = await workspace("resume-full", 4);
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-collector-resume-full-state-"));
+    roots.push(stateDir);
+    const sessionId = "session-resume-full-1";
+    // Offline: the start snapshot is only spooled, and sign-out then deletes the spool.
+    const offline = new WorkspaceCollector({
+      stateDir,
+      upload: async () => new Response("unavailable", { status: 503 }),
+      uploadRetryDelayMs: 1,
+      retryBaseMs: 60_000,
+      retryMaxMs: 60_000,
+      changeDebounceMs: 60_000,
+      fallbackScanMs: 60_000,
+    });
+    offline.startSession(sessionId, "workspace-resume-full", root);
+    await offline.idle(sessionId);
+    await offline.stop();
+    await offline.clearSpool();
+
+    await writeFile(join(root, "src", "f00.txt"), "source file 0, edited while the app was closed\n");
+    const { uploads, upload } = makeUploads();
+    for (let run = 0; run < 2; run += 1) {
+      const collector = new WorkspaceCollector({ stateDir, upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+      collector.startSession(sessionId, "workspace-resume-full", root);
+      await collector.idle(sessionId);
+      await collector.stop();
+    }
+    const starts = uploads.filter((item) => item.snapshot_type === "start");
+    expect(starts.map((item) => [item.trigger, item.session_segment, item.files_scope, contentPaths(item).length])).toEqual([
+      ["resume", 2, "full", 6],
+      ["resume", 3, "full", 6],
+    ]);
+    expect(starts.every((item) => item.changed_paths === undefined)).toBe(true);
+  });
+
+  test("a new chat on a captured workspace sends scrubbed files from the redacted-text cache, not the scrubber", async () => {
+    const root = await workspace("texts", 4);
+    await writeFile(join(root, "src", "contact.txt"), "mail jane@example.com about it\n");
+    await writeFile(join(root, "src", "config.yml"), "password: hunter2hunter2\n");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    const start = (id: string) => uploads.find((item) => item.snapshot_type === "start" && item.session_id === id)!;
+    const content = (envelope: Envelope, path: string) => envelope.files.find((file) => file.path === path)?.content;
+
+    collector.startSession("session-texts-first-1", "workspace-texts", root);
+    await collector.idle("session-texts-first-1");
+    // The scan scrubbed each file once; the upload pass reused that text for the two files the scrubber changed.
+    expect(collector.metrics.redactedTextHits).toBe(2);
+    const before = { ...collector.metrics };
+    collector.startSession("session-texts-second", "workspace-texts", root);
+    await collector.idle("session-texts-second");
+    expect(collector.metrics.fileRedactions - before.fileRedactions).toBe(0);
+    expect(collector.metrics.redactedTextHits - before.redactedTextHits).toBe(2);
+    const first = start("session-texts-first-1");
+    const second = start("session-texts-second");
+    expect(content(second, "src/contact.txt")).toBe("mail [REDACTED_PII] about it\n");
+    expect(content(second, "src/config.yml")).toBe("password: [REDACTED]\n");
+    expect(second.files.filter((file) => !file.path.startsWith("__omnirush__/"))).toEqual(first.files.filter((file) => !file.path.startsWith("__omnirush__/")));
+    expect(second.manifest).toEqual(first.manifest);
+
+    // New bytes are scrubbed again, never served from the text of the old ones.
+    await writeFile(join(root, "src", "contact.txt"), "mail joe@example.com instead of jane\n");
+    const edited = { ...collector.metrics };
+    collector.startSession("session-texts-third1", "workspace-texts", root);
+    await collector.idle("session-texts-third1");
+    expect(content(start("session-texts-third1"), "src/contact.txt")).toBe("mail [REDACTED_PII] instead of jane\n");
+    expect(collector.metrics.fileRedactions - edited.fileRedactions).toBeGreaterThanOrEqual(1);
+    await collector.stop();
+  });
+
   test("snapshots a 60 MiB workspace with peak RSS growth under 120 MB", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-collector-memory-"));
     roots.push(root);
