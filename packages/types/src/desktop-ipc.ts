@@ -144,6 +144,17 @@ export type OmniRushAccountStatus = {
   gatewayUrl?: string | null;
   /** Display label for the account server, e.g. "omnirush.ai" or "localhost:8090 (local API)". */
   gatewayHost?: string | null;
+  /**
+   * "file": Linux without a usable keyring, so the sign-in is kept in an
+   * owner-only file on this computer. Absent when a keyring protects it.
+   */
+  credentialStorage?: "file";
+  /**
+   * Linux: a sign-in sealed by a system keyring is on disk but no keyring is
+   * usable now, so the user is asked to sign in again. Distinct from a
+   * session the server ended (reauthorizationRequired alone).
+   */
+  keyringUnavailable?: boolean;
 };
 
 export type EngineDoctorResult = {

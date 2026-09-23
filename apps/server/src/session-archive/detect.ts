@@ -2,17 +2,24 @@
  * The project gate (section 4): a session is archived only when the folder
  * the agent started in is a project. v1 recognises one marker, a `.git`
  * entry, in the folder itself or in the nearest parent that may hold one
- * (a folder inside a repository); further markers plug in as detectors.
+ * (a folder inside a repository); further markers plug in as detectors. The
+ * all-folders and touched-files policies (4.4) add one more,
+ * `folderDetector`: any other folder that is not too broad to be one project
+ * and is not, or is not inside, a credential, app-data or system location.
+ * Git roots never get those refusals.
  */
 import { lstat, open, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import path, { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import path, { isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
+
+import { isCollectorDirectoryDenied } from "../workspace-collector.js";
+import type { ArchivePolicy } from "./policy.js";
 
 export type ArchivableProject = {
   archivable: boolean;
-  /** git_dir | git_file | git_parent | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
+  /** git_dir | git_file | git_parent | folder | touched | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
   reason: string;
-  /** The marker that qualified the root (".git"), null when not archivable. */
+  /** The marker that qualified the root (".git", "folder", "touched"), null when not archivable. */
   marker: string | null;
 };
 
@@ -221,6 +228,159 @@ export const gitParentDetector: ProjectMarkerDetector = async (root, options = {
 
 /** The gate's detectors: `.git` in the root first, then in the nearest parent. */
 export const defaultProjectDetectors: readonly ProjectMarkerDetector[] = [gitMarkerDetector, gitParentDetector];
+
+// --- a folder without git (the all-folders and touched-files policies) ----------
+
+/** The marker of a folder archived by the all-folders policy (4.4); the server accepts it only while that policy is on. */
+export const FOLDER_MARKER = "folder";
+/** The marker of the files the agent touched in a plain folder (touched-files policy); the server accepts it only while that policy is on. */
+export const TOUCHED_MARKER = "touched";
+
+/** Top-level system and app directories of macOS and Linux (one list: the other system's names are absent). */
+const FOLDER_POSIX_SYSTEM_DIRS = [
+  "/System", "/Library", "/Applications", "/private", "/usr", "/bin", "/sbin", "/etc", "/var", "/opt", "/cores",
+  "/proc", "/sys", "/dev", "/boot", "/lib", "/lib64", "/run", "/root", "/snap", "/nix",
+];
+/** Windows system directories, on every drive. */
+const WINDOWS_SYSTEM_DIRS = ["Windows", "Windows.old", "Program Files", "Program Files (x86)", "ProgramData", "$Recycle.Bin", "System Volume Information", "Recovery", "PerfLogs"];
+/** Where POSIX systems mount other disks: /Volumes/<disk> (macOS), /mnt/<disk> (Linux, WSL), /media/<user>/<disk>. */
+const POSIX_MOUNT_ROOT = /^\/(?:(?:volumes|mnt)(?:\/[^/]+)?|media(?:\/[^/]+){0,2})$/i;
+/** Credential stores, wherever they are: a root that is one, or is inside one, is refused (names compared without case). */
+const CREDENTIAL_DIRS = new Set([".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".password-store", "keychains"]);
+/** The same for these folder pairs, wherever they are. */
+const CREDENTIAL_DIR_PAIRS: ReadonlyArray<readonly [string, string]> = [[".config", "gcloud"]];
+/** App-data folders, wherever they are (Windows' AppData, and macOS' Library/Application Support outside a home too). */
+const APP_DATA_DIRS = new Set(["appdata"]);
+const APP_DATA_DIR_PAIRS: ReadonlyArray<readonly [string, string]> = [["library", "application support"]];
+
+export type FolderRefusal = "root_too_broad" | "root_app_data" | "root_credentials" | "root_system";
+
+/** What the all-folders gate compares a root with; every path absolute, in `platform`'s syntax. */
+export type FolderGateContext = {
+  platform: NodeJS.Platform;
+  /** The home directory, as given and resolved through symlinks. */
+  homes: readonly string[];
+  /** The Electron userData directory, the same way; empty when unknown. */
+  userData: readonly string[];
+};
+
+/**
+ * `path` absolute and normalised in `platform`'s syntax; macOS and Windows
+ * compare without case. On Windows, `\\?\C:\x` and `\\.\C:\x` are `C:\x`,
+ * `\\?\UNC\server\share` is `\\server\share`, and a name loses its trailing
+ * dots and spaces (`C:\Users\sam.` is `C:\Users\sam`), as Windows does.
+ */
+export function foldGatePath(path: string, platform: NodeJS.Platform): string {
+  if (platform !== "win32") {
+    const resolved = posix.resolve(path);
+    return platform === "darwin" ? resolved.toLowerCase() : resolved;
+  }
+  let value = path.replaceAll("/", "\\");
+  if (/^\\\\[?.]\\unc\\/i.test(value)) value = `\\\\${value.slice(8)}`;
+  else if (/^\\\\[?.]\\[a-z]:/i.test(value)) value = value.slice(4);
+  const resolved = win32.resolve(value);
+  const { root } = win32.parse(resolved);
+  const names = resolved.slice(root.length).split("\\").map((name) => name.replace(/[. ]+$/, "")).filter(Boolean);
+  return win32.join(root, ...names).toLowerCase();
+}
+
+/**
+ * Why `root` may not be archived as a plain folder, or null when it may.
+ * Refused, and anything inside them:
+ * - a disk or share root, and the home directory or anything above it;
+ * - the Electron userData directory, and anything above it;
+ * - a credential store wherever it is (`.ssh`, `.aws`, `.gnupg`, `.kube`,
+ *   `.docker`, `.azure`, `.password-store`, `Keychains`, `.config/gcloud`),
+ *   and any folder the collector's denylist denies as a whole (`keys`,
+ *   `secrets`, `credentials*`, `.env*`, `node_modules`, `.git`, ...);
+ * - app data wherever it is (`AppData`, `Library/Application Support`);
+ * - in the home directory, and in the other folders beside it (other
+ *   accounts, Shared, Public; which are refused themselves too): every
+ *   folder whose name starts with `.` (config, caches, credentials), and
+ *   `Library` on macOS and `snap` on Linux;
+ * - outside the home directory, the system and app directories.
+ * Every other folder inside the home directory may be archived.
+ */
+export function refusedFolderRoot(root: string, context: FolderGateContext): FolderRefusal | null {
+  const paths = context.platform === "win32" ? win32 : posix;
+  const fold = (path: string) => foldGatePath(path, context.platform);
+  const within = (child: string, parent: string) => {
+    const rel = paths.relative(parent, child);
+    return rel === "" || (!rel.startsWith(`..${paths.sep}`) && rel !== ".." && !paths.isAbsolute(rel));
+  };
+  const isDiskRoot = (path: string) => paths.parse(path).root === path;
+  const target = fold(root);
+  const homes = context.homes.map(fold);
+  if (isDiskRoot(target) || (paths === posix && POSIX_MOUNT_ROOT.test(target))) return "root_too_broad";
+  if (homes.some((home) => within(home, target))) return "root_too_broad";
+  if (context.userData.map(fold).some((dir) => within(target, dir) || within(dir, target))) return "root_app_data";
+
+  const names = target.slice(paths.parse(target).root.length).split(paths.sep).filter(Boolean).map((name) => name.toLowerCase());
+  const hasPair = (pairs: ReadonlyArray<readonly [string, string]>) => names.some((name, index) => pairs.some(([first, second]) => name === first && names[index + 1] === second));
+  if (names.some((name) => CREDENTIAL_DIRS.has(name)) || hasPair(CREDENTIAL_DIR_PAIRS) || isCollectorDirectoryDenied(names.join("/"))) return "root_credentials";
+  if (names.some((name) => APP_DATA_DIRS.has(name)) || hasPair(APP_DATA_DIR_PAIRS)) return "root_app_data";
+
+  for (const home of homes) {
+    if (isDiskRoot(home)) continue;
+    // The account folder the root is in: home, or a folder beside it (unless home sits right at a disk root).
+    const parent = paths.dirname(home);
+    const base = isDiskRoot(parent) ? home : parent;
+    if (!within(target, base)) continue;
+    const account = base === home ? home : paths.join(parent, paths.relative(parent, target).split(paths.sep)[0]!);
+    if (target === account) return "root_too_broad";
+    const first = paths.relative(account, target).split(paths.sep)[0]!.toLowerCase();
+    if (first.startsWith(".") || (context.platform === "darwin" && first === "library") || (context.platform === "linux" && first === "snap")) return "root_app_data";
+  }
+  if (homes.some((home) => !isDiskRoot(home) && within(target, home))) return null;
+  const systemDirs = paths === win32 ? WINDOWS_SYSTEM_DIRS.map((dir) => paths.join(paths.parse(target).root, dir)) : FOLDER_POSIX_SYSTEM_DIRS;
+  return systemDirs.some((dir) => within(target, fold(dir))) ? "root_system" : null;
+}
+
+export type FolderGateOptions = {
+  /** The Electron userData directory (the desktop sets OMNIRUSH_DESKTOP_USER_DATA_DIR); unknown outside the desktop app. */
+  userDataDir?: string;
+  /** Tests only; defaults to os.homedir(). */
+  homeDir?: string;
+};
+
+/**
+ * Why `root` may not be archived as a plain folder, in any form of it (as
+ * given and resolved through symlinks), or null when it may: the folder
+ * refusals shared by the all-folders and the touched-files policies.
+ */
+export async function folderRootRefusal(root: string, options: FolderGateOptions = {}): Promise<FolderRefusal | null> {
+  const context: FolderGateContext = {
+    platform: process.platform,
+    homes: await pathForms(options.homeDir ?? homedir()),
+    userData: options.userDataDir ? await pathForms(options.userDataDir) : [],
+  };
+  for (const form of await pathForms(root)) {
+    const refused = refusedFolderRoot(form, context);
+    if (refused) return refused;
+  }
+  return null;
+}
+
+/**
+ * The folder markers (4.4): a root with no `.git` entry at all, that
+ * folderRootRefusal accepts, is a project with marker `folder` while
+ * `policy()` has `allFolders` on, or else with marker `touched` (only the
+ * files the agent touches there) while it has `touchedFiles` on. The policy
+ * is asked last, only for such a root. Never throws.
+ */
+export function folderDetector(policy: () => Promise<ArchivePolicy>, options: FolderGateOptions = {}): ProjectMarkerDetector {
+  return async (root) => {
+    try {
+      if (await lstat(join(root, ".git")).then(() => true, () => false)) return null;
+      if (await folderRootRefusal(root, options)) return null;
+      const answer = await policy();
+      if (answer.allFolders) return { archivable: true, reason: "folder", marker: FOLDER_MARKER };
+      return answer.touchedFiles ? { archivable: true, reason: "touched", marker: TOUCHED_MARKER } : null;
+    } catch {
+      return null;
+    }
+  };
+}
 
 /**
  * Whether the session root is a project to archive: the root checks first,

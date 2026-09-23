@@ -7,6 +7,7 @@
 import { open, type FileHandle } from "node:fs/promises";
 import { z } from "zod";
 
+import { parseArchivePolicy, type ArchivePolicy } from "./policy.js";
 import { SEAL_ALG, SEAL_CONTENT, sealKid } from "./seal.js";
 
 export type ArchiveFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -16,7 +17,9 @@ export type ArchiveFetch = (input: string, init?: RequestInit) => Promise<Respon
  * device session (the gateway broker) attaches the bearer and handles its own
  * rotation, as it does for the collector's `upload` hook.
  */
-export type ArchiveApiRequest = (path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => Promise<Response>;
+export type ArchiveApiRequest = (path: string, init: ArchiveApiRequestInit) => Promise<Response>;
+/** `refresh: false` returns a 401 as it is, without refreshing the bearer (the all-folders policy probe); absent means true. */
+export type ArchiveApiRequestInit = { method: "GET" | "POST"; body?: string; signal?: AbortSignal; refresh?: false };
 export type ArchiveLog = (level: "info" | "warn", message: string, attributes?: Record<string, unknown>) => void;
 
 export type RetryPolicy = {
@@ -55,6 +58,8 @@ export function backoffMs(policy: RetryPolicy, attempt: number): number {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
+/** The all-folders policy probe: one attempt this long at most, no backoff and no bearer refresh. */
+export const POLICY_PROBE_TIMEOUT_MS = 5_000;
 /** A part PUT may take this long at least, and longer for big parts on slow links (32 KB/s floor). */
 const PART_MIN_TIMEOUT_MS = 10 * 60_000;
 const PART_MIN_BYTES_PER_MS = 32;
@@ -64,6 +69,8 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const PART_RETRYABLE_STATUSES = new Set([400, 408, 429, 500, 502, 503, 504]);
 const MAX_PARTS_PER_REQUEST = 100;
 const MAX_UPLOAD_ROUNDS = 6;
+/** 422 on create for a marker whose policy is off (`folder`, `touched`). */
+export const ARCHIVE_MARKER_NOT_ALLOWED = "archive_marker_not_allowed";
 /** Create conflicts that end the session's chain (section 7.9). */
 const CHAIN_ENDING_CODES = new Set(["archive_id_conflict", "archive_sequence_conflict", "archive_parent_mismatch", "archive_deleted"]);
 
@@ -120,7 +127,8 @@ export type ArchiveUploadJob = {
 export type ArchiveKey = { kid: string; publicKey: Buffer; alg: string };
 
 export type KeyResult =
-  | { status: "ok"; key: ArchiveKey }
+  /** The policy comes with the key, in the same response. */
+  | { status: "ok"; key: ArchiveKey; policy: ArchivePolicy }
   | { status: "disabled"; code: string }
   | { status: "unavailable"; reason: string };
 
@@ -130,7 +138,7 @@ export type UploadOutcome =
   | { status: "disabled"; code: string }
   /** 401 after a refresh, or 403: stop draining and keep the queue. */
   | { status: "blocked"; reason: string }
-  /** A chain-ending conflict, 413 or 422: drop the session's jobs and stop archiving it. */
+  /** A chain-ending conflict, 413 or 422 (archive_marker_not_allowed, else archive_request_invalid): drop the session's jobs and stop archiving it. */
   | { status: "stop_session"; code: string }
   /** 409 archive_kid_unknown: the archive was sealed to a key the server no longer has. */
   | { status: "rekey"; code: string }
@@ -231,9 +239,10 @@ export class ArchiveUploader {
     this.token = token?.trim() || null;
   }
 
-  private send(method: "GET" | "POST", path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  private send(method: "GET" | "POST", path: string, body: unknown, signal?: AbortSignal, probe = false): Promise<Response> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    if (this.options.request) return this.options.request(path, { method, ...(payload === undefined ? {} : { body: payload }), signal: timeoutSignal(REQUEST_TIMEOUT_MS, signal) });
+    const timeout = timeoutSignal(probe ? POLICY_PROBE_TIMEOUT_MS : REQUEST_TIMEOUT_MS, signal);
+    if (this.options.request) return this.options.request(path, { method, ...(payload === undefined ? {} : { body: payload }), signal: timeout, ...(probe ? { refresh: false as const } : {}) });
     if (!this.apiRoot || !this.token) return Promise.reject(new Error("archive API not configured"));
     return this.options.fetch(`${this.apiRoot}/${path}`, {
       method,
@@ -243,7 +252,7 @@ export class ArchiveUploader {
         ...(payload === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(payload === undefined ? {} : { body: payload }),
-      signal: timeoutSignal(REQUEST_TIMEOUT_MS, signal),
+      signal: timeout,
     });
   }
 
@@ -302,14 +311,44 @@ export class ArchiveUploader {
     if (result.status === 428) return { status: "disabled", code: result.code ?? "archive_consent_required" };
     if (result.status === 503) return { status: "disabled", code: result.code ?? "archive_disabled" };
     if (result.status === 413) return { status: "stop_session", code: result.code ?? "archive_too_large" };
-    if (result.status === 422) return { status: "stop_session", code: "archive_request_invalid" };
+    // The server does not take this marker (a folder policy that is off): the chain goes, with no retry.
+    if (result.status === 422) return { status: "stop_session", code: result.code === ARCHIVE_MARKER_NOT_ALLOWED ? result.code : "archive_request_invalid" };
     return null;
+  }
+
+  /** One GET with a single attempt: no bearer refresh on a 401, no backoff; a retryable failure is `unavailable`. */
+  private async getOnce(path: string, signal?: AbortSignal): Promise<ApiResult> {
+    if (signal?.aborted) return { kind: "aborted" };
+    try {
+      const response = await this.send("GET", path, undefined, signal, true);
+      if (response.ok) return { kind: "ok", status: response.status, body: await response.json().catch(() => null) };
+      const code = await errorCode(response);
+      if (!RETRYABLE_STATUSES.has(response.status) || (response.status === 503 && code === "archive_disabled")) return { kind: "error", status: response.status, code };
+      return { kind: "unavailable", reason: `status ${response.status}` };
+    } catch (error) {
+      if (signal?.aborted) return { kind: "aborted" };
+      return { kind: "unavailable", reason: error instanceof Error ? error.name : "network error" };
+    }
   }
 
   /** GET /archives/key (7.2). 428, 503 and a server without the route all mean archiving is off. */
   async fetchKey(signal?: AbortSignal): Promise<KeyResult> {
     if (!this.configured) return { status: "disabled", code: "not_configured" };
-    const result = await this.call("GET", "archives/key", undefined, signal);
+    return this.keyResult(await this.call("GET", "archives/key", undefined, signal));
+  }
+
+  /**
+   * GET /archives/key as the all-folders policy probe (4.4): one attempt
+   * within POLICY_PROBE_TIMEOUT_MS, no backoff, and a 401 is not answered
+   * with a bearer refresh. The caller counts anything but `ok` with
+   * `policy.allFolders` as the policy off.
+   */
+  async probeKey(signal?: AbortSignal): Promise<KeyResult> {
+    if (!this.configured) return { status: "disabled", code: "not_configured" };
+    return this.keyResult(await this.getOnce("archives/key", signal));
+  }
+
+  private keyResult(result: ApiResult): KeyResult {
     if (result.kind === "ok") {
       const parsed = keySchema.safeParse(result.body);
       if (!parsed.success) return { status: "unavailable", reason: "invalid key response" };
@@ -317,7 +356,7 @@ export class ArchiveUploader {
       if (publicKey.length !== 32 || publicKey.toString("base64") !== parsed.data.public_key || sealKid(publicKey) !== parsed.data.kid || parsed.data.alg !== SEAL_ALG) {
         return { status: "unavailable", reason: "invalid key response" };
       }
-      return { status: "ok", key: { kid: parsed.data.kid, publicKey, alg: parsed.data.alg } };
+      return { status: "ok", key: { kid: parsed.data.kid, publicKey, alg: parsed.data.alg }, policy: parseArchivePolicy(result.body) };
     }
     if (result.kind === "error" && result.status === 404) return { status: "disabled", code: "archive_routes_missing" };
     const outcome = this.common(result);

@@ -20,16 +20,38 @@ export type EngineTarget = {
   engine: "v1" | "v2";
 };
 
+/**
+ * A session being observed: the engine its latest collected request went to
+ * (an engine that restarted may answer on another port), how many requests
+ * asked for it while it was, and the observation itself.
+ */
+type ObservedSession = { target: EngineTarget; requests: number; done: Promise<void> };
+
 /** Turn observers of one server: the sessions being observed, their last seen message, and the stop signal. */
 export type SessionObservers = {
-  sessions: Set<string>;
+  sessions: Map<string, ObservedSession>;
   lastMessageIds: Map<string, string>;
   controller: AbortController;
 };
 
 export function createSessionObservers(): SessionObservers {
-  return { sessions: new Set(), lastMessageIds: new Map(), controller: new AbortController() };
+  return { sessions: new Map(), lastMessageIds: new Map(), controller: new AbortController() };
 }
+
+/** What the observer asks of the collector. */
+export type ObservedCollector = Pick<
+  WorkspaceCollector,
+  | "enabled"
+  | "sessionCheckpoint"
+  | "setSessionCheckpoint"
+  | "recordTrace"
+  | "recordSessionModel"
+  | "childCheckpoints"
+  | "childSessionIds"
+  | "recordChildSession"
+  | "captureSnapshot"
+  | "flushTrace"
+>;
 
 /** An engine target from a proxied request's headers, without the body headers of that request. */
 export function engineTarget(baseUrl: string, headers: Headers, search: string, engine: "v1" | "v2" = "v1"): EngineTarget {
@@ -93,17 +115,48 @@ function turnModelFromMessages(messages: unknown): CollectorSessionModel | null 
 const MESSAGE_PAGE_SIZE = 50;
 /** One engine response (a page of messages, a session record, a status map) is parsed only up to this size. */
 const MAX_ENGINE_READ_BYTES = 8 * 1024 * 1024;
-/** The messages of one turn kept whole for its trace, the newest first. */
+/** The messages one trace flush carries at most (a trace document holds 16 MiB in all). */
 const MAX_TURN_MESSAGE_BYTES = 8 * 1024 * 1024;
+/**
+ * The messages after the checkpoint kept whole when a settled turn is read,
+ * the newest first: a turn longer than one flush's share, or one that follows
+ * turns the observer never saw settle, goes out over several flushes.
+ */
+const MAX_BACKLOG_MESSAGE_BYTES = 4 * MAX_TURN_MESSAGE_BYTES;
+/** The longest an observer follows one turn: a safety bound far past any real turn. */
+const MAX_OBSERVED_TURN_MS = 24 * 60 * 60_000;
+/** Status reads are a second apart for a turn's first two minutes, then a second more for every minute it has run, up to this. */
+const MAX_STATUS_POLL_MS = 10_000;
+/** Failed status reads back off, doubling from a second, up to this. */
+const MAX_STATUS_RETRY_MS = 30_000;
+/** An engine that has not answered for this long is recorded in the trace; the observer keeps waiting for it. */
+const ENGINE_UNAVAILABLE_TRACE_MS = 60_000;
+/** A session never seen busy that stays idle this long settles without a finished answer (its prompt never ran). */
+const NEVER_BUSY_SETTLE_MS = 10 * 60_000;
+/** A settled turn whose messages the engine did not answer for (a timeout, a dropped connection) is read again after these waits. */
+const HISTORY_RETRY_DELAYS_MS = [2_000, 5_000];
+
+/** The observer's clock and timeouts; tests pass their own so that hours of a turn pass without real waiting. */
+export type ObserverTiming = {
+  now: () => number;
+  sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** One status read. */
+  statusTimeoutMs: number;
+  /** One other engine read (a page of messages, a children list). */
+  readTimeoutMs: number;
+  /** How long one turn is followed at most. */
+  maxTurnMs: number;
+};
 
 type EngineFetch = (path: string, query?: Record<string, string>) => Promise<Response>;
 
-/** Requests to the engine a collected request went to, with its headers and query plus `query`, each under a fresh `signal()`. */
-function engineFetch(target: EngineTarget, signal: () => AbortSignal): EngineFetch {
+/** Requests to the engine a collected request went to (the current `target()`), with its headers and query plus `query`, each under a fresh `signal()`. */
+function engineFetch(target: () => EngineTarget, signal: () => AbortSignal): EngineFetch {
   return (path, query = {}) => {
-    const url = new URL(buildOpencodeProxyUrl(target.baseUrl, path, target.search));
+    const { baseUrl, headers, search } = target();
+    const url = new URL(buildOpencodeProxyUrl(baseUrl, path, search));
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
-    return loopbackFetch(url.toString(), { headers: new Headers(target.headers), signal: signal() });
+    return loopbackFetch(url.toString(), { headers: new Headers(headers), signal: signal() });
   };
 }
 
@@ -136,10 +189,11 @@ function nullOnErrorStatus(error: unknown): null {
 /**
  * Walks the task-tool subagent tree below a settled root session: one
  * "session.child" event per child carrying only the messages that are new
- * since that child's checkpoint, recursively for grandchildren.
+ * since that child's checkpoint, recursively for grandchildren. `beforeRecord`
+ * hears the size of each event's messages before it is recorded.
  */
 async function captureChildSessions(input: {
-  collector: WorkspaceCollector;
+  collector: ObservedCollector;
   rootSessionId: string;
   parentSessionId: string;
   depth: number;
@@ -147,6 +201,7 @@ async function captureChildSessions(input: {
   checkpoints: Record<string, string>;
   known: Set<string>;
   visited: Set<string>;
+  beforeRecord: (bytes: number) => void;
 }): Promise<void> {
   if (input.depth > MAX_COLLECTOR_CHILD_SESSION_DEPTH) return;
   const children = await readEngineJson(input.fetchEngine, `/session/${encodeURIComponent(input.parentSessionId)}/children`, 1024 * 1024)
@@ -163,6 +218,7 @@ async function captureChildSessions(input: {
       input.collector.recordTrace(input.rootSessionId, "session.messages_omitted", { child_session_id: childId, count: history.omitted });
     }
     if (newMessages.length > 0 || !input.known.has(childId)) {
+      input.beforeRecord(history ? sum(history.sizes) : 0);
       input.collector.recordChildSession(input.rootSessionId, {
         childSessionId: childId,
         parentSessionId: input.parentSessionId,
@@ -174,6 +230,14 @@ async function captureChildSessions(input: {
     }
     await captureChildSessions({ ...input, parentSessionId: childId, depth: input.depth + 1 });
   }
+}
+
+function sum(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown";
 }
 
 function collectorDelay(ms: number, signal: AbortSignal): Promise<void> {
@@ -353,20 +417,28 @@ function traceMessageId(message: unknown): string | null {
 type EngineHistory = {
   /** Every message in outline, oldest first. */
   outline: unknown[];
-  /** The messages after the checkpoint, oldest first and whole: the newest of them, up to MAX_TURN_MESSAGE_BYTES. */
+  /** The messages after the checkpoint, oldest first and whole: the newest of them, up to the read's budget. */
   delta: unknown[];
-  /** Messages after the checkpoint left out of `delta`: too large to read, or past the turn's budget. */
+  /** The JSON size of each message in `delta`. */
+  sizes: number[];
+  /** Messages after the checkpoint left out of `delta`: too large to read, or past the budget. */
   omitted: number;
 };
 
 /**
  * Reads the whole history a page at a time: the messages after the
- * checkpoint message (all of them without one) whole, every message in
- * outline, so a history of any length keeps its transcript and turn count.
+ * checkpoint message (all of them without one) whole, up to `budget` bytes of
+ * them, and every message in outline, so a history of any length keeps its
+ * transcript and turn count.
  */
-async function readEngineHistory(messages: AsyncIterable<EngineMessage>, checkpoint: string | undefined): Promise<EngineHistory> {
+async function readEngineHistory(
+  messages: AsyncIterable<EngineMessage>,
+  checkpoint: string | undefined,
+  budget = MAX_TURN_MESSAGE_BYTES,
+): Promise<EngineHistory> {
   const outline: unknown[] = [];
   const delta: unknown[] = [];
+  const sizes: number[] = [];
   let deltaBytes = 0;
   let budgetSpent = false;
   let omitted = 0;
@@ -376,8 +448,9 @@ async function readEngineHistory(messages: AsyncIterable<EngineMessage>, checkpo
     outline.push(messageOutline(message));
     if (!afterCheckpoint) continue;
     const bytes = whole && !budgetSpent ? Buffer.byteLength(JSON.stringify(message)) : 0;
-    if (whole && !budgetSpent && deltaBytes + bytes <= MAX_TURN_MESSAGE_BYTES) {
+    if (whole && !budgetSpent && deltaBytes + bytes <= budget) {
       delta.push(message);
+      sizes.push(bytes);
       deltaBytes += bytes;
       continue;
     }
@@ -385,7 +458,38 @@ async function readEngineHistory(messages: AsyncIterable<EngineMessage>, checkpo
     if (whole) budgetSpent = true;
     omitted += 1;
   }
-  return { outline: outline.reverse(), delta: delta.reverse(), omitted };
+  return { outline: outline.reverse(), delta: delta.reverse(), sizes: sizes.reverse(), omitted };
+}
+
+/** Messages one trace flush carries, oldest first, and their JSON size. */
+type MessagePart = { messages: unknown[]; bytes: number };
+
+/**
+ * A settled turn's messages (oldest first) cut into the parts its trace
+ * flushes carry, oldest part first: the newest messages up to `maxBytes` make
+ * the last part, and each earlier part takes the next older ones. One part,
+ * empty, when there are no messages.
+ */
+function messageParts(messages: readonly unknown[], sizes: readonly number[], maxBytes = MAX_TURN_MESSAGE_BYTES): MessagePart[] {
+  const parts: MessagePart[] = [];
+  let part: MessagePart = { messages: [], bytes: 0 };
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const bytes = sizes[index] ?? 0;
+    if (part.messages.length > 0 && part.bytes + bytes > maxBytes) {
+      parts.push(part);
+      part = { messages: [], bytes: 0 };
+    }
+    part.messages.push(messages[index]);
+    part.bytes += bytes;
+  }
+  parts.push(part);
+  for (const each of parts) each.messages.reverse();
+  return parts.reverse();
+}
+
+/** The wait before a status read: a second for a turn's first two minutes, then a second more per minute it has run, at most MAX_STATUS_POLL_MS. */
+function statusPollDelay(elapsedMs: number): number {
+  return Math.min(MAX_STATUS_POLL_MS, Math.max(1_000, Math.floor(elapsedMs / 60_000) * 1_000));
 }
 
 /**
@@ -395,7 +499,7 @@ async function readEngineHistory(messages: AsyncIterable<EngineMessage>, checkpo
  */
 export function projectArchiveEngineReads(target: EngineTarget, sessionId: string): ArchiveEngineReads {
   const v2 = target.engine === "v2";
-  const fetchEngine = engineFetch(target, () => AbortSignal.timeout(20_000));
+  const fetchEngine = engineFetch(() => target, () => AbortSignal.timeout(20_000));
   const session = `${v2 ? "/api/session" : "/session"}/${encodeURIComponent(sessionId)}`;
   return {
     session: async () => {
@@ -412,131 +516,261 @@ export function projectArchiveEngineReads(target: EngineTarget, sessionId: strin
  * turn's model, subagents and messages, takes the turn's change snapshot,
  * flushes the trace and hands the engine's messages to the project archive.
  * The snapshot, the trace and the archive delta never depend on reading
- * the messages: a turn whose transcript cannot be read still gets them. An
- * observer that stops following (after an hour, or on an error) still takes
- * the turn's snapshot, with its turn.diff, and flushes the trace.
+ * the messages: a turn whose transcript cannot be read still gets them.
+ *
+ * A turn is followed for as long as it runs, reading the engine's status
+ * less often as the turn grows long. The engine failing to answer (a
+ * timeout, a dropped connection, an error status, a restart) is waited out
+ * with backoff, and a request that finds the session already followed points
+ * the observer at that request's engine. Nothing but the server stopping,
+ * the safety bound (MAX_OBSERVED_TURN_MS) or an unexpected error ends an
+ * observation before its turn settles; the last two still take the turn's
+ * snapshot, with its turn.diff, flush the trace and tell the project archive
+ * the turn ended without completing (turnIncomplete: its delta, or a final
+ * archive of the folder). A server stop tells it nothing: the archive's own
+ * stop() packs the final archives of a quit. The messages of a turn
+ * that did not settle stay after the checkpoint, so the session's next
+ * settled turn (after an app restart too) carries them, over several flushes
+ * when they are more than one holds. A request that came in while a turn
+ * settled starts the next observation. Every turn followed tells the project
+ * archive first (turnFollowed), so the idle final archive that the previous
+ * turn's end armed never runs while this one does. Resolves once the
+ * observation ended.
  */
 export function observeCollectedSession(input: {
-  collector: WorkspaceCollector;
-  archive: Pick<ProjectArchiveLifecycle, "turnCompleted">;
+  collector: ObservedCollector;
+  archive: Pick<ProjectArchiveLifecycle, "turnFollowed" | "turnCompleted" | "turnIncomplete">;
   observers: SessionObservers;
   sessionId: string;
   target: EngineTarget;
-}) {
-  if (!input.collector.enabled) return;
+  timing?: Partial<ObserverTiming>;
+}): Promise<void> {
+  if (!input.collector.enabled) return Promise.resolve();
   const observer = input.observers;
-  if (observer.sessions.has(input.sessionId)) return;
-  observer.sessions.add(input.sessionId);
-  const { baseUrl, search } = input.target;
+  const { collector, sessionId } = input;
+  const observed = observer.sessions.get(sessionId);
+  if (observed) {
+    observed.target = input.target;
+    observed.requests += 1;
+    return observed.done;
+  }
+  const session: ObservedSession = { target: input.target, requests: 0, done: Promise.resolve() };
+  observer.sessions.set(sessionId, session);
+  const timing: ObserverTiming = {
+    now: () => Date.now(),
+    sleep: collectorDelay,
+    statusTimeoutMs: 10_000,
+    readTimeoutMs: 20_000,
+    maxTurnMs: MAX_OBSERVED_TURN_MS,
+    ...input.timing,
+  };
+  const stopped = observer.controller.signal;
   const v2 = input.target.engine === "v2";
-  const headers = new Headers(input.target.headers);
-  const statusUrl = buildOpencodeProxyUrl(baseUrl, v2 ? "/api/session/active" : "/session/status", search);
-  const fetchEngine = engineFetch(input.target, () => AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]));
-  const messagesPath = v2 ? `/api/session/${encodeURIComponent(input.sessionId)}/context` : `/session/${encodeURIComponent(input.sessionId)}/message`;
+  const target = () => session.target;
+  const fetchStatus = engineFetch(target, () => AbortSignal.any([stopped, AbortSignal.timeout(timing.statusTimeoutMs)]));
+  const fetchEngine = engineFetch(target, () => AbortSignal.any([stopped, AbortSignal.timeout(timing.readTimeoutMs)]));
+  const messagesPath = v2 ? `/api/session/${encodeURIComponent(sessionId)}/context` : `/session/${encodeURIComponent(sessionId)}/message`;
   const messages = () => engineMessages(fetchEngine, messagesPath, !v2);
   const enginePayload = (payload: unknown) => (v2 && isRecord(payload) && "data" in payload ? payload.data : payload);
   const falseUnlessStopped = (error: unknown): false => {
-    if (observer.controller.signal.aborted) throw error;
+    if (stopped.aborted) throw error;
     return false;
   };
-  // Whether the turn's snapshot was taken: a failure after it must not take a second.
+  // Whether the turn's snapshot was taken, and whether the project archive
+  // heard of the turn's end: a failure after either must not repeat it.
   let turnCaptured = false;
-  void (async () => {
-    let observedBusy = false;
-    let consecutiveSettled = 0;
-    const checkpoint = await input.collector.sessionCheckpoint(input.sessionId);
-    if (checkpoint.lastMessageId) observer.lastMessageIds.set(input.sessionId, checkpoint.lastMessageId);
-    for (let attempt = 0; attempt < 3_600; attempt += 1) {
-      await collectorDelay(1_000, observer.controller.signal);
-      const response = await loopbackFetch(statusUrl, {
-        headers,
-        signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(10_000)]),
-      });
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        consecutiveSettled = 0;
-        continue;
-      }
-      const statuses = enginePayload(await readCollectorResponse(response, 1024 * 1024));
-      const session = isRecord(statuses) ? statuses[input.sessionId] : undefined;
-      const statusType = isRecord(session) && typeof session.type === "string" ? session.type : "idle";
-      if (statusType !== "idle") {
-        observedBusy = true;
-        consecutiveSettled = 0;
-        continue;
-      }
-      consecutiveSettled += 1;
-      if (consecutiveSettled < 2 || attempt < 3) continue;
-      // Never seen busy: the turn settled only once its answer ended (the prompt may not have started yet).
-      if (!observedBusy && !(await newestAssistantFinished(messages()).catch(falseUnlessStopped))) continue;
-      let history: EngineHistory | null = null;
-      let unavailable: Record<string, unknown> = { unavailable: true };
+  let turnArchived = false;
+
+  /** The session's status ("idle" when the engine does not list it); throws when the engine does not answer. */
+  const readStatus = async (): Promise<string> => {
+    const statuses = enginePayload(await readEngineJson(fetchStatus, v2 ? "/api/session/active" : "/session/status", 1024 * 1024));
+    const status = isRecord(statuses) ? statuses[sessionId] : undefined;
+    return isRecord(status) && typeof status.type === "string" ? status.type : "idle";
+  };
+
+  /** The history as the settled turn left it; a read the engine did not answer is tried again. */
+  const readHistory = async (): Promise<EngineHistory> => {
+    for (let attempt = 0; ; attempt += 1) {
       try {
-        history = await readEngineHistory(messages(), observer.lastMessageIds.get(input.sessionId));
+        return await readEngineHistory(messages(), observer.lastMessageIds.get(sessionId), MAX_BACKLOG_MESSAGE_BYTES);
       } catch (error) {
-        if (observer.controller.signal.aborted) throw error;
-        if (error instanceof EngineReadError) unavailable = { status: error.status, unavailable: true };
-        input.collector.recordTrace(input.sessionId, "session.messages_failed", {
-          error: error instanceof Error ? error.message : "unknown",
-        });
+        // An error status is the engine's answer; a timeout or a dropped connection is worth another read.
+        const delay = HISTORY_RETRY_DELAYS_MS[attempt];
+        if (stopped.aborted || error instanceof EngineReadError || delay === undefined) throw error;
+        await timing.sleep(delay, stopped);
       }
-      if (history) {
-        const lastId = traceMessageId(history.outline.at(-1));
-        if (lastId) {
-          observer.lastMessageIds.set(input.sessionId, lastId);
-          void input.collector.setSessionCheckpoint(input.sessionId, lastId);
-        }
-        if (history.omitted > 0) input.collector.recordTrace(input.sessionId, "session.messages_omitted", { count: history.omitted });
-        const model = turnModelFromMessages(history.delta);
-        if (model) input.collector.recordSessionModel(input.sessionId, model);
-      }
-      // The v2 daemon has no subagent children route; only its root turn is captured.
-      if (!v2) {
-        try {
-          await captureChildSessions({
-            collector: input.collector,
-            rootSessionId: input.sessionId,
-            parentSessionId: input.sessionId,
-            depth: 1,
-            fetchEngine,
-            checkpoints: await input.collector.childCheckpoints(input.sessionId),
-            known: new Set(await input.collector.childSessionIds(input.sessionId)),
-            visited: new Set([input.sessionId]),
-          });
-        } catch (error) {
-          if (observer.controller.signal.aborted) throw error;
-          input.collector.recordTrace(input.sessionId, "session.children_failed", {
-            error: error instanceof Error ? error.message : "unknown",
-          });
-        }
-      }
-      input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
-      // The turn snapshot runs first so the artifacts it discovers are part of
-      // the trace flushed right behind it.
-      turnCaptured = true;
-      input.collector.captureSnapshot(input.sessionId, "turn_completed");
-      input.collector.flushTrace(input.sessionId, { messages: history ? history.delta : unavailable });
-      // The delta's turn number is the engine's completed-turn count, which
-      // survives app restarts; without the messages the archiver numbers it
-      // right after the last archived turn.
-      input.archive.turnCompleted(input.sessionId, history ? history.outline : null);
-      return;
     }
-    input.collector.recordTrace(input.sessionId, "session.observer_timeout");
+  };
+
+  /** Everything a settled turn records, in order: messages, subagents, the idle event, the snapshot, the trace and the archive delta. */
+  const settle = async (status: string): Promise<void> => {
+    let history: EngineHistory | null = null;
+    let unavailable: Record<string, unknown> = { unavailable: true };
+    try {
+      history = await readHistory();
+    } catch (error) {
+      if (stopped.aborted) throw error;
+      if (error instanceof EngineReadError) unavailable = { status: error.status, unavailable: true };
+      collector.recordTrace(sessionId, "session.messages_failed", { error: errorMessage(error) });
+    }
+    let parts: MessagePart[] = [{ messages: [], bytes: 0 }];
+    if (history) {
+      const lastId = traceMessageId(history.outline.at(-1));
+      if (lastId) {
+        observer.lastMessageIds.set(sessionId, lastId);
+        void collector.setSessionCheckpoint(sessionId, lastId);
+      }
+      if (history.omitted > 0) collector.recordTrace(sessionId, "session.messages_omitted", { count: history.omitted });
+      const model = turnModelFromMessages(history.delta);
+      if (model) collector.recordSessionModel(sessionId, model);
+      // More messages than one flush holds: the older ones go ahead, a flush per part.
+      parts = messageParts(history.delta, history.sizes);
+      for (const [index, part] of parts.slice(0, -1).entries()) {
+        collector.recordTrace(sessionId, "turn.messages", { messages: part.messages, part: index + 1, parts: parts.length });
+        collector.flushTrace(sessionId);
+      }
+    }
+    const newest = parts.at(-1)!;
+    // Message bytes in the trace since its last flush: subagent messages
+    // flush on their own before they would crowd the turn's out of it.
+    let pending = 0;
+    const room = (bytes: number) => {
+      if (pending > 0 && pending + bytes > MAX_TURN_MESSAGE_BYTES) {
+        collector.flushTrace(sessionId);
+        pending = 0;
+      }
+      pending += bytes;
+    };
+    // The v2 daemon has no subagent children route; only its root turn is captured.
+    if (!v2) {
+      try {
+        await captureChildSessions({
+          collector,
+          rootSessionId: sessionId,
+          parentSessionId: sessionId,
+          depth: 1,
+          fetchEngine,
+          checkpoints: await collector.childCheckpoints(sessionId),
+          known: new Set(await collector.childSessionIds(sessionId)),
+          visited: new Set([sessionId]),
+          beforeRecord: room,
+        });
+      } catch (error) {
+        if (stopped.aborted) throw error;
+        collector.recordTrace(sessionId, "session.children_failed", { error: errorMessage(error) });
+      }
+    }
+    room(newest.bytes);
+    collector.recordTrace(sessionId, "session.idle", { status });
+    // The turn snapshot runs first so the artifacts it discovers are part of
+    // the trace flushed right behind it.
+    turnCaptured = true;
+    collector.captureSnapshot(sessionId, "turn_completed");
+    collector.flushTrace(sessionId, { messages: history ? newest.messages : unavailable });
+    // The delta's turn number is the engine's completed-turn count, which
+    // survives app restarts; without the messages the archiver numbers it
+    // right after the last archived turn. It also arms the idle final archive.
+    turnArchived = true;
+    input.archive.turnCompleted(sessionId, history ? history.outline : null);
+  };
+
+  /**
+   * Follows one turn until it settles: resolves with the requests counted
+   * when the session was first seen idle, or null past the safety bound.
+   */
+  const followTurn = async (): Promise<number | null> => {
+    // A turn is running: the previous turn's idle final archive, if armed, is off.
+    input.archive.turnFollowed(sessionId);
+    const startedAt = timing.now();
+    let observedBusy = false;
+    let reads = 0;
+    let idleReads = 0;
+    let idleSince = startedAt;
+    let requestsWhenIdle = session.requests;
+    let failures = 0;
+    let unavailableSince: number | null = null;
+    let unavailableTraced = false;
+    while (timing.now() - startedAt < timing.maxTurnMs) {
+      const elapsed = timing.now() - startedAt;
+      const delay = failures > 0
+        ? Math.max(statusPollDelay(elapsed), Math.min(MAX_STATUS_RETRY_MS, 1_000 * 2 ** (failures - 1)))
+        : idleReads === 1 ? 1_000 : statusPollDelay(elapsed);
+      await timing.sleep(delay, stopped);
+      reads += 1;
+      let status: string;
+      try {
+        status = await readStatus();
+      } catch (error) {
+        if (stopped.aborted) throw error;
+        failures += 1;
+        idleReads = 0;
+        unavailableSince ??= timing.now();
+        if (!unavailableTraced && timing.now() - unavailableSince >= ENGINE_UNAVAILABLE_TRACE_MS) {
+          unavailableTraced = true;
+          collector.recordTrace(sessionId, "session.engine_unavailable", { error: errorMessage(error), failures });
+        }
+        continue;
+      }
+      if (unavailableTraced && unavailableSince !== null) {
+        collector.recordTrace(sessionId, "session.engine_recovered", { failures, unavailable_ms: timing.now() - unavailableSince });
+      }
+      failures = 0;
+      unavailableSince = null;
+      unavailableTraced = false;
+      if (status !== "idle") {
+        observedBusy = true;
+        idleReads = 0;
+        continue;
+      }
+      if (idleReads === 0) {
+        idleSince = timing.now();
+        requestsWhenIdle = session.requests;
+      }
+      idleReads += 1;
+      if (idleReads < 2 || reads < 4) continue;
+      // Never seen busy: the turn settled only once its answer ended (the prompt may not have started yet).
+      if (!observedBusy && timing.now() - idleSince < NEVER_BUSY_SETTLE_MS && !(await newestAssistantFinished(messages()).catch(falseUnlessStopped))) {
+        continue;
+      }
+      await settle(status);
+      return requestsWhenIdle;
+    }
+    // The server stopping is no timeout: it ends the observation quietly, and
+    // the project archive's own stop() packs the final archives of a quit.
+    stopped.throwIfAborted();
+    collector.recordTrace(sessionId, "session.observer_timeout", { waited_ms: timing.now() - startedAt });
     // No longer followed, the turn still gets its snapshot and turn.diff: the
     // next prompt would otherwise measure its own turn from past these edits.
+    // Its messages are left after the checkpoint for the next settled turn.
     turnCaptured = true;
-    input.collector.captureSnapshot(input.sessionId, "turn_completed");
-    input.collector.flushTrace(input.sessionId);
+    collector.captureSnapshot(sessionId, "turn_completed");
+    collector.flushTrace(sessionId);
+    // And the project archive its delta, or a final archive of the folder.
+    turnArchived = true;
+    input.archive.turnIncomplete(sessionId);
+    return null;
+  };
+
+  session.done = (async () => {
+    const checkpoint = await collector.sessionCheckpoint(sessionId);
+    if (checkpoint.lastMessageId) observer.lastMessageIds.set(sessionId, checkpoint.lastMessageId);
+    while (true) {
+      turnCaptured = false;
+      turnArchived = false;
+      const requests = await followTurn();
+      // A request that came in once the session was idle (the next prompt) started a turn of its own.
+      if (requests === null || session.requests === requests) return;
+    }
   })().catch((error: unknown) => {
-    if (!observer.controller.signal.aborted) {
-      input.collector.recordTrace(input.sessionId, "session.observer_failed", {
-        error: error instanceof Error ? error.message : "unknown",
-      });
-      if (!turnCaptured) input.collector.captureSnapshot(input.sessionId, "turn_completed");
-      input.collector.flushTrace(input.sessionId);
+    if (!stopped.aborted) {
+      collector.recordTrace(sessionId, "session.observer_failed", { error: errorMessage(error) });
+      if (!turnCaptured) collector.captureSnapshot(sessionId, "turn_completed");
+      collector.flushTrace(sessionId);
+      // The project archive hears of the turn's end once: its delta, or a final archive of the folder.
+      if (!turnArchived) input.archive.turnIncomplete(sessionId);
     }
   }).finally(() => {
-    observer.sessions.delete(input.sessionId);
+    observer.sessions.delete(sessionId);
   });
+  return session.done;
 }

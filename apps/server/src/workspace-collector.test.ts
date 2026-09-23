@@ -36,6 +36,7 @@ import {
   stripRemoteUserinfo,
   workspaceRelativePath,
 } from "./workspace-collector.js";
+import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -315,6 +316,70 @@ describe("workspace collector privacy", () => {
     const files = uploads.flatMap((envelope) => envelope.files);
     expect(files.some((file) => file.content.includes("OUTSIDE_FILE_MARKER"))).toBe(false);
     expect(files.filter((file) => file.path === "__omnirush__/changes.json").map((file) => file.content).join()).not.toContain("outside.csv");
+  });
+
+  test("reports every path the session touches inside the root to the project archive, denied names too, and none outside", async () => {
+    const base = await mkdtemp(join(tmpdir(), "omnirush-collector-touched-"));
+    roots.push(base);
+    const root = join(base, "workspace");
+    await mkdir(join(root, "docs"), { recursive: true });
+    await writeFile(join(base, "outside.csv"), "OUTSIDE");
+    await writeFile(join(root, "docs/brief.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46, 0, 1, 2]));
+    const touched: Array<[string, string]> = [];
+    const { upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000, onPathTouched: (sessionId, path) => touched.push([sessionId, path]) });
+    const sessionId = "session-touched-1234";
+    collector.startSession(sessionId, "workspace-touched", root);
+    await collector.idle(sessionId);
+    // The agent reads a PDF (absolute path, in a tool input), names a file outside, and a credential file.
+    collector.recordTrace(sessionId, "tool.read", { input: { filePath: join(root, "docs/brief.pdf") } });
+    collector.recordTrace(sessionId, "tool.read", { path: join(base, "outside.csv") });
+    collector.recordTrace(sessionId, "tool.read", { path: "../outside.csv" });
+    collector.recordTrace(sessionId, "tool.read", { path: ".env" });
+    // A command writes a binary: the watcher sees it land.
+    await writeFile(join(root, "render.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 1]));
+    const deadline = Date.now() + 10_000;
+    while (!touched.some(([, path]) => path === "render.png") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    await collector.stop();
+    const paths = new Set(touched.map(([, path]) => path));
+    expect(touched.every(([id]) => id === sessionId)).toBe(true);
+    for (const path of ["docs/brief.pdf", ".env", "render.png"]) expect(paths.has(path)).toBe(true);
+    expect([...paths].filter((path) => path.includes("outside") || path.startsWith("..") || path.startsWith("/"))).toEqual([]);
+  });
+
+  test("reports only what the session touches when its start snapshot was refused", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-touched-refused-"));
+    roots.push(root);
+    await mkdir(join(root, "private"));
+    await writeFile(join(root, "private/ledger.csv"), "untouched\n");
+    await writeFile(join(root, "private/scan.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46, 0, 1, 2]));
+    await writeFile(join(root, "notes.md"), "untouched\n");
+    // macOS delivers writes made just before a watch starts to the new watcher: these files predate the session.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const touched: string[] = [];
+    const types: string[] = [];
+    // The backend refuses the start snapshot (a 400 is never spooled), so no manifest is accepted.
+    const upload = async (_sessionId: string, compressed: Uint8Array) => {
+      const type = (JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as { snapshot_type: string }).snapshot_type;
+      types.push(type);
+      return type === "start" ? Response.json({ error: "bad_request" }, { status: 400 }) : Response.json({ ok: true }, { status: 201 });
+    };
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000, onPathTouched: (_sessionId, path) => touched.push(path) });
+    const sessionId = "session-touched-refused-1";
+    collector.startSession(sessionId, "workspace-touched-refused", root);
+    await collector.idle(sessionId);
+    collector.captureSnapshot(sessionId, "prompt");
+    await writeFile(join(root, "result.txt"), "the agent's output\n");
+    const deadline = Date.now() + 10_000;
+    while (!touched.includes("result.txt") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    await collector.stop();
+    expect(types[0]).toBe("start");
+    // Later captures scanned the whole tree with no accepted baseline.
+    expect(types).toContain("end");
+    expect(touched).toContain("result.txt");
+    expect([...new Set(touched)].filter((path) => path !== "result.txt")).toEqual([]);
   });
 });
 
@@ -734,6 +799,406 @@ describe("workspace collector durable retry", () => {
     expect(await collector.sessionDeliveryStatus(sessionId)).toMatchObject({ failureCount: 5 });
 
     await collector.clearSpool();
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    await collector.stop();
+  });
+});
+
+describe("workspace collector upload deadline and spool drain", () => {
+  // Upload deadlines at 1/100 of real time: one simulated second is 10 ms.
+  const hundredth: CollectUploadBudget = {
+    baseMs: COLLECT_UPLOAD_BUDGET.baseMs / 100,
+    bytesPerSecond: COLLECT_UPLOAD_BUDGET.bytesPerSecond * 100,
+    maxSendMs: COLLECT_UPLOAD_BUDGET.maxSendMs / 100,
+    responseMs: COLLECT_UPLOAD_BUDGET.responseMs / 100,
+  };
+  const simulatedSeconds = (seconds: number) => seconds * 10;
+  const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolvePromise, reject) => {
+    const timer = setTimeout(resolvePromise, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
+
+  /** Writes one spool entry as a failed upload leaves it; ids sort in `index` order. */
+  async function spoolEntry(stateDir: string, index: number, bytes: number, extra: Record<string, unknown> = {}): Promise<string> {
+    const spoolDir = join(stateDir, "omnirush-collector-spool");
+    await mkdir(spoolDir, { recursive: true, mode: 0o700 });
+    const id = `${index.toString(16).padStart(12, "0")}-${index.toString(16).padStart(6, "0")}-0000000${index}`;
+    const body = Buffer.alloc(bytes, index);
+    await writeFile(join(spoolDir, `${id}.zst`), body, { mode: 0o600 });
+    await writeFile(join(spoolDir, `${id}.json`), JSON.stringify({
+      id,
+      session_id: `session-drain-${index}`,
+      snapshot_type: index === 1 ? "start" : "change",
+      trigger: index === 1 ? "session_start" : "turn_completed",
+      sequence: index,
+      bytes,
+      created_at: new Date().toISOString(),
+      attempts: 1,
+      ...extra,
+    }), { mode: 0o600 });
+    return id;
+  }
+
+  async function spoolMeta(stateDir: string, id: string): Promise<{ attempts: number; last_attempt_at?: string }> {
+    return JSON.parse(await readFile(join(stateDir, "omnirush-collector-spool", `${id}.json`), "utf8")) as { attempts: number; last_attempt_at?: string };
+  }
+
+  async function drainState(): Promise<string> {
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-collector-drain-state-"));
+    roots.push(stateDir);
+    return stateDir;
+  }
+
+  test("scales the deadline with the envelope and adds the wait for the gateway's answer", () => {
+    expect(collectUploadTimeoutMs(0)).toBe(150_000);
+    // A 10 MiB start snapshot: 30 s, 80 s of body at 128 KiB/s, 120 s for the answer.
+    expect(collectUploadTimeoutMs(10 * 1024 * 1024)).toBe(230_000);
+    expect(collectUploadTimeoutMs(10 * 1024 * 1024)).toBeGreaterThan(60_000 + 90_000);
+    expect(collectUploadTimeoutMs(1024 * 1024 * 1024)).toBe(15 * 60_000 + 120_000);
+    expect(collectUploadTimeoutMs(10 * 1024 * 1024, hundredth)).toBe(2_300);
+  });
+
+  test("delivers a 10 MB envelope over an uplink that needs 60 s for it on the first attempt", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 10 * 1024 * 1024);
+    const calls: { bytes: number; aborted: boolean }[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (_sessionId, compressed, signal) => {
+        // Throttled: the body trickles out over 60 s (about 170 KiB/s).
+        await sleep(simulatedSeconds(60), signal);
+        calls.push({ bytes: compressed.byteLength, aborted: signal?.aborted ?? true });
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      uploadBudget: hundredth,
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 1, pending: 0 });
+    expect(calls).toEqual([{ bytes: 10 * 1024 * 1024, aborted: false }]);
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    await collector.stop();
+  });
+
+  test("waits for an answer that comes 90 s after the body is sent", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 6 * 1024 * 1024);
+    const answered: boolean[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      gatewayUrl: "https://gateway.example.test/v1",
+      accessToken: "device-token",
+      fetch: async (_input: string, init?: RequestInit) => {
+        const signal = init?.signal ?? undefined;
+        await sleep(simulatedSeconds(20), signal);
+        // Body sent; the gateway scrubs the envelope before it answers.
+        await sleep(simulatedSeconds(90), signal);
+        answered.push(signal?.aborted ?? true);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      uploadBudget: hundredth,
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 1, pending: 0 });
+    expect(answered).toEqual([false]);
+    await collector.stop();
+  });
+
+  test("delivers the entries behind a spooled upload that keeps failing, and backs that one off", async () => {
+    const stateDir = await drainState();
+    const stuck = await spoolEntry(stateDir, 1, 4_096);
+    await spoolEntry(stateDir, 2, 1_024);
+    await spoolEntry(stateDir, 3, 1_024);
+    const attempts: number[] = [];
+    const delivered: number[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (sessionId) => {
+        const index = Number(sessionId.split("-").at(-1));
+        attempts.push(index);
+        // The first entry never gets an answer, even past its deadline.
+        if (index === 1) return new Promise<Response>(() => undefined);
+        delivered.push(index);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      uploadBudget: { baseMs: 50, bytesPerSecond: 128 * 1024 * 1000, maxSendMs: 900, responseMs: 100 },
+      retryBaseMs: 60_000,
+    });
+
+    expect(await collector.drainSpool()).toEqual({ delivered: 2, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3]);
+    expect(delivered).toEqual([2, 3]);
+    const failed = await spoolMeta(stateDir, stuck);
+    expect(failed.attempts).toBe(2);
+    expect(typeof failed.last_attempt_at).toBe("string");
+
+    // Within its backoff the failed entry is left alone.
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3]);
+
+    // Once the backoff (the retry base after one failed drain) has passed, it is tried again...
+    const spoolDir = join(stateDir, "omnirush-collector-spool");
+    await writeFile(join(spoolDir, `${stuck}.json`), JSON.stringify({ ...failed, last_attempt_at: new Date(Date.now() - 61_000).toISOString() }));
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3, 1]);
+    const again = await spoolMeta(stateDir, stuck);
+    expect(again.attempts).toBe(3);
+
+    // ...and the next backoff is twice as long.
+    await writeFile(join(spoolDir, `${stuck}.json`), JSON.stringify({ ...again, last_attempt_at: new Date(Date.now() - 90_000).toISOString() }));
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3, 1]);
+    await collector.stop();
+  });
+
+  test("stops a drain after three failures and leaves the rest to the next one", async () => {
+    const stateDir = await drainState();
+    for (let index = 1; index <= 5; index += 1) await spoolEntry(stateDir, index, 512);
+    const attempts: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (sessionId) => {
+        attempts.push(sessionId);
+        return Response.json({ error: "unavailable" }, { status: 503 });
+      },
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 5 });
+    expect(attempts).toEqual(["session-drain-1", "session-drain-2", "session-drain-3"]);
+    await collector.stop();
+  });
+
+  test("drops an entry once it reaches the attempt limit", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 512, { attempts: 23 });
+    await spoolEntry(stateDir, 2, 512);
+    const warnings: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async () => Response.json({ error: "unavailable" }, { status: 503 }),
+      log: (level, message) => { if (level === "warn") warnings.push(message); },
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(warnings).toEqual(["OmniRush collection artifact dropped from spool"]);
+    expect(await collector.spoolStatus()).toEqual({ entries: 1, bytes: 512 });
+    await collector.stop();
+  });
+
+  test("a sign-out aborts the spooled upload in flight and empties the spool", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 1_024);
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    let aborted = false;
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: (_sessionId, _compressed, signal) => new Promise<Response>((_resolvePromise, reject) => {
+        signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(signal.reason);
+        }, { once: true });
+        started();
+      }),
+      retryBaseMs: 60_000,
+    });
+    const drain = collector.drainSpool();
+    await inFlight;
+    await collector.clearSpool();
+    expect(aborted).toBe(true);
+    expect(await drain).toEqual({ delivered: 0, pending: 1 });
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    await collector.stop();
+  });
+
+  test("a sign-out aborts the live upload in flight and spools nothing it carried", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-signout-"));
+    roots.push(root);
+    const stateDir = await drainState();
+    await writeFile(join(root, "app.txt"), "hello\n");
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const signals: AbortSignal[] = [];
+    const infos: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (_sessionId, _compressed, signal) => {
+        signals.push(signal!);
+        started();
+        // Fails 200 ms in, cancelled or not: a slow uplink that drops.
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+        throw new Error("network down");
+      },
+      log: (level, message) => { if (level === "info") infos.push(message); },
+      fallbackScanMs: 60_000,
+      uploadRetryDelayMs: 1,
+      retryBaseMs: 60_000,
+    });
+    const sessionId = "session-signout-1234";
+    collector.startSession(sessionId, "workspace-signout", root);
+    await inFlight;
+    await collector.clearSpool();
+    await collector.idle(sessionId);
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(infos).toContain("OmniRush collection artifact discarded at sign-out");
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    expect(await readdir(join(stateDir, "omnirush-collector-spool")).catch(() => [])).toEqual([]);
+
+    // The next account's uploads are not cancelled by the earlier sign-out.
+    const next = "session-signout-5678";
+    collector.startSession(next, "workspace-signout-next", root);
+    await collector.idle(next);
+    expect(signals.length).toBeGreaterThan(1);
+    expect(signals.slice(1).every((signal) => !signal.aborted)).toBe(true);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 1 });
+    await collector.clearSpool();
+    await collector.stop();
+  });
+
+  test("spools a live upload once an attempt runs out its deadline, and still retries quick failures in band", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-deadline-live-"));
+    roots.push(root);
+    const stateDir = await drainState();
+    await writeFile(join(root, "app.txt"), "v0\n");
+    // What the gateway does with each call, in order; "drop" once the plan runs out.
+    const plan: Array<"hang" | "drop" | "timeout"> = [];
+    const calls: string[] = [];
+    const spooled: unknown[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async () => {
+        const step = plan.shift() ?? "drop";
+        calls.push(step);
+        // No answer ever, and the hook ignores its signal: only the deadline ends the attempt.
+        if (step === "hang") return new Promise<Response>(() => undefined);
+        // The gateway broker's own deadline, reported by name across the worker boundary.
+        if (step === "timeout") throw new DOMException("The operation timed out.", "TimeoutError");
+        throw new Error("network down");
+      },
+      log: (level, message, attributes) => {
+        if (level === "warn" && message === "OmniRush collection artifact spooled for retry") spooled.push(attributes?.reason);
+      },
+      uploadBudget: { baseMs: 50, bytesPerSecond: 128 * 1024 * 1000, maxSendMs: 900, responseMs: 100 },
+      fallbackScanMs: 60_000,
+      changeDebounceMs: 60_000,
+      uploadRetryDelayMs: 1,
+      retryBaseMs: 60_000,
+    });
+    const sessionId = "session-deadline-live-1";
+
+    // The start snapshot's first attempt runs out its deadline: spooled, not tried twice more in band.
+    plan.push("hang");
+    collector.startSession(sessionId, "workspace-deadline-live", root);
+    await collector.idle(sessionId);
+    expect(calls).toEqual(["hang"]);
+    expect(spooled).toHaveLength(1);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 1 });
+
+    // The session's queue moved on to its next snapshot, whose quick failures keep their in-band retries.
+    plan.push("drop", "drop", "drop");
+    await writeFile(join(root, "app.txt"), "v1\n");
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    expect(calls).toEqual(["hang", "drop", "drop", "drop"]);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 2 });
+
+    // A quick failure, then an attempt out of time: no third attempt.
+    plan.push("drop", "timeout");
+    await writeFile(join(root, "app.txt"), "v2\n");
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    expect(calls).toEqual(["hang", "drop", "drop", "drop", "drop", "timeout"]);
+    expect(spooled.slice(1)).toEqual(["network down", "The operation timed out."]);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 3 });
+    await collector.clearSpool();
+    await collector.stop();
+  });
+
+  test("a stop mid-drain leaves the spooled entry in flight as it was", async () => {
+    const stateDir = await drainState();
+    const id = await spoolEntry(stateDir, 1, 1_024, { attempts: 3, last_attempt_at: new Date(Date.now() - 60 * 60_000).toISOString() });
+    const before = await spoolMeta(stateDir, id);
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const collector = new WorkspaceCollector({
+      stateDir,
+      // Never answers and ignores its signal: the stop ends it all the same.
+      upload: () => {
+        started();
+        return new Promise<Response>(() => undefined);
+      },
+      retryBaseMs: 60_000,
+    });
+    const drain = collector.drainSpool();
+    await inFlight;
+    await collector.stop();
+    expect(await drain).toEqual({ delivered: 0, pending: 1 });
+    expect(await spoolMeta(stateDir, id)).toEqual(before);
+    expect(before).toMatchObject({ attempts: 3, last_attempt_at: expect.any(String) });
+    expect(await collector.spoolStatus()).toEqual({ entries: 1, bytes: 1_024 });
+  });
+
+  test("an entry dated in the future (the clock went back) waits one backoff, not until then", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 256, { attempts: 2, last_attempt_at: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString() });
+    let calls = 0;
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async () => {
+        calls += 1;
+        return new Response(null, { status: calls === 1 ? 503 : 201 });
+      },
+      retryBaseMs: 20,
+      retryMaxMs: 80,
+    });
+    // Due at once: the first try fails and records a sane last attempt.
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    const deadline = Date.now() + 2_000;
+    while ((await collector.spoolStatus()).entries > 0 && Date.now() < deadline) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    }
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    // Retried on the capped schedule: a handful of calls, no 1 ms loop.
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(calls).toBeLessThanOrEqual(4);
+    await collector.stop();
+  });
+
+  test("a drain asked for while one runs picks up the entries spooled meanwhile", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 512);
+    let release!: () => void;
+    const held = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const delivered: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (sessionId) => {
+        if (sessionId === "session-drain-1") {
+          started();
+          await held;
+        }
+        delivered.push(sessionId);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      retryBaseMs: 60_000,
+    });
+    const running = collector.drainSpool();
+    await inFlight;
+    // Spooled after the running drain listed the spool.
+    await spoolEntry(stateDir, 2, 512);
+    const next = collector.drainSpool();
+    // Every call during the run shares the one drain after it.
+    expect(collector.drainSpool()).toBe(next);
+    release();
+    expect(await running).toEqual({ delivered: 1, pending: 0 });
+    expect(await next).toEqual({ delivered: 1, pending: 0 });
+    expect(delivered).toEqual(["session-drain-1", "session-drain-2"]);
     expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
     await collector.stop();
   });
@@ -2521,6 +2986,69 @@ describe("workspace collector incremental snapshots", () => {
       expect(change && contentPaths(change)).toEqual(["assets/found.txt"]);
     }
     await collector.stop();
+  });
+
+  test("two chats on one folder: only the one running a turn uploads the edits made meanwhile, and each still captures its own milestones", async () => {
+    const root = await workspace("shared", 4);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 150, minChangeIntervalMs: 0 });
+    const working = "session-shared-working-1";
+    const idle = "session-shared-idle-0001";
+    const both = [working, idle];
+    for (const sessionId of both) collector.startSession(sessionId, "workspace-shared", root);
+    for (const sessionId of both) await collector.idle(sessionId);
+    const settle = async () => {
+      // Past the debounce and several reconcile passes.
+      await sleep(600);
+      for (const sessionId of both) await collector.idle(sessionId);
+    };
+    const changesOf = (sessionId: string) => changes(uploads)
+      .filter((item) => item.session_id === sessionId)
+      .map((item) => [item.trigger, contentPaths(item).sort()]);
+    // Whichever of the watcher and the reconcile pass saw the edit first.
+    const edit = expect.stringMatching(/^(?:fs_change|periodic)$/);
+
+    collector.captureSnapshot(working, "prompt");
+    await collector.idle(working);
+    await writeFile(join(root, "src", "f00.txt"), "the agent's edit\n");
+    await settle();
+    expect(changesOf(working)).toEqual([[edit, ["src/f00.txt"]]]);
+    expect(changesOf(idle)).toEqual([]);
+    expect(collector.metrics.capturesHeld).toBeGreaterThan(0);
+
+    // The turn ends: the other chat still leaves that turn's edits alone, reconcile passes included.
+    collector.captureSnapshot(working, "turn_completed");
+    await settle();
+    expect(changesOf(idle)).toEqual([]);
+
+    // An edit between turns is uploaded once, by the chat that ran the last turn.
+    await writeFile(join(root, "README.md"), "# edited by hand\n");
+    await settle();
+    expect(changesOf(working).at(-1)).toEqual([edit, ["README.md"]]);
+    expect(changesOf(idle)).toEqual([]);
+
+    // The other chat's own prompt carries what it has not sent yet; while it
+    // runs its turn, the first chat holds back in turn.
+    collector.captureSnapshot(idle, "prompt");
+    await collector.idle(idle);
+    expect(changesOf(idle)).toEqual([["prompt", ["README.md", "src/f00.txt"]]]);
+    const sentByWorking = changesOf(working).length;
+    await writeFile(join(root, "src", "f02.txt"), "the other agent's edit\n");
+    await settle();
+    expect(changesOf(idle).at(-1)).toEqual([edit, ["src/f02.txt"]]);
+    expect(changesOf(working)).toHaveLength(sentByWorking);
+    collector.captureSnapshot(idle, "turn_completed");
+    await collector.idle(idle);
+    for (const sessionId of both) collector.flushTrace(sessionId);
+    await collector.stop();
+    for (const sessionId of both) {
+      const milestones = uploads
+        .filter((item) => item.snapshot_type === "trace" && item.session_id === sessionId)
+        .flatMap((item) => item.trace ?? [])
+        .filter((event) => event.type === "collector.trigger")
+        .map((event) => event.data?.trigger);
+      expect(milestones).toEqual(["prompt", "turn_completed"]);
+    }
   });
 
   test("keeps gitignored files out of change snapshots and the journal in a workspace git does not manage", async () => {

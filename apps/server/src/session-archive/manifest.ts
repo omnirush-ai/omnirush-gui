@@ -17,9 +17,9 @@ import { hintGarbageCollection } from "./files.js";
 
 export const ARCHIVE_SCHEMA = "omnirush.archive.v1";
 export const RESERVED_ROOT_NAME = "__omnirush__";
-const STAT_CONCURRENCY = 64;
-const HASH_CONCURRENCY = 6;
-const HASH_READ_BYTES = 128 * 1024;
+export const STAT_CONCURRENCY = 64;
+export const HASH_CONCURRENCY = 6;
+export const HASH_READ_BYTES = 128 * 1024;
 /** Bytes hashed, or entries inspected or hashed, between two garbage collection hints. */
 const GC_HINT_BYTES = 64 * 1024 * 1024;
 const GC_HINT_ENTRIES = 10_000;
@@ -35,6 +35,20 @@ export const OPEN_ENTRY_FLAGS =
   fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0) | (fsConstants.O_NOCTTY ?? 0);
 
 export type ArchiveKind = "base" | "delta";
+/**
+ * Why a delta was taken (manifest.json `trigger`): a completed turn, or a
+ * final archive of the folder after the last completed turn, which carries
+ * that turn's number again.
+ */
+export type ArchiveTrigger = "turn" | "final";
+/** What prompted a final archive (manifest.json `reason`). */
+export type FinalReason = "idle" | "turn_incomplete" | "session_deleted" | "app_quit" | "app_start";
+/**
+ * manifest.json `scope` of a touched-files archive: its `files` are only the
+ * files the agent touched, and a path it does not list is not deleted (only
+ * `deleted` deletes). The whole-folder archives have no `scope`.
+ */
+export type ArchiveScope = "touched";
 export type ArchiveEntryType = "file" | "dir" | "symlink";
 
 /** One manifest `files` item (section 5.4). */
@@ -94,6 +108,9 @@ export type ArchiveManifest = {
   turn: number;
   created_at: string;
   parent_archive_id: string | null;
+  trigger?: ArchiveTrigger;
+  reason?: FinalReason;
+  scope?: ArchiveScope;
   workspace: { label: string; marker: string; git: ArchiveGit | null };
   files: ArchiveEntry[];
   deleted?: string[];
@@ -319,6 +336,8 @@ export type ScanOptions = {
   statConcurrency?: number;
   hashConcurrency?: number;
   metrics?: ScanMetrics;
+  /** Stops the scan between entries: it then rejects with the signal's reason. */
+  signal?: AbortSignal;
 };
 
 export type ScanResult = { entries: ScannedEntry[]; excluded: ExcludedCounts };
@@ -328,7 +347,7 @@ export type ScanResult = { entries: ScannedEntry[]; excluded: ExcludedCounts };
  * pull plain data items, so a 200k-entry level costs 200k small objects, not
  * 200k suspended async frames.
  */
-async function forEachBounded<T>(items: readonly T[], limit: number, operation: (item: T) => Promise<void>): Promise<void> {
+export async function forEachBounded<T>(items: readonly T[], limit: number, operation: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < items.length) {
@@ -342,7 +361,7 @@ async function forEachBounded<T>(items: readonly T[], limit: number, operation: 
 
 const NAME_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-function decodeName(raw: Buffer): string | null {
+export function decodeName(raw: Buffer): string | null {
   try {
     return NAME_DECODER.decode(raw);
   } catch {
@@ -350,12 +369,12 @@ function decodeName(raw: Buffer): string | null {
   }
 }
 
-function portable(path: string): string {
+export function portable(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
 }
 
 /** The excluded directories that lie strictly under the root, as root-relative paths. */
-async function excludedRelativeDirs(root: string, dirs: readonly string[]): Promise<Set<string>> {
+export async function excludedRelativeDirs(root: string, dirs: readonly string[]): Promise<Set<string>> {
   const rootForms = new Set([resolve(root)]);
   try {
     rootForms.add(await realpath(root));
@@ -384,7 +403,7 @@ async function excludedRelativeDirs(root: string, dirs: readonly string[]): Prom
 // Strings kept per entry are built with join(), which yields one flat string;
 // template concatenation in JSC yields a rope that keeps every piece alive,
 // roughly doubling the per-entry cost on a 200k-entry tree.
-function statFields(stats: BigIntStats) {
+export function statFields(stats: BigIntStats) {
   return {
     mode: Number(stats.mode & 0o7777n),
     mtime: Number(stats.mtimeNs / 1_000_000_000n),
@@ -394,7 +413,7 @@ function statFields(stats: BigIntStats) {
 }
 
 /** SHA-256 of the first `size` bytes (the lstat size): pass 2 streams exactly those and detects any change. */
-async function hashFile(absolute: string, size: number, buffer: Buffer, metrics: ScanMetrics): Promise<string | null> {
+async function hashFile(absolute: string, size: number, buffer: Buffer, metrics: ScanMetrics, signal?: AbortSignal): Promise<string | null> {
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(absolute, OPEN_ENTRY_FLAGS);
@@ -408,6 +427,8 @@ async function hashFile(absolute: string, size: number, buffer: Buffer, metrics:
     const hash = createHash("sha256");
     let remaining = size;
     while (remaining > 0) {
+      // A stopped scan does not finish a big file first (the scan rejects right after).
+      if (signal?.aborted) return null;
       const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, remaining), null);
       if (bytesRead === 0) break;
       hash.update(buffer.subarray(0, bytesRead));
@@ -432,6 +453,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const concurrency = options.statConcurrency ?? STAT_CONCURRENCY;
   const metrics = options.metrics ?? emptyScanMetrics();
   const cache = options.hashCache;
+  const signal = options.signal;
   const excluded = emptyExcludedCounts();
   const prunedDirs = await excludedRelativeDirs(root, options.excludedDirs ?? []);
   const includeCredentials = options.includeCredentialFiles === true;
@@ -439,6 +461,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const toHash: ScannedEntry[] = [];
 
   const inspect = async (relDir: string, absDir: string, name: string, next: Array<{ rel: string; abs: string }>): Promise<void> => {
+    signal?.throwIfAborted();
     const rel = relDir ? [relDir, name].join("/") : name;
     const abs = join(absDir, name);
     let stats: BigIntStats;
@@ -499,6 +522,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   while (level.length > 0) {
     const names: Array<{ relDir: string; absDir: string; name: string }> = [];
     await forEachBounded(level, concurrency, async (dir) => {
+      signal?.throwIfAborted();
       let raw: Buffer[];
       try {
         raw = await readdir(dir.abs, { encoding: "buffer" });
@@ -523,9 +547,10 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const unreadable = new Set<ScannedEntry>();
   const buffers: Buffer[] = [];
   await forEachBounded(toHash, options.hashConcurrency ?? HASH_CONCURRENCY, async (entry) => {
+    signal?.throwIfAborted();
     const buffer = buffers.pop() ?? Buffer.allocUnsafe(HASH_READ_BYTES);
     try {
-      const sha256 = await hashFile(join(root, ...entry.path.split("/")), entry.size, buffer, metrics);
+      const sha256 = await hashFile(join(root, ...entry.path.split("/")), entry.size, buffer, metrics, signal);
       if (sha256 === null) {
         unreadable.add(entry);
         cache?.forget(entry.path);
@@ -537,6 +562,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
       buffers.push(buffer);
     }
   });
+  signal?.throwIfAborted();
   excluded.unreadable += unreadable.size;
   const kept = unreadable.size > 0 ? entries.filter((entry) => !unreadable.has(entry)) : entries;
   kept.sort((left, right) => compareArchivePaths(left.path, right.path));
@@ -616,6 +642,11 @@ export type ManifestInput = {
   turn: number;
   createdAt: Date;
   parentArchiveId: string | null;
+  /** Deltas only: a completed turn, or a final archive (then with its reason). */
+  trigger?: ArchiveTrigger;
+  reason?: FinalReason;
+  /** Touched-files archives only. */
+  scope?: ArchiveScope;
   label: string;
   marker: string;
   git: ArchiveGit | null;
@@ -643,6 +674,9 @@ export function manifestSource(input: ManifestInput): ManifestSource {
     turn: input.turn,
     created_at: input.createdAt.toISOString(),
     parent_archive_id: input.parentArchiveId,
+    ...(input.trigger ? { trigger: input.trigger } : {}),
+    ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
     workspace: { label: input.label, marker: input.marker, git: input.git },
   });
   const deleted = input.kind === "delta" ? `,"deleted":${JSON.stringify(input.deleted ?? [])}` : "";

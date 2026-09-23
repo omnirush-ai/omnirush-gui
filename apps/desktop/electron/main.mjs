@@ -79,6 +79,7 @@ import {
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
 import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
+import { applyLinuxPasswordStore, recordLinuxPasswordStore } from "./linux-password-store.mjs";
 import { createDesktopOmniRushAccountStore, legacyKeychainAllowed } from "./omnirush-account.mjs";
 import {
   clearOmniRushSentrySession,
@@ -1016,6 +1017,23 @@ if (extraLaunchArgs) {
     }
   }
 }
+// Linux: Chromium falls back to its insecure basic_text store when it cannot
+// name the desktop (Hyprland, sway, i3, ...), even with gnome-keyring,
+// KeePassXC or KWallet on the session bus. Point it at that keyring before
+// `ready`; an explicit --password-store always wins. Bounded to ~300 ms.
+// Once a sign-in or vault key is sealed with a store, later launches keep
+// that store while the sealed file exists, even if the keyring is not yet
+// running (D-Bus starts it on demand).
+await applyLinuxPasswordStore({ app, userDataPath: app.getPath("userData") });
+/** Linux: remember which keyring backend sealed `fileName` in userData. */
+function recordKeyringSealed(fileName) {
+  return (backend) => recordLinuxPasswordStore({ userDataPath: app.getPath("userData"), fileName, backend }).then(
+    (changed) => {
+      if (changed) console.log(`[omnirush] Linux password store recorded for ${fileName}: ${backend}`);
+    },
+    () => undefined,
+  );
+}
 configureFakeMediaForTests(app, envFlagEnabled("OMNIRUSH_ELECTRON_FAKE_MEDIA"));
 // omnirush.ai has no hosted Den control plane. The default stays empty so no
 // code path contacts one automatically; a Den base URL only exists when
@@ -1314,6 +1332,9 @@ function validateSkillName(raw) {
 const omnirushAccountStore = createDesktopOmniRushAccountStore({
   filePath: path.join(app.getPath("userData"), "omnirush-account.bin"),
   loadSafeStorage: () => require("electron").safeStorage,
+  // Linux without a usable keyring only; unencrypted at rest, owner-only.
+  fallbackFilePath: path.join(app.getPath("userData"), "private-credentials", "omnirush-account.json"),
+  onKeyringSealed: recordKeyringSealed("omnirush-account.bin"),
   legacyKeychain: legacyKeychainAllowed({
     appIdentifier: APP_IDENTIFIER,
     productionAppIdentifier: TAURI_APP_IDENTIFIER,
@@ -1352,6 +1373,9 @@ const runtimeManager = createRuntimeManager({
     : createDesktopVaultKeyProvider({
         filePath: path.join(app.getPath("userData"), "local-managed-mcp-vault-key.bin"),
         loadSafeStorage: () => require("electron").safeStorage,
+        // Linux without a usable keyring only; unencrypted at rest, owner-only.
+        fallbackFilePath: path.join(app.getPath("userData"), "private-credentials", "local-managed-mcp-vault-key.json"),
+        onKeyringSealed: recordKeyringSealed("local-managed-mcp-vault-key.bin"),
       }),
   omnirushGatewayCredentials: omnirushAccountStore,
   // Collector envelopes report environment.app_version from the desktop build, not the server package.

@@ -8,7 +8,11 @@
  * bodies travel as transferred buffers.
  */
 import type { CaptureHost, EngineTarget, PromptRecord } from "./capture-host.js";
+import type { FolderGateOptions } from "./session-archive/detect.js";
 import type { CollectorWebVisit } from "./workspace-collector.js";
+
+/** How the capture stops: `archiveFinals` false (the account is gone) packs no final project archives. */
+export type CaptureStopOptions = { archiveFinals: boolean };
 
 /** CaptureHost methods callable from the main thread, with their arguments. */
 export type CaptureCalls = {
@@ -21,7 +25,7 @@ export type CaptureCalls = {
   observeSession: [sessionId: string, target: EngineTarget];
   sessionDeleted: [sessionId: string];
   signOut: [];
-  stop: [];
+  stop: [options?: CaptureStopOptions];
   idle: [];
   diagnostics: [];
 };
@@ -35,7 +39,7 @@ export type CaptureCall = { [M in CaptureCallName]: { kind: "call"; id: number |
 export type HostRequest =
   | { type: "collect"; sessionId: string; body: Uint8Array<ArrayBuffer> }
   | { type: "refreshAccessToken" }
-  | { type: "archiveRequest"; path: string; method: "GET" | "POST"; body?: string }
+  | { type: "archiveRequest"; path: string; method: "GET" | "POST"; body?: string; refresh?: false }
   | { type: "fetch"; url: string; method: string; headers: Array<[string, string]>; body?: Uint8Array<ArrayBuffer> | string };
 
 export type RequestChannel = "collector" | "archive";
@@ -66,6 +70,7 @@ export type CaptureWorkerInit = {
   archive: {
     enabled: boolean;
     excludedDirs: string[];
+    folderGate?: FolderGateOptions;
     request: boolean;
     refreshAccessToken: boolean;
     gatewayUrl?: string;
@@ -126,7 +131,7 @@ export function invokeCapture(host: CaptureHost, call: CaptureCall): unknown {
     case "signOut":
       return host.signOut();
     case "stop":
-      return host.stop();
+      return host.stop(...call.args);
     case "idle":
       return host.idle();
     case "diagnostics":

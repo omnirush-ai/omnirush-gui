@@ -32,6 +32,8 @@ import { isCollectableWebUrl, workspaceCollectorEnabled, type CollectorWebVisit 
 const MAX_TRACED_REQUEST_BYTES = 4 * 1024 * 1024;
 /** Shutdown waits this long for the last traces and end snapshots before the worker is terminated. */
 const STOP_TIMEOUT_MS = 20_000;
+/** Shutdown waits this long to learn whether the account is still there (for the final project archives), else packs none. */
+const ACCOUNT_CHECK_TIMEOUT_MS = 1_000;
 /** A worker that exits unexpectedly is replaced at most this many times per server. */
 const MAX_WORKER_RESTARTS = 3;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
@@ -39,6 +41,8 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
 export type CaptureServiceOptions = Omit<CaptureHostOptions, "onSessionClosed"> & {
   /** Run capture on a worker thread; default on unless OMNIRUSH_CAPTURE_WORKER is 0, false, no or off. */
   worker?: boolean;
+  /** How long shutdown waits for the capture to stop; STOP_TIMEOUT_MS unless a test lowers it. */
+  stopTimeoutMs?: number;
 };
 
 export type CaptureService = {
@@ -59,7 +63,12 @@ export type CaptureService = {
   observeSession(sessionId: string, target: EngineTarget): void;
   sessionDeleted(sessionId: string): void;
   signOut(): Promise<void>;
-  stop(): Promise<void>;
+  /**
+   * Stops capture. `archiveFinals` (default true) says whether the account is
+   * still connected, so that the project archive packs its final archives;
+   * a user sign-out clears the account before it restarts the server.
+   */
+  stop(options?: { archiveFinals?: boolean | Promise<boolean> }): Promise<void>;
   /** Every queued capture, upload and archive step settled (tests, profiling). */
   idle(): Promise<void>;
   diagnostics(): Promise<CaptureDiagnostics | null>;
@@ -167,29 +176,36 @@ class CaptureClient implements CaptureService {
     return isDiagnostics(value) ? value : null;
   }
 
-  stop(): Promise<void> {
-    this.stopping ??= this.shutdown();
+  stop(options: { archiveFinals?: boolean | Promise<boolean> } = {}): Promise<void> {
+    this.stopping ??= this.shutdown(options.archiveFinals ?? true);
     return this.stopping;
   }
 
-  private async shutdown(): Promise<void> {
+  private async shutdown(archiveFinals: boolean | Promise<boolean>): Promise<void> {
     // First, and synchronously: archive uploads this thread makes for the worker are aborted now.
     for (const { controller, channel } of this.served.values()) if (channel === "archive") controller.abort();
-    const done = this.dispatch({ kind: "call", id: null, method: "stop", args: [] }, [], true);
+    const finals = await withinTimeout(archiveFinals, ACCOUNT_CHECK_TIMEOUT_MS);
+    const done = this.dispatch({ kind: "call", id: null, method: "stop", args: [{ archiveFinals: finals }] }, [], true);
+    const timeoutMs = this.options.stopTimeoutMs ?? STOP_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<void>((resolvePromise) => {
+    const timedOut = new Promise<true>((resolvePromise) => {
       timer = setTimeout(() => {
-        this.options.log("warn", "OmniRush capture did not stop in time; the capture worker is terminated", { timeoutMs: STOP_TIMEOUT_MS });
-        resolvePromise();
-      }, STOP_TIMEOUT_MS);
+        this.options.log("warn", this.local
+          ? "OmniRush capture did not stop in time; its uploads in flight are aborted"
+          : "OmniRush capture did not stop in time; the capture worker is terminated", { timeoutMs });
+        resolvePromise(true);
+      }, timeoutMs);
       timer.unref?.();
     });
-    await Promise.race([done, timedOut]);
+    const late = await Promise.race([done.then(() => false), timedOut]);
     clearTimeout(timer);
+    // In-process there is no worker to terminate: its uploads end here instead (spooled for the next start).
+    if (late) this.local?.collector.abortUploads();
     const worker = this.worker;
     this.worker = null;
     this.current = "down";
     if (worker) await worker.terminate().catch(() => undefined);
+    // Also aborts the requests this thread was still serving for the worker.
     this.settleOutstanding();
   }
 
@@ -257,6 +273,7 @@ class CaptureClient implements CaptureService {
       archive: {
         enabled: archive.enabled,
         excludedDirs: archive.excludedDirs,
+        folderGate: archive.folderGate,
         request: Boolean(archive.request),
         refreshAccessToken: Boolean(archive.refreshAccessToken),
         ...(archive.gatewayUrl !== undefined ? { gatewayUrl: archive.gatewayUrl } : {}),
@@ -320,7 +337,6 @@ class CaptureClient implements CaptureService {
   private onExit(worker: Worker, code: number): void {
     if (worker !== this.worker) return;
     this.worker = null;
-    for (const { controller } of this.served.values()) controller.abort();
     this.settleOutstanding();
     if (this.stopping) return;
     if (this.current === "starting") {
@@ -339,10 +355,16 @@ class CaptureClient implements CaptureService {
     this.options.log("warn", "OmniRush capture worker exited too often; capture is off until the app restarts", { code });
   }
 
-  /** Every caller waiting on the worker gets an empty result. */
+  /**
+   * The worker is gone: every caller waiting on it gets an empty result, and
+   * every request this thread still serves for it (a collector upload that
+   * outlasted the stop, an archive or egress fetch) is aborted, so none runs
+   * on for up to its own deadline with no one left to take the answer.
+   */
   private settleOutstanding(): void {
     for (const resolvePromise of this.replies.values()) resolvePromise(null);
     this.replies.clear();
+    for (const { controller } of this.served.values()) controller.abort(new DOMException("The capture worker has stopped", "AbortError"));
     this.served.clear();
   }
 
@@ -351,7 +373,7 @@ class CaptureClient implements CaptureService {
     if (reason !== null) {
       this.options.log("warn", "OmniRush capture worker could not start; capturing in-process", { error: errorSummary(reason) });
     }
-    const { worker: _worker, ...hostOptions } = this.options;
+    const { worker: _worker, stopTimeoutMs: _stopTimeoutMs, ...hostOptions } = this.options;
     try {
       this.local = new CaptureHost(hostOptions);
     } catch (error) {
@@ -406,7 +428,7 @@ class CaptureClient implements CaptureService {
     switch (request.type) {
       case "collect": {
         if (!collector.upload) throw new Error("no collector upload hook");
-        return { kind: "result", id, ok: true, response: await serializeResponse(await collector.upload(request.sessionId, request.body)) };
+        return { kind: "result", id, ok: true, response: await serializeResponse(await collector.upload(request.sessionId, request.body, signal)) };
       }
       case "refreshAccessToken": {
         const refresh = channel === "archive" ? archive.refreshAccessToken : collector.refreshAccessToken;
@@ -414,7 +436,12 @@ class CaptureClient implements CaptureService {
       }
       case "archiveRequest": {
         if (!archive.request) throw new Error("no archive request hook");
-        const response = await archive.request(request.path, { method: request.method, ...(request.body !== undefined ? { body: request.body } : {}), signal });
+        const response = await archive.request(request.path, {
+          method: request.method,
+          ...(request.body !== undefined ? { body: request.body } : {}),
+          ...(request.refresh === false ? { refresh: false as const } : {}),
+          signal,
+        });
         return { kind: "result", id, ok: true, response: await serializeResponse(response) };
       }
       case "fetch": {
@@ -428,6 +455,21 @@ class CaptureClient implements CaptureService {
         return { kind: "result", id, ok: true, response: await serializeResponse(response) };
       }
     }
+  }
+}
+
+/** The answer if it comes within `ms`, else false (as for a failed check). */
+async function withinTimeout(answer: boolean | Promise<boolean>, ms: number): Promise<boolean> {
+  if (typeof answer === "boolean") return answer;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<boolean>((resolvePromise) => {
+    timer = setTimeout(() => resolvePromise(false), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([answer.catch(() => false), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

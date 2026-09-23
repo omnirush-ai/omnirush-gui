@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +9,7 @@ import { zstdDecompressSync } from "node:zlib";
 
 import { startCaptureService, type CaptureService, type CaptureServiceOptions } from "./capture-client.js";
 import { FakeArchiveServer, slowPartTwo } from "./session-archive/fake-archive-server.js";
+import { openArchive } from "./session-archive/test-helpers.js";
 
 /**
  * The capture worker: the collector's and the archiver's work runs off the
@@ -225,6 +227,221 @@ describe("capture worker", () => {
     expect(slow.puts[0]!.abortedAfterMs!).toBeLessThan(1_000);
     // The collector still delivered the session's end snapshot on the way out.
     expect(sink.envelopes().map((item) => item.snapshot_type)).toContain("end");
+  }, 60_000);
+
+  test("a stop that runs out of time aborts the collector upload this thread still serves for the worker, and does not wait for it", async () => {
+    const root = await syntheticWorkspace(5);
+    const signals: AbortSignal[] = [];
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const capture = service({
+      stateDir: await tempDir("state"),
+      stopTimeoutMs: 300,
+      collector: {
+        // The gateway never answers and this hook ignores its signal, as a stalled upload on the main thread would.
+        upload: (_sessionId, _bytes, signal) => {
+          signals.push(signal!);
+          started();
+          return new Promise<Response>(() => undefined);
+        },
+      },
+    });
+    capture.startSession("session-served-0001", "workspace-served", root);
+    await inFlight;
+    expect(signals[0]!.aborted).toBe(false);
+    const stopping = performance.now();
+    await capture.stop();
+    expect(performance.now() - stopping).toBeLessThan(5_000);
+    expect(capture.mode()).toBe("down");
+    // Terminating the worker ended the request it had asked this thread to make.
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+  }, 60_000);
+
+  test("in-process, a stop that runs out of time aborts the upload in flight and spools it for the next start", async () => {
+    const root = await syntheticWorkspace(5);
+    const stateDir = await tempDir("state");
+    const signals: AbortSignal[] = [];
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const capture = service({
+      stateDir,
+      worker: false,
+      stopTimeoutMs: 300,
+      collector: {
+        upload: (_sessionId, _bytes, signal) => {
+          signals.push(signal!);
+          started();
+          return new Promise<Response>(() => undefined);
+        },
+      },
+    });
+    capture.startSession("session-local-stop-01", "workspace-local-stop", root);
+    await inFlight;
+    const stopping = performance.now();
+    await capture.stop();
+    expect(performance.now() - stopping).toBeLessThan(5_000);
+    expect(signals[0]!.aborted).toBe(true);
+    // The start snapshot and the session's end snapshot wait in the spool, the end one never sent.
+    const spoolDir = join(stateDir, "omnirush-collector-spool");
+    const spooledTypes = async () => (await Promise.all((await readdir(spoolDir).catch(() => [] as string[]))
+      .filter((name) => name.endsWith(".json"))
+      .map(async (name) => (JSON.parse(await readFile(join(spoolDir, name), "utf8")) as { snapshot_type: string }).snapshot_type))).sort();
+    await until(async () => (await spooledTypes()).length === 2, 10_000, "the spooled snapshots");
+    expect(await spooledTypes()).toEqual(["end", "start"]);
+    expect(signals).toHaveLength(1);
+  }, 60_000);
+
+  test("stopping packs the project archive's final archives on the worker, unless the account is gone", async () => {
+    const results: string[][] = [];
+    for (const archiveFinals of [undefined, Promise.resolve(false)]) {
+      const root = await tempDir("project");
+      await writeFile(join(root, "README.md"), "# project\n");
+      await git(root, "init", "-q");
+      await git(root, "add", "README.md");
+      await git(root, "commit", "-q", "-m", "initial");
+      const archive = new FakeArchiveServer();
+      const engine = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: (request) => (new URL(request.url).pathname.endsWith("/message") ? Response.json([]) : Response.json({ id: "ses_final_stop_01" })),
+      });
+      cleanups.push(() => engine.stop(true));
+      const stateDir = await tempDir("state");
+      const capture = service({
+        stateDir,
+        collector: { upload: uploadSink().upload },
+        archive: {
+          enabled: true,
+          excludedDirs: [],
+          request: (path, init) => archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
+            method: init.method,
+            headers: { authorization: `Bearer ${archive.token}` },
+            ...(init.body === undefined ? {} : { body: init.body }),
+          }),
+          refreshAccessToken: async () => null,
+          fetch: archive.respond,
+          baseIdleMs: 0,
+        },
+      });
+      capture.startSession("ses_final_stop_01", "workspace-final", root);
+      capture.archiveSessionStarted("ses_final_stop_01", root, { baseUrl: `http://127.0.0.1:${engine.port}`, headers: [], search: "", engine: "v1" });
+      await capture.idle();
+      expect(archive.objects().map((object) => object.request.kind)).toEqual(["base"]);
+      // Edited after the chat's last turn, then the app quits (or the user signs out).
+      await writeFile(join(root, "notes.md"), "after the last turn\n");
+      await capture.stop(archiveFinals === undefined ? {} : { archiveFinals });
+      results.push(await readdir(join(stateDir, "omnirush-archive", "queue")));
+    }
+    expect(results[0]).toHaveLength(1);
+    expect(results[1]).toEqual([]);
+  }, 60_000);
+
+  test("the archiver on the worker reads the all-folders policy from the key and archives a folder without .git only while it is on", async () => {
+    const engine = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => (new URL(request.url).pathname.endsWith("/message") ? Response.json([]) : Response.json({ id: "ses_folder_0001" })),
+    });
+    cleanups.push(() => engine.stop(true));
+    for (const policy of [undefined, { all_folders: true }]) {
+      const home = await tempDir("home");
+      const root = join(home, "notes");
+      await mkdir(root);
+      await writeFile(join(root, "plan.md"), "# plan\n");
+      const archive = new FakeArchiveServer();
+      archive.policy = policy;
+      const refreshFlags: unknown[] = [];
+      const capture = service({
+        stateDir: await tempDir("state"),
+        collector: { upload: uploadSink().upload },
+        archive: {
+          enabled: true,
+          excludedDirs: [],
+          folderGate: { homeDir: home },
+          request: (path, init) => {
+            refreshFlags.push("refresh" in init ? init.refresh : "absent");
+            return archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
+              method: init.method,
+              headers: { authorization: `Bearer ${archive.token}` },
+              ...(init.body === undefined ? {} : { body: init.body }),
+            });
+          },
+          refreshAccessToken: async () => null,
+          fetch: archive.respond,
+          baseIdleMs: 0,
+        },
+      });
+      capture.startSession("ses_folder_0001", "workspace-folder", root);
+      capture.archiveSessionStarted("ses_folder_0001", root, { baseUrl: `http://127.0.0.1:${engine.port}`, headers: [], search: "", engine: "v1" });
+      await until(() => archive.calls.some((call) => call.path === "archives/key"), 20_000, "the key read");
+      await capture.idle();
+      expect(capture.mode()).toBe("worker");
+      if (policy) {
+        await until(() => archive.objects().length === 1, 20_000, "the folder's base archive");
+        expect(archive.objects()[0]!.request).toMatchObject({ session_id: "ses_folder_0001", kind: "base", marker: "folder" });
+      } else {
+        expect(archive.callPaths()).toEqual(["GET archives/key 200"]);
+      }
+      // The policy probe reached the main thread's request hook with no bearer refresh.
+      expect(refreshFlags[0]).toBe(false);
+      await capture.stop();
+    }
+  }, 60_000);
+
+  test("on the worker, the paths the collector sees a session touch reach the touched-files archive: a folder without .git gets only those files", async () => {
+    const sessionId = "ses_touched_0001";
+    const engine = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => (new URL(request.url).pathname.endsWith("/message") ? Response.json([]) : Response.json({ id: sessionId })),
+    });
+    cleanups.push(() => engine.stop(true));
+    const home = await tempDir("home");
+    const root = join(home, "report");
+    await mkdir(root);
+    const brief = randomBytes(64 * 1024);
+    await writeFile(join(root, "brief.pdf"), brief);
+    await writeFile(join(root, "untouched.txt"), "never touched\n");
+    const archive = new FakeArchiveServer();
+    archive.policy = { touched_files: true };
+    const stateDir = await tempDir("state");
+    const capture = service({
+      stateDir,
+      collector: { upload: uploadSink().upload },
+      archive: {
+        enabled: true,
+        excludedDirs: [],
+        folderGate: { homeDir: home },
+        request: (path, init) => archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
+          method: init.method,
+          headers: { authorization: `Bearer ${archive.token}` },
+          ...(init.body === undefined ? {} : { body: init.body }),
+        }),
+        refreshAccessToken: async () => null,
+        fetch: archive.respond,
+        baseIdleMs: 0,
+      },
+    });
+    capture.startSession(sessionId, "workspace-touched", root);
+    capture.archiveSessionStarted(sessionId, root, { baseUrl: `http://127.0.0.1:${engine.port}`, headers: [], search: "", engine: "v1" });
+    await until(() => archive.calls.some((call) => call.path === "archives/key"), 20_000, "the key read");
+    await capture.idle();
+    expect(capture.mode()).toBe("worker");
+    // Registered: nothing packed before a capture with a touched file.
+    expect(archive.callPaths()).toEqual(["GET archives/key 200"]);
+    // The agent reads the PDF; the app quits: the quit's final archive is the chain's base.
+    capture.recordTrace(sessionId, "tool.read", { input: { filePath: join(root, "brief.pdf") } });
+    await capture.idle();
+    await capture.stop();
+    const archiveDir = join(stateDir, "omnirush-archive");
+    const queue = await readdir(join(archiveDir, "queue"));
+    expect(queue).toHaveLength(1);
+    const record = JSON.parse(await readFile(join(archiveDir, "queue", queue[0]!), "utf8"));
+    expect(record.request).toMatchObject({ session_id: sessionId, kind: "base", sequence: 0, turn: 0, marker: "touched" });
+    const members = await openArchive(await readFile(join(archiveDir, "pending", record.sealed_file)));
+    expect(members.map((member) => member.name)).toEqual(["__omnirush__/manifest.json", "brief.pdf"]);
+    expect(members[1]!.content.equals(brief)).toBe(true);
   }, 60_000);
 
   test("OMNIRUSH_CAPTURE_WORKER=0 captures in-process with the same envelopes", async () => {

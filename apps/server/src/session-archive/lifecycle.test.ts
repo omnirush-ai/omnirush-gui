@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { FakeArchiveServer } from "./fake-archive-server.js";
-import { SessionArchiver, type CaptureResult, type DrainResult } from "./index.js";
+import { SessionArchiver, type CaptureResult, type DrainResult, type FinalReason } from "./index.js";
 import {
   completedTurnCount,
   projectArchiveEnabled,
@@ -28,7 +28,14 @@ class FakeArchiver implements ProjectArchiver {
   readonly calls: string[] = [];
   base: (sessionId: string, turn: number) => Promise<CaptureResult> = async () => queued("base");
   delta: (sessionId: string, turn: number | null) => Promise<CaptureResult> = async (_sessionId, turn) => queued("delta", turn ?? 0);
+  final: (sessionId: string, reason: FinalReason, signal?: AbortSignal) => Promise<CaptureResult> = async () => skipped("unchanged");
   drainResult: () => Promise<DrainResult> = async () => drained;
+  /** What startFinalCandidates answers (not recorded as a call). */
+  startFinals: string[] = [];
+  /** The options of each stop() call. */
+  readonly stops: Array<{ finals?: readonly string[]; budgetMs?: number }> = [];
+  /** recordTouched and forgetTouched calls (not in `calls`). */
+  readonly touched: string[] = [];
 
   async captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     this.calls.push(`base ${sessionId} ${root} ${turn}`);
@@ -40,6 +47,23 @@ class FakeArchiver implements ProjectArchiver {
     return this.delta(sessionId, turn);
   }
 
+  async captureFinal(sessionId: string, reason: FinalReason, options: { signal?: AbortSignal } = {}): Promise<CaptureResult> {
+    this.calls.push(`final ${sessionId} ${reason}`);
+    return this.final(sessionId, reason, options.signal);
+  }
+
+  async startFinalCandidates(): Promise<string[]> {
+    return this.startFinals;
+  }
+
+  recordTouched(sessionId: string, path: string): void {
+    this.touched.push(`record ${sessionId} ${path}`);
+  }
+
+  forgetTouched(sessionId: string): void {
+    this.touched.push(`forget ${sessionId}`);
+  }
+
   async drain(): Promise<DrainResult> {
     this.calls.push("drain");
     return this.drainResult();
@@ -49,12 +73,17 @@ class FakeArchiver implements ProjectArchiver {
     this.calls.push("signOut");
   }
 
-  async stop(): Promise<void> {
+  async stop(options: { finals?: readonly string[]; budgetMs?: number } = {}): Promise<void> {
     this.calls.push("stop");
+    this.stops.push(options);
   }
 
   captures(): string[] {
     return this.calls.filter((call) => call.startsWith("base") || call.startsWith("delta"));
+  }
+
+  finals(): string[] {
+    return this.calls.filter((call) => call.startsWith("final"));
   }
 }
 
@@ -86,7 +115,7 @@ function engine(input: { parentID?: string; messages?: () => unknown; session?: 
   return { reader, reads };
 }
 
-function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; now?: () => number; concurrency?: number } = {}) {
+function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; now?: () => number; concurrency?: number; finalIdleMs?: number; quitBudgetMs?: number } = {}) {
   const logs: Array<{ level: string; message: string; attributes?: Record<string, unknown> }> = [];
   const subject = new ProjectArchiveLifecycle({
     archiver,
@@ -95,6 +124,8 @@ function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; now?
     consentRecheckMs: 60_000,
     ...(options.now ? { now: options.now } : {}),
     ...(options.concurrency ? { concurrency: options.concurrency } : {}),
+    ...(options.finalIdleMs !== undefined ? { finalIdleMs: options.finalIdleMs } : {}),
+    ...(options.quitBudgetMs !== undefined ? { quitBudgetMs: options.quitBudgetMs } : {}),
   });
   return { subject, logs };
 }
@@ -188,6 +219,43 @@ describe("ProjectArchiveLifecycle", () => {
     expect(archiver.captures()).toEqual([]);
     // Known to be a child: the engine is not asked again, and its messages are never read.
     expect(child.reads).toEqual({ session: 1, messages: 0 });
+  });
+
+  test("touched paths reach the archiver only for a session this run started that may be archived", async () => {
+    const archiver = new FakeArchiver();
+    const { subject } = lifecycle(archiver);
+    const root = await tempDir("root");
+    // Before its first prompt, the session is not known here.
+    subject.pathTouched("ses_touch_0001", "early.txt");
+    subject.sessionStarted({ sessionId: "ses_touch_0001", root, engine: engine().reader });
+    // While its start step waits, and once it is resolved with a root.
+    subject.pathTouched("ses_touch_0001", "brief.pdf");
+    await subject.settled();
+    subject.pathTouched("ses_touch_0001", "out/render.png");
+    // Not archivable: nothing more.
+    archiver.base = async () => skipped("not_archivable");
+    subject.sessionStarted({ sessionId: "ses_touch_0002", root, engine: engine().reader });
+    await subject.settled();
+    subject.pathTouched("ses_touch_0002", "x.txt");
+    // A child session: what it reported goes, and nothing more is passed on.
+    subject.sessionStarted({ sessionId: "ses_touch_child", root, engine: engine({ parentID: "ses_touch_0001" }).reader });
+    subject.pathTouched("ses_touch_child", "child.txt");
+    await subject.settled();
+    subject.pathTouched("ses_touch_child", "later.txt");
+    // Deleted: forgotten.
+    subject.sessionEnded("ses_touch_0001");
+    subject.pathTouched("ses_touch_0001", "after.txt");
+    await subject.settled();
+    expect(archiver.touched).toEqual([
+      "record ses_touch_0001 brief.pdf",
+      "record ses_touch_0001 out/render.png",
+      "record ses_touch_child child.txt",
+      "forget ses_touch_child",
+    ]);
+    // Signed out: nothing.
+    await subject.signOut();
+    subject.pathTouched("ses_touch_0001", "signed-out.txt");
+    expect(archiver.touched).toHaveLength(4);
   });
 
   test("delta turn numbers come from the engine's completed turns, in order after the base", async () => {
@@ -394,6 +462,91 @@ describe("ProjectArchiveLifecycle", () => {
     expect(child.reads).toEqual({ session: 2, messages: 0 });
   });
 
+  test("an engine too slow to answer at session start is read again a minute later, so a session whose first turn runs for hours still gets its base", async () => {
+    jest.useFakeTimers();
+    try {
+      const archiver = new FakeArchiver();
+      const { subject, logs } = lifecycle(archiver);
+      const root = await tempDir("root");
+      let engineUp = false;
+      const slow = engine({
+        session: () => {
+          if (!engineUp) throw new Error("TimeoutError: the engine did not answer");
+          return { id: "ses_retried_0001" };
+        },
+        messages: () => messages(2, true),
+      });
+      subject.sessionStarted({ sessionId: "ses_retried_0001", root, engine: slow.reader });
+      await subject.settled();
+      expect(archiver.captures()).toEqual([]);
+      expect(logs.map((log) => [log.attributes?.reason, log.attributes?.retryInMs])).toEqual([["the engine session could not be read", 60_000]]);
+
+      // The engine answers by the time the retry runs, with the first turn of this app run still going.
+      engineUp = true;
+      jest.advanceTimersByTime(59_999);
+      await subject.settled();
+      expect(slow.reads.session).toBe(1);
+      jest.advanceTimersByTime(1);
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_retried_0001 ${root} 2`]);
+      // Resolved: no further retry, and the turn's delta follows the base.
+      jest.advanceTimersByTime(60 * 60_000);
+      subject.turnCompleted("ses_retried_0001", messages(3));
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_retried_0001 ${root} 2`, `delta ses_retried_0001 ${root} 3`]);
+      expect(slow.reads).toEqual({ session: 2, messages: 1 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("an engine that stays unreadable is read again after 1, 2, 5 and 10 minutes, then at the session's next prompt or turn", async () => {
+    jest.useFakeTimers();
+    try {
+      const archiver = new FakeArchiver();
+      const { subject, logs } = lifecycle(archiver);
+      const root = await tempDir("root");
+      let engineUp = false;
+      const down = engine({ session: () => { if (!engineUp) throw new Error("ECONNREFUSED"); return { id: "ses_down_retry_01" }; } });
+      subject.sessionStarted({ sessionId: "ses_down_retry_01", root, engine: down.reader });
+      await subject.settled();
+      // A prompt while a retry is waiting reads the engine at once but does not add another retry.
+      subject.sessionStarted({ sessionId: "ses_down_retry_01", root, engine: down.reader });
+      await subject.settled();
+      expect(down.reads.session).toBe(2);
+      for (const minutes of [1, 2, 5, 10]) {
+        const reads = down.reads.session;
+        jest.advanceTimersByTime(minutes * 60_000 - 1);
+        await subject.settled();
+        expect(down.reads.session).toBe(reads);
+        jest.advanceTimersByTime(1);
+        await subject.settled();
+        expect(down.reads.session).toBe(reads + 1);
+      }
+      jest.advanceTimersByTime(24 * 60 * 60_000);
+      await subject.settled();
+      expect(down.reads.session).toBe(6);
+      expect(logs.map((log) => log.attributes?.retryInMs)).toEqual([60_000, undefined, 120_000, 300_000, 600_000, undefined]);
+
+      // Past the retries, the next completed turn still resolves it.
+      engineUp = true;
+      subject.turnCompleted("ses_down_retry_01", messages(1));
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_down_retry_01 ${root} 1`, `delta ses_down_retry_01 ${root} 1`]);
+
+      // A retry never runs once archiving stopped.
+      const stopped = engine({ session: () => { throw new Error("ECONNREFUSED"); } });
+      subject.sessionStarted({ sessionId: "ses_stopped_0001", root, engine: stopped.reader });
+      await subject.settled();
+      await subject.stop();
+      jest.advanceTimersByTime(60_000);
+      await subject.settled();
+      expect(stopped.reads.session).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test("with the real archiver: base at session start, a delta per changed turn, and the next app run resumes the upload", async () => {
     const server = new FakeArchiveServer();
     const root = await tempDir("project");
@@ -556,5 +709,350 @@ describe("ProjectArchiveLifecycle base quiet period", () => {
       expect(Date.now() - endedAt).toBeLessThan(1_000);
       expect(archiver.captures()).toEqual([]);
     }
+  });
+});
+
+describe("ProjectArchiveLifecycle final archives", () => {
+  const sleep = (ms: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+
+  /** Turn deltas numbered like the real archiver: a count that did not move is stale. */
+  function turnArchiver(): FakeArchiver {
+    const archiver = new FakeArchiver();
+    const lastTurn = new Map<string, number>();
+    archiver.base = async (sessionId, turn) => {
+      lastTurn.set(sessionId, turn);
+      return queued("base");
+    };
+    archiver.delta = async (sessionId, turn) => {
+      const next = turn ?? (lastTurn.get(sessionId) ?? 0) + 1;
+      if (next <= (lastTurn.get(sessionId) ?? -1)) return skipped("stale_turn");
+      lastTurn.set(sessionId, next);
+      return queued("delta", next);
+    };
+    return archiver;
+  }
+
+  test("a session quiet after its turn gets one idle final archive; a new prompt cancels the pending one", async () => {
+    const archiver = turnArchiver();
+    const { subject } = lifecycle(archiver, { finalIdleMs: 300 });
+    const root = await tempDir("root");
+    const reads = engine({ messages: () => messages(0, true) }).reader;
+    subject.sessionStarted({ sessionId: "ses_idle_000001", root, engine: reads });
+    await subject.settled();
+    // The next prompt comes within the quiet window: no final archive.
+    subject.turnCompleted("ses_idle_000001", messages(1));
+    await sleep(30);
+    subject.sessionStarted({ sessionId: "ses_idle_000001", root, engine: reads });
+    await sleep(400);
+    await subject.settled();
+    expect(archiver.finals()).toEqual([]);
+
+    // Turn 2 ends and nothing follows: one final archive, however long the quiet lasts.
+    subject.turnCompleted("ses_idle_000001", messages(2));
+    await sleep(400);
+    await subject.settled();
+    expect(archiver.finals()).toEqual(["final ses_idle_000001 idle"]);
+    await sleep(400);
+    await subject.settled();
+    expect(archiver.finals()).toHaveLength(1);
+    expect(archiver.captures()).toEqual([`base ses_idle_000001 ${root} 0`, `delta ses_idle_000001 ${root} 1`, `delta ses_idle_000001 ${root} 2`]);
+
+    // A prompt while the idle final is packing cancels it.
+    let signal: AbortSignal | undefined;
+    archiver.final = (_sessionId, _reason, given) => new Promise((resolvePromise) => {
+      signal = given;
+      given?.addEventListener("abort", () => resolvePromise(skipped("cancelled")), { once: true });
+    });
+    subject.turnCompleted("ses_idle_000001", messages(3));
+    await sleep(400);
+    expect(archiver.finals()).toHaveLength(2);
+    expect(signal?.aborted).toBe(false);
+    subject.sessionStarted({ sessionId: "ses_idle_000001", root, engine: reads });
+    await subject.settled();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  test("a turn the observer follows keeps the idle final archive off until it ends, even when its prompt came before the previous turn's end", async () => {
+    const archiver = turnArchiver();
+    const { subject } = lifecycle(archiver, { finalIdleMs: 100 });
+    const root = await tempDir("root");
+    const reads = engine().reader;
+    subject.sessionStarted({ sessionId: "ses_followed_001", root, engine: reads });
+    await subject.settled();
+    // The next prompt went out while turn 1 settled: its session start comes first, then turn 1's end,
+    // then the observer follows turn 2.
+    subject.sessionStarted({ sessionId: "ses_followed_001", root, engine: reads });
+    subject.turnCompleted("ses_followed_001", messages(1));
+    subject.turnFollowed("ses_followed_001");
+    await sleep(250);
+    await subject.settled();
+    expect(archiver.finals()).toEqual([]);
+    // Turn 2 ends: its quiet window gets the idle final archive.
+    subject.turnCompleted("ses_followed_001", messages(2));
+    await sleep(250);
+    await subject.settled();
+    expect(archiver.finals()).toEqual(["final ses_followed_001 idle"]);
+    expect(archiver.captures()).toEqual([`base ses_followed_001 ${root} 0`, `delta ses_followed_001 ${root} 1`, `delta ses_followed_001 ${root} 2`]);
+
+    // An idle final already packing when a turn is followed is cancelled like one a prompt ends.
+    let signal: AbortSignal | undefined;
+    archiver.final = (_sessionId, _reason, given) => new Promise((resolvePromise) => {
+      signal = given;
+      given?.addEventListener("abort", () => resolvePromise(skipped("cancelled")), { once: true });
+    });
+    subject.turnCompleted("ses_followed_001", messages(3));
+    await sleep(250);
+    expect(signal?.aborted).toBe(false);
+    subject.turnFollowed("ses_followed_001");
+    await subject.settled();
+    expect(signal?.aborted).toBe(true);
+    // A session this run does not know is left alone.
+    subject.turnFollowed("ses_unknown_0002");
+    await subject.settled();
+    expect(archiver.finals()).toHaveLength(2);
+  });
+
+  test("a session deleted, a sign-out and a shutdown clear both an idle final archive and an unresolved start's retry; neither runs afterwards", async () => {
+    const root = await tempDir("root");
+    jest.useFakeTimers();
+    try {
+      for (const end of ["sessionEnded", "signOut", "stop"] as const) {
+        const archiver = turnArchiver();
+        const { subject } = lifecycle(archiver);
+        // One session's turn ended: its idle final archive waits for FINAL_IDLE_MS.
+        subject.sessionStarted({ sessionId: "ses_timer_idle01", root, engine: engine().reader });
+        await subject.settled();
+        subject.turnCompleted("ses_timer_idle01", messages(1));
+        await subject.settled();
+        // Another's engine could not be read at its start: its retry waits a minute.
+        const down = engine({ session: () => { throw new Error("ECONNREFUSED"); } });
+        subject.sessionStarted({ sessionId: "ses_timer_retry1", root, engine: down.reader });
+        await subject.settled();
+        expect(jest.getTimerCount()).toBe(2);
+
+        if (end === "sessionEnded") {
+          subject.sessionEnded("ses_timer_idle01");
+          subject.sessionEnded("ses_timer_retry1");
+        } else if (end === "signOut") {
+          await subject.signOut();
+        } else {
+          await subject.stop();
+        }
+        await subject.settled();
+        expect(jest.getTimerCount()).toBe(0);
+        jest.advanceTimersByTime(24 * 60 * 60_000);
+        await subject.settled();
+        expect(down.reads.session).toBe(1);
+        // Only a deleted session gets its own (session_deleted) final archive; shutdown hands its finals to the archiver.
+        expect(archiver.finals().sort()).toEqual(end === "sessionEnded"
+          ? ["final ses_timer_idle01 session_deleted", "final ses_timer_retry1 session_deleted"]
+          : []);
+        expect(archiver.captures()).toEqual([`base ses_timer_idle01 ${root} 0`, `delta ses_timer_idle01 ${root} 1`]);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("a start read still running when the session is deleted, at a sign-out or at shutdown arms no retry when it fails", async () => {
+    const root = await tempDir("root");
+    jest.useFakeTimers();
+    try {
+      for (const end of ["sessionEnded", "signOut", "stop"] as const) {
+        const archiver = turnArchiver();
+        const { subject, logs } = lifecycle(archiver);
+        const read = deferred<unknown>();
+        const slow = engine({ session: () => read.promise });
+        subject.sessionStarted({ sessionId: "ses_inflight_001", root, engine: slow.reader });
+        for (let tick = 0; tick < 100 && slow.reads.session === 0; tick += 1) await Promise.resolve();
+        expect(slow.reads.session).toBe(1);
+        if (end === "sessionEnded") subject.sessionEnded("ses_inflight_001");
+        else if (end === "signOut") await subject.signOut();
+        else await subject.stop();
+        // The engine gives up only now.
+        read.resolve(null);
+        await subject.settled();
+        expect(logs.filter((log) => log.attributes?.reason === "the engine session could not be read").map((log) => log.attributes?.retryInMs)).toEqual([undefined]);
+        expect(jest.getTimerCount()).toBe(0);
+        jest.advanceTimersByTime(24 * 60 * 60_000);
+        await subject.settled();
+        expect(slow.reads.session).toBe(1);
+        expect(archiver.captures()).toEqual([]);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("a turn that ends without completing: its delta when the engine's count moved, else a final archive", async () => {
+    const archiver = turnArchiver();
+    const { subject } = lifecycle(archiver, { finalIdleMs: 60_000 });
+    const root = await tempDir("root");
+    let count: number | null = 0;
+    const reads = engine({ messages: () => (count === null ? Promise.reject(new Error("ECONNREFUSED")) : messages(count)) });
+    subject.sessionStarted({ sessionId: "ses_abnormal_001", root, engine: reads.reader });
+    await subject.settled();
+    // The observer gave up (or failed) after the turn had completed in the engine.
+    count = 1;
+    subject.turnIncomplete("ses_abnormal_001");
+    await subject.settled();
+    // Aborted before any answer: the count did not move.
+    subject.turnIncomplete("ses_abnormal_001");
+    await subject.settled();
+    // The engine went away: no count to go by.
+    count = null;
+    subject.turnIncomplete("ses_abnormal_001");
+    await subject.settled();
+    // A settled turn whose count did not move (a prompt aborted at once) is final too.
+    subject.turnCompleted("ses_abnormal_001", messages(1, true));
+    await subject.settled();
+    expect(archiver.calls.filter((call) => call !== "drain")).toEqual([
+      `base ses_abnormal_001 ${root} 0`,
+      `delta ses_abnormal_001 ${root} 1`,
+      `delta ses_abnormal_001 ${root} 1`,
+      "final ses_abnormal_001 turn_incomplete",
+      "final ses_abnormal_001 turn_incomplete",
+      `delta ses_abnormal_001 ${root} 1`,
+      "final ses_abnormal_001 turn_incomplete",
+    ]);
+    // Unknown sessions are left alone.
+    subject.turnIncomplete("ses_unknown_0001");
+    await subject.settled();
+    expect(archiver.finals()).toHaveLength(3);
+  });
+
+  test("a deleted session gets a final archive before it is forgotten; a child never, an unknown one if the archiver has its base", async () => {
+    const archiver = turnArchiver();
+    const { subject } = lifecycle(archiver);
+    const root = await tempDir("root");
+    subject.sessionStarted({ sessionId: "ses_deleted_0001", root, engine: engine().reader });
+    subject.sessionStarted({ sessionId: "ses_child_00001", root, engine: engine({ parentID: "ses_deleted_0001" }).reader });
+    await subject.settled();
+    subject.turnCompleted("ses_deleted_0001", messages(1));
+    subject.sessionEnded("ses_deleted_0001");
+    subject.sessionEnded("ses_child_00001");
+    // A session this app run has not seen (the archiver answers no_base when it never had one).
+    subject.sessionEnded("ses_earlier_0001");
+    await subject.settled();
+    expect(archiver.finals().sort()).toEqual(["final ses_deleted_0001 session_deleted", "final ses_earlier_0001 session_deleted"]);
+    // Forgotten: its pending turn step was dropped, and later calls are ignored.
+    subject.turnCompleted("ses_deleted_0001", messages(2));
+    await subject.settled();
+    expect(archiver.captures()).toEqual([`base ses_deleted_0001 ${root} 0`]);
+  });
+
+  test("shutdown hands this run's sessions to the archiver's final archives, most recent first, within the budget", async () => {
+    let now = 1_000;
+    const archiver = turnArchiver();
+    const { subject } = lifecycle(archiver, { now: () => now });
+    const root = await tempDir("root");
+    subject.sessionStarted({ sessionId: "ses_quit_old_001", root, engine: engine().reader });
+    now += 1_000;
+    subject.sessionStarted({ sessionId: "ses_quit_new_001", root, engine: engine().reader });
+    subject.sessionStarted({ sessionId: "ses_quit_child_1", root, engine: engine({ parentID: "ses_quit_new_001" }).reader });
+    await subject.settled();
+    now += 1_000;
+    subject.turnCompleted("ses_quit_old_001", messages(1));
+    await subject.settled();
+    await subject.stop();
+    expect(archiver.stops).toEqual([{ finals: ["ses_quit_old_001", "ses_quit_new_001"], budgetMs: 5_000 }]);
+
+    // No budget, consent off, or the account gone (a user sign-out restarts the server): a plain stop.
+    const noBudget = turnArchiver();
+    const off = lifecycle(noBudget, { quitBudgetMs: 0 });
+    off.subject.sessionStarted({ sessionId: "ses_quit_none_01", root, engine: engine().reader });
+    await off.subject.settled();
+    await off.subject.stop();
+    const refused = turnArchiver();
+    refused.base = async () => skipped("disabled");
+    const consent = lifecycle(refused);
+    consent.subject.sessionStarted({ sessionId: "ses_quit_none_02", root, engine: engine().reader });
+    await consent.subject.settled();
+    await consent.subject.stop();
+    const gone = turnArchiver();
+    const signedOut = lifecycle(gone);
+    signedOut.subject.sessionStarted({ sessionId: "ses_quit_none_03", root, engine: engine().reader });
+    await signedOut.subject.settled();
+    await signedOut.subject.stop({ finals: false });
+    expect([...noBudget.stops, ...refused.stops, ...gone.stops]).toEqual([{}, {}, {}]);
+  });
+
+  test("app start: the sessions the archiver names get a final archive, behind every other waiting step", async () => {
+    const archiver = turnArchiver();
+    const { subject } = lifecycle(archiver);
+    const root = await tempDir("root");
+    const first = deferred<CaptureResult>();
+    archiver.base = (sessionId) => (sessionId === "ses_start_first1" ? first.promise : Promise.resolve(queued("base")));
+    // A base is packing when the app-start check comes back.
+    subject.sessionStarted({ sessionId: "ses_start_first1", root, engine: engine().reader });
+    await sleep(10);
+    expect(archiver.captures()).toEqual([`base ses_start_first1 ${root} 0`]);
+    archiver.startFinals = ["ses_start_final1", "ses_start_final2"];
+    subject.start();
+    await sleep(10);
+    subject.sessionStarted({ sessionId: "ses_start_next01", root, engine: engine().reader });
+    first.resolve(queued("base"));
+    await subject.settled();
+    expect(archiver.calls.filter((call) => call !== "drain")).toEqual([
+      `base ses_start_first1 ${root} 0`,
+      `base ses_start_next01 ${root} 0`,
+      "final ses_start_final1 app_start",
+      "final ses_start_final2 app_start",
+    ]);
+  });
+
+  test("with the real archiver: after the last turn, the folder is archived when the chat goes quiet, when the app quits and at the next start", async () => {
+    const server = new FakeArchiveServer();
+    const root = await tempDir("project");
+    const git = (...args: string[]) => execFileAsync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args]);
+    await git("init", "-q", "-b", "main");
+    await writeFile(join(root, "app.ts"), "export const app = 1;\n");
+    await git("add", "app.ts");
+    await git("commit", "-q", "-m", "initial");
+    const state = await tempDir("state");
+    const archiverFor = () => new SessionArchiver({ gatewayUrl: server.gatewayUrl, accessToken: server.token, fetch: server.respond, stateDir: state, retry: { baseMs: 1, maxMs: 2, attempts: 2 } });
+    const id = "ses_final_real_1";
+
+    const first = lifecycle(archiverFor(), { finalIdleMs: 100 });
+    first.subject.start();
+    first.subject.sessionStarted({ sessionId: id, root, engine: engine({ messages: () => messages(0, true) }).reader });
+    await first.subject.settled();
+    await writeFile(join(root, "turn.txt"), "turn 1\n");
+    first.subject.turnCompleted(id, messages(1));
+    await first.subject.settled();
+    // The user edits after the turn; the chat stays quiet.
+    await writeFile(join(root, "idle.txt"), "after the turn\n");
+    await sleep(200);
+    await first.subject.settled();
+    // More edits, then the app quits.
+    await writeFile(join(root, "quit.txt"), "before quitting\n");
+    await first.subject.stop();
+    // And edits while it is closed.
+    await writeFile(join(root, "closed.txt"), "while closed\n");
+
+    const second = lifecycle(archiverFor());
+    second.subject.start();
+    await second.subject.settled();
+    second.subject.sessionStarted({ sessionId: id, root, engine: engine({ messages: () => messages(1, true) }).reader });
+    await second.subject.settled();
+    await writeFile(join(root, "turn.txt"), "turn 2\n");
+    second.subject.turnCompleted(id, messages(2));
+    await second.subject.settled();
+    await second.subject.stop();
+
+    const objects = server.objects();
+    expect(objects.map((object) => [object.request.kind, object.request.sequence, object.request.turn])).toEqual([
+      ["base", 0, 0], ["delta", 1, 1], ["delta", 2, 1], ["delta", 3, 1], ["delta", 4, 1], ["delta", 5, 2],
+    ]);
+    const manifests = await Promise.all(objects.map(async (object) => {
+      const members = await openArchive(object.object!);
+      return { manifest: manifestOf(members), names: members.slice(1).map((member) => member.name) };
+    }));
+    expect(manifests.slice(1).map(({ manifest }) => [manifest.trigger, manifest.reason])).toEqual([["turn", undefined], ["final", "idle"], ["final", "app_quit"], ["final", "app_start"], ["turn", undefined]]);
+    expect(manifests[2]!.names).toContain("idle.txt");
+    expect(manifests[3]!.names).toContain("quit.txt");
+    expect(manifests[4]!.names).toContain("closed.txt");
+    expect(manifests[5]!.names).toContain("turn.txt");
+    expect([...first.logs, ...second.logs].filter((log) => log.level === "warn")).toEqual([]);
   });
 });

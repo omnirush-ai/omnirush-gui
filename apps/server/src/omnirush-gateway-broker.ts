@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 
+import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import type { OmniRushGatewayCredentialBundle, OmniRushGatewayCredentials } from "./types.js";
 
@@ -8,6 +9,8 @@ type BrokerOptions = {
   engineToken?: string;
   fetch?: typeof externalFetch;
   log?: (level: "info" | "warn" | "error", message: string, attributes?: Record<string, unknown>) => void;
+  /** collect()'s deadline parameters; COLLECT_UPLOAD_BUDGET unless a test shrinks it. */
+  collectUploadBudget?: CollectUploadBudget;
 };
 
 /**
@@ -514,6 +517,7 @@ export class OmniRushGatewayBroker {
   private readonly latest?: OmniRushGatewayCredentials["latest"];
   private readonly fetcher: typeof externalFetch;
   private readonly log?: BrokerOptions["log"];
+  private readonly collectUploadBudget: CollectUploadBudget;
   private refreshInFlight: Promise<boolean> | null = null;
   /**
    * The pair this broker held before it adopted one from the store. Spent as
@@ -538,6 +542,7 @@ export class OmniRushGatewayBroker {
     this.latest = options.credentials?.latest;
     this.fetcher = options.fetch ?? externalFetch;
     this.log = options.log;
+    this.collectUploadBudget = options.collectUploadBudget ?? COLLECT_UPLOAD_BUDGET;
   }
 
   get enabled(): boolean {
@@ -598,7 +603,14 @@ export class OmniRushGatewayBroker {
     });
   }
 
-  collect(sessionId: string, body: Uint8Array): Promise<Response> {
+  /**
+   * One collector envelope. The deadline grows with the envelope's size
+   * (collect-upload-budget.ts), and the retry with a refreshed bearer gets a
+   * deadline of its own; `signal`, the collector's own deadline or cancel,
+   * ends either sooner.
+   */
+  collect(sessionId: string, body: Uint8Array, signal?: AbortSignal): Promise<Response> {
+    const timeoutMs = collectUploadTimeoutMs(body.byteLength, this.collectUploadBudget);
     return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, "collect"), {
       method: "POST",
       headers: {
@@ -607,7 +619,7 @@ export class OmniRushGatewayBroker {
         "X-OmniRush-Session-ID": sessionId,
       },
       body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
-      signal: AbortSignal.timeout(30_000),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
     }));
   }
 
@@ -615,9 +627,11 @@ export class OmniRushGatewayBroker {
    * A project archive API call for the session archiver (`archives/key`,
    * `archives`, `archives/<id>/parts|complete|abort`), authenticated like
    * collect(): the device bearer and the same bounded 401 refresh. S3 part
-   * uploads never come through here; they go to their presigned URLs.
+   * uploads never come through here; they go to their presigned URLs. With
+   * `refresh: false` (the archiver's all-folders policy probe) it is one
+   * request: a 401 is returned as it is, with no refresh and no second try.
    */
-  archiveRequest(path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }): Promise<Response> {
+  archiveRequest(path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal; refresh?: false }): Promise<Response> {
     if (!ARCHIVE_API_PATH.test(path)) return Promise.resolve(Response.json({ error: "unsupported_archive_path" }, { status: 404 }));
     return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, path), {
       method: init.method,
@@ -628,7 +642,7 @@ export class OmniRushGatewayBroker {
       },
       ...(init.body === undefined ? {} : { body: init.body }),
       ...(init.signal ? { signal: init.signal } : {}),
-    }));
+    }), { refresh: init.refresh !== false });
   }
 
   /**
@@ -644,11 +658,16 @@ export class OmniRushGatewayBroker {
     }));
   }
 
-  /** Sends with the current device bearer; a 401 is retried bounded like handle(): adopt, then spend the adopted refresh token. */
-  private async withDeviceBearer(send: (state: CredentialState) => Promise<Response>): Promise<Response> {
+  /**
+   * Sends with the current device bearer; a 401 is retried bounded like
+   * handle(): adopt, then spend the adopted refresh token. `refresh: false`
+   * sends once and returns whatever came back.
+   */
+  private async withDeviceBearer(send: (state: CredentialState) => Promise<Response>, options: { refresh: boolean } = { refresh: true }): Promise<Response> {
     if (!this.state) return Response.json({ error: "omnirush_account_required" }, { status: 401 });
     let spent = this.state.accessToken;
     let response = await send(this.state);
+    if (!options.refresh) return response;
     for (let round = 0; round < 2 && response.status === 401 && this.state; round += 1) {
       const credentialAlreadyRotated = this.state.accessToken !== spent;
       if (!credentialAlreadyRotated && !(await this.refresh(spent))) break;

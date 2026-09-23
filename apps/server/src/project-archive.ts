@@ -10,6 +10,7 @@ import { omnirushConfigDir, omnirushServerDataDir, opencodeCacheDirs, opencodeDa
 
 import type { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { runtimeStorageDir } from "./runtime-db.js";
+import type { FolderGateOptions } from "./session-archive/detect.js";
 import { SessionArchiver, type SessionArchiverOptions } from "./session-archive/index.js";
 import { ProjectArchiveLifecycle, projectArchiveEnabled, type ArchiveLifecycleLog } from "./session-archive/lifecycle.js";
 import type { ServerConfig } from "./types.js";
@@ -45,13 +46,16 @@ type ProjectArchiveInput = {
 
 /**
  * Where and how a server's archiver works: its state dir, the directories it
- * prunes, whether it is on, and how it authenticates. Disabled (signed out,
- * or turned off on this device) it gets no bearer, so clearing what a
- * previous run left never reaches the network.
+ * prunes, where the all-folders policy may not archive a folder (the desktop
+ * app's userData dir, which it sets as OMNIRUSH_DESKTOP_USER_DATA_DIR),
+ * whether it is on, and how it authenticates. Disabled (signed out, or
+ * turned off on this device) it gets no bearer, so clearing what a previous
+ * run left never reaches the network.
  */
 export function projectArchiveSettings(input: ProjectArchiveInput): {
   stateDir: string;
   excludedDirs: string[];
+  folderGate: FolderGateOptions;
   enabled: boolean;
   auth: "broker" | "environment" | "none";
   gatewayUrl?: string;
@@ -59,7 +63,8 @@ export function projectArchiveSettings(input: ProjectArchiveInput): {
 } {
   const env = input.env ?? process.env;
   const enabled = projectArchiveEnabled(env) && input.collectorEnabled;
-  const base = { stateDir: runtimeStorageDir(input.config), excludedDirs: appDirectories(input.config), enabled };
+  const userDataDir = env.OMNIRUSH_DESKTOP_USER_DATA_DIR?.trim();
+  const base = { stateDir: runtimeStorageDir(input.config), excludedDirs: appDirectories(input.config), folderGate: userDataDir ? { userDataDir } : {}, enabled };
   if (!enabled) return { ...base, auth: "none" };
   if (input.gatewayBroker.enabled) return { ...base, auth: "broker" };
   return {
@@ -89,6 +94,7 @@ export function createProjectArchive(input: ProjectArchiveInput & {
     archiver: new SessionArchiver({
       stateDir: settings.stateDir,
       excludedDirs: settings.excludedDirs,
+      folderGate: settings.folderGate,
       log: input.log,
       ...auth,
       ...(input.fetch ? { fetch: input.fetch } : {}),

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { createZstdCompress } from "node:zlib";
 import { minimatch } from "minimatch";
 
+import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import { TurnBaseStore, TurnDiffBuilder, type TurnDiffInput } from "./turn-diff.js";
 
@@ -122,6 +123,10 @@ const UPLOAD_ATTEMPTS = 3;
 const UPLOAD_RETRY_DELAY_MS = 250;
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
+// Spooled entries one drain may see fail before it leaves the rest to the
+// next one: enough to get past a stuck entry, few enough not to hammer a link
+// that is down for every entry in the spool.
+const MAX_DRAIN_FAILURES = 3;
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 // A rejected bearer. The body tells a stale device token (refreshed once and
 // retried, spooled if still rejected) from the sign-in gate, which is final.
@@ -325,6 +330,14 @@ type SessionState = {
   turnManifest: TurnBaseline | null;
   /** When the current turn's prompt was sent (null before the first). */
   turnStartedAt: number | null;
+  /** A prompt was dispatched and its turn has not completed (its turn_completed milestone ends it). */
+  turnInProgress: boolean;
+  /**
+   * Edits were made on this session's root while it had no turn in progress
+   * and another session on the root had one: they are that turn's, and this
+   * session's own filesystem and periodic captures wait for its next milestone.
+   */
+  changesHeld: boolean;
   /**
    * Files the journal saw the turn write that may be binary or over the size
    * cap, with their mtime: "skipped" in its "turn.diff".
@@ -355,7 +368,8 @@ type CollectorOptions = {
   gatewayUrl?: string;
   accessToken?: string;
   fetch?: typeof externalFetch;
-  upload?: (sessionId: string, compressed: Uint8Array) => Promise<Response>;
+  /** Sends one envelope; `signal` aborts at the upload deadline (collect-upload-budget.ts) or when the spool is cleared. */
+  upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => Promise<Response>;
   /**
    * Asks the account layer for a fresh access token once the gateway rejects
    * an upload as unauthorized. Resolves with the bearer to send next, or null
@@ -372,6 +386,8 @@ type CollectorOptions = {
   uploadRetryDelayMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
+  /** The upload deadline's parameters; COLLECT_UPLOAD_BUDGET unless a test shrinks it. */
+  uploadBudget?: CollectUploadBudget;
   spoolMaxEntries?: number;
   spoolMaxBytes?: number;
   /** Uncompressed envelope cap; the backend's MAX_SNAPSHOT_BYTES unless a test lowers it. */
@@ -384,6 +400,13 @@ type CollectorOptions = {
   redactedTextCacheBytes?: number;
   /** Called once a finished session's last upload settled and its state is gone. */
   onSessionClosed?: (sessionId: string) => void;
+  /**
+   * Every workspace-relative path (portable `/`) a session touched, before
+   * any denylist: a tool's path in the trace, a change the watcher saw, a
+   * file a capture or the reconcile pass found changed. The project archive's
+   * touched-files mode keeps them; it applies its own exclusions.
+   */
+  onPathTouched?: (sessionId: string, path: string) => void;
 };
 
 type TransmitOutcome =
@@ -764,6 +787,17 @@ function hasDeniedWords(lower: string): boolean {
 function hasScrubbedExtension(lower: string): boolean {
   const dot = lower.lastIndexOf(".");
   return dot > 0 && SCRUBBED_EXTENSIONS.has(lower.slice(dot));
+}
+
+/**
+ * Whether the collector denies every file under this directory path, whatever
+ * the file is called: one of its components meets the unconditional rules
+ * (`.ssh`, `.aws`, `.gnupg`, `keys`, `secrets`, `credentials*`, `.env*`,
+ * `node_modules`, `.git`, a key-store suffix, ...). The project archive
+ * refuses such a folder as the root of an all-folders archive.
+ */
+export function isCollectorDirectoryDenied(path: string): boolean {
+  return hasDeniedComponent(pathComponents(path));
 }
 
 /**
@@ -2203,6 +2237,8 @@ export type CollectorMetrics = {
   reconciles: number;
   capturesSkipped: number;
   capturesDeferred: number;
+  /** Filesystem and periodic captures left to another session on the same root (its turn made the edits). */
+  capturesHeld: number;
   ignoreCheckSpawns: number;
   watchEvents: number;
   envelopesWritten: number;
@@ -2213,7 +2249,7 @@ export type CollectorMetrics = {
 function freshMetrics(): CollectorMetrics {
   return {
     fileStats: 0, fileReads: 0, fileRedactions: 0, fullScans: 0, dirtyScans: 0, reconciles: 0,
-    capturesSkipped: 0, capturesDeferred: 0, ignoreCheckSpawns: 0, watchEvents: 0, envelopesWritten: 0, redactedTextHits: 0,
+    capturesSkipped: 0, capturesDeferred: 0, capturesHeld: 0, ignoreCheckSpawns: 0, watchEvents: 0, envelopesWritten: 0, redactedTextHits: 0,
   };
 }
 
@@ -2838,6 +2874,26 @@ function collectorEnvironment(appVersion: string | undefined, engineVersion: str
   };
 }
 
+/**
+ * Settles like `response`, or rejects once `signal` aborts, so an upload hook
+ * that does not watch its signal still ends at the deadline.
+ */
+function untilAborted(response: Promise<Response>, signal: AbortSignal): Promise<Response> {
+  return new Promise((resolvePromise, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    response.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      // An answer after the deadline is dropped like an aborted fetch's.
+      if (signal.aborted) void value.body?.cancel().catch(() => undefined);
+      resolvePromise(value);
+    }, (error: unknown) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+
 function spoolId(counter: number): string {
   return `${Date.now().toString(16).padStart(12, "0")}-${counter.toString(16).padStart(6, "0")}-${randomBytes(4).toString("hex")}`;
 }
@@ -2892,6 +2948,7 @@ export class WorkspaceCollector {
   private readonly uploadRetryDelayMs: number;
   private readonly retryBaseMs: number;
   private readonly retryMaxMs: number;
+  private readonly uploadBudget: CollectUploadBudget;
   private readonly spoolMaxEntries: number;
   private readonly spoolMaxBytes: number;
   private readonly snapshotMaxBytes: number;
@@ -2900,6 +2957,17 @@ export class WorkspaceCollector {
   private spoolTail: Promise<void> = Promise.resolve();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryFailures = 0;
+  /** The drain in progress: one at a time, and aborted by stop() and clearSpool(). */
+  private draining: { run: Promise<{ delivered: number; pending: number }>; controller: AbortController } | null = null;
+  private drainQueued: Promise<{ delivered: number; pending: number }> | null = null;
+  /**
+   * The signed-in account's uploads: clearSpool() (sign-out) aborts it and
+   * starts a new one, ending every upload in flight, and an envelope such an
+   * upload carried is not spooled.
+   */
+  private account = new AbortController();
+  /** Aborted once by abortUploads(): a shutdown out of time ends every upload in flight and sends nothing more. */
+  private readonly halted = new AbortController();
   private stopped = false;
   private readonly minChangeIntervalMs: number;
   private readonly maxWatchedFiles: number;
@@ -2915,6 +2983,7 @@ export class WorkspaceCollector {
   /** The scrubbed texts sent, by redacted digest: the bases of "turn.diff" events. */
   private readonly bases: TurnBaseStore;
   private readonly onSessionClosed?: (sessionId: string) => void;
+  private readonly onPathTouched?: (sessionId: string, path: string) => void;
   /** Work counters for tests and profiling. */
   readonly metrics: CollectorMetrics = freshMetrics();
 
@@ -2936,6 +3005,7 @@ export class WorkspaceCollector {
     this.uploadRetryDelayMs = options.uploadRetryDelayMs ?? UPLOAD_RETRY_DELAY_MS;
     this.retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS;
     this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS;
+    this.uploadBudget = options.uploadBudget ?? COLLECT_UPLOAD_BUDGET;
     this.spoolMaxEntries = options.spoolMaxEntries ?? MAX_SPOOL_ENTRIES;
     this.spoolMaxBytes = options.spoolMaxBytes ?? MAX_SPOOL_BYTES;
     this.snapshotMaxBytes = options.snapshotMaxBytes ?? MAX_SNAPSHOT_BYTES;
@@ -2943,6 +3013,7 @@ export class WorkspaceCollector {
     this.maxWatchedFiles = options.maxWatchedFiles ?? MAX_COLLECTOR_WATCHED_FILES;
     this.texts = new RedactedTextCache(options.redactedTextCacheBytes ?? REDACTED_TEXT_CACHE_BYTES);
     this.onSessionClosed = options.onSessionClosed;
+    this.onPathTouched = options.onPathTouched;
     this.tempDir = stateDir ? join(stateDir, TEMP_DIRECTORY) : join(tmpdir(), `omnirush-collector-${process.pid}`);
     this.bases = new TurnBaseStore(stateDir ? join(stateDir, BASE_DIRECTORY) : join(this.tempDir, BASE_DIRECTORY));
     void this.cleanTempDir(60 * 60_000).catch(() => undefined);
@@ -3126,6 +3197,8 @@ export class WorkspaceCollector {
       manifest: null,
       turnManifest: null,
       turnStartedAt: null,
+      turnInProgress: false,
+      changesHeld: false,
       turnSkipped: new Map(),
       cache: this.acquireCache(root),
       listing: { denied: 0, truncated: false },
@@ -3265,7 +3338,9 @@ export class WorkspaceCollector {
     }
     const relative = String(filename).replaceAll("\\", "/");
     const path = workspaceRelativePath(state.root, prefix ? `${prefix}/${relative}` : relative);
-    if (!path || isCollectorPathDenied(path)) return;
+    if (!path) return;
+    this.reportTouched(state, path);
+    if (isCollectorPathDenied(path)) return;
     if (path === ".gitignore" || path.endsWith("/.gitignore")) {
       // New ignore rules can hide or reveal any number of files: forget what
       // git answered so far and rescan the tree with the rules as they stand.
@@ -3304,6 +3379,15 @@ export class WorkspaceCollector {
       this.addWatcher(state, path);
     }
     this.scheduleChange(state, "fs_change");
+  }
+
+  /** Tells the project archive that the session touched `path` (workspace-relative). */
+  private reportTouched(state: SessionState, path: string): void {
+    try {
+      this.onPathTouched?.(state.id, path);
+    } catch {
+      // The archive's bookkeeping never stops a capture.
+    }
   }
 
   private markDirty(state: SessionState, path: string): void {
@@ -3363,14 +3447,19 @@ export class WorkspaceCollector {
             ? known !== undefined
             : !cached || cached.size !== eligible.size || cached.mtimeMs !== eligible.mtimeMs
               || (!cached.binary && known?.sha256 !== cached.sha256) || (cached.binary && known !== undefined);
-          if (stale) this.markDirty(session, path);
+          if (stale) {
+            this.markDirty(session, path);
+            this.reportTouched(session, path);
+          }
         }
         await yielder.pause();
       });
       const listed = new Set(listing.paths);
       for (const session of sessions) {
         for (const path of session.manifest?.keys() ?? []) {
-          if (!listed.has(path)) this.markDirty(session, path);
+          if (listed.has(path)) continue;
+          this.markDirty(session, path);
+          this.reportTouched(session, path);
         }
       }
     } finally {
@@ -3528,7 +3617,9 @@ export class WorkspaceCollector {
 
   private recordTouchedPath(state: SessionState, candidate: string): void {
     const path = workspaceRelativePath(state.root, candidate.replaceAll("\\", "/"));
-    if (!path || isCollectorPathDenied(path) || state.touchedPaths.has(path)) return;
+    if (!path) return;
+    this.reportTouched(state, path);
+    if (isCollectorPathDenied(path) || state.touchedPaths.has(path)) return;
     state.touchedPaths.add(path);
     this.markDirty(state, path);
     this.queueChangedPath(state, path);
@@ -3680,6 +3771,7 @@ export class WorkspaceCollector {
       // The turn's change snapshot must carry it even where no watcher saw it
       // land (a tool writing into a directory beyond MAX_WATCH_ROOTS).
       this.markDirty(state, path);
+      this.reportTouched(state, path);
       if (emitted >= MAX_ARTIFACT_EVENTS_PER_TURN || stat.size > MAX_ARTIFACT_HASH_BYTES) continue;
       try {
         const sha256 = await sha256File(resolve(state.root, path));
@@ -3710,6 +3802,9 @@ export class WorkspaceCollector {
     // just before may carry a later fraction of the same millisecond.
     if (trigger === "prompt") state.turnStartedAt = Date.now() + 1;
     const startedAt = state.turnStartedAt;
+    state.turnInProgress = trigger === "prompt";
+    // The milestone carries whatever edits were held back for another session's turn.
+    state.changesHeld = false;
     if (state.changeTimer) {
       clearTimeout(state.changeTimer);
       state.changeTimer = null;
@@ -3888,8 +3983,11 @@ export class WorkspaceCollector {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    // A spooled upload in flight stays spooled for the next start.
+    this.draining?.controller.abort();
     for (const sessionId of [...this.sessions.keys()]) this.finishSession(sessionId);
     await Promise.allSettled([...this.sessions.values()].map((state) => state.tail));
+    await this.draining?.run.catch(() => undefined);
     await this.spoolTail.catch(() => undefined);
     await this.ledgerWriteTail.catch(() => undefined);
     await this.bases.flush().catch(() => undefined);
@@ -3897,8 +3995,21 @@ export class WorkspaceCollector {
     if (!this.ledgerPath) await rm(this.tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
+  /**
+   * A shutdown that ran out of time and has no worker thread to terminate
+   * (capture-client.ts, capture in-process): every upload in flight, live or
+   * from the spool, ends now, and any envelope still to go out is spooled
+   * without being sent, all of it for the next start. stop() still settles
+   * the sessions; this only keeps their uploads from outliving it by up to
+   * an upload deadline.
+   */
+  abortUploads(): void {
+    this.halted.abort(new DOMException("The capture is shutting down", "AbortError"));
+  }
+
   private scheduleChange(state: SessionState, trigger: Extract<ChangeTrigger, "fs_change" | "periodic">): void {
     if (state.finished) return;
+    if (!state.turnInProgress && this.turnOnRootElsewhere(state)) state.changesHeld = true;
     if (state.changeTimer) clearTimeout(state.changeTimer);
     // A filesystem change is the more specific reason; keep it when the
     // periodic scan also notices the same edit.
@@ -3929,6 +4040,10 @@ export class WorkspaceCollector {
     // A finished session is about to upload its end snapshot, which already
     // carries everything a queued change capture would.
     if (state.finished) return;
+    if (!milestone && this.changesLeftToOthers(state)) {
+      this.metrics.capturesHeld += 1;
+      return;
+    }
     if (trigger === "turn_completed") {
       await this.captureArtifacts(state).catch((error: unknown) => {
         this.log("warn", "OmniRush artifact capture failed", {
@@ -3949,6 +4064,40 @@ export class WorkspaceCollector {
     }
     const captured = await this.uploadWorkspace(state, "change", trigger);
     if (milestone) this.appendTrace(state, "collector.trigger", { trigger, captured });
+  }
+
+  /** Whether another live session on `state`'s root has a turn in progress. */
+  private turnOnRootElsewhere(state: SessionState): boolean {
+    for (const other of this.sessions.values()) {
+      if (other !== state && !other.finished && other.cache === state.cache && other.turnInProgress) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a filesystem or periodic capture of `state` is left to the other
+   * sessions open on its root, so that one agent's edits are not uploaded
+   * again by every chat open on the same folder. It is when `state` has no
+   * turn in progress and another session on the root has one, and, once
+   * edits were held back that way, until `state`'s own next milestone
+   * (which carries them) as long as another session on the root still
+   * uploads its own changes. A session alone on its root is never held.
+   */
+  private changesLeftToOthers(state: SessionState): boolean {
+    if (state.turnInProgress) return false;
+    let uploading = false;
+    let shared = false;
+    for (const other of this.sessions.values()) {
+      if (other === state || other.finished || other.cache !== state.cache) continue;
+      if (other.turnInProgress) {
+        state.changesHeld = true;
+        return true;
+      }
+      shared = true;
+      if (!other.changesHeld) uploading = true;
+    }
+    if (!shared) state.changesHeld = false;
+    return state.changesHeld && uploading;
   }
 
   /** Whether anything could have moved since the last accepted snapshot; one `git rev-parse` at most. */
@@ -4128,6 +4277,10 @@ export class WorkspaceCollector {
         ? await scanDirtyPaths(state.root, cache, this.texts, previous, reported, ignored, state.listing, this.metrics)
         : await scanWorkspaceFull(state.root, cache, this.texts, previous, type === "start", this.metrics,
           type === "start" ? (paths) => this.installWatchers(state, paths) : undefined);
+      // What moved on disk since the last snapshot, where no watcher may have
+      // seen it (a polled workspace). Only against an accepted snapshot: with
+      // none yet (the start one was refused), every file counts as changed.
+      if (previous !== null) for (const path of scan.changed ?? []) this.reportTouched(state, path);
       // A change capture that found nothing moved stops at one `git rev-parse`
       // (a commit changes history without touching a file); the full git block
       // with its status, log and diff is collected only for a snapshot that goes out.
@@ -4288,8 +4441,16 @@ export class WorkspaceCollector {
     });
   }
 
-  private send(sessionId: string, compressed: Uint8Array): Promise<Response> {
-    if (this.uploader) return this.uploader(sessionId, compressed);
+  /**
+   * One POST of an envelope, ended by `deadline` (the attempt's size-scaled
+   * deadline, collect-upload-budget.ts: fetch reports no upload progress, so
+   * sending the body and the gateway's answer share one deadline) or sooner
+   * by `cancel`.
+   */
+  private send(sessionId: string, compressed: Uint8Array, deadline: AbortSignal, cancel?: AbortSignal): Promise<Response> {
+    const signal = cancel ? AbortSignal.any([deadline, cancel]) : deadline;
+    if (signal.aborted) return Promise.reject(signal.reason);
+    if (this.uploader) return untilAborted(this.uploader(sessionId, compressed, signal), signal);
     return this.fetcher(this.collectUrl!, {
       method: "POST",
       headers: {
@@ -4298,7 +4459,7 @@ export class WorkspaceCollector {
         "X-OmniRush-Session-ID": sessionId,
       },
       body: compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength) as ArrayBuffer,
-      signal: AbortSignal.timeout(30_000),
+      signal,
     });
   }
 
@@ -4315,13 +4476,23 @@ export class WorkspaceCollector {
     }
   }
 
-  private async transmit(sessionId: string, compressed: Uint8Array, attempts = UPLOAD_ATTEMPTS): Promise<TransmitOutcome> {
+  /**
+   * Sends an envelope, up to `attempts` times. A quick failure (a dropped
+   * connection, a 5xx) is tried again after a short delay; an attempt that
+   * ran out its deadline is not: at a size-scaled deadline one more attempt
+   * could hold the session's queue for many minutes, so the envelope goes to
+   * the spool at once and the spool drain retries it on its own backoff.
+   */
+  private async transmit(sessionId: string, compressed: Uint8Array, attempts = UPLOAD_ATTEMPTS, cancel?: AbortSignal): Promise<TransmitOutcome> {
+    const timeoutMs = collectUploadTimeoutMs(compressed.byteLength, this.uploadBudget);
     let lastReason = "collector upload unavailable";
     let refreshAttempted = false;
     let attempt = 0;
     while (attempt < attempts) {
+      // Each attempt, the retry with a refreshed bearer too, gets a deadline of its own.
+      const deadline = AbortSignal.timeout(timeoutMs);
       try {
-        const response = await this.send(sessionId, compressed);
+        const response = await this.send(sessionId, compressed, deadline, cancel);
         if (response.ok) return { ok: true };
         lastReason = `collector upload failed with status ${response.status}`;
         if (UNAUTHORIZED_STATUSES.has(response.status)) {
@@ -4349,9 +4520,15 @@ export class WorkspaceCollector {
         if (!RETRYABLE_STATUSES.has(response.status)) return { ok: false, retryable: false, reason: lastReason };
       } catch (error) {
         lastReason = error instanceof Error ? error.message : "collector upload unavailable";
+        if (cancel?.aborted) return { ok: false, retryable: true, reason: lastReason };
+        // Out of time: this attempt's deadline, or the gateway broker's own
+        // (the same size-scaled budget, reported across the worker boundary by name).
+        if (deadline.aborted || (error instanceof Error && error.name === "TimeoutError")) {
+          return { ok: false, retryable: true, reason: lastReason };
+        }
       }
       attempt += 1;
-      if (attempt < attempts) {
+      if (attempt < attempts && !cancel?.aborted) {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, this.uploadRetryDelayMs * 2 ** (attempt - 1)));
       }
     }
@@ -4450,13 +4627,19 @@ export class WorkspaceCollector {
         return false;
       }
       const compressed = await readFile(path);
-      const outcome = await this.transmit(state.id, compressed);
+      const account = this.account.signal;
+      const outcome = await this.transmit(state.id, compressed, UPLOAD_ATTEMPTS, AbortSignal.any([account, this.halted.signal]));
       if (!outcome.ok) {
-        if (!outcome.retryable || !this.spoolDir) {
+        if ((!outcome.retryable || !this.spoolDir) && !account.aborted) {
           await this.recordLedgerOutcome(state.id, "failure").catch(() => undefined);
           throw new Error(outcome.reason);
         }
-        await this.spoolEnvelopeFile({ id: "", session_id: state.id, snapshot_type: snapshotType, trigger, sequence, bytes: compressedBytes, created_at: new Date().toISOString(), attempts: 1 }, path);
+        const spooled = await this.spoolEnvelopeFile({ id: "", session_id: state.id, snapshot_type: snapshotType, trigger, sequence, bytes: compressedBytes, created_at: new Date().toISOString(), attempts: 1 }, path, account);
+        if (!spooled) {
+          // Signed out during the upload: the envelope is deleted, never queued for the next account.
+          this.log("info", "OmniRush collection artifact discarded at sign-out", { sessionId: state.id, snapshotType, trigger, sequence });
+          return false;
+        }
         state.sentBytes += bytes;
         state.sequence = sequence;
         state.failureCount += 1;
@@ -4541,10 +4724,18 @@ export class WorkspaceCollector {
     await writeFileAtomic(join(this.spoolDir!, `${meta.id}.json`), JSON.stringify(meta));
   }
 
-  /** Moves an already-compressed envelope file into the spool (same filesystem: a rename, no copy). */
-  private spoolEnvelopeFile(meta: SpoolMeta, sourcePath: string): Promise<void> {
+  /**
+   * Moves an already-compressed envelope file into the spool (same
+   * filesystem: a rename, no copy). Resolves false, the file deleted, when
+   * the account it was captured for signed out (checked under the spool
+   * lock, so clearSpool() never runs between the check and the move).
+   */
+  private spoolEnvelopeFile(meta: SpoolMeta, sourcePath: string, account: AbortSignal): Promise<boolean> {
     return this.spoolLocked(async () => {
-      if (!this.spoolDir) return;
+      if (!this.spoolDir || account.aborted) {
+        await rm(sourcePath, { force: true }).catch(() => undefined);
+        return false;
+      }
       await mkdir(this.spoolDir, { recursive: true, mode: 0o700 });
       const id = spoolId(++this.spoolCounter);
       const target = join(this.spoolDir, `${id}.zst`);
@@ -4555,6 +4746,7 @@ export class WorkspaceCollector {
       }
       await this.writeSpoolMeta({ ...meta, id });
       await this.enforceSpoolBounds();
+      return true;
     });
   }
 
@@ -4577,8 +4769,10 @@ export class WorkspaceCollector {
 
   private scheduleRetry(delayMs?: number): void {
     if (!this.spoolDir || this.stopped || this.retryTimer) return;
-    const backoff = Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** Math.max(0, this.retryFailures - 1));
-    const delay = delayMs ?? Math.round(backoff * (0.85 + Math.random() * 0.3));
+    // Never past the retry cap: a delay computed from a spool entry dated in
+    // the future (the clock went back) must not park the spool for days, or
+    // overflow setTimeout into a 1 ms loop.
+    const delay = Math.min(this.retryMaxMs, Math.max(0, delayMs ?? this.jitteredBackoffMs()));
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.drainSpool().catch(() => undefined);
@@ -4586,58 +4780,122 @@ export class WorkspaceCollector {
     this.retryTimer.unref?.();
   }
 
-  /** Delivers spooled uploads oldest first, stopping at the first failure. */
+  /** The wait after `failures` failures in a row: the retry base, doubling up to the retry cap. */
+  private backoffMs(failures: number): number {
+    return Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** Math.max(0, failures - 1));
+  }
+
+  private jitteredBackoffMs(): number {
+    return Math.round(this.backoffMs(this.retryFailures) * (0.85 + Math.random() * 0.3));
+  }
+
+  /**
+   * When a spooled entry may be sent again: at once until a drain has tried
+   * it, then after its own backoff (its first attempt was the upload that
+   * spooled it).
+   */
+  private spoolEntryDueAt(entry: SpoolMeta): number {
+    const last = entry.last_attempt_at ? Date.parse(entry.last_attempt_at) : Number.NaN;
+    if (!Number.isFinite(last)) return 0;
+    // A last attempt after now means the clock went back: due at once, and
+    // the attempt then records a sane time.
+    return last > Date.now() ? 0 : last + this.backoffMs(entry.attempts - 1);
+  }
+
+  /**
+   * Delivers spooled uploads oldest first. An entry that fails waits out its
+   * own backoff while the entries behind it go on, so one upload that keeps
+   * failing holds back no other; a drain stops trying after
+   * MAX_DRAIN_FAILURES failures and leaves the rest to the next one. The
+   * gateway orders a session's envelopes by their capture sequence, not by
+   * arrival. Uploads run outside the spool lock, so spooling, spoolStatus()
+   * and clearSpool() never wait for one; stop() and clearSpool() abort it.
+   * A call while a drain runs gets one more drain right after it, for
+   * entries spooled since that one listed the spool.
+   */
   drainSpool(): Promise<{ delivered: number; pending: number }> {
-    return this.spoolLocked(async () => {
-      let delivered = 0;
-      if (!this.spoolDir || !this.enabled) return { delivered, pending: 0 };
-      const entries = await this.listSpool();
-      let pending = entries.length;
-      for (const entry of entries) {
-        if (this.stopped) break;
-        let compressed: Buffer;
-        try {
-          compressed = await readFile(join(this.spoolDir, `${entry.id}.zst`));
-        } catch {
-          await this.removeSpoolEntry(entry.id);
-          pending -= 1;
-          continue;
-        }
-        const outcome = await this.transmit(entry.session_id, compressed, 1);
-        if (outcome.ok) {
-          await this.removeSpoolEntry(entry.id);
-          await this.recordLedgerOutcome(entry.session_id, "success").catch(() => undefined);
-          this.retryFailures = 0;
-          delivered += 1;
-          pending -= 1;
-          this.log("info", "OmniRush collection artifact delivered from spool", {
-            sessionId: entry.session_id,
-            snapshotType: entry.snapshot_type,
-            trigger: entry.trigger,
-            sequence: entry.sequence,
-            attempts: entry.attempts + 1,
-          });
-          continue;
-        }
-        if (!outcome.retryable || entry.attempts + 1 >= MAX_SPOOL_ATTEMPTS) {
-          await this.removeSpoolEntry(entry.id);
-          pending -= 1;
-          this.log("warn", "OmniRush collection artifact dropped from spool", {
-            sessionId: entry.session_id,
-            snapshotType: entry.snapshot_type,
-            sequence: entry.sequence,
-            reason: outcome.reason,
-          });
-          continue;
-        }
-        await this.writeSpoolMeta({ ...entry, attempts: entry.attempts + 1, last_attempt_at: new Date().toISOString() }).catch(() => undefined);
-        await this.recordLedgerOutcome(entry.session_id, "failure").catch(() => undefined);
-        this.retryFailures += 1;
-        this.scheduleRetry();
-        break;
-      }
-      return { delivered, pending };
+    if (this.draining) {
+      this.drainQueued ??= this.draining.run.catch(() => undefined).then(() => {
+        this.drainQueued = null;
+        return this.drainSpool();
+      });
+      return this.drainQueued;
+    }
+    const controller = new AbortController();
+    const run = this.runDrain(AbortSignal.any([controller.signal, this.halted.signal])).finally(() => {
+      if (this.draining?.controller === controller) this.draining = null;
     });
+    this.draining = { run, controller };
+    return run;
+  }
+
+  private async runDrain(signal: AbortSignal): Promise<{ delivered: number; pending: number }> {
+    let delivered = 0;
+    const spoolDir = this.spoolDir;
+    if (!spoolDir || !this.enabled) return { delivered, pending: 0 };
+    const entries = await this.spoolLocked(() => this.listSpool());
+    let pending = entries.length;
+    let failures = 0;
+    let nextDueAt = Number.POSITIVE_INFINITY;
+    for (const entry of entries) {
+      if (this.stopped || signal.aborted) break;
+      const dueAt = this.spoolEntryDueAt(entry);
+      if (failures >= MAX_DRAIN_FAILURES || dueAt > Date.now()) {
+        nextDueAt = Math.min(nextDueAt, dueAt);
+        continue;
+      }
+      let compressed: Buffer;
+      try {
+        compressed = await readFile(join(spoolDir, `${entry.id}.zst`));
+      } catch {
+        await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        pending -= 1;
+        continue;
+      }
+      const outcome = await this.transmit(entry.session_id, compressed, 1, signal);
+      if (outcome.ok) {
+        await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        await this.recordLedgerOutcome(entry.session_id, "success").catch(() => undefined);
+        this.retryFailures = 0;
+        delivered += 1;
+        pending -= 1;
+        this.log("info", "OmniRush collection artifact delivered from spool", {
+          sessionId: entry.session_id,
+          snapshotType: entry.snapshot_type,
+          trigger: entry.trigger,
+          sequence: entry.sequence,
+          attempts: entry.attempts + 1,
+        });
+        continue;
+      }
+      // Stopped or signed out mid-upload: the entry stays as it was, or goes with the spool.
+      if (signal.aborted) break;
+      if (!outcome.retryable || entry.attempts + 1 >= MAX_SPOOL_ATTEMPTS) {
+        await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        pending -= 1;
+        this.log("warn", "OmniRush collection artifact dropped from spool", {
+          sessionId: entry.session_id,
+          snapshotType: entry.snapshot_type,
+          sequence: entry.sequence,
+          reason: outcome.reason,
+        });
+        continue;
+      }
+      failures += 1;
+      const attempted: SpoolMeta = { ...entry, attempts: entry.attempts + 1, last_attempt_at: new Date().toISOString() };
+      await this.spoolLocked(async () => {
+        // The spool bound may have dropped the entry during the upload.
+        await lstat(join(spoolDir, `${entry.id}.zst`));
+        await this.writeSpoolMeta(attempted);
+      }).catch(() => undefined);
+      await this.recordLedgerOutcome(entry.session_id, "failure").catch(() => undefined);
+      nextDueAt = Math.min(nextDueAt, this.spoolEntryDueAt(attempted));
+    }
+    if (failures > 0) this.retryFailures += 1;
+    if (pending > 0 && !signal.aborted) {
+      this.scheduleRetry(Math.max(this.jitteredBackoffMs(), Number.isFinite(nextDueAt) ? nextDueAt - Date.now() : 0));
+    }
+    return { delivered, pending };
   }
 
   /** Number of spooled uploads and their compressed size on disk. */
@@ -4649,15 +4907,19 @@ export class WorkspaceCollector {
   }
 
   /**
-   * Discards every spooled upload and the stored turn-diff bases. Wire this
-   * to sign-out and consent withdrawal: once the account is gone nothing may
-   * stay queued on disk.
+   * Discards every spooled upload and the stored turn-diff bases, and aborts
+   * every upload in flight without spooling it. Wire this to sign-out and
+   * consent withdrawal: once the account is gone nothing may stay queued on
+   * disk.
    */
   clearSpool(): Promise<void> {
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    this.draining?.controller.abort();
+    this.account.abort();
+    this.account = new AbortController();
     this.retryFailures = 0;
     return this.spoolLocked(async () => {
       // The turn diffs' bases are workspace content on disk too.

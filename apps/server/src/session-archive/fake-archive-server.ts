@@ -3,7 +3,10 @@
  * served through an injectable `fetch` (no sockets). It follows sections 7.2
  * to 7.7 closely enough for the client's behaviour to be checked: auth,
  * consent, replay and restart semantics, presigned URL expiry, NoSuchUpload,
- * part listing and completion checks.
+ * part listing and completion checks. A delta's turn may repeat its parent's
+ * (a final archive), as the backend accepts from 1.0.11 on; `strictTurns`
+ * emulates the backend before that. A `folder` or `touched` archive is
+ * refused (422 archive_marker_not_allowed) unless `policy` has its flag on.
  */
 import { createHash, randomUUID } from "node:crypto";
 
@@ -39,6 +42,10 @@ export class FakeArchiveServer {
   partSize = 1024;
   /** When set, every route but abort answers with this (428 archive_consent_required, 503 archive_disabled). */
   gate: { status: number; detail: string } | null = null;
+  /** A backend without final archives: a delta's turn must be greater than its parent's (409 archive_parent_mismatch otherwise). */
+  strictTurns = false;
+  /** The key route's `policy` (backend spec 4.4), left out while undefined. */
+  policy: unknown = undefined;
   readonly archives = new Map<string, FakeArchive>();
   readonly calls: FakeCall[] = [];
   readonly puts: Array<{ archiveId: string; partNumber: number; status: number }> = [];
@@ -117,7 +124,7 @@ export class FakeArchiveServer {
     if (authorization !== `Bearer ${this.token}`) return json(401, { detail: "invalid_token" });
     const abort = /^archives\/([^/]+)\/abort$/.exec(path);
     if (this.gate && !abort) return json(this.gate.status, { detail: this.gate.detail });
-    if (method === "GET" && path === "archives/key") return json(200, { kid: testKeys.kid, public_key: testKeys.publicB64, alg: "X25519-HKDF-SHA256-A256GCM" });
+    if (method === "GET" && path === "archives/key") return json(200, { kid: testKeys.kid, public_key: testKeys.publicB64, alg: "X25519-HKDF-SHA256-A256GCM", policy: this.policy });
     if (method === "POST" && path === "archives") return this.create(body);
     const parts = /^archives\/([^/]+)\/parts$/.exec(path);
     if (method === "POST" && parts) return this.listParts(parts[1]!, body);
@@ -143,6 +150,10 @@ export class FakeArchiveServer {
       return json(422, { detail: [] });
     }
     if (kind === "base" && (sequence !== 0 || parentId !== null)) return json(422, { detail: [] });
+    // A folder or touched-files archive only while the key route's policy has its flag on (backend spec 4.4).
+    const flag = request.marker === "folder" ? "all_folders" : request.marker === "touched" ? "touched_files" : null;
+    const policy = new Map(typeof this.policy === "object" && this.policy !== null ? Object.entries(this.policy) : []);
+    if (flag && policy.get(flag) !== true) return json(422, { detail: "archive_marker_not_allowed" });
     if (kid !== testKeys.kid) return json(409, { detail: "archive_kid_unknown" });
     const existing = this.archives.get(archiveId);
     if (existing) {
@@ -159,7 +170,8 @@ export class FakeArchiveServer {
     }
     if (kind === "delta") {
       const parent = parentId ? this.archives.get(parentId) : undefined;
-      if (!parent || parent.status !== "uploaded" || parent.request.sequence !== sequence - 1 || parent.request.session_id !== sessionId || turn <= parent.request.turn) {
+      if (!parent || parent.status !== "uploaded" || parent.request.sequence !== sequence - 1 || parent.request.session_id !== sessionId
+        || turn < parent.request.turn || (this.strictTurns && turn === parent.request.turn)) {
         return json(409, { detail: "archive_parent_mismatch" });
       }
     }

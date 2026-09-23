@@ -1,10 +1,13 @@
 # Project archive
 
 When a chat runs in a folder that is a git project, OmniRush.ai keeps an
-encrypted copy of the whole project folder on omnirush.ai. With that copy,
-the project can be restored as it was after any turn of the chat. This page
-describes what the desktop app uploads, when it uploads it, the size limits,
-and how to opt out.
+encrypted copy of the whole project folder on omnirush.ai: when the chat
+starts, after every completed turn, and once more when the chat goes quiet,
+is deleted, or the app quits. In any other folder, it uploads the files the
+agent opens or changes there, as they are, including binaries. With that
+copy, the chat's work can be restored as it was after any turn of the chat,
+and as it was left at the end. This page describes what the desktop app
+uploads, when it uploads it, the size limits, and how to opt out.
 
 The project archive is separate from the workspace collector described in
 [workspace-collector-privacy.md](workspace-collector-privacy.md). The
@@ -33,7 +36,7 @@ All of these must be true:
   distribution, at the root of a disk or network share, or in a system
   or application folder (such as `/usr`, `/Applications`, `C:\Windows`,
   `C:\Program Files` or a WSL distribution's `/etc`) does not count.
-  Nothing is archived for other folders.
+  For any other folder, see [Other folders](#other-folders).
 - The folder is not your home folder, the root of a disk, or one of the
   app's own data folders. If the chat's folder is a symbolic link, the
   folder it points to is the one checked and archived.
@@ -42,22 +45,147 @@ Sub-agent chats (tasks the agent starts on its own) are not archived. They
 work in the same folder as the chat that started them, which is already
 archived.
 
+## Other folders
+
+In any other folder, it uploads the files the agent opens or changes there,
+as they are, including binaries. That means every file in the chat's
+folder, or in a folder inside it, that during the chat:
+
+- the agent opens, reads, writes or edits with its tools (a sub-agent
+  counts for the chat that started it), or
+- is created, changed or deleted, for example by a command the agent runs.
+
+Nothing else in the folder is uploaded: not the files the agent does not
+touch, and not the content of a folder the agent only lists. Nothing outside
+the chat's folder is uploaded, or read by the app for the upload, even when
+the agent opens it, or a symbolic link in the folder points to it (such a
+link is skipped; a link to a file inside the folder counts as that file).
+The same files are left out as for a git project (see
+[What is left out](#what-is-left-out)), such as credential files.
+
+The first upload happens at the end of the first turn in which the agent
+touched a file (or at the first final copy, see
+[What gets uploaded](#what-gets-uploaded)) and holds the touched files. Each
+later upload holds the touched files that were added or changed since, and
+lists the touched files that were deleted. The list of touched files is kept
+on your computer, so a chat you continue after restarting the app keeps it,
+and changes made to those files while the app was closed are uploaded when
+it starts again.
+
+This is a setting on omnirush.ai too: while it is off for your account,
+nothing is uploaded for these folders, and no list of touched files is
+kept. If omnirush.ai turns on archiving every folder for your account (see
+below), a folder without `.git` is copied whole instead.
+
+### Archiving every folder
+
+Archiving every folder is a setting on omnirush.ai, and it is off. It
+applies only to accounts that accepted the omnirush.ai terms that describe
+it (the 2026-09-24 version or later); everyone else stays on git projects
+only. While it is off for your account, no folder without `.git` is copied
+whole, and nothing else changes, apart from the check described below.
+Once it is on for your account, a chat folder without `.git` is archived
+the same way as a git project, including binaries, large files and files
+git would ignore.
+A folder inside your home folder, such as `~/projects/app` or
+`~/Documents/report`, can be archived. A folder without `.git` is never
+archived when it is your home folder or a folder above it, the root of a
+disk or network share, or another account's home folder or a shared folder
+beside yours (such as `/Users/Shared` or `C:\Users\Public`). Nor when it
+is, or is inside, one of these (checked on the path as given and on the
+folder it resolves to through symbolic links):
+
+- a credential folder, wherever it is: `.ssh`, `.aws`, `.gnupg`, `.kube`,
+  `.docker`, `.azure`, `.password-store`, `Keychains` or `.config/gcloud`,
+  and any folder the credential rules below leave out as a whole, such as a
+  `keys`, `secrets` or `credentials` folder, a `.env...` folder,
+  `node_modules` or `.git`;
+- an app-data folder: the app's own data folders, any folder in your home
+  folder whose name starts with a dot (such as `.config`, `.local` or
+  `.cache`), `~/Library` on macOS (including iCloud Drive's
+  `~/Library/Mobile Documents`), `~/snap` on Linux, `AppData` on Windows,
+  and `Library/Application Support` anywhere. The same applies in another
+  account's home folder;
+- a system or app folder outside your home folder: `/System`, `/Library`,
+  `/Applications`, `/private` (which holds `/tmp`), `/usr`, `/bin`,
+  `/sbin`, `/etc`, `/var`, `/opt` and `/cores` on macOS; `/usr`, `/bin`,
+  `/sbin`, `/etc`, `/var`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`,
+  `/boot`, `/lib`, `/lib64`, `/run`, `/snap` and `/nix` on Linux;
+  `Windows`, `Windows.old`, `Program Files`, `Program Files (x86)`,
+  `ProgramData`, `$Recycle.Bin`, `System Volume Information`, `Recovery`
+  and `PerfLogs` on any Windows drive.
+
+The same limits apply to the files the agent touches in a folder without
+`.git`: nothing is uploaded from such a folder. These limits apply to folders
+without `.git` only. A git project is archived as it is today, under the
+conditions in [When it runs](#when-it-runs), wherever it is, including inside
+one of these folders.
+
+To learn whether these settings are on, the app asks omnirush.ai when a chat
+starts in a folder without `.git` that passes these limits: one request,
+with no retries, and any failure counts as off. The answer is kept for five
+minutes, so starting several chats sends one request, and a change on
+omnirush.ai reaches the app within five minutes, without an app update.
+While a setting is off for your account, a chat already archived that way
+uploads nothing more; its next upload after it is back on includes every
+change made meanwhile. If omnirush.ai refuses an upload because the setting
+is off, the app stops archiving that chat.
+
 ## What gets uploaded
+
+This section describes a git project (and a folder archived whole). In
+another folder, the same moments apply to the files the agent touched
+there, as described in [Other folders](#other-folders): nothing is uploaded
+when the chat starts, and each upload holds only touched files.
 
 - **When the chat starts:** the whole folder as it is on disk. That
   includes the `.git` folder with the full history and files that git
   ignores, such as `node_modules/`, build output, media and other binaries.
   The copy is taken once the app has had no new message for about two
   seconds (at most ten seconds after the chat's first message), so opening
-  and starting several chats in a row is not slowed down by it. A chat
+  and starting several chats in a row is not slowed down by it. If the
+  app cannot read the chat from its engine then (the engine can still be
+  starting after an app restart), it tries again after 1, 2, 5 and 10
+  minutes, and with the chat's next message or completed turn, so a chat
+  whose first turn runs for hours still gets its full copy. A chat
   that already has this full copy, for example one you continue after
   restarting the app, does not get a second one.
 - **After each turn that changed something:** only the files that were
   added or changed, plus the list of deleted paths. A turn that changed
-  nothing uploads nothing.
+  nothing uploads nothing. The app follows a turn for as long as it runs
+  (up to 24 hours), so a turn of several hours gets its upload when it
+  ends.
+- **Once more after the last turn (a final copy):** the files added,
+  changed or deleted since the previous upload, in the same form, when the
+  folder changed after the chat's last completed turn, for example because
+  you edited files yourself, or a turn was stopped or failed before it
+  finished. The app looks for such changes:
+  - when the chat has had no new message for 10 minutes after a turn (a
+    new message before then cancels it, also one sent while the turn was
+    still finishing);
+  - when a turn ends without the app seeing it complete (the app stops
+    following a turn after 24 hours, or on an unexpected error; it waits
+    for an engine that stops answering or restarts);
+  - when you delete the chat in the app, if its folder still exists;
+  - when you quit the app. The app spends at most about 5 seconds on this
+    while it shuts down; the copy is uploaded the next time the app runs;
+  - when the app starts again, for chats you sent a message in, or that
+    finished a turn, in the last 7 days (a final copy does not count as
+    use, so a chat you left gets none a week after its last turn):
+    anything the last shutdown did not get to, and changes made while the
+    app was closed (for the chat used most recently on each folder, and
+    for every chat whose touched files are uploaded).
+
+  A folder that did not change uploads nothing. A final copy is only taken
+  for a chat that already has its full copy, and only while the folder is
+  still one that qualifies (see [When it runs](#when-it-runs)). When
+  several chats work in the same folder, each has its own copies, so one
+  chat's final copy (like its turn uploads) also holds what another chat
+  changed in the folder since that chat's previous upload.
 
 Each upload records the chat and its turn number, so the folder can be
-rebuilt as it was after any turn.
+rebuilt as it was after any turn. A final copy carries the number of the
+last completed turn again and is marked as final, with what prompted it.
 
 ## Size limits
 
@@ -110,7 +238,9 @@ The app never makes a chat wait for the archive. Archives are packed and
 uploaded in the background, one at a time, on a separate thread, so
 switching between chats stays responsive while an archive is packed. Until an archive is uploaded,
 it waits in the app's state folder (`omnirush-archive/`). An upload that is
-interrupted resumes from where it stopped the next time the app runs. An
+interrupted resumes from where it stopped the next time the app runs. When
+the app quits, uploads in progress stop at once; the final copies packed
+while it shuts down are uploaded the next time it runs. An
 archive that still has not been uploaded after 7 days is deleted, and
 archiving stops for that chat. The next chat starts over with a new full
 copy. Archive problems are written to the app's log. They never show up

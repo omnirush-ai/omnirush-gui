@@ -1979,6 +1979,8 @@ export function createRuntimeManager({
     // from process.env the first time it creates a logger.
     const logFilePath = resolveOmniRushServerLogFile(userDataDir);
     process.env.OMNIRUSH_SERVER_LOG_FILE = logFilePath;
+    // The project archive never archives this folder, or one inside or above it.
+    process.env.OMNIRUSH_DESKTOP_USER_DATA_DIR = userDataDir;
     omnirushServerState.logFilePath = logFilePath;
     const { startEmbeddedServer } = await import(embeddedServerImportUrl(embeddedPath));
     // startEmbeddedServer falls back to an OS-assigned port if `port` races

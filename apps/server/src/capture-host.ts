@@ -16,6 +16,7 @@ import {
   type EngineTarget,
   type SessionObservers,
 } from "./collector-observer.js";
+import type { CaptureStopOptions } from "./capture-protocol.js";
 import { SessionArchiver, type SessionArchiverOptions } from "./session-archive/index.js";
 import { ProjectArchiveLifecycle, type ArchiveLifecycleLog } from "./session-archive/lifecycle.js";
 import { WorkspaceCollector, type CollectorMetrics, type CollectorWebVisit } from "./workspace-collector.js";
@@ -47,13 +48,13 @@ export type CaptureHostOptions = {
   engineVersion: string;
   log: CaptureLog;
   collector: {
-    upload?: (sessionId: string, compressed: Uint8Array) => Promise<Response>;
+    upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => Promise<Response>;
     refreshAccessToken?: () => Promise<string | null>;
     fetch?: (input: string, init?: RequestInit) => Promise<Response>;
     gatewayUrl?: string;
     accessToken?: string;
   };
-  archive: Pick<SessionArchiverOptions, "request" | "refreshAccessToken" | "fetch" | "gatewayUrl" | "accessToken"> & {
+  archive: Pick<SessionArchiverOptions, "request" | "refreshAccessToken" | "fetch" | "gatewayUrl" | "accessToken" | "folderGate"> & {
     /** Archiving is on for this device (OMNIRUSH_ARCHIVE_ENABLED) and an account is connected. */
     enabled: boolean;
     /** App data, config and cache directories: pruned under a project root, never archived as one. */
@@ -92,10 +93,12 @@ export class CaptureHost {
       engineVersion: options.engineVersion,
       log: options.log,
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
+      // The touched-files archive hears of every path a session touches, here on the same thread.
+      onPathTouched: (sessionId, path) => this.archive.pathTouched(sessionId, path),
     });
-    const { enabled, excludedDirs, baseIdleMs, baseMaxDeferMs, ...auth } = options.archive;
+    const { enabled, excludedDirs, folderGate, baseIdleMs, baseMaxDeferMs, ...auth } = options.archive;
     this.archive = new ProjectArchiveLifecycle({
-      archiver: new SessionArchiver({ stateDir: options.stateDir, excludedDirs, log: options.log, ...auth }),
+      archiver: new SessionArchiver({ stateDir: options.stateDir, excludedDirs, folderGate, log: options.log, ...auth }),
       enabled: enabled && this.collector.enabled,
       log: options.log,
       ...(baseIdleMs !== undefined ? { baseIdleMs } : {}),
@@ -141,7 +144,7 @@ export class CaptureHost {
 
   /** The engine accepted a collected request: follow the session until its turn settles. */
   observeSession(sessionId: string, target: EngineTarget): void {
-    observeCollectedSession({ collector: this.collector, archive: this.archive, observers: this.observers, sessionId, target });
+    void observeCollectedSession({ collector: this.collector, archive: this.archive, observers: this.observers, sessionId, target });
   }
 
   /** The session was deleted in the engine. */
@@ -158,9 +161,13 @@ export class CaptureHost {
     await this.collector.clearSpool().catch(() => undefined);
   }
 
-  /** Server shutdown: in-flight archive uploads abort first, then every session's trace and end snapshot go out. */
-  async stop(): Promise<void> {
-    const archiveStopped = this.archive.stop();
+  /**
+   * Server shutdown: in-flight archive uploads abort first, then every
+   * session's trace and end snapshot go out, next to the project archive's
+   * final archives (unless `archiveFinals` is false: the account is gone).
+   */
+  async stop(options: CaptureStopOptions = { archiveFinals: true }): Promise<void> {
+    const archiveStopped = this.archive.stop({ finals: options.archiveFinals });
     this.observers.controller.abort();
     await this.collector.stop().catch(() => undefined);
     await archiveStopped;

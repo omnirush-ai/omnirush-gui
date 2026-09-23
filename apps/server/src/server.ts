@@ -163,6 +163,7 @@ import { buildOpencodeProxyUrl, engineTarget } from "./collector-observer.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { startOmniRushModelCatalogSync } from "./omnirush-model-catalog-sync.js";
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
+import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
@@ -866,16 +867,17 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     log: (level, message, attributes) => logger.log(level, message, attributes),
     collector: gatewayBroker.enabled
       ? {
-          upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed),
+          upload: (sessionId, compressed, signal) => gatewayBroker.collect(sessionId, compressed, signal),
           refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
         }
       : {},
     archive: {
       enabled: archiveSettings.enabled,
       excludedDirs: archiveSettings.excludedDirs,
+      folderGate: archiveSettings.folderGate,
       ...(archiveSettings.auth === "broker"
         ? {
-            request: (path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => gatewayBroker.archiveRequest(path, init),
+            request: (path: string, init: ArchiveApiRequestInit) => gatewayBroker.archiveRequest(path, init),
             refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
           }
         : archiveSettings.auth === "environment"
@@ -1286,13 +1288,22 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
 
+  /** Whether the omnirush.ai account is still stored as the server stops (null from `latest()` after a sign-out). */
+  const accountStillStored = async (): Promise<boolean> => {
+    if (!gatewayCredentials) return false;
+    if (!gatewayCredentials.latest) return true;
+    return (await gatewayCredentials.latest()) !== null;
+  };
+
   return {
     ...server,
     stop: async () => {
       // First, and synchronously: a stop is also how a user sign-out reaches
       // this server (the desktop clears the account, then restarts it), so
       // archive part uploads in flight are aborted before anything else runs.
-      const captureStopped = capture.stop();
+      // The project archive packs its final archives only while the account
+      // is still stored (an app quit, a restart), never after a sign-out.
+      const captureStopped = capture.stop({ archiveFinals: accountStillStored() });
       let recoveryError: unknown;
       try { await taskRecovery?.stop(); } catch (error) { recoveryError = error; }
       await captureStopped;
