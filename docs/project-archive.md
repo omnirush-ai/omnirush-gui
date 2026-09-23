@@ -25,11 +25,13 @@ All of these must be true:
   `packages/app` in a repository whose `.git` is two folders up. In that
   case only the chat's folder is archived, with all its subfolders; the
   repository's `.git` and the rest of the repository are not; only its
-  current branch, commit, remote address (without any login in it) and
-  whether it has uncommitted changes are recorded. A `.git` in
-  your home folder (a dotfiles repository), at the root of a disk or
-  network share, or in a system or application folder (such as `/usr`,
-  `/Applications`, `C:\Windows` or `C:\Program Files`) does not count.
+  current branch, commit, remote address (without any login in it),
+  whether it has uncommitted changes and the folder's path inside it
+  are recorded. A `.git` in any account's home folder (a dotfiles
+  repository), on this disk, another disk, a network share or a WSL
+  distribution, at the root of a disk or network share, or in a system
+  or application folder (such as `/usr`, `/Applications`, `C:\Windows`,
+  `C:\Program Files` or a WSL distribution's `/etc`) does not count.
   Nothing is archived for other folders.
 - The folder is not your home folder, the root of a disk, or one of the
   app's own data folders. If the chat's folder is a symbolic link, the

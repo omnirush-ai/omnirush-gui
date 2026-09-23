@@ -126,20 +126,38 @@ function sameOrInsideFolded(child: string, parent: string, p: PathApi): boolean 
   return rel === "" || (!rel.startsWith(`..${p.sep}`) && rel !== ".." && !p.isAbsolute(rel));
 }
 
+/** Linux system folders guarded under a UNC share root too (a WSL distro: \\wsl$\<distro>\etc, \\wsl.localhost\<distro>\root). */
+const UNC_POSIX_SYSTEM_NAMES = ["usr", "etc", "var", "opt", "root"];
+
+/** The root that `dir`'s home and system folders hang off: its drive or UNC share root, or /Volumes/<name>/ on posix. */
+function volumeRoot(dir: string, p: PathApi): string {
+  if (p.sep === "/") {
+    const mounted = /^\/Volumes\/[^/]+/i.exec(dir);
+    if (mounted) return `${mounted[0]}/`;
+  }
+  return p.parse(dir).root;
+}
+
 /** Why the parent walk must stop at `dir` without looking for `.git` in it, or null. Case-insensitive, so it errs on the side of stopping. */
 function parentWalkStop(dir: string, homes: readonly string[], p: PathApi, systemDirs?: readonly string[]): string | null {
-  if (p.parse(dir).root === dir || (p.sep === "/" && /^\/Volumes(?:\/[^/]+)?\/?$/.test(dir))) return "filesystem_root";
+  if (p.parse(dir).root === dir || (p.sep === "/" && /^\/Volumes(?:\/[^/]+)?\/?$/i.test(dir))) return "filesystem_root";
   if (homes.some((home) => p.relative(home.toLowerCase(), dir.toLowerCase()) === "")) return "home";
-  // Another account's home: /Users/<name>, /home/<name>, <drive>:\Users\<name>.
-  if (/^(?:\/users|\/home|[a-z]:\\users)$/i.test(p.dirname(dir))) return "home";
-  const system = systemDirs ?? (p.sep === "/" ? POSIX_SYSTEM_DIRS : WIN32_SYSTEM_NAMES.map((name) => p.join(p.parse(dir).root, name)));
+  // Any account's home on any volume: /Users/<name>, /home/<name>, <drive>:\Users\<name>,
+  // /Volumes/<disk>/Users/<name>, \\wsl$\<distro>\home\<name>.
+  const vroot = volumeRoot(dir, p);
+  if (/^(?:users|home)$/i.test(p.relative(vroot, p.dirname(dir)))) return "home";
+  const unc = p.sep === "\\" && /^[\\/]{2}[^\\/?.]/.test(vroot);
+  // A share of home folders: \\nas\homes\<name>, \\server\users\<name>.
+  if (unc && p.relative(vroot, p.dirname(dir)) === "" && /[\\/](?:users|homes?)[\\/]?$/i.test(vroot)) return "home";
+  const system =
+    systemDirs ?? (p.sep === "/" ? POSIX_SYSTEM_DIRS : [...WIN32_SYSTEM_NAMES, ...(unc ? UNC_POSIX_SYSTEM_NAMES : [])].map((name) => p.join(vroot, name)));
   if (system.some((guarded) => sameOrInsideFolded(dir, guarded, p))) return "system_dir";
   return null;
 }
 
 /**
  * The parents of `root` that gitParentDetector may look in for `.git`,
- * nearest first. The walk stops before the home directory (dotfiles repos),
+ * nearest first. The walk stops before the home directory or any account's home on any volume (dotfiles repos),
  * a filesystem, drive or UNC share root, or a system or app directory, so
  * none of those, nor anything above them, can qualify the root.
  */
@@ -174,7 +192,7 @@ async function isMountPoint(dir: string): Promise<boolean> {
 /**
  * A root without `.git` that sits inside a repository, e.g. `~/proj/packages/app`
  * with `~/proj/.git`: archivable as git_parent when the nearest parent holding
- * `.git` (a directory or a valid gitfile) lies before any stop of
+ * `.git` (a directory with HEAD, or a valid gitfile) lies before any stop of
  * gitParentCandidates or a mount point. Only the root is archived; the
  * parent's `.git` is not. A `.git` of any other kind in the root, or at the
  * nearest parent, and a root inside that `.git`, qualify nothing.
@@ -190,7 +208,10 @@ export const gitParentDetector: ProjectMarkerDetector = async (root, options = {
       // A root inside the repository's own .git (hooks, worktrees) would upload its history.
       if (relative(dir, start).split(sep).some((part) => part.toLowerCase() === ".git")) return null;
       const found = await gitMarkerDetector(dir);
-      return found?.archivable ? { archivable: true, reason: "git_parent", marker: ".git" } : null;
+      if (!found?.archivable) return null;
+      // A .git folder without HEAD is one git itself skips, walking on up to a repository the walk never reached.
+      if (found.reason === "git_dir" && !(await lstat(join(dir, ".git", "HEAD")).then((stats) => stats.isFile(), () => false))) return null;
+      return { archivable: true, reason: "git_parent", marker: ".git" };
     }
     return null;
   } catch {

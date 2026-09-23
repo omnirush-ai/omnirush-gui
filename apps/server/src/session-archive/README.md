@@ -25,8 +25,8 @@ The user-facing description is `docs/project-archive.md`.
 
 | File | Responsibility |
 | --- | --- |
-| `detect.ts` | `isArchivableProject(root, detectors?, options?)`, `gitMarkerDetector` and `gitParentDetector` (section 4). A pluggable gate; only the `.git` marker is enabled, in the root or (`git_parent`) in the nearest parent, never at home, a filesystem, drive, share or mount root, or in a system or app directory. A `git_parent` root is archived alone, without the parent's `.git` |
-| `manifest.ts` | Scan with the exclusions and credential filter (5.2, 5.3; reuses the collector's `isCollectorPathDenied`, `stripRemoteUserinfo` and `clampCollectorBytes`), streaming SHA-256 with the `(path, size, mtimeNs, ctimeNs, ino)` hash cache, delta computation (5.8), `manifest.json` (5.6) and the git block |
+| `detect.ts` | `isArchivableProject(root, detectors?, options?)`, `gitMarkerDetector` and `gitParentDetector` (section 4). A pluggable gate; only the `.git` marker is enabled, in the root or (`git_parent`) in the nearest parent (a `.git` folder there must hold `HEAD`), never at any account's home on any volume or share, a filesystem, drive, share or mount root, or in a system or app directory (on a UNC share such as `\\wsl$\<distro>`, also `usr`, `etc`, `var`, `opt` and `root`). A `git_parent` root is archived alone, without the parent's `.git` |
+| `manifest.ts` | Scan with the exclusions and credential filter (5.2, 5.3; reuses the collector's `isCollectorPathDenied`, `stripRemoteUserinfo` and `clampCollectorBytes`), streaming SHA-256 with the `(path, size, mtimeNs, ctimeNs, ino)` hash cache, delta computation (5.8), `manifest.json` (5.6) and the git block (`path` from `git rev-parse --show-prefix`; git runs with `GIT_CEILING_DIRECTORIES` set to the real home so it never climbs into home) |
 | `pack.ts` | Streaming pax tar writer (5.5) with unstable-entry detection (5.9), and the file -> tar -> zstd -> ORSEAL01 -> temp file pipeline (5.10, 13.1) |
 | `seal.ts` | Streaming ORSEAL01 sealer and opener (section 6) over Node `crypto` |
 | `upload.ts` | Multipart upload client over an injectable `fetch` (sections 7 and 13.5) |
@@ -297,8 +297,8 @@ cd apps/server && bun --conditions=development test src/session-archive
   - a directory swapped for a symlink to an outside folder, before pass 2 and while pass 2 is inside it: zero-filled, nothing from outside in the tar; a file swapped for a FIFO does not block;
   - pax header edge cases;
   - a multi-MiB `writeSealedArchive` round trip checked with the `zstd` CLI.
-- `manifest.test.ts`: UTF-8 byte order; the credential filter; the exclusions (credential, FIFO, app state, `__omnirush__`, unreadable, non-UTF-8); the hash cache; delta for add, modify (content and mode), delete, rename, file to dir, dir to file and symlink retarget; unstable re-send; `.git` changes; manifest JSON; the git block; `git status` never rewriting `.git/index`.
-- `detect.test.ts`: a `.git` dir; a gitfile; no `.git`; an invalid gitfile; a `.git` symlink; home, `/` and app dirs refused; `root_not_directory`; detector plug-ins; `git_parent` (nearest parent wins, root `.git` preferred, dotfiles home, system dirs, posix and `path.win32` walks).
+- `manifest.test.ts`: UTF-8 byte order; the credential filter; the exclusions (credential, FIFO, app state, `__omnirush__`, unreadable, non-UTF-8); the hash cache; delta for add, modify (content and mode), delete, rename, file to dir, dir to file and symlink retarget; unstable re-send; `.git` changes; manifest JSON; the git block and its `path`; `git status` never rewriting `.git/index`.
+- `detect.test.ts`: a `.git` dir; a gitfile; no `.git`; an invalid gitfile; a `.git` symlink; home, `/` and app dirs refused; `root_not_directory`; detector plug-ins; `git_parent` (nearest parent wins, a `.git` folder without `HEAD` there qualifies nothing, root `.git` preferred, dotfiles home, system dirs, posix and `path.win32` walks including `/Volumes/<disk>` homes and WSL shares).
 - `upload.test.ts` (in-process fake API and S3):
   - the happy path;
   - resume after a failed part;

@@ -85,9 +85,15 @@ describe("project gate", () => {
   // Temp folders live under /private or /var on macOS, which the walk never enters; systemDirs: [] lifts that here.
   const anyDir = { systemDirs: [] as string[] };
 
+  /** A `.git` folder git accepts as a parent repository: one with HEAD. */
+  async function gitDirWithHead(dir: string): Promise<void> {
+    await mkdir(join(dir, ".git"), { recursive: true });
+    await writeFile(join(dir, ".git/HEAD"), "ref: refs/heads/main\n");
+  }
+
   test("a folder inside a repository is archivable as git_parent, from a .git directory or gitfile at the nearest parent", async () => {
     const repo = await tempDir("gate-parent");
-    await mkdir(join(repo, ".git"));
+    await gitDirWithHead(repo);
     await mkdir(join(repo, "packages/app/src"), { recursive: true });
     const git_parent = { archivable: true, reason: "git_parent", marker: ".git" };
     expect(await isArchivableProject(join(repo, "packages/app"), undefined, anyDir)).toEqual(git_parent);
@@ -101,6 +107,11 @@ describe("project gate", () => {
     await rm(join(repo, "packages/.git"));
     await symlink(join(repo, ".git"), join(repo, "packages/.git"));
     expect((await isArchivableProject(join(repo, "packages/app"), undefined, anyDir)).reason).toBe("no_marker");
+    // So does a .git folder without HEAD, which git would skip on its way up to the repository above.
+    await rm(join(repo, "packages/.git"));
+    await mkdir(join(repo, "packages/.git"));
+    expect((await isArchivableProject(join(repo, "packages/app"), undefined, anyDir)).reason).toBe("no_marker");
+    await rm(join(repo, "packages/.git"), { recursive: true });
     // A root inside the repository's own .git never qualifies: that would upload its history.
     await mkdir(join(repo, ".git/hooks"));
     expect((await isArchivableProject(join(repo, ".git/hooks"), undefined, anyDir)).reason).toBe("no_marker");
@@ -110,7 +121,7 @@ describe("project gate", () => {
 
   test("a .git in the root itself is still preferred, and an invalid one there is not overridden by a parent", async () => {
     const repo = await tempDir("gate-prefer");
-    await mkdir(join(repo, ".git"));
+    await gitDirWithHead(repo);
     await mkdir(join(repo, "vendor/lib/.git"), { recursive: true });
     await mkdir(join(repo, "tools/cli"), { recursive: true });
     expect(await isArchivableProject(join(repo, "vendor/lib"), undefined, anyDir)).toEqual({ archivable: true, reason: "git_dir", marker: ".git" });
@@ -129,13 +140,13 @@ describe("project gate", () => {
     await rm(join(home, ".git"), { recursive: true });
     expect((await isArchivableProject(join(home, "code/app"), undefined, { ...anyDir, homeDir: home })).reason).toBe("no_marker");
     // A real project inside home still qualifies.
-    await mkdir(join(home, "code/.git"));
+    await gitDirWithHead(join(home, "code"));
     expect((await isArchivableProject(join(home, "code/app"), undefined, { ...anyDir, homeDir: home })).reason).toBe("git_parent");
   });
 
   test("a repository in a system or app directory does not qualify a folder inside it", async () => {
     const repo = await tempDir("gate-system");
-    await mkdir(join(repo, ".git"));
+    await gitDirWithHead(repo);
     await mkdir(join(repo, "Contents/Resources"), { recursive: true });
     expect((await isArchivableProject(join(repo, "Contents/Resources"), undefined, { systemDirs: [repo] })).reason).toBe("no_marker");
     expect((await isArchivableProject(join(repo, "Contents/Resources"), undefined, { systemDirs: [join(repo, "..")] })).reason).toBe("no_marker");
@@ -155,6 +166,10 @@ describe("project gate", () => {
     expect(gitParentCandidates("/proj", home, posix)).toEqual([]);
     expect(gitParentCandidates("/Volumes/Backup/proj/app", home, posix)).toEqual(["/Volumes/Backup/proj"]);
     expect(gitParentCandidates("/Volumes/Backup/app", home, posix)).toEqual([]);
+    // Homes on another volume: the rule is relative to the volume root, not to /.
+    expect(gitParentCandidates("/Volumes/Ext/Users/other/code/app", home, posix)).toEqual(["/Volumes/Ext/Users/other/code"]);
+    expect(gitParentCandidates("/Volumes/Ext/home/sam/app", home, posix)).toEqual([]);
+    expect(gitParentCandidates("/Volumes/Ext/srv/proj/app", home, posix)).toEqual(["/Volumes/Ext/srv/proj", "/Volumes/Ext/srv"]);
     for (const guarded of ["/System/Volumes/Data/x/app", "/Library/Developer/x/app", "/Applications/Foo.app/Contents/Resources/app", "/usr/local/proj/app", "/private/tmp/proj/app", "/private/var/folders/xy/T/proj/app", "/var/www/site/app", "/etc/nixos/app", "/opt/homebrew/Library/Taps", "/USR/local/x/app"]) {
       expect(gitParentCandidates(guarded, home, posix)).toEqual([]);
     }
@@ -172,7 +187,16 @@ describe("project gate", () => {
     expect(gitParentCandidates("\\\\server\\share\\app", home, win32)).toEqual([]);
     expect(gitParentCandidates("\\\\?\\UNC\\server\\share\\app", home, win32)).toEqual([]);
     expect(gitParentCandidates("\\\\?\\C:\\src\\proj\\app", home, win32)).toEqual(["C:\\src\\proj", "C:\\src"]);
-    for (const guarded of ["C:\\Windows\\System32\\x\\app", "c:\\windows\\x\\app", "C:\\Program Files\\App\\resources\\app", "D:\\Program Files (x86)\\App\\x", "C:\\ProgramData\\chocolatey\\lib\\x", "\\\\server\\share\\Windows\\x\\app"]) {
+    expect(gitParentCandidates("D:\\Users\\other\\proj\\app", home, win32)).toEqual(["D:\\Users\\other\\proj"]);
+    // A WSL distro is a UNC share: its homes and Linux system folders are guarded against the share root.
+    expect(gitParentCandidates("\\\\wsl$\\Ubuntu\\home\\sam\\code\\app", home, win32)).toEqual(["\\\\wsl$\\Ubuntu\\home\\sam\\code"]);
+    expect(gitParentCandidates("\\\\wsl.localhost\\Ubuntu\\home\\sam\\code\\app", home, win32)).toEqual(["\\\\wsl.localhost\\Ubuntu\\home\\sam\\code"]);
+    expect(gitParentCandidates("//wsl$/Ubuntu/home/sam/code/app", home, win32)).toEqual(["//wsl$/Ubuntu/home/sam/code"]);
+    expect(gitParentCandidates("\\\\wsl$\\Ubuntu\\srv\\proj\\app", home, win32)).toEqual(["\\\\wsl$\\Ubuntu\\srv\\proj", "\\\\wsl$\\Ubuntu\\srv"]);
+    // A share of home folders.
+    expect(gitParentCandidates("\\\\nas\\homes\\sam\\proj\\app", home, win32)).toEqual(["\\\\nas\\homes\\sam\\proj"]);
+    expect(gitParentCandidates("\\\\server\\Users\\sam\\app", home, win32)).toEqual([]);
+    for (const guarded of ["C:\\Windows\\System32\\x\\app", "c:\\windows\\x\\app", "C:\\Program Files\\App\\resources\\app", "D:\\Program Files (x86)\\App\\x", "C:\\ProgramData\\chocolatey\\lib\\x", "\\\\server\\share\\Windows\\x\\app", "\\\\wsl.localhost\\Ubuntu\\etc\\x", "\\\\wsl.localhost\\Ubuntu\\etc\\nixos\\app", "\\\\wsl$\\Ubuntu\\usr\\local\\x\\app", "\\\\wsl$\\Ubuntu\\var\\www\\app", "\\\\wsl$\\Ubuntu\\opt\\x\\app", "\\\\wsl$\\Ubuntu\\root\\proj\\app"]) {
       expect(gitParentCandidates(guarded, home, win32)).toEqual([]);
     }
   });

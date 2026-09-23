@@ -248,14 +248,16 @@ describe("manifest and git block", () => {
     const root = await tempDir("git-block");
     expect(await readArchiveGit(root)).toBeNull();
     await git(root, "init", "-q", "-b", "main");
-    expect(await readArchiveGit(root)).toEqual({ head: null, branch: "main", remote: null, dirty: false });
+    expect(await readArchiveGit(root)).toEqual({ head: null, branch: "main", remote: null, dirty: false, path: "" });
     await writeFile(join(root, "a.txt"), "a");
     await git(root, "add", "a.txt");
     await git(root, "commit", "-q", "-m", "one");
     await git(root, "remote", "add", "upstream", "https://example.com/upstream.git");
     await git(root, "remote", "add", "origin", "https://user:ghp_secret@github.com/acme/my-app.git");
     const head = await git(root, "rev-parse", "HEAD");
-    expect(await readArchiveGit(root)).toEqual({ head, branch: "main", remote: "https://github.com/acme/my-app.git", dirty: false });
+    expect(await readArchiveGit(root)).toEqual({ head, branch: "main", remote: "https://github.com/acme/my-app.git", dirty: false, path: "" });
+    await mkdir(join(root, "packages/my app"), { recursive: true });
+    expect((await readArchiveGit(join(root, "packages/my app")))!.path).toBe("packages/my app");
     await writeFile(join(root, "untracked.txt"), "u");
     expect((await readArchiveGit(root))!.dirty).toBe(true);
     await git(root, "checkout", "-q", "--detach");
