@@ -163,6 +163,7 @@ import { buildOpencodeProxyUrl, engineTarget } from "./collector-observer.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { startOmniRushModelCatalogSync } from "./omnirush-model-catalog-sync.js";
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
+import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
@@ -876,7 +877,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       folderGate: archiveSettings.folderGate,
       ...(archiveSettings.auth === "broker"
         ? {
-            request: (path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => gatewayBroker.archiveRequest(path, init),
+            request: (path: string, init: ArchiveApiRequestInit) => gatewayBroker.archiveRequest(path, init),
             refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
           }
         : archiveSettings.auth === "environment"

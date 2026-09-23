@@ -661,6 +661,28 @@ describe("OmniRush gateway broker project archive requests", () => {
     ]);
   });
 
+  test("refresh: false (the archiver's policy probe) sends once and returns a 401 as it is, with no refresh", async () => {
+    const calls: string[] = [];
+    const refreshCalls: string[] = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1/", accessToken: "access-1", refreshToken: "refresh-1" },
+      engineToken: "local-engine-token",
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/device/refresh")) {
+          refreshCalls.push(url);
+          return Response.json({ access_token: "access-2", refresh_token: "refresh-2", gateway_url: "https://gateway.example/omnirush/v1" });
+        }
+        calls.push(`${init?.method ?? "GET"} ${url} ${new Headers(init?.headers).get("authorization")}`);
+        return Response.json({ detail: "invalid_token" }, { status: 401 });
+      },
+    });
+    const response = await broker.archiveRequest("archives/key", { method: "GET", refresh: false });
+    expect(response.status).toBe(401);
+    expect(calls).toEqual(["GET https://gateway.example/omnirush/archives/key Bearer access-1"]);
+    expect(refreshCalls).toEqual([]);
+  });
+
   test("never leave the archive routes, and answer 401 without an account", async () => {
     const urls: string[] = [];
     const broker = new OmniRushGatewayBroker({

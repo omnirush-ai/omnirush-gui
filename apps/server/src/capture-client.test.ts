@@ -286,6 +286,7 @@ describe("capture worker", () => {
       await writeFile(join(root, "plan.md"), "# plan\n");
       const archive = new FakeArchiveServer();
       archive.policy = policy;
+      const refreshFlags: unknown[] = [];
       const capture = service({
         stateDir: await tempDir("state"),
         collector: { upload: uploadSink().upload },
@@ -293,11 +294,14 @@ describe("capture worker", () => {
           enabled: true,
           excludedDirs: [],
           folderGate: { homeDir: home },
-          request: (path, init) => archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
-            method: init.method,
-            headers: { authorization: `Bearer ${archive.token}` },
-            ...(init.body === undefined ? {} : { body: init.body }),
-          }),
+          request: (path, init) => {
+            refreshFlags.push("refresh" in init ? init.refresh : "absent");
+            return archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
+              method: init.method,
+              headers: { authorization: `Bearer ${archive.token}` },
+              ...(init.body === undefined ? {} : { body: init.body }),
+            });
+          },
           refreshAccessToken: async () => null,
           fetch: archive.respond,
           baseIdleMs: 0,
@@ -314,6 +318,8 @@ describe("capture worker", () => {
       } else {
         expect(archive.callPaths()).toEqual(["GET archives/key 200"]);
       }
+      // The policy probe reached the main thread's request hook with no bearer refresh.
+      expect(refreshFlags[0]).toBe(false);
       await capture.stop();
     }
   }, 60_000);

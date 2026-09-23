@@ -17,7 +17,9 @@ export type ArchiveFetch = (input: string, init?: RequestInit) => Promise<Respon
  * device session (the gateway broker) attaches the bearer and handles its own
  * rotation, as it does for the collector's `upload` hook.
  */
-export type ArchiveApiRequest = (path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => Promise<Response>;
+export type ArchiveApiRequest = (path: string, init: ArchiveApiRequestInit) => Promise<Response>;
+/** `refresh: false` returns a 401 as it is, without refreshing the bearer (the all-folders policy probe); absent means true. */
+export type ArchiveApiRequestInit = { method: "GET" | "POST"; body?: string; signal?: AbortSignal; refresh?: false };
 export type ArchiveLog = (level: "info" | "warn", message: string, attributes?: Record<string, unknown>) => void;
 
 export type RetryPolicy = {
@@ -56,6 +58,8 @@ export function backoffMs(policy: RetryPolicy, attempt: number): number {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
+/** The all-folders policy probe: one attempt this long at most, no backoff and no bearer refresh. */
+export const POLICY_PROBE_TIMEOUT_MS = 5_000;
 /** A part PUT may take this long at least, and longer for big parts on slow links (32 KB/s floor). */
 const PART_MIN_TIMEOUT_MS = 10 * 60_000;
 const PART_MIN_BYTES_PER_MS = 32;
@@ -233,9 +237,10 @@ export class ArchiveUploader {
     this.token = token?.trim() || null;
   }
 
-  private send(method: "GET" | "POST", path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  private send(method: "GET" | "POST", path: string, body: unknown, signal?: AbortSignal, probe = false): Promise<Response> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    if (this.options.request) return this.options.request(path, { method, ...(payload === undefined ? {} : { body: payload }), signal: timeoutSignal(REQUEST_TIMEOUT_MS, signal) });
+    const timeout = timeoutSignal(probe ? POLICY_PROBE_TIMEOUT_MS : REQUEST_TIMEOUT_MS, signal);
+    if (this.options.request) return this.options.request(path, { method, ...(payload === undefined ? {} : { body: payload }), signal: timeout, ...(probe ? { refresh: false as const } : {}) });
     if (!this.apiRoot || !this.token) return Promise.reject(new Error("archive API not configured"));
     return this.options.fetch(`${this.apiRoot}/${path}`, {
       method,
@@ -245,7 +250,7 @@ export class ArchiveUploader {
         ...(payload === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(payload === undefined ? {} : { body: payload }),
-      signal: timeoutSignal(REQUEST_TIMEOUT_MS, signal),
+      signal: timeout,
     });
   }
 
@@ -308,10 +313,39 @@ export class ArchiveUploader {
     return null;
   }
 
+  /** One GET with a single attempt: no bearer refresh on a 401, no backoff; a retryable failure is `unavailable`. */
+  private async getOnce(path: string, signal?: AbortSignal): Promise<ApiResult> {
+    if (signal?.aborted) return { kind: "aborted" };
+    try {
+      const response = await this.send("GET", path, undefined, signal, true);
+      if (response.ok) return { kind: "ok", status: response.status, body: await response.json().catch(() => null) };
+      const code = await errorCode(response);
+      if (!RETRYABLE_STATUSES.has(response.status) || (response.status === 503 && code === "archive_disabled")) return { kind: "error", status: response.status, code };
+      return { kind: "unavailable", reason: `status ${response.status}` };
+    } catch (error) {
+      if (signal?.aborted) return { kind: "aborted" };
+      return { kind: "unavailable", reason: error instanceof Error ? error.name : "network error" };
+    }
+  }
+
   /** GET /archives/key (7.2). 428, 503 and a server without the route all mean archiving is off. */
   async fetchKey(signal?: AbortSignal): Promise<KeyResult> {
     if (!this.configured) return { status: "disabled", code: "not_configured" };
-    const result = await this.call("GET", "archives/key", undefined, signal);
+    return this.keyResult(await this.call("GET", "archives/key", undefined, signal));
+  }
+
+  /**
+   * GET /archives/key as the all-folders policy probe (4.4): one attempt
+   * within POLICY_PROBE_TIMEOUT_MS, no backoff, and a 401 is not answered
+   * with a bearer refresh. The caller counts anything but `ok` with
+   * `policy.allFolders` as the policy off.
+   */
+  async probeKey(signal?: AbortSignal): Promise<KeyResult> {
+    if (!this.configured) return { status: "disabled", code: "not_configured" };
+    return this.keyResult(await this.getOnce("archives/key", signal));
+  }
+
+  private keyResult(result: ApiResult): KeyResult {
     if (result.kind === "ok") {
       const parsed = keySchema.safeParse(result.body);
       if (!parsed.success) return { status: "unavailable", reason: "invalid key response" };

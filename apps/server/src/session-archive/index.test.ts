@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 import { gitMarkerDetector, gitParentDetector } from "./detect.js";
 import { FakeArchiveServer, slowPartTwo } from "./fake-archive-server.js";
-import { ARCHIVE_STATE_DIRECTORY, SessionArchiver, type SessionArchiverOptions } from "./index.js";
+import { ARCHIVE_STATE_DIRECTORY, POLICY_TTL_MS, SessionArchiver, type SessionArchiverOptions } from "./index.js";
 import { cleanupTempDirs, manifestOf, openArchive, tempDir } from "./test-helpers.js";
 
 const execFileAsync = promisify(execFile);
@@ -306,6 +306,161 @@ describe("SessionArchiver", () => {
     expect(server.calls.filter((call) => call.path === "archives/key")).toHaveLength(1);
   });
 
+  test("with the all-folders policy on, a session started in a credential or app-data folder is refused and nothing is sent", async () => {
+    const server = new FakeArchiveServer();
+    server.policy = { all_folders: true };
+    const home = await tempDir("home");
+    const files: Record<string, string> = {
+      ".gnupg/secring.gpg": "old-style secret keyring",
+      ".gnupg/pubring.kbx": "keybox",
+      ".aws/config": "[default]\nregion = us-east-1\n",
+      ".aws/sso/cache/abc.json": "{\"accessToken\":\"aoa-sso-token\"}",
+      ".docker/config.json": "{\"auths\":{\"ghcr.io\":{\"auth\":\"dXNlcjpwYXNz\"}}}",
+      ".ssh/config": "Host *\n",
+      ".ssh/known_hosts": "github.com ssh-ed25519 AAAA\n",
+      ".kube/config": "apiVersion: v1\n",
+      ".config/gh/hosts.yml": "github.com:\n  oauth_token: gho_x\n",
+      ".config/gcloud/credentials.db": "sqlite",
+      ".local/share/keyrings/login.keyring": "keyring",
+      ".password-store/bank.gpg": "gpg",
+      "Library/Keychains/login.keychain-db": "keychain",
+      "Library/Application Support/Google/Chrome/Default/Cookies": "cookies",
+      "AppData/Roaming/gcloud/access_tokens.db": "tokens",
+      "work/secrets/prod.txt": "prod",
+    };
+    for (const [path, content] of Object.entries(files)) {
+      await mkdir(join(home, path, ".."), { recursive: true });
+      await writeFile(join(home, path), content);
+    }
+    const state = await tempDir("state");
+    const subject = archiver(server, state, { folderGate: { homeDir: home } });
+    const roots = [...new Set(Object.keys(files).map((path) => join(home, path, "..")))];
+    roots.push(join(home, ".aws"), join(home, ".config"), join(home, ".local"), join(home, "Library"), join(home, "AppData"));
+    for (const [index, root] of roots.entries()) {
+      expect({ root, result: await subject.captureBase(`ses_credential_${index}`, root) }).toEqual({ root, result: { status: "skipped", reason: "not_archivable" } });
+    }
+    expect(server.calls).toEqual([]);
+    expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "sessions"))).toEqual([]);
+  });
+
+  test("with the policy off and the API failing, a folder session costs one GET with no backoff and no refresh, and does not change archiving", async () => {
+    const failures: Array<[string, Response | "network"]> = [
+      ["502", new Response("bad gateway", { status: 502 })],
+      ["401", Response.json({ detail: "invalid_token" }, { status: 401 })],
+      ["428", Response.json({ detail: "archive_consent_required" }, { status: 428 })],
+      ["503 archive_disabled", Response.json({ detail: "archive_disabled" }, { status: 503 })],
+      ["network", "network"],
+    ];
+    for (const [name, failure] of failures) {
+      const server = new FakeArchiveServer();
+      let keyAttempts = 0;
+      server.apiHook = ({ path }) => {
+        if (path !== "archives/key") return undefined;
+        keyAttempts += 1;
+        return failure === "network" ? "network" : failure.clone();
+      };
+      const home = await tempDir("home");
+      for (const dir of ["notes", "drafts", "scratch"]) await mkdir(join(home, dir));
+      const sleeps: number[] = [];
+      const refreshes: string[] = [];
+      const state = await tempDir("state");
+      const subject = archiver(server, state, {
+        folderGate: { homeDir: home },
+        retry: { baseMs: 1_000, maxMs: 300_000, attempts: 8, sleep: async (ms) => void sleeps.push(ms) },
+        refreshAccessToken: async () => (refreshes.push("refresh"), server.token),
+      });
+      const started = Date.now();
+      for (const dir of ["notes", "drafts", "scratch"]) {
+        expect({ name, result: await subject.captureBase(`ses_${dir}_folder`, join(home, dir)) }).toEqual({ name, result: { status: "skipped", reason: "not_archivable" } });
+      }
+      expect(Date.now() - started).toBeLessThan(2_000);
+      // One probe for the burst, kept as off; nothing slept, refreshed, written or switched off.
+      expect({ name, keyAttempts, sleeps, refreshes }).toEqual({ name, keyAttempts: 1, sleeps: [], refreshes: [] });
+      expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "sessions"))).toEqual([]);
+      expect((await subject.pendingStatus()).disabled).toBeNull();
+      // A git session right after is exactly as without the policy: its own full key fetch.
+      server.apiHook = null;
+      const { root } = await project();
+      expect(await subject.captureBase("ses_git_after", root)).toMatchObject({ status: "queued", kind: "base" });
+      expect(server.callPaths().filter((call) => call.endsWith(" 200"))).toEqual(["GET archives/key 200"]);
+    }
+  });
+
+  test("the policy answer is kept with the key for POLICY_TTL_MS: one probe per burst, and a change on omnirush.ai is seen after it", async () => {
+    const server = new FakeArchiveServer();
+    let clock = Date.parse("2026-09-24T10:00:00Z");
+    const home = await tempDir("home");
+    const folders = ["a", "b", "c", "d", "e", "f", "g"];
+    for (const dir of folders) {
+      await mkdir(join(home, dir));
+      await writeFile(join(home, dir, "notes.md"), `${dir}\n`);
+    }
+    const subject = archiver(server, await tempDir("state"), { folderGate: { homeDir: home }, now: () => new Date(clock) });
+    const keyReads = () => server.calls.filter((call) => call.path === "archives/key").length;
+    const creates = () => server.calls.filter((call) => call.method === "POST" && call.path === "archives").length;
+
+    // Off: a burst of folder sessions sends one probe.
+    for (const dir of ["a", "b"]) expect(await subject.captureBase(`ses_ttl_${dir}_folder`, join(home, dir))).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(keyReads()).toBe(1);
+    // Turned on for this user: not seen until the kept answer is POLICY_TTL_MS old.
+    server.policy = { all_folders: true };
+    clock += POLICY_TTL_MS - 1;
+    expect(await subject.captureBase("ses_ttl_c_folder", join(home, "c"))).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(keyReads()).toBe(1);
+    clock += 1;
+    expect(await subject.captureBase("ses_ttl_d_folder", join(home, "d"))).toMatchObject({ status: "queued", kind: "base" });
+    // The probe's key served the base.
+    expect(keyReads()).toBe(2);
+    // On and kept: the next folder base checks consent with a full key fetch, like a git base.
+    clock += 60_000;
+    expect(await subject.captureBase("ses_ttl_e_folder", join(home, "e"))).toMatchObject({ status: "queued", kind: "base" });
+    expect(keyReads()).toBe(3);
+    await subject.drain();
+    expect(server.objects().map((archive) => archive.request.marker)).toEqual(["folder", "folder"]);
+
+    // Turned off again: that full fetch sees it, the folder is not archived, and the answer is kept as off.
+    server.policy = { all_folders: false };
+    expect(await subject.captureBase("ses_ttl_f_folder", join(home, "f"))).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(await subject.captureBase("ses_ttl_g_folder", join(home, "g"))).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(keyReads()).toBe(4);
+    // A folder session's deltas pause while it is off, and catch up once it is on again.
+    await writeFile(join(home, "d", "notes.md"), "d, edited\n");
+    const createsBefore = creates();
+    expect(await subject.captureDelta("ses_ttl_d_folder", join(home, "d"), 1)).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(creates()).toBe(createsBefore);
+    server.policy = { all_folders: true };
+    clock += POLICY_TTL_MS;
+    expect(await subject.captureDelta("ses_ttl_d_folder", join(home, "d"), 2)).toMatchObject({ status: "queued", kind: "delta", sequence: 1 });
+    expect(keyReads()).toBe(5);
+
+    // Sign-out forgets the answer: the next account's first folder session asks again.
+    await subject.signOut();
+    subject.setAccessToken(server.token);
+    expect(await subject.captureBase("ses_ttl_g_folder", join(home, "g"))).toMatchObject({ status: "queued", kind: "base" });
+    expect(keyReads()).toBe(6);
+  });
+
+  test("a folder inside a larger git repository is archived as a plain folder: marker folder and workspace.git null", async () => {
+    const server = new FakeArchiveServer();
+    server.policy = { all_folders: true };
+    const home = await tempDir("home");
+    const repo = join(home, "dotfiles");
+    await mkdir(join(repo, "work/proj"), { recursive: true });
+    await git(repo, "init", "-q", "-b", "dotfiles");
+    await git(repo, "remote", "add", "origin", "https://github.com/me/dotfiles.git");
+    await writeFile(join(repo, "work/proj/plan.md"), "# plan\n");
+    const subject = archiver(server, await tempDir("state"), { folderGate: { homeDir: home } });
+    expect(await subject.captureBase("ses_nested_folder", join(repo, "work/proj"))).toMatchObject({ status: "queued", kind: "base" });
+    await writeFile(join(repo, "work/proj/plan.md"), "# plan, edited\n");
+    expect(await subject.captureDelta("ses_nested_folder", join(repo, "work/proj"), 1)).toMatchObject({ status: "queued", kind: "delta" });
+    await subject.drain();
+    const [base, delta] = server.objects();
+    expect(base!.request.marker).toBe("folder");
+    expect(delta!.request.marker).toBe("folder");
+    expect(manifestOf(await openArchive(base!.object!))).toMatchObject({ workspace: { label: "proj", marker: "folder", git: null } });
+    expect(manifestOf(await openArchive(delta!.object!))).toMatchObject({ workspace: { marker: "folder", git: null } });
+  });
+
   test("428 at /archives/key: nothing is packed, archiving stays off until a later captureBase succeeds", async () => {
     const server = new FakeArchiveServer();
     server.gate = { status: 428, detail: "archive_consent_required" };
@@ -542,6 +697,28 @@ describe("SessionArchiver final archives", () => {
     // The server took a final archive: the chain point kept for a refusal is gone, one baseline is left.
     expect(await subject.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "unchanged" });
     expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "baselines"))).toHaveLength(1);
+  });
+
+  test("a plain folder's final archives pass the all-folders refusals and policy again: one while it is on, none while it is off", async () => {
+    const server = new FakeArchiveServer();
+    server.policy = { all_folders: true };
+    const home = await tempDir("home");
+    const root = join(home, "drafts");
+    await mkdir(root);
+    await writeFile(join(root, "chapter.md"), "one\n");
+    let now = Date.parse("2026-09-23T10:00:00Z");
+    const subject = archiver(server, await tempDir("state"), { folderGate: { homeDir: home }, now: () => new Date(now) });
+    expect(await subject.captureBase("ses_folder_final", root, 1)).toMatchObject({ status: "queued", kind: "base" });
+    await writeFile(join(root, "chapter.md"), "two\n");
+    expect(await subject.captureFinal("ses_folder_final", "idle")).toMatchObject({ status: "queued", kind: "delta", sequence: 1 });
+    await subject.drain();
+    expect(server.objects().map((object) => [object.request.marker, object.request.turn])).toEqual([["folder", 1], ["folder", 1]]);
+    expect(manifestOf(await openArchive(server.objects()[1]!.object!))).toMatchObject({ trigger: "final", reason: "idle", workspace: { marker: "folder", git: null } });
+
+    server.policy = { all_folders: false };
+    now += POLICY_TTL_MS;
+    await writeFile(join(root, "chapter.md"), "three\n");
+    expect(await subject.captureFinal("ses_folder_final", "app_quit")).toEqual({ status: "skipped", reason: "not_archivable" });
   });
 
   test("a server without final archives: the refused final is dropped once, the chain goes back, and the turn delta queued behind it is captured again", async () => {

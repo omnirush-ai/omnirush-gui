@@ -299,7 +299,7 @@ describe("all-folders gate (4.4)", () => {
       [windows, "C:\\Users\\sam\\AppData\\Roaming", "root_app_data"],
       [windows, "C:\\Users\\sam\\AppData", "root_app_data"],
       // AppData itself is refused with no userData dir known too.
-      [{ ...windows, userData: [] }, "C:\\Users\\sam\\AppData", "root_system"],
+      [{ ...windows, userData: [] }, "C:\\Users\\sam\\AppData", "root_app_data"],
       // System and app directories, and anything inside them.
       ...["/System", "/System/Library", "/Library", "/Library/Developer/x", "/Applications", "/Applications/Foo.app", "/usr", "/usr/local/src/x", "/bin", "/etc", "/var", "/var/folders/ab/T/x", "/private", "/private/tmp/x", "/library/x"].map((root): [FolderGateContext, string, "root_system"] => [mac, root, "root_system"]),
       ...["/usr", "/usr/share/x", "/etc", "/var/www/site", "/opt", "/opt/app", "/proc", "/proc/1", "/sys", "/sys/class"].map((root): [FolderGateContext, string, "root_system"] => [linux, root, "root_system"]),
@@ -313,18 +313,19 @@ describe("all-folders gate (4.4)", () => {
         "C:\\Program Files (x86)\\App",
         "C:\\ProgramData",
         "C:\\ProgramData\\App",
-        "C:\\Users\\sam\\AppData\\Local",
-        "C:\\Users\\sam\\AppData\\Local\\Temp\\x",
-        "C:\\Users\\sam\\appdata\\locallow",
+        "C:\\Windows.old\\Users\\sam",
+        "C:\\$Recycle.Bin\\S-1-5-21",
+        "C:\\Recovery",
       ].map((root): [FolderGateContext, string, "root_system"] => [windows, root, "root_system"]),
+      ...["C:\\Users\\sam\\AppData\\Local", "C:\\Users\\sam\\AppData\\Local\\Temp\\x", "C:\\Users\\sam\\appdata\\locallow"].map((root): [FolderGateContext, string, "root_app_data"] => [windows, root, "root_app_data"]),
       // Allowed: folders under home, and elsewhere outside system directories.
       [mac, "/Users/sam/omnirush.ai", null],
       [mac, "/Users/sam/projects/x", null],
-      [mac, "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/x", null],
+      [mac, "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/x", "root_app_data"],
       [mac, "/Volumes/Backup/projects/x", null],
       [mac, "/Users/other/x", null],
       [linux, "/home/sam/omnirush.ai", null],
-      [linux, "/home/sam/.local/share/x", null],
+      [linux, "/home/sam/.local/share/x", "root_app_data"],
       [linux, "/srv/site", null],
       [linux, "/tmp/scratch", null],
       [linux, "/Library/x", "root_system"],
@@ -337,6 +338,118 @@ describe("all-folders gate (4.4)", () => {
     for (const [context, root, expected] of cases) {
       expect({ root, refused: refusedFolderRoot(root, context) }).toEqual({ root, refused: expected });
     }
+  });
+
+  test("credential and app-data folders are refused as the session folder, wherever they are and on every platform", () => {
+    const mac: FolderGateContext = { platform: "darwin", homes: ["/Users/sam"], userData: [] };
+    const linux: FolderGateContext = { platform: "linux", homes: ["/home/sam"], userData: [] };
+    const windows: FolderGateContext = { platform: "win32", homes: ["C:\\Users\\sam"], userData: [] };
+    const cases: Array<[FolderGateContext, string, ReturnType<typeof refusedFolderRoot>]> = [
+      // Credential stores in home, and anything inside them.
+      ...[".ssh", ".aws", ".aws/sso/cache", ".gnupg", ".kube", ".docker", ".config/gcloud", ".config/gcloud/legacy_credentials", ".password-store", ".azure", "Library/Keychains"].flatMap(
+        (dir): Array<[FolderGateContext, string, "root_credentials"]> => [[mac, `/Users/sam/${dir}`, "root_credentials"], [linux, `/home/sam/${dir}`, "root_credentials"]],
+      ),
+      [mac, "/Users/sam/.SSH", "root_credentials"],
+      [windows, "C:\\Users\\sam\\.ssh", "root_credentials"],
+      [windows, "C:\\Users\\sam\\.aws\\sso", "root_credentials"],
+      [windows, "C:\\Users\\sam\\.docker", "root_credentials"],
+      [windows, "C:\\Users\\sam\\.kube", "root_credentials"],
+      // The same names outside home: a backup disk, another account, a synced copy.
+      [mac, "/Volumes/Backup/Users/sam/.aws", "root_credentials"],
+      [mac, "/Volumes/Backup/Users/sam/.gnupg/private-keys-v1.d", "root_credentials"],
+      [mac, "/Volumes/Backup/Library/Keychains", "root_credentials"],
+      [mac, "/Users/sam/Dropbox/dotfiles/.ssh", "root_credentials"],
+      [linux, "/srv/backup/sam/.kube", "root_credentials"],
+      [linux, "/mnt/data/home/.config/gcloud", "root_credentials"],
+      [windows, "D:\\Backup\\.gnupg", "root_credentials"],
+      // Folders the collector's denylist denies as a whole.
+      ...["work/keys", "work/secrets", "work/credentials", "work/aws-credentials", "work/prod.secrets", "work/.env.d", "work/certs.pem", "work/app/node_modules/pkg", "work/repo/.git/hooks"].map(
+        (dir): [FolderGateContext, string, "root_credentials"] => [mac, `/Users/sam/${dir}`, "root_credentials"],
+      ),
+      [windows, "C:\\Users\\sam\\work\\Secrets", "root_credentials"],
+      // App data: every dot folder in home, macOS Library, Linux snap, Windows AppData, Library/Application Support anywhere.
+      ...[".config", ".config/gh", ".local", ".local/share/keyrings", ".cache/x", ".mozilla/firefox", ".Trash", ".vscode/extensions", ".npm"].map(
+        (dir): [FolderGateContext, string, "root_app_data"] => [linux, `/home/sam/${dir}`, "root_app_data"],
+      ),
+      ...["Library", "Library/Application Support/Google/Chrome/Default", "Library/Cookies", "Library/Containers/com.x", "Library/Group Containers/x", "library/mail", ".config/gh", ".Trash"].map(
+        (dir): [FolderGateContext, string, "root_app_data"] => [mac, `/Users/sam/${dir}`, "root_app_data"],
+      ),
+      [linux, "/home/sam/snap/firefox/common", "root_app_data"],
+      [linux, "/home/sam/Library/x", null],
+      [windows, "C:\\Users\\sam\\.vscode", "root_app_data"],
+      [windows, "C:\\Users\\sam\\AppData\\Roaming\\gcloud", "root_app_data"],
+      [windows, "D:\\Backup\\AppData\\Roaming", "root_app_data"],
+      [mac, "/Volumes/Backup/Users/sam/Library/Application Support/x", "root_app_data"],
+      // Other accounts and shared folders beside home: refused themselves, and their app data.
+      [mac, "/Users/other", "root_too_broad"],
+      [mac, "/Users/Shared", "root_too_broad"],
+      [mac, "/Users/other/Library/Cookies", "root_app_data"],
+      [mac, "/Users/other/.config", "root_app_data"],
+      [mac, "/Users/other/.ssh", "root_credentials"],
+      [linux, "/home/other", "root_too_broad"],
+      [linux, "/home/other/.local/share", "root_app_data"],
+      [windows, "C:\\Users\\Public", "root_too_broad"],
+      [windows, "C:\\Users\\Default\\AppData\\Local", "root_app_data"],
+      [windows, "C:\\Users\\other\\.ssh", "root_credentials"],
+      // Still allowed: ordinary folders, including names the denylist only checks on files.
+      [mac, "/Users/sam/work/token-service", null],
+      [mac, "/Users/sam/work/keyboard-firmware", null],
+      [mac, "/Users/sam/Documents/report", null],
+      [mac, "/Users/sam/Library-notes", null],
+      [mac, "/Users/Shared/project", null],
+      [mac, "/Users/other/project", null],
+      [linux, "/home/sam/work/dotfiles-site", null],
+      [windows, "C:\\Users\\sam\\work\\x", null],
+    ];
+    for (const [context, root, expected] of cases) {
+      expect({ root, refused: refusedFolderRoot(root, context) }).toEqual({ root, refused: expected });
+    }
+  });
+
+  test("Windows device and long paths, and names with trailing dots or spaces, are refused like their plain form", () => {
+    const windows: FolderGateContext = { platform: "win32", homes: ["C:\\Users\\sam"], userData: [] };
+    const cases: Array<[string, ReturnType<typeof refusedFolderRoot>]> = [
+      ["\\\\?\\C:\\Users\\sam", "root_too_broad"],
+      ["\\\\?\\c:\\users\\SAM\\", "root_too_broad"],
+      ["\\\\.\\C:\\", "root_too_broad"],
+      ["\\\\?\\UNC\\server\\share", "root_too_broad"],
+      ["\\\\?\\UNC\\server\\share\\", "root_too_broad"],
+      ["C:\\Users\\sam.", "root_too_broad"],
+      ["C:\\Users\\sam. .", "root_too_broad"],
+      ["C:\\Users\\sam \\", "root_too_broad"],
+      ["C:\\Users.\\sam", "root_too_broad"],
+      ["\\\\.\\C:\\Windows\\System32", "root_system"],
+      ["\\\\?\\C:\\Program Files.\\App", "root_system"],
+      ["\\\\?\\C:\\Users\\sam\\AppData\\Local", "root_app_data"],
+      ["C:\\Users\\sam\\AppData.\\Local", "root_app_data"],
+      ["\\\\?\\C:\\Users\\sam\\.ssh", "root_credentials"],
+      ["C:\\Users\\sam\\.ssh.", "root_credentials"],
+      ["\\\\?\\C:\\Users\\sam\\projects\\x", null],
+      ["\\\\?\\UNC\\server\\share\\projects\\x", null],
+    ];
+    for (const [root, expected] of cases) {
+      expect({ root, refused: refusedFolderRoot(root, windows) }).toEqual({ root, refused: expected });
+    }
+  });
+
+  test("on disk: a session started in a credential or app-data folder, or through a link into one, is refused without asking the policy", async () => {
+    const home = await tempDir("folder-home");
+    const roots = [".gnupg", ".aws/sso/cache", ".docker", ".ssh", ".kube", ".config/gh", ".config/gcloud", "Library/Keychains", "work/secrets", "AppData/Roaming/x"];
+    for (const dir of roots) await mkdir(join(home, dir), { recursive: true });
+    await writeFile(join(home, ".gnupg/secring.gpg"), "secret keyring");
+    await mkdir(join(home, "work/links"), { recursive: true });
+    await symlink(join(home, ".aws"), join(home, "work/links/aws"));
+    const on = policy(true);
+    const detector = folderDetector(on.allFolders, { homeDir: home });
+    // work/links/aws/sso is a real directory reached through a link: its resolved form is ~/.aws/sso.
+    for (const root of [...roots.map((dir) => join(home, dir)), join(home, "work/links/aws/sso")]) {
+      expect({ root, result: await detector(root) }).toEqual({ root, result: null });
+      expect({ root, gate: await isArchivableProject(root, [gitMarkerDetector, detector]) }).toEqual({ root, gate: NO_MARKER });
+    }
+    expect(on.asked.count).toBe(0);
+    await mkdir(join(home, "work/app"));
+    expect(await detector(join(home, "work/app"))).toEqual(FOLDER);
+    expect(on.asked.count).toBe(1);
   });
 
   test("a home directory under a system directory keeps its folders, but a home at the disk root does not open the system directories", () => {

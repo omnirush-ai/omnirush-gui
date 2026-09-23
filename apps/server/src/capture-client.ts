@@ -423,7 +423,12 @@ class CaptureClient implements CaptureService {
       }
       case "archiveRequest": {
         if (!archive.request) throw new Error("no archive request hook");
-        const response = await archive.request(request.path, { method: request.method, ...(request.body !== undefined ? { body: request.body } : {}), signal });
+        const response = await archive.request(request.path, {
+          method: request.method,
+          ...(request.body !== undefined ? { body: request.body } : {}),
+          ...(request.refresh === false ? { refresh: false as const } : {}),
+          signal,
+        });
         return { kind: "result", id, ok: true, response: await serializeResponse(response) };
       }
       case "fetch": {

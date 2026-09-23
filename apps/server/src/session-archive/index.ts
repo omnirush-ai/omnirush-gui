@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { externalFetch } from "../server-fetch.js";
-import { defaultProjectDetectors, folderDetector, isArchivableProject, type FolderGateOptions, type ProjectMarkerDetector } from "./detect.js";
+import { defaultProjectDetectors, FOLDER_MARKER, folderDetector, isArchivableProject, type FolderGateOptions, type ProjectMarkerDetector } from "./detect.js";
 import { hintGarbageCollection, readJsonFile, stateKey, writeChunksAtomic, writeJsonAtomic } from "./files.js";
 import {
   ArchiveHashCache,
@@ -65,6 +65,12 @@ const SIGN_OUT_ABORT_TIMEOUT_MS = 5_000;
 const START_FINAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
 /** At most this many sessions are scanned for a final archive at app start. */
 const MAX_START_FINALS = 10;
+/**
+ * How long an all-folders policy answer (4.4) is reused for folders without
+ * `.git`: sessions started meanwhile send no probe, and a policy flipped on
+ * omnirush.ai reaches a running app within this time.
+ */
+export const POLICY_TTL_MS = 5 * 60_000;
 
 export type SessionArchiverOptions = {
   /** As the collector: the archive routes are derived from it like the collect URL. */
@@ -241,6 +247,10 @@ export class SessionArchiver {
   private started: Promise<void> | null = null;
   private key: ArchiveKey | null = null;
   private disabled: string | null = null;
+  /** The last all-folders policy answer, kept with the key for POLICY_TTL_MS; a failed probe is kept as off. */
+  private policy: { allFolders: boolean; at: number } | null = null;
+  /** The probe in flight, shared by the sessions that start meanwhile. */
+  private policyProbe: Promise<KeyResult> | null = null;
   private readonly sessionTails = new Map<string, Promise<void>>();
   /** Sessions stopped by the drain; captures in flight check it before they commit. */
   private readonly stoppedSessions = new Map<string, string>();
@@ -310,7 +320,9 @@ export class SessionArchiver {
    * Base archive at session start (new session, or a resumed one without a
    * base). No-op when the gate says not archivable, archiving is off, or the
    * session already has a base. Checks consent through GET /archives/key
-   * before packing anything.
+   * before packing anything. A folder without `.git` counts as a project
+   * only while the all-folders policy is on (allFoldersPolicy); with it off
+   * nothing is written and only that policy is read.
    */
   captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     return this.guard("base", sessionId, turn, async () => this.withSession(sessionId, async () => {
@@ -324,10 +336,11 @@ export class SessionArchiver {
 
   /**
    * Delta after a completed turn. No-op without a base, when the session
-   * stopped archiving, or when nothing in the folder changed. A session whose
-   * base could not be captured yet (key unavailable) gets its base instead.
-   * A null turn (the engine's messages could not be read) follows the last
-   * archived turn.
+   * stopped archiving, when nothing in the folder changed, or for a plain
+   * folder (marker `folder`) while the all-folders policy is off. A session
+   * whose base could not be captured yet (key unavailable) gets its base
+   * instead. A null turn (the engine's messages could not be read) follows
+   * the last archived turn.
    */
   captureDelta(sessionId: string, root: string, turn: number | null): Promise<CaptureResult> {
     return this.guard("delta", sessionId, turn ?? 0, async () => this.withSession(sessionId, async () => {
@@ -340,6 +353,8 @@ export class SessionArchiver {
       if (state.next_sequence === 0) return this.captureBaseLocked(sessionId, state.root, turn ?? 0, generation);
       const next = turn ?? (state.last_turn ?? 0) + 1;
       if (state.last_turn !== null && next <= state.last_turn) return { status: "skipped", reason: "stale_turn" };
+      // A plain folder's deltas pause while the all-folders policy is off; the next one after it is on again catches up.
+      if (state.marker === FOLDER_MARKER && !(await this.allFoldersPolicy(generation)).allFolders) return { status: "skipped", reason: "not_archivable" };
       const key = await this.currentKey();
       if (key === "disabled") return { status: "skipped", reason: "disabled" };
       if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
@@ -371,8 +386,9 @@ export class SessionArchiver {
         return { status: "skipped", reason: skipReason };
       };
       if (this.finalsRefused) return skip("unsupported");
-      // The folder may be gone, or no longer what the start-time gate accepted.
-      const gate = await isArchivableProject(state.root, this.detectors, { appDirs: this.appDirs });
+      // The folder may be gone, or no longer what the start-time gate accepted (a plain folder: the all-folders policy is still on).
+      const detectors = state.marker === FOLDER_MARKER ? [...this.detectors, this.folderDetector(generation)] : this.detectors;
+      const gate = await isArchivableProject(state.root, detectors, { appDirs: this.appDirs });
       if (!gate.archivable) return skip("not_archivable");
       const key = await this.currentKey(signal);
       if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
@@ -468,6 +484,8 @@ export class SessionArchiver {
     }
     this.key = null;
     this.disabled = null;
+    this.policy = null;
+    this.policyProbe = null;
     this.stoppedSessions.clear();
     this.resettingSessions.clear();
     this.finalsAccepted = false;
@@ -551,20 +569,19 @@ export class SessionArchiver {
 
   private async captureBaseLocked(sessionId: string, root: string, turn: number, generation: number): Promise<CaptureResult> {
     if (!this.uploader.configured) return { status: "skipped", reason: "disabled" };
-    // A root no other detector qualified asks the key route for the all-folders policy (4.4); the base reuses that answer.
-    let keyFetch: Promise<KeyResult> | null = null;
-    const fetchKey = () => (keyFetch ??= this.uploader.fetchKey());
-    const folder = folderDetector(async () => {
-      const fetched = await fetchKey();
-      return fetched.status === "ok" && fetched.policy.allFolders;
-    }, this.folderGate);
-    const gate = await isArchivableProject(root, [...this.detectors, folder], { appDirs: this.appDirs });
+    // A root no git detector qualified, and that no folder refusal stops, asks for the all-folders policy (4.4).
+    const probe: { fetched: KeyResult | null } = { fetched: null };
+    const gate = await isArchivableProject(root, [...this.detectors, this.folderDetector(generation, probe)], { appDirs: this.appDirs });
     if (!gate.archivable || !gate.marker) return { status: "skipped", reason: "not_archivable" };
-    const fetched = await fetchKey();
+    // The key and the consent check (7.2): a probe made for this base already holds them; else the full fetch.
+    const fetched = probe.fetched ?? await this.uploader.fetchKey();
+    if (!probe.fetched) this.rememberPolicy(fetched, generation, false);
     if (fetched.status === "disabled") {
       await this.disable(fetched.code);
       return { status: "skipped", reason: "disabled" };
     }
+    // The policy was turned off since the answer this folder was let in on.
+    if (gate.marker === FOLDER_MARKER && fetched.status === "ok" && !fetched.policy.allFolders) return { status: "skipped", reason: "not_archivable" };
     const state: SessionState = {
       v: 1,
       session_id: sessionId,
@@ -578,7 +595,7 @@ export class SessionArchiver {
       updated_at: this.now().toISOString(),
     };
     if (fetched.status === "unavailable") {
-      // Remembered with next_sequence 0: the next captureDelta tries the base again.
+      // Remembered with next_sequence 0: the next captureDelta tries the base again (a folder passes the gate and the policy again).
       if (generation === this.generation) await this.saveSession(state);
       this.log("info", "OmniRush archive key unavailable; the base archive is retried after the next turn", { sessionId, reason: fetched.reason });
       return { status: "skipped", reason: "unavailable" };
@@ -593,9 +610,57 @@ export class SessionArchiver {
     }
   }
 
+  /** The all-folders detector (4.4) with its refusals and the policy; `probe` receives the key response of a probe it made. */
+  private folderDetector(generation: number, probe?: { fetched: KeyResult | null }): ProjectMarkerDetector {
+    return folderDetector(async () => {
+      const answer = await this.allFoldersPolicy(generation);
+      if (probe) probe.fetched = answer.fetched;
+      return answer.allFolders;
+    }, this.folderGate);
+  }
+
+  /**
+   * The all-folders policy (4.4) for a folder the gate would otherwise let in:
+   * the answer kept with the key while it is younger than POLICY_TTL_MS, else
+   * one probe (a single GET /archives/key, no backoff, no bearer refresh).
+   * Anything but a valid key with `policy.all_folders: true` is off; a failed
+   * probe is kept as off too, so an outage costs one request per
+   * POLICY_TTL_MS, never a retry storm. `fetched` is the probe's answer when
+   * this call made one: the base reuses it for its key.
+   */
+  private async allFoldersPolicy(generation: number): Promise<{ allFolders: boolean; fetched: KeyResult | null }> {
+    const kept = this.policy;
+    if (kept && this.now().getTime() - kept.at < POLICY_TTL_MS) return { allFolders: kept.allFolders, fetched: null };
+    let probe = this.policyProbe;
+    if (!probe) {
+      const started = this.uploader.probeKey();
+      probe = started;
+      this.policyProbe = started;
+      void started.finally(() => {
+        if (this.policyProbe === started) this.policyProbe = null;
+      });
+    }
+    const fetched = await probe;
+    this.rememberPolicy(fetched, generation, true);
+    return { allFolders: fetched.status === "ok" && fetched.policy.allFolders, fetched };
+  }
+
+  /**
+   * Keeps a key response's policy for allFoldersPolicy. A full fetch (git
+   * bases, deltas) counts only when it answered; a probe counts whatever it
+   * got. Nothing from before a sign-out is kept.
+   */
+  private rememberPolicy(fetched: KeyResult, generation: number, probe: boolean): void {
+    if (generation !== this.generation) return;
+    if (fetched.status === "unavailable" && !probe) return;
+    this.policy = { allFolders: fetched.status === "ok" && fetched.policy.allFolders, at: this.now().getTime() };
+  }
+
   private async currentKey(signal?: AbortSignal): Promise<ArchiveKey | "disabled" | "unavailable"> {
     if (this.key) return this.key;
+    const generation = this.generation;
     const fetched = await this.uploader.fetchKey(signal);
+    this.rememberPolicy(fetched, generation, false);
     if (fetched.status === "disabled") {
       await this.disable(fetched.code);
       return "disabled";
@@ -626,7 +691,9 @@ export class SessionArchiver {
     const { signal } = options;
     const cache = await this.loadHashCache(rootKey);
     const scanning = scanArchiveTree(state.root, { excludedDirs: this.appDirs, includeCredentialFiles: this.includeCredentials, hashCache: cache, ...(signal ? { signal } : {}) });
-    const gitReading = kind === "base" ? readArchiveGit(state.root) : null;
+    // A plain folder sends no git block (workspace.git null), even inside a larger repository.
+    const withGit = state.marker !== FOLDER_MARKER;
+    const gitReading = kind === "base" && withGit ? readArchiveGit(state.root) : null;
     const scan = await scanning;
     let files: ScannedEntry[] = scan.entries;
     let deleted: string[] | undefined;
@@ -645,7 +712,7 @@ export class SessionArchiver {
       files = delta.files;
       deleted = delta.deleted;
     }
-    const git = await (gitReading ?? readArchiveGit(state.root));
+    const git = withGit ? await (gitReading ?? readArchiveGit(state.root)) : null;
     const archiveId = this.random.uuid();
     const sequence = state.next_sequence;
     const createdAt = this.now();
@@ -910,6 +977,7 @@ export class SessionArchiver {
     if (!this.disabled) this.log("info", "OmniRush project archiving is off for this account", { code });
     this.disabled = code;
     this.key = null;
+    this.policy = { allFolders: false, at: this.now().getTime() };
     await this.saveArchiverState();
     const records = await this.listQueue();
     for (const record of records) {

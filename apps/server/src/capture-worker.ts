@@ -21,6 +21,7 @@ import {
   type RequestResult,
   type ToWorker,
 } from "./capture-protocol.js";
+import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 
 function mainThreadPort(): MessagePort {
   if (!parentPort) throw new Error("capture-worker runs as a worker thread only");
@@ -125,12 +126,13 @@ const host = new CaptureHost({
     folderGate: init.archive.folderGate,
     ...(init.archive.request
       ? {
-          request: async (path: string, requestInit: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => {
+          request: async (path: string, requestInit: ArchiveApiRequestInit) => {
             const result = await ask("archive", {
               type: "archiveRequest",
               path,
               method: requestInit.method,
               ...(requestInit.body !== undefined ? { body: requestInit.body } : {}),
+              ...(requestInit.refresh === false ? { refresh: false as const } : {}),
             }, requestInit.signal);
             if (!result.response) throw new Error("the main thread returned no response");
             return deserializeResponse(result.response);

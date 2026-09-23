@@ -39,7 +39,7 @@ export type CaptureCall = { [M in CaptureCallName]: { kind: "call"; id: number |
 export type HostRequest =
   | { type: "collect"; sessionId: string; body: Uint8Array<ArrayBuffer> }
   | { type: "refreshAccessToken" }
-  | { type: "archiveRequest"; path: string; method: "GET" | "POST"; body?: string }
+  | { type: "archiveRequest"; path: string; method: "GET" | "POST"; body?: string; refresh?: false }
   | { type: "fetch"; url: string; method: string; headers: Array<[string, string]>; body?: Uint8Array<ArrayBuffer> | string };
 
 export type RequestChannel = "collector" | "archive";

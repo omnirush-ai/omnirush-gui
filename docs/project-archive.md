@@ -41,16 +41,53 @@ All of these must be true:
   app's own data folders. If the chat's folder is a symbolic link, the
   folder it points to is the one checked and archived.
 
-Archiving every folder is a setting on omnirush.ai, and it is off. While it
-is off, only git projects are archived. Once it is on (after the omnirush.ai
-consent terms describe it), a chat folder without `.git` is archived the
-same way, including binaries, large files and files git would ignore. It is
-still never your home folder or a folder above it, the root of a disk or
-network share, the app's own data folders, or a system or app folder such as
-`/System`, `/Library`, `/Applications`, `/usr`, `/etc` or `/var` on macOS,
-`/usr`, `/etc`, `/var`, `/opt` on Linux, or `C:\Windows`, `Program Files`,
-`ProgramData` and your `AppData` folder on Windows (or anything inside them).
-A folder inside your home folder, such as `~/projects/app`, can be archived.
+Archiving every folder is a setting on omnirush.ai, and it is off. It
+applies only to accounts that accepted the omnirush.ai terms that describe
+it (the 2026-09-24 version or later); everyone else stays on git projects
+only. While it is off for your account, only git projects are archived and
+nothing else changes, apart from the check described below. Once it is on
+for your account, a chat folder without `.git` is archived the same way as
+a git project, including binaries, large files and files git would ignore.
+A folder inside your home folder, such as `~/projects/app` or
+`~/Documents/report`, can be archived. A folder without `.git` is never
+archived when it is your home folder or a folder above it, the root of a
+disk or network share, or another account's home folder or a shared folder
+beside yours (such as `/Users/Shared` or `C:\Users\Public`). Nor when it
+is, or is inside, one of these (checked on the path as given and on the
+folder it resolves to through symbolic links):
+
+- a credential folder, wherever it is: `.ssh`, `.aws`, `.gnupg`, `.kube`,
+  `.docker`, `.azure`, `.password-store`, `Keychains` or `.config/gcloud`,
+  and any folder the credential rules below leave out as a whole, such as a
+  `keys`, `secrets` or `credentials` folder, a `.env...` folder,
+  `node_modules` or `.git`;
+- an app-data folder: the app's own data folders, any folder in your home
+  folder whose name starts with a dot (such as `.config`, `.local` or
+  `.cache`), `~/Library` on macOS (including iCloud Drive's
+  `~/Library/Mobile Documents`), `~/snap` on Linux, `AppData` on Windows,
+  and `Library/Application Support` anywhere. The same applies in another
+  account's home folder;
+- a system or app folder outside your home folder: `/System`, `/Library`,
+  `/Applications`, `/private` (which holds `/tmp`), `/usr`, `/bin`,
+  `/sbin`, `/etc`, `/var`, `/opt` and `/cores` on macOS; `/usr`, `/bin`,
+  `/sbin`, `/etc`, `/var`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`,
+  `/boot`, `/lib`, `/lib64`, `/run`, `/snap` and `/nix` on Linux;
+  `Windows`, `Windows.old`, `Program Files`, `Program Files (x86)`,
+  `ProgramData`, `$Recycle.Bin`, `System Volume Information`, `Recovery`
+  and `PerfLogs` on any Windows drive.
+
+These limits apply to folders without `.git` only. A git project is archived
+as it is today, under the conditions at the top of this section, wherever it
+is, including inside one of these folders.
+
+To learn whether the setting is on, the app asks omnirush.ai when a chat
+starts in a folder without `.git` that passes these limits: one request,
+with no retries, and any failure counts as off. The answer is kept for five
+minutes, so starting several chats sends one request, and a change on
+omnirush.ai reaches the app within five minutes, without an app update.
+While the setting is off for your account, a chat already archived this way
+uploads nothing more; its next upload after it is back on includes every
+change made meanwhile.
 
 Sub-agent chats (tasks the agent starts on its own) are not archived. They
 work in the same folder as the chat that started them, which is already

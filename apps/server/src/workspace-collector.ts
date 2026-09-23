@@ -775,6 +775,17 @@ function hasScrubbedExtension(lower: string): boolean {
 }
 
 /**
+ * Whether the collector denies every file under this directory path, whatever
+ * the file is called: one of its components meets the unconditional rules
+ * (`.ssh`, `.aws`, `.gnupg`, `keys`, `secrets`, `credentials*`, `.env*`,
+ * `node_modules`, `.git`, a key-store suffix, ...). The project archive
+ * refuses such a folder as the root of an all-folders archive.
+ */
+export function isCollectorDirectoryDenied(path: string): boolean {
+  return hasDeniedComponent(pathComponents(path));
+}
+
+/**
  * Whether a workspace-relative path may never leave the machine. Repository
  * internals, dependency trees and the classic credential files are denied by
  * name; beyond those, any component carrying a credential word ("AWS master
