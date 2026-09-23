@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -680,6 +680,255 @@ describe("OmniRush gateway broker project archive requests", () => {
 
     const signedOut = new OmniRushGatewayBroker({ engineToken: "local-engine-token" });
     const response = await signedOut.archiveRequest("archives/key", { method: "GET" });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "omnirush_account_required" });
+  });
+});
+
+/** Feeds `bytes` through the guard in `chunkSize` pieces; returns what the engine reads and why it was cut. */
+async function replayStream(bytes: Uint8Array, chunkSize: number) {
+  const reasons: string[] = [];
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let index = 0; index < bytes.length; index += chunkSize) {
+        controller.enqueue(bytes.slice(index, index + chunkSize));
+      }
+      controller.close();
+    },
+  });
+  const out = new Uint8Array(await new Response(guardEventStream(upstream, { onInterrupted: (reason) => reasons.push(reason) })).arrayBuffer());
+  return { out, text: new TextDecoder().decode(out), reasons };
+}
+
+/** The data payloads of every event in an SSE text, in order. */
+function eventPayloads(text: string): unknown[] {
+  return text.split(/\r?\n\r?\n/).flatMap((block) => {
+    const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+    if (!data || data === "[DONE]") return [];
+    return [JSON.parse(data) as unknown];
+  });
+}
+
+describe("upstream stream guard with recorded Muse streams", () => {
+  // A live meta Muse web-search stream (muse-spark-1.3, search_context_size
+  // medium) with its content scrubbed: model names, reasoning, text, queries,
+  // URLs and titles are replaced; the framing is as recorded. Sorted-key JSON
+  // puts `type` at the end of each frame; the stream carries a `: keepalive`
+  // comment, url_citation annotations and commentary-phase messages, and ends
+  // with response.completed and a bare `data: [DONE]`.
+  const fixture = readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__", "muse-web-search.sse"));
+  const cutBefore = (text: string, marker: string) => new TextEncoder().encode(text.slice(0, text.lastIndexOf(marker)));
+
+  test("forwards a recorded Muse stream byte for byte and never reports it truncated", async () => {
+    const bytes = new Uint8Array(await fixture);
+    const text = new TextDecoder().decode(bytes);
+    expect(text).toContain("\n\n: keepalive\n\n");
+    expect(text).toContain('"type":"response.web_search_call.completed"}');
+    expect(text.trimEnd().endsWith('"type":"response.completed"}\n\ndata: [DONE]')).toBe(true);
+    for (const chunkSize of [1, 3, 64, 1024, 16_384, bytes.length]) {
+      const { out, reasons } = await replayStream(bytes, chunkSize);
+      expect([chunkSize, reasons]).toEqual([chunkSize, []]);
+      expect(Buffer.from(out).equals(Buffer.from(bytes))).toBe(true);
+    }
+  });
+
+  test("still reports a recorded stream cut before its terminal event", async () => {
+    const text = new TextDecoder().decode(await fixture);
+    const completed = text.lastIndexOf("event: response.completed");
+    // Cut at an event boundary, and in the middle of the final response.completed frame.
+    for (const cut of [completed, completed + 200]) {
+      const { text: out, reasons } = await replayStream(new TextEncoder().encode(text.slice(0, cut)), 512);
+      expect(reasons).toEqual(["truncated"]);
+      // A partial event is never forwarded, so the interruption frame stays well formed.
+      expect(out).toBe(text.slice(0, completed) + out.slice(completed));
+      const last = eventPayloads(out).at(-1) as { type: string; error: { code: string } };
+      expect(last).toMatchObject({ type: "error", sequence_number: -1, error: { code: "upstream_stream_interrupted" } });
+    }
+  });
+
+  test("a bare data: [DONE] ends a stream on its own", async () => {
+    const text = new TextDecoder().decode(await fixture);
+    const withoutCompleted = text.slice(0, text.lastIndexOf("event: response.completed")) + "data: [DONE]\n\n";
+    const { text: out, reasons } = await replayStream(new TextEncoder().encode(withoutCompleted), 4096);
+    expect(reasons).toEqual([]);
+    expect(out).toBe(withoutCompleted);
+  });
+
+  test("comments are not data, even when they look like a terminal event", async () => {
+    const created = 'event: response.created\ndata: {"response":{"id":"resp_1"},"sequence_number":0,"type":"response.created"}\n\n';
+    const comments = ': keepalive\n\n: {"sequence_number":9,"type":"response.completed"}\n\n: data: [DONE]\n\n';
+    const { text, reasons } = await replayStream(new TextEncoder().encode(created + comments), 7);
+    expect(reasons).toEqual(["truncated"]);
+    expect(text.startsWith(created + comments)).toBe(true);
+  });
+
+  test("CRLF-framed streams are framed and completed the same way", async () => {
+    const text = new TextDecoder().decode(await fixture).replace(/\n/g, "\r\n");
+    const bytes = new TextEncoder().encode(text);
+    const { out, reasons } = await replayStream(bytes, 333);
+    expect(reasons).toEqual([]);
+    expect(Buffer.from(out).equals(Buffer.from(bytes))).toBe(true);
+  });
+
+  test("the backend's error frame ends the stream, carrying readable copy under its own code", async () => {
+    const created = 'event: response.created\ndata: {"response":{"id":"resp_1"},"sequence_number":0,"type":"response.created"}\n\n';
+    for (const [code, copy] of [
+      ["upstream_idle_timeout", "stopped responding before it finished"],
+      ["upstream_provider_unavailable", "temporarily unavailable"],
+      ["upstream_stream_interrupted", "ended before the response completed"],
+    ]) {
+      const frame = `event: error\ndata: ${JSON.stringify({ type: "error", sequence_number: -1, error: { type: "server_error", code, message: "Upstream stopped sending data" } })}\n\n`;
+      const { text, reasons } = await replayStream(new TextEncoder().encode(created + frame), 50);
+      expect(reasons).toEqual([]);
+      const events = eventPayloads(text);
+      expect(events).toHaveLength(2);
+      expect(events[1]).toEqual({
+        type: "error",
+        sequence_number: -1,
+        error: { type: "server_error", code, message: expect.stringContaining(copy) },
+      });
+      expect(JSON.stringify(events[1])).toContain("omnirush.ai: ");
+    }
+  });
+
+  test("a relay error frame that was not rewritten becomes one the engine parses", async () => {
+    const created = 'event: response.created\ndata: {"response":{"id":"resp_1"},"sequence_number":0,"type":"response.created"}\n\n';
+    const relay = 'event: error\ndata: {"error":{"code":"idle_timeout","message":"Upstream stopped sending data","request_id":"req_1","type":"timeout"}}\n\n';
+    const { text, reasons } = await replayStream(new TextEncoder().encode(created + relay), 16);
+    expect(reasons).toEqual([]);
+    expect(text).toMatch(/\n\nevent: error\ndata: \{/);
+    expect(eventPayloads(text)[1]).toEqual({
+      type: "error",
+      sequence_number: -1,
+      error: { type: "timeout", code: "idle_timeout", message: expect.stringContaining("stopped responding") },
+    });
+  });
+
+  test("an error frame the engine already parses keeps its bytes when there is no better copy", async () => {
+    const frame = 'event: error\ndata: {"type":"error","sequence_number":4,"code":"server_error","message":"The server had an error while processing your request.","param":null}\n\n';
+    const { text, reasons } = await replayStream(new TextEncoder().encode(frame), 8);
+    expect(reasons).toEqual([]);
+    expect(text).toBe(frame);
+  });
+
+  const recordedDir = process.env.OMNIRUSH_RECORDED_SSE_DIR?.trim();
+  test.skipIf(!recordedDir)("replays every recorded stream in OMNIRUSH_RECORDED_SSE_DIR unchanged and complete", async () => {
+    const names = (await readdir(recordedDir!)).filter((name) => name.endsWith(".sse")).sort();
+    let replayed = 0;
+    for (const name of names) {
+      const bytes = new Uint8Array(await readFile(path.join(recordedDir!, name)));
+      // A refused request is recorded as its JSON error body, not a stream.
+      if (!/^(?:event|data):/.test(new TextDecoder().decode(bytes.slice(0, 16)))) continue;
+      for (const chunkSize of [1, 7, 512, 4096, bytes.length]) {
+        const { out, reasons } = await replayStream(bytes, chunkSize);
+        expect([name, chunkSize, reasons]).toEqual([name, chunkSize, []]);
+        expect([name, Buffer.from(out).equals(Buffer.from(bytes))]).toEqual([name, true]);
+      }
+      const text = new TextDecoder().decode(bytes);
+      const cut = await replayStream(cutBefore(text, "event: response.completed"), 999);
+      expect([name, cut.reasons]).toEqual([name, ["truncated"]]);
+      replayed += 1;
+    }
+    expect(replayed).toBeGreaterThan(0);
+  });
+});
+
+describe("readable gateway errors", () => {
+  function refusingBroker(status: number, body: string, headers: Record<string, string> = { "content-type": "application/json" }) {
+    return new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
+      engineToken: "local-engine-token",
+      fetch: async () => new Response(body, { status, headers }),
+    });
+  }
+
+  test("turn the backend's and the relay's refusal codes into copy the engine shows, keeping status and Retry-After", async () => {
+    const cases: Array<{ status: number; body: unknown; headers?: Record<string, string>; code: string; copy: string }> = [
+      { status: 400, body: { detail: "model_unavailable" }, code: "model_unavailable", copy: "not available on your account" },
+      { status: 429, body: { detail: "model_concurrency_limited" }, headers: { "retry-after": "5" }, code: "model_concurrency_limited", copy: "Wait for one to finish" },
+      { status: 429, body: { detail: "daily_grant_exhausted" }, code: "daily_grant_exhausted", copy: "today's model allowance" },
+      { status: 502, body: { detail: "model_upstream_auth_failed" }, code: "model_upstream_auth_failed", copy: "temporarily unavailable" },
+      {
+        status: 503,
+        body: { error: { type: "upstream_error", code: "provider_unavailable", message: "Upstream is temporarily unavailable", request_id: "req_1" } },
+        headers: { "retry-after": "60" },
+        code: "provider_unavailable",
+        copy: "temporarily unavailable",
+      },
+      // What muse-spark-1.2 answered while it was down.
+      {
+        status: 500,
+        body: { error: { type: "upstream_error", code: "provider_error", message: "Upstream returned an error", request_id: "req_2" } },
+        code: "provider_error",
+        copy: "the model provider could not complete this request.",
+      },
+    ];
+    for (const entry of cases) {
+      const response = await refusingBroker(entry.status, JSON.stringify(entry.body), { "content-type": "application/json", ...entry.headers })
+        .handle(gatewayRequest({ model: "meta-muse-spark", input: "hi", stream: true }), "responses");
+      expect([entry.code, response.status]).toEqual([entry.code, entry.status]);
+      expect(response.headers.get("retry-after")).toBe(entry.headers?.["retry-after"] ?? null);
+      const payload = await response.json() as { error: { message: string; code: string } };
+      expect(payload.error.code).toBe(entry.code);
+      expect(payload.error.message).toStartWith("omnirush.ai: ");
+      expect(payload.error.message).toContain(entry.copy);
+    }
+  });
+
+  test("keep what a provider error names as refused", async () => {
+    const body = { error: { type: "upstream_error", code: "provider_error", message: "Upstream returned an error: Unknown parameter: 'stop'.", param: "stop" } };
+    const response = await refusingBroker(400, JSON.stringify(body)).handle(gatewayRequest({ model: "meta-muse-spark", input: "hi" }), "responses");
+    expect(await response.json()).toEqual({
+      error: {
+        message: "omnirush.ai: the model provider could not complete this request. (Unknown parameter: 'stop'.)",
+        type: "upstream_error",
+        code: "provider_error",
+        param: "stop",
+      },
+    });
+  });
+
+  test("leave errors without a known code as they came", async () => {
+    const openai = JSON.stringify({ error: { message: "Invalid input", type: "invalid_request_error", code: null } });
+    const response = await refusingBroker(400, openai).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi" }), "responses");
+    expect(await response.text()).toBe(openai);
+    const plain = await refusingBroker(502, "Bad Gateway", { "content-type": "text/plain" }).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi" }), "responses");
+    expect([plain.status, await plain.text()]).toEqual([502, "Bad Gateway"]);
+  });
+});
+
+describe("OmniRush gateway broker model catalog requests", () => {
+  test("read GET <gateway>/models with the device bearer and refresh an expired one once", async () => {
+    const calls: Array<{ url: string; method: string; authorization: string | null }> = [];
+    const refreshCalls: string[] = [];
+    const catalog = { object: "list", data: [{ id: "gpt-6-astra", default: true }] };
+    const broker = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1/", accessToken: "access-1", refreshToken: "refresh-1" },
+      engineToken: "local-engine-token",
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/device/refresh")) {
+          refreshCalls.push((JSON.parse(String(init?.body)) as { refresh_token: string }).refresh_token);
+          return Response.json({ access_token: "access-2", refresh_token: "refresh-2", gateway_url: "https://gateway.example/omnirush/v1" });
+        }
+        const authorization = new Headers(init?.headers).get("authorization");
+        calls.push({ url, method: init?.method ?? "GET", authorization });
+        return authorization === "Bearer access-2" ? Response.json(catalog) : Response.json({ detail: "invalid_token" }, { status: 401 });
+      },
+    });
+
+    const response = await broker.modelCatalog();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(catalog);
+    expect(refreshCalls).toEqual(["refresh-1"]);
+    expect(calls).toEqual([
+      { url: "https://gateway.example/omnirush/v1/models", method: "GET", authorization: "Bearer access-1" },
+      { url: "https://gateway.example/omnirush/v1/models", method: "GET", authorization: "Bearer access-2" },
+    ]);
+  });
+
+  test("answer 401 without an account", async () => {
+    const response = await new OmniRushGatewayBroker({ engineToken: "local-engine-token" }).modelCatalog();
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "omnirush_account_required" });
   });
