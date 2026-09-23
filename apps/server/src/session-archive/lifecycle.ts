@@ -139,7 +139,12 @@ type SessionRecord = {
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** Cancels the idle final archive while it is queued or packing: a new prompt ends the quiet period. */
   idleFinal: AbortController | null;
+  /** Engine reads retried on their own while unresolved, and the retry waiting (see unresolved()). */
+  retries?: { count: number; timer: ReturnType<typeof setTimeout> | null };
 };
+
+/** An unresolved session start reads the engine again after these waits, then only at its next prompt or turn. */
+const UNRESOLVED_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000];
 
 export class ProjectArchiveLifecycle {
   private readonly archiver: ProjectArchiver;
@@ -264,11 +269,24 @@ export class ProjectArchiveLifecycle {
   }
 
   /**
+   * The observer follows a turn of the session: it is not quiet. A turn that
+   * ended just before (its turnCompleted can come after the next prompt's
+   * sessionStarted, when that prompt went out while the turn settled) must
+   * not leave its idle final archive armed through this turn, however long
+   * it runs; this turn's own end arms the next one.
+   */
+  turnFollowed(sessionId: string): void {
+    const record = this.sessions.get(sessionId);
+    if (record) this.cancelIdleFinal(record);
+  }
+
+  /**
    * The observer stopped following the session's turn without seeing it
-   * complete (it gave up after an hour, or failed, such as when the engine
-   * went away). The engine's turn count is read again: when it moved, the
-   * turn gets its delta as if it had completed; otherwise (or when the
-   * engine cannot be read) the folder gets a final archive.
+   * complete: past its 24-hour safety bound, or on an unexpected error (an
+   * engine that does not answer is waited out, and a server stop is not
+   * this). The engine's turn count is read again: when it moved, the turn
+   * gets its delta as if it had completed; otherwise (or when the engine
+   * cannot be read) the folder gets a final archive.
    */
   turnIncomplete(sessionId: string): void {
     const record = this.sessions.get(sessionId);
@@ -285,12 +303,12 @@ export class ProjectArchiveLifecycle {
 
   /**
    * The session was deleted: a last final archive of its folder (when it
-   * has a base and the folder is still there), then it is forgotten; the
-   * queue keeps uploading.
+   * has a base and the folder is still there), then it is forgotten, with
+   * its idle final and its start retry; the queue keeps uploading.
    */
   sessionEnded(sessionId: string): void {
     const record = this.sessions.get(sessionId);
-    if (record) this.cancelIdleFinal(record);
+    if (record) this.release(record);
     this.sessions.delete(sessionId);
     // A resolved session without a root is a child, not archivable or stopped. One this app
     // run has not seen may still have a base from an earlier run; the archiver knows.
@@ -306,7 +324,7 @@ export class ProjectArchiveLifecycle {
   async signOut(): Promise<void> {
     this.signedOut = true;
     this.wakeSleepers();
-    for (const record of this.sessions.values()) this.cancelIdleFinal(record);
+    for (const record of this.sessions.values()) this.release(record);
     this.sessions.clear();
     await this.archiver.signOut().catch((error: unknown) => this.warn("sign-out", error));
   }
@@ -323,7 +341,7 @@ export class ProjectArchiveLifecycle {
       : [];
     this.stopped = true;
     this.wakeSleepers();
-    for (const record of this.sessions.values()) this.cancelIdleFinal(record);
+    for (const record of this.sessions.values()) this.release(record);
     await this.archiver.stop(finals.length > 0 ? { finals, budgetMs: this.quitBudgetMs } : {}).catch((error: unknown) => this.warn("stop", error));
   }
 
@@ -337,13 +355,14 @@ export class ProjectArchiveLifecycle {
    * archived), at which real path, and its base with `turns` completed turns
    * (read from the engine when null). The base is a no-op ("exists") when an
    * earlier app run captured it. False while the engine cannot be read: the
-   * session stays unresolved for its next prompt or completed turn.
+   * session stays unresolved, and is read again after a while (see
+   * unresolved()) and at its next prompt or completed turn.
    */
   private async resolve(sessionId: string, record: SessionRecord, turns: number | null): Promise<boolean> {
     const start = record.start;
     if (!start) return true;
     const parent = parentSessionId(await start.engine.session().catch(() => null));
-    if (parent === undefined) return this.unresolved(sessionId, "the engine session could not be read");
+    if (parent === undefined) return this.unresolved(sessionId, record, "the engine session could not be read");
     if (parent !== null) {
       record.start = null;
       return true;
@@ -354,7 +373,7 @@ export class ProjectArchiveLifecycle {
       return true;
     }
     const count = turns ?? completedTurnCount(await start.engine.messages().catch(() => null));
-    if (count === null) return this.unresolved(sessionId, "the engine messages could not be read");
+    if (count === null) return this.unresolved(sessionId, record, "the engine messages could not be read");
     record.start = null;
     record.root = root;
     const result = await this.archiver.captureBase(sessionId, root, count);
@@ -426,8 +445,51 @@ export class ProjectArchiveLifecycle {
     record.idleFinal = null;
   }
 
-  private unresolved(sessionId: string, reason: string): false {
-    this.log("warn", "OmniRush project archive could not read the engine for a session; its next prompt or turn tries again", { sessionId, reason });
+  /** An unresolved start's retry waiting, if any, never runs. */
+  private cancelRetry(record: SessionRecord): void {
+    if (record.retries?.timer) clearTimeout(record.retries.timer);
+    if (record.retries) record.retries.timer = null;
+  }
+
+  /** The session is forgotten (deleted, signed out, shutdown): none of its timers runs any more. */
+  private release(record: SessionRecord): void {
+    this.cancelIdleFinal(record);
+    this.cancelRetry(record);
+  }
+
+  /**
+   * The engine could not be read for a session start (it can still be
+   * starting, or be busy with a large session). Besides the session's next
+   * prompt or completed turn, the start step runs again on its own after 1, 2,
+   * 5 and 10 minutes, so a session whose first turn runs for hours still gets
+   * its base; one retry waits at a time, and none once the session is
+   * forgotten or archiving stopped.
+   */
+  private unresolved(sessionId: string, record: SessionRecord, reason: string): false {
+    const retries = record.retries ??= { count: 0, timer: null };
+    const current = this.active && this.sessions.get(sessionId) === record;
+    const delay = retries.timer || !current ? undefined : UNRESOLVED_RETRY_DELAYS_MS[retries.count];
+    if (delay !== undefined) {
+      retries.count += 1;
+      retries.timer = setTimeout(() => {
+        retries.timer = null;
+        if (!this.active || this.consentOff || this.sessions.get(sessionId) !== record || !record.start || record.starting) return;
+        record.starting = true;
+        this.schedule(sessionId, "base", async () => {
+          try {
+            if (this.sessions.get(sessionId) === record && record.start) await this.resolve(sessionId, record, null);
+          } finally {
+            record.starting = false;
+          }
+        });
+      }, delay);
+      retries.timer.unref?.();
+    }
+    this.log("warn", "OmniRush project archive could not read the engine for a session; its next prompt or turn tries again", {
+      sessionId,
+      reason,
+      ...(delay !== undefined ? { retryInMs: delay } : {}),
+    });
     return false;
   }
 

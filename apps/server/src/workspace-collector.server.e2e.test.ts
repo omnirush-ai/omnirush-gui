@@ -897,20 +897,30 @@ describe("project archive wiring", () => {
     expect(archive.calls.filter((call) => call.path === "archives/key")).toHaveLength(1);
   }, 60_000);
 
-  test("a turn the observer stops following (it failed) still gets its delta, numbered from the engine", async () => {
+  test("a turn whose status the engine stops answering is waited out, not given up: once it answers, the turn gets its delta, numbered from the engine", async () => {
     const { root, engine, archive, gateway, omnirush } = await archivedServer();
     expect((await prompt(omnirush.base)).status).toBe(204);
     await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
     await waitFor(() => (archive.objects().length >= 1 ? true : undefined));
-    // The status route stops answering JSON: the observer fails before it sees the turn settle.
+    // The status route stops answering JSON: the observer retries with backoff instead of failing.
     engine.control.statusBody = "not json";
     await writeFile(join(root, "feature.txt"), "new work\n");
+    const statusReads = () => engine.received.filter((request) => request === "GET /session/status").length;
+    const before = statusReads();
     expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (statusReads() >= before + 2 ? true : undefined));
+    engine.control.statusBody = null;
     const objects = await waitFor(() => (archive.objects().some((object) => object.request.turn === 2) ? archive.objects() : undefined));
-    const failed = await waitFor(() => traces(gateway.uploads).find((envelope) => events(envelope).some((event) => event.type === "session.observer_failed")));
+    const settled = await waitFor(() => traces(gateway.uploads).slice(1).find((envelope) => events(envelope).some((event) => event.type === "turn.completed")));
     await omnirush.stop();
 
-    expect(events(failed).some((event) => event.type === "session.observer_failed")).toBe(true);
+    // The turn settled as any other: its messages went out, and the observer neither failed nor timed out.
+    const completed = events(settled).find((event) => event.type === "turn.completed")?.data?.messages as Array<{ info: { id: string } }>;
+    expect(completed.map((entry) => entry.info.id)).toEqual(["user_2", "assistant_2"]);
+    for (const envelope of traces(gateway.uploads)) {
+      expect(events(envelope).map((event) => event.type)).not.toContain("session.observer_failed");
+      expect(events(envelope).map((event) => event.type)).not.toContain("session.observer_timeout");
+    }
     expect(objects.map((object) => [object.request.kind, object.request.turn])).toEqual([["base", 1], ["delta", 2]]);
     const members = await openArchive(objects[1]!.object!);
     expect(manifestOf(members)).toMatchObject({ kind: "delta", turn: 2, trigger: "turn" });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -415,6 +415,91 @@ describe("ProjectArchiveLifecycle", () => {
     expect(child.reads).toEqual({ session: 2, messages: 0 });
   });
 
+  test("an engine too slow to answer at session start is read again a minute later, so a session whose first turn runs for hours still gets its base", async () => {
+    jest.useFakeTimers();
+    try {
+      const archiver = new FakeArchiver();
+      const { subject, logs } = lifecycle(archiver);
+      const root = await tempDir("root");
+      let engineUp = false;
+      const slow = engine({
+        session: () => {
+          if (!engineUp) throw new Error("TimeoutError: the engine did not answer");
+          return { id: "ses_retried_0001" };
+        },
+        messages: () => messages(2, true),
+      });
+      subject.sessionStarted({ sessionId: "ses_retried_0001", root, engine: slow.reader });
+      await subject.settled();
+      expect(archiver.captures()).toEqual([]);
+      expect(logs.map((log) => [log.attributes?.reason, log.attributes?.retryInMs])).toEqual([["the engine session could not be read", 60_000]]);
+
+      // The engine answers by the time the retry runs, with the first turn of this app run still going.
+      engineUp = true;
+      jest.advanceTimersByTime(59_999);
+      await subject.settled();
+      expect(slow.reads.session).toBe(1);
+      jest.advanceTimersByTime(1);
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_retried_0001 ${root} 2`]);
+      // Resolved: no further retry, and the turn's delta follows the base.
+      jest.advanceTimersByTime(60 * 60_000);
+      subject.turnCompleted("ses_retried_0001", messages(3));
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_retried_0001 ${root} 2`, `delta ses_retried_0001 ${root} 3`]);
+      expect(slow.reads).toEqual({ session: 2, messages: 1 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("an engine that stays unreadable is read again after 1, 2, 5 and 10 minutes, then at the session's next prompt or turn", async () => {
+    jest.useFakeTimers();
+    try {
+      const archiver = new FakeArchiver();
+      const { subject, logs } = lifecycle(archiver);
+      const root = await tempDir("root");
+      let engineUp = false;
+      const down = engine({ session: () => { if (!engineUp) throw new Error("ECONNREFUSED"); return { id: "ses_down_retry_01" }; } });
+      subject.sessionStarted({ sessionId: "ses_down_retry_01", root, engine: down.reader });
+      await subject.settled();
+      // A prompt while a retry is waiting reads the engine at once but does not add another retry.
+      subject.sessionStarted({ sessionId: "ses_down_retry_01", root, engine: down.reader });
+      await subject.settled();
+      expect(down.reads.session).toBe(2);
+      for (const minutes of [1, 2, 5, 10]) {
+        const reads = down.reads.session;
+        jest.advanceTimersByTime(minutes * 60_000 - 1);
+        await subject.settled();
+        expect(down.reads.session).toBe(reads);
+        jest.advanceTimersByTime(1);
+        await subject.settled();
+        expect(down.reads.session).toBe(reads + 1);
+      }
+      jest.advanceTimersByTime(24 * 60 * 60_000);
+      await subject.settled();
+      expect(down.reads.session).toBe(6);
+      expect(logs.map((log) => log.attributes?.retryInMs)).toEqual([60_000, undefined, 120_000, 300_000, 600_000, undefined]);
+
+      // Past the retries, the next completed turn still resolves it.
+      engineUp = true;
+      subject.turnCompleted("ses_down_retry_01", messages(1));
+      await subject.settled();
+      expect(archiver.captures()).toEqual([`base ses_down_retry_01 ${root} 1`, `delta ses_down_retry_01 ${root} 1`]);
+
+      // A retry never runs once archiving stopped.
+      const stopped = engine({ session: () => { throw new Error("ECONNREFUSED"); } });
+      subject.sessionStarted({ sessionId: "ses_stopped_0001", root, engine: stopped.reader });
+      await subject.settled();
+      await subject.stop();
+      jest.advanceTimersByTime(60_000);
+      await subject.settled();
+      expect(stopped.reads.session).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test("with the real archiver: base at session start, a delta per changed turn, and the next app run resumes the upload", async () => {
     const server = new FakeArchiveServer();
     const root = await tempDir("project");
@@ -638,6 +723,118 @@ describe("ProjectArchiveLifecycle final archives", () => {
     subject.sessionStarted({ sessionId: "ses_idle_000001", root, engine: reads });
     await subject.settled();
     expect(signal?.aborted).toBe(true);
+  });
+
+  test("a turn the observer follows keeps the idle final archive off until it ends, even when its prompt came before the previous turn's end", async () => {
+    const archiver = turnArchiver();
+    const { subject } = lifecycle(archiver, { finalIdleMs: 100 });
+    const root = await tempDir("root");
+    const reads = engine().reader;
+    subject.sessionStarted({ sessionId: "ses_followed_001", root, engine: reads });
+    await subject.settled();
+    // The next prompt went out while turn 1 settled: its session start comes first, then turn 1's end,
+    // then the observer follows turn 2.
+    subject.sessionStarted({ sessionId: "ses_followed_001", root, engine: reads });
+    subject.turnCompleted("ses_followed_001", messages(1));
+    subject.turnFollowed("ses_followed_001");
+    await sleep(250);
+    await subject.settled();
+    expect(archiver.finals()).toEqual([]);
+    // Turn 2 ends: its quiet window gets the idle final archive.
+    subject.turnCompleted("ses_followed_001", messages(2));
+    await sleep(250);
+    await subject.settled();
+    expect(archiver.finals()).toEqual(["final ses_followed_001 idle"]);
+    expect(archiver.captures()).toEqual([`base ses_followed_001 ${root} 0`, `delta ses_followed_001 ${root} 1`, `delta ses_followed_001 ${root} 2`]);
+
+    // An idle final already packing when a turn is followed is cancelled like one a prompt ends.
+    let signal: AbortSignal | undefined;
+    archiver.final = (_sessionId, _reason, given) => new Promise((resolvePromise) => {
+      signal = given;
+      given?.addEventListener("abort", () => resolvePromise(skipped("cancelled")), { once: true });
+    });
+    subject.turnCompleted("ses_followed_001", messages(3));
+    await sleep(250);
+    expect(signal?.aborted).toBe(false);
+    subject.turnFollowed("ses_followed_001");
+    await subject.settled();
+    expect(signal?.aborted).toBe(true);
+    // A session this run does not know is left alone.
+    subject.turnFollowed("ses_unknown_0002");
+    await subject.settled();
+    expect(archiver.finals()).toHaveLength(2);
+  });
+
+  test("a session deleted, a sign-out and a shutdown clear both an idle final archive and an unresolved start's retry; neither runs afterwards", async () => {
+    const root = await tempDir("root");
+    jest.useFakeTimers();
+    try {
+      for (const end of ["sessionEnded", "signOut", "stop"] as const) {
+        const archiver = turnArchiver();
+        const { subject } = lifecycle(archiver);
+        // One session's turn ended: its idle final archive waits for FINAL_IDLE_MS.
+        subject.sessionStarted({ sessionId: "ses_timer_idle01", root, engine: engine().reader });
+        await subject.settled();
+        subject.turnCompleted("ses_timer_idle01", messages(1));
+        await subject.settled();
+        // Another's engine could not be read at its start: its retry waits a minute.
+        const down = engine({ session: () => { throw new Error("ECONNREFUSED"); } });
+        subject.sessionStarted({ sessionId: "ses_timer_retry1", root, engine: down.reader });
+        await subject.settled();
+        expect(jest.getTimerCount()).toBe(2);
+
+        if (end === "sessionEnded") {
+          subject.sessionEnded("ses_timer_idle01");
+          subject.sessionEnded("ses_timer_retry1");
+        } else if (end === "signOut") {
+          await subject.signOut();
+        } else {
+          await subject.stop();
+        }
+        await subject.settled();
+        expect(jest.getTimerCount()).toBe(0);
+        jest.advanceTimersByTime(24 * 60 * 60_000);
+        await subject.settled();
+        expect(down.reads.session).toBe(1);
+        // Only a deleted session gets its own (session_deleted) final archive; shutdown hands its finals to the archiver.
+        expect(archiver.finals().sort()).toEqual(end === "sessionEnded"
+          ? ["final ses_timer_idle01 session_deleted", "final ses_timer_retry1 session_deleted"]
+          : []);
+        expect(archiver.captures()).toEqual([`base ses_timer_idle01 ${root} 0`, `delta ses_timer_idle01 ${root} 1`]);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("a start read still running when the session is deleted, at a sign-out or at shutdown arms no retry when it fails", async () => {
+    const root = await tempDir("root");
+    jest.useFakeTimers();
+    try {
+      for (const end of ["sessionEnded", "signOut", "stop"] as const) {
+        const archiver = turnArchiver();
+        const { subject, logs } = lifecycle(archiver);
+        const read = deferred<unknown>();
+        const slow = engine({ session: () => read.promise });
+        subject.sessionStarted({ sessionId: "ses_inflight_001", root, engine: slow.reader });
+        for (let tick = 0; tick < 100 && slow.reads.session === 0; tick += 1) await Promise.resolve();
+        expect(slow.reads.session).toBe(1);
+        if (end === "sessionEnded") subject.sessionEnded("ses_inflight_001");
+        else if (end === "signOut") await subject.signOut();
+        else await subject.stop();
+        // The engine gives up only now.
+        read.resolve(null);
+        await subject.settled();
+        expect(logs.filter((log) => log.attributes?.reason === "the engine session could not be read").map((log) => log.attributes?.retryInMs)).toEqual([undefined]);
+        expect(jest.getTimerCount()).toBe(0);
+        jest.advanceTimersByTime(24 * 60 * 60_000);
+        await subject.settled();
+        expect(slow.reads.session).toBe(1);
+        expect(archiver.captures()).toEqual([]);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("a turn that ends without completing: its delta when the engine's count moved, else a final archive", async () => {

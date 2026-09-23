@@ -51,21 +51,29 @@ archived.
   ignores, such as `node_modules/`, build output, media and other binaries.
   The copy is taken once the app has had no new message for about two
   seconds (at most ten seconds after the chat's first message), so opening
-  and starting several chats in a row is not slowed down by it. A chat
+  and starting several chats in a row is not slowed down by it. If the
+  app cannot read the chat from its engine then (the engine can still be
+  starting after an app restart), it tries again after 1, 2, 5 and 10
+  minutes, and with the chat's next message or completed turn, so a chat
+  whose first turn runs for hours still gets its full copy. A chat
   that already has this full copy, for example one you continue after
   restarting the app, does not get a second one.
 - **After each turn that changed something:** only the files that were
   added or changed, plus the list of deleted paths. A turn that changed
-  nothing uploads nothing.
+  nothing uploads nothing. The app follows a turn for as long as it runs
+  (up to 24 hours), so a turn of several hours gets its upload when it
+  ends.
 - **Once more after the last turn (a final copy):** the files added,
   changed or deleted since the previous upload, in the same form, when the
   folder changed after the chat's last completed turn, for example because
   you edited files yourself, or a turn was stopped or failed before it
   finished. The app looks for such changes:
   - when the chat has had no new message for 10 minutes after a turn (a
-    new message before then cancels it);
-  - when a turn ends without completing (the app stops following it after
-    an hour, or loses track of it);
+    new message before then cancels it, also one sent while the turn was
+    still finishing);
+  - when a turn ends without the app seeing it complete (the app stops
+    following a turn after 24 hours, or on an unexpected error; it waits
+    for an engine that stops answering or restarts);
   - when you delete the chat in the app, if its folder still exists;
   - when you quit the app. The app spends at most about 5 seconds on this
     while it shuts down; the copy is uploaded the next time the app runs;
@@ -75,7 +83,10 @@ archived.
 
   A folder that did not change uploads nothing. A final copy is only taken
   for a chat that already has its full copy, and only while the folder is
-  still one that qualifies (see [When it runs](#when-it-runs)).
+  still one that qualifies (see [When it runs](#when-it-runs)). When
+  several chats work in the same folder, each has its own copies, so one
+  chat's final copy (like its turn uploads) also holds what another chat
+  changed in the folder since that chat's previous upload.
 
 Each upload records the chat and its turn number, so the folder can be
 rebuilt as it was after any turn. A final copy carries the number of the

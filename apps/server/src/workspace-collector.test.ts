@@ -2523,6 +2523,69 @@ describe("workspace collector incremental snapshots", () => {
     await collector.stop();
   });
 
+  test("two chats on one folder: only the one running a turn uploads the edits made meanwhile, and each still captures its own milestones", async () => {
+    const root = await workspace("shared", 4);
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 150, minChangeIntervalMs: 0 });
+    const working = "session-shared-working-1";
+    const idle = "session-shared-idle-0001";
+    const both = [working, idle];
+    for (const sessionId of both) collector.startSession(sessionId, "workspace-shared", root);
+    for (const sessionId of both) await collector.idle(sessionId);
+    const settle = async () => {
+      // Past the debounce and several reconcile passes.
+      await sleep(600);
+      for (const sessionId of both) await collector.idle(sessionId);
+    };
+    const changesOf = (sessionId: string) => changes(uploads)
+      .filter((item) => item.session_id === sessionId)
+      .map((item) => [item.trigger, contentPaths(item).sort()]);
+    // Whichever of the watcher and the reconcile pass saw the edit first.
+    const edit = expect.stringMatching(/^(?:fs_change|periodic)$/);
+
+    collector.captureSnapshot(working, "prompt");
+    await collector.idle(working);
+    await writeFile(join(root, "src", "f00.txt"), "the agent's edit\n");
+    await settle();
+    expect(changesOf(working)).toEqual([[edit, ["src/f00.txt"]]]);
+    expect(changesOf(idle)).toEqual([]);
+    expect(collector.metrics.capturesHeld).toBeGreaterThan(0);
+
+    // The turn ends: the other chat still leaves that turn's edits alone, reconcile passes included.
+    collector.captureSnapshot(working, "turn_completed");
+    await settle();
+    expect(changesOf(idle)).toEqual([]);
+
+    // An edit between turns is uploaded once, by the chat that ran the last turn.
+    await writeFile(join(root, "README.md"), "# edited by hand\n");
+    await settle();
+    expect(changesOf(working).at(-1)).toEqual([edit, ["README.md"]]);
+    expect(changesOf(idle)).toEqual([]);
+
+    // The other chat's own prompt carries what it has not sent yet; while it
+    // runs its turn, the first chat holds back in turn.
+    collector.captureSnapshot(idle, "prompt");
+    await collector.idle(idle);
+    expect(changesOf(idle)).toEqual([["prompt", ["README.md", "src/f00.txt"]]]);
+    const sentByWorking = changesOf(working).length;
+    await writeFile(join(root, "src", "f02.txt"), "the other agent's edit\n");
+    await settle();
+    expect(changesOf(idle).at(-1)).toEqual([edit, ["src/f02.txt"]]);
+    expect(changesOf(working)).toHaveLength(sentByWorking);
+    collector.captureSnapshot(idle, "turn_completed");
+    await collector.idle(idle);
+    for (const sessionId of both) collector.flushTrace(sessionId);
+    await collector.stop();
+    for (const sessionId of both) {
+      const milestones = uploads
+        .filter((item) => item.snapshot_type === "trace" && item.session_id === sessionId)
+        .flatMap((item) => item.trace ?? [])
+        .filter((event) => event.type === "collector.trigger")
+        .map((event) => event.data?.trigger);
+      expect(milestones).toEqual(["prompt", "turn_completed"]);
+    }
+  });
+
   test("keeps gitignored files out of change snapshots and the journal in a workspace git does not manage", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-collector-nogit-"));
     roots.push(root);
