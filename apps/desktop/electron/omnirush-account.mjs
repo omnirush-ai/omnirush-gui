@@ -187,6 +187,23 @@ async function deleteMacKeychain(service, platform, runSecurity) {
   return removed;
 }
 
+/**
+ * Whether this launch may read, and on sign-out remove, the legacy macOS
+ * keychain entries (KEYCHAIN_SERVICES). They hold the owner's real
+ * account, and belong to the default production profile alone: a dev,
+ * eval, test or blank-slate profile, a custom OMNIRUSH_ELECTRON_USERDATA or
+ * OMNIRUSH_ELECTRON_APP_IDENTIFIER, or the mock keychain must never import
+ * them.
+ * @param {{ appIdentifier: string, productionAppIdentifier: string, blankSlate: boolean, env?: NodeJS.ProcessEnv }} launch
+ */
+export function legacyKeychainAllowed({ appIdentifier, productionAppIdentifier, blankSlate, env = process.env }) {
+  return appIdentifier === productionAppIdentifier
+    && !blankSlate
+    && !env.OMNIRUSH_ELECTRON_USERDATA?.trim()
+    && !env.OMNIRUSH_ELECTRON_APP_IDENTIFIER?.trim()
+    && env.OMNIRUSH_ELECTRON_USE_MOCK_KEYCHAIN !== "1";
+}
+
 export function createDesktopOmniRushAccountStore({
   filePath,
   loadSafeStorage,
@@ -195,6 +212,8 @@ export function createDesktopOmniRushAccountStore({
   fetchImpl = globalThis.fetch,
   execFileImpl = /** @type {SecurityCommandRunner} */ (execFileAsync),
   sleep = (milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
+  // Only the default production profile may use the legacy keychain entries (legacyKeychainAllowed).
+  legacyKeychain = false,
 }) {
   let cached = null;
   // The embedded broker shares this store (persist/latest/invalidate) and
@@ -207,7 +226,9 @@ export function createDesktopOmniRushAccountStore({
   /** Whether the sign-out in flight revokes the session (see save()). */
   let clearRevokesRemote = false;
   const signedOutPath = `${filePath}.signed-out`;
-  const runSecurity = (args) => execFileImpl(SECURITY_TOOL, args, { timeout: 5_000, maxBuffer: 64 * 1024 });
+  const runSecurity = (args) => (legacyKeychain
+    ? execFileImpl(SECURITY_TOOL, args, { timeout: 5_000, maxBuffer: 64 * 1024 })
+    : Promise.reject(new Error("The legacy keychain entries belong to the default production profile")));
 
   /**
    * Resolves once every in-flight refresh, save and sign-out has finished.

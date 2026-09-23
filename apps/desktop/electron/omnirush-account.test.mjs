@@ -9,6 +9,7 @@ import {
   accountServerLabel,
   classifyRemoteLogout,
   createDesktopOmniRushAccountStore,
+  legacyKeychainAllowed,
 } from "./omnirush-account.mjs";
 
 function testStorage() {
@@ -387,6 +388,7 @@ test("sign out on macOS forgets the keychain gateway URL so the next sign-in use
   const logoutRequests = [];
   const options = await storeOptions({
     platform: "darwin",
+    legacyKeychain: true,
     execFileImpl: keychain.execFileImpl,
     env: { OMNIRUSH_DEV_MODE: "1", OMNIRUSH_ACCESS_TOKEN: "legacy-access", OMNIRUSH_REFRESH_TOKEN: "legacy-refresh" },
     fetchImpl: async (url) => {
@@ -421,6 +423,7 @@ test("sign out removes every duplicate keychain gateway URL item", async () => {
   const calls = [];
   const options = await storeOptions({
     platform: "darwin",
+    legacyKeychain: true,
     execFileImpl: async (_file, args) => {
       calls.push(args);
       if (args[0] === "find-generic-password") throw new Error("not found");
@@ -444,6 +447,7 @@ test("server-driven invalidation keeps the keychain gateway URL", async () => {
   const keychain = fakeMacKeychain({ [KEYCHAIN_SERVICES.gatewayUrl]: "https://staging.example/omnirush/v1" });
   const options = await storeOptions({
     platform: "darwin",
+    legacyKeychain: true,
     execFileImpl: keychain.execFileImpl,
     env: { OMNIRUSH_DEV_MODE: "1", OMNIRUSH_ACCESS_TOKEN: "expired-access", OMNIRUSH_REFRESH_TOKEN: "expired-refresh" },
     fetchImpl: async () => Response.json({ detail: "device_token_invalid" }, { status: 401 }),
@@ -454,6 +458,52 @@ test("server-driven invalidation keeps the keychain gateway URL", async () => {
   assert.equal(status.gatewayHost, "staging.example");
   assert.equal(keychain.calls.some((args) => args[0] === "delete-generic-password"), false);
   assert.equal(keychain.items.get(KEYCHAIN_SERVICES.gatewayUrl), "https://staging.example/omnirush/v1");
+});
+
+test("only the default production profile imports the legacy keychain account", async () => {
+  const signedIn = {
+    [KEYCHAIN_SERVICES.gatewayUrl]: "https://omnirush.ai/omnirush/v1",
+    [KEYCHAIN_SERVICES.accessToken]: "real-access",
+    [KEYCHAIN_SERVICES.refreshToken]: "real-refresh",
+  };
+  const requests = [];
+  const fetchImpl = async (url) => {
+    requests.push(String(url));
+    return new URL(url).pathname.endsWith("/device/logout")
+      ? new Response(null, { status: 204 })
+      : Response.json({ email: "owner@example.com", status: "active" });
+  };
+
+  // A custom profile (an eval, a test, a dev or blank-slate one) on the owner's Mac.
+  const keychain = fakeMacKeychain(signedIn);
+  const isolated = createDesktopOmniRushAccountStore(await storeOptions({ platform: "darwin", env: {}, execFileImpl: keychain.execFileImpl, fetchImpl }));
+  const status = await isolated.status();
+  assert.equal(status.connected, false);
+  assert.equal(status.gatewayUrl, "https://omnirush.ai/omnirush/v1");
+  await isolated.clear();
+  assert.deepEqual(keychain.calls, []);
+  assert.deepEqual(requests, []);
+  assert.equal(keychain.items.size, 3);
+
+  // The default production profile still imports it once.
+  const production = createDesktopOmniRushAccountStore(await storeOptions({ platform: "darwin", env: {}, legacyKeychain: true, execFileImpl: keychain.execFileImpl, fetchImpl }));
+  assert.equal((await production.status()).connected, true);
+  assert.deepEqual(requests, ["https://omnirush.ai/omnirush/device/me"]);
+});
+
+test("legacyKeychainAllowed admits the default production profile alone", () => {
+  const production = { appIdentifier: "ai.omnirush.desktop", productionAppIdentifier: "ai.omnirush.desktop", blankSlate: false };
+  assert.equal(legacyKeychainAllowed({ ...production, env: {} }), true);
+  assert.equal(legacyKeychainAllowed({ ...production, env: { OMNIRUSH_ELECTRON_USERDATA: "  " } }), true);
+  const refused = {
+    "dev identifier": { ...production, appIdentifier: "ai.omnirush.desktop.dev", env: {} },
+    "eval identifier": { ...production, appIdentifier: "ai.omnirush.desktop.eval.search", env: {} },
+    "blank slate": { ...production, blankSlate: true, env: {} },
+    "userData override": { ...production, env: { OMNIRUSH_ELECTRON_USERDATA: "/tmp/eval/electron-userdata" } },
+    "identifier override": { ...production, env: { OMNIRUSH_ELECTRON_APP_IDENTIFIER: "ai.omnirush.desktop" } },
+    "mock keychain": { ...production, env: { OMNIRUSH_ELECTRON_USE_MOCK_KEYCHAIN: "1" } },
+  };
+  for (const [label, launch] of Object.entries(refused)) assert.equal(legacyKeychainAllowed(launch), false, label);
 });
 
 test("status names the account server the app is connected to", async () => {

@@ -474,6 +474,9 @@ function hostPnpmHome(): string | null {
   return null;
 }
 
+/** Nothing listens on the discard port: every account and gateway call from an eval surface fails at once. */
+export const EVAL_DEAD_GATEWAY_URL = "http://127.0.0.1:9/omnirush/v1";
+
 export function electronSurfaceEnv(
   paths: ElectronProfilePaths,
   options: ElectronSurfaceEnvOptions,
@@ -483,6 +486,12 @@ export function electronSurfaceEnv(
   // Give local eval Electron surfaces isolated app data, config, and identity so
   // they cannot affect the user's real desktop app.
   return {
+    // No account: empty tokens and a dead gateway, so a source app on the
+    // owner's Mac cannot sign in from the legacy keychain entries or reach
+    // omnirush.ai. A spec that needs an account passes its own.
+    OMNIRUSH_ACCESS_TOKEN: "",
+    OMNIRUSH_REFRESH_TOKEN: "",
+    OMNIRUSH_GATEWAY_URL: EVAL_DEAD_GATEWAY_URL,
     ...(pnpmHome ? { PNPM_HOME: pnpmHome } : {}),
     APPDATA: paths.appDataDir,
     HOME: paths.homeDir,

@@ -79,7 +79,7 @@ import {
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
 import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
-import { createDesktopOmniRushAccountStore } from "./omnirush-account.mjs";
+import { createDesktopOmniRushAccountStore, legacyKeychainAllowed } from "./omnirush-account.mjs";
 import {
   clearOmniRushSentrySession,
   initOmniRushSentry,
@@ -1314,6 +1314,11 @@ function validateSkillName(raw) {
 const omnirushAccountStore = createDesktopOmniRushAccountStore({
   filePath: path.join(app.getPath("userData"), "omnirush-account.bin"),
   loadSafeStorage: () => require("electron").safeStorage,
+  legacyKeychain: legacyKeychainAllowed({
+    appIdentifier: APP_IDENTIFIER,
+    productionAppIdentifier: TAURI_APP_IDENTIFIER,
+    blankSlate: BLANK_SLATE_LAUNCH.enabled,
+  }),
 });
 
 function omnirushUiMcpLaunch() {

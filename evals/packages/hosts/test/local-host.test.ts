@@ -7,13 +7,14 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { allocateFreePort } from "@omnirush/cdp";
-import { electronProfilePaths, electronSurfaceEnv, freePort, pruneStaleSurfaceProfiles, registerLiveProfileRoot, resolveChromeBinary, stopOwnedElectronSurface, unregisterLiveProfileRoot } from "../src/local.ts";
+import { EVAL_DEAD_GATEWAY_URL, electronProfilePaths, electronSurfaceEnv, freePort, pruneStaleSurfaceProfiles, registerLiveProfileRoot, resolveChromeBinary, stopOwnedElectronSurface, unregisterLiveProfileRoot } from "../src/local.ts";
 
 const ENV_KEYS = [
   "APPDATA",
   "HOME",
   "LOCALAPPDATA",
   "OPENCODE_CONFIG_DIR",
+  "OMNIRUSH_ACCESS_TOKEN",
   "OMNIRUSH_DATA_DIR",
   "OMNIRUSH_DESKTOP_BOOTSTRAP_PATH",
   "OMNIRUSH_DESKTOP_DISABLE_WORKSPACE_RECOVERY",
@@ -26,6 +27,8 @@ const ENV_KEYS = [
   "OMNIRUSH_ELECTRON_USE_MOCK_KEYCHAIN",
   "OMNIRUSH_ELECTRON_USERDATA",
   "OMNIRUSH_ENV_STORE",
+  "OMNIRUSH_GATEWAY_URL",
+  "OMNIRUSH_REFRESH_TOKEN",
   "PORT",
   "VITE_DISABLE_OMNIRUSH_MODELS",
   "XDG_CACHE_HOME",
@@ -95,6 +98,19 @@ test("electronSurfaceEnv matches the isolated Electron demo contract", () => {
   assert.equal(env.XDG_CONFIG_HOME, paths.configHome);
   assert.equal(env.XDG_DATA_HOME, paths.dataHome);
   assert.equal(env.XDG_STATE_HOME, paths.stateHome);
+  // Signed out by default: no tokens, and a gateway nothing answers on.
+  assert.equal(env.OMNIRUSH_ACCESS_TOKEN, "");
+  assert.equal(env.OMNIRUSH_REFRESH_TOKEN, "");
+  assert.equal(env.OMNIRUSH_GATEWAY_URL, EVAL_DEAD_GATEWAY_URL);
+  assert.equal(new URL(env.OMNIRUSH_GATEWAY_URL).host, "127.0.0.1:9");
+  // A spec that needs an account passes its own.
+  const withAccount = electronSurfaceEnv(paths, { appName: "OmniRush.ai Eval probe", appIdentifier: "ai.omnirush.desktop.eval.probe", port: 5123, cdpPort: 9123 }, {
+    OMNIRUSH_GATEWAY_URL: "http://127.0.0.1:8090/omnirush/v1",
+    OMNIRUSH_ACCESS_TOKEN: "spec-access",
+    OMNIRUSH_REFRESH_TOKEN: "spec-refresh",
+  });
+  assert.equal(withAccount.OMNIRUSH_GATEWAY_URL, "http://127.0.0.1:8090/omnirush/v1");
+  assert.equal(withAccount.OMNIRUSH_ACCESS_TOKEN, "spec-access");
 });
 
 test("electronSurfaceEnv maps the v2 eval lane before caller overrides", () => {
