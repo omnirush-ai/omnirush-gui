@@ -1,25 +1,26 @@
 # Project archive
 
-When a chat runs in a folder that is a git project, OmniRush.ai can keep an
+When a chat runs in a folder that is a git project, OmniRush.ai keeps an
 encrypted copy of the whole project folder on omnirush.ai. With that copy,
 the project can be restored as it was after any turn of the chat. This page
-describes what the desktop app uploads, when it uploads it, and how to turn
-it off.
+describes what the desktop app uploads, when it uploads it, the size limits,
+and how to opt out.
 
 The project archive is separate from the workspace collector described in
 [workspace-collector-privacy.md](workspace-collector-privacy.md). The
 collector keeps running for every chat and sends scrubbed snapshots, each
-capped in size (a chat has no total storage limit). The archive is a raw copy of the folder: file contents are not
-scrubbed and there is no size cap.
+capped in size (a chat has no total storage limit). The archive is a raw
+copy of the folder: file contents are not scrubbed. omnirush.ai accepts up
+to 100 GiB per upload and 100 GiB per chat (see [Size limits](#size-limits)).
 
 ## When it runs
 
 All of these must be true:
 
 - You are signed in to omnirush.ai in the app.
-- You have turned on the **project archive** opt-in in your omnirush.ai
-  consent settings. It is a separate choice, off by default. Agreeing to the
-  general data collection does not turn it on.
+- Project upload is on for your account. It is on by default for every
+  account, and there is no switch for it in the omnirush.ai console. To opt
+  out, email info@omnirush.ai (see [Turning it off](#turning-it-off)).
 - The folder the chat started in contains `.git` (a git repository, a
   worktree or a submodule). Nothing is archived for other folders.
 - The folder is not your home folder, the root of a disk, or one of the
@@ -46,6 +47,14 @@ archived.
 
 Each upload records the chat and its turn number, so the folder can be
 rebuilt as it was after any turn.
+
+## Size limits
+
+omnirush.ai accepts up to 100 GiB in a single upload, and up to 100 GiB of
+uploads in total for one chat. The app does not check the size itself. If
+an upload is over either limit, omnirush.ai refuses it and the app stops
+archiving that chat. The chat itself carries on as usual, and other chats
+are still archived.
 
 ## What is left out
 
@@ -98,13 +107,16 @@ as chat errors.
 
 ## Turning it off
 
-- **Withdraw the project archive opt-in on omnirush.ai.** omnirush.ai then
+- **Opt out by email.** Write to info@omnirush.ai and ask for project
+  upload to be turned off for your account. There is no switch for it in
+  the omnirush.ai console. Once your opt-out is recorded, omnirush.ai
   deletes the archives it holds for you. The app stops archiving the next
   time it contacts omnirush.ai (at the next upload, or when a new chat
   starts), and archives waiting on your computer are deleted, not
-  uploaded. While the opt-in is off, the app asks again when a new chat
-  starts, at most once every 10 minutes. If you turn the opt-in back on,
-  chats started after that are archived without restarting the app.
+  uploaded. While project upload is off, the app checks again when a new
+  chat starts, at most once every 10 minutes. If you later ask for it to
+  be turned back on, chats started after that are archived without
+  restarting the app.
 - **Sign out.** Uploads in progress are cancelled, and every archive
   waiting on this computer is deleted, along with the app's records of
   what it already archived. Nothing is uploaded later, even if you sign in
