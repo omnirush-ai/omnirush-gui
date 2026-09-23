@@ -5,8 +5,8 @@ declare const expect: (value: unknown) => {
 };
 
 import {
+  BUILTIN_OMNIRUSH_MODEL_IDS,
   DEFAULT_MODEL,
-  OMNIRUSH_MODEL_IDS,
   isOmniRushModelID,
   OMNIRUSH_EXTENSION_CATALOG,
   filterOmniRushExtensionCatalogForPlatform,
@@ -23,11 +23,15 @@ describe("omnirush.ai extension catalog platform filter", () => {
     expect(DEFAULT_MODEL).toEqual({ providerID: "omnirush", modelID: "gpt-6-astra" });
   });
 
-  test("recognises every omnirush.ai model, default first", () => {
-    expect([...OMNIRUSH_MODEL_IDS]).toEqual(["gpt-6-astra", "gpt-5.6-sol"]);
+  test("recognises every omnirush.ai catalog model, not just the built-in ones", () => {
+    expect([...BUILTIN_OMNIRUSH_MODEL_IDS]).toEqual(["gpt-6-astra", "gpt-5.6-sol"]);
     expect(isOmniRushModelID("gpt-5.6-sol")).toEqual(true);
     expect(isOmniRushModelID("GPT-6-Astra")).toEqual(true);
+    expect(isOmniRushModelID("meta-muse-spark")).toEqual(true);
+    expect(isOmniRushModelID("muse-spark-1.3")).toEqual(true);
+    // The launch release's retired route is not a catalog id.
     expect(isOmniRushModelID("z-ai/glm-5.2")).toEqual(false);
+    expect(isOmniRushModelID("")).toEqual(false);
   });
 
   test("resolves browser runtime to web and desktop runtime to OS", () => {

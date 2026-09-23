@@ -157,8 +157,9 @@ export function readStoredDefaultModel(): ModelRef {
     const stored = window.localStorage.getItem(MODEL_PREF_KEY);
     const parsed = parseModelRef(stored);
     // Public OmniRush releases previously persisted a retired managed model.
-    // Keep external provider choices and every current omnirush.ai model, but
-    // migrate retired built-in routes to the default model.
+    // Keep external provider choices and every omnirush.ai catalog model
+    // (the catalog is the server's, not a list compiled in here), but migrate
+    // retired routes to the default model.
     if (parsed?.providerID === "omnirush" && !isOmniRushModelID(parsed.modelID)) {
       writeStoredDefaultModel(DEFAULT_MODEL);
       return DEFAULT_MODEL;

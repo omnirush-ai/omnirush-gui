@@ -51,7 +51,12 @@ import {
   useModelCollectionsStore,
 } from "@/react-app/domains/session/models/model-collections-store";
 import { favoriteModelShortcutLabel } from "@/react-app/shell/favorite-model-shortcut";
-import { dedupeModelOptions, resolveModelDisplayName, resolveModelProviderDisplayName } from "@/app/utils";
+import {
+  dedupeModelOptions,
+  resolveModelDisplayName,
+  resolveModelProviderDisplayName,
+  resolveOmniRushModelGroup,
+} from "@/app/utils";
 import { isSupportedModelProvider, providerCatalogRank } from "@/app/lib/provider-catalog";
 
 function getProviderDisplayName(providerId: string) {
@@ -103,11 +108,13 @@ function useModelOptions(
       .flatMap((provider) =>
         Object.entries(provider.models).map(([id, model]) => {
           const summary = getModelBehaviorSummary(provider.id, model, null, provider.name);
+          const group = resolveOmniRushModelGroup(provider.id, model.family);
           return {
             providerID: provider.id,
             modelID: id,
             title: resolveModelDisplayName(id, model.name),
             description: resolveModelProviderDisplayName(provider.id, id, provider.name, model.name),
+            ...(group ? { group } : {}),
             behaviorTitle: summary.title,
             behaviorLabel: summary.label,
             behaviorDescription: summary.description,
@@ -149,7 +156,7 @@ function groupByProvider(modelOptions: ModelOption[]): ModelSelectGroup[] {
   const groups = new Map<string, ModelSelectItem[]>();
 
   for (const option of modelOptions) {
-    const providerLabel = option.description ?? getProviderDisplayName(option.providerID);
+    const providerLabel = option.group ?? option.description ?? getProviderDisplayName(option.providerID);
     const item: ModelSelectItem = {
       id: `${option.providerID}:${option.modelID}`,
       option,
@@ -167,7 +174,8 @@ function groupByProvider(modelOptions: ModelOption[]): ModelSelectGroup[] {
   return [...groups.entries()]
     .map(([providerLabel, options]) => ({
       value: providerLabel,
-      rank: Math.min(...options.map(({ option }) => providerCatalogRank(option.providerID))),
+      // A family group (Meta Muse) follows its provider's own group.
+      rank: Math.min(...options.map(({ option }) => providerCatalogRank(option.providerID) + (option.group ? 0.5 : 0))),
       items: [...options].sort((a, b) => a.option.title.localeCompare(b.option.title)),
     }))
     .sort((a, b) => a.rank - b.rank || a.value.localeCompare(b.value));

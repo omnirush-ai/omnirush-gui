@@ -60,7 +60,9 @@ export type ModelPickerModalProps = {
 };
 
 type ProviderGroup = {
+  /** The provider; `key` tells apart an omnirush.ai family group (Meta Muse) from the provider's own. */
   id: string;
+  key: string;
   iconProviderId: string;
   name: string;
   isNew: boolean;
@@ -162,28 +164,32 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
   const providerGroups = useMemo<ProviderGroup[]>(() => {
     const map = new Map<string, ProviderGroup>();
     for (const opt of filteredOptions) {
-      let group = map.get(opt.providerID);
+      const key = opt.group ? `${opt.providerID}\u0000${opt.group}` : opt.providerID;
+      // A family group follows its provider's own group.
+      const accessRank = providerCatalogRank(opt.providerID) + (opt.group ? 0.5 : 0);
+      let group = map.get(key);
       if (!group) {
         group = {
           id: opt.providerID,
+          key,
           iconProviderId: opt.providerID,
-          name: opt.description ?? resolveProviderDisplayName(opt.providerID),
+          name: opt.group ?? opt.description ?? resolveProviderDisplayName(opt.providerID),
           isNew: !!opt.isRecommended,
           isCloud: opt.source === "cloud",
           isDisabled: disabledSet.has(opt.providerID),
           hasCurrent: false,
-          accessRank: providerCatalogRank(opt.providerID),
+          accessRank,
           recommended: [],
           other: [],
         };
-        map.set(opt.providerID, group);
+        map.set(key, group);
       }
       if (isRecommendedModel(opt.modelID)) {
         group.recommended.push(opt);
       } else {
         group.other.push(opt);
       }
-      group.accessRank = Math.min(group.accessRank, providerCatalogRank(opt.providerID));
+      group.accessRank = Math.min(group.accessRank, accessRank);
       if (modelEquals(props.current, { providerID: opt.providerID, modelID: opt.modelID })) {
         group.hasCurrent = true;
       }
@@ -206,7 +212,7 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
   // Auto-expand on search
   useEffect(() => {
     if (props.query.trim()) {
-      setExpandedProviders(new Set(providerGroups.map((g) => g.id)));
+      setExpandedProviders(new Set(providerGroups.map((g) => g.key)));
     }
   }, [props.query, providerGroups]);
 
@@ -223,9 +229,9 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
       if (!autoExpandedRef.current.has(id) && !toExpand.includes(id)) toExpand.push(id);
     };
     const current = providerGroups.find((group) => group.hasCurrent);
-    if (current) queueExpand(current.id);
+    if (current) queueExpand(current.key);
     for (const group of providerGroups) {
-      if (group.isCloud) queueExpand(group.id);
+      if (group.isCloud) queueExpand(group.key);
     }
     if (toExpand.length === 0) return;
     for (const id of toExpand) autoExpandedRef.current.add(id);
@@ -333,12 +339,12 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
             ) : (
               providerGroups.map((group) => (
                 <ProviderAccordion
-                  key={group.id}
+                  key={group.key}
                   group={group}
-                  expanded={expandedProviders.has(group.id)}
+                  expanded={expandedProviders.has(group.key)}
                   current={props.current}
-                  canToggleProvider={!!props.onToggleProvider}
-                  onToggleExpand={() => toggleProvider(group.id)}
+                  canToggleProvider={!!props.onToggleProvider && group.key === group.id}
+                  onToggleExpand={() => toggleProvider(group.key)}
                   onToggleProvider={props.onToggleProvider}
                   onSelect={handleSelect}
                   organizationProviderLabel={organizationProviderLabel}

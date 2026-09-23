@@ -18,23 +18,39 @@ export const VARIANT_PREF_KEY = "omnirush.modelVariant";
 export { LANGUAGE_PREF_KEY } from "../i18n";
 export const HIDE_TITLEBAR_PREF_KEY = "omnirush.hideTitlebar";
 
-/** Models served by the omnirush.ai account route; the first entry is the default. */
-export const OMNIRUSH_MODEL_IDS = ["gpt-6-astra", "gpt-5.6-sol"] as const;
+/**
+ * The models the engine serves before the account's catalog first syncs (and
+ * offline); the first entry is the default. The catalog itself comes from the
+ * server, so any other catalog model is just as valid.
+ */
+export const BUILTIN_OMNIRUSH_MODEL_IDS = ["gpt-6-astra", "gpt-5.6-sol"] as const;
 
 export const DEFAULT_MODEL: ModelRef = {
   providerID: "omnirush",
-  modelID: OMNIRUSH_MODEL_IDS[0],
+  modelID: BUILTIN_OMNIRUSH_MODEL_IDS[0],
 };
 
+/** omnirush.ai model ids the catalog no longer serves; a stored choice of one resets to the default. */
+export const RETIRED_OMNIRUSH_MODEL_IDS: readonly string[] = [];
+
+/** The id syntax of the omnirush.ai model catalog. */
+const OMNIRUSH_CATALOG_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/**
+ * Whether a model id can name an omnirush.ai catalog model. Retired routes
+ * (e.g. the launch release's `z-ai/glm-5.2`) cannot.
+ */
 export function isOmniRushModelID(modelID: string): boolean {
-  return (OMNIRUSH_MODEL_IDS as readonly string[]).includes(modelID.trim().toLowerCase());
+  const id = modelID.trim();
+  return OMNIRUSH_CATALOG_MODEL_ID.test(id) && !RETIRED_OMNIRUSH_MODEL_IDS.includes(id.toLowerCase());
 }
 
 /**
- * Effort levels offered for every omnirush.ai model, in picker order. Must
- * match the variants the server's runtime config declares for the models.
+ * Every effort an omnirush.ai model may offer, in picker order. Each model
+ * offers its own subset: the server's runtime config declares the rest of
+ * these disabled, so the engine reports exactly the model's levels.
  */
-export const OMNIRUSH_REASONING_EFFORTS = ["low", "high", "xhigh", "max"] as const;
+export const OMNIRUSH_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export const SUGGESTED_PLUGINS: SuggestedPlugin[] = [];
 
