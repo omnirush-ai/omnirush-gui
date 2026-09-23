@@ -131,7 +131,7 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: pnpm --filter @omnirush/desktop... --filter @omnirush/app... --filter omnirush-server... install --frozen-lockfile --prefer-offline
+        run: pnpm --filter @omnirush/desktop... --filter @omnirush/app... --filter omnirush-server... --filter omnirush-ui-mcp... install --frozen-lockfile --prefer-offline
 
       - name: Stamp release version
         shell: bash
