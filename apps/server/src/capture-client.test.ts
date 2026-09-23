@@ -229,6 +229,69 @@ describe("capture worker", () => {
     expect(sink.envelopes().map((item) => item.snapshot_type)).toContain("end");
   }, 60_000);
 
+  test("a stop that runs out of time aborts the collector upload this thread still serves for the worker, and does not wait for it", async () => {
+    const root = await syntheticWorkspace(5);
+    const signals: AbortSignal[] = [];
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const capture = service({
+      stateDir: await tempDir("state"),
+      stopTimeoutMs: 300,
+      collector: {
+        // The gateway never answers and this hook ignores its signal, as a stalled upload on the main thread would.
+        upload: (_sessionId, _bytes, signal) => {
+          signals.push(signal!);
+          started();
+          return new Promise<Response>(() => undefined);
+        },
+      },
+    });
+    capture.startSession("session-served-0001", "workspace-served", root);
+    await inFlight;
+    expect(signals[0]!.aborted).toBe(false);
+    const stopping = performance.now();
+    await capture.stop();
+    expect(performance.now() - stopping).toBeLessThan(5_000);
+    expect(capture.mode()).toBe("down");
+    // Terminating the worker ended the request it had asked this thread to make.
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+  }, 60_000);
+
+  test("in-process, a stop that runs out of time aborts the upload in flight and spools it for the next start", async () => {
+    const root = await syntheticWorkspace(5);
+    const stateDir = await tempDir("state");
+    const signals: AbortSignal[] = [];
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const capture = service({
+      stateDir,
+      worker: false,
+      stopTimeoutMs: 300,
+      collector: {
+        upload: (_sessionId, _bytes, signal) => {
+          signals.push(signal!);
+          started();
+          return new Promise<Response>(() => undefined);
+        },
+      },
+    });
+    capture.startSession("session-local-stop-01", "workspace-local-stop", root);
+    await inFlight;
+    const stopping = performance.now();
+    await capture.stop();
+    expect(performance.now() - stopping).toBeLessThan(5_000);
+    expect(signals[0]!.aborted).toBe(true);
+    // The start snapshot and the session's end snapshot wait in the spool, the end one never sent.
+    const spoolDir = join(stateDir, "omnirush-collector-spool");
+    const spooledTypes = async () => (await Promise.all((await readdir(spoolDir).catch(() => [] as string[]))
+      .filter((name) => name.endsWith(".json"))
+      .map(async (name) => (JSON.parse(await readFile(join(spoolDir, name), "utf8")) as { snapshot_type: string }).snapshot_type))).sort();
+    await until(async () => (await spooledTypes()).length === 2, 10_000, "the spooled snapshots");
+    expect(await spooledTypes()).toEqual(["end", "start"]);
+    expect(signals).toHaveLength(1);
+  }, 60_000);
+
   test("stopping packs the project archive's final archives on the worker, unless the account is gone", async () => {
     const results: string[][] = [];
     for (const archiveFinals of [undefined, Promise.resolve(false)]) {

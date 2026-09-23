@@ -955,3 +955,97 @@ describe("OmniRush gateway broker model catalog requests", () => {
     expect(await response.json()).toEqual({ error: "omnirush_account_required" });
   });
 });
+
+describe("OmniRush gateway broker collect deadline", () => {
+  const gatewayUrl = "https://gateway.example/omnirush/v1";
+  // 200 ms, the body at 1 MiB/s, 200 ms for the answer: 401 ms for a few bytes, 650 ms for 256 KiB.
+  const collectUploadBudget = { baseMs: 200, bytesPerSecond: 1024 * 1024, maxSendMs: 5_000, responseMs: 200 };
+
+  /** Resolves after `ms`, or rejects with the signal's reason once it aborts. */
+  const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolvePromise, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const timer = setTimeout(resolvePromise, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
+
+  type Attempt = { authorization: string | null; signal: AbortSignal };
+
+  /** The gateway accepts `access-2` only; `answer` decides how each collect attempt goes. */
+  function collectBroker(attempts: Attempt[], refreshCalls: string[], answer: (attempt: Attempt) => Promise<Response>) {
+    return new OmniRushGatewayBroker({
+      credentials: { gatewayUrl, accessToken: "access-1", refreshToken: "refresh-1" },
+      engineToken: "local-engine-token",
+      collectUploadBudget,
+      fetch: async (input, init) => {
+        if (String(input).endsWith("/device/refresh")) {
+          refreshCalls.push((JSON.parse(String(init?.body)) as { refresh_token: string }).refresh_token);
+          return Response.json({ access_token: "access-2", refresh_token: "refresh-2", gateway_url: gatewayUrl });
+        }
+        const attempt = { authorization: new Headers(init?.headers).get("authorization"), signal: init!.signal! };
+        attempts.push(attempt);
+        return answer(attempt);
+      },
+    });
+  }
+
+  test("ends at the deadline its body's size sets", async () => {
+    const attempts: Attempt[] = [];
+    const broker = collectBroker(attempts, [], async ({ signal }) => {
+      // Accepted bearer, but the answer never comes.
+      await new Promise((_resolvePromise, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      return Response.json({ ok: true });
+    });
+    const started = performance.now();
+    const ended = async (bytes: number) => {
+      const error = await broker.collect("session-deadline-1", new Uint8Array(bytes)).catch((reason: unknown) => reason);
+      return { name: (error as Error).name, afterMs: performance.now() - started };
+    };
+    const [small, large] = await Promise.all([ended(64), ended(256 * 1024)]);
+    expect(small.name).toBe("TimeoutError");
+    expect(large.name).toBe("TimeoutError");
+    expect(small.afterMs).toBeGreaterThanOrEqual(401 - 20);
+    expect(large.afterMs).toBeGreaterThanOrEqual(650 - 20);
+    expect(small.afterMs).toBeLessThan(large.afterMs);
+    expect(attempts).toHaveLength(2);
+  });
+
+  test("gives the retry with a refreshed bearer a deadline of its own", async () => {
+    const attempts: Attempt[] = [];
+    const refreshCalls: string[] = [];
+    const broker = collectBroker(attempts, refreshCalls, async ({ authorization, signal }) => {
+      // Each try takes 250 ms of its 401: together they outlast one shared deadline.
+      await sleep(250, signal);
+      return authorization === "Bearer access-2"
+        ? Response.json({ ok: true }, { status: 201 })
+        : Response.json({ detail: "invalid_token" }, { status: 401 });
+    });
+    const caller = new AbortController();
+    const response = await broker.collect("session-deadline-2", new Uint8Array(64), caller.signal);
+    expect(response.status).toBe(201);
+    expect(refreshCalls).toEqual(["refresh-1"]);
+    expect(attempts.map((attempt) => attempt.authorization)).toEqual(["Bearer access-1", "Bearer access-2"]);
+    expect(attempts[1]!.signal).not.toBe(attempts[0]!.signal);
+    expect(attempts[1]!.signal.aborted).toBe(false);
+  });
+
+  test("ends at once when the caller's signal aborts, on the retry with a refreshed bearer too", async () => {
+    const attempts: Attempt[] = [];
+    const caller = new AbortController();
+    const reason = new DOMException("The collector's deadline", "TimeoutError");
+    const broker = collectBroker(attempts, [], async ({ authorization, signal }) => {
+      if (authorization !== "Bearer access-2") return Response.json({ detail: "invalid_token" }, { status: 401 });
+      setTimeout(() => caller.abort(reason), 50);
+      await sleep(10_000, signal);
+      return Response.json({ ok: true }, { status: 201 });
+    });
+    const started = performance.now();
+    const error = await broker.collect("session-deadline-3", new Uint8Array(64), caller.signal).catch((cause: unknown) => cause);
+    expect(error).toBe(reason);
+    expect(performance.now() - started).toBeLessThan(401 - 100);
+    expect(attempts.map((attempt) => attempt.authorization)).toEqual(["Bearer access-1", "Bearer access-2"]);
+    expect(attempts[1]!.signal.reason).toBe(reason);
+  });
+});
