@@ -2,7 +2,15 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  logPlaintextCredentialsOnce,
+  readPlaintextCredentialFile,
+  removePlaintextCredentialFile,
+  writePlaintextCredentialFile,
+} from "./plaintext-credential-file.mjs";
+
 const KEY_BYTES = 32;
+const PLAINTEXT_KIND = "MCP credential vault key";
 
 /**
  * @param {string} filePath
@@ -58,23 +66,74 @@ function decodeKey(encoded) {
  *   filePath: string;
  *   loadSafeStorage: () => import("electron").SafeStorage;
  *   platform?: NodeJS.Platform;
- * }} options
+ *   fallbackFilePath?: string | null;
+ *   log?: (message: string) => void;
+ * }} options `fallbackFilePath`: Linux only, where the key is kept,
+ * unencrypted at rest with owner-only permissions, while no keyring is usable
+ * (see plaintext-credential-file.mjs).
  */
 export function createDesktopVaultKeyProvider({
   filePath,
   loadSafeStorage,
   platform = process.platform,
+  fallbackFilePath = null,
+  log = (message) => console.warn(message),
 }) {
   /** @type {Promise<Buffer> | null} */
   let pending = null;
+  const fileFallback = platform === "linux" && Boolean(fallbackFilePath);
+
+  /** The key kept in the private file, or null when there is none or it is invalid. */
+  async function readUnprotectedKey() {
+    try {
+      const contents = await readPlaintextCredentialFile(fallbackFilePath);
+      return contents ? decodeKey(JSON.parse(contents).key) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Linux without a usable keyring: the key lives in an owner-only file,
+   * unencrypted at rest. A key sealed by a keyring that is gone cannot be
+   * read, so a fresh key is minted and the vault recovers as it does after a
+   * keyring change; the sealed blob is left for the keyring's return.
+   */
+  async function loadUnprotectedKey() {
+    logPlaintextCredentialsOnce(PLAINTEXT_KIND, log);
+    const stored = await readUnprotectedKey();
+    if (stored) return stored;
+    const key = randomBytes(KEY_BYTES);
+    await writePlaintextCredentialFile(
+      fallbackFilePath,
+      `${JSON.stringify({ note: "Unencrypted at rest: this system has no keyring. Owner-only file.", key: key.toString("base64") }, null, 2)}\n`,
+    );
+    return key;
+  }
 
   async function loadKey() {
     const safeStorage = loadSafeStorage();
-    if (!safeStorage || !(await safeStorage.isAsyncEncryptionAvailable())) {
+    const encryptionAvailable = Boolean(safeStorage) && await safeStorage.isAsyncEncryptionAvailable();
+    const basicText = encryptionAvailable && platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text";
+    if (fileFallback && (!encryptionAvailable || basicText)) return loadUnprotectedKey();
+    if (!encryptionAvailable) {
       throw new Error("Operating-system secure storage is unavailable for OmniRush.ai-managed OAuth.");
     }
-    if (platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text") {
+    if (basicText) {
       throw new Error("A secure Linux password store is required for OmniRush.ai-managed OAuth.");
+    }
+
+    const unprotected = fileFallback ? await readUnprotectedKey() : null;
+    if (unprotected) {
+      // A keyring is usable now: seal the key the vault uses with it, keep
+      // any older sealed blob as a backup, then delete the private file.
+      await rename(filePath, `${filePath}.omnirush-backup-${backupTimestamp(new Date())}`).catch((error) => {
+        if (error?.code !== "ENOENT") throw error;
+      });
+      await replaceProtectedKey(filePath, await safeStorage.encryptStringAsync(unprotected.toString("base64")));
+      await removePlaintextCredentialFile(fallbackFilePath);
+      log("[omnirush] Moved the MCP credential vault key from the private file into the system keyring.");
+      return unprotected;
     }
 
     /** @type {Buffer | undefined} */

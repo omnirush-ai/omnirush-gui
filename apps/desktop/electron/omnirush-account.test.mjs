@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -747,4 +747,181 @@ test("a bundle persisted before the rotation counter loads as rotation 0 and cou
   server.expired.add("access-1");
   assert.equal((await store.status()).email, "person@example.com");
   assert.equal(JSON.parse(await readFile(options.filePath, "utf8")).rotation, 1);
+});
+
+// Linux without a usable keyring: the sign-in falls back to an owner-only file.
+
+const FAKE_GATEWAY_URL = "http://127.0.0.1:9/omnirush/v1";
+
+/** A fake safeStorage reporting `backend`; "encrypts" by prefixing so tests can tell sealed bytes apart. */
+function linuxStorage(backend, { available = true } = {}) {
+  return {
+    isAsyncEncryptionAvailable: async () => available,
+    getSelectedStorageBackend: () => backend,
+    encryptStringAsync: async (value) => Buffer.from(`sealed:${value}`, "utf8"),
+    decryptStringAsync: async (value) => {
+      const text = value.toString("utf8");
+      if (!text.startsWith("sealed:")) throw new Error("not sealed by this keyring");
+      return { result: text.slice("sealed:".length), shouldReEncrypt: false };
+    },
+  };
+}
+
+async function fallbackOptions(storage, overrides = {}) {
+  const logs = [];
+  const options = await storeOptions({
+    loadSafeStorage: () => storage,
+    fetchImpl: async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith("/device/me")) return Response.json({ email: "person@example.com", status: "active" });
+      if (pathname.endsWith("/device/logout")) return new Response(null, { status: 204 });
+      throw new Error(`Unexpected request ${pathname}`);
+    },
+    log: (message) => logs.push(message),
+    ...overrides,
+  });
+  const fallbackFilePath = path.join(path.dirname(options.filePath), "private-credentials", "account.json");
+  return { options: { ...options, fallbackFilePath }, logs };
+}
+
+async function exists(filePath) {
+  return access(filePath).then(() => true, () => false);
+}
+
+const FAKE_CREDENTIALS = { gatewayUrl: FAKE_GATEWAY_URL, accessToken: "fake-access", refreshToken: "fake-refresh" };
+
+test("Linux basic_text: sign-in lands in an owner-only private file instead of failing", async () => {
+  let polls = 0;
+  const { options, logs } = await fallbackOptions(linuxStorage("basic_text"), {
+    fetchImpl: async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith("/device/authorize")) {
+        return Response.json({ device_code: "code", user_code: "ABCD", verification_uri_complete: "https://omnirush.ai/console?code=ABCD", interval: 0, expires_in: 60 });
+      }
+      if (pathname.endsWith("/device/token")) {
+        polls += 1;
+        return Response.json({ gateway_url: FAKE_GATEWAY_URL, access_token: "fake-access", refresh_token: "fake-refresh" });
+      }
+      if (pathname.endsWith("/device/me")) return Response.json({ email: "person@example.com", status: "active" });
+      throw new Error(`Unexpected request ${pathname}`);
+    },
+  });
+  const store = createDesktopOmniRushAccountStore(options);
+  const result = await store.authorize({ gatewayUrl: undefined, deviceName: "Test Linux", openVerification: async () => undefined });
+  assert.equal(result.connected, true);
+  assert.equal(polls, 1);
+
+  assert.equal(await exists(options.filePath), false);
+  const saved = JSON.parse(await readFile(options.fallbackFilePath, "utf8"));
+  assert.equal(saved.credentials.refreshToken, "fake-refresh");
+  assert.match(saved.note, /Unencrypted at rest/);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(options.fallbackFilePath)).mode & 0o777, 0o600);
+    assert.equal((await stat(path.dirname(options.fallbackFilePath))).mode & 0o777, 0o700);
+  }
+  assert.equal(logs.filter((line) => /unencrypted at rest/.test(line)).length <= 1, true);
+  assert.equal(logs.some((line) => line.includes("fake-access") || line.includes("fake-refresh")), false);
+
+  const status = await createDesktopOmniRushAccountStore(options).status();
+  assert.equal(status.connected, true);
+  assert.equal(status.credentialStorage, "file");
+  assert.equal(status.email, "person@example.com");
+});
+
+test("Linux without encryption at all also uses the private file", async () => {
+  const { options } = await fallbackOptions(linuxStorage("gnome_libsecret", { available: false }));
+  const store = createDesktopOmniRushAccountStore(options);
+  await store.save(FAKE_CREDENTIALS);
+  assert.equal(await exists(options.fallbackFilePath), true);
+  assert.equal((await store.status()).credentialStorage, "file");
+});
+
+test("Linux with libsecret keeps the encrypted keyring path and no private file", async () => {
+  const { options } = await fallbackOptions(linuxStorage("gnome_libsecret"));
+  const store = createDesktopOmniRushAccountStore(options);
+  await store.save(FAKE_CREDENTIALS);
+  assert.match(await readFile(options.filePath, "utf8"), /^sealed:/);
+  assert.equal(await exists(options.fallbackFilePath), false);
+  const status = await createDesktopOmniRushAccountStore(options).status();
+  assert.equal(status.connected, true);
+  assert.equal("credentialStorage" in status, false);
+});
+
+test("a keyring that appears later receives the sign-in and the private file is deleted", async () => {
+  const { options: plain } = await fallbackOptions(linuxStorage("basic_text"));
+  await createDesktopOmniRushAccountStore(plain).save(FAKE_CREDENTIALS);
+  assert.equal(await exists(plain.fallbackFilePath), true);
+
+  const { options, logs } = await fallbackOptions(linuxStorage("gnome_libsecret"));
+  Object.assign(options, { filePath: plain.filePath, fallbackFilePath: plain.fallbackFilePath });
+  const status = await createDesktopOmniRushAccountStore(options).status();
+  assert.equal(status.connected, true);
+  assert.equal("credentialStorage" in status, false);
+  assert.equal(await exists(options.fallbackFilePath), false);
+  const sealed = await readFile(options.filePath, "utf8");
+  assert.match(sealed, /^sealed:/);
+  assert.equal(JSON.parse(sealed.slice("sealed:".length)).refreshToken, "fake-refresh");
+  assert.equal(logs.some((line) => /into the system keyring/.test(line)), true);
+
+  // The next launch reads the keyring copy.
+  assert.equal((await createDesktopOmniRushAccountStore(options).load())?.refreshToken, "fake-refresh");
+});
+
+test("a keyring that disappears asks for a new sign-in instead of failing", async () => {
+  const { options: sealed } = await fallbackOptions(linuxStorage("gnome_libsecret"));
+  await createDesktopOmniRushAccountStore(sealed).save(FAKE_CREDENTIALS);
+
+  const { options } = await fallbackOptions(linuxStorage("basic_text"));
+  Object.assign(options, { filePath: sealed.filePath, fallbackFilePath: sealed.fallbackFilePath });
+  const status = await createDesktopOmniRushAccountStore(options).status();
+  assert.equal(status.connected, false);
+  assert.equal(status.reauthorizationRequired, true);
+  assert.equal(status.credentialStorage, "file");
+
+  // Signing in again works and lands in the private file.
+  const store = createDesktopOmniRushAccountStore(options);
+  await store.save({ ...FAKE_CREDENTIALS, refreshToken: "fake-refresh-2" });
+  assert.equal((await store.status()).connected, true);
+  assert.equal(await exists(options.fallbackFilePath), true);
+});
+
+test("sign-out deletes the private file and stays signed out", async () => {
+  const { options } = await fallbackOptions(linuxStorage("basic_text"));
+  const store = createDesktopOmniRushAccountStore(options);
+  await store.save(FAKE_CREDENTIALS);
+  assert.equal(await exists(options.fallbackFilePath), true);
+  assert.deepEqual(await store.clear(), { remoteRevoked: true, reason: "revoked" });
+  assert.equal(await exists(options.fallbackFilePath), false);
+  const status = await createDesktopOmniRushAccountStore(options).status();
+  assert.equal(status.connected, false);
+  assert.equal(status.reauthorizationRequired, undefined);
+});
+
+for (const platform of /** @type {const} */ (["darwin", "win32"])) {
+  test(`${platform}: unavailable secure storage still refuses to store the sign-in, with no private file`, async () => {
+    const { options } = await fallbackOptions(linuxStorage("unknown", { available: false }), { platform });
+    const store = createDesktopOmniRushAccountStore(options);
+    await assert.rejects(store.save(FAKE_CREDENTIALS), /Secure desktop credential storage is unavailable/);
+    assert.equal(await exists(options.fallbackFilePath), false);
+    const status = await store.status();
+    assert.equal(status.connected, false);
+    assert.equal("credentialStorage" in status, false);
+  });
+
+  test(`${platform}: available secure storage is used exactly as before`, async () => {
+    const { options } = await fallbackOptions(linuxStorage(platform === "darwin" ? "keychain" : "dpapi"), { platform });
+    const store = createDesktopOmniRushAccountStore(options);
+    await store.save(FAKE_CREDENTIALS);
+    assert.match(await readFile(options.filePath, "utf8"), /^sealed:/);
+    assert.equal(await exists(options.fallbackFilePath), false);
+    assert.equal("credentialStorage" in await store.status(), false);
+  });
+}
+
+test("Linux basic_text without a fallback path keeps refusing (no silent plaintext)", async () => {
+  const options = await storeOptions({ loadSafeStorage: () => linuxStorage("basic_text") });
+  await assert.rejects(
+    createDesktopOmniRushAccountStore(options).save(FAKE_CREDENTIALS),
+    /Secure desktop credential storage is unavailable/,
+  );
 });

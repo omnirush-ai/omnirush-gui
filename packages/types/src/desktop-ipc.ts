@@ -144,6 +144,11 @@ export type OmniRushAccountStatus = {
   gatewayUrl?: string | null;
   /** Display label for the account server, e.g. "omnirush.ai" or "localhost:8090 (local API)". */
   gatewayHost?: string | null;
+  /**
+   * "file": Linux without a usable keyring, so the sign-in is kept in an
+   * owner-only file on this computer. Absent when a keyring protects it.
+   */
+  credentialStorage?: "file";
 };
 
 export type EngineDoctorResult = {

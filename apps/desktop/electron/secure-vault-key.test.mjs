@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -91,7 +91,7 @@ describe("desktop managed MCP vault key", () => {
     }
   });
 
-  it("rejects Electron's insecure Linux basic-text backend", async () => {
+  it("rejects Electron's insecure Linux basic-text backend (no fallback path)", async () => {
     const filePath = path.join(os.tmpdir(), "unused-omnirush-vault-key.bin");
     const provider = createDesktopVaultKeyProvider({
       filePath,
@@ -110,5 +110,95 @@ describe("desktop managed MCP vault key", () => {
     });
     await assert.rejects(provider(), /secure storage is unavailable/);
     assert.deepEqual(await backupSiblings(filePath), []);
+  });
+
+  describe("Linux without a usable keyring", () => {
+    /** @param {string} root */
+    function paths(root) {
+      return { filePath: path.join(root, "vault-key.bin"), fallbackFilePath: path.join(root, "private-credentials", "vault-key.json") };
+    }
+    /** @param {string} filePath */
+    const exists = (filePath) => access(filePath).then(() => true, () => false);
+    const basicText = () => fakeSafeStorage({ getSelectedStorageBackend: () => "basic_text" });
+    const quiet = () => undefined;
+
+    it("keeps the key in an owner-only private file and restores it", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-vault-key-"));
+      const { filePath, fallbackFilePath } = paths(root);
+      try {
+        const options = { filePath, fallbackFilePath, loadSafeStorage: basicText, platform: /** @type {const} */ ("linux"), log: quiet };
+        const key = await createDesktopVaultKeyProvider(options)();
+        assert.equal(key.byteLength, 32);
+        assert.equal(await exists(filePath), false);
+        assert.equal(JSON.parse(await readFile(fallbackFilePath, "utf8")).key, key.toString("base64"));
+        if (process.platform !== "win32") {
+          assert.equal((await stat(fallbackFilePath)).mode & 0o777, 0o600);
+          assert.equal((await stat(path.dirname(fallbackFilePath))).mode & 0o777, 0o700);
+        }
+        assert.deepEqual(await createDesktopVaultKeyProvider(options)(), key);
+
+        const unavailable = { ...options, loadSafeStorage: () => fakeSafeStorage({ isAsyncEncryptionAvailable: async () => false }) };
+        assert.deepEqual(await createDesktopVaultKeyProvider(unavailable)(), key);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("moves the key into a keyring that appears later and deletes the private file", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-vault-key-"));
+      const { filePath, fallbackFilePath } = paths(root);
+      try {
+        const base = { filePath, fallbackFilePath, platform: /** @type {const} */ ("linux"), log: quiet };
+        const key = await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: basicText })();
+        const keyring = fakeSafeStorage();
+        assert.deepEqual(await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: () => keyring })(), key);
+        assert.equal(await exists(fallbackFilePath), false);
+        assert.equal((await readFile(filePath)).includes(key.toString("base64")), false);
+        assert.deepEqual(await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: () => keyring })(), key);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("mints a file key when the keyring that sealed the old one is gone, leaving the sealed blob", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-vault-key-"));
+      const { filePath, fallbackFilePath } = paths(root);
+      try {
+        const base = { filePath, fallbackFilePath, platform: /** @type {const} */ ("linux"), log: quiet };
+        const sealedKey = await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: () => fakeSafeStorage() })();
+        const sealedBlob = await readFile(filePath);
+        const fileKey = await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: basicText })();
+        assert.notDeepEqual(fileKey, sealedKey);
+        assert.deepEqual(await readFile(filePath), sealedBlob);
+
+        // When the keyring returns, the key the vault now uses wins; the old blob is kept as a backup.
+        assert.deepEqual(await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: () => fakeSafeStorage() })(), fileKey);
+        assert.equal((await backupSiblings(filePath)).length, 1);
+        assert.equal(await exists(fallbackFilePath), false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    for (const platform of /** @type {const} */ (["darwin", "win32"])) {
+      it(`${platform}: unavailable secure storage still fails closed and writes no private file`, async () => {
+        const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-vault-key-"));
+        const { filePath, fallbackFilePath } = paths(root);
+        try {
+          const provider = createDesktopVaultKeyProvider({
+            filePath,
+            fallbackFilePath,
+            platform,
+            log: quiet,
+            loadSafeStorage: () => fakeSafeStorage({ isAsyncEncryptionAvailable: async () => false }),
+          });
+          await assert.rejects(provider(), /secure storage is unavailable/);
+          assert.equal(await exists(fallbackFilePath), false);
+          assert.equal(await exists(filePath), false);
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      });
+    }
   });
 });

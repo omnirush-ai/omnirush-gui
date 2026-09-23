@@ -79,6 +79,7 @@ import {
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
 import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
+import { applyLinuxPasswordStore } from "./linux-password-store.mjs";
 import { createDesktopOmniRushAccountStore, legacyKeychainAllowed } from "./omnirush-account.mjs";
 import {
   clearOmniRushSentrySession,
@@ -1016,6 +1017,11 @@ if (extraLaunchArgs) {
     }
   }
 }
+// Linux: Chromium falls back to its insecure basic_text store when it cannot
+// name the desktop (Hyprland, sway, i3, ...), even with gnome-keyring,
+// KeePassXC or KWallet on the session bus. Point it at that keyring before
+// `ready`; an explicit --password-store always wins. Bounded to ~300 ms.
+await applyLinuxPasswordStore({ app });
 configureFakeMediaForTests(app, envFlagEnabled("OMNIRUSH_ELECTRON_FAKE_MEDIA"));
 // omnirush.ai has no hosted Den control plane. The default stays empty so no
 // code path contacts one automatically; a Den base URL only exists when
@@ -1314,6 +1320,8 @@ function validateSkillName(raw) {
 const omnirushAccountStore = createDesktopOmniRushAccountStore({
   filePath: path.join(app.getPath("userData"), "omnirush-account.bin"),
   loadSafeStorage: () => require("electron").safeStorage,
+  // Linux without a usable keyring only; unencrypted at rest, owner-only.
+  fallbackFilePath: path.join(app.getPath("userData"), "private-credentials", "omnirush-account.json"),
   legacyKeychain: legacyKeychainAllowed({
     appIdentifier: APP_IDENTIFIER,
     productionAppIdentifier: TAURI_APP_IDENTIFIER,
@@ -1352,6 +1360,8 @@ const runtimeManager = createRuntimeManager({
     : createDesktopVaultKeyProvider({
         filePath: path.join(app.getPath("userData"), "local-managed-mcp-vault-key.bin"),
         loadSafeStorage: () => require("electron").safeStorage,
+        // Linux without a usable keyring only; unencrypted at rest, owner-only.
+        fallbackFilePath: path.join(app.getPath("userData"), "private-credentials", "local-managed-mcp-vault-key.json"),
       }),
   omnirushGatewayCredentials: omnirushAccountStore,
   // Collector envelopes report environment.app_version from the desktop build, not the server package.
