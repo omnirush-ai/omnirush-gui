@@ -28,6 +28,8 @@ export type DiagnosticsBundleContext = {
   omnirushServerStatus?: OmniRushServerStatus;
   omnirushServerUrl?: string;
   runtimeWorkspaceId?: string | null;
+  selectedSessionId?: string | null;
+  selectedWorkspaceId?: string | null;
   cloudMcpHealth?: unknown;
 };
 
@@ -156,7 +158,11 @@ export function composeDiagnosticsBundleJson(input: DiagnosticsBundleInputs): st
       tauri: input.desktopRuntime,
       developerMode: context?.developerMode === true,
     },
+    session: {
+      id: context?.selectedSessionId?.trim() || null,
+    },
     workspace: {
+      id: context?.selectedWorkspaceId?.trim() || null,
       runtimeWorkspaceId: context?.runtimeWorkspaceId ?? null,
       clientConnected,
       anyActiveRuns: context?.anyActiveRuns === true,

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildCommandPaletteSplitSessions } from "../src/react-app/shell/command-palette-sessions";
+import {
+  buildCommandPaletteSplitSessions,
+  buildCopySessionIdPaletteItem,
+} from "../src/react-app/shell/command-palette-sessions";
 import type { SessionOption } from "../src/react-app/shell/command-palette";
 
 const sessions: SessionOption[] = [
@@ -46,5 +49,31 @@ describe("command palette split sessions", () => {
     ]);
     expect(options.some((option) => option.workspaceTitle === "Workspace B")).toBe(true);
     expect(options.some((option) => option.workspaceId === "workspace-a" && option.sessionId === "session-a")).toBe(false);
+  });
+});
+
+describe("command palette Copy session ID", () => {
+  test("is enabled with the selected session and copies its ID", () => {
+    const copied: string[] = [];
+    const item = buildCopySessionIdPaletteItem("ses_selected_1", (sessionId) => copied.push(sessionId));
+
+    expect(item.title).toBe("Copy session ID");
+    expect(item.disabled).toBe(false);
+    expect(item.detail).toBe("ses_selected_1");
+    item.action();
+    expect(copied).toEqual(["ses_selected_1"]);
+  });
+
+  test("stays listed but disabled until a session is selected", () => {
+    for (const selected of [null, undefined, "", "   "]) {
+      const copied: string[] = [];
+      const item = buildCopySessionIdPaletteItem(selected, (sessionId) => copied.push(sessionId));
+
+      expect(item.id).toBe("session.copy-id");
+      expect(item.disabled).toBe(true);
+      expect(item.detail).toBe("Open a session to copy its ID");
+      item.action();
+      expect(copied).toEqual([]);
+    }
   });
 });

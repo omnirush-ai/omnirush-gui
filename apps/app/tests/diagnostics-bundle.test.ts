@@ -112,6 +112,32 @@ describe("diagnostics bundle", () => {
     expect(parsed.omnirushServer.settings.tokenPresent).toBe(false);
   });
 
+  test("carries the selected session and workspace IDs for support", () => {
+    const input = baseInputs();
+    input.context = {
+      ...input.context,
+      runtimeWorkspaceId: "runtime-ws-1",
+      selectedSessionId: "ses_diagnostics_1",
+      selectedWorkspaceId: "ws-diagnostics-1",
+    };
+
+    const parsed = JSON.parse(composeDiagnosticsBundleJson(input));
+
+    expect(parsed.session).toEqual({ id: "ses_diagnostics_1" });
+    expect(parsed.workspace.id).toBe("ws-diagnostics-1");
+    expect(parsed.workspace.runtimeWorkspaceId).toBe("runtime-ws-1");
+  });
+
+  test("reports no session when none is selected", () => {
+    const input = baseInputs();
+    input.context = { ...input.context, selectedSessionId: null, selectedWorkspaceId: "" };
+
+    const parsed = JSON.parse(composeDiagnosticsBundleJson(input));
+
+    expect(parsed.session).toEqual({ id: null });
+    expect(parsed.workspace.id).toBeNull();
+  });
+
   test("includes sanitized Cloud health without Den or MCP tokens", () => {
     const input = baseInputs();
     input.cloudMcpHealth = {

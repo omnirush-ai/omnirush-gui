@@ -21,6 +21,7 @@ import { createClient, isPromptAdmissionUnknown, unwrap } from "@/app/lib/openco
 import { createClientV2, isOpencodeV2BaseUrl, V2_SESSION_ARCHIVE_UNAVAILABLE } from "@/app/lib/opencode-v2-adapter";
 import { abortSessionSafe, forkSession, listCommands, revertSession, setSessionArchived, shellInSession, unrevertSession } from "@/app/lib/opencode-session";
 import { getNativeSessionMessages } from "@/app/lib/opencode-session-native";
+import { copySessionId } from "@/react-app/domains/session/sidebar/copy-session-id";
 import { useSessionManagementStore as sessionManagementStore } from "@/react-app/domains/session/sidebar/session-management-store";
 import { getSessionDescendantIds } from "@/react-app/domains/session/sidebar/utils";
 import {
@@ -187,7 +188,7 @@ import {
 import { useShareWorkspaceState } from "@/react-app/domains/workspace/share-workspace-state";
 import { ModelPickerModal, MODEL_PICKER_UNAVAILABLE_SUBTITLE } from "@/react-app/domains/session/modals/model-picker-modal";
 import { CommandPalette, type PaletteItem, type SessionGroupOption } from "./command-palette";
-import { buildCommandPaletteSessions } from "./command-palette-sessions";
+import { buildCommandPaletteSessions, buildCopySessionIdPaletteItem } from "./command-palette-sessions";
 import { requestRenameSession } from "./session-actions-bus";
 import type { ThinkingModeShortcutDirection } from "./thinking-mode-shortcut";
 import { SessionSearchDialog } from "./session-search-dialog";
@@ -2854,6 +2855,8 @@ export function SessionRoute() {
     omnirushServerStatus: client ? "connected" : "disconnected",
     omnirushServerUrl: baseUrl,
     runtimeWorkspaceId: selectedWorkspaceEndpoint?.workspaceId ?? null,
+    selectedSessionId,
+    selectedWorkspaceId,
   }), [
     activeReloadBlockingSessions.length,
     baseUrl,
@@ -2862,8 +2865,15 @@ export function SessionRoute() {
     developerMode,
     omnirushServerHostInfoState,
     reloadCoordinator.canReloadWorkspaceEngine,
+    selectedSessionId,
     selectedWorkspaceEndpoint?.workspaceId,
+    selectedWorkspaceId,
   ]);
+
+  const copySessionIdPaletteItem = useMemo(() => buildCopySessionIdPaletteItem(selectedSessionId, (sessionId) => {
+    setCommandPaletteOpen(false);
+    void copySessionId(sessionId);
+  }), [selectedSessionId]);
 
   const diagnosticsCopyPaletteItem = useMemo<PaletteItem>(() => ({
     id: "diagnostics.copy",
@@ -3771,7 +3781,7 @@ export function SessionRoute() {
       currentSessionForGroupMove={currentSessionForGroupMove}
       currentSessionGroupId={currentSessionGroupId}
       onMoveCurrentSessionToGroup={handleMoveCurrentSessionToGroup}
-      extraItems={[...currentSessionActionPaletteItems, ...(sessionFindPaletteItem ? [sessionFindPaletteItem] : []), sessionSearchPaletteItem, ...terminalPaletteItems, ...(checkDesktopRestriction({ restriction: "allowControlSettings" }) ? [] : [developerModePaletteItem]), diagnosticsCopyPaletteItem, diagnosticsExportPaletteItem, nextSessionTabPaletteItem, prevSessionTabPaletteItem, reloadConfigPaletteItem]}
+      extraItems={[...currentSessionActionPaletteItems, ...(sessionFindPaletteItem ? [sessionFindPaletteItem] : []), sessionSearchPaletteItem, ...terminalPaletteItems, ...(checkDesktopRestriction({ restriction: "allowControlSettings" }) ? [] : [developerModePaletteItem]), copySessionIdPaletteItem, diagnosticsCopyPaletteItem, diagnosticsExportPaletteItem, nextSessionTabPaletteItem, prevSessionTabPaletteItem, reloadConfigPaletteItem]}
       listAgents={listAgents}
       selectedAgent={selectedAgent}
       onSelectAgent={setSelectedAgent}
