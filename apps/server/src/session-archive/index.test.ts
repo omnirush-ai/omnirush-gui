@@ -1063,6 +1063,43 @@ describe("SessionArchiver touched files", () => {
     expect((await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "touched"))).length).toBe(1);
   });
 
+  test("a restart whose key probe fails keeps a touched chain without a base and its paths: it catches up once the policy answers", async () => {
+    let now = Date.parse("2026-09-23T10:00:00Z");
+    const { server, root, state, make } = await touchedSetup({ now: () => new Date(now) });
+    const first = make();
+    const id = "ses_touched_offline";
+    expect(await first.captureBase(id, root, 0)).toEqual({ status: "skipped", reason: "unchanged" });
+    await writeFile(join(root, "draft.md"), "draft\n");
+    first.recordTouched(id, "draft.md");
+    await first.stop();
+
+    // The next start is offline: GET archives/key fails.
+    server.apiHook = ({ path }) => (path === "archives/key" ? "network" : undefined);
+    now += 60_000;
+    const second = make();
+    expect(await second.startFinalCandidates()).toEqual([id]);
+    expect((await second.captureFinal(id, "app_start")).status).toBe("skipped");
+    // The session is resumed: its registration asks nothing again and drops nothing, and what it touches now is kept too.
+    const calls = server.calls.length;
+    expect(await second.captureBase(id, root, 1)).toEqual({ status: "skipped", reason: "unchanged" });
+    expect(server.calls.length).toBe(calls);
+    await writeFile(join(root, "chart.svg"), "<svg/>\n");
+    second.recordTouched(id, "chart.svg");
+    expect(await second.captureDelta(id, root, 2)).toEqual({ status: "skipped", reason: "not_archivable" });
+    await second.stop();
+    expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "touched"))).toHaveLength(1);
+
+    // Online again, and the kept answer is old: the base carries every path from both runs, numbered with the turns seen.
+    server.apiHook = null;
+    now += POLICY_TTL_MS;
+    const third = make();
+    expect(await third.captureFinal(id, "idle")).toMatchObject({ status: "queued", kind: "base", sequence: 0 });
+    expect((await third.drain()).uploaded).toBe(1);
+    const [base] = server.objects();
+    expect(base!.request).toMatchObject({ session_id: id, kind: "base", turn: 1, marker: "touched" });
+    expect(await names(base!)).toEqual(["__omnirush__/manifest.json", "chart.svg", "draft.md"]);
+  });
+
   test("a touched chain pauses while its policy is off and catches up once it is on again", async () => {
     let now = Date.parse("2026-09-23T10:00:00Z");
     const { server, root, subject } = await touchedSetup({ now: () => new Date(now) });

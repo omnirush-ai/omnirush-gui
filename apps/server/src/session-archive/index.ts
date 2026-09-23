@@ -368,6 +368,7 @@ export class SessionArchiver {
    * (folderPolicy); with both off nothing is written and only the policy is
    * read. A touched-files session is only registered here ("unchanged"): its
    * base comes with the first delta or final archive that has a touched file.
+   * One registered before (resumed) runs no gate again.
    */
   captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     return this.guard("base", sessionId, turn, async () => this.withSession(sessionId, async () => {
@@ -375,6 +376,13 @@ export class SessionArchiver {
       const state = await this.loadSession(sessionId);
       if (state?.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
       if (state && state.next_sequence > 0) return { status: "skipped", reason: "exists" };
+      // A touched-files chain registered earlier (a resumed session) still waits for its base. Like a
+      // chain with one, it keeps its paths whatever the policy answers now: its deltas and finals ask.
+      if (state?.marker === TOUCHED_MARKER) {
+        if (!state.ended) this.touched.track(sessionId);
+        if (state.turn_seen !== turn && generation === this.generation) await this.saveSession({ ...state, turn_seen: turn, updated_at: this.now().toISOString() });
+        return { status: "skipped", reason: "unchanged" };
+      }
       return this.captureBaseLocked(sessionId, resolve(root), turn, generation, true);
     }));
   }
