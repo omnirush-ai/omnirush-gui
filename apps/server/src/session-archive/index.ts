@@ -272,21 +272,24 @@ export class SessionArchiver {
    * Delta after a completed turn. No-op without a base, when the session
    * stopped archiving, or when nothing in the folder changed. A session whose
    * base could not be captured yet (key unavailable) gets its base instead.
+   * A null turn (the engine's messages could not be read) follows the last
+   * archived turn.
    */
-  captureDelta(sessionId: string, root: string, turn: number): Promise<CaptureResult> {
-    return this.guard("delta", sessionId, turn, async () => this.withSession(sessionId, async () => {
+  captureDelta(sessionId: string, root: string, turn: number | null): Promise<CaptureResult> {
+    return this.guard("delta", sessionId, turn ?? 0, async () => this.withSession(sessionId, async () => {
       const generation = this.generation;
       if (this.disabled) return { status: "skipped", reason: "disabled" };
       const state = await this.loadSession(sessionId);
       if (!state) return { status: "skipped", reason: "no_base" };
       if (state.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
       if (resolve(root) !== state.root) this.log("warn", "OmniRush archive delta root differs from the session root; using the session root", { sessionId });
-      if (state.next_sequence === 0) return this.captureBaseLocked(sessionId, state.root, turn, generation);
-      if (state.last_turn !== null && turn <= state.last_turn) return { status: "skipped", reason: "stale_turn" };
+      if (state.next_sequence === 0) return this.captureBaseLocked(sessionId, state.root, turn ?? 0, generation);
+      const next = turn ?? (state.last_turn ?? 0) + 1;
+      if (state.last_turn !== null && next <= state.last_turn) return { status: "skipped", reason: "stale_turn" };
       const key = await this.currentKey();
       if (key === "disabled") return { status: "skipped", reason: "disabled" };
       if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
-      return this.captureArchive(state, "delta", turn, key, generation);
+      return this.captureArchive(state, "delta", next, key, generation);
     }));
   }
 

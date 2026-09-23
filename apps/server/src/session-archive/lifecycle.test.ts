@@ -27,7 +27,7 @@ const drained: DrainResult = { uploaded: 0, pending: 0, dropped: 0, blocked: nul
 class FakeArchiver implements ProjectArchiver {
   readonly calls: string[] = [];
   base: (sessionId: string, turn: number) => Promise<CaptureResult> = async () => queued("base");
-  delta: (sessionId: string, turn: number) => Promise<CaptureResult> = async (_sessionId, turn) => queued("delta", turn);
+  delta: (sessionId: string, turn: number | null) => Promise<CaptureResult> = async (_sessionId, turn) => queued("delta", turn ?? 0);
   drainResult: () => Promise<DrainResult> = async () => drained;
 
   async captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
@@ -35,7 +35,7 @@ class FakeArchiver implements ProjectArchiver {
     return this.base(sessionId, turn);
   }
 
-  async captureDelta(sessionId: string, root: string, turn: number): Promise<CaptureResult> {
+  async captureDelta(sessionId: string, root: string, turn: number | null): Promise<CaptureResult> {
     this.calls.push(`delta ${sessionId} ${root} ${turn}`);
     return this.delta(sessionId, turn);
   }
@@ -200,8 +200,8 @@ describe("ProjectArchiveLifecycle", () => {
     // The turn ends while the base is still packing: its delta waits for the base.
     subject.turnCompleted("ses_turns_0001", messages(1));
     subject.turnCompleted("ses_turns_0001", messages(2));
-    // Unreadable messages: no delta (the next one carries the changes).
-    subject.turnCompleted("ses_turns_0001", { status: 503, unavailable: true });
+    // Unreadable messages still get their delta, with no turn: the archiver numbers it after the last one.
+    subject.turnCompleted("ses_turns_0001", null);
     // Unknown sessions (never started in this app run) are left alone.
     subject.turnCompleted("ses_unknown_0001", messages(4));
     baseGate.resolve(queued("base"));
@@ -211,6 +211,7 @@ describe("ProjectArchiveLifecycle", () => {
       `base ses_turns_0001 ${root} 0`,
       `delta ses_turns_0001 ${root} 1`,
       `delta ses_turns_0001 ${root} 2`,
+      `delta ses_turns_0001 ${root} null`,
     ]);
   });
 
@@ -481,11 +482,17 @@ describe("ProjectArchiveLifecycle", () => {
     second.subject.turnCompleted("ses_restarted_01", messages(2));
     await second.subject.settled();
 
+    // A turn whose messages the observer could not read follows the last archived turn.
+    await writeFile(join(root, "after.txt"), "unread turn\n");
+    second.subject.turnCompleted("ses_restarted_01", null);
+    await second.subject.settled();
+
     const archives = server.objects();
-    expect(archives.map((archive) => [archive.request.kind, archive.request.sequence, archive.request.turn])).toEqual([["base", 0, 0], ["delta", 1, 1], ["delta", 2, 2]]);
+    expect(archives.map((archive) => [archive.request.kind, archive.request.sequence, archive.request.turn])).toEqual([["base", 0, 0], ["delta", 1, 1], ["delta", 2, 2], ["delta", 3, 3]]);
     const latest = await openArchive(archives[2]!.object!);
     expect(latest.find((member) => member.name === "after.txt")!.content.toString()).toBe("after restart 2\n");
     expect(manifestOf(latest)).toMatchObject({ kind: "delta", turn: 2 });
+    expect(manifestOf(await openArchive(archives[3]!.object!))).toMatchObject({ kind: "delta", turn: 3 });
   });
 });
 

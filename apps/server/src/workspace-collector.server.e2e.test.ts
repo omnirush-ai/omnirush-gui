@@ -82,23 +82,39 @@ async function createWorkspace(): Promise<{ root: string; stateDir: string }> {
 type EngineMessage = { info: Record<string, unknown>; parts: unknown[] };
 
 /**
+ * The engine's message paging (`?limit=&before=`): the newest `limit`
+ * messages before the cursor, oldest first, with `X-Next-Cursor` while older
+ * ones remain. Without `limit`, the whole list.
+ */
+function messagePage(url: URL, list: EngineMessage[]): Response {
+  const limit = Number(url.searchParams.get("limit") ?? 0);
+  if (!limit) return Response.json(list);
+  const end = url.searchParams.has("before") ? Number(url.searchParams.get("before")) : list.length;
+  const start = Math.max(0, end - limit);
+  return Response.json(list.slice(start, end), start > 0 ? { headers: { "X-Next-Cursor": String(start) } } : {});
+}
+
+/**
  * A fake engine with one root session and a two-level subagent tree. Each
  * prompt is a turn: the root gains a user + assistant message, the child gains
  * a message on turns 1 and 2, the grandchild on turns 1 and 3. It also serves
  * what a local workflow step needs: the provider catalog, session creation and
- * the synchronous prompt route on the "ses_workflow" session it creates.
+ * the synchronous prompt route on the "ses_workflow" session it creates. The
+ * root session can start with an earlier `history`.
  */
-function startMockEngine(input: { provider: string; model: string }) {
+function startMockEngine(input: { provider: string; model: string; history?: EngineMessage[] }) {
   let turn = 0;
   let busy = false;
   let workflowBusy = false;
-  const root: EngineMessage[] = [];
+  const root: EngineMessage[] = [...(input.history ?? [])];
   const child: EngineMessage[] = [];
   const grandchild: EngineMessage[] = [];
   const workflow: EngineMessage[] = [];
   const prompts: unknown[] = [];
   const workflowPrompts: unknown[] = [];
   const received: string[] = [];
+  /** How long a prompt keeps the root session busy, and the error status its message route answers with (null: none). */
+  const control: { busyMs: number; rootMessagesStatus: number | null } = { busyMs: 50, rootMessagesStatus: null };
   const message = (session: string, id: string, role: "user" | "assistant", text: string): EngineMessage => ({
     info: {
       id,
@@ -145,7 +161,7 @@ function startMockEngine(input: { provider: string; model: string }) {
         return Response.json(answer);
       }
       if (pathname === "/session/ses_workflow") return Response.json(session("ses_workflow"));
-      if (pathname === "/session/ses_workflow/message") return Response.json(workflow);
+      if (pathname === "/session/ses_workflow/message") return messagePage(url, workflow);
       if (pathname === "/session/ses_workflow/children") return Response.json([]);
       if (pathname === "/session/ses_workflow/abort" && request.method === "POST") return Response.json(true);
       if (pathname === "/session/ses_root/prompt_async" && request.method === "POST") {
@@ -155,23 +171,25 @@ function startMockEngine(input: { provider: string; model: string }) {
         root.push(message("ses_root", `user_${turn}`, "user", `prompt ${turn}`), message("ses_root", `assistant_${turn}`, "assistant", `answer ${turn}`));
         if (turn === 1 || turn === 2) child.push(message("ses_child", `child_${turn}`, "assistant", `child answer ${turn} for jane@example.com`));
         if (turn === 1 || turn === 3) grandchild.push(message("ses_grandchild", `grand_${turn}`, "assistant", `grandchild answer ${turn}`));
-        setTimeout(() => { busy = false; }, 50);
+        setTimeout(() => { busy = false; }, control.busyMs);
         return new Response(null, { status: 204 });
       }
       if (pathname === "/session" && request.method === "GET") return Response.json([session("ses_root")]);
       if (pathname === "/session/ses_root") return Response.json(session("ses_root"));
-      if (pathname === "/session/ses_root/message") return Response.json(root);
+      if (pathname === "/session/ses_root/message") {
+        return control.rootMessagesStatus ? Response.json({ code: "unavailable" }, { status: control.rootMessagesStatus }) : messagePage(url, root);
+      }
       if (pathname === "/session/ses_root/children") return Response.json([session("ses_child", "ses_root")]);
-      if (pathname === "/session/ses_child/message") return Response.json(child);
+      if (pathname === "/session/ses_child/message") return messagePage(url, child);
       if (pathname === "/session/ses_child/children") return Response.json([session("ses_grandchild", "ses_child")]);
-      if (pathname === "/session/ses_grandchild/message") return Response.json(grandchild);
+      if (pathname === "/session/ses_grandchild/message") return messagePage(url, grandchild);
       if (pathname === "/session/ses_grandchild/children") return Response.json([]);
       if (pathname === "/session/ses_root/todo") return Response.json([]);
       return Response.json({ code: "not_found", message: `Not found: ${request.method} ${pathname}` }, { status: 404 });
     },
   }) as Served;
   cleanups.push(() => server.stop(true));
-  return { server, prompts, workflowPrompts, received, baseUrl: `http://127.0.0.1:${server.port}` };
+  return { server, prompts, workflowPrompts, received, control, baseUrl: `http://127.0.0.1:${server.port}` };
 }
 
 /**
@@ -835,15 +853,15 @@ describe("collection gaps: the v2 mount and local workflow steps", () => {
 
 describe("project archive wiring", () => {
   /** A server whose gateway also serves the archive routes; `ses_root` has a two-level subagent tree. */
-  async function archivedServer(setup: (archive: FakeArchiveServer) => void = () => undefined) {
+  async function archivedServer(setup: (archive: FakeArchiveServer) => void = () => undefined, history?: EngineMessage[]) {
     const { root, stateDir } = await createWorkspace();
-    const engine = startMockEngine({ provider: "openai", model: "gpt-5" });
+    const engine = startMockEngine({ provider: "openai", model: "gpt-5", ...(history ? { history } : {}) });
     const archive = new FakeArchiveServer();
     archive.token = "access-token";
     setup(archive);
     const gateway = startMockGateway(archive);
     const omnirush = await startOmniRush(serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl, gatewayUrl: gateway.gatewayUrl }));
-    return { root, stateDir, archive, gateway, omnirush };
+    return { root, stateDir, engine, archive, gateway, omnirush };
   }
 
   test("a git workspace's root session is archived through the device session: one base, then a delta for a turn that changed the folder", async () => {
@@ -873,6 +891,63 @@ describe("project archive wiring", () => {
     expect(new Set(objects.map((object) => object.request.session_id))).toEqual(new Set(["ses_root"]));
     expect(archive.calls.filter((call) => call.path === "archives/key")).toHaveLength(1);
   }, 60_000);
+
+  test("a chat whose history is past the 8 MiB read cap keeps each turn's transcript, turn snapshot and archive delta, and gets its base; a turn whose messages cannot be read keeps its snapshot and delta", async () => {
+    const message = (id: string, role: "user" | "assistant", part: Record<string, unknown>): EngineMessage => ({
+      info: { id, sessionID: "ses_root", role, time: role === "assistant" ? { created: 1, completed: 2 } : { created: 1 } },
+      parts: [{ id: `${id}_part`, messageID: id, sessionID: "ses_root", ...part }],
+    });
+    // A first prompt carrying a PDF the engine stored whole as a data URL, over
+    // the read cap on its own, then thirty turns of 100 KB answers (over one page).
+    const history = [
+      message("old_user_0", "user", { type: "file", mime: "application/pdf", filename: "scan.pdf", url: `data:application/pdf;base64,${"A".repeat(9 * 1024 * 1024)}` }),
+      message("old_assistant_0", "assistant", { type: "text", text: "read it" }),
+      ...Array.from({ length: 30 }, (_, index) => [
+        message(`old_user_${index + 1}`, "user", { type: "text", text: `question ${index + 1}` }),
+        message(`old_assistant_${index + 1}`, "assistant", { type: "text", text: "x".repeat(100 * 1024) }),
+      ]).flat(),
+    ];
+    const { root, engine, archive, gateway, omnirush } = await archivedServer(undefined, history);
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
+    await writeFile(join(root, "feature.txt"), "new work\n");
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 2 ? true : undefined));
+    await waitFor(() => (archive.objects().some((object) => object.request.kind === "delta") ? true : undefined));
+    // Then the engine stops answering for the messages (a turn long enough to be seen running).
+    engine.control.rootMessagesStatus = 500;
+    engine.control.busyMs = 2_500;
+    await writeFile(join(root, "later.txt"), "more work\n");
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 3 ? true : undefined));
+    const objects = await waitFor(() => (archive.objects().filter((object) => object.request.kind === "delta").length >= 2 ? archive.objects() : undefined));
+    await omnirush.stop();
+
+    const [turnOne, turnTwo, turnThree] = traces(gateway.uploads);
+    const turnMessageIds = (envelope: Envelope | undefined) => (events(envelope).find((event) => event.type === "turn.completed")?.data?.messages as Array<{ info: { id: string } }>)
+      .map((entry) => entry.info.id);
+    // No checkpoint on the first turn: every message but the one too large to read, oldest first.
+    expect(turnMessageIds(turnOne)).toEqual(history.slice(1).map((entry) => String(entry.info.id)).concat(["user_1", "assistant_1"]));
+    expect(events(turnOne).find((event) => event.type === "session.messages_omitted")?.data).toEqual({ count: 1 });
+    // The next turn carries just its own messages.
+    expect(turnMessageIds(turnTwo)).toEqual(["user_2", "assistant_2"]);
+    for (const envelope of [turnOne, turnTwo]) {
+      const types = events(envelope).map((event) => event.type);
+      expect(types).not.toContain("session.observer_failed");
+      expect(types).not.toContain("session.messages_failed");
+      expect(events(envelope).filter((event) => event.type === "collector.trigger").map((event) => event.data?.trigger)).toContain("turn_completed");
+    }
+    // Unreadable messages: no transcript, but the turn snapshot and the trace still go out.
+    expect(events(turnThree).find((event) => event.type === "turn.completed")?.data).toEqual({ messages: { status: 500, unavailable: true } });
+    expect(events(turnThree).find((event) => event.type === "session.messages_failed")?.data).toEqual({ error: "the engine answered 500" });
+    expect(events(turnThree).filter((event) => event.type === "collector.trigger").map((event) => event.data?.trigger)).toContain("turn_completed");
+    // The base counts every completed turn, the PDF turn included (read from
+    // its info alone): 31 earlier ones plus the first prompt's. The changed
+    // second turn gets its delta, and so does the third, numbered right after it.
+    expect(objects.map((object) => [object.request.kind, object.request.turn])).toEqual([["base", 32], ["delta", 33], ["delta", 34]]);
+    expect((await openArchive(objects[1]!.object!)).map((member) => member.name)).toContain("feature.txt");
+    expect((await openArchive(objects[2]!.object!)).map((member) => member.name)).toContain("later.txt");
+  }, 90_000);
 
   test("without archive consent (428) nothing is packed or uploaded, consent is checked once, and the chat carries on", async () => {
     const { stateDir, archive, gateway, omnirush } = await archivedServer((fake) => {

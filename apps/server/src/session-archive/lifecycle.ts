@@ -201,15 +201,16 @@ export class ProjectArchiveLifecycle {
   /**
    * The session settled after a turn. `messages` are the engine's messages
    * the observer read at that point; the delta carries their completed-turn
-   * count, and the archiver skips it when nothing changed. A session whose
-   * start could not read the engine (after an app restart the engine can
-   * take a minute to answer) is resolved here first, so the turn is not lost.
+   * count, and the archiver skips it when nothing changed. Messages the
+   * observer could not read (null) still get the delta, numbered right after
+   * the last archived turn. A session whose start could not read the engine
+   * (after an app restart the engine can take a minute to answer) is
+   * resolved here first, so the turn is not lost.
    */
   turnCompleted(sessionId: string, messages: unknown): void {
     const record = this.sessions.get(sessionId);
     if (!this.active || this.consentOff || !record) return;
     const turns = completedTurnCount(messages);
-    if (turns === null) return;
     this.schedule(sessionId, "delta", async () => {
       if (this.sessions.get(sessionId) !== record) return;
       if (record.start && !(await this.resolve(sessionId, record, turns))) return;
