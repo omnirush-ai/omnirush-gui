@@ -7,9 +7,10 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants as fsConstants, type BigIntStats } from "node:fs";
+import { constants as fsConstants, realpathSync, type BigIntStats } from "node:fs";
 import { lstat, open, readdir, readlink, realpath } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { clampCollectorBytes, isCollectorPathDenied, stripRemoteUserinfo } from "../workspace-collector.js";
 import { hintGarbageCollection } from "./files.js";
@@ -75,7 +76,14 @@ export type ExcludedCounts = {
   non_utf8: number;
 };
 
-export type ArchiveGit = { head: string | null; branch: string | null; remote: string | null; dirty: boolean };
+export type ArchiveGit = {
+  head: string | null;
+  branch: string | null;
+  remote: string | null;
+  dirty: boolean;
+  /** The root's path inside the repository (`git rev-parse --show-prefix` without the trailing `/`), "" at its top level. */
+  path?: string;
+};
 
 export type ArchiveManifest = {
   schema: typeof ARCHIVE_SCHEMA;
@@ -660,7 +668,24 @@ export function buildManifestBytes(input: ManifestInput): Buffer {
 
 type GitRun = { ok: boolean; stdout: string; truncated: boolean };
 
-/** Runs git in the root without locks, prompts or fsmonitor hooks; reads at most `maxBytes` of stdout. */
+/**
+ * GIT_CEILING_DIRECTORIES with the real home directory appended: git never
+ * climbs into home, so a folder whose nearest `.git` git rejects (an empty
+ * folder, say) cannot pick up a dotfiles repository there.
+ */
+function gitCeilingDirectories(): string {
+  let home = homedir();
+  try {
+    home = realpathSync(home);
+  } catch {
+    // An unreadable home is used as given.
+  }
+  const existing = process.env.GIT_CEILING_DIRECTORIES;
+  if (!home) return existing ?? "";
+  return existing ? `${existing}${delimiter}${home}` : home;
+}
+
+/** Runs git in the root without locks, prompts or fsmonitor hooks, never above home; reads at most `maxBytes` of stdout. */
 function runGit(root: string, args: string[], maxBytes = 64 * 1024): Promise<GitRun> {
   return new Promise((resolvePromise) => {
     const chunks: Buffer[] = [];
@@ -683,7 +708,15 @@ function runGit(root: string, args: string[], maxBytes = 64 * 1024): Promise<Git
       child = spawn("git", ["-C", root, "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", ...args], {
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat", PAGER: "cat", LC_ALL: "C" },
+        env: {
+          ...process.env,
+          GIT_CEILING_DIRECTORIES: gitCeilingDirectories(),
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_OPTIONAL_LOCKS: "0",
+          GIT_PAGER: "cat",
+          PAGER: "cat",
+          LC_ALL: "C",
+        },
       });
     } catch {
       finish(false);
@@ -716,18 +749,21 @@ async function gitLine(root: string, args: string[]): Promise<string | null> {
 
 /**
  * workspace.git (section 5.6): HEAD, branch, the origin (else first) remote
- * without userinfo, and whether `git status --porcelain` prints anything.
+ * without userinfo, whether `git status --porcelain` prints anything, and the
+ * root's path inside the repository ("" at its top level; a git_parent root
+ * is a folder inside it).
  * Null when git cannot read the repository. GIT_OPTIONAL_LOCKS=0 keeps
  * `git status` from rewriting .git/index, which would otherwise show up as a
  * change in the next delta.
  */
 export async function readArchiveGit(root: string): Promise<ArchiveGit | null> {
   if (!(await runGit(root, ["rev-parse", "--git-dir"])).ok) return null;
-  const [head, branch, remotes, status] = await Promise.all([
+  const [head, branch, remotes, status, prefix] = await Promise.all([
     gitLine(root, ["rev-parse", "--verify", "-q", "HEAD"]),
     gitLine(root, ["symbolic-ref", "--short", "-q", "HEAD"]),
     gitLine(root, ["remote"]),
     runGit(root, ["status", "--porcelain", "--untracked-files=normal"], 1),
+    runGit(root, ["rev-parse", "--show-prefix"]),
   ]);
   const names = remotes?.split(/\r?\n/).map((name) => name.trim()).filter(Boolean) ?? [];
   const remoteName = names.includes("origin") ? "origin" : names[0];
@@ -737,5 +773,6 @@ export async function readArchiveGit(root: string): Promise<ArchiveGit | null> {
     branch,
     remote: remoteUrl ? stripRemoteUserinfo(remoteUrl) : null,
     dirty: status.ok && status.stdout.length > 0,
+    ...(prefix.ok && !prefix.truncated ? { path: prefix.stdout.replace(/\r?\n$/, "").replace(/\/$/, "") } : {}),
   };
 }

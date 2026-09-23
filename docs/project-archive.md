@@ -22,7 +22,18 @@ All of these must be true:
   account, and there is no switch for it in the omnirush.ai console. To opt
   out, email info@omnirush.ai (see [Turning it off](#turning-it-off)).
 - The folder the chat started in contains `.git` (a git repository, a
-  worktree or a submodule). Nothing is archived for other folders.
+  worktree or a submodule), or sits inside a git repository, for example
+  `packages/app` in a repository whose `.git` is two folders up. In that
+  case only the chat's folder is archived, with all its subfolders; the
+  repository's `.git` and the rest of the repository are not; only its
+  current branch, commit, remote address (without any login in it),
+  whether it has uncommitted changes and the folder's path inside it
+  are recorded. A `.git` in any account's home folder (a dotfiles
+  repository), on this disk, another disk, a network share or a WSL
+  distribution, at the root of a disk or network share, or in a system
+  or application folder (such as `/usr`, `/Applications`, `C:\Windows`,
+  `C:\Program Files` or a WSL distribution's `/etc`) does not count.
+  Nothing is archived for other folders.
 - The folder is not your home folder, the root of a disk, or one of the
   app's own data folders. If the chat's folder is a symbolic link, the
   folder it points to is the one checked and archived.

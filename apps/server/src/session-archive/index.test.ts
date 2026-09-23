@@ -5,6 +5,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
+import { gitMarkerDetector, gitParentDetector } from "./detect.js";
 import { FakeArchiveServer, slowPartTwo } from "./fake-archive-server.js";
 import { ARCHIVE_STATE_DIRECTORY, SessionArchiver, type SessionArchiverOptions } from "./index.js";
 import { cleanupTempDirs, manifestOf, openArchive, tempDir } from "./test-helpers.js";
@@ -87,7 +88,7 @@ describe("SessionArchiver", () => {
       sequence: 0,
       turn: 0,
       parent_archive_id: null,
-      workspace: { label: basename(root), marker: ".git", git: { head, branch: "main", remote: "https://github.com/acme/app.git", dirty: true } },
+      workspace: { label: basename(root), marker: ".git", git: { head, branch: "main", remote: "https://github.com/acme/app.git", dirty: true, path: "" } },
       excluded: { credential: 2, special: 0, app_state: 0, reserved: 0, unreadable: 0, non_utf8: 0 },
     });
     expect("deleted" in manifest).toBe(false);
@@ -148,6 +149,81 @@ describe("SessionArchiver", () => {
     expect(await subject.captureBase("ses_plain_folder", root)).toEqual({ status: "skipped", reason: "not_archivable" });
     expect(await subject.captureDelta("ses_plain_folder", root, 1)).toEqual({ status: "skipped", reason: "no_base" });
     expect(server.calls).toEqual([]);
+  });
+
+  test("a folder inside a repository: the whole folder with every subfolder, nothing from the parent or its .git, git block from the parent", async () => {
+    const server = new FakeArchiveServer();
+    const { root: repo, head } = await project();
+    const root = join(repo, "packages/app");
+    await mkdir(join(root, "src/deep/deeper"), { recursive: true });
+    await writeFile(join(root, "src/main.ts"), "export const main = 1;\n");
+    await writeFile(join(root, "src/deep/deeper/data.bin"), randomBytes(4096));
+    await mkdir(join(root, "node_modules/dep"), { recursive: true });
+    await writeFile(join(root, "node_modules/dep/index.js"), "module.exports = 1;\n");
+    await mkdir(join(root, "dist"));
+    const binary = randomBytes(200 * 1024);
+    await writeFile(join(root, "dist/app.wasm"), binary);
+    await writeFile(join(root, ".env"), "TOKEN=abc\n");
+    await mkdir(join(repo, "packages/other"), { recursive: true });
+    await writeFile(join(repo, "packages/other/sibling.ts"), "export {};\n");
+    // Temp folders sit under /private or /var on macOS, where the parent walk never looks.
+    const detectors = [gitMarkerDetector, (dir: string) => gitParentDetector(dir, { systemDirs: [] })];
+    const subject = archiver(server, await tempDir("state"), { detectors });
+
+    expect(await subject.captureBase("ses_repo_subfolder", root)).toMatchObject({ status: "queued", kind: "base" });
+    await subject.drain();
+    const [first] = server.objects();
+    expect(first!.request).toMatchObject({ kind: "base", marker: ".git" });
+    const members = await openArchive(first!.object!);
+    const names = members.map((member) => member.name);
+    expect(names).toEqual(expect.arrayContaining(["src/main.ts", "src/deep/deeper/data.bin", "node_modules/dep/index.js", "dist/app.wasm"]));
+    expect(names.filter((name) => name.split("/").includes(".git"))).toEqual([]);
+    for (const outside of ["src/app.ts", ".gitignore", "assets/scene.blend", "sibling.ts", "packages/other/sibling.ts", ".env"]) expect(names).not.toContain(outside);
+    expect(names.every((name) => !name.startsWith("/") && !name.split("/").includes(".."))).toBe(true);
+    expect(members.find((member) => member.name === "dist/app.wasm")!.content.equals(binary)).toBe(true);
+    expect(manifestOf(members)).toMatchObject({
+      workspace: { label: "app", marker: ".git", git: { head, branch: "main", remote: "https://github.com/acme/app.git", dirty: true, path: "packages/app" } },
+      excluded: { credential: 1 },
+    });
+
+    await writeFile(join(root, "src/main.ts"), "export const main = 2;\n");
+    await git(repo, "add", "packages/app/src");
+    await git(repo, "commit", "-q", "-m", "turn one");
+    expect((await subject.captureDelta("ses_repo_subfolder", root, 1)).status).toBe("queued");
+    await subject.drain();
+    const deltaMembers = await openArchive(server.objects()[1]!.object!);
+    expect(deltaMembers.slice(1).map((member) => member.name)).toEqual(["src/main.ts"]);
+    expect(manifestOf(deltaMembers)).toMatchObject({ workspace: { git: { head: await git(repo, "rev-parse", "HEAD"), branch: "main", path: "packages/app" } } });
+  });
+
+  test("an empty .git between the folder and a dotfiles repository at home: nothing archived, and git never reports the dotfiles repository", async () => {
+    const server = new FakeArchiveServer();
+    const home = await tempDir("dotfiles-home");
+    await git(home, "init", "-q", "-b", "dotfiles");
+    await writeFile(join(home, ".zshrc"), "export EDITOR=vi\n");
+    await git(home, "add", ".zshrc");
+    await git(home, "commit", "-q", "-m", "dotfiles");
+    await git(home, "remote", "add", "origin", "https://example.com/me/dotfiles.git");
+    await mkdir(join(home, "proj/.git"), { recursive: true });
+    const root = join(home, "proj/packages/app");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "main.ts"), "export {};\n");
+    // Plain git skips the empty .git and climbs to the dotfiles repository.
+    expect(await git(root, "symbolic-ref", "--short", "HEAD")).toBe("dotfiles");
+
+    const detectors = [gitMarkerDetector, (dir: string) => gitParentDetector(dir, { systemDirs: [], homeDir: home })];
+    const subject = archiver(server, await tempDir("state"), { detectors });
+    expect(await subject.captureBase("ses_empty_git", root)).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(server.calls).toEqual([]);
+
+    // The archive's git, with this folder as the OS home, stops below home: no git block for the folder, nor for
+    // proj itself, whose empty .git passes the gate as git_dir.
+    const script = `const { readArchiveGit } = await import(${JSON.stringify(join(import.meta.dir, "manifest.ts"))});
+      console.log(JSON.stringify(await Promise.all(JSON.parse(process.env.ARCHIVE_GIT_ROOTS).map((dir) => readArchiveGit(dir)))));`;
+    const { stdout } = await execFileAsync(process.execPath, ["-e", script], {
+      env: { ...process.env, HOME: home, ARCHIVE_GIT_ROOTS: JSON.stringify([root, join(home, "proj")]) },
+    });
+    expect(JSON.parse(stdout)).toEqual([null, null]);
   });
 
   test("428 at /archives/key: nothing is packed, archiving stays off until a later captureBase succeeds", async () => {
