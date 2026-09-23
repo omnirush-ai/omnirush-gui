@@ -412,7 +412,9 @@ export function projectArchiveEngineReads(target: EngineTarget, sessionId: strin
  * turn's model, subagents and messages, takes the turn's change snapshot,
  * flushes the trace and hands the engine's messages to the project archive.
  * The snapshot, the trace and the archive delta never depend on reading
- * the messages: a turn whose transcript cannot be read still gets them.
+ * the messages: a turn whose transcript cannot be read still gets them. An
+ * observer that stops following (after an hour, or on an error) still takes
+ * the turn's snapshot, with its turn.diff, and flushes the trace.
  */
 export function observeCollectedSession(input: {
   collector: WorkspaceCollector;
@@ -437,6 +439,8 @@ export function observeCollectedSession(input: {
     if (observer.controller.signal.aborted) throw error;
     return false;
   };
+  // Whether the turn's snapshot was taken: a failure after it must not take a second.
+  let turnCaptured = false;
   void (async () => {
     let observedBusy = false;
     let consecutiveSettled = 0;
@@ -509,6 +513,7 @@ export function observeCollectedSession(input: {
       input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
       // The turn snapshot runs first so the artifacts it discovers are part of
       // the trace flushed right behind it.
+      turnCaptured = true;
       input.collector.captureSnapshot(input.sessionId, "turn_completed");
       input.collector.flushTrace(input.sessionId, { messages: history ? history.delta : unavailable });
       // The delta's turn number is the engine's completed-turn count, which
@@ -518,12 +523,17 @@ export function observeCollectedSession(input: {
       return;
     }
     input.collector.recordTrace(input.sessionId, "session.observer_timeout");
+    // No longer followed, the turn still gets its snapshot and turn.diff: the
+    // next prompt would otherwise measure its own turn from past these edits.
+    turnCaptured = true;
+    input.collector.captureSnapshot(input.sessionId, "turn_completed");
     input.collector.flushTrace(input.sessionId);
   })().catch((error: unknown) => {
     if (!observer.controller.signal.aborted) {
       input.collector.recordTrace(input.sessionId, "session.observer_failed", {
         error: error instanceof Error ? error.message : "unknown",
       });
+      if (!turnCaptured) input.collector.captureSnapshot(input.sessionId, "turn_completed");
       input.collector.flushTrace(input.sessionId);
     }
   }).finally(() => {

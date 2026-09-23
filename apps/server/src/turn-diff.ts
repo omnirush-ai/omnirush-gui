@@ -14,8 +14,10 @@ import { join } from "node:path";
 
 /** A file diff is cut at this many bytes (as JSON-encoded in the event). */
 export const MAX_TURN_DIFF_FILE_BYTES = 256 * 1024;
-/** One "turn.diff" event carries at most this many bytes of file entries. */
+/** One "turn.diff" trace event, JSON-encoded with its envelope, is at most this many bytes. */
 export const MAX_TURN_DIFF_EVENT_BYTES = 2 * 1024 * 1024;
+/** A turn's diffs get this much time in all; the files still waiting once it is spent are only counted. */
+export const MAX_TURN_DIFF_MS = 250;
 /** Budget of the base store, least recently used out first. */
 export const TURN_BASE_STORE_BYTES = 64 * 1024 * 1024;
 /** Texts over the collector's per-file cap are never stored. */
@@ -25,9 +27,19 @@ const DIFF_CONTEXT_LINES = 3;
 const MIN_DIFF_ROOM_BYTES = 1024;
 /** Past this edit distance, or this much work, the exact diff gives way to a greedy one. */
 const MAX_EDIT_DISTANCE = 1_500;
-const MAX_DIFF_WORK = 10_000_000;
+/**
+ * Line comparisons one file's diff may make, exact and greedy passes together;
+ * past them the rest of the change is written as removed and added.
+ */
+const MAX_DIFF_COMPARISONS = 5_000_000;
 /** How far ahead the greedy diff looks, on each side, for the lines to line up again. */
 const GREEDY_WINDOW = 32;
+/** The event around its entries, as the trace carries it, every count at its widest. */
+const EVENT_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({
+  at: new Date(0).toISOString(),
+  type: "turn.diff",
+  data: { schema_version: 1, files: [], file_count: Number.MAX_SAFE_INTEGER, omitted_file_count: Number.MAX_SAFE_INTEGER, truncated: false },
+}));
 const BASE_WRITE_CONCURRENCY = 8;
 /** Texts waiting to be written beyond this make writable() wait, so a start snapshot never holds more. */
 const BASE_PENDING_HIGH_WATER = 8 * 1024 * 1024;
@@ -42,10 +54,14 @@ export type TurnDiffFile = {
   /** Workspace-relative, redacted as upload paths are. */
   path: string;
   status: TurnDiffStatus;
-  /** Redacted sha256 of the text before the turn (null for an added or skipped file). */
+  /**
+   * Redacted sha256 of the text before the turn: null for an added or skipped
+   * file, and for a no_base one the collector first saw already changed by the turn.
+   */
   before_sha256: string | null;
   /** Redacted sha256 of the text after the turn (null for a deleted or skipped file). */
   after_sha256: string | null;
+  /** Lines added and removed: exact, or an upper bound where the diff's comparison budget ran out (a correct patch still). */
   additions: number | null;
   deletions: number | null;
   /** Unified diff of the scrubbed texts; null when a side is unavailable (no_base) or the file was skipped. */
@@ -59,12 +75,17 @@ export type TurnDiffEvent = {
   files: TurnDiffFile[];
   /** Files the turn changed, including any the event cap left out of `files`. */
   file_count: number;
+  /** Files left out of `files`: past the event cap, or waiting for a diff once the turn's diff time was spent. */
   omitted_file_count: number;
   /** A diff was cut or a file left out. */
   truncated: boolean;
 };
 
-/** A changed file with its texts resolved: null where that side has no text (added, deleted, skipped, no base). */
+/**
+ * A changed file with its texts resolved: null where that side has no text
+ * (added, deleted, skipped, no base) or where the texts were not read (the
+ * event could take no further diff).
+ */
 export type TurnDiffInput = {
   path: string;
   status: TurnDiffStatus;
@@ -85,56 +106,94 @@ function splitLines(text: string): Lines {
 }
 
 /**
- * Marks the lines outside a longest common subsequence of `a` and `b`
- * (Myers' O(ND) algorithm), or, once the edit distance or the work passes its
- * bound, outside a greedy matching: a correct diff either way, only not
- * always a minimal one.
+ * Integer ids for the lines between the common prefix and suffix, equal
+ * lines sharing one. A line gets its id only once the diff first reaches it,
+ * so a diff that stops at its budget never pays for the lines past that point.
  */
-function markChanges(a: Int32Array, b: Int32Array, removed: Uint8Array, added: Uint8Array, aOffset: number, bOffset: number): void {
-  const n = a.length;
-  const m = b.length;
-  const replaceAll = () => {
-    removed.fill(1, aOffset, aOffset + n);
-    added.fill(1, bOffset, bOffset + m);
-  };
-  if (n === 0 || m === 0) return replaceAll();
+class LineIds {
+  private readonly ids = new Map<string, number>();
+  private readonly a: Int32Array;
+  private readonly b: Int32Array;
+  private doneA = 0;
+  private doneB = 0;
+
+  constructor(private readonly keyA: (index: number) => string, private readonly keyB: (index: number) => string, n: number, m: number) {
+    this.a = new Int32Array(n);
+    this.b = new Int32Array(m);
+  }
+
+  private intern(text: string): number {
+    let id = this.ids.get(text);
+    if (id === undefined) {
+      id = this.ids.size;
+      this.ids.set(text, id);
+    }
+    return id;
+  }
+
+  idA(index: number): number {
+    for (; this.doneA <= index; this.doneA += 1) this.a[this.doneA] = this.intern(this.keyA(this.doneA));
+    return this.a[index]!;
+  }
+
+  idB(index: number): number {
+    for (; this.doneB <= index; this.doneB += 1) this.b[this.doneB] = this.intern(this.keyB(this.doneB));
+    return this.b[index]!;
+  }
+}
+
+/**
+ * Marks the lines outside a longest common subsequence of the `n` lines of
+ * one side and the `m` of the other (Myers' O(ND) algorithm), or, once the
+ * edit distance or the work passes its bound, outside a greedy matching: a
+ * correct diff either way, only not always a minimal one.
+ */
+function markChanges(ids: LineIds, n: number, m: number, removed: Uint8Array, added: Uint8Array, offset: number, budget: number): void {
+  if (n === 0 || m === 0) {
+    removed.fill(1, offset, offset + n);
+    added.fill(1, offset, offset + m);
+    return;
+  }
   const limit = Math.min(n + m, MAX_EDIT_DISTANCE);
-  const offset = limit + 1;
+  const middle = limit + 1;
   const v = new Int32Array(2 * limit + 3);
   const trace: Int32Array[] = [];
   let work = 0;
-  for (let d = 0; d <= limit; d += 1) {
+  // The exact search gets half the budget, the greedy pass (which starts over from the top) the rest.
+  const exactBudget = budget / 2;
+  exact: for (let d = 0; d <= limit; d += 1) {
     // What round d reads of round d-1: v[k-1] and v[k+1] for k in [-d, d].
-    trace.push(v.slice(offset - d - 1, offset + d + 2));
+    trace.push(v.slice(middle - d - 1, middle + d + 2));
     for (let k = -d; k <= d; k += 2) {
-      let x = k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!) ? v[offset + k + 1]! : v[offset + k - 1]! + 1;
+      let x = k === -d || (k !== d && v[middle + k - 1]! < v[middle + k + 1]!) ? v[middle + k + 1]! : v[middle + k - 1]! + 1;
       let y = x - k;
       const start = x;
-      while (x < n && y < m && a[x] === b[y]) {
+      while (x < n && y < m && ids.idA(x) === ids.idB(y)) {
         x += 1;
         y += 1;
       }
       work += 1 + x - start;
-      v[offset + k] = x;
-      if (x >= n && y >= m) return backtrack(trace, n, m, removed, added, aOffset, bOffset);
+      v[middle + k] = x;
+      if (x >= n && y >= m) return backtrack(trace, n, m, removed, added, offset);
+      if (work > exactBudget) break exact;
     }
-    if (work > MAX_DIFF_WORK) break;
   }
-  greedy(a, b, removed, added, aOffset, bOffset);
+  greedy(ids, n, m, removed, added, offset, budget - work);
 }
 
 /**
  * Walks both sides together; at a mismatch, the nearest point within the
  * window where they line up again ends the edit. Linear in the lines times
- * the window squared, whatever the edit distance.
+ * the window squared, whatever the edit distance, and stops once `budget`
+ * comparisons are spent: everything past that point is removed and added.
  */
-function greedy(a: Int32Array, b: Int32Array, removed: Uint8Array, added: Uint8Array, aOffset: number, bOffset: number): void {
-  const n = a.length;
-  const m = b.length;
+function greedy(ids: LineIds, n: number, m: number, removed: Uint8Array, added: Uint8Array, offset: number, budget: number): void {
   let i = 0;
   let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
+  let work = 0;
+  while (i < n && j < m && work < budget) {
+    work += 1;
+    if (ids.idA(i) === ids.idB(j)) {
       i += 1;
       j += 1;
       continue;
@@ -143,24 +202,25 @@ function greedy(a: Int32Array, b: Int32Array, removed: Uint8Array, added: Uint8A
     let skipB = 1;
     search: for (let distance = 1; distance <= 2 * GREEDY_WINDOW; distance += 1) {
       for (let x = Math.max(0, distance - GREEDY_WINDOW); x <= Math.min(distance, GREEDY_WINDOW); x += 1) {
-        if (i + x < n && j + distance - x < m && a[i + x] === b[j + distance - x]) {
+        work += 1;
+        if (i + x < n && j + distance - x < m && ids.idA(i + x) === ids.idB(j + distance - x)) {
           skipA = x;
           skipB = distance - x;
           break search;
         }
       }
     }
-    removed.fill(1, aOffset + i, aOffset + i + skipA);
-    added.fill(1, bOffset + j, bOffset + j + skipB);
+    removed.fill(1, offset + i, offset + i + skipA);
+    added.fill(1, offset + j, offset + j + skipB);
     i += skipA;
     j += skipB;
   }
-  removed.fill(1, aOffset + i, aOffset + n);
-  added.fill(1, bOffset + j, bOffset + m);
+  removed.fill(1, offset + i, offset + n);
+  added.fill(1, offset + j, offset + m);
 }
 
 /** Walks the recorded rounds back from the end, marking the one edit each round made. */
-function backtrack(trace: Int32Array[], n: number, m: number, removed: Uint8Array, added: Uint8Array, aOffset: number, bOffset: number): void {
+function backtrack(trace: Int32Array[], n: number, m: number, removed: Uint8Array, added: Uint8Array, offset: number): void {
   let x = n;
   let y = m;
   for (let d = trace.length - 1; d > 0; d -= 1) {
@@ -170,8 +230,8 @@ function backtrack(trace: Int32Array[], n: number, m: number, removed: Uint8Arra
     const down = k === -d || (k !== d && at(k - 1) < at(k + 1));
     const previousX = at(down ? k + 1 : k - 1);
     const previousY = previousX - (down ? k + 1 : k - 1);
-    if (down) added[bOffset + previousY] = 1;
-    else removed[aOffset + previousX] = 1;
+    if (down) added[offset + previousY] = 1;
+    else removed[offset + previousX] = 1;
     x = previousX;
     y = previousY;
   }
@@ -184,11 +244,12 @@ function lineCost(line: string): number {
 
 /**
  * A unified diff (3 lines of context) of `before` into `after`, a null side
- * standing for /dev/null. The counts cover the whole change; the text stops
- * at the last whole line within `maxBytes` (measured JSON-encoded), marked
- * truncated.
+ * standing for /dev/null. The counts cover the whole change (exact, or an
+ * upper bound once `maxComparisons` cut the line matching short); the text
+ * stops at the last whole line within `maxBytes` (measured JSON-encoded),
+ * marked truncated. The patch always turns `before` into `after`.
  */
-export function unifiedDiff(path: string, before: string | null, after: string | null, maxBytes = MAX_TURN_DIFF_FILE_BYTES): { diff: string; additions: number; deletions: number; truncated: boolean; bytes: number } {
+export function unifiedDiff(path: string, before: string | null, after: string | null, maxBytes = MAX_TURN_DIFF_FILE_BYTES, maxComparisons = MAX_DIFF_COMPARISONS): { diff: string; additions: number; deletions: number; truncated: boolean; bytes: number } {
   const a = splitLines(before ?? "");
   const b = splitLines(after ?? "");
   // A last line without a newline differs from the same line with one.
@@ -199,23 +260,12 @@ export function unifiedDiff(path: string, before: string | null, after: string |
   while (prefix < nA && prefix < nB && key(a, prefix) === key(b, prefix)) prefix += 1;
   let suffix = 0;
   while (suffix < nA - prefix && suffix < nB - prefix && key(a, nA - 1 - suffix) === key(b, nB - 1 - suffix)) suffix += 1;
-  const ids = new Map<string, number>();
-  const idsOf = (side: Lines, count: number) => {
-    const out = new Int32Array(count);
-    for (let index = 0; index < count; index += 1) {
-      const text = key(side, prefix + index);
-      let id = ids.get(text);
-      if (id === undefined) {
-        id = ids.size;
-        ids.set(text, id);
-      }
-      out[index] = id;
-    }
-    return out;
-  };
+  const n = nA - prefix - suffix;
+  const m = nB - prefix - suffix;
+  const ids = new LineIds((index) => key(a, prefix + index), (index) => key(b, prefix + index), n, m);
   const removed = new Uint8Array(nA);
   const added = new Uint8Array(nB);
-  markChanges(idsOf(a, nA - prefix - suffix), idsOf(b, nB - prefix - suffix), removed, added, prefix, prefix);
+  markChanges(ids, n, m, removed, added, prefix, maxComparisons);
 
   type Block = { aStart: number; aEnd: number; bStart: number; bEnd: number };
   const blocks: Block[] = [];
@@ -287,20 +337,29 @@ export function unifiedDiff(path: string, before: string | null, after: string |
 
 /**
  * Assembles one "turn.diff" event under the event cap: each file's diff gets
- * at most MAX_TURN_DIFF_FILE_BYTES and what is left of the event's budget;
- * once the budget is spent, further files are only counted.
+ * at most MAX_TURN_DIFF_FILE_BYTES and what is left of the event's budget.
+ * Once no further diff fits, in the event or in the turn's diff time, a file
+ * that needs one is only counted, while an entry without diff text (skipped,
+ * no_base) still goes in as long as it fits.
  */
 export class TurnDiffBuilder {
   private readonly files: TurnDiffFile[] = [];
-  private used = 0;
+  /** Bytes of the event so far, its envelope reserved from the start. */
+  private used = EVENT_ENVELOPE_BYTES;
   private omitted = 0;
   private truncated = false;
+  /** Time spent diffing so far. */
+  private diffMs = 0;
 
-  constructor(private readonly maxEventBytes = MAX_TURN_DIFF_EVENT_BYTES, private readonly maxFileBytes = MAX_TURN_DIFF_FILE_BYTES) {}
+  constructor(
+    private readonly maxEventBytes = MAX_TURN_DIFF_EVENT_BYTES,
+    private readonly maxFileBytes = MAX_TURN_DIFF_FILE_BYTES,
+    private readonly maxDiffMs = MAX_TURN_DIFF_MS,
+  ) {}
 
-  /** No further diff fits: the caller need not resolve its texts. */
+  /** No further diff fits: the caller need not resolve texts. */
   get full(): boolean {
-    return this.used + MIN_DIFF_ROOM_BYTES > this.maxEventBytes;
+    return this.used + MIN_DIFF_ROOM_BYTES > this.maxEventBytes || this.diffMs >= this.maxDiffMs;
   }
 
   omit(): void {
@@ -309,33 +368,38 @@ export class TurnDiffBuilder {
   }
 
   add(input: TurnDiffInput): void {
+    const diffed = input.status === "added" || input.status === "modified" || input.status === "deleted";
+    if (diffed && this.full) return this.omit();
+    const before = input.status === "added" ? null : input.before;
+    const after = input.status === "deleted" ? null : input.after;
+    const hasText = diffed && (before !== null || after !== null);
     const file: TurnDiffFile = {
       path: input.path,
       status: input.status,
       before_sha256: input.before_sha256,
       after_sha256: input.after_sha256,
-      additions: null,
-      deletions: null,
+      // At their widest while the entry is measured: a count never exceeds its text's length.
+      additions: hasText ? after?.length ?? 0 : null,
+      deletions: hasText ? before?.length ?? 0 : null,
       diff: null,
       truncated: false,
     };
     // The entry without its diff, plus the comma between entries.
     const overhead = Buffer.byteLength(JSON.stringify(file)) + 1;
     const room = this.maxEventBytes - this.used - overhead;
-    const hasText = (input.status === "added" || input.status === "modified" || input.status === "deleted") && (input.before !== null || input.after !== null);
     if (room < (hasText ? MIN_DIFF_ROOM_BYTES : 0)) return this.omit();
-    let diffBytes = 0;
     if (hasText) {
-      const result = unifiedDiff(input.path, input.status === "added" ? null : input.before, input.status === "deleted" ? null : input.after, Math.min(this.maxFileBytes, room));
+      const started = performance.now();
+      const result = unifiedDiff(input.path, before, after, Math.min(this.maxFileBytes, room));
+      this.diffMs += performance.now() - started;
       file.additions = result.additions;
       file.deletions = result.deletions;
       file.diff = result.diff;
       file.truncated = result.truncated;
-      diffBytes = result.bytes;
       if (result.truncated) this.truncated = true;
     }
     this.files.push(file);
-    this.used += overhead + (file.diff === null ? 0 : diffBytes + 2 - 4);
+    this.used += Buffer.byteLength(JSON.stringify(file)) + 1;
   }
 
   finish(): TurnDiffEvent {
@@ -376,6 +440,10 @@ export class TurnBaseStore {
   private saveTail: Promise<void> = Promise.resolve();
   private readonly ready: Promise<void>;
   private waiters: Array<{ limit: number; resolve: () => void }> = [];
+  /** Removals of evicted texts still under way, by digest: a write of the same digest waits for its removal. */
+  private readonly removals = new Map<string, Promise<void>>();
+  /** Writes under way: clear() lets them settle before it removes the directory. */
+  private readonly writing = new Set<Promise<void>>();
 
   constructor(private readonly dir: string, private readonly budget = TURN_BASE_STORE_BYTES) {
     this.ready = this.load(dir);
@@ -416,8 +484,18 @@ export class TurnBaseStore {
       if (this.used <= this.budget) break;
       this.index.delete(sha256);
       this.used -= bytes;
-      void rm(join(this.dir, sha256), { force: true }).catch(() => undefined);
+      const removal: Promise<void> = rm(join(this.dir, sha256), { force: true }).catch(() => undefined).finally(() => {
+        if (this.removals.get(sha256) === removal) this.removals.delete(sha256);
+      });
+      this.removals.set(sha256, removal);
     }
+  }
+
+  /** Whether a text is held under `sha256`, without reading it back. */
+  async has(sha256: string): Promise<boolean> {
+    if (this.pending.has(sha256)) return true;
+    await this.ready;
+    return this.index.has(sha256);
   }
 
   /** Remembers `text` (the scrubbed text whose redacted sha256 is `sha256`, `bytes` long). */
@@ -436,7 +514,8 @@ export class TurnBaseStore {
     while (this.active < BASE_WRITE_CONCURRENCY && this.queue.length > 0) {
       const sha256 = this.queue.shift()!;
       this.active += 1;
-      void this.write(sha256).finally(() => {
+      const writing: Promise<void> = this.write(sha256).finally(() => {
+        this.writing.delete(writing);
         this.active -= 1;
         const held = this.pending.get(sha256);
         if (held) {
@@ -446,6 +525,7 @@ export class TurnBaseStore {
         this.pump();
         this.wake();
       });
+      this.writing.add(writing);
     }
   }
 
@@ -477,6 +557,8 @@ export class TurnBaseStore {
     const dir = this.dir;
     try {
       await this.ready;
+      // An evicted copy of the same digest is removed first, or its late removal would take this one.
+      await this.removals.get(sha256);
       if (!held || generation !== this.generation) return;
       const { text, bytes } = held;
       if (this.index.has(sha256)) return this.touch(sha256, bytes);
@@ -558,15 +640,21 @@ export class TurnBaseStore {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    // Queued texts are never written. One already being written sees the new
+    // generation and removes itself, and settles before the directory goes:
+    // nothing it does can recreate the directory afterwards.
+    this.queue.length = 0;
+    const writing = [...this.writing];
     // After the load, which would otherwise fill the index again.
     await this.ready;
     this.index.clear();
-    this.queue.length = 0;
     this.pending.clear();
     this.pendingBytes = 0;
     this.used = 0;
     this.dirty = false;
     this.wake();
+    await Promise.all(writing);
+    await Promise.all(this.removals.values());
     await this.saveTail;
     await rm(this.dir, { recursive: true, force: true });
   }
