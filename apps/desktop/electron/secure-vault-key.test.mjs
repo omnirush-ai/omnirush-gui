@@ -180,6 +180,27 @@ describe("desktop managed MCP vault key", () => {
       }
     });
 
+    it("keeps the private file until the sealed key reads back, then records the store", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-vault-key-"));
+      const { filePath, fallbackFilePath } = paths(root);
+      try {
+        const recorded = [];
+        const base = { filePath, fallbackFilePath, platform: /** @type {const} */ ("linux"), log: quiet, onKeyringSealed: (backend) => { recorded.push(backend); } };
+        const key = await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: basicText })();
+        const broken = fakeSafeStorage({ decryptStringAsync: async () => { throw new Error("locked"); } });
+        assert.deepEqual(await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: () => broken })(), key);
+        assert.equal(await exists(fallbackFilePath), true);
+        assert.deepEqual(recorded, []);
+
+        assert.deepEqual(await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: () => fakeSafeStorage() })(), key);
+        assert.equal(await exists(fallbackFilePath), false);
+        assert.deepEqual(recorded, ["gnome_libsecret"]);
+        assert.deepEqual(await createDesktopVaultKeyProvider({ ...base, loadSafeStorage: () => fakeSafeStorage() })(), key);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
     for (const platform of /** @type {const} */ (["darwin", "win32"])) {
       it(`${platform}: unavailable secure storage still fails closed and writes no private file`, async () => {
         const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-vault-key-"));

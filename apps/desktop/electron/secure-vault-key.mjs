@@ -3,9 +3,9 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path";
 
 import {
+  discardPlaintextCredentialFile,
   logPlaintextCredentialsOnce,
   readPlaintextCredentialFile,
-  removePlaintextCredentialFile,
   writePlaintextCredentialFile,
 } from "./plaintext-credential-file.mjs";
 
@@ -67,21 +67,47 @@ function decodeKey(encoded) {
  *   loadSafeStorage: () => import("electron").SafeStorage;
  *   platform?: NodeJS.Platform;
  *   fallbackFilePath?: string | null;
+ *   onKeyringSealed?: ((backend: string) => unknown) | null;
  *   log?: (message: string) => void;
  * }} options `fallbackFilePath`: Linux only, where the key is kept,
  * unencrypted at rest with owner-only permissions, while no keyring is usable
- * (see plaintext-credential-file.mjs).
+ * (see plaintext-credential-file.mjs). `onKeyringSealed`: Linux only, told
+ * which safeStorage backend sealed the key, so later launches keep that
+ * --password-store.
  */
 export function createDesktopVaultKeyProvider({
   filePath,
   loadSafeStorage,
   platform = process.platform,
   fallbackFilePath = null,
+  onKeyringSealed = null,
   log = (message) => console.warn(message),
 }) {
   /** @type {Promise<Buffer> | null} */
   let pending = null;
   const fileFallback = platform === "linux" && Boolean(fallbackFilePath);
+
+  /** @param {import("electron").SafeStorage} safeStorage */
+  async function noteKeyringSealed(safeStorage) {
+    if (!fileFallback || !onKeyringSealed) return;
+    try {
+      await onKeyringSealed(safeStorage.getSelectedStorageBackend());
+    } catch {
+      // Best effort: without the record the startup probe still decides.
+    }
+  }
+
+  /**
+   * The key sealed in `filePath`, or null when it is missing or unreadable.
+   * @param {import("electron").SafeStorage} safeStorage
+   */
+  async function readSealedKey(safeStorage) {
+    try {
+      return decodeKey((await safeStorage.decryptStringAsync(await readFile(filePath))).result);
+    } catch {
+      return null;
+    }
+  }
 
   /** The key kept in the private file, or null when there is none or it is invalid. */
   async function readUnprotectedKey() {
@@ -126,13 +152,24 @@ export function createDesktopVaultKeyProvider({
     const unprotected = fileFallback ? await readUnprotectedKey() : null;
     if (unprotected) {
       // A keyring is usable now: seal the key the vault uses with it, keep
-      // any older sealed blob as a backup, then delete the private file.
-      await rename(filePath, `${filePath}.omnirush-backup-${backupTimestamp(new Date())}`).catch((error) => {
-        if (error?.code !== "ENOENT") throw error;
-      });
-      await replaceProtectedKey(filePath, await safeStorage.encryptStringAsync(unprotected.toString("base64")));
-      await removePlaintextCredentialFile(fallbackFilePath);
-      log("[omnirush] Moved the MCP credential vault key from the private file into the system keyring.");
+      // any older, different sealed blob as a backup, and delete the private
+      // file only once the sealed copy reads back as the same key. Until
+      // then the file keeps the vault usable and a later launch retries.
+      const existing = await readSealedKey(safeStorage);
+      if (!existing?.equals(unprotected)) {
+        await rename(filePath, `${filePath}.omnirush-backup-${backupTimestamp(new Date())}`).catch((error) => {
+          if (error?.code !== "ENOENT") throw error;
+        });
+        await replaceProtectedKey(filePath, await safeStorage.encryptStringAsync(unprotected.toString("base64")));
+      }
+      const readBack = existing?.equals(unprotected) ? existing : await readSealedKey(safeStorage);
+      if (readBack?.equals(unprotected)) {
+        await discardPlaintextCredentialFile(fallbackFilePath, PLAINTEXT_KIND, log);
+        await noteKeyringSealed(safeStorage);
+        log("[omnirush] Moved the MCP credential vault key from the private file into the system keyring.");
+      } else {
+        log("[omnirush] The system keyring did not return the MCP credential vault key; keeping it in the private file.");
+      }
       return unprotected;
     }
 
@@ -162,12 +199,14 @@ export function createDesktopVaultKeyProvider({
         if (decrypted.shouldReEncrypt) {
           await replaceProtectedKey(filePath, await safeStorage.encryptStringAsync(decrypted.result));
         }
+        await noteKeyringSealed(safeStorage);
         return key;
       }
     }
 
     const key = randomBytes(KEY_BYTES);
     await replaceProtectedKey(filePath, await safeStorage.encryptStringAsync(key.toString("base64")));
+    await noteKeyringSealed(safeStorage);
     return key;
   }
 

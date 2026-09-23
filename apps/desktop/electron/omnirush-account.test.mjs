@@ -877,6 +877,7 @@ test("a keyring that disappears asks for a new sign-in instead of failing", asyn
   assert.equal(status.connected, false);
   assert.equal(status.reauthorizationRequired, true);
   assert.equal(status.credentialStorage, "file");
+  assert.equal(status.keyringUnavailable, true);
 
   // Signing in again works and lands in the private file.
   const store = createDesktopOmniRushAccountStore(options);
@@ -924,4 +925,63 @@ test("Linux basic_text without a fallback path keeps refusing (no silent plainte
     createDesktopOmniRushAccountStore(options).save(FAKE_CREDENTIALS),
     /Secure desktop credential storage is unavailable/,
   );
+});
+
+test("migration keeps the private file until the keyring copy reads back, and the user stays signed in", async () => {
+  const { options: plain } = await fallbackOptions(linuxStorage("basic_text"));
+  await createDesktopOmniRushAccountStore(plain).save(FAKE_CREDENTIALS);
+
+  // A keyring that encrypts but cannot return what it sealed (locked, half-started).
+  const broken = { ...linuxStorage("gnome_libsecret"), decryptStringAsync: async () => { throw new Error("locked"); } };
+  const recorded = [];
+  const { options, logs } = await fallbackOptions(broken, { onKeyringSealed: (backend) => { recorded.push(backend); } });
+  Object.assign(options, { filePath: plain.filePath, fallbackFilePath: plain.fallbackFilePath });
+  const status = await createDesktopOmniRushAccountStore(options).status();
+  assert.equal(status.connected, true);
+  assert.equal(await exists(options.fallbackFilePath), true);
+  assert.equal(JSON.parse(await readFile(options.fallbackFilePath, "utf8")).credentials.refreshToken, "fake-refresh");
+  assert.deepEqual(recorded, []);
+  assert.equal(logs.some((line) => /did not return/.test(line)), true);
+  assert.equal(logs.some((line) => line.includes("fake-access") || line.includes("fake-refresh")), false);
+
+  // A rotation saved while the keyring cannot read back also stays in the file.
+  const store = createDesktopOmniRushAccountStore(options);
+  await store.save({ ...FAKE_CREDENTIALS, refreshToken: "fake-refresh-2" });
+  assert.equal(JSON.parse(await readFile(options.fallbackFilePath, "utf8")).credentials.refreshToken, "fake-refresh-2");
+
+  // Once the keyring works, the copy is verified, the file deleted and the store recorded.
+  const { options: working } = await fallbackOptions(linuxStorage("gnome_libsecret"), { onKeyringSealed: (backend) => { recorded.push(backend); } });
+  Object.assign(working, { filePath: plain.filePath, fallbackFilePath: plain.fallbackFilePath });
+  assert.equal((await createDesktopOmniRushAccountStore(working).load())?.refreshToken, "fake-refresh-2");
+  assert.equal(await exists(working.fallbackFilePath), false);
+  assert.deepEqual(recorded, ["gnome_libsecret"]);
+});
+
+test("a leftover private file older than a readable keyring copy never replaces it", async () => {
+  const { options } = await fallbackOptions(linuxStorage("gnome_libsecret"));
+  const { options: plain } = await fallbackOptions(linuxStorage("basic_text"));
+  Object.assign(plain, { filePath: options.filePath, fallbackFilePath: options.fallbackFilePath });
+  await createDesktopOmniRushAccountStore(plain).save(FAKE_CREDENTIALS);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  // The keyring copy holds a newer rotation (its delete of the file failed).
+  await writeFile(options.filePath, `sealed:${JSON.stringify({ ...FAKE_CREDENTIALS, refreshToken: "fake-refresh-newer" })}`);
+  assert.equal((await createDesktopOmniRushAccountStore(options).load())?.refreshToken, "fake-refresh-newer");
+  assert.equal(await exists(options.fallbackFilePath), false);
+});
+
+test("a session the server ended in file mode is not reported as a missing keyring", async () => {
+  const { options } = await fallbackOptions(linuxStorage("basic_text"), {
+    fetchImpl: async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith("/device/me") || pathname.endsWith("/device/refresh")) return new Response(null, { status: 401 });
+      if (pathname.endsWith("/device/logout")) return new Response(null, { status: 204 });
+      throw new Error(`Unexpected request ${pathname}`);
+    },
+    sleep: async () => undefined,
+  });
+  await createDesktopOmniRushAccountStore(options).save(FAKE_CREDENTIALS);
+  const status = await createDesktopOmniRushAccountStore(options).status();
+  assert.equal(status.connected, false);
+  assert.equal(status.reauthorizationRequired, true);
+  assert.equal(status.keyringUnavailable, undefined);
 });

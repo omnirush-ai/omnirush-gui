@@ -149,6 +149,12 @@ export type OmniRushAccountStatus = {
    * owner-only file on this computer. Absent when a keyring protects it.
    */
   credentialStorage?: "file";
+  /**
+   * Linux: a sign-in sealed by a system keyring is on disk but no keyring is
+   * usable now, so the user is asked to sign in again. Distinct from a
+   * session the server ended (reauthorizationRequired alone).
+   */
+  keyringUnavailable?: boolean;
 };
 
 export type EngineDoctorResult = {

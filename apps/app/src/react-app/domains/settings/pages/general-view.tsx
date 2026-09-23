@@ -252,7 +252,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                     : "omnirush.ai models are ready on this Mac."
                   : account.gatewayConfigured
                     ? account.reauthorizationRequired
-                      ? account.credentialStorage === "file"
+                      ? account.keyringUnavailable
                         ? "Your system keyring is not available right now. Sign in again to continue."
                         : "Your session expired. Sign in again to continue."
                       : "Sign in in your browser, then return here."

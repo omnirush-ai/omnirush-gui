@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 // Linux fallback for systems without a usable keyring (Electron's safeStorage
@@ -37,20 +38,25 @@ export async function usableSafeStorage(loadSafeStorage, platform) {
 }
 
 /**
- * The file's text, or null when it does not exist. Tightens permissions that
- * were loosened since the file was written.
+ * The file's text, or null when it does not exist. Never follows a symlink
+ * (O_NOFOLLOW), and tightens permissions on the opened file itself when they
+ * were loosened since it was written.
  * @param {string} filePath
  */
 export async function readPlaintextCredentialFile(filePath) {
-  let contents;
+  let handle;
   try {
-    contents = await readFile(filePath, "utf8");
+    handle = await open(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
-  await chmod(filePath, 0o600).catch(() => undefined);
-  return contents;
+  try {
+    await handle.chmod(0o600).catch(() => undefined);
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 /**
@@ -76,4 +82,22 @@ export async function writePlaintextCredentialFile(filePath, contents) {
 /** @param {string} filePath */
 export async function removePlaintextCredentialFile(filePath) {
   await rm(filePath, { force: true });
+}
+
+/**
+ * Remove the private file once its contents are safely elsewhere. A failure
+ * is logged, not thrown: the caller's newer copy is already in place, and a
+ * stale file only means the next load migrates it again.
+ * @param {string} filePath
+ * @param {string} kind
+ * @param {(message: string) => void} log
+ */
+export async function discardPlaintextCredentialFile(filePath, kind, log) {
+  try {
+    await removePlaintextCredentialFile(filePath);
+    return true;
+  } catch (error) {
+    log(`[omnirush] Could not delete the private file for the ${kind} (${error?.code ?? "error"}); it will be retried.`);
+    return false;
+  }
 }
