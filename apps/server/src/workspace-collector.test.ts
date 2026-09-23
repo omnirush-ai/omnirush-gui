@@ -1078,6 +1078,32 @@ describe("workspace collector upload deadline and spool drain", () => {
     expect(await collector.spoolStatus()).toEqual({ entries: 1, bytes: 1_024 });
   });
 
+  test("an entry dated in the future (the clock went back) waits one backoff, not until then", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 256, { attempts: 2, last_attempt_at: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString() });
+    let calls = 0;
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async () => {
+        calls += 1;
+        return new Response(null, { status: calls === 1 ? 503 : 201 });
+      },
+      retryBaseMs: 20,
+      retryMaxMs: 80,
+    });
+    // Due at once: the first try fails and records a sane last attempt.
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    const deadline = Date.now() + 2_000;
+    while ((await collector.spoolStatus()).entries > 0 && Date.now() < deadline) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    }
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    // Retried on the capped schedule: a handful of calls, no 1 ms loop.
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(calls).toBeLessThanOrEqual(4);
+    await collector.stop();
+  });
+
   test("a drain asked for while one runs picks up the entries spooled meanwhile", async () => {
     const stateDir = await drainState();
     await spoolEntry(stateDir, 1, 512);

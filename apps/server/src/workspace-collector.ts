@@ -4726,7 +4726,10 @@ export class WorkspaceCollector {
 
   private scheduleRetry(delayMs?: number): void {
     if (!this.spoolDir || this.stopped || this.retryTimer) return;
-    const delay = delayMs ?? this.jitteredBackoffMs();
+    // Never past the retry cap: a delay computed from a spool entry dated in
+    // the future (the clock went back) must not park the spool for days, or
+    // overflow setTimeout into a 1 ms loop.
+    const delay = Math.min(this.retryMaxMs, Math.max(0, delayMs ?? this.jitteredBackoffMs()));
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.drainSpool().catch(() => undefined);
@@ -4750,7 +4753,10 @@ export class WorkspaceCollector {
    */
   private spoolEntryDueAt(entry: SpoolMeta): number {
     const last = entry.last_attempt_at ? Date.parse(entry.last_attempt_at) : Number.NaN;
-    return Number.isFinite(last) ? last + this.backoffMs(entry.attempts - 1) : 0;
+    if (!Number.isFinite(last)) return 0;
+    // A last attempt after now means the clock went back: due at once, and
+    // the attempt then records a sane time.
+    return last > Date.now() ? 0 : last + this.backoffMs(entry.attempts - 1);
   }
 
   /**
