@@ -11,6 +11,7 @@ import {
   Clock3,
   ChevronRight,
   Columns2,
+  Copy,
   FolderPlus,
   LayoutGrid,
   MoreHorizontal,
@@ -158,6 +159,7 @@ import {
   sidebarRowPaddingInlineStart,
 } from "./sidebar-lanes";
 import { WorkspaceAvatarPicker } from "./workspace-avatar-picker";
+import { copySessionId } from "./copy-session-id";
 import { isSameWorkbenchSession, useWorkbenchStore, workbenchSessionKey } from "../chat/workbench-store";
 import { SidebarDestination } from "./sidebar-destination";
 import { SessionTitle } from "./session-title";
@@ -478,6 +480,10 @@ function SessionMenuContent({
           {t("workspace_list.rename_session")}
         </ContextMenuItem>
       ) : null}
+      <ContextMenuItem data-session-menu-copy-id onClick={() => void copySessionId(sessionId)}>
+        <Copy className="size-4" />
+        {t("session_management.copy_session_id")}
+      </ContextMenuItem>
       <ContextMenuSub>
         <ContextMenuSubTrigger>
           <Tag className="mr-2 size-4" />

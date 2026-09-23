@@ -21,6 +21,7 @@ import { createClient, isPromptAdmissionUnknown, unwrap } from "@/app/lib/openco
 import { createClientV2, isOpencodeV2BaseUrl, V2_SESSION_ARCHIVE_UNAVAILABLE } from "@/app/lib/opencode-v2-adapter";
 import { abortSessionSafe, forkSession, listCommands, revertSession, setSessionArchived, shellInSession, unrevertSession } from "@/app/lib/opencode-session";
 import { getNativeSessionMessages } from "@/app/lib/opencode-session-native";
+import { copySessionId } from "@/react-app/domains/session/sidebar/copy-session-id";
 import { useSessionManagementStore as sessionManagementStore } from "@/react-app/domains/session/sidebar/session-management-store";
 import { getSessionDescendantIds } from "@/react-app/domains/session/sidebar/utils";
 import {
@@ -187,7 +188,7 @@ import {
 import { useShareWorkspaceState } from "@/react-app/domains/workspace/share-workspace-state";
 import { ModelPickerModal, MODEL_PICKER_UNAVAILABLE_SUBTITLE } from "@/react-app/domains/session/modals/model-picker-modal";
 import { CommandPalette, type PaletteItem, type SessionGroupOption } from "./command-palette";
-import { buildCommandPaletteSessions } from "./command-palette-sessions";
+import { buildCommandPaletteSessions, buildCopySessionIdPaletteItem } from "./command-palette-sessions";
 import { requestRenameSession } from "./session-actions-bus";
 import type { ThinkingModeShortcutDirection } from "./thinking-mode-shortcut";
 import { SessionSearchDialog } from "./session-search-dialog";
@@ -2845,6 +2846,19 @@ export function SessionRoute() {
     },
   }), [developerMode]);
 
+  // A focused side chat is the conversation people are looking at, so its ID is
+  // the one to copy and report. It only shows beside the route's own session.
+  const focusedSideChat = useWorkbenchStore((state) => (
+    state.focusedPane === "secondary"
+    && state.primary?.workspaceId === selectedWorkspaceId
+    && state.primary.sessionId === selectedSessionId
+      ? state.secondary
+      : null
+  ));
+  const focusedSession = useMemo(() => (
+    focusedSideChat ?? (selectedSessionId ? { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId } : null)
+  ), [focusedSideChat, selectedSessionId, selectedWorkspaceId]);
+
   const buildCommandDiagnosticsBundle = useCallback(() => buildDiagnosticsBundleJson({
     anyActiveRuns: activeReloadBlockingSessions.length > 0,
     canReloadWorkspace: reloadCoordinator.canReloadWorkspaceEngine,
@@ -2854,16 +2868,25 @@ export function SessionRoute() {
     omnirushServerStatus: client ? "connected" : "disconnected",
     omnirushServerUrl: baseUrl,
     runtimeWorkspaceId: selectedWorkspaceEndpoint?.workspaceId ?? null,
+    focusedSession,
+    selectedWorkspaceId,
   }), [
     activeReloadBlockingSessions.length,
     baseUrl,
     canCreateTask,
     client,
     developerMode,
+    focusedSession,
     omnirushServerHostInfoState,
     reloadCoordinator.canReloadWorkspaceEngine,
     selectedWorkspaceEndpoint?.workspaceId,
+    selectedWorkspaceId,
   ]);
+
+  const copySessionIdPaletteItem = useMemo(() => buildCopySessionIdPaletteItem(focusedSession?.sessionId, (sessionId) => {
+    setCommandPaletteOpen(false);
+    void copySessionId(sessionId);
+  }), [focusedSession?.sessionId]);
 
   const diagnosticsCopyPaletteItem = useMemo<PaletteItem>(() => ({
     id: "diagnostics.copy",
@@ -3771,7 +3794,7 @@ export function SessionRoute() {
       currentSessionForGroupMove={currentSessionForGroupMove}
       currentSessionGroupId={currentSessionGroupId}
       onMoveCurrentSessionToGroup={handleMoveCurrentSessionToGroup}
-      extraItems={[...currentSessionActionPaletteItems, ...(sessionFindPaletteItem ? [sessionFindPaletteItem] : []), sessionSearchPaletteItem, ...terminalPaletteItems, ...(checkDesktopRestriction({ restriction: "allowControlSettings" }) ? [] : [developerModePaletteItem]), diagnosticsCopyPaletteItem, diagnosticsExportPaletteItem, nextSessionTabPaletteItem, prevSessionTabPaletteItem, reloadConfigPaletteItem]}
+      extraItems={[...currentSessionActionPaletteItems, ...(sessionFindPaletteItem ? [sessionFindPaletteItem] : []), sessionSearchPaletteItem, ...terminalPaletteItems, ...(checkDesktopRestriction({ restriction: "allowControlSettings" }) ? [] : [developerModePaletteItem]), ...(copySessionIdPaletteItem ? [copySessionIdPaletteItem] : []), diagnosticsCopyPaletteItem, diagnosticsExportPaletteItem, nextSessionTabPaletteItem, prevSessionTabPaletteItem, reloadConfigPaletteItem]}
       listAgents={listAgents}
       selectedAgent={selectedAgent}
       onSelectAgent={setSelectedAgent}
