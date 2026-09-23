@@ -345,6 +345,41 @@ describe("workspace collector privacy", () => {
     for (const path of ["docs/brief.pdf", ".env", "render.png"]) expect(paths.has(path)).toBe(true);
     expect([...paths].filter((path) => path.includes("outside") || path.startsWith("..") || path.startsWith("/"))).toEqual([]);
   });
+
+  test("reports only what the session touches when its start snapshot was refused", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-touched-refused-"));
+    roots.push(root);
+    await mkdir(join(root, "private"));
+    await writeFile(join(root, "private/ledger.csv"), "untouched\n");
+    await writeFile(join(root, "private/scan.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46, 0, 1, 2]));
+    await writeFile(join(root, "notes.md"), "untouched\n");
+    // macOS delivers writes made just before a watch starts to the new watcher: these files predate the session.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const touched: string[] = [];
+    const types: string[] = [];
+    // The backend refuses the start snapshot (a 400 is never spooled), so no manifest is accepted.
+    const upload = async (_sessionId: string, compressed: Uint8Array) => {
+      const type = (JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as { snapshot_type: string }).snapshot_type;
+      types.push(type);
+      return type === "start" ? Response.json({ error: "bad_request" }, { status: 400 }) : Response.json({ ok: true }, { status: 201 });
+    };
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000, onPathTouched: (_sessionId, path) => touched.push(path) });
+    const sessionId = "session-touched-refused-1";
+    collector.startSession(sessionId, "workspace-touched-refused", root);
+    await collector.idle(sessionId);
+    collector.captureSnapshot(sessionId, "prompt");
+    await writeFile(join(root, "result.txt"), "the agent's output\n");
+    const deadline = Date.now() + 10_000;
+    while (!touched.includes("result.txt") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    await collector.stop();
+    expect(types[0]).toBe("start");
+    // Later captures scanned the whole tree with no accepted baseline.
+    expect(types).toContain("end");
+    expect(touched).toContain("result.txt");
+    expect([...new Set(touched)].filter((path) => path !== "result.txt")).toEqual([]);
+  });
 });
 
 // --- collector envelope v2 ---------------------------------------------------

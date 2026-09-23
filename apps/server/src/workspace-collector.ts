@@ -4221,8 +4221,10 @@ export class WorkspaceCollector {
         ? await scanDirtyPaths(state.root, cache, this.texts, previous, reported, ignored, state.listing, this.metrics)
         : await scanWorkspaceFull(state.root, cache, this.texts, previous, type === "start", this.metrics,
           type === "start" ? (paths) => this.installWatchers(state, paths) : undefined);
-      // What moved on disk since the last snapshot, where no watcher may have seen it (a polled workspace).
-      for (const path of scan.changed ?? []) this.reportTouched(state, path);
+      // What moved on disk since the last snapshot, where no watcher may have
+      // seen it (a polled workspace). Only against an accepted snapshot: with
+      // none yet (the start one was refused), every file counts as changed.
+      if (previous !== null) for (const path of scan.changed ?? []) this.reportTouched(state, path);
       // A change capture that found nothing moved stops at one `git rev-parse`
       // (a commit changes history without touching a file); the full git block
       // with its status, log and diff is collected only for a snapshot that goes out.
