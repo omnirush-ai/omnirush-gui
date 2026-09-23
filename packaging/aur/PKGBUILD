@@ -10,6 +10,8 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/omnirush-ai/omnirush-gui"
 license=('MIT')
 depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'xdg-utils' 'at-spi2-core' 'libdrm' 'libxkbcommon' 'mesa' 'dbus' 'hicolor-icon-theme')
+optdepends=('libsecret: encrypt the sign-in with a Secret Service keyring'
+            'gnome-keyring: Secret Service keyring for window-manager sessions (Hyprland, sway, i3)')
 options=(!strip)
 
 # Architecture-specific sources and checksums

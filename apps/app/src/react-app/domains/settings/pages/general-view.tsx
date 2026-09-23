@@ -252,10 +252,17 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                     : "omnirush.ai models are ready on this Mac."
                   : account.gatewayConfigured
                     ? account.reauthorizationRequired
-                      ? "Your session expired. Sign in again to continue."
+                      ? account.keyringUnavailable
+                        ? "Your system keyring is not available right now. Sign in again to continue."
+                        : "Your session expired. Sign in again to continue."
                       : "Sign in in your browser, then return here."
                     : "The omnirush.ai account service has not been configured for this build.")}
               </div>
+              {account.connected && account.credentialStorage === "file" ? (
+                <div className="mt-0.5 text-[11px] text-dls-secondary" data-testid="account-credential-storage">
+                  Signed in. Your system has no keyring, so the sign-in is kept in a private file on this computer.
+                </div>
+              ) : null}
               {account.connected && account.usage?.tokenLimit ? (
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-dls-hover" aria-label={`${account.usage.usedTokens} tokens used today`}>
                   <div

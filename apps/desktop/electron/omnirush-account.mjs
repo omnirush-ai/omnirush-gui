@@ -1,7 +1,16 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+
+import {
+  discardPlaintextCredentialFile,
+  logPlaintextCredentialsOnce,
+  readPlaintextCredentialFile,
+  removePlaintextCredentialFile,
+  usableSafeStorage,
+  writePlaintextCredentialFile,
+} from "./plaintext-credential-file.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +39,14 @@ const MAX_KEYCHAIN_DELETES = 8;
  * the server before this store's, while its persist is still on its way.
  */
 const ROTATION_GRACE_MS = 250;
+const PLAINTEXT_KIND = "omnirush.ai sign-in";
+const PLAINTEXT_NOTE = "Unencrypted at rest: this system has no keyring. Owner-only file; signing out deletes it.";
+
+function sameCredentials(left, right) {
+  return left.gatewayUrl === right.gatewayUrl
+    && left.accessToken === right.accessToken
+    && left.refreshToken === right.refreshToken;
+}
 
 function normalizeCredential(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -214,8 +231,18 @@ export function createDesktopOmniRushAccountStore({
   sleep = (milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
   // Only the default production profile may use the legacy keychain entries (legacyKeychainAllowed).
   legacyKeychain = false,
+  // Linux only: where the sign-in is kept, unencrypted at rest with owner-only
+  // permissions, while no keyring is usable (see plaintext-credential-file.mjs).
+  fallbackFilePath = null,
+  // Linux only: told which safeStorage backend sealed the sign-in once it is
+  // written and read back, so later launches keep that --password-store.
+  onKeyringSealed = null,
+  log = (message) => console.warn(message),
 }) {
   let cached = null;
+  const fileFallback = platform === "linux" && Boolean(fallbackFilePath);
+  let keyringLossLogged = false;
+  let sealedBackendRecorded = null;
   // The embedded broker shares this store (persist/latest/invalidate) and
   // rotates the same device session. Every writer is tracked so a reader,
   // the broker's latest() in particular, observes a settled store rather
@@ -247,21 +274,79 @@ export function createDesktopOmniRushAccountStore({
   }
 
   async function safeStorage() {
-    const storage = loadSafeStorage();
-    if (!storage || !(await storage.isAsyncEncryptionAvailable())) return null;
-    if (platform === "linux" && storage.getSelectedStorageBackend() === "basic_text") return null;
-    return storage;
+    return usableSafeStorage(loadSafeStorage, platform);
+  }
+
+  async function loadFallbackFile() {
+    try {
+      const contents = await readPlaintextCredentialFile(fallbackFilePath);
+      return contents ? validCredentials(JSON.parse(contents)?.credentials) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Tell main which backend sealed the sign-in (once per backend per process). */
+  async function noteKeyringSealed(storage) {
+    if (!fileFallback || !onKeyringSealed) return;
+    const backend = storage.getSelectedStorageBackend();
+    if (sealedBackendRecorded === backend) return;
+    try {
+      await onKeyringSealed(backend);
+      sealedBackendRecorded = backend;
+    } catch {
+      // Best effort: without the record the startup probe still decides.
+    }
+  }
+
+  async function modifiedAt(file) {
+    try {
+      return (await stat(file)).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+
+  async function decryptKeyringCopy(storage) {
+    try {
+      const decrypted = await storage.decryptStringAsync(await readFile(filePath));
+      const credentials = validCredentials(JSON.parse(decrypted.result));
+      return credentials ? { credentials, shouldReEncrypt: Boolean(decrypted.shouldReEncrypt) } : null;
+    } catch {
+      return null;
+    }
   }
 
   async function loadFile() {
     try {
       const storage = await safeStorage();
-      if (!storage) return null;
-      const encrypted = await readFile(filePath);
-      const decrypted = await storage.decryptStringAsync(encrypted);
-      const credentials = validCredentials(JSON.parse(decrypted.result));
-      if (credentials && decrypted.shouldReEncrypt) await enqueueWrite(credentials);
-      return credentials;
+      if (!storage) {
+        if (!fileFallback) return null;
+        const credentials = await loadFallbackFile();
+        if (credentials) logPlaintextCredentialsOnce(PLAINTEXT_KIND, log);
+        return credentials;
+      }
+      const sealed = await decryptKeyringCopy(storage);
+      const unprotected = fileFallback ? await loadFallbackFile() : null;
+      // The private file is written only while no keyring is usable, so it is
+      // normally the newest copy; a readable keyring copy written after it
+      // wins (the file is then a leftover whose delete failed).
+      if (unprotected && !(sealed && await modifiedAt(filePath) > await modifiedAt(fallbackFilePath))) {
+        // A keyring is usable now: move the sign-in out of the private file.
+        // writeCredentials deletes the file only once the encrypted copy has
+        // been written and read back; otherwise the file stays and keeps the
+        // user signed in, and a later load retries.
+        await enqueueWrite(unprotected).then(
+          () => log("[omnirush] Moved the omnirush.ai sign-in from the private file into the system keyring."),
+          () => undefined,
+        );
+        return unprotected;
+      }
+      if (!sealed) return null;
+      if (unprotected) await discardPlaintextCredentialFile(fallbackFilePath, PLAINTEXT_KIND, log);
+      await noteKeyringSealed(storage);
+      if (sealed.shouldReEncrypt) await enqueueWrite(sealed.credentials);
+      return sealed.credentials;
     } catch {
       return null;
     }
@@ -339,15 +424,42 @@ export function createDesktopOmniRushAccountStore({
 
   async function writeCredentials(normalized) {
     const storage = await safeStorage();
-    if (!storage) throw new Error("Secure desktop credential storage is unavailable");
-    const encrypted = await storage.encryptStringAsync(JSON.stringify(normalized));
-    await mkdir(path.dirname(filePath), { recursive: true });
-    const temporary = `${filePath}.${process.pid}.tmp`;
-    await writeFile(temporary, encrypted, { mode: 0o600 });
-    await rename(temporary, filePath).catch(async (error) => {
-      await rm(temporary, { force: true }).catch(() => undefined);
-      throw error;
-    });
+    if (!storage) {
+      if (!fileFallback) throw new Error("Secure desktop credential storage is unavailable");
+      // Unencrypted at rest, protected only by owner-only permissions: Linux
+      // without a usable keyring. The next load with a keyring migrates it.
+      await writePlaintextCredentialFile(
+        fallbackFilePath,
+        `${JSON.stringify({ note: PLAINTEXT_NOTE, credentials: normalized }, null, 2)}\n`,
+      );
+      logPlaintextCredentialsOnce(PLAINTEXT_KIND, log);
+    } else {
+      const encrypted = await storage.encryptStringAsync(JSON.stringify(normalized));
+      await mkdir(path.dirname(filePath), { recursive: true });
+      const temporary = `${filePath}.${process.pid}.tmp`;
+      await writeFile(temporary, encrypted, { mode: 0o600 });
+      await rename(temporary, filePath).catch(async (error) => {
+        await rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      });
+      if (fileFallback) {
+        // Linux: only trust the keyring copy once it reads back. Until then
+        // the private file keeps the sign-in (a keyring that encrypts but
+        // cannot decrypt, a locked or half-started Secret Service).
+        const readBack = await decryptKeyringCopy(storage);
+        if (readBack && sameCredentials(readBack.credentials, normalized)) {
+          await discardPlaintextCredentialFile(fallbackFilePath, PLAINTEXT_KIND, log);
+          await noteKeyringSealed(storage);
+        } else {
+          log("[omnirush] The system keyring did not return the saved omnirush.ai sign-in; keeping it in the private file.");
+          await writePlaintextCredentialFile(
+            fallbackFilePath,
+            `${JSON.stringify({ note: PLAINTEXT_NOTE, credentials: normalized }, null, 2)}\n`,
+          );
+          logPlaintextCredentialsOnce(PLAINTEXT_KIND, log);
+        }
+      }
+    }
     await rm(signedOutPath, { force: true });
     cached = normalized;
   }
@@ -520,6 +632,24 @@ export function createDesktopOmniRushAccountStore({
     throw new Error("Account link expired before it was approved");
   }
 
+  /**
+   * Whether a sign-in encrypted with a keyring is on disk while no keyring is
+   * usable (the keyring was removed or is not running): the user is asked to
+   * sign in again rather than shown as silently signed out.
+   */
+  async function keyringCopyUnreadable() {
+    try {
+      await readFile(filePath);
+    } catch {
+      return false;
+    }
+    if (!keyringLossLogged) {
+      keyringLossLogged = true;
+      log("[omnirush] The saved sign-in is encrypted with a system keyring that is not usable now; asking to sign in again.");
+    }
+    return true;
+  }
+
   /** @returns {Promise<AccountStatus>} */
   async function status() {
     const credentials = await load();
@@ -529,13 +659,22 @@ export function createDesktopOmniRushAccountStore({
     // signed-out app reports the server the next sign-in will use.
     const gatewayUrl = credentials?.gatewayUrl ?? configured ?? null;
     const server = { gatewayUrl, gatewayHost: accountServerLabel(gatewayUrl) };
-    if (!credentials) return { connected: false, gatewayConfigured, ...server };
+    // Linux without a usable keyring: the sign-in is (or will be) kept in the private file.
+    const fileBacked = fileFallback && !(await safeStorage());
+    const storage = fileBacked ? { credentialStorage: /** @type {const} */ ("file") } : {};
+    if (!credentials) {
+      if (fileBacked && await keyringCopyUnreadable()) {
+        return { connected: false, gatewayConfigured, ...server, ...storage, reauthorizationRequired: true, keyringUnavailable: true };
+      }
+      return { connected: false, gatewayConfigured, ...server, ...storage };
+    }
     try {
       const profile = await fetchProfile(credentials);
       return {
         connected: true,
         gatewayConfigured,
         ...server,
+        ...storage,
         email: profile?.email ?? null,
         displayName: profile?.displayName ?? null,
         accountStatus: profile?.status ?? null,
@@ -548,6 +687,7 @@ export function createDesktopOmniRushAccountStore({
           connected: false,
           gatewayConfigured,
           ...server,
+          ...storage,
           reauthorizationRequired: true,
           email: null,
           displayName: null,
@@ -561,6 +701,7 @@ export function createDesktopOmniRushAccountStore({
         connected: true,
         gatewayConfigured,
         ...server,
+        ...storage,
         email: null,
         displayName: null,
         accountStatus: null,
@@ -602,6 +743,7 @@ export function createDesktopOmniRushAccountStore({
       await mkdir(path.dirname(signedOutPath), { recursive: true });
       await writeFile(signedOutPath, "signed-out\n", { mode: 0o600 });
       await rm(filePath, { force: true });
+      if (fileFallback) await removePlaintextCredentialFile(fallbackFilePath);
       if (revokeRemote) await deleteMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity);
       return outcome;
     } finally {
