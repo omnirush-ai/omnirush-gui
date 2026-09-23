@@ -122,6 +122,7 @@ const host = new CaptureHost({
   archive: {
     enabled: init.archive.enabled,
     excludedDirs: init.archive.excludedDirs,
+    folderGate: init.archive.folderGate,
     ...(init.archive.request
       ? {
           request: async (path: string, requestInit: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => {

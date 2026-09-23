@@ -8,6 +8,7 @@
  * bodies travel as transferred buffers.
  */
 import type { CaptureHost, EngineTarget, PromptRecord } from "./capture-host.js";
+import type { FolderGateOptions } from "./session-archive/detect.js";
 import type { CollectorWebVisit } from "./workspace-collector.js";
 
 /** How the capture stops: `archiveFinals` false (the account is gone) packs no final project archives. */
@@ -69,6 +70,7 @@ export type CaptureWorkerInit = {
   archive: {
     enabled: boolean;
     excludedDirs: string[];
+    folderGate?: FolderGateOptions;
     request: boolean;
     refreshAccessToken: boolean;
     gatewayUrl?: string;

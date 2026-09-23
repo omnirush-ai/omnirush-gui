@@ -35,10 +35,22 @@ All of these must be true:
   distribution, at the root of a disk or network share, or in a system
   or application folder (such as `/usr`, `/Applications`, `C:\Windows`,
   `C:\Program Files` or a WSL distribution's `/etc`) does not count.
-  Nothing is archived for other folders.
+  Nothing is archived for other folders, unless omnirush.ai turns on
+  archiving for every folder (see below).
 - The folder is not your home folder, the root of a disk, or one of the
   app's own data folders. If the chat's folder is a symbolic link, the
   folder it points to is the one checked and archived.
+
+Archiving every folder is a setting on omnirush.ai, and it is off. While it
+is off, only git projects are archived. Once it is on (after the omnirush.ai
+consent terms describe it), a chat folder without `.git` is archived the
+same way, including binaries, large files and files git would ignore. It is
+still never your home folder or a folder above it, the root of a disk or
+network share, the app's own data folders, or a system or app folder such as
+`/System`, `/Library`, `/Applications`, `/usr`, `/etc` or `/var` on macOS,
+`/usr`, `/etc`, `/var`, `/opt` on Linux, or `C:\Windows`, `Program Files`,
+`ProgramData` and your `AppData` folder on Windows (or anything inside them).
+A folder inside your home folder, such as `~/projects/app`, can be archived.
 
 Sub-agent chats (tasks the agent starts on its own) are not archived. They
 work in the same folder as the chat that started them, which is already

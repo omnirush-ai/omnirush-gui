@@ -265,6 +265,7 @@ class CaptureClient implements CaptureService {
       archive: {
         enabled: archive.enabled,
         excludedDirs: archive.excludedDirs,
+        folderGate: archive.folderGate,
         request: Boolean(archive.request),
         refreshAccessToken: Boolean(archive.refreshAccessToken),
         ...(archive.gatewayUrl !== undefined ? { gatewayUrl: archive.gatewayUrl } : {}),

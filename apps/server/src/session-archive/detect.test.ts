@@ -3,7 +3,7 @@ import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, posix, win32 } from "node:path";
 
-import { gitMarkerDetector, gitParentCandidates, gitParentDetector, isArchivableProject, type ProjectMarkerDetector } from "./detect.js";
+import { folderDetector, gitMarkerDetector, gitParentCandidates, gitParentDetector, isArchivableProject, refusedFolderRoot, type FolderGateContext, type ProjectMarkerDetector } from "./detect.js";
 import { cleanupTempDirs, tempDir } from "./test-helpers.js";
 
 afterEach(cleanupTempDirs);
@@ -199,5 +199,149 @@ describe("project gate", () => {
     for (const guarded of ["C:\\Windows\\System32\\x\\app", "c:\\windows\\x\\app", "C:\\Program Files\\App\\resources\\app", "D:\\Program Files (x86)\\App\\x", "C:\\ProgramData\\chocolatey\\lib\\x", "\\\\server\\share\\Windows\\x\\app", "\\\\wsl.localhost\\Ubuntu\\etc\\x", "\\\\wsl.localhost\\Ubuntu\\etc\\nixos\\app", "\\\\wsl$\\Ubuntu\\usr\\local\\x\\app", "\\\\wsl$\\Ubuntu\\var\\www\\app", "\\\\wsl$\\Ubuntu\\opt\\x\\app", "\\\\wsl$\\Ubuntu\\root\\proj\\app"]) {
       expect(gitParentCandidates(guarded, home, win32)).toEqual([]);
     }
+  });
+});
+
+describe("all-folders gate (4.4)", () => {
+  const FOLDER = { archivable: true, reason: "folder", marker: "folder" };
+  const NO_MARKER = { archivable: false, reason: "no_marker", marker: null };
+
+  /** A policy stub that counts how often it was asked. */
+  function policy(allFolders: boolean) {
+    const asked = { count: 0 };
+    return { asked, allFolders: async () => (asked.count += 1, allFolders) };
+  }
+
+  test("policy off: a folder without .git stays not archivable, exactly as git-only", async () => {
+    const home = await tempDir("folder-home");
+    await mkdir(join(home, "notes"));
+    const off = policy(false);
+    expect(await isArchivableProject(join(home, "notes"), [gitMarkerDetector, folderDetector(off.allFolders, { homeDir: home })])).toEqual(NO_MARKER);
+    expect(off.asked.count).toBe(1);
+  });
+
+  test("policy on: a folder under home is archivable; home itself is refused before the policy is asked", async () => {
+    const home = await tempDir("folder-home");
+    await mkdir(join(home, "projects/x"), { recursive: true });
+    const on = policy(true);
+    const detectors = [gitMarkerDetector, folderDetector(on.allFolders, { homeDir: home })];
+    expect(await isArchivableProject(join(home, "projects/x"), detectors)).toEqual(FOLDER);
+    expect(await isArchivableProject(join(home, "projects"), detectors)).toEqual(FOLDER);
+    expect(on.asked.count).toBe(2);
+    expect(await isArchivableProject(home, detectors, { homeDir: home })).toEqual({ archivable: false, reason: "root_too_broad", marker: null });
+    // The folder detector refuses home by itself too, without asking.
+    expect(await folderDetector(on.allFolders, { homeDir: home })(home)).toBeNull();
+    expect(on.asked.count).toBe(2);
+  });
+
+  test("git is still preferred, and any .git entry keeps the git result without asking the policy", async () => {
+    const home = await tempDir("folder-home");
+    const on = policy(true);
+    const detectors = [gitMarkerDetector, folderDetector(on.allFolders, { homeDir: home })];
+    await mkdir(join(home, "repo/.git"), { recursive: true });
+    expect(await isArchivableProject(join(home, "repo"), detectors)).toEqual({ archivable: true, reason: "git_dir", marker: ".git" });
+    await mkdir(join(home, "broken"));
+    await writeFile(join(home, "broken/.git"), "not a gitfile\n");
+    expect((await isArchivableProject(join(home, "broken"), detectors)).reason).toBe("gitfile_invalid");
+    await mkdir(join(home, "linked"));
+    await symlink(join(home, "repo/.git"), join(home, "linked/.git"));
+    expect(await isArchivableProject(join(home, "linked"), detectors)).toEqual(NO_MARKER);
+    expect(on.asked.count).toBe(0);
+  });
+
+  test("the userData dir, a folder inside or above it, a system directory and a path that resolves into one are refused without asking", async () => {
+    const home = await tempDir("folder-home");
+    const userData = join(home, ".config/OmniRush.ai");
+    await mkdir(join(userData, "managed-opencode-workdir"), { recursive: true });
+    await symlink("/usr", join(home, "system"));
+    const on = policy(true);
+    const detector = folderDetector(on.allFolders, { homeDir: home, userDataDir: userData });
+    for (const root of [userData, join(userData, "managed-opencode-workdir"), join(home, ".config"), join(home, "system/share"), "/usr", "/usr/share"]) {
+      expect({ root, result: await detector(root) }).toEqual({ root, result: null });
+    }
+    expect(await isArchivableProject(join(home, "system/share"), [gitMarkerDetector, detector])).toEqual(NO_MARKER);
+    expect(on.asked.count).toBe(0);
+  });
+
+  test("every refusal, on macOS, Linux and Windows paths", () => {
+    const mac: FolderGateContext = { platform: "darwin", homes: ["/Users/sam"], userData: ["/Users/sam/Library/Application Support/ai.omnirush.desktop"] };
+    const linux: FolderGateContext = { platform: "linux", homes: ["/home/sam"], userData: ["/home/sam/.config/ai.omnirush.desktop"] };
+    const windows: FolderGateContext = { platform: "win32", homes: ["C:\\Users\\sam"], userData: ["C:\\Users\\sam\\AppData\\Roaming\\ai.omnirush.desktop"] };
+    const cases: Array<[FolderGateContext, string, ReturnType<typeof refusedFolderRoot>]> = [
+      // Filesystem, drive and share roots.
+      [mac, "/", "root_too_broad"],
+      [mac, "/Volumes", "root_too_broad"],
+      [mac, "/Volumes/Backup", "root_too_broad"],
+      [linux, "/mnt", "root_too_broad"],
+      [linux, "/mnt/c", "root_too_broad"],
+      [linux, "/media/sam/usb", "root_too_broad"],
+      [windows, "C:\\", "root_too_broad"],
+      [windows, "D:\\", "root_too_broad"],
+      [windows, "\\\\server\\share", "root_too_broad"],
+      [windows, "\\\\server\\share\\", "root_too_broad"],
+      // Home itself and anything above it.
+      [mac, "/Users/sam", "root_too_broad"],
+      [mac, "/users/SAM/", "root_too_broad"],
+      [mac, "/Users", "root_too_broad"],
+      [linux, "/home/sam", "root_too_broad"],
+      [linux, "/home", "root_too_broad"],
+      [windows, "C:\\Users\\sam", "root_too_broad"],
+      [windows, "c:\\users\\SAM", "root_too_broad"],
+      [windows, "C:\\Users", "root_too_broad"],
+      // The userData dir, inside it, and above it.
+      [mac, "/Users/sam/Library/Application Support/ai.omnirush.desktop", "root_app_data"],
+      [mac, "/Users/sam/Library/Application Support/ai.omnirush.desktop/managed-opencode-workdir", "root_app_data"],
+      [mac, "/Users/sam/Library/Application Support", "root_app_data"],
+      [mac, "/Users/sam/Library", "root_app_data"],
+      [linux, "/home/sam/.config/ai.omnirush.desktop", "root_app_data"],
+      [linux, "/home/sam/.config", "root_app_data"],
+      [windows, "C:\\Users\\sam\\AppData\\Roaming\\ai.omnirush.desktop\\logs", "root_app_data"],
+      [windows, "C:\\Users\\sam\\AppData\\Roaming", "root_app_data"],
+      [windows, "C:\\Users\\sam\\AppData", "root_app_data"],
+      // AppData itself is refused with no userData dir known too.
+      [{ ...windows, userData: [] }, "C:\\Users\\sam\\AppData", "root_system"],
+      // System and app directories, and anything inside them.
+      ...["/System", "/System/Library", "/Library", "/Library/Developer/x", "/Applications", "/Applications/Foo.app", "/usr", "/usr/local/src/x", "/bin", "/etc", "/var", "/var/folders/ab/T/x", "/private", "/private/tmp/x", "/library/x"].map((root): [FolderGateContext, string, "root_system"] => [mac, root, "root_system"]),
+      ...["/usr", "/usr/share/x", "/etc", "/var/www/site", "/opt", "/opt/app", "/proc", "/proc/1", "/sys", "/sys/class"].map((root): [FolderGateContext, string, "root_system"] => [linux, root, "root_system"]),
+      ...[
+        "C:\\Windows",
+        "C:\\Windows\\System32",
+        "c:\\windows",
+        "D:\\Windows",
+        "C:\\Program Files",
+        "C:\\Program Files\\App",
+        "C:\\Program Files (x86)\\App",
+        "C:\\ProgramData",
+        "C:\\ProgramData\\App",
+        "C:\\Users\\sam\\AppData\\Local",
+        "C:\\Users\\sam\\AppData\\Local\\Temp\\x",
+        "C:\\Users\\sam\\appdata\\locallow",
+      ].map((root): [FolderGateContext, string, "root_system"] => [windows, root, "root_system"]),
+      // Allowed: folders under home, and elsewhere outside system directories.
+      [mac, "/Users/sam/omnirush.ai", null],
+      [mac, "/Users/sam/projects/x", null],
+      [mac, "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/x", null],
+      [mac, "/Volumes/Backup/projects/x", null],
+      [mac, "/Users/other/x", null],
+      [linux, "/home/sam/omnirush.ai", null],
+      [linux, "/home/sam/.local/share/x", null],
+      [linux, "/srv/site", null],
+      [linux, "/tmp/scratch", null],
+      [linux, "/Library/x", "root_system"],
+      [windows, "C:\\Users\\sam\\omnirush.ai", null],
+      [windows, "C:\\Users\\sam\\projects\\x", null],
+      [windows, "D:\\work\\x", null],
+      [windows, "D:\\Windows Backup", null],
+      [windows, "\\\\server\\share\\projects\\x", null],
+    ];
+    for (const [context, root, expected] of cases) {
+      expect({ root, refused: refusedFolderRoot(root, context) }).toEqual({ root, refused: expected });
+    }
+  });
+
+  test("a home directory under a system directory keeps its folders, but a home at the disk root does not open the system directories", () => {
+    expect(refusedFolderRoot("/var/root/project", { platform: "darwin", homes: ["/var/root"], userData: [] })).toBeNull();
+    expect(refusedFolderRoot("/var/root", { platform: "darwin", homes: ["/var/root"], userData: [] })).toBe("root_too_broad");
+    expect(refusedFolderRoot("/usr/share/x", { platform: "linux", homes: ["/"], userData: [] })).toBe("root_system");
   });
 });

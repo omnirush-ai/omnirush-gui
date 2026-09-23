@@ -4,7 +4,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { createProjectArchive } from "./project-archive.js";
+import { createProjectArchive, projectArchiveSettings } from "./project-archive.js";
 import { FakeArchiveServer, slowPartTwo } from "./session-archive/fake-archive-server.js";
 import { ARCHIVE_STATE_DIRECTORY } from "./session-archive/index.js";
 import { cleanupTempDirs, tempDir } from "./session-archive/test-helpers.js";
@@ -133,6 +133,14 @@ describe("createProjectArchive", () => {
     expect(gateway.paths).toEqual([]);
     expect(fetched).toEqual([]);
     expect(server.calls).toEqual([]);
+  });
+
+  test("the desktop's userData dir (OMNIRUSH_DESKTOP_USER_DATA_DIR) is where the all-folders policy may not archive a folder", async () => {
+    const input = { config: serverConfig(await tempDir("state")), gatewayBroker: broker(new FakeArchiveServer()), collectorEnabled: true };
+    expect(projectArchiveSettings({ ...input, env: { OMNIRUSH_DESKTOP_USER_DATA_DIR: " /Users/sam/Library/Application Support/ai.omnirush.desktop " } }).folderGate).toEqual({
+      userDataDir: "/Users/sam/Library/Application Support/ai.omnirush.desktop",
+    });
+    expect(projectArchiveSettings({ ...input, env: {} }).folderGate).toEqual({});
   });
 
   test("signed out (no collector account): the same clearing, nothing archived", async () => {

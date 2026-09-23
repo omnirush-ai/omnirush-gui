@@ -1,7 +1,8 @@
 # session-archive
 
 The desktop side of the OmniRush project archive. When the folder an agent
-session started in contains `.git`, the whole folder is uploaded:
+session started in contains `.git`, the whole folder is uploaded (with the
+all-folders policy on, any other folder too, see "All folders" below):
 
 - at session start: a **base** archive, including `.git/` and gitignored content;
 - after every completed turn that changed anything: a **delta** archive with the
@@ -30,7 +31,8 @@ The user-facing description is `docs/project-archive.md`.
 
 | File | Responsibility |
 | --- | --- |
-| `detect.ts` | `isArchivableProject(root, detectors?, options?)`, `gitMarkerDetector` and `gitParentDetector` (section 4). A pluggable gate; only the `.git` marker is enabled, in the root or (`git_parent`) in the nearest parent (a `.git` folder there must hold `HEAD`), never at any account's home on any volume or share, a filesystem, drive, share or mount root, or in a system or app directory (on a UNC share such as `\\wsl$\<distro>`, also `usr`, `etc`, `var`, `opt` and `root`). A `git_parent` root is archived alone, without the parent's `.git` |
+| `detect.ts` | `isArchivableProject(root, detectors?, options?)`, `gitMarkerDetector` and `gitParentDetector` (section 4). A pluggable gate; the `.git` marker, in the root or (`git_parent`) in the nearest parent (a `.git` folder there must hold `HEAD`), never at any account's home on any volume or share, a filesystem, drive, share or mount root, or in a system or app directory (on a UNC share such as `\\wsl$\<distro>`, also `usr`, `etc`, `var`, `opt` and `root`). A `git_parent` root is archived alone, without the parent's `.git`. `folderDetector` / `refusedFolderRoot` for the all-folders policy (4.4) |
+| `policy.ts` | `parseArchivePolicy`: `policy.all_folders` from the GET /archives/key body; anything but `true` is off |
 | `manifest.ts` | Scan with the exclusions and credential filter (5.2, 5.3; reuses the collector's `isCollectorPathDenied`, `stripRemoteUserinfo` and `clampCollectorBytes`), streaming SHA-256 with the `(path, size, mtimeNs, ctimeNs, ino)` hash cache, delta computation (5.8), `manifest.json` (5.6) and the git block (`path` from `git rev-parse --show-prefix`; git runs with `GIT_CEILING_DIRECTORIES` set to the real home so it never climbs into home) |
 | `pack.ts` | Streaming pax tar writer (5.5) with unstable-entry detection (5.9), and the file -> tar -> zstd -> ORSEAL01 -> temp file pipeline (5.10, 13.1) |
 | `seal.ts` | Streaming ORSEAL01 sealer and opener (section 6) over Node `crypto` |
@@ -210,7 +212,7 @@ void sessionArchiver.captureBase(sessionId, root, completedTurns).then(() => ses
 
 - `root` is the folder the agent started in (`input.workspace.path`), as a real path: the gate `lstat`s it and refuses a symlinked root. The home directory, a filesystem root and the app's own directories are always refused.
 - `completedTurns` is 0 for a new session. For a resumed session, it is the number of turns the session has already completed.
-- The call is cheap when there is nothing to do. With a base already captured, it only reads the session record, with no network. Without `.git`, it runs a few `lstat` calls: the root, then its parents up to the nearest `.git`, home or a guarded directory. Otherwise it fetches `GET /archives/key`, which also checks the archive consent: a 428 means nothing is packed.
+- The call is cheap when there is nothing to do. With a base already captured, it only reads the session record, with no network. Without `.git`, it runs a few `lstat` calls: the root, then its parents up to the nearest `.git`, home or a guarded directory, and for a folder the all-folders gate would accept it fetches `GET /archives/key` for the policy. Otherwise it fetches `GET /archives/key`, which also checks the archive consent: a 428 means nothing is packed.
 - Child (sub-agent) sessions share the parent's root and must not be archived. Call this for root sessions only.
 - Keep a per-process `Set` of session ids already handed to `captureBase`. `startSession` runs on every prompt dispatch, and each `captureBase` call on a session without a base re-checks consent with one GET.
 
@@ -300,6 +302,7 @@ against a loopback sink).
   - on a **base**, the job is dropped and the session goes back to base-pending: the next `captureDelta` packs a new base with the current key;
   - on a **delta**, the chain cannot be re-sealed, so the session stops.
   This only happens if a key is removed from `OMNIRUSH_ARCHIVE_PRIVATE_KEYS` while archives sealed to it are still queued.
+- **All folders (4.4).** GET /archives/key also carries `policy.all_folders` (off unless it is the boolean `true`; `policy.ts`). While it is off, archiving is git only, as before. While it is on, a session root with no `.git` entry at all is archived too, with marker and reason `folder`: the same whole-folder base and deltas, credential filter, pruning, consent and sign-out. `folderDetector` runs after the other detectors, so git still wins. It refuses, in every form of the root (as given and resolved through symlinks), a disk or share root (`/`, `C:\`, `\\server\share`, `/Volumes/<disk>`, `/mnt/<disk>`, `/media/<user>/<disk>`), the home directory and anything above it, the desktop's userData dir (`OMNIRUSH_DESKTOP_USER_DATA_DIR`, set by the desktop app) and anything inside or above it, and system and app directories and anything inside them (`/System`, `/Library`, `/Applications`, `/private`, `/usr`, `/bin`, `/sbin`, `/etc`, `/var`, `/opt`, `/proc`, `/sys`, `/dev`, `/boot`, `/lib`, `/lib64`, `/run`; `Windows`, `Program Files`, `Program Files (x86)` and `ProgramData` on any drive, and `<home>\AppData`). Inside the home directory only AppData and userData are refused. The policy is asked only for a root that passes, through the same GET the base then uses for its key: a folder session's start costs one GET when the policy is off, and the lifecycle asks once per session per app run. The server refuses `folder` archives while the policy is off (`422 archive_marker_not_allowed`), which stops such a session.
 - **Part order.** Parts are uploaded one at a time, in order, streamed from the sealed file. The spec allows up to 4 in parallel; that is a possible later optimisation.
 - **Pass 2 never reads outside the root.** Node has no `openat`, so pass 2 cannot pin a directory handle. Instead it `lstat`s each directory once, parents first, when the walk enters it. If a directory is no longer a real directory (for example it was swapped for a symlink by `npm link` or a tool), nothing below it is read. Each file is opened with `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY`, so a FIFO swapped in never blocks the capture. The handle's `fstat` must show a regular file with the `st_dev` and `st_ino` that pass 1 `lstat`ed, which catches a swap made after the directory check. Otherwise the member is zero-filled at its manifest size and listed in `unstable.json`, and the next delta sends it again. A changed size or mtime on the same inode still copies the bytes (5.9). This adds about 3% to pass 2 on a 56k-entry tree.
 - **Memory.** Pass 2 streams through a pool of four 1 MiB tar blocks, recycled once zstd has consumed them. The sealer holds one 1 MiB chunk, and the sink awaits each file write. The manifest is serialised on the fly: once to learn its size, once while it is written. Short-lived zstd and AES-GCM output buffers are the remaining churn. An upload holds the part it is sending (the server's part size, 64 MiB by default). In Bun, a full GC is requested every 64 MiB, every 10k files and around each capture (about 2 ms each at these heap sizes); elsewhere this is a no-op.
@@ -335,13 +338,14 @@ cd apps/server && bun --conditions=development test src/session-archive
   - pax header edge cases;
   - a multi-MiB `writeSealedArchive` round trip checked with the `zstd` CLI, and a stopped writer rejecting.
 - `manifest.test.ts`: UTF-8 byte order; the credential filter; the exclusions (credential, FIFO, app state, `__omnirush__`, unreadable, non-UTF-8); the hash cache; a stopped scan reading nothing; delta for add, modify (content and mode), delete, rename, file to dir, dir to file and symlink retarget; unstable re-send; `.git` changes; manifest JSON, with a delta's `trigger` and a final archive's `reason`; the git block and its `path`; `git status` never rewriting `.git/index`.
-- `detect.test.ts`: a `.git` dir; a gitfile; no `.git`; an invalid gitfile; a `.git` symlink; home, `/` and app dirs refused; `root_not_directory`; detector plug-ins; `git_parent` (nearest parent wins, a `.git` folder without `HEAD` there qualifies nothing, root `.git` preferred, dotfiles home, system dirs, posix and `path.win32` walks including `/Volumes/<disk>` homes and WSL shares).
+- `detect.test.ts`: a `.git` dir; a gitfile; no `.git`; an invalid gitfile; a `.git` symlink; home, `/` and app dirs refused; `root_not_directory`; detector plug-ins; `git_parent` (nearest parent wins, a `.git` folder without `HEAD` there qualifies nothing, root `.git` preferred, dotfiles home, system dirs, posix and `path.win32` walks including `/Volumes/<disk>` homes and WSL shares); the all-folders gate: policy off and on, git first, every refusal on macOS, Linux and Windows paths.
 - `upload.test.ts` (in-process fake API and S3):
   - the happy path;
   - resume after a failed part;
   - a part S3 already holds;
   - an expired URL (403);
   - 428 and 503;
+  - the key route's policy: only `all_folders: true` turns it on, and the key works either way;
   - a 401 with a refresh, and a failed refresh;
   - NoSuchUpload leading to a re-create;
   - `archive_not_uploading` at complete;
@@ -358,7 +362,7 @@ cd apps/server && bun --conditions=development test src/session-archive
 - `index.test.ts`:
   - the whole folder: `.git/` and gitignored `node_modules/` and `dist/` present, `.env` and `id_rsa` absent unless `archiveIncludeCredentialFiles`; the base then a delta, each decrypted and checked;
   - no delta when nothing changed, `stale_turn` and `exists`;
-  - no `.git`;
+  - no `.git`: not archived with the policy off, absent or not a boolean (only the key read); with it on, archived whole with binaries and ignored-looking files, credentials left out, then a delta; home, userData and a system dir refused without a request; a git project still archived as git;
   - consent off at the key route and during a drain;
   - app restart resuming a half-uploaded archive;
   - a crashed commit discarded;

@@ -141,13 +141,33 @@ describe("SessionArchiver", () => {
     expect(names).toEqual(expect.arrayContaining([".env", "id_rsa"]));
   });
 
-  test("a folder without .git is not archived and nothing is sent", async () => {
+  test("a folder without .git is not archived while the all-folders policy is off or absent; only the key is read", async () => {
+    for (const policy of [undefined, { all_folders: false }, { all_folders: "true" }]) {
+      const server = new FakeArchiveServer();
+      server.policy = policy;
+      const home = await tempDir("home");
+      const root = join(home, "plain");
+      await mkdir(root);
+      await writeFile(join(root, "notes.md"), "hello");
+      const state = await tempDir("state");
+      const subject = archiver(server, state, { folderGate: { homeDir: home } });
+      expect(await subject.captureBase("ses_plain_folder", root)).toEqual({ status: "skipped", reason: "not_archivable" });
+      expect(await subject.captureDelta("ses_plain_folder", root, 1)).toEqual({ status: "skipped", reason: "no_base" });
+      expect(server.callPaths()).toEqual(["GET archives/key 200"]);
+      expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "sessions"))).toEqual([]);
+    }
+  });
+
+  test("with the all-folders policy on, home itself, the app's userData dir and a system directory are refused and nothing is sent", async () => {
     const server = new FakeArchiveServer();
-    const root = await tempDir("plain");
-    await writeFile(join(root, "notes.md"), "hello");
-    const subject = archiver(server, await tempDir("state"));
-    expect(await subject.captureBase("ses_plain_folder", root)).toEqual({ status: "skipped", reason: "not_archivable" });
-    expect(await subject.captureDelta("ses_plain_folder", root, 1)).toEqual({ status: "skipped", reason: "no_base" });
+    server.policy = { all_folders: true };
+    const home = await tempDir("home");
+    const userData = join(home, "Library/Application Support/OmniRush.ai");
+    await mkdir(userData, { recursive: true });
+    const subject = archiver(server, await tempDir("state"), { folderGate: { homeDir: home, userDataDir: userData } });
+    for (const root of [home, userData, join(home, "Library"), "/usr"]) {
+      expect({ root, result: await subject.captureBase("ses_refused_folder", root) }).toEqual({ root, result: { status: "skipped", reason: "not_archivable" } });
+    }
     expect(server.calls).toEqual([]);
   });
 
@@ -214,7 +234,8 @@ describe("SessionArchiver", () => {
     const detectors = [gitMarkerDetector, (dir: string) => gitParentDetector(dir, { systemDirs: [], homeDir: home })];
     const subject = archiver(server, await tempDir("state"), { detectors });
     expect(await subject.captureBase("ses_empty_git", root)).toEqual({ status: "skipped", reason: "not_archivable" });
-    expect(server.calls).toEqual([]);
+    // At most the all-folders policy is asked (it is off); nothing is created.
+    expect(server.calls.filter((call) => call.path !== "archives/key")).toEqual([]);
 
     // The archive's git, with this folder as the OS home, stops below home: no git block for the folder, nor for
     // proj itself, whose empty .git passes the gate as git_dir.
@@ -224,6 +245,65 @@ describe("SessionArchiver", () => {
       env: { ...process.env, HOME: home, ARCHIVE_GIT_ROOTS: JSON.stringify([root, join(home, "proj")]) },
     });
     expect(JSON.parse(stdout)).toEqual([null, null]);
+  });
+
+  test("with the all-folders policy on, a folder without .git is archived whole: binaries and ignored-looking files kept, credentials left out", async () => {
+    const server = new FakeArchiveServer();
+    server.policy = { all_folders: true };
+    const home = await tempDir("home");
+    const root = join(home, "render-job");
+    await mkdir(join(root, "node_modules/left-pad"), { recursive: true });
+    await writeFile(join(root, ".gitignore"), "node_modules/\ndist/\n*.blend1\n");
+    await writeFile(join(root, "node_modules/left-pad/index.js"), "module.exports = (s) => s;\n");
+    await mkdir(join(root, "dist"));
+    await writeFile(join(root, "dist/bundle.js"), "console.log(1);\n");
+    await mkdir(join(root, "assets"));
+    const blend = randomBytes(300 * 1024);
+    await writeFile(join(root, "assets/scene.blend"), blend);
+    const backup = randomBytes(64 * 1024);
+    await writeFile(join(root, "assets/scene.blend1"), backup);
+    await writeFile(join(root, ".env"), "API_KEY=sk-live-1234567890\n");
+    await writeFile(join(root, "id_rsa"), "-----BEGIN OPENSSH PRIVATE KEY-----\n");
+    const subject = archiver(server, await tempDir("state"), { folderGate: { homeDir: home } });
+
+    const base = await subject.captureBase("ses_plain_folder", root);
+    expect(base).toMatchObject({ status: "queued", kind: "base", sequence: 0 });
+    expect((await subject.drain()).uploaded).toBe(1);
+    // One key read serves the policy and the seal.
+    expect(server.callPaths()[0]).toBe("GET archives/key 200");
+    expect(server.calls.filter((call) => call.path === "archives/key")).toHaveLength(1);
+    const [first] = server.objects();
+    expect(first!.request).toMatchObject({ session_id: "ses_plain_folder", kind: "base", sequence: 0, marker: "folder" });
+    const members = await openArchive(first!.object!);
+    const names = members.map((member) => member.name);
+    expect(names).toEqual(expect.arrayContaining([".gitignore", "node_modules/left-pad/index.js", "dist/bundle.js", "assets/scene.blend", "assets/scene.blend1"]));
+    expect(names).not.toContain(".env");
+    expect(names).not.toContain("id_rsa");
+    expect(members.find((member) => member.name === "assets/scene.blend")!.content.equals(blend)).toBe(true);
+    expect(members.find((member) => member.name === "assets/scene.blend1")!.content.equals(backup)).toBe(true);
+    expect(manifestOf(members)).toMatchObject({ kind: "base", workspace: { label: "render-job", marker: "folder", git: null }, excluded: { credential: 2 } });
+
+    const edited = randomBytes(1024);
+    await writeFile(join(root, "assets/scene.blend"), edited);
+    expect(await subject.captureDelta("ses_plain_folder", root, 1)).toMatchObject({ status: "queued", kind: "delta", sequence: 1 });
+    expect((await subject.drain()).uploaded).toBe(1);
+    const second = server.objects()[1]!;
+    expect(second.request).toMatchObject({ kind: "delta", sequence: 1, marker: "folder", parent_archive_id: first!.request.archive_id });
+    const changed = (await openArchive(second.object!)).slice(1);
+    expect(changed.map((member) => member.name)).toEqual(["assets/scene.blend"]);
+    expect(changed[0]!.content.equals(edited)).toBe(true);
+  });
+
+  test("with the all-folders policy on, a git project is still archived as git", async () => {
+    const server = new FakeArchiveServer();
+    server.policy = { all_folders: true };
+    const { root } = await project();
+    const subject = archiver(server, await tempDir("state"), { folderGate: { homeDir: await tempDir("home") } });
+    expect(await subject.captureBase("ses_git_first", root)).toMatchObject({ status: "queued", kind: "base" });
+    await subject.drain();
+    expect(server.objects()[0]!.request.marker).toBe(".git");
+    expect(manifestOf(await openArchive(server.objects()[0]!.object!))).toMatchObject({ workspace: { marker: ".git" } });
+    expect(server.calls.filter((call) => call.path === "archives/key")).toHaveLength(1);
   });
 
   test("428 at /archives/key: nothing is packed, archiving stays off until a later captureBase succeeds", async () => {

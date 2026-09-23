@@ -1,6 +1,7 @@
 /**
  * SessionArchiver (section 13): the desktop side of the OmniRush project
- * archive. A session whose root holds a `.git` gets a base archive of the
+ * archive. A session whose root holds a `.git` (or, with the all-folders
+ * policy on, any folder detect.ts accepts) gets a base archive of the
  * whole folder at session start, a delta after every completed turn that
  * changed anything, and a final delta (the last turn's number again) when the
  * folder changed after that turn; each is sealed to the omnirush.ai archive
@@ -14,7 +15,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { externalFetch } from "../server-fetch.js";
-import { defaultProjectDetectors, isArchivableProject, type ProjectMarkerDetector } from "./detect.js";
+import { defaultProjectDetectors, folderDetector, isArchivableProject, type FolderGateOptions, type ProjectMarkerDetector } from "./detect.js";
 import { hintGarbageCollection, readJsonFile, stateKey, writeChunksAtomic, writeJsonAtomic } from "./files.js";
 import {
   ArchiveHashCache,
@@ -41,6 +42,7 @@ import {
   type ArchiveFetch,
   type ArchiveKey,
   type ArchiveLog,
+  type KeyResult,
   type RetryPolicy,
 } from "./upload.js";
 
@@ -81,6 +83,8 @@ export type SessionArchiverOptions = {
   /** Default false: the credential filter of section 5.3 applies. */
   archiveIncludeCredentialFiles?: boolean;
   detectors?: ProjectMarkerDetector[];
+  /** Where the all-folders policy (4.4) may not archive a folder without `.git`: the userData dir (and, in tests, home). */
+  folderGate?: FolderGateOptions;
   log?: ArchiveLog;
   /** Tests. */
   now?: () => Date;
@@ -227,6 +231,7 @@ export class SessionArchiver {
   private readonly dirs: { sessions: string; baselines: string; hashCache: string; queue: string; pending: string; tmp: string };
   private readonly uploader: ArchiveUploader;
   private readonly detectors: readonly ProjectMarkerDetector[];
+  private readonly folderGate: FolderGateOptions | undefined;
   private readonly appDirs: string[];
   private readonly includeCredentials: boolean;
   private readonly log: ArchiveLog;
@@ -281,6 +286,7 @@ export class SessionArchiver {
       log: this.log,
     });
     this.detectors = options.detectors ?? defaultProjectDetectors;
+    this.folderGate = options.folderGate;
     this.appDirs = [stateDir, ...(options.excludedDirs ?? []).map((dir) => resolve(dir))];
     this.includeCredentials = options.archiveIncludeCredentialFiles === true;
   }
@@ -545,9 +551,16 @@ export class SessionArchiver {
 
   private async captureBaseLocked(sessionId: string, root: string, turn: number, generation: number): Promise<CaptureResult> {
     if (!this.uploader.configured) return { status: "skipped", reason: "disabled" };
-    const gate = await isArchivableProject(root, this.detectors, { appDirs: this.appDirs });
+    // A root no other detector qualified asks the key route for the all-folders policy (4.4); the base reuses that answer.
+    let keyFetch: Promise<KeyResult> | null = null;
+    const fetchKey = () => (keyFetch ??= this.uploader.fetchKey());
+    const folder = folderDetector(async () => {
+      const fetched = await fetchKey();
+      return fetched.status === "ok" && fetched.policy.allFolders;
+    }, this.folderGate);
+    const gate = await isArchivableProject(root, [...this.detectors, folder], { appDirs: this.appDirs });
     if (!gate.archivable || !gate.marker) return { status: "skipped", reason: "not_archivable" };
-    const fetched = await this.uploader.fetchKey();
+    const fetched = await fetchKey();
     if (fetched.status === "disabled") {
       await this.disable(fetched.code);
       return { status: "skipped", reason: "disabled" };

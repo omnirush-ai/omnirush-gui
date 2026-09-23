@@ -7,6 +7,7 @@
 import { open, type FileHandle } from "node:fs/promises";
 import { z } from "zod";
 
+import { parseArchivePolicy, type ArchivePolicy } from "./policy.js";
 import { SEAL_ALG, SEAL_CONTENT, sealKid } from "./seal.js";
 
 export type ArchiveFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -120,7 +121,8 @@ export type ArchiveUploadJob = {
 export type ArchiveKey = { kid: string; publicKey: Buffer; alg: string };
 
 export type KeyResult =
-  | { status: "ok"; key: ArchiveKey }
+  /** The policy comes with the key, in the same response. */
+  | { status: "ok"; key: ArchiveKey; policy: ArchivePolicy }
   | { status: "disabled"; code: string }
   | { status: "unavailable"; reason: string };
 
@@ -317,7 +319,7 @@ export class ArchiveUploader {
       if (publicKey.length !== 32 || publicKey.toString("base64") !== parsed.data.public_key || sealKid(publicKey) !== parsed.data.kid || parsed.data.alg !== SEAL_ALG) {
         return { status: "unavailable", reason: "invalid key response" };
       }
-      return { status: "ok", key: { kid: parsed.data.kid, publicKey, alg: parsed.data.alg } };
+      return { status: "ok", key: { kid: parsed.data.kid, publicKey, alg: parsed.data.alg }, policy: parseArchivePolicy(result.body) };
     }
     if (result.kind === "error" && result.status === 404) return { status: "disabled", code: "archive_routes_missing" };
     const outcome = this.common(result);

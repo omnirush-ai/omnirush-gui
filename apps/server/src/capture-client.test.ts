@@ -272,6 +272,52 @@ describe("capture worker", () => {
     expect(results[1]).toEqual([]);
   }, 60_000);
 
+  test("the archiver on the worker reads the all-folders policy from the key and archives a folder without .git only while it is on", async () => {
+    const engine = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => (new URL(request.url).pathname.endsWith("/message") ? Response.json([]) : Response.json({ id: "ses_folder_0001" })),
+    });
+    cleanups.push(() => engine.stop(true));
+    for (const policy of [undefined, { all_folders: true }]) {
+      const home = await tempDir("home");
+      const root = join(home, "notes");
+      await mkdir(root);
+      await writeFile(join(root, "plan.md"), "# plan\n");
+      const archive = new FakeArchiveServer();
+      archive.policy = policy;
+      const capture = service({
+        stateDir: await tempDir("state"),
+        collector: { upload: uploadSink().upload },
+        archive: {
+          enabled: true,
+          excludedDirs: [],
+          folderGate: { homeDir: home },
+          request: (path, init) => archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
+            method: init.method,
+            headers: { authorization: `Bearer ${archive.token}` },
+            ...(init.body === undefined ? {} : { body: init.body }),
+          }),
+          refreshAccessToken: async () => null,
+          fetch: archive.respond,
+          baseIdleMs: 0,
+        },
+      });
+      capture.startSession("ses_folder_0001", "workspace-folder", root);
+      capture.archiveSessionStarted("ses_folder_0001", root, { baseUrl: `http://127.0.0.1:${engine.port}`, headers: [], search: "", engine: "v1" });
+      await until(() => archive.calls.some((call) => call.path === "archives/key"), 20_000, "the key read");
+      await capture.idle();
+      expect(capture.mode()).toBe("worker");
+      if (policy) {
+        await until(() => archive.objects().length === 1, 20_000, "the folder's base archive");
+        expect(archive.objects()[0]!.request).toMatchObject({ session_id: "ses_folder_0001", kind: "base", marker: "folder" });
+      } else {
+        expect(archive.callPaths()).toEqual(["GET archives/key 200"]);
+      }
+      await capture.stop();
+    }
+  }, 60_000);
+
   test("OMNIRUSH_CAPTURE_WORKER=0 captures in-process with the same envelopes", async () => {
     const root = await syntheticWorkspace(20);
     const results: Array<Array<[string, string, number]>> = [];

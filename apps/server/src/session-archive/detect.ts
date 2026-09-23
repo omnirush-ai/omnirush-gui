@@ -2,17 +2,19 @@
  * The project gate (section 4): a session is archived only when the folder
  * the agent started in is a project. v1 recognises one marker, a `.git`
  * entry, in the folder itself or in the nearest parent that may hold one
- * (a folder inside a repository); further markers plug in as detectors.
+ * (a folder inside a repository); further markers plug in as detectors. The
+ * all-folders policy (4.4) adds one more, `folderDetector`: any other folder
+ * that is not too broad to be one project.
  */
 import { lstat, open, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import path, { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import path, { isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 
 export type ArchivableProject = {
   archivable: boolean;
-  /** git_dir | git_file | git_parent | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
+  /** git_dir | git_file | git_parent | folder | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
   reason: string;
-  /** The marker that qualified the root (".git"), null when not archivable. */
+  /** The marker that qualified the root (".git", "folder"), null when not archivable. */
   marker: string | null;
 };
 
@@ -221,6 +223,86 @@ export const gitParentDetector: ProjectMarkerDetector = async (root, options = {
 
 /** The gate's detectors: `.git` in the root first, then in the nearest parent. */
 export const defaultProjectDetectors: readonly ProjectMarkerDetector[] = [gitMarkerDetector, gitParentDetector];
+
+// --- a folder without git (the all-folders policy) ------------------------------
+
+/** The marker of a folder archived by the all-folders policy (4.4); the server accepts it only while that policy is on. */
+export const FOLDER_MARKER = "folder";
+
+/** Top-level system and app directories of macOS and Linux (one list: the other system's names are absent). */
+const FOLDER_POSIX_SYSTEM_DIRS = ["/System", "/Library", "/Applications", "/private", "/usr", "/bin", "/sbin", "/etc", "/var", "/opt", "/proc", "/sys", "/dev", "/boot", "/lib", "/lib64", "/run"];
+/** Windows system directories, on every drive. */
+const WINDOWS_SYSTEM_DIRS = ["Windows", "Program Files", "Program Files (x86)", "ProgramData"];
+/** Where POSIX systems mount other disks: /Volumes/<disk> (macOS), /mnt/<disk> (Linux, WSL), /media/<user>/<disk>. */
+const POSIX_MOUNT_ROOT = /^\/(?:(?:volumes|mnt)(?:\/[^/]+)?|media(?:\/[^/]+){0,2})$/i;
+
+/** What the all-folders gate compares a root with; every path absolute, in `platform`'s syntax. */
+export type FolderGateContext = {
+  platform: NodeJS.Platform;
+  /** The home directory, as given and resolved through symlinks. */
+  homes: readonly string[];
+  /** The Electron userData directory, the same way; empty when unknown. */
+  userData: readonly string[];
+};
+
+/**
+ * Why `root` may not be archived as a plain folder, or null when it may:
+ * a disk root or share root, the home directory or anything above it, the
+ * userData directory, anything inside it or above it, and a system or app
+ * directory or anything inside one (Windows: AppData too). Inside the home
+ * directory only AppData and userData are refused. macOS and Windows
+ * compare without case.
+ */
+export function refusedFolderRoot(root: string, context: FolderGateContext): "root_too_broad" | "root_app_data" | "root_system" | null {
+  const paths = context.platform === "win32" ? win32 : posix;
+  const fold = (path: string) => (context.platform === "darwin" || context.platform === "win32" ? paths.resolve(path).toLowerCase() : paths.resolve(path));
+  const within = (child: string, parent: string) => {
+    const rel = paths.relative(parent, child);
+    return rel === "" || (!rel.startsWith(`..${paths.sep}`) && rel !== ".." && !paths.isAbsolute(rel));
+  };
+  const target = fold(root);
+  const homes = context.homes.map(fold);
+  if (paths.parse(target).root === target || (paths === posix && POSIX_MOUNT_ROOT.test(target))) return "root_too_broad";
+  if (homes.some((home) => within(home, target))) return "root_too_broad";
+  if (context.userData.map(fold).some((dir) => within(target, dir) || within(dir, target))) return "root_app_data";
+  if (paths === win32 && homes.some((home) => within(target, paths.join(home, "appdata")))) return "root_system";
+  if (homes.some((home) => paths.parse(home).root !== home && within(target, home))) return null;
+  const systemDirs = paths === win32 ? WINDOWS_SYSTEM_DIRS.map((dir) => paths.join(paths.parse(target).root, dir)) : FOLDER_POSIX_SYSTEM_DIRS;
+  return systemDirs.some((dir) => within(target, fold(dir))) ? "root_system" : null;
+}
+
+export type FolderGateOptions = {
+  /** The Electron userData directory (the desktop sets OMNIRUSH_DESKTOP_USER_DATA_DIR); unknown outside the desktop app. */
+  userDataDir?: string;
+  /** Tests only; defaults to os.homedir(). */
+  homeDir?: string;
+};
+
+/**
+ * The all-folders marker (4.4): a root with no `.git` entry at all is a
+ * project, marker `folder`, when refusedFolderRoot accepts it in every
+ * form (as given and resolved through symlinks) and `allFolders()` says
+ * the policy is on. The policy is asked last, only for such a root. Never
+ * throws.
+ */
+export function folderDetector(allFolders: () => Promise<boolean>, options: FolderGateOptions = {}): ProjectMarkerDetector {
+  return async (root) => {
+    try {
+      if (await lstat(join(root, ".git")).then(() => true, () => false)) return null;
+      const context: FolderGateContext = {
+        platform: process.platform,
+        homes: await pathForms(options.homeDir ?? homedir()),
+        userData: options.userDataDir ? await pathForms(options.userDataDir) : [],
+      };
+      for (const form of await pathForms(root)) {
+        if (refusedFolderRoot(form, context)) return null;
+      }
+      return (await allFolders()) ? { archivable: true, reason: "folder", marker: FOLDER_MARKER } : null;
+    } catch {
+      return null;
+    }
+  };
+}
 
 /**
  * Whether the session root is a project to archive: the root checks first,

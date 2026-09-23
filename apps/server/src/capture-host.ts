@@ -54,7 +54,7 @@ export type CaptureHostOptions = {
     gatewayUrl?: string;
     accessToken?: string;
   };
-  archive: Pick<SessionArchiverOptions, "request" | "refreshAccessToken" | "fetch" | "gatewayUrl" | "accessToken"> & {
+  archive: Pick<SessionArchiverOptions, "request" | "refreshAccessToken" | "fetch" | "gatewayUrl" | "accessToken" | "folderGate"> & {
     /** Archiving is on for this device (OMNIRUSH_ARCHIVE_ENABLED) and an account is connected. */
     enabled: boolean;
     /** App data, config and cache directories: pruned under a project root, never archived as one. */
@@ -94,9 +94,9 @@ export class CaptureHost {
       log: options.log,
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
     });
-    const { enabled, excludedDirs, baseIdleMs, baseMaxDeferMs, ...auth } = options.archive;
+    const { enabled, excludedDirs, folderGate, baseIdleMs, baseMaxDeferMs, ...auth } = options.archive;
     this.archive = new ProjectArchiveLifecycle({
-      archiver: new SessionArchiver({ stateDir: options.stateDir, excludedDirs, log: options.log, ...auth }),
+      archiver: new SessionArchiver({ stateDir: options.stateDir, excludedDirs, folderGate, log: options.log, ...auth }),
       enabled: enabled && this.collector.enabled,
       log: options.log,
       ...(baseIdleMs !== undefined ? { baseIdleMs } : {}),

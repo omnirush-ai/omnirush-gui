@@ -43,6 +43,8 @@ export class FakeArchiveServer {
   gate: { status: number; detail: string } | null = null;
   /** A backend without final archives: a delta's turn must be greater than its parent's (409 archive_parent_mismatch otherwise). */
   strictTurns = false;
+  /** The key route's `policy` (backend spec 4.4), left out while undefined. */
+  policy: unknown = undefined;
   readonly archives = new Map<string, FakeArchive>();
   readonly calls: FakeCall[] = [];
   readonly puts: Array<{ archiveId: string; partNumber: number; status: number }> = [];
@@ -121,7 +123,7 @@ export class FakeArchiveServer {
     if (authorization !== `Bearer ${this.token}`) return json(401, { detail: "invalid_token" });
     const abort = /^archives\/([^/]+)\/abort$/.exec(path);
     if (this.gate && !abort) return json(this.gate.status, { detail: this.gate.detail });
-    if (method === "GET" && path === "archives/key") return json(200, { kid: testKeys.kid, public_key: testKeys.publicB64, alg: "X25519-HKDF-SHA256-A256GCM" });
+    if (method === "GET" && path === "archives/key") return json(200, { kid: testKeys.kid, public_key: testKeys.publicB64, alg: "X25519-HKDF-SHA256-A256GCM", policy: this.policy });
     if (method === "POST" && path === "archives") return this.create(body);
     const parts = /^archives\/([^/]+)\/parts$/.exec(path);
     if (method === "POST" && parts) return this.listParts(parts[1]!, body);

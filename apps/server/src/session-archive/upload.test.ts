@@ -81,6 +81,29 @@ describe("archive upload client", () => {
     expect((await client.fetchKey()).status).toBe("unavailable");
   });
 
+  test("the key route's policy: all_folders only when it is the boolean true; anything else is off and the key still works", async () => {
+    const server = new FakeArchiveServer();
+    const client = uploader(server);
+    const cases: Array<[unknown, boolean]> = [
+      [{ all_folders: true }, true],
+      [{ all_folders: true, other: "ignored" }, true],
+      [undefined, false],
+      [null, false],
+      [{}, false],
+      [{ all_folders: false }, false],
+      [{ all_folders: "true" }, false],
+      [{ all_folders: 1 }, false],
+      [{ all_folders: null }, false],
+      [[true], false],
+      ["all_folders", false],
+    ];
+    for (const [policy, allFolders] of cases) {
+      server.policy = policy;
+      const fetched = await client.fetchKey();
+      expect({ policy, status: fetched.status, allFolders: fetched.status === "ok" && fetched.policy.allFolders }).toEqual({ policy, status: "ok", allFolders });
+    }
+  });
+
   test("428 and 503 archive_disabled on create turn archiving off without an error", async () => {
     for (const gate of [{ status: 428, detail: "archive_consent_required" }, { status: 503, detail: "archive_disabled" }]) {
       const server = new FakeArchiveServer();

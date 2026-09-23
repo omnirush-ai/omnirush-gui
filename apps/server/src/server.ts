@@ -873,6 +873,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     archive: {
       enabled: archiveSettings.enabled,
       excludedDirs: archiveSettings.excludedDirs,
+      folderGate: archiveSettings.folderGate,
       ...(archiveSettings.auth === "broker"
         ? {
             request: (path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => gatewayBroker.archiveRequest(path, init),
