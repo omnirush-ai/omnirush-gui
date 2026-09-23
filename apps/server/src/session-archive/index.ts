@@ -79,7 +79,7 @@ const MAX_JOB_AGE_MS = 7 * 24 * 60 * 60_000;
 const JOB_RETRY_BASE_MS = 60_000;
 const JOB_RETRY_MAX_MS = 60 * 60_000;
 const SIGN_OUT_ABORT_TIMEOUT_MS = 5_000;
-/** At app start, sessions whose chain moved within this long may get a final archive (startFinalCandidates). */
+/** At app start, sessions active (a base, a prompt, a turn) within this long may get a final archive (startFinalCandidates). */
 const START_FINAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
 /** At most this many sessions are scanned for a final archive at app start. */
 const MAX_START_FINALS = 10;
@@ -186,7 +186,15 @@ const sessionStateSchema = z.object({
   ended: z.string().nullable().optional(),
   /** A touched-files chain without its base yet: the completed turns last seen, the turn of a base a final archive captures. */
   turn_seen: z.number().int().nonnegative().optional(),
-});
+  /**
+   * When the session was last active: its base, a prompt (captureBase once
+   * per app run) or a turn end (captureDelta). Never a final archive, a
+   * rewind or other bookkeeping, which move updated_at: the app-start window
+   * counts from this. A record without it (1.0.10) counts from its
+   * updated_at, and keeps that time from then on.
+   */
+  last_activity_at: z.string().optional(),
+}).transform((state) => ({ ...state, last_activity_at: state.last_activity_at ?? state.updated_at }));
 type SessionState = z.infer<typeof sessionStateSchema>;
 
 const createRequestSchema = z.object({
@@ -362,25 +370,32 @@ export class SessionArchiver {
   /**
    * Base archive at session start (new session, or a resumed one without a
    * base). No-op when the gate says not archivable, archiving is off, or the
-   * session already has a base. Checks consent through GET /archives/key
-   * before packing anything. A folder without `.git` counts as a project
-   * only while the all-folders or the touched-files policy is on
+   * session already has a base (its record then only notes the prompt as
+   * activity, for the app-start window). Checks consent through GET
+   * /archives/key before packing anything. A folder without `.git` counts as
+   * a project only while the all-folders or the touched-files policy is on
    * (folderPolicy); with both off nothing is written and only the policy is
    * read. A touched-files session is only registered here ("unchanged"): its
    * base comes with the first delta or final archive that has a touched file.
-   * One registered before (resumed) runs no gate again.
+   * One registered before (resumed) runs no gate again; its record notes the
+   * prompt as activity too.
    */
   captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     return this.guard("base", sessionId, turn, async () => this.withSession(sessionId, async () => {
       const generation = this.generation;
       const state = await this.loadSession(sessionId);
       if (state?.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
-      if (state && state.next_sequence > 0) return { status: "skipped", reason: "exists" };
+      if (state && state.next_sequence > 0) {
+        // A prompt on a session archived in an earlier app run: it is active again.
+        if (generation === this.generation) await this.saveSession({ ...state, last_activity_at: this.now().toISOString() });
+        return { status: "skipped", reason: "exists" };
+      }
       // A touched-files chain registered earlier (a resumed session) still waits for its base. Like a
       // chain with one, it keeps its paths whatever the policy answers now: its deltas and finals ask.
+      // The prompt counts as its activity too.
       if (state?.marker === TOUCHED_MARKER) {
         if (!state.ended) this.touched.track(sessionId);
-        if (state.turn_seen !== turn && generation === this.generation) await this.saveSession({ ...state, turn_seen: turn, updated_at: this.now().toISOString() });
+        if (generation === this.generation) await this.saveSession({ ...state, turn_seen: turn, updated_at: this.now().toISOString(), last_activity_at: this.now().toISOString() });
         return { status: "skipped", reason: "unchanged" };
       }
       return this.captureBaseLocked(sessionId, resolve(root), turn, generation, true);
@@ -394,15 +409,19 @@ export class SessionArchiver {
    * policy is off. A session whose base could not be captured yet (key
    * unavailable, or no touched file yet) gets its base instead. A null turn
    * (the engine's messages could not be read) follows the last archived
-   * turn.
+   * turn. Whatever it captures, the turn counts as the session's activity
+   * (the app-start window).
    */
   captureDelta(sessionId: string, root: string, turn: number | null): Promise<CaptureResult> {
     return this.guard("delta", sessionId, turn ?? 0, async () => this.withSession(sessionId, async () => {
       const generation = this.generation;
       if (this.disabled) return { status: "skipped", reason: "disabled" };
-      const state = await this.loadSession(sessionId);
-      if (!state) return { status: "skipped", reason: "no_base" };
-      if (state.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
+      const loaded = await this.loadSession(sessionId);
+      if (!loaded) return { status: "skipped", reason: "no_base" };
+      if (loaded.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
+      // A turn ended: the session was active, whatever this capture does.
+      const state: SessionState = { ...loaded, last_activity_at: this.now().toISOString() };
+      if (generation === this.generation) await this.saveSession(state);
       if (resolve(root) !== state.root) this.log("warn", "OmniRush archive delta root differs from the session root; using the session root", { sessionId });
       const touched = state.marker === TOUCHED_MARKER;
       if (state.next_sequence === 0 && !touched) return this.captureBaseLocked(sessionId, state.root, turn ?? 0, generation);
@@ -494,12 +513,14 @@ export class SessionArchiver {
   /**
    * The sessions to give a final archive once at app start: every session
    * with a turn captured since its last final archive (the app quit before
-   * that final, or crashed), and the most recent session on each other
-   * folder (the folder may have changed while the app was closed), and
-   * every touched-files session (its files are its own). Only sessions whose
-   * chain moved within the last 7 days, not stopped and not deleted, with a
-   * base or (touched files) a touched path; the most recent first, at most
-   * 10.
+   * that final, or crashed), the most recently active session on each
+   * other folder (the folder may have changed while the app was closed),
+   * and every touched-files session (its files are its own). Only sessions
+   * active (a base, a prompt, a turn) within the last 7 days, not stopped
+   * and not deleted, with a base or (touched files) a touched path: a final
+   * archive never extends the window, so a chat left alone gets none a week
+   * after its last turn, however often the app starts. The most recently
+   * active first, at most 10.
    */
   async startFinalCandidates(): Promise<string[]> {
     try {
@@ -512,12 +533,12 @@ export class SessionArchiver {
         const parsed = sessionStateSchema.safeParse(await readJsonFile(join(this.dirs.sessions, name)));
         if (!parsed.success || name !== `${stateKey(parsed.data.session_id)}.json`) continue;
         const state = parsed.data;
-        if (state.stopped || state.ended || !(nowMs - Date.parse(state.updated_at) <= START_FINAL_WINDOW_MS)) continue;
+        if (state.stopped || state.ended || !(nowMs - Date.parse(state.last_activity_at) <= START_FINAL_WINDOW_MS)) continue;
         // Without a base, only a touched-files session that touched something may get one.
         if (state.next_sequence === 0 && !(state.marker === TOUCHED_MARKER && (await this.touched.has(state.session_id)))) continue;
         sessions.push(state);
       }
-      sessions.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+      sessions.sort((left, right) => right.last_activity_at.localeCompare(left.last_activity_at));
       const roots = new Set<string>();
       const picked: string[] = [];
       for (const state of sessions) {
@@ -702,6 +723,7 @@ export class SessionArchiver {
       stopped: null,
       updated_at: this.now().toISOString(),
       ...(touched ? { turn_seen: turn } : {}),
+      last_activity_at: this.now().toISOString(),
     };
     if (touched) this.touched.track(sessionId);
     if (fetched.status === "unavailable") {

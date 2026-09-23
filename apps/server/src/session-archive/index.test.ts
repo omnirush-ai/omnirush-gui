@@ -851,10 +851,114 @@ describe("SessionArchiver final archives", () => {
     const members = await openArchive(object.object!);
     expect(manifestOf(members)).toMatchObject({ trigger: "final", reason: "app_start", turn: 2 });
     expect(members.map((member) => member.name)).toContain("closed.txt");
-    // Its final settles the session whose last turn had none; the folder's most recent archive is now that one.
+    // Its final settles the session whose last turn had none. A final is not activity: the folder's most
+    // recently active chat is still the one with the latest turn.
     clock += 1_000;
     expect(await next.captureFinal("ses_start_due_01", "app_start")).toMatchObject({ status: "queued", sequence: 2 });
-    expect(await next.startFinalCandidates()).toEqual(["ses_start_due_01"]);
+    expect(await next.startFinalCandidates()).toEqual(["ses_start_last_01"]);
+  });
+
+  test("app start: the 7-day window counts from the chat's last base, prompt or turn; its final archives never extend it", async () => {
+    const server = new FakeArchiveServer();
+    const { root } = await project();
+    const state = await tempDir("state");
+    const day = 24 * 60 * 60_000;
+    let clock = Date.now() - 40 * day;
+    const appRun = () => archiver(server, state, { now: () => new Date(clock) });
+    const id = "ses_window_turns_1";
+
+    // Day 0: the chat's base and its one turn.
+    const first = appRun();
+    expect((await first.captureBase(id, root)).status).toBe("queued");
+    await writeFile(join(root, "turn1.txt"), "turn 1\n");
+    expect((await first.captureDelta(id, root, 1)).status).toBe("queued");
+    expect(await first.drain()).toMatchObject({ uploaded: 2 });
+    await first.stop();
+
+    // Day 6: the folder was edited outside the app, which then starts: within the window, one app_start final.
+    clock += 6 * day;
+    await writeFile(join(root, "outside.txt"), "day 6\n");
+    const second = appRun();
+    expect(await second.startFinalCandidates()).toEqual([id]);
+    expect(await second.captureFinal(id, "app_start")).toMatchObject({ status: "queued", sequence: 2 });
+    expect(await second.drain()).toMatchObject({ uploaded: 1 });
+    await second.stop();
+
+    // Day 12: edited again, the app starts again. The final six days ago was not activity: nothing is checked.
+    clock += 6 * day;
+    await writeFile(join(root, "outside.txt"), "day 12\n");
+    const third = appRun();
+    expect(await third.startFinalCandidates()).toEqual([]);
+    expect(server.objects()).toHaveLength(3);
+
+    // A prompt on the chat (its start step; the base exists) makes it active again.
+    expect(await third.captureBase(id, root, 1)).toEqual({ status: "skipped", reason: "exists" });
+    expect(await third.startFinalCandidates()).toEqual([id]);
+    // Day 13: its turn; day 15: a turn that changed nothing, which counts too.
+    clock += day;
+    expect(await third.captureDelta(id, root, 2)).toMatchObject({ status: "queued", sequence: 3 });
+    clock += 2 * day;
+    expect(await third.captureDelta(id, root, 3)).toEqual({ status: "skipped", reason: "unchanged" });
+    await writeFile(join(root, "outside.txt"), "day 15\n");
+    expect(await third.captureFinal(id, "idle")).toMatchObject({ status: "queued", sequence: 4 });
+    expect(await third.drain()).toMatchObject({ uploaded: 2, pending: 0 });
+    await third.stop();
+
+    // Day 21, six days after that last turn (eight after the last change): checked once more; day 23, eight days after it: no longer.
+    clock += 6 * day;
+    await writeFile(join(root, "outside.txt"), "day 21\n");
+    const fourth = appRun();
+    expect(await fourth.startFinalCandidates()).toEqual([id]);
+    expect(await fourth.captureFinal(id, "app_start")).toMatchObject({ status: "queued", sequence: 5 });
+    expect(await fourth.drain()).toMatchObject({ uploaded: 1 });
+    await fourth.stop();
+    clock += 2 * day;
+    await writeFile(join(root, "outside.txt"), "day 23\n");
+    expect(await appRun().startFinalCandidates()).toEqual([]);
+    const finals = await Promise.all(server.objects().map(async (object) => manifestOf(await openArchive(object.object!)).reason));
+    expect(finals).toEqual([undefined, undefined, "app_start", undefined, "idle", "app_start"]);
+  });
+
+  test("app start window: a record from before 1.0.11 counts from its last archive, and a final refused by a server without them does not extend it", async () => {
+    const server = new FakeArchiveServer();
+    server.strictTurns = true;
+    const { root } = await project();
+    const state = await tempDir("state");
+    const day = 24 * 60 * 60_000;
+    let clock = Date.now() - 40 * day;
+    const appRun = () => archiver(server, state, { now: () => new Date(clock) });
+    const id = "ses_window_legacy";
+
+    const first = appRun();
+    expect((await first.captureBase(id, root)).status).toBe("queued");
+    await writeFile(join(root, "turn1.txt"), "turn 1\n");
+    expect((await first.captureDelta(id, root, 1)).status).toBe("queued");
+    expect(await first.drain()).toMatchObject({ uploaded: 2 });
+    await first.stop();
+    // The session record as 1.0.10 wrote it: no activity time, no final archive fields.
+    const sessions = join(state, ARCHIVE_STATE_DIRECTORY, "sessions");
+    const [name] = await readdir(sessions);
+    const record = JSON.parse(await readFile(join(sessions, name!), "utf8")) as Record<string, unknown>;
+    for (const field of ["last_activity_at", "final_due", "rewind", "ended"]) delete record[field];
+    await writeFile(join(sessions, name!), `${JSON.stringify(record)}\n`);
+
+    // Day 6: within the window (its last archive); the server refuses the final and the chain goes back.
+    clock += 6 * day;
+    await writeFile(join(root, "outside.txt"), "day 6\n");
+    const second = appRun();
+    expect(await second.startFinalCandidates()).toEqual([id]);
+    expect(await second.captureFinal(id, "app_start")).toMatchObject({ status: "queued", sequence: 2 });
+    expect(await second.drain()).toMatchObject({ uploaded: 0, dropped: 1 });
+    // Waits for the rewind, which rewrote the record (updated_at is day 6, and a final is due again).
+    expect(await second.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "unsupported" });
+    await second.stop();
+    const rewound = JSON.parse(await readFile(join(sessions, name!), "utf8")) as Record<string, unknown>;
+    expect(rewound).toMatchObject({ next_sequence: 2, final_due: true, updated_at: new Date(clock).toISOString(), last_activity_at: record.updated_at });
+
+    // Day 12: neither the final nor its rewind moved the window.
+    clock += 6 * day;
+    expect(await appRun().startFinalCandidates()).toEqual([]);
+    expect(server.objects()).toHaveLength(2);
   });
 
   test("a session deleted with its folder gone gets no final, and is not checked at the next start", async () => {
