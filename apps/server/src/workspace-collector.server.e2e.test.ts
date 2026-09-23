@@ -1,13 +1,15 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { zstdDecompressSync } from "node:zlib";
 
 import { proxyOpencodeRequest, proxyOpencodeV2Request, startServer } from "./server.js";
+import { FakeArchiveServer } from "./session-archive/fake-archive-server.js";
+import { manifestOf, openArchive } from "./session-archive/test-helpers.js";
 import type { ServerConfig } from "./types.js";
 
 /**
@@ -269,14 +271,27 @@ async function settledRun(base: string, runId: string): Promise<{ status: string
   throw new Error("the workflow run did not settle");
 }
 
-/** The omnirush.ai collector endpoint, recording every decompressed envelope. */
-function startMockGateway() {
+/**
+ * The omnirush.ai collector endpoint, recording every decompressed envelope.
+ * With `archive`, it also serves the project archive routes from that fake,
+ * with the presigned S3 part URLs pointing back here.
+ */
+function startMockGateway(archive?: FakeArchiveServer) {
   const uploads: Upload[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (archive && url.pathname.startsWith("/omnirush/archives")) {
+        const body = request.method === "GET" ? undefined : await request.text();
+        const response = await archive.respond(`https://api.omnirush.test${url.pathname}`, { method: request.method, headers: request.headers, ...(body ? { body } : {}) });
+        const text = (await response.text()).replaceAll("https://bucket.s3.test/", `http://127.0.0.1:${server.port}/s3/`);
+        return new Response(text, { status: response.status, headers: { "content-type": "application/json" } });
+      }
+      if (archive && url.pathname.startsWith("/s3/")) {
+        return archive.respond(`https://bucket.s3.test/${url.pathname.slice("/s3/".length)}${url.search}`, { method: request.method, body: await request.arrayBuffer() });
+      }
       if (url.pathname === "/omnirush/collect" && request.method === "POST") {
         if (request.headers.get("authorization") !== "Bearer access-token") return Response.json({ detail: "unauthorized" }, { status: 401 });
         const compressed = Buffer.from(await request.arrayBuffer());
@@ -815,5 +830,75 @@ describe("collection gaps: the v2 mount and local workflow steps", () => {
     });
     expect((events(trace).find((event) => event.type === "turn.completed")?.data?.messages as unknown[]).length).toBe(2);
     expect(gateway.uploads.at(-1)?.envelope.session).toEqual({ provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: [] });
+  }, 60_000);
+});
+
+describe("project archive wiring", () => {
+  /** A server whose gateway also serves the archive routes; `ses_root` has a two-level subagent tree. */
+  async function archivedServer(setup: (archive: FakeArchiveServer) => void = () => undefined) {
+    const { root, stateDir } = await createWorkspace();
+    const engine = startMockEngine({ provider: "openai", model: "gpt-5" });
+    const archive = new FakeArchiveServer();
+    archive.token = "access-token";
+    setup(archive);
+    const gateway = startMockGateway(archive);
+    const omnirush = await startOmniRush(serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl, gatewayUrl: gateway.gatewayUrl }));
+    return { root, stateDir, archive, gateway, omnirush };
+  }
+
+  test("a git workspace's root session is archived through the device session: one base, then a delta for a turn that changed the folder", async () => {
+    const { root, archive, gateway, omnirush } = await archivedServer();
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
+    const [base] = await waitFor(() => (archive.objects().length >= 1 ? archive.objects() : undefined));
+
+    await writeFile(join(root, "feature.txt"), "new work\n");
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 2 ? true : undefined));
+    const objects = await waitFor(() => (archive.objects().some((object) => object.request.turn === 2) ? archive.objects() : undefined));
+    await omnirush.stop();
+
+    expect(base!.request).toMatchObject({ session_id: "ses_root", kind: "base", sequence: 0, marker: ".git" });
+    expect((await openArchive(base!.object!)).map((member) => member.name)).toEqual(expect.arrayContaining(["app.txt", ".git/HEAD"]));
+    // One base however many prompts; the turn numbers are the engine's completed-turn count, strictly increasing.
+    expect(objects.filter((object) => object.request.kind === "base")).toHaveLength(1);
+    const turns = objects.map((object) => object.request.turn);
+    expect(turns.every((turn, index) => index === 0 || turn > turns[index - 1]!)).toBe(true);
+    const delta = objects.at(-1)!;
+    expect(delta.request).toMatchObject({ kind: "delta", turn: 2 });
+    const members = await openArchive(delta.object!);
+    expect(members.map((member) => member.name)).toContain("feature.txt");
+    expect(manifestOf(members)).toMatchObject({ session_id: "ses_root", turn: 2 });
+    // The subagent sessions are never archived, and the key was fetched once.
+    expect(new Set(objects.map((object) => object.request.session_id))).toEqual(new Set(["ses_root"]));
+    expect(archive.calls.filter((call) => call.path === "archives/key")).toHaveLength(1);
+  }, 60_000);
+
+  test("without archive consent (428) nothing is packed or uploaded, consent is checked once, and the chat carries on", async () => {
+    const { stateDir, archive, gateway, omnirush } = await archivedServer((fake) => {
+      fake.gate = { status: 428, detail: "archive_consent_required" };
+    });
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 2 ? true : undefined));
+    await omnirush.stop();
+    expect(archive.callPaths()).toEqual(["GET archives/key 428"]);
+    expect(await readdir(join(stateDir, "omnirush-archive", "pending"))).toEqual([]);
+  }, 60_000);
+
+  test("OMNIRUSH_ARCHIVE_ENABLED=0 turns the archive off on this device: no archive request at all", async () => {
+    const previous = process.env.OMNIRUSH_ARCHIVE_ENABLED;
+    process.env.OMNIRUSH_ARCHIVE_ENABLED = "0";
+    cleanups.push(() => {
+      if (previous === undefined) delete process.env.OMNIRUSH_ARCHIVE_ENABLED;
+      else process.env.OMNIRUSH_ARCHIVE_ENABLED = previous;
+    });
+    const { stateDir, archive, gateway, omnirush } = await archivedServer();
+    expect((await prompt(omnirush.base)).status).toBe(204);
+    await waitFor(() => (traces(gateway.uploads).length >= 1 ? true : undefined));
+    await omnirush.stop();
+    expect(archive.calls).toEqual([]);
+    expect(await readdir(stateDir)).not.toContain("omnirush-archive");
   }, 60_000);
 });

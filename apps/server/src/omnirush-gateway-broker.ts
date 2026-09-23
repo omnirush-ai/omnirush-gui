@@ -146,13 +146,17 @@ function upstreamUrl(gatewayUrl: string, path: string): string {
   return url.toString();
 }
 
-function collectorUrl(gatewayUrl: string): string {
+/** `<gateway root>/<path>`: the gateway URL with its trailing `/` and `/v1` stripped, as for every omnirush.ai API route. */
+function apiUrl(gatewayUrl: string, path: string): string {
   const url = new URL(gatewayUrl);
-  url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "") + "/collect";
+  url.pathname = `${url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "")}/${path}`;
   url.search = "";
   url.hash = "";
   return url.toString();
 }
+
+/** The project archive routes the session archiver calls (archives, archives/key, archives/<id>/parts|complete|abort). */
+const ARCHIVE_API_PATH = /^archives(?:\/key|\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:parts|complete|abort))?$/;
 
 /**
  * Set by the omnirush-reasoning-effort engine plugin; keep the two
@@ -288,29 +292,51 @@ export class OmniRushGatewayBroker {
     });
   }
 
-  async collect(sessionId: string, body: Uint8Array): Promise<Response> {
-    if (!this.state) return Response.json({ error: "omnirush_account_required" }, { status: 401 });
-    const tokenUsed = this.state.accessToken;
-    const send = () => this.fetcher(collectorUrl(this.state!.gatewayUrl), {
+  collect(sessionId: string, body: Uint8Array): Promise<Response> {
+    return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, "collect"), {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${this.state!.accessToken}`,
+        Authorization: `Bearer ${state.accessToken}`,
         "Content-Type": "application/zstd",
         "X-OmniRush-Session-ID": sessionId,
       },
       body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
       signal: AbortSignal.timeout(30_000),
-    });
-    let response = await send();
-    let spent = tokenUsed;
-    // Bounded like handle(): adopt, then spend the adopted refresh token.
+    }));
+  }
+
+  /**
+   * A project archive API call for the session archiver (`archives/key`,
+   * `archives`, `archives/<id>/parts|complete|abort`), authenticated like
+   * collect(): the device bearer and the same bounded 401 refresh. S3 part
+   * uploads never come through here; they go to their presigned URLs.
+   */
+  archiveRequest(path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }): Promise<Response> {
+    if (!ARCHIVE_API_PATH.test(path)) return Promise.resolve(Response.json({ error: "unsupported_archive_path" }, { status: 404 }));
+    return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, path), {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${state.accessToken}`,
+        Accept: "application/json",
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(init.body === undefined ? {} : { body: init.body }),
+      ...(init.signal ? { signal: init.signal } : {}),
+    }));
+  }
+
+  /** Sends with the current device bearer; a 401 is retried bounded like handle(): adopt, then spend the adopted refresh token. */
+  private async withDeviceBearer(send: (state: CredentialState) => Promise<Response>): Promise<Response> {
+    if (!this.state) return Response.json({ error: "omnirush_account_required" }, { status: 401 });
+    let spent = this.state.accessToken;
+    let response = await send(this.state);
     for (let round = 0; round < 2 && response.status === 401 && this.state; round += 1) {
       const credentialAlreadyRotated = this.state.accessToken !== spent;
       if (!credentialAlreadyRotated && !(await this.refresh(spent))) break;
       if (!this.state) break;
       await response.body?.cancel().catch(() => undefined);
       spent = this.state.accessToken;
-      response = await send();
+      response = await send(this.state);
     }
     return response;
   }

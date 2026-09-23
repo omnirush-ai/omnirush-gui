@@ -160,6 +160,8 @@ import { createEngineV2Preview, type EngineV2Preview } from "./engine-v2-preview
 import { MAX_COLLECTOR_CHILD_SESSION_DEPTH, WorkspaceCollector, type CollectorSessionModel } from "./workspace-collector.js";
 import { collectPromptAttachments, promptBodyForTrace } from "./collector-attachments.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
+import { createProjectArchive } from "./project-archive.js";
+import { isFinishedAssistantMessage, type ArchiveEngineReads, type ProjectArchiveLifecycle } from "./session-archive/lifecycle.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
@@ -179,6 +181,7 @@ const agentDiagnosticsLastRunByServer = new WeakMap<ServerConfig, Map<string, nu
 const agentDiagnosticsInFlightByServer = new WeakMap<ServerConfig, Set<string>>();
 const commandAdmissionsByServer = new WeakMap<ServerConfig, Map<string, { fingerprint: string; admittedAt: number }>>();
 const workspaceCollectorsByServer = new WeakMap<ServerConfig, WorkspaceCollector>();
+const projectArchivesByServer = new WeakMap<ServerConfig, ProjectArchiveLifecycle>();
 const collectorObserversByServer = new WeakMap<ServerConfig, {
   sessions: Set<string>;
   lastMessageIds: Map<string, string>;
@@ -967,10 +970,7 @@ function traceHasTerminalAssistant(messages: unknown): boolean {
     if (!isRecord(message)) continue;
     const info = isRecord(message.info) ? message.info : message;
     if ((info.role ?? info.type) !== "assistant") continue;
-    if (isRecord(info.time) && (typeof info.time.completed === "number" || typeof info.time.completed === "string")) return true;
-    if (typeof info.finish === "string" || info.error != null) return true;
-    const parts = Array.isArray(message.parts) ? message.parts : Array.isArray(info.content) ? info.content : [];
-    return parts.some((part) => isRecord(part) && ["step-finish", "finish", "error"].includes(String(part.type)));
+    return isFinishedAssistantMessage(message);
   }
   return false;
 }
@@ -985,6 +985,42 @@ function newTraceMessages(messages: unknown, previousId: string | undefined): un
   if (!Array.isArray(messages) || !previousId) return messages;
   const index = messages.findIndex((message) => traceMessageId(message) === previousId);
   return index >= 0 ? messages.slice(index + 1) : messages;
+}
+
+/**
+ * The engine reads behind a project archive session start (is it a child
+ * session, how many turns has it completed), made like the collector
+ * observer's: same engine, headers and query, never from the request path.
+ */
+function projectArchiveEngineReads(input: {
+  baseUrl: string;
+  headers: Headers;
+  search: string;
+  sessionId: string;
+  engine?: "v1" | "v2";
+}): ArchiveEngineReads {
+  const v2 = input.engine === "v2";
+  const headers = new Headers(input.headers);
+  headers.delete("content-length");
+  headers.delete("content-type");
+  const read = async (path: string, maxBytes: number): Promise<unknown> => {
+    const response = await loopbackFetch(buildOpencodeProxyUrl(input.baseUrl, path, input.search), {
+      headers,
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const payload = await readCollectorResponse(response, maxBytes);
+    return v2 && isRecord(payload) && "data" in payload ? payload.data : payload;
+  };
+  const session = `${v2 ? "/api/session" : "/session"}/${encodeURIComponent(input.sessionId)}`;
+  return {
+    session: () => read(session, 1024 * 1024),
+    // The same message list the observer counts turns from at turn end.
+    messages: () => read(v2 ? `${session}/context` : `${session}/message`, 8 * 1024 * 1024),
+  };
 }
 
 function observeCollectedSession(input: {
@@ -1091,6 +1127,8 @@ function observeCollectedSession(input: {
       // the trace flushed right behind it.
       input.collector.captureSnapshot(input.sessionId, "turn_completed");
       input.collector.flushTrace(input.sessionId, { messages: delta });
+      // The delta's turn number is the engine's completed-turn count, which survives app restarts.
+      projectArchivesByServer.get(input.config)?.turnCompleted(input.sessionId, messages);
       return;
     }
     input.collector.recordTrace(input.sessionId, "session.observer_timeout");
@@ -1131,8 +1169,10 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       ? {
           ...gatewayCredentials,
           // Revoked or expired omnirush.ai credentials also discard spooled
-          // collector uploads: a signed-out account leaves nothing queued.
+          // collector uploads and queued project archives: a signed-out
+          // account leaves nothing queued.
           invalidate: async () => {
+            await projectArchive.signOut();
             await workspaceCollector.clearSpool().catch(() => undefined);
             await gatewayCredentials.invalidate?.();
           },
@@ -1158,6 +1198,15 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
   workspaceCollectorsByServer.set(config, workspaceCollector);
+  // Whole-folder archives of git projects, beside the collector (session-archive/README.md).
+  const projectArchive = createProjectArchive({
+    config,
+    gatewayBroker,
+    collectorEnabled: workspaceCollector.enabled,
+    log: (level, message, attributes) => logger.log(level, message, attributes),
+  });
+  projectArchivesByServer.set(config, projectArchive);
+  projectArchive.start();
   const collectorObserver = {
     sessions: new Set<string>(),
     lastMessageIds: new Map<string, string>(),
@@ -1497,10 +1546,14 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       idleTimeout: 120,
     });
   } catch (error) {
+    // First, and synchronously: archive part uploads in flight are aborted now, not after the other shutdown steps.
+    const archiveStopped = projectArchive.stop();
     await taskRecovery?.stop().catch(() => undefined);
     collectorObserver.controller.abort();
     await workspaceCollector.stop().catch(() => undefined);
+    await archiveStopped;
     workspaceCollectorsByServer.delete(config);
+    projectArchivesByServer.delete(config);
     collectorObserversByServer.delete(config);
     captureServerException(error, { method: "START", route: "startServer" });
     cloudProviderSync.stop();
@@ -1547,11 +1600,17 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   return {
     ...server,
     stop: async () => {
+      // First, and synchronously: a stop is also how a user sign-out reaches
+      // this server (the desktop clears the account, then restarts it), so
+      // archive part uploads in flight are aborted before anything else runs.
+      const archiveStopped = projectArchive.stop();
       let recoveryError: unknown;
       try { await taskRecovery?.stop(); } catch (error) { recoveryError = error; }
       collectorObserver.controller.abort();
       await workspaceCollector.stop().catch(() => undefined);
+      await archiveStopped;
       workspaceCollectorsByServer.delete(config);
+      projectArchivesByServer.delete(config);
       collectorObserversByServer.delete(config);
       await localWorkflowServices.get(config)?.stop();
       managedDesktopPolicy(config).onChange = undefined;
@@ -1745,6 +1804,11 @@ export async function proxyOpencodeV2Request(input: {
       body: v2PromptBodyForTrace(requestPayload),
     });
     collector.captureSnapshot(collectedSessionId, "prompt");
+    projectArchivesByServer.get(input.config)?.sessionStarted({
+      sessionId: collectedSessionId,
+      root: input.workspace.path,
+      engine: projectArchiveEngineReads({ baseUrl: input.connection.url, headers, search: target.search, sessionId: collectedSessionId, engine: "v2" }),
+    });
     void collectPromptAttachments(requestPayload, input.workspace.path).then((attachments) => {
       for (const attachment of attachments) collector.recordAttachment(collectedSessionId, attachment);
     }).catch(() => undefined);
@@ -1767,6 +1831,7 @@ export async function proxyOpencodeV2Request(input: {
   if (collector && deletedCollectedSessionId && response.ok) {
     collector.recordTrace(deletedCollectedSessionId, "session.deleted");
     collector.finishSession(deletedCollectedSessionId);
+    projectArchivesByServer.get(input.config)?.sessionEnded(deletedCollectedSessionId);
     collectorObserversByServer.get(input.config)?.lastMessageIds.delete(deletedCollectedSessionId);
   }
   if (method === "GET" && /^\/api\/provider(?:\/|$)/.test(decodedPath) && response.ok) {
@@ -2080,6 +2145,11 @@ export async function proxyOpencodeRequest(input: {
     });
     if (isCollectorPromptDispatch(method, proxyPath)) {
       collector.captureSnapshot(collectedSessionId, "prompt");
+      projectArchivesByServer.get(input.config)?.sessionStarted({
+        sessionId: collectedSessionId,
+        root: workspace.path,
+        engine: projectArchiveEngineReads({ baseUrl, headers, search, sessionId: collectedSessionId }),
+      });
       const promptSessionId = collectedSessionId;
       void collectPromptAttachments(requestPayload, workspace.path).then((attachments) => {
         for (const attachment of attachments) collector.recordAttachment(promptSessionId, attachment);
@@ -2222,6 +2292,7 @@ export async function proxyOpencodeRequest(input: {
     if (collector?.enabled && deletedCollectedSessionId && response.ok) {
       collector.recordTrace(deletedCollectedSessionId, "session.deleted");
       collector.finishSession(deletedCollectedSessionId);
+      projectArchivesByServer.get(input.config)?.sessionEnded(deletedCollectedSessionId);
       collectorObserversByServer.get(input.config)?.lastMessageIds.delete(deletedCollectedSessionId);
     }
     return response;

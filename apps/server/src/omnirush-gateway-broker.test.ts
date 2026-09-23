@@ -625,3 +625,62 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
     expect((await store.status()).connected).toBe(false);
   });
 });
+
+describe("OmniRush gateway broker project archive requests", () => {
+  const archiveId = "0f6c2a7e-5b1d-4c8e-9a3f-2d7b6e1c4a90";
+
+  test("reach the gateway root with the device bearer and refresh an expired one like collect()", async () => {
+    const calls: Array<{ url: string; method: string; authorization: string | null; contentType: string | null; body: unknown }> = [];
+    const refreshCalls: string[] = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1/", accessToken: "access-1", refreshToken: "refresh-1" },
+      engineToken: "local-engine-token",
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/device/refresh")) {
+          refreshCalls.push((JSON.parse(String(init?.body)) as { refresh_token: string }).refresh_token);
+          return Response.json({ access_token: "access-2", refresh_token: "refresh-2", gateway_url: "https://gateway.example/omnirush/v1" });
+        }
+        const headers = new Headers(init?.headers);
+        calls.push({ url, method: init?.method ?? "GET", authorization: headers.get("authorization"), contentType: headers.get("content-type"), body: init?.body });
+        return headers.get("authorization") === "Bearer access-2"
+          ? Response.json({ ok: true })
+          : Response.json({ detail: "invalid_token" }, { status: 401 });
+      },
+    });
+
+    expect((await broker.archiveRequest("archives/key", { method: "GET" })).status).toBe(200);
+    const body = JSON.stringify({ parts: [{ part_number: 1, etag: "\"e1\"" }] });
+    expect((await broker.archiveRequest(`archives/${archiveId}/complete`, { method: "POST", body })).status).toBe(200);
+
+    expect(refreshCalls).toEqual(["refresh-1"]);
+    expect(calls).toEqual([
+      { url: "https://gateway.example/omnirush/archives/key", method: "GET", authorization: "Bearer access-1", contentType: null, body: undefined },
+      { url: "https://gateway.example/omnirush/archives/key", method: "GET", authorization: "Bearer access-2", contentType: null, body: undefined },
+      { url: `https://gateway.example/omnirush/archives/${archiveId}/complete`, method: "POST", authorization: "Bearer access-2", contentType: "application/json", body },
+    ]);
+  });
+
+  test("never leave the archive routes, and answer 401 without an account", async () => {
+    const urls: string[] = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-1", refreshToken: "refresh-1" },
+      engineToken: "local-engine-token",
+      fetch: async (input) => {
+        urls.push(String(input));
+        return Response.json({ ok: true });
+      },
+    });
+    for (const path of ["collect", "archives/../device/refresh", "archives/not-a-uuid/parts", `archives/${archiveId}/delete`, "https://elsewhere.example/archives"]) {
+      expect([path, (await broker.archiveRequest(path, { method: "POST", body: "{}" })).status]).toEqual([path, 404]);
+    }
+    expect(urls).toEqual([]);
+    expect((await broker.archiveRequest("archives", { method: "POST", body: "{}" })).status).toBe(200);
+    expect(urls).toEqual(["https://gateway.example/omnirush/archives"]);
+
+    const signedOut = new OmniRushGatewayBroker({ engineToken: "local-engine-token" });
+    const response = await signedOut.archiveRequest("archives/key", { method: "GET" });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "omnirush_account_required" });
+  });
+});
