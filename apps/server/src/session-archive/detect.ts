@@ -1,22 +1,23 @@
 /**
  * The project gate (section 4): a session is archived only when the folder
  * the agent started in is a project. v1 recognises one marker, a `.git`
- * entry; further markers plug in as detectors.
+ * entry, in the folder itself or in the nearest parent that may hold one
+ * (a folder inside a repository); further markers plug in as detectors.
  */
 import { lstat, open, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import path, { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 export type ArchivableProject = {
   archivable: boolean;
-  /** git_dir | git_file | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
+  /** git_dir | git_file | git_parent | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
   reason: string;
   /** The marker that qualified the root (".git"), null when not archivable. */
   marker: string | null;
 };
 
-/** Looks at the root itself only (never walks the tree); null when its marker is absent. Never throws. */
-export type ProjectMarkerDetector = (root: string) => Promise<ArchivableProject | null>;
+/** Looks at the root (and, for gitParentDetector, its parents), never below it; null when its marker is absent. Never throws. */
+export type ProjectMarkerDetector = (root: string, options?: ProjectGateOptions) => Promise<ArchivableProject | null>;
 
 const MAX_GITFILE_BYTES = 4096;
 
@@ -62,12 +63,14 @@ export type ProjectGateOptions = {
   appDirs?: readonly string[];
   /** Tests only; defaults to os.homedir(). */
   homeDir?: string;
+  /** Tests only; replaces the system and app directories gitParentDetector never looks in. */
+  systemDirs?: readonly string[];
 };
 
-async function pathForms(path: string): Promise<string[]> {
-  const forms = [resolve(path)];
+async function pathForms(target: string): Promise<string[]> {
+  const forms = [resolve(target)];
   try {
-    const real = await realpath(path);
+    const real = await realpath(target);
     if (!forms.includes(real)) forms.push(real);
   } catch {
     // A directory that does not exist yet is compared by its resolved form only.
@@ -109,6 +112,95 @@ async function refusedRoot(root: string, options: ProjectGateOptions): Promise<s
   return null;
 }
 
+// --- a folder inside a repository ---------------------------------------------
+
+type PathApi = Pick<typeof path, "dirname" | "join" | "parse" | "relative" | "isAbsolute" | "sep">;
+
+/** System and app directories: a `.git` in one, or anywhere inside one, never qualifies a folder below it. */
+const POSIX_SYSTEM_DIRS = ["/System", "/Library", "/Applications", "/usr", "/private", "/var", "/etc", "/opt"];
+/** The same on Windows, on every drive and share. */
+const WIN32_SYSTEM_NAMES = ["Windows", "Program Files", "Program Files (x86)", "ProgramData"];
+
+function sameOrInsideFolded(child: string, parent: string, p: PathApi): boolean {
+  const rel = p.relative(parent.toLowerCase(), child.toLowerCase());
+  return rel === "" || (!rel.startsWith(`..${p.sep}`) && rel !== ".." && !p.isAbsolute(rel));
+}
+
+/** Why the parent walk must stop at `dir` without looking for `.git` in it, or null. Case-insensitive, so it errs on the side of stopping. */
+function parentWalkStop(dir: string, homes: readonly string[], p: PathApi, systemDirs?: readonly string[]): string | null {
+  if (p.parse(dir).root === dir || (p.sep === "/" && /^\/Volumes(?:\/[^/]+)?\/?$/.test(dir))) return "filesystem_root";
+  if (homes.some((home) => p.relative(home.toLowerCase(), dir.toLowerCase()) === "")) return "home";
+  // Another account's home: /Users/<name>, /home/<name>, <drive>:\Users\<name>.
+  if (/^(?:\/users|\/home|[a-z]:\\users)$/i.test(p.dirname(dir))) return "home";
+  const system = systemDirs ?? (p.sep === "/" ? POSIX_SYSTEM_DIRS : WIN32_SYSTEM_NAMES.map((name) => p.join(p.parse(dir).root, name)));
+  if (system.some((guarded) => sameOrInsideFolded(dir, guarded, p))) return "system_dir";
+  return null;
+}
+
+/**
+ * The parents of `root` that gitParentDetector may look in for `.git`,
+ * nearest first. The walk stops before the home directory (dotfiles repos),
+ * a filesystem, drive or UNC share root, or a system or app directory, so
+ * none of those, nor anything above them, can qualify the root.
+ */
+export function gitParentCandidates(
+  root: string,
+  homes: readonly string[],
+  p: PathApi = path,
+  systemDirs?: readonly string[],
+): string[] {
+  // Win32 namespace prefixes: \\?\UNC\server\share -> \\server\share, \\?\C:\ -> C:\.
+  const start = p.sep === "\\" ? root.replace(/^\\\\[?.]\\UNC\\/i, "\\\\").replace(/^\\\\[?.]\\(?=[a-z]:)/i, "") : root;
+  const candidates: string[] = [];
+  let current = start;
+  for (;;) {
+    const parent = p.dirname(current);
+    if (parent === current || parentWalkStop(parent, homes, p, systemDirs)) return candidates;
+    candidates.push(parent);
+    current = parent;
+  }
+}
+
+/** A mount point (the root of another filesystem) is a drive root too. Errs on the side of true. */
+async function isMountPoint(dir: string): Promise<boolean> {
+  try {
+    const [own, above] = await Promise.all([lstat(dir), lstat(path.dirname(dir))]);
+    return own.dev !== above.dev;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * A root without `.git` that sits inside a repository, e.g. `~/proj/packages/app`
+ * with `~/proj/.git`: archivable as git_parent when the nearest parent holding
+ * `.git` (a directory or a valid gitfile) lies before any stop of
+ * gitParentCandidates or a mount point. Only the root is archived; the
+ * parent's `.git` is not. A `.git` of any other kind in the root, or at the
+ * nearest parent, and a root inside that `.git`, qualify nothing.
+ */
+export const gitParentDetector: ProjectMarkerDetector = async (root, options = {}) => {
+  try {
+    if (await lstat(join(root, ".git")).then(() => true, () => false)) return null;
+    const start = await realpath(root).catch(() => resolve(root));
+    const homes = await pathForms(options.homeDir ?? homedir());
+    for (const dir of gitParentCandidates(start, homes, path, options.systemDirs)) {
+      if (await isMountPoint(dir)) return null;
+      if (!(await lstat(join(dir, ".git")).then(() => true, () => false))) continue;
+      // A root inside the repository's own .git (hooks, worktrees) would upload its history.
+      if (relative(dir, start).split(sep).some((part) => part.toLowerCase() === ".git")) return null;
+      const found = await gitMarkerDetector(dir);
+      return found?.archivable ? { archivable: true, reason: "git_parent", marker: ".git" } : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/** The gate's detectors: `.git` in the root first, then in the nearest parent. */
+export const defaultProjectDetectors: readonly ProjectMarkerDetector[] = [gitMarkerDetector, gitParentDetector];
+
 /**
  * Whether the session root is a project to archive: the root checks first,
  * then the detectors in order; the first archivable result wins, else the
@@ -116,7 +208,7 @@ async function refusedRoot(root: string, options: ProjectGateOptions): Promise<s
  */
 export async function isArchivableProject(
   root: string,
-  detectors: readonly ProjectMarkerDetector[] = [gitMarkerDetector],
+  detectors: readonly ProjectMarkerDetector[] = defaultProjectDetectors,
   options: ProjectGateOptions = {},
 ): Promise<ArchivableProject> {
   const refused = await refusedRoot(root, options);
@@ -125,7 +217,7 @@ export async function isArchivableProject(
   for (const detector of detectors) {
     let result: ArchivableProject | null = null;
     try {
-      result = await detector(root);
+      result = await detector(root, options);
     } catch {
       result = null;
     }

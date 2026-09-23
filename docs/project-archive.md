@@ -21,7 +21,16 @@ All of these must be true:
   consent settings. It is a separate choice, off by default. Agreeing to the
   general data collection does not turn it on.
 - The folder the chat started in contains `.git` (a git repository, a
-  worktree or a submodule). Nothing is archived for other folders.
+  worktree or a submodule), or sits inside a git repository, for example
+  `packages/app` in a repository whose `.git` is two folders up. In that
+  case only the chat's folder is archived, with all its subfolders; the
+  repository's `.git` and the rest of the repository are not; only its
+  current branch, commit, remote address (without any login in it) and
+  whether it has uncommitted changes are recorded. A `.git` in
+  your home folder (a dotfiles repository), at the root of a disk or
+  network share, or in a system or application folder (such as `/usr`,
+  `/Applications`, `C:\Windows` or `C:\Program Files`) does not count.
+  Nothing is archived for other folders.
 - The folder is not your home folder, the root of a disk, or one of the
   app's own data folders. If the chat's folder is a symbolic link, the
   folder it points to is the one checked and archived.

@@ -25,7 +25,7 @@ The user-facing description is `docs/project-archive.md`.
 
 | File | Responsibility |
 | --- | --- |
-| `detect.ts` | `isArchivableProject(root, detectors?, options?)` and `gitMarkerDetector` (section 4). A pluggable gate; only the `.git` marker is enabled |
+| `detect.ts` | `isArchivableProject(root, detectors?, options?)`, `gitMarkerDetector` and `gitParentDetector` (section 4). A pluggable gate; only the `.git` marker is enabled, in the root or (`git_parent`) in the nearest parent, never at home, a filesystem, drive, share or mount root, or in a system or app directory. A `git_parent` root is archived alone, without the parent's `.git` |
 | `manifest.ts` | Scan with the exclusions and credential filter (5.2, 5.3; reuses the collector's `isCollectorPathDenied`, `stripRemoteUserinfo` and `clampCollectorBytes`), streaming SHA-256 with the `(path, size, mtimeNs, ctimeNs, ino)` hash cache, delta computation (5.8), `manifest.json` (5.6) and the git block |
 | `pack.ts` | Streaming pax tar writer (5.5) with unstable-entry detection (5.9), and the file -> tar -> zstd -> ORSEAL01 -> temp file pipeline (5.10, 13.1) |
 | `seal.ts` | Streaming ORSEAL01 sealer and opener (section 6) over Node `crypto` |
@@ -172,7 +172,7 @@ void sessionArchiver.captureBase(sessionId, root, completedTurns).then(() => ses
 
 - `root` is the folder the agent started in (`input.workspace.path`), as a real path: the gate `lstat`s it and refuses a symlinked root. The home directory, a filesystem root and the app's own directories are always refused.
 - `completedTurns` is 0 for a new session. For a resumed session, it is the number of turns the session has already completed.
-- The call is cheap when there is nothing to do. With a base already captured, it only reads the session record, with no network. Without `.git`, it runs two `lstat` calls. Otherwise it fetches `GET /archives/key`, which also checks the archive consent: a 428 means nothing is packed.
+- The call is cheap when there is nothing to do. With a base already captured, it only reads the session record, with no network. Without `.git`, it runs a few `lstat` calls: the root, then its parents up to the nearest `.git`, home or a guarded directory. Otherwise it fetches `GET /archives/key`, which also checks the archive consent: a 428 means nothing is packed.
 - Child (sub-agent) sessions share the parent's root and must not be archived. Call this for root sessions only.
 - Keep a per-process `Set` of session ids already handed to `captureBase`. `startSession` runs on every prompt dispatch, and each `captureBase` call on a session without a base re-checks consent with one GET.
 
@@ -298,7 +298,7 @@ cd apps/server && bun --conditions=development test src/session-archive
   - pax header edge cases;
   - a multi-MiB `writeSealedArchive` round trip checked with the `zstd` CLI.
 - `manifest.test.ts`: UTF-8 byte order; the credential filter; the exclusions (credential, FIFO, app state, `__omnirush__`, unreadable, non-UTF-8); the hash cache; delta for add, modify (content and mode), delete, rename, file to dir, dir to file and symlink retarget; unstable re-send; `.git` changes; manifest JSON; the git block; `git status` never rewriting `.git/index`.
-- `detect.test.ts`: a `.git` dir; a gitfile; no `.git`; an invalid gitfile; a `.git` symlink; home, `/` and app dirs refused; `root_not_directory`; detector plug-ins.
+- `detect.test.ts`: a `.git` dir; a gitfile; no `.git`; an invalid gitfile; a `.git` symlink; home, `/` and app dirs refused; `root_not_directory`; detector plug-ins; `git_parent` (nearest parent wins, root `.git` preferred, dotfiles home, system dirs, posix and `path.win32` walks).
 - `upload.test.ts` (in-process fake API and S3):
   - the happy path;
   - resume after a failed part;

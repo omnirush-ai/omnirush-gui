@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { externalFetch } from "../server-fetch.js";
-import { gitMarkerDetector, isArchivableProject, type ProjectMarkerDetector } from "./detect.js";
+import { defaultProjectDetectors, isArchivableProject, type ProjectMarkerDetector } from "./detect.js";
 import { hintGarbageCollection, readJsonFile, stateKey, writeChunksAtomic, writeJsonAtomic } from "./files.js";
 import {
   ArchiveHashCache,
@@ -41,7 +41,7 @@ import {
   type RetryPolicy,
 } from "./upload.js";
 
-export { gitMarkerDetector, isArchivableProject, type ArchivableProject, type ProjectMarkerDetector } from "./detect.js";
+export { gitMarkerDetector, gitParentDetector, isArchivableProject, type ArchivableProject, type ProjectMarkerDetector } from "./detect.js";
 export { isArchiveCredentialPath } from "./manifest.js";
 export type { ArchiveApiRequest } from "./upload.js";
 
@@ -232,7 +232,7 @@ export class SessionArchiver {
       retry: this.retry,
       log: this.log,
     });
-    this.detectors = options.detectors ?? [gitMarkerDetector];
+    this.detectors = options.detectors ?? defaultProjectDetectors;
     this.appDirs = [stateDir, ...(options.excludedDirs ?? []).map((dir) => resolve(dir))];
     this.includeCredentials = options.archiveIncludeCredentialFiles === true;
   }
