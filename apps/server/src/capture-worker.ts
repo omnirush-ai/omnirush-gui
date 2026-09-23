@@ -107,9 +107,9 @@ const host = new CaptureHost({
   collector: {
     ...(init.collector.upload
       ? {
-          upload: async (sessionId: string, compressed: Uint8Array) => {
+          upload: async (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => {
             const body = new Uint8Array(compressed);
-            const result = await ask("collector", { type: "collect", sessionId, body });
+            const result = await ask("collector", { type: "collect", sessionId, body }, signal);
             if (!result.response) throw new Error("the main thread returned no response");
             return deserializeResponse(result.response);
           },

@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 
+import { collectUploadTimeoutMs } from "./collect-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import type { OmniRushGatewayCredentialBundle, OmniRushGatewayCredentials } from "./types.js";
 
@@ -598,7 +599,13 @@ export class OmniRushGatewayBroker {
     });
   }
 
-  collect(sessionId: string, body: Uint8Array): Promise<Response> {
+  /**
+   * One collector envelope. The deadline grows with the envelope's size
+   * (collect-upload-budget.ts); `signal`, the collector's own deadline or
+   * cancel, ends it sooner.
+   */
+  collect(sessionId: string, body: Uint8Array, signal?: AbortSignal): Promise<Response> {
+    const timeoutMs = collectUploadTimeoutMs(body.byteLength);
     return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, "collect"), {
       method: "POST",
       headers: {
@@ -607,7 +614,7 @@ export class OmniRushGatewayBroker {
         "X-OmniRush-Session-ID": sessionId,
       },
       body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
-      signal: AbortSignal.timeout(30_000),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
     }));
   }
 

@@ -36,6 +36,7 @@ import {
   stripRemoteUserinfo,
   workspaceRelativePath,
 } from "./workspace-collector.js";
+import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -799,6 +800,262 @@ describe("workspace collector durable retry", () => {
 
     await collector.clearSpool();
     expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    await collector.stop();
+  });
+});
+
+describe("workspace collector upload deadline and spool drain", () => {
+  // Upload deadlines at 1/100 of real time: one simulated second is 10 ms.
+  const hundredth: CollectUploadBudget = {
+    baseMs: COLLECT_UPLOAD_BUDGET.baseMs / 100,
+    bytesPerSecond: COLLECT_UPLOAD_BUDGET.bytesPerSecond * 100,
+    maxSendMs: COLLECT_UPLOAD_BUDGET.maxSendMs / 100,
+    responseMs: COLLECT_UPLOAD_BUDGET.responseMs / 100,
+  };
+  const simulatedSeconds = (seconds: number) => seconds * 10;
+  const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolvePromise, reject) => {
+    const timer = setTimeout(resolvePromise, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
+
+  /** Writes one spool entry as a failed upload leaves it; ids sort in `index` order. */
+  async function spoolEntry(stateDir: string, index: number, bytes: number, extra: Record<string, unknown> = {}): Promise<string> {
+    const spoolDir = join(stateDir, "omnirush-collector-spool");
+    await mkdir(spoolDir, { recursive: true, mode: 0o700 });
+    const id = `${index.toString(16).padStart(12, "0")}-${index.toString(16).padStart(6, "0")}-0000000${index}`;
+    const body = Buffer.alloc(bytes, index);
+    await writeFile(join(spoolDir, `${id}.zst`), body, { mode: 0o600 });
+    await writeFile(join(spoolDir, `${id}.json`), JSON.stringify({
+      id,
+      session_id: `session-drain-${index}`,
+      snapshot_type: index === 1 ? "start" : "change",
+      trigger: index === 1 ? "session_start" : "turn_completed",
+      sequence: index,
+      bytes,
+      created_at: new Date().toISOString(),
+      attempts: 1,
+      ...extra,
+    }), { mode: 0o600 });
+    return id;
+  }
+
+  async function spoolMeta(stateDir: string, id: string): Promise<{ attempts: number; last_attempt_at?: string }> {
+    return JSON.parse(await readFile(join(stateDir, "omnirush-collector-spool", `${id}.json`), "utf8")) as { attempts: number; last_attempt_at?: string };
+  }
+
+  async function drainState(): Promise<string> {
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-collector-drain-state-"));
+    roots.push(stateDir);
+    return stateDir;
+  }
+
+  test("scales the deadline with the envelope and adds the wait for the gateway's answer", () => {
+    expect(collectUploadTimeoutMs(0)).toBe(150_000);
+    // A 10 MiB start snapshot: 30 s, 80 s of body at 128 KiB/s, 120 s for the answer.
+    expect(collectUploadTimeoutMs(10 * 1024 * 1024)).toBe(230_000);
+    expect(collectUploadTimeoutMs(10 * 1024 * 1024)).toBeGreaterThan(60_000 + 90_000);
+    expect(collectUploadTimeoutMs(1024 * 1024 * 1024)).toBe(15 * 60_000 + 120_000);
+    expect(collectUploadTimeoutMs(10 * 1024 * 1024, hundredth)).toBe(2_300);
+  });
+
+  test("delivers a 10 MB envelope over an uplink that needs 60 s for it on the first attempt", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 10 * 1024 * 1024);
+    const calls: { bytes: number; aborted: boolean }[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (_sessionId, compressed, signal) => {
+        // Throttled: the body trickles out over 60 s (about 170 KiB/s).
+        await sleep(simulatedSeconds(60), signal);
+        calls.push({ bytes: compressed.byteLength, aborted: signal?.aborted ?? true });
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      uploadBudget: hundredth,
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 1, pending: 0 });
+    expect(calls).toEqual([{ bytes: 10 * 1024 * 1024, aborted: false }]);
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    await collector.stop();
+  });
+
+  test("waits for an answer that comes 90 s after the body is sent", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 6 * 1024 * 1024);
+    const answered: boolean[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      gatewayUrl: "https://gateway.example.test/v1",
+      accessToken: "device-token",
+      fetch: async (_input: string, init?: RequestInit) => {
+        const signal = init?.signal ?? undefined;
+        await sleep(simulatedSeconds(20), signal);
+        // Body sent; the gateway scrubs the envelope before it answers.
+        await sleep(simulatedSeconds(90), signal);
+        answered.push(signal?.aborted ?? true);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      uploadBudget: hundredth,
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 1, pending: 0 });
+    expect(answered).toEqual([false]);
+    await collector.stop();
+  });
+
+  test("delivers the entries behind a spooled upload that keeps failing, and backs that one off", async () => {
+    const stateDir = await drainState();
+    const stuck = await spoolEntry(stateDir, 1, 4_096);
+    await spoolEntry(stateDir, 2, 1_024);
+    await spoolEntry(stateDir, 3, 1_024);
+    const attempts: number[] = [];
+    const delivered: number[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (sessionId) => {
+        const index = Number(sessionId.split("-").at(-1));
+        attempts.push(index);
+        // The first entry never gets an answer, even past its deadline.
+        if (index === 1) return new Promise<Response>(() => undefined);
+        delivered.push(index);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      uploadBudget: { baseMs: 50, bytesPerSecond: 128 * 1024 * 1000, maxSendMs: 900, responseMs: 100 },
+      retryBaseMs: 60_000,
+    });
+
+    expect(await collector.drainSpool()).toEqual({ delivered: 2, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3]);
+    expect(delivered).toEqual([2, 3]);
+    const failed = await spoolMeta(stateDir, stuck);
+    expect(failed.attempts).toBe(2);
+    expect(typeof failed.last_attempt_at).toBe("string");
+
+    // Within its backoff the failed entry is left alone.
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3]);
+
+    // Once the backoff (the retry base after one failed drain) has passed, it is tried again...
+    const spoolDir = join(stateDir, "omnirush-collector-spool");
+    await writeFile(join(spoolDir, `${stuck}.json`), JSON.stringify({ ...failed, last_attempt_at: new Date(Date.now() - 61_000).toISOString() }));
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3, 1]);
+    const again = await spoolMeta(stateDir, stuck);
+    expect(again.attempts).toBe(3);
+
+    // ...and the next backoff is twice as long.
+    await writeFile(join(spoolDir, `${stuck}.json`), JSON.stringify({ ...again, last_attempt_at: new Date(Date.now() - 90_000).toISOString() }));
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(attempts).toEqual([1, 2, 3, 1]);
+    await collector.stop();
+  });
+
+  test("stops a drain after three failures and leaves the rest to the next one", async () => {
+    const stateDir = await drainState();
+    for (let index = 1; index <= 5; index += 1) await spoolEntry(stateDir, index, 512);
+    const attempts: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (sessionId) => {
+        attempts.push(sessionId);
+        return Response.json({ error: "unavailable" }, { status: 503 });
+      },
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 5 });
+    expect(attempts).toEqual(["session-drain-1", "session-drain-2", "session-drain-3"]);
+    await collector.stop();
+  });
+
+  test("drops an entry once it reaches the attempt limit", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 512, { attempts: 23 });
+    await spoolEntry(stateDir, 2, 512);
+    const warnings: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async () => Response.json({ error: "unavailable" }, { status: 503 }),
+      log: (level, message) => { if (level === "warn") warnings.push(message); },
+      retryBaseMs: 60_000,
+    });
+    expect(await collector.drainSpool()).toEqual({ delivered: 0, pending: 1 });
+    expect(warnings).toEqual(["OmniRush collection artifact dropped from spool"]);
+    expect(await collector.spoolStatus()).toEqual({ entries: 1, bytes: 512 });
+    await collector.stop();
+  });
+
+  test("a sign-out aborts the spooled upload in flight and empties the spool", async () => {
+    const stateDir = await drainState();
+    await spoolEntry(stateDir, 1, 1_024);
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    let aborted = false;
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: (_sessionId, _compressed, signal) => new Promise<Response>((_resolvePromise, reject) => {
+        signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(signal.reason);
+        }, { once: true });
+        started();
+      }),
+      retryBaseMs: 60_000,
+    });
+    const drain = collector.drainSpool();
+    await inFlight;
+    await collector.clearSpool();
+    expect(aborted).toBe(true);
+    expect(await drain).toEqual({ delivered: 0, pending: 1 });
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    await collector.stop();
+  });
+
+  test("a sign-out aborts the live upload in flight and spools nothing it carried", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-signout-"));
+    roots.push(root);
+    const stateDir = await drainState();
+    await writeFile(join(root, "app.txt"), "hello\n");
+    let started!: () => void;
+    const inFlight = new Promise<void>((resolvePromise) => { started = resolvePromise; });
+    const signals: AbortSignal[] = [];
+    const infos: string[] = [];
+    const collector = new WorkspaceCollector({
+      stateDir,
+      upload: async (_sessionId, _compressed, signal) => {
+        signals.push(signal!);
+        started();
+        // Fails 200 ms in, cancelled or not: a slow uplink that drops.
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+        throw new Error("network down");
+      },
+      log: (level, message) => { if (level === "info") infos.push(message); },
+      fallbackScanMs: 60_000,
+      uploadRetryDelayMs: 1,
+      retryBaseMs: 60_000,
+    });
+    const sessionId = "session-signout-1234";
+    collector.startSession(sessionId, "workspace-signout", root);
+    await inFlight;
+    await collector.clearSpool();
+    await collector.idle(sessionId);
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(infos).toContain("OmniRush collection artifact discarded at sign-out");
+    expect(await collector.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
+    expect(await readdir(join(stateDir, "omnirush-collector-spool")).catch(() => [])).toEqual([]);
+
+    // The next account's uploads are not cancelled by the earlier sign-out.
+    const next = "session-signout-5678";
+    collector.startSession(next, "workspace-signout-next", root);
+    await collector.idle(next);
+    expect(signals.length).toBeGreaterThan(1);
+    expect(signals.slice(1).every((signal) => !signal.aborted)).toBe(true);
+    expect(await collector.spoolStatus()).toMatchObject({ entries: 1 });
+    await collector.clearSpool();
     await collector.stop();
   });
 });

@@ -415,7 +415,7 @@ class CaptureClient implements CaptureService {
     switch (request.type) {
       case "collect": {
         if (!collector.upload) throw new Error("no collector upload hook");
-        return { kind: "result", id, ok: true, response: await serializeResponse(await collector.upload(request.sessionId, request.body)) };
+        return { kind: "result", id, ok: true, response: await serializeResponse(await collector.upload(request.sessionId, request.body, signal)) };
       }
       case "refreshAccessToken": {
         const refresh = channel === "archive" ? archive.refreshAccessToken : collector.refreshAccessToken;

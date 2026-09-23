@@ -48,7 +48,7 @@ export type CaptureHostOptions = {
   engineVersion: string;
   log: CaptureLog;
   collector: {
-    upload?: (sessionId: string, compressed: Uint8Array) => Promise<Response>;
+    upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => Promise<Response>;
     refreshAccessToken?: () => Promise<string | null>;
     fetch?: (input: string, init?: RequestInit) => Promise<Response>;
     gatewayUrl?: string;
