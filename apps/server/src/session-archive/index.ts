@@ -4,9 +4,12 @@
  * policy on, any folder detect.ts accepts) gets a base archive of the
  * whole folder at session start, a delta after every completed turn that
  * changed anything, and a final delta (the last turn's number again) when the
- * folder changed after that turn; each is sealed to the omnirush.ai archive
- * key, queued durably under the collector state dir and uploaded to S3
- * through presigned multipart URLs. The embedded server drives it through
+ * folder changed after that turn. Any other folder detect.ts accepts gets,
+ * with the touched-files policy on, the same chain holding only the files
+ * the agent touched there (touched.ts), its base at the first capture that
+ * has one. Each archive is sealed to the omnirush.ai archive key, queued
+ * durably under the collector state dir and uploaded to S3 through
+ * presigned multipart URLs. The embedded server drives it through
  * lifecycle.ts; see README.md.
  */
 import { randomBytes, randomUUID } from "node:crypto";
@@ -15,7 +18,16 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { externalFetch } from "../server-fetch.js";
-import { defaultProjectDetectors, FOLDER_MARKER, folderDetector, isArchivableProject, type FolderGateOptions, type ProjectMarkerDetector } from "./detect.js";
+import {
+  defaultProjectDetectors,
+  FOLDER_MARKER,
+  folderDetector,
+  folderRootRefusal,
+  isArchivableProject,
+  TOUCHED_MARKER,
+  type FolderGateOptions,
+  type ProjectMarkerDetector,
+} from "./detect.js";
 import { hintGarbageCollection, readJsonFile, stateKey, writeChunksAtomic, writeJsonAtomic } from "./files.js";
 import {
   ArchiveHashCache,
@@ -27,14 +39,20 @@ import {
   parseBaselineText,
   readArchiveGit,
   scanArchiveTree,
+  type ArchiveEntry,
+  type ArchiveGit,
   type ArchiveKind,
   type ArchiveTrigger,
+  type ExcludedCounts,
   type FinalReason,
   type ScannedEntry,
 } from "./manifest.js";
 import { writeSealedArchive } from "./pack.js";
+import { POLICY_OFF, type ArchivePolicy } from "./policy.js";
 import { SEAL_CONTENT } from "./seal.js";
+import { scanTouchedFiles, touchedChange, TouchedPathStore } from "./touched.js";
 import {
+  ARCHIVE_MARKER_NOT_ALLOWED,
   ArchiveUploader,
   DEFAULT_RETRY_POLICY,
   type ArchiveApiRequest,
@@ -66,9 +84,10 @@ const START_FINAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
 /** At most this many sessions are scanned for a final archive at app start. */
 const MAX_START_FINALS = 10;
 /**
- * How long an all-folders policy answer (4.4) is reused for folders without
- * `.git`: sessions started meanwhile send no probe, and a policy flipped on
- * omnirush.ai reaches a running app within this time.
+ * How long a folder policy answer (4.4: all folders, touched files) is
+ * reused for folders without `.git`: sessions started meanwhile send no
+ * probe, and a policy flipped on omnirush.ai reaches a running app within
+ * this time.
  */
 export const POLICY_TTL_MS = 5 * 60_000;
 
@@ -89,7 +108,7 @@ export type SessionArchiverOptions = {
   /** Default false: the credential filter of section 5.3 applies. */
   archiveIncludeCredentialFiles?: boolean;
   detectors?: ProjectMarkerDetector[];
-  /** Where the all-folders policy (4.4) may not archive a folder without `.git`: the userData dir (and, in tests, home). */
+  /** Where the all-folders and touched-files policies (4.4) may not archive a folder without `.git`: the userData dir (and, in tests, home). */
   folderGate?: FolderGateOptions;
   log?: ArchiveLog;
   /** Tests. */
@@ -98,6 +117,8 @@ export type SessionArchiverOptions = {
   random?: { uuid(): string; bytes(n: number): Buffer };
   /** Tests: backoff timings of the upload client. */
   retry?: Partial<RetryPolicy>;
+  /** Tests: how soon reported touched paths are written (2 s). */
+  touchedFlushMs?: number;
 };
 
 export type CaptureSkipReason =
@@ -163,6 +184,8 @@ const sessionStateSchema = z.object({
   final_due: z.boolean().optional(),
   /** When the session was deleted in the app: no final archive at app start. */
   ended: z.string().nullable().optional(),
+  /** A touched-files chain without its base yet: the completed turns last seen, the turn of a base a final archive captures. */
+  turn_seen: z.number().int().nonnegative().optional(),
 });
 type SessionState = z.infer<typeof sessionStateSchema>;
 
@@ -221,9 +244,16 @@ function errorSummary(error: unknown): string {
   return "unknown error";
 }
 
+/** Whether `policy` lets a chain with this marker capture: a plain folder needs all_folders, touched files touched_files, git nothing. */
+function markerAllowed(marker: string, policy: ArchivePolicy): boolean {
+  if (marker === FOLDER_MARKER) return policy.allFolders;
+  if (marker === TOUCHED_MARKER) return policy.touchedFiles;
+  return true;
+}
+
 /** How a capture was asked for. */
 type CaptureOptions = {
-  /** Deltas only: a completed turn, or a final archive with its reason. */
+  /** Deltas: a completed turn, or a final archive with its reason (a touched-files base a final archive captures says "final" too, without it in its manifest). */
   trigger?: ArchiveTrigger;
   reason?: FinalReason;
   /** A final archive of a session deleted in the app: its record is marked ended. */
@@ -234,7 +264,7 @@ type CaptureOptions = {
 
 export class SessionArchiver {
   private readonly dir: string;
-  private readonly dirs: { sessions: string; baselines: string; hashCache: string; queue: string; pending: string; tmp: string };
+  private readonly dirs: { sessions: string; baselines: string; hashCache: string; queue: string; pending: string; tmp: string; touched: string };
   private readonly uploader: ArchiveUploader;
   private readonly detectors: readonly ProjectMarkerDetector[];
   private readonly folderGate: FolderGateOptions | undefined;
@@ -247,8 +277,8 @@ export class SessionArchiver {
   private started: Promise<void> | null = null;
   private key: ArchiveKey | null = null;
   private disabled: string | null = null;
-  /** The last all-folders policy answer, kept with the key for POLICY_TTL_MS; a failed probe is kept as off. */
-  private policy: { allFolders: boolean; at: number } | null = null;
+  /** The last folder policy answer, kept with the key for POLICY_TTL_MS; a failed probe is kept as off. */
+  private policy: { value: ArchivePolicy; at: number } | null = null;
   /** The probe in flight, shared by the sessions that start meanwhile. */
   private policyProbe: Promise<KeyResult> | null = null;
   private readonly sessionTails = new Map<string, Promise<void>>();
@@ -266,6 +296,8 @@ export class SessionArchiver {
   private finalsAccepted = false;
   /** The server refused a final archive (a backend without them): none is captured until the app restarts. */
   private finalsRefused = false;
+  /** The paths each touched-files session touched (touched.ts). */
+  private readonly touched: TouchedPathStore;
 
   constructor(options: SessionArchiverOptions) {
     const stateDir = resolve(options.stateDir);
@@ -277,6 +309,7 @@ export class SessionArchiver {
       queue: join(this.dir, "queue"),
       pending: join(this.dir, "pending"),
       tmp: join(this.dir, "tmp"),
+      touched: join(this.dir, "touched"),
     };
     this.log = options.log ?? (() => undefined);
     this.now = options.now ?? (() => new Date());
@@ -299,6 +332,16 @@ export class SessionArchiver {
     this.folderGate = options.folderGate;
     this.appDirs = [stateDir, ...(options.excludedDirs ?? []).map((dir) => resolve(dir))];
     this.includeCredentials = options.archiveIncludeCredentialFiles === true;
+    this.touched = new TouchedPathStore(this.dirs.touched, {
+      ready: () => this.start(),
+      modeOf: async (sessionId) => {
+        const state = await this.loadSession(sessionId);
+        if (!state) return "unknown";
+        return state.marker === TOUCHED_MARKER && !state.stopped && !state.ended ? "tracked" : "ignored";
+      },
+      log: this.log,
+      ...(options.touchedFlushMs !== undefined ? { flushMs: options.touchedFlushMs } : {}),
+    });
   }
 
   // --- public API -------------------------------------------------------------------
@@ -321,8 +364,10 @@ export class SessionArchiver {
    * base). No-op when the gate says not archivable, archiving is off, or the
    * session already has a base. Checks consent through GET /archives/key
    * before packing anything. A folder without `.git` counts as a project
-   * only while the all-folders policy is on (allFoldersPolicy); with it off
-   * nothing is written and only that policy is read.
+   * only while the all-folders or the touched-files policy is on
+   * (folderPolicy); with both off nothing is written and only the policy is
+   * read. A touched-files session is only registered here ("unchanged"): its
+   * base comes with the first delta or final archive that has a touched file.
    */
   captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     return this.guard("base", sessionId, turn, async () => this.withSession(sessionId, async () => {
@@ -330,17 +375,18 @@ export class SessionArchiver {
       const state = await this.loadSession(sessionId);
       if (state?.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
       if (state && state.next_sequence > 0) return { status: "skipped", reason: "exists" };
-      return this.captureBaseLocked(sessionId, resolve(root), turn, generation);
+      return this.captureBaseLocked(sessionId, resolve(root), turn, generation, true);
     }));
   }
 
   /**
    * Delta after a completed turn. No-op without a base, when the session
    * stopped archiving, when nothing in the folder changed, or for a plain
-   * folder (marker `folder`) while the all-folders policy is off. A session
-   * whose base could not be captured yet (key unavailable) gets its base
-   * instead. A null turn (the engine's messages could not be read) follows
-   * the last archived turn.
+   * folder (marker `folder`) or touched files (marker `touched`) while their
+   * policy is off. A session whose base could not be captured yet (key
+   * unavailable, or no touched file yet) gets its base instead. A null turn
+   * (the engine's messages could not be read) follows the last archived
+   * turn.
    */
   captureDelta(sessionId: string, root: string, turn: number | null): Promise<CaptureResult> {
     return this.guard("delta", sessionId, turn ?? 0, async () => this.withSession(sessionId, async () => {
@@ -350,14 +396,17 @@ export class SessionArchiver {
       if (!state) return { status: "skipped", reason: "no_base" };
       if (state.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
       if (resolve(root) !== state.root) this.log("warn", "OmniRush archive delta root differs from the session root; using the session root", { sessionId });
-      if (state.next_sequence === 0) return this.captureBaseLocked(sessionId, state.root, turn ?? 0, generation);
-      const next = turn ?? (state.last_turn ?? 0) + 1;
+      const touched = state.marker === TOUCHED_MARKER;
+      if (state.next_sequence === 0 && !touched) return this.captureBaseLocked(sessionId, state.root, turn ?? 0, generation);
+      const next = state.next_sequence === 0 ? turn ?? state.turn_seen ?? 0 : turn ?? (state.last_turn ?? 0) + 1;
       if (state.last_turn !== null && next <= state.last_turn) return { status: "skipped", reason: "stale_turn" };
-      // A plain folder's deltas pause while the all-folders policy is off; the next one after it is on again catches up.
-      if (state.marker === FOLDER_MARKER && !(await this.allFoldersPolicy(generation)).allFolders) return { status: "skipped", reason: "not_archivable" };
+      // A plain folder's or touched files' archives pause while their policy is off; the next one after it is on again catches up.
+      if ((state.marker === FOLDER_MARKER || touched) && !(await this.policyAllows(state.marker, generation))) return { status: "skipped", reason: "not_archivable" };
       const key = await this.currentKey();
       if (key === "disabled") return { status: "skipped", reason: "disabled" };
       if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
+      // A touched-files session without a base: its base, with this turn, once a touched file is there.
+      if (state.next_sequence === 0) return this.captureArchive(state, "base", next, key, generation);
       return this.captureArchive(state, "delta", next, key, generation, { trigger: "turn" });
     }));
   }
@@ -368,48 +417,81 @@ export class SessionArchiver {
    * the app quits or starts again). A delta like any other, numbered with
    * the last archived turn again, whose manifest says `"trigger": "final"`
    * and why. Only for a session with a base, whose root the gate still
-   * accepts; nothing when the folder did not change. `signal` cancels it
-   * until its commit.
+   * accepts (a plain folder or touched files: the folder refusals, and their
+   * policy is on); nothing when the folder did not change. A touched-files
+   * session without a base gets its base here once it has a touched file,
+   * numbered with the completed turns last seen. `signal` cancels it until
+   * its commit.
    */
   captureFinal(sessionId: string, reason: FinalReason, options: { signal?: AbortSignal } = {}): Promise<CaptureResult> {
     const { signal } = options;
+    const ended = reason === "session_deleted";
     return this.guard("delta", sessionId, 0, async () => this.withSession(sessionId, async () => {
-      const generation = this.generation;
-      if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
-      if (this.disabled || !this.uploader.configured) return { status: "skipped", reason: "disabled" };
-      const state = await this.loadSession(sessionId);
-      if (!state || state.next_sequence === 0 || state.last_turn === null) return { status: "skipped", reason: "no_base" };
-      if (state.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
-      const ended = reason === "session_deleted";
-      const skip = async (skipReason: CaptureSkipReason): Promise<CaptureResult> => {
-        if (ended && generation === this.generation) await this.saveSession({ ...state, final_due: false, ended: this.now().toISOString(), updated_at: this.now().toISOString() });
-        return { status: "skipped", reason: skipReason };
-      };
-      if (this.finalsRefused) return skip("unsupported");
-      // The folder may be gone, or no longer what the start-time gate accepted (a plain folder: the all-folders policy is still on).
-      const detectors = state.marker === FOLDER_MARKER ? [...this.detectors, this.folderDetector(generation)] : this.detectors;
-      const gate = await isArchivableProject(state.root, detectors, { appDirs: this.appDirs });
-      if (!gate.archivable) return skip("not_archivable");
-      const key = await this.currentKey(signal);
-      if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
-      if (key === "disabled") return { status: "skipped", reason: "disabled" };
-      if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
-      try {
-        return await this.captureArchive(state, "delta", state.last_turn, key, generation, { trigger: "final", reason, ended, ...(signal ? { signal } : {}) });
-      } catch (error) {
-        if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
-        throw error;
+      const result = await this.captureFinalLocked(sessionId, reason, ended, signal);
+      if (ended) {
+        // A deleted session keeps no touched paths once its record says so (or there is none).
+        const after = await this.loadSession(sessionId);
+        if (!after || after.ended) await this.touched.forget(sessionId);
       }
+      return result;
     }));
+  }
+
+  private async captureFinalLocked(sessionId: string, reason: FinalReason, ended: boolean, signal?: AbortSignal): Promise<CaptureResult> {
+    const generation = this.generation;
+    if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
+    if (this.disabled || !this.uploader.configured) return { status: "skipped", reason: "disabled" };
+    const state = await this.loadSession(sessionId);
+    const unbased = state?.next_sequence === 0 && state.marker === TOUCHED_MARKER;
+    const turn = unbased ? state.turn_seen ?? 0 : state && state.next_sequence > 0 ? state.last_turn : null;
+    if (!state || turn === null) return { status: "skipped", reason: "no_base" };
+    if (state.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
+    const skip = async (skipReason: CaptureSkipReason): Promise<CaptureResult> => {
+      if (ended && generation === this.generation) await this.saveSession({ ...state, final_due: false, ended: this.now().toISOString(), updated_at: this.now().toISOString() });
+      return { status: "skipped", reason: skipReason };
+    };
+    // A base repeats no turn: a backend without final archives takes it.
+    if (this.finalsRefused && !unbased) return skip("unsupported");
+    // The folder may be gone, or no longer what the start-time gate accepted.
+    if (!(await this.chainAllowed(state, generation))) return skip("not_archivable");
+    const key = await this.currentKey(signal);
+    if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
+    if (key === "disabled") return { status: "skipped", reason: "disabled" };
+    if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
+    try {
+      return await this.captureArchive(state, unbased ? "base" : "delta", turn, key, generation, { trigger: "final", reason, ended, ...(signal ? { signal } : {}) });
+    } catch (error) {
+      if (signal?.aborted) return { status: "skipped", reason: "cancelled" };
+      throw error;
+    }
+  }
+
+  /**
+   * A path the session touched, workspace-relative (portable `/`), as the
+   * collector reports it: a tool's path in the trace, or a change the
+   * watcher saw. Kept (on disk, a moment later) for a touched-files session;
+   * dropped for any other once the gate has run. Cheap: called for every
+   * file event.
+   */
+  recordTouched(sessionId: string, path: string): void {
+    if (this.disabled || !SESSION_ID_PATTERN.test(sessionId) || this.stoppedSessions.has(sessionId)) return;
+    this.touched.note(sessionId, path);
+  }
+
+  /** The session is not archived (a child session): its reported paths go. */
+  forgetTouched(sessionId: string): void {
+    void this.touched.forget(sessionId).catch((error: unknown) => this.log("warn", "OmniRush touched-files paths could not be removed", { sessionId, error: errorSummary(error) }));
   }
 
   /**
    * The sessions to give a final archive once at app start: every session
    * with a turn captured since its last final archive (the app quit before
    * that final, or crashed), and the most recent session on each other
-   * folder (the folder may have changed while the app was closed). Only
-   * sessions whose chain moved within the last 7 days, not stopped and not
-   * deleted; the most recent first, at most 10.
+   * folder (the folder may have changed while the app was closed), and
+   * every touched-files session (its files are its own). Only sessions whose
+   * chain moved within the last 7 days, not stopped and not deleted, with a
+   * base or (touched files) a touched path; the most recent first, at most
+   * 10.
    */
   async startFinalCandidates(): Promise<string[]> {
     try {
@@ -422,15 +504,19 @@ export class SessionArchiver {
         const parsed = sessionStateSchema.safeParse(await readJsonFile(join(this.dirs.sessions, name)));
         if (!parsed.success || name !== `${stateKey(parsed.data.session_id)}.json`) continue;
         const state = parsed.data;
-        if (state.stopped || state.ended || state.next_sequence === 0 || !(nowMs - Date.parse(state.updated_at) <= START_FINAL_WINDOW_MS)) continue;
+        if (state.stopped || state.ended || !(nowMs - Date.parse(state.updated_at) <= START_FINAL_WINDOW_MS)) continue;
+        // Without a base, only a touched-files session that touched something may get one.
+        if (state.next_sequence === 0 && !(state.marker === TOUCHED_MARKER && (await this.touched.has(state.session_id)))) continue;
         sessions.push(state);
       }
       sessions.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
       const roots = new Set<string>();
       const picked: string[] = [];
       for (const state of sessions) {
-        const newestOnRoot = !roots.has(state.root);
-        roots.add(state.root);
+        // A touched-files chain holds only its own session's files: it counts as a folder of its own.
+        const folder = state.marker === TOUCHED_MARKER ? `${state.root}\0${state.session_id}` : state.root;
+        const newestOnRoot = !roots.has(folder);
+        roots.add(folder);
         if (state.final_due || newestOnRoot) picked.push(state.session_id);
       }
       return picked.slice(0, MAX_START_FINALS);
@@ -467,6 +553,7 @@ export class SessionArchiver {
    */
   async signOut(): Promise<void> {
     this.generation += 1;
+    this.touched.clear();
     this.clearRetryTimer();
     this.drainController?.abort();
     try {
@@ -507,6 +594,8 @@ export class SessionArchiver {
   async stop(options: { finals?: readonly string[]; budgetMs?: number } = {}): Promise<void> {
     this.clearRetryTimer();
     this.drainController?.abort();
+    // Touched paths reported in the last moments reach disk for the next start.
+    await this.touched.flush().catch((error: unknown) => this.log("warn", "OmniRush touched-files paths could not be written", { error: errorSummary(error) }));
     const budgetMs = options.budgetMs ?? 0;
     if (options.finals && options.finals.length > 0 && budgetMs > 0) await this.quitFinals(options.finals, budgetMs);
     this.generation += 1;
@@ -567,11 +656,19 @@ export class SessionArchiver {
     return run;
   }
 
-  private async captureBaseLocked(sessionId: string, root: string, turn: number, generation: number): Promise<CaptureResult> {
+  /**
+   * The gate, then the base: a whole-folder base at once; a touched-files
+   * session is registered and gets its base from the first capture that has
+   * a touched file (at session start, `lazy`, only registered).
+   */
+  private async captureBaseLocked(sessionId: string, root: string, turn: number, generation: number, lazy = false): Promise<CaptureResult> {
     if (!this.uploader.configured) return { status: "skipped", reason: "disabled" };
-    // A root no git detector qualified, and that no folder refusal stops, asks for the all-folders policy (4.4).
+    // A root no git detector qualified, and that no folder refusal stops, asks for the folder policy (4.4).
     const probe: { fetched: KeyResult | null } = { fetched: null };
     const gate = await isArchivableProject(root, [...this.detectors, this.folderDetector(generation, probe)], { appDirs: this.appDirs });
+    const touched = gate.marker === TOUCHED_MARKER;
+    // Whatever else the gate said, the session keeps no touched paths.
+    if (!touched) await this.touched.forget(sessionId);
     if (!gate.archivable || !gate.marker) return { status: "skipped", reason: "not_archivable" };
     // The key and the consent check (7.2): a probe made for this base already holds them; else the full fetch.
     const fetched = probe.fetched ?? await this.uploader.fetchKey();
@@ -581,7 +678,10 @@ export class SessionArchiver {
       return { status: "skipped", reason: "disabled" };
     }
     // The policy was turned off since the answer this folder was let in on.
-    if (gate.marker === FOLDER_MARKER && fetched.status === "ok" && !fetched.policy.allFolders) return { status: "skipped", reason: "not_archivable" };
+    if (fetched.status === "ok" && !markerAllowed(gate.marker, fetched.policy)) {
+      if (touched) await this.touched.forget(sessionId);
+      return { status: "skipped", reason: "not_archivable" };
+    }
     const state: SessionState = {
       v: 1,
       session_id: sessionId,
@@ -593,7 +693,9 @@ export class SessionArchiver {
       baseline: null,
       stopped: null,
       updated_at: this.now().toISOString(),
+      ...(touched ? { turn_seen: turn } : {}),
     };
+    if (touched) this.touched.track(sessionId);
     if (fetched.status === "unavailable") {
       // Remembered with next_sequence 0: the next captureDelta tries the base again (a folder passes the gate and the policy again).
       if (generation === this.generation) await this.saveSession(state);
@@ -601,6 +703,10 @@ export class SessionArchiver {
       return { status: "skipped", reason: "unavailable" };
     }
     await this.enable(fetched.key);
+    if (touched && lazy) {
+      if (generation === this.generation) await this.saveSession(state);
+      return { status: "skipped", reason: "unchanged" };
+    }
     try {
       return await this.captureArchive(state, "base", turn, fetched.key, generation);
     } catch (error) {
@@ -610,27 +716,27 @@ export class SessionArchiver {
     }
   }
 
-  /** The all-folders detector (4.4) with its refusals and the policy; `probe` receives the key response of a probe it made. */
+  /** The folder detector (4.4) with its refusals and the policy; `probe` receives the key response of a probe it made. */
   private folderDetector(generation: number, probe?: { fetched: KeyResult | null }): ProjectMarkerDetector {
     return folderDetector(async () => {
-      const answer = await this.allFoldersPolicy(generation);
+      const answer = await this.folderPolicy(generation);
       if (probe) probe.fetched = answer.fetched;
-      return answer.allFolders;
+      return answer.policy;
     }, this.folderGate);
   }
 
   /**
-   * The all-folders policy (4.4) for a folder the gate would otherwise let in:
-   * the answer kept with the key while it is younger than POLICY_TTL_MS, else
-   * one probe (a single GET /archives/key, no backoff, no bearer refresh).
-   * Anything but a valid key with `policy.all_folders: true` is off; a failed
-   * probe is kept as off too, so an outage costs one request per
-   * POLICY_TTL_MS, never a retry storm. `fetched` is the probe's answer when
-   * this call made one: the base reuses it for its key.
+   * The folder policy (4.4: all folders, touched files) for a folder the
+   * gate would otherwise let in: the answer kept with the key while it is
+   * younger than POLICY_TTL_MS, else one probe (a single GET /archives/key,
+   * no backoff, no bearer refresh). Anything but a valid key with the flag
+   * `true` is off; a failed probe is kept as off too, so an outage costs one
+   * request per POLICY_TTL_MS, never a retry storm. `fetched` is the probe's
+   * answer when this call made one: the base reuses it for its key.
    */
-  private async allFoldersPolicy(generation: number): Promise<{ allFolders: boolean; fetched: KeyResult | null }> {
+  private async folderPolicy(generation: number): Promise<{ policy: ArchivePolicy; fetched: KeyResult | null }> {
     const kept = this.policy;
-    if (kept && this.now().getTime() - kept.at < POLICY_TTL_MS) return { allFolders: kept.allFolders, fetched: null };
+    if (kept && this.now().getTime() - kept.at < POLICY_TTL_MS) return { policy: kept.value, fetched: null };
     let probe = this.policyProbe;
     if (!probe) {
       const started = this.uploader.probeKey();
@@ -642,18 +748,45 @@ export class SessionArchiver {
     }
     const fetched = await probe;
     this.rememberPolicy(fetched, generation, true);
-    return { allFolders: fetched.status === "ok" && fetched.policy.allFolders, fetched };
+    return { policy: fetched.status === "ok" ? fetched.policy : POLICY_OFF, fetched };
+  }
+
+  /** Whether the policy a plain folder's (`folder`) or touched files' (`touched`) chain needs is on. */
+  private async policyAllows(marker: string, generation: number): Promise<boolean> {
+    return markerAllowed(marker, (await this.folderPolicy(generation)).policy);
   }
 
   /**
-   * Keeps a key response's policy for allFoldersPolicy. A full fetch (git
+   * Whether a chain may still capture (a final archive): a git root still
+   * passes the gate; a plain folder's or touched files' root still passes
+   * the root checks and the folder refusals, and their policy is on.
+   */
+  private async chainAllowed(state: SessionState, generation: number): Promise<boolean> {
+    if (state.marker !== FOLDER_MARKER && state.marker !== TOUCHED_MARKER) return (await isArchivableProject(state.root, this.detectors, { appDirs: this.appDirs })).archivable;
+    const accepted: ProjectMarkerDetector = async (root) => ((await folderRootRefusal(root, this.folderGate)) ? null : { archivable: true, reason: state.marker, marker: state.marker });
+    if (!(await isArchivableProject(state.root, [accepted], { appDirs: this.appDirs })).archivable) return false;
+    return this.policyAllows(state.marker, generation);
+  }
+
+  /** 422 archive_marker_not_allowed: the kept policy says off for that marker, until it is asked again (POLICY_TTL_MS). */
+  private markerRefused(marker: string, generation: number): void {
+    if (generation !== this.generation) return;
+    const value = this.policy?.value ?? POLICY_OFF;
+    this.policy = {
+      value: { allFolders: value.allFolders && marker !== FOLDER_MARKER, touchedFiles: value.touchedFiles && marker !== TOUCHED_MARKER },
+      at: this.now().getTime(),
+    };
+  }
+
+  /**
+   * Keeps a key response's policy for folderPolicy. A full fetch (git
    * bases, deltas) counts only when it answered; a probe counts whatever it
    * got. Nothing from before a sign-out is kept.
    */
   private rememberPolicy(fetched: KeyResult, generation: number, probe: boolean): void {
     if (generation !== this.generation) return;
     if (fetched.status === "unavailable" && !probe) return;
-    this.policy = { allFolders: fetched.status === "ok" && fetched.policy.allFolders, at: this.now().getTime() };
+    this.policy = { value: fetched.status === "ok" ? fetched.policy : POLICY_OFF, at: this.now().getTime() };
   }
 
   private async currentKey(signal?: AbortSignal): Promise<ArchiveKey | "disabled" | "unavailable"> {
@@ -690,29 +823,59 @@ export class SessionArchiver {
     const rootKey = stateKey(state.root);
     const { signal } = options;
     const cache = await this.loadHashCache(rootKey);
-    const scanning = scanArchiveTree(state.root, { excludedDirs: this.appDirs, includeCredentialFiles: this.includeCredentials, hashCache: cache, ...(signal ? { signal } : {}) });
-    // A plain folder sends no git block (workspace.git null), even inside a larger repository.
-    const withGit = state.marker !== FOLDER_MARKER;
-    const gitReading = kind === "base" && withGit ? readArchiveGit(state.root) : null;
-    const scan = await scanning;
-    let files: ScannedEntry[] = scan.entries;
+    const touched = state.marker === TOUCHED_MARKER;
+    let files: ScannedEntry[];
     let deleted: string[] | undefined;
-    if (kind === "delta") {
-      const baseline = state.baseline ? parseBaselineText(await readText(join(this.dirs.baselines, state.baseline))) : null;
+    let excluded: ExcludedCounts;
+    /** The chain's entry list after this archive: the next baseline. */
+    let next: readonly ArchiveEntry[];
+    let git: ArchiveGit | null = null;
+    if (touched) {
+      const baseline = kind === "delta" ? await this.readBaseline(state) : [];
       if (!baseline) {
         await this.markStopped(sessionId, "baseline_missing");
         return { status: "skipped", reason: "stopped" };
       }
-      const delta = computeArchiveDelta(baseline, scan.entries);
-      if (isArchiveDeltaEmpty(delta)) {
+      // Every path the session touched, and every file the chain holds (to see it go).
+      const paths = await this.touched.snapshot(sessionId);
+      for (const entry of baseline) paths.add(entry.path);
+      const scan = await scanTouchedFiles(state.root, paths, { excludedDirs: this.appDirs, includeCredentialFiles: this.includeCredentials, hashCache: cache, ...(signal ? { signal } : {}) });
+      const change = touchedChange(baseline, scan);
+      if (change.files.length === 0 && change.deleted.length === 0) {
         if (cache.changed) await this.saveHashCache(rootKey, cache);
-        if (generation === this.generation) await this.noteUnchanged(state, options);
+        if (generation === this.generation) await this.noteUnchanged(state, kind, turn, options);
         return { status: "skipped", reason: "unchanged" };
       }
-      files = delta.files;
-      deleted = delta.deleted;
+      files = change.files;
+      deleted = kind === "delta" ? change.deleted : undefined;
+      excluded = scan.excluded;
+      next = change.next;
+    } else {
+      const scanning = scanArchiveTree(state.root, { excludedDirs: this.appDirs, includeCredentialFiles: this.includeCredentials, hashCache: cache, ...(signal ? { signal } : {}) });
+      // A plain folder sends no git block (workspace.git null), even inside a larger repository.
+      const withGit = state.marker !== FOLDER_MARKER;
+      const gitReading = kind === "base" && withGit ? readArchiveGit(state.root) : null;
+      const scan = await scanning;
+      files = scan.entries;
+      excluded = scan.excluded;
+      next = scan.entries;
+      if (kind === "delta") {
+        const baseline = await this.readBaseline(state);
+        if (!baseline) {
+          await this.markStopped(sessionId, "baseline_missing");
+          return { status: "skipped", reason: "stopped" };
+        }
+        const delta = computeArchiveDelta(baseline, scan.entries);
+        if (isArchiveDeltaEmpty(delta)) {
+          if (cache.changed) await this.saveHashCache(rootKey, cache);
+          if (generation === this.generation) await this.noteUnchanged(state, kind, turn, options);
+          return { status: "skipped", reason: "unchanged" };
+        }
+        files = delta.files;
+        deleted = delta.deleted;
+      }
+      git = withGit ? await (gitReading ?? readArchiveGit(state.root)) : null;
     }
-    const git = withGit ? await (gitReading ?? readArchiveGit(state.root)) : null;
     const archiveId = this.random.uuid();
     const sequence = state.next_sequence;
     const createdAt = this.now();
@@ -726,12 +889,13 @@ export class SessionArchiver {
       parentArchiveId: kind === "base" ? null : state.last_archive_id,
       ...(kind === "delta" && options.trigger ? { trigger: options.trigger } : {}),
       ...(kind === "delta" && options.reason ? { reason: options.reason } : {}),
+      ...(touched ? { scope: "touched" as const } : {}),
       label: archiveLabel(state.root),
       marker: state.marker,
       git,
       files,
       ...(deleted ? { deleted } : {}),
-      excluded: scan.excluded,
+      excluded,
     });
     const partial = join(this.dirs.tmp, `${archiveId}.partial`);
     let sealed: Awaited<ReturnType<typeof writeSealedArchive>>;
@@ -780,15 +944,15 @@ export class SessionArchiver {
       upload: null,
     };
     await writeJsonAtomic(join(this.dirs.queue, `${archiveId}.json`), record);
-    // 3: the new baseline is the full scan; entries that changed while packing get a null hash so the next delta sends them again.
+    // 3: the new baseline is the full scan (touched files: the chain's files); entries that changed while packing get a null hash so the next delta sends them again.
     const unstable = new Set(sealed.unstable);
     for (const path of unstable) cache.forget(path);
     const baselineName = `${sessionKey}-${sequence}.json`;
-    await writeChunksAtomic(join(this.dirs.baselines, baselineName), baselineChunks(scan.entries, unstable));
+    await writeChunksAtomic(join(this.dirs.baselines, baselineName), baselineChunks(next, unstable));
     // 4: commit. Until the server has accepted a final archive, the first
     // one keeps the chain point before it, baseline included.
     const previousBaseline = state.baseline;
-    const rewind = state.rewind ?? (options.trigger === "final" && !this.finalsAccepted
+    const rewind = state.rewind ?? (kind === "delta" && options.trigger === "final" && !this.finalsAccepted
       ? { next_sequence: state.next_sequence, last_archive_id: state.last_archive_id, last_turn: state.last_turn, baseline: state.baseline }
       : null);
     await this.saveSession({
@@ -811,6 +975,7 @@ export class SessionArchiver {
       sequence,
       turn,
       ...(options.trigger === "final" ? { trigger: "final", reason: options.reason } : {}),
+      ...(touched ? { scope: "touched" } : {}),
       bytes: sealed.size,
       files: files.length,
       ...(deleted ? { deleted: deleted.length } : {}),
@@ -819,8 +984,21 @@ export class SessionArchiver {
     return { status: "queued", archiveId, kind, sequence, size: sealed.size };
   }
 
-  /** Nothing changed: after a turn the session's final is due (checked at the next start), a final settles it. */
-  private async noteUnchanged(state: SessionState, options: CaptureOptions): Promise<void> {
+  /** The entry list after the chain's last archive; null when it cannot be read (the chain cannot go on). */
+  private async readBaseline(state: SessionState): Promise<ArchiveEntry[] | null> {
+    return state.baseline ? parseBaselineText(await readText(join(this.dirs.baselines, state.baseline))) : null;
+  }
+
+  /**
+   * Nothing changed: after a turn the session's final is due (checked at the
+   * next start), a final settles it. A touched-files session without a base
+   * (nothing touched yet) stays registered, with the turns seen so far.
+   */
+  private async noteUnchanged(state: SessionState, kind: ArchiveKind, turn: number, options: CaptureOptions): Promise<void> {
+    if (kind === "base") {
+      await this.saveSession({ ...state, turn_seen: turn, ...(options.ended ? { ended: this.now().toISOString() } : {}), updated_at: this.now().toISOString() });
+      return;
+    }
     const final = options.trigger === "final";
     if (final && !state.final_due && !options.ended) return;
     await this.saveSession({
@@ -923,6 +1101,8 @@ export class SessionArchiver {
             // A server without final archives refuses the repeated turn number: not a broken chain.
             result.dropped += await this.rewindRefusedFinal(record);
           } else {
+            // The server does not take this marker: its policy is off here too until the next answer, so no other chain starts meanwhile.
+            if (outcome.code === ARCHIVE_MARKER_NOT_ALLOWED) this.markerRefused(record.request.marker, generation);
             result.dropped += await this.stopSession(sessionId, outcome.code);
           }
           held.add(sessionId);
@@ -934,6 +1114,8 @@ export class SessionArchiver {
             // Nothing exists on the server yet: the base is captured again with the current key.
             result.dropped += await this.resetToNoBase(sessionId);
           } else {
+            // The server does not take this marker: its policy is off here too until the next answer, so no other chain starts meanwhile.
+            if (outcome.code === ARCHIVE_MARKER_NOT_ALLOWED) this.markerRefused(record.request.marker, generation);
             result.dropped += await this.stopSession(sessionId, outcome.code);
           }
           held.add(sessionId);
@@ -977,7 +1159,7 @@ export class SessionArchiver {
     if (!this.disabled) this.log("info", "OmniRush project archiving is off for this account", { code });
     this.disabled = code;
     this.key = null;
-    this.policy = { allFolders: false, at: this.now().getTime() };
+    this.policy = { value: POLICY_OFF, at: this.now().getTime() };
     await this.saveArchiverState();
     const records = await this.listQueue();
     for (const record of records) {
@@ -1013,11 +1195,12 @@ export class SessionArchiver {
     }).catch((error) => this.log("warn", "OmniRush archive session stop failed", { sessionId, error: errorSummary(error) }));
   }
 
-  /** Under the session lock: the stopped flag, and any job queued since. */
+  /** Under the session lock: the stopped flag, and any job queued since; a stopped session keeps no touched paths. */
   private async markStopped(sessionId: string, code: string): Promise<void> {
     for (const record of await this.listQueue()) {
       if (record.request.session_id === sessionId) await this.deleteJob(record);
     }
+    await this.touched.forget(sessionId);
     const state = await this.loadSession(sessionId);
     if (state && !state.stopped) await this.saveSession({ ...state, stopped: code, updated_at: this.now().toISOString() });
   }
@@ -1245,6 +1428,11 @@ export class SessionArchiver {
     }
     for (const name of await readdir(this.dirs.hashCache)) {
       if (name.endsWith(".tmp")) await rm(join(this.dirs.hashCache, name), { force: true });
+    }
+    // Touched paths only of touched-files sessions still archiving.
+    for (const name of await readdir(this.dirs.touched)) {
+      const session = name.endsWith(".jsonl") ? sessions.get(name.slice(0, -".jsonl".length)) : undefined;
+      if (!session || session.marker !== TOUCHED_MARKER || session.stopped || session.ended) await rm(join(this.dirs.touched, name), { force: true });
     }
   }
 }

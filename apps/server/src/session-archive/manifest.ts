@@ -17,9 +17,9 @@ import { hintGarbageCollection } from "./files.js";
 
 export const ARCHIVE_SCHEMA = "omnirush.archive.v1";
 export const RESERVED_ROOT_NAME = "__omnirush__";
-const STAT_CONCURRENCY = 64;
-const HASH_CONCURRENCY = 6;
-const HASH_READ_BYTES = 128 * 1024;
+export const STAT_CONCURRENCY = 64;
+export const HASH_CONCURRENCY = 6;
+export const HASH_READ_BYTES = 128 * 1024;
 /** Bytes hashed, or entries inspected or hashed, between two garbage collection hints. */
 const GC_HINT_BYTES = 64 * 1024 * 1024;
 const GC_HINT_ENTRIES = 10_000;
@@ -43,6 +43,12 @@ export type ArchiveKind = "base" | "delta";
 export type ArchiveTrigger = "turn" | "final";
 /** What prompted a final archive (manifest.json `reason`). */
 export type FinalReason = "idle" | "turn_incomplete" | "session_deleted" | "app_quit" | "app_start";
+/**
+ * manifest.json `scope` of a touched-files archive: its `files` are only the
+ * files the agent touched, and a path it does not list is not deleted (only
+ * `deleted` deletes). The whole-folder archives have no `scope`.
+ */
+export type ArchiveScope = "touched";
 export type ArchiveEntryType = "file" | "dir" | "symlink";
 
 /** One manifest `files` item (section 5.4). */
@@ -104,6 +110,7 @@ export type ArchiveManifest = {
   parent_archive_id: string | null;
   trigger?: ArchiveTrigger;
   reason?: FinalReason;
+  scope?: ArchiveScope;
   workspace: { label: string; marker: string; git: ArchiveGit | null };
   files: ArchiveEntry[];
   deleted?: string[];
@@ -340,7 +347,7 @@ export type ScanResult = { entries: ScannedEntry[]; excluded: ExcludedCounts };
  * pull plain data items, so a 200k-entry level costs 200k small objects, not
  * 200k suspended async frames.
  */
-async function forEachBounded<T>(items: readonly T[], limit: number, operation: (item: T) => Promise<void>): Promise<void> {
+export async function forEachBounded<T>(items: readonly T[], limit: number, operation: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < items.length) {
@@ -354,7 +361,7 @@ async function forEachBounded<T>(items: readonly T[], limit: number, operation: 
 
 const NAME_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-function decodeName(raw: Buffer): string | null {
+export function decodeName(raw: Buffer): string | null {
   try {
     return NAME_DECODER.decode(raw);
   } catch {
@@ -362,12 +369,12 @@ function decodeName(raw: Buffer): string | null {
   }
 }
 
-function portable(path: string): string {
+export function portable(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
 }
 
 /** The excluded directories that lie strictly under the root, as root-relative paths. */
-async function excludedRelativeDirs(root: string, dirs: readonly string[]): Promise<Set<string>> {
+export async function excludedRelativeDirs(root: string, dirs: readonly string[]): Promise<Set<string>> {
   const rootForms = new Set([resolve(root)]);
   try {
     rootForms.add(await realpath(root));
@@ -396,7 +403,7 @@ async function excludedRelativeDirs(root: string, dirs: readonly string[]): Prom
 // Strings kept per entry are built with join(), which yields one flat string;
 // template concatenation in JSC yields a rope that keeps every piece alive,
 // roughly doubling the per-entry cost on a 200k-entry tree.
-function statFields(stats: BigIntStats) {
+export function statFields(stats: BigIntStats) {
   return {
     mode: Number(stats.mode & 0o7777n),
     mtime: Number(stats.mtimeNs / 1_000_000_000n),
@@ -638,6 +645,8 @@ export type ManifestInput = {
   /** Deltas only: a completed turn, or a final archive (then with its reason). */
   trigger?: ArchiveTrigger;
   reason?: FinalReason;
+  /** Touched-files archives only. */
+  scope?: ArchiveScope;
   label: string;
   marker: string;
   git: ArchiveGit | null;
@@ -667,6 +676,7 @@ export function manifestSource(input: ManifestInput): ManifestSource {
     parent_archive_id: input.parentArchiveId,
     ...(input.trigger ? { trigger: input.trigger } : {}),
     ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
     workspace: { label: input.label, marker: input.marker, git: input.git },
   });
   const deleted = input.kind === "delta" ? `,"deleted":${JSON.stringify(input.deleted ?? [])}` : "";

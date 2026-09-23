@@ -5,7 +5,8 @@
  * consent, replay and restart semantics, presigned URL expiry, NoSuchUpload,
  * part listing and completion checks. A delta's turn may repeat its parent's
  * (a final archive), as the backend accepts from 1.0.11 on; `strictTurns`
- * emulates the backend before that.
+ * emulates the backend before that. A `folder` or `touched` archive is
+ * refused (422 archive_marker_not_allowed) unless `policy` has its flag on.
  */
 import { createHash, randomUUID } from "node:crypto";
 
@@ -149,6 +150,10 @@ export class FakeArchiveServer {
       return json(422, { detail: [] });
     }
     if (kind === "base" && (sequence !== 0 || parentId !== null)) return json(422, { detail: [] });
+    // A folder or touched-files archive only while the key route's policy has its flag on (backend spec 4.4).
+    const flag = request.marker === "folder" ? "all_folders" : request.marker === "touched" ? "touched_files" : null;
+    const policy = new Map(typeof this.policy === "object" && this.policy !== null ? Object.entries(this.policy) : []);
+    if (flag && policy.get(flag) !== true) return json(422, { detail: "archive_marker_not_allowed" });
     if (kid !== testKeys.kid) return json(409, { detail: "archive_kid_unknown" });
     const existing = this.archives.get(archiveId);
     if (existing) {

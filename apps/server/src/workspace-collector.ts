@@ -392,6 +392,13 @@ type CollectorOptions = {
   redactedTextCacheBytes?: number;
   /** Called once a finished session's last upload settled and its state is gone. */
   onSessionClosed?: (sessionId: string) => void;
+  /**
+   * Every workspace-relative path (portable `/`) a session touched, before
+   * any denylist: a tool's path in the trace, a change the watcher saw, a
+   * file a capture or the reconcile pass found changed. The project archive's
+   * touched-files mode keeps them; it applies its own exclusions.
+   */
+  onPathTouched?: (sessionId: string, path: string) => void;
 };
 
 type TransmitOutcome =
@@ -2936,6 +2943,7 @@ export class WorkspaceCollector {
   /** The scrubbed texts sent, by redacted digest: the bases of "turn.diff" events. */
   private readonly bases: TurnBaseStore;
   private readonly onSessionClosed?: (sessionId: string) => void;
+  private readonly onPathTouched?: (sessionId: string, path: string) => void;
   /** Work counters for tests and profiling. */
   readonly metrics: CollectorMetrics = freshMetrics();
 
@@ -2964,6 +2972,7 @@ export class WorkspaceCollector {
     this.maxWatchedFiles = options.maxWatchedFiles ?? MAX_COLLECTOR_WATCHED_FILES;
     this.texts = new RedactedTextCache(options.redactedTextCacheBytes ?? REDACTED_TEXT_CACHE_BYTES);
     this.onSessionClosed = options.onSessionClosed;
+    this.onPathTouched = options.onPathTouched;
     this.tempDir = stateDir ? join(stateDir, TEMP_DIRECTORY) : join(tmpdir(), `omnirush-collector-${process.pid}`);
     this.bases = new TurnBaseStore(stateDir ? join(stateDir, BASE_DIRECTORY) : join(this.tempDir, BASE_DIRECTORY));
     void this.cleanTempDir(60 * 60_000).catch(() => undefined);
@@ -3288,7 +3297,9 @@ export class WorkspaceCollector {
     }
     const relative = String(filename).replaceAll("\\", "/");
     const path = workspaceRelativePath(state.root, prefix ? `${prefix}/${relative}` : relative);
-    if (!path || isCollectorPathDenied(path)) return;
+    if (!path) return;
+    this.reportTouched(state, path);
+    if (isCollectorPathDenied(path)) return;
     if (path === ".gitignore" || path.endsWith("/.gitignore")) {
       // New ignore rules can hide or reveal any number of files: forget what
       // git answered so far and rescan the tree with the rules as they stand.
@@ -3327,6 +3338,15 @@ export class WorkspaceCollector {
       this.addWatcher(state, path);
     }
     this.scheduleChange(state, "fs_change");
+  }
+
+  /** Tells the project archive that the session touched `path` (workspace-relative). */
+  private reportTouched(state: SessionState, path: string): void {
+    try {
+      this.onPathTouched?.(state.id, path);
+    } catch {
+      // The archive's bookkeeping never stops a capture.
+    }
   }
 
   private markDirty(state: SessionState, path: string): void {
@@ -3386,14 +3406,19 @@ export class WorkspaceCollector {
             ? known !== undefined
             : !cached || cached.size !== eligible.size || cached.mtimeMs !== eligible.mtimeMs
               || (!cached.binary && known?.sha256 !== cached.sha256) || (cached.binary && known !== undefined);
-          if (stale) this.markDirty(session, path);
+          if (stale) {
+            this.markDirty(session, path);
+            this.reportTouched(session, path);
+          }
         }
         await yielder.pause();
       });
       const listed = new Set(listing.paths);
       for (const session of sessions) {
         for (const path of session.manifest?.keys() ?? []) {
-          if (!listed.has(path)) this.markDirty(session, path);
+          if (listed.has(path)) continue;
+          this.markDirty(session, path);
+          this.reportTouched(session, path);
         }
       }
     } finally {
@@ -3551,7 +3576,9 @@ export class WorkspaceCollector {
 
   private recordTouchedPath(state: SessionState, candidate: string): void {
     const path = workspaceRelativePath(state.root, candidate.replaceAll("\\", "/"));
-    if (!path || isCollectorPathDenied(path) || state.touchedPaths.has(path)) return;
+    if (!path) return;
+    this.reportTouched(state, path);
+    if (isCollectorPathDenied(path) || state.touchedPaths.has(path)) return;
     state.touchedPaths.add(path);
     this.markDirty(state, path);
     this.queueChangedPath(state, path);
@@ -3703,6 +3730,7 @@ export class WorkspaceCollector {
       // The turn's change snapshot must carry it even where no watcher saw it
       // land (a tool writing into a directory beyond MAX_WATCH_ROOTS).
       this.markDirty(state, path);
+      this.reportTouched(state, path);
       if (emitted >= MAX_ARTIFACT_EVENTS_PER_TURN || stat.size > MAX_ARTIFACT_HASH_BYTES) continue;
       try {
         const sha256 = await sha256File(resolve(state.root, path));
@@ -4193,6 +4221,8 @@ export class WorkspaceCollector {
         ? await scanDirtyPaths(state.root, cache, this.texts, previous, reported, ignored, state.listing, this.metrics)
         : await scanWorkspaceFull(state.root, cache, this.texts, previous, type === "start", this.metrics,
           type === "start" ? (paths) => this.installWatchers(state, paths) : undefined);
+      // What moved on disk since the last snapshot, where no watcher may have seen it (a polled workspace).
+      for (const path of scan.changed ?? []) this.reportTouched(state, path);
       // A change capture that found nothing moved stops at one `git rev-parse`
       // (a commit changes history without touching a file); the full git block
       // with its status, log and diff is collected only for a snapshot that goes out.

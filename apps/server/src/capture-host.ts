@@ -93,6 +93,8 @@ export class CaptureHost {
       engineVersion: options.engineVersion,
       log: options.log,
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
+      // The touched-files archive hears of every path a session touches, here on the same thread.
+      onPathTouched: (sessionId, path) => this.archive.pathTouched(sessionId, path),
     });
     const { enabled, excludedDirs, folderGate, baseIdleMs, baseMaxDeferMs, ...auth } = options.archive;
     this.archive = new ProjectArchiveLifecycle({

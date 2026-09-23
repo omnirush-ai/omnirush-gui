@@ -69,6 +69,8 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const PART_RETRYABLE_STATUSES = new Set([400, 408, 429, 500, 502, 503, 504]);
 const MAX_PARTS_PER_REQUEST = 100;
 const MAX_UPLOAD_ROUNDS = 6;
+/** 422 on create for a marker whose policy is off (`folder`, `touched`). */
+export const ARCHIVE_MARKER_NOT_ALLOWED = "archive_marker_not_allowed";
 /** Create conflicts that end the session's chain (section 7.9). */
 const CHAIN_ENDING_CODES = new Set(["archive_id_conflict", "archive_sequence_conflict", "archive_parent_mismatch", "archive_deleted"]);
 
@@ -136,7 +138,7 @@ export type UploadOutcome =
   | { status: "disabled"; code: string }
   /** 401 after a refresh, or 403: stop draining and keep the queue. */
   | { status: "blocked"; reason: string }
-  /** A chain-ending conflict, 413 or 422: drop the session's jobs and stop archiving it. */
+  /** A chain-ending conflict, 413 or 422 (archive_marker_not_allowed, else archive_request_invalid): drop the session's jobs and stop archiving it. */
   | { status: "stop_session"; code: string }
   /** 409 archive_kid_unknown: the archive was sealed to a key the server no longer has. */
   | { status: "rekey"; code: string }
@@ -309,7 +311,8 @@ export class ArchiveUploader {
     if (result.status === 428) return { status: "disabled", code: result.code ?? "archive_consent_required" };
     if (result.status === 503) return { status: "disabled", code: result.code ?? "archive_disabled" };
     if (result.status === 413) return { status: "stop_session", code: result.code ?? "archive_too_large" };
-    if (result.status === 422) return { status: "stop_session", code: "archive_request_invalid" };
+    // The server does not take this marker (a folder policy that is off): the chain goes, with no retry.
+    if (result.status === 422) return { status: "stop_session", code: result.code === ARCHIVE_MARKER_NOT_ALLOWED ? result.code : "archive_request_invalid" };
     return null;
   }
 

@@ -246,6 +246,10 @@ class RecordingArchiver implements ProjectArchiver {
     return [];
   }
 
+  recordTouched(): void {}
+
+  forgetTouched(): void {}
+
   async drain(): Promise<DrainResult> {
     return { uploaded: 0, pending: 0, dropped: 0, blocked: null, disabled: false };
   }

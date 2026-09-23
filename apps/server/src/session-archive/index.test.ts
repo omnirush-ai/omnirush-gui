@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -868,5 +868,246 @@ describe("SessionArchiver final archives", () => {
     expect(await subject.captureFinal("ses_deleted_gone", "session_deleted")).toEqual({ status: "skipped", reason: "not_archivable" });
     expect(await subject.startFinalCandidates()).toEqual([]);
     expect(server.objects()).toHaveLength(1);
+  });
+});
+
+describe("SessionArchiver touched files", () => {
+  const TOUCHED_ON = { touched_files: true };
+
+  /** A folder without .git in a home folder of its own, and the archiver whose folder gate knows that home. */
+  async function touchedSetup(options: Partial<SessionArchiverOptions> & { policy?: unknown } = {}) {
+    const server = new FakeArchiveServer();
+    server.policy = "policy" in options ? options.policy : TOUCHED_ON;
+    const home = await tempDir("home");
+    const root = join(home, "report");
+    await mkdir(root);
+    const state = options.stateDir ?? (await tempDir("state"));
+    const logs: Array<{ level: string; message: string; attributes?: Record<string, unknown> }> = [];
+    const make = (extra: Partial<SessionArchiverOptions> = {}) => archiver(server, state, {
+      folderGate: { homeDir: home },
+      touchedFlushMs: 5,
+      log: (level, message, attributes) => logs.push({ level, message, ...(attributes ? { attributes } : {}) }),
+      ...options,
+      ...extra,
+    });
+    return { server, home, root, state, logs, make, subject: make() };
+  }
+
+  const names = async (object: { object: Buffer | null }) => (await openArchive(object.object!)).map((member) => member.name);
+
+  test("a folder without .git: only the files the agent touched, byte for byte; untouched files, credentials and links out of the folder never", async () => {
+    const { server, root, subject } = await touchedSetup();
+    const outside = await tempDir("outside");
+    await writeFile(join(outside, "secret.txt"), "OUTSIDE_MARKER");
+    const brief = randomBytes(200 * 1024);
+    await writeFile(join(root, "brief.pdf"), brief);
+    await writeFile(join(root, "notes.txt"), "never touched\n");
+    await writeFile(join(root, ".env"), "API_KEY=sk-live-1234567890\n");
+    await symlink(join(outside, "secret.txt"), join(root, "link-out"));
+    const id = "ses_touched_files";
+
+    // Session start registers the session; nothing is packed yet.
+    expect(await subject.captureBase(id, root)).toEqual({ status: "skipped", reason: "unchanged" });
+    expect(server.callPaths()).toEqual(["GET archives/key 200"]);
+    // The agent reads the PDF, writes a binary, and names a credential file and a link out of the folder.
+    subject.recordTouched(id, "brief.pdf");
+    const render = randomBytes(300 * 1024);
+    await mkdir(join(root, "out"));
+    await writeFile(join(root, "out/render.png"), render);
+    subject.recordTouched(id, "out/render.png");
+    subject.recordTouched(id, "out");
+    subject.recordTouched(id, ".env");
+    subject.recordTouched(id, "link-out");
+
+    expect(await subject.captureDelta(id, root, 1)).toMatchObject({ status: "queued", kind: "base", sequence: 0 });
+    expect((await subject.drain()).uploaded).toBe(1);
+    const [base] = server.objects();
+    expect(base!.request).toMatchObject({ session_id: id, kind: "base", sequence: 0, turn: 1, parent_archive_id: null, marker: "touched" });
+    const members = await openArchive(base!.object!);
+    expect(members.map((member) => member.name)).toEqual(["__omnirush__/manifest.json", "brief.pdf", "out/render.png"]);
+    expect(members[1]!.content.equals(brief)).toBe(true);
+    expect(members[2]!.content.equals(render)).toBe(true);
+    const manifest = manifestOf(members);
+    expect(manifest).toMatchObject({ kind: "base", turn: 1, scope: "touched", workspace: { label: "report", marker: "touched", git: null }, excluded: { credential: 1, special: 1 } });
+    expect(manifest.files).toEqual([
+      { path: "brief.pdf", type: "file", mode: expect.any(Number), size: brief.length, sha256: sha256(brief) },
+      { path: "out/render.png", type: "file", mode: expect.any(Number), size: render.length, sha256: sha256(render) },
+    ]);
+    expect("deleted" in manifest).toBe(false);
+
+    // The next turn: the binary is rewritten, the PDF deleted, a new file created; notes.txt is still untouched.
+    const rerender = randomBytes(1024);
+    await writeFile(join(root, "out/render.png"), rerender);
+    await rm(join(root, "brief.pdf"));
+    await writeFile(join(root, "summary.md"), "# summary\n");
+    subject.recordTouched(id, "summary.md");
+    subject.recordTouched(id, "brief.pdf");
+    expect(await subject.captureDelta(id, root, 2)).toMatchObject({ status: "queued", kind: "delta", sequence: 1 });
+    expect((await subject.drain()).uploaded).toBe(1);
+    const delta = server.objects()[1]!;
+    expect(delta.request).toMatchObject({ kind: "delta", sequence: 1, turn: 2, marker: "touched", parent_archive_id: base!.request.archive_id });
+    const deltaMembers = await openArchive(delta.object!);
+    expect(deltaMembers.slice(1).map((member) => member.name)).toEqual(["out/render.png", "summary.md"]);
+    expect(deltaMembers[1]!.content.equals(rerender)).toBe(true);
+    expect(manifestOf(deltaMembers)).toMatchObject({ kind: "delta", trigger: "turn", scope: "touched", deleted: ["brief.pdf"] });
+
+    // Nothing touched changed: nothing is sent, even though an untouched file did.
+    await writeFile(join(root, "notes.txt"), "edited by the user, never touched by the agent\n");
+    expect(await subject.captureDelta(id, root, 3)).toEqual({ status: "skipped", reason: "unchanged" });
+    for (const object of server.objects()) {
+      expect(await names(object)).not.toContain("notes.txt");
+      expect(object.object!.includes(Buffer.from("OUTSIDE_MARKER"))).toBe(false);
+    }
+  });
+
+  test("a git folder is archived as today with touched_files on, and keeps no touched paths", async () => {
+    const { server, state, make } = await touchedSetup();
+    const { root } = await project();
+    const subject = make();
+    expect(await subject.captureBase("ses_git_touched", root)).toMatchObject({ status: "queued", kind: "base" });
+    subject.recordTouched("ses_git_touched", "src/app.ts");
+    await subject.drain();
+    expect(server.objects()[0]!.request.marker).toBe(".git");
+    expect(await names(server.objects()[0]!)).toEqual(expect.arrayContaining([".git/HEAD", "assets/scene.blend", "src/app.ts"]));
+    expect(manifestOf(await openArchive(server.objects()[0]!.object!))).not.toHaveProperty("scope");
+    await subject.stop();
+    expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "touched"))).toEqual([]);
+  });
+
+  test("all_folders wins over touched_files: the whole folder", async () => {
+    const { server, root, subject } = await touchedSetup({ policy: { all_folders: true, touched_files: true } });
+    await writeFile(join(root, "a.txt"), "a\n");
+    expect(await subject.captureBase("ses_all_and_touched", root)).toMatchObject({ status: "queued", kind: "base" });
+    await subject.drain();
+    expect(server.objects()[0]!.request.marker).toBe("folder");
+  });
+
+  test("with the policy off or absent nothing is uploaded or kept, and the refused folders never are with it on", async () => {
+    for (const policy of [undefined, { touched_files: false }, { touched_files: "true" }, { all_folders: false }]) {
+      const { server, root, state, subject } = await touchedSetup({ policy });
+      await writeFile(join(root, "brief.pdf"), randomBytes(1024));
+      expect(await subject.captureBase("ses_touched_off", root)).toEqual({ status: "skipped", reason: "not_archivable" });
+      subject.recordTouched("ses_touched_off", "brief.pdf");
+      expect(await subject.captureDelta("ses_touched_off", root, 1)).toEqual({ status: "skipped", reason: "no_base" });
+      expect(await subject.captureFinal("ses_touched_off", "app_quit")).toEqual({ status: "skipped", reason: "no_base" });
+      await subject.stop();
+      expect(server.callPaths()).toEqual(["GET archives/key 200"]);
+      expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "sessions"))).toEqual([]);
+      expect(await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "touched"))).toEqual([]);
+    }
+
+    // The folder refusals: home, a credential folder, the userData dir, a system folder, and a folder inside the app's own state.
+    const { server, home, state, make } = await touchedSetup();
+    const userData = join(home, "work/OmniRush.ai");
+    for (const dir of [".ssh", "work/OmniRush.ai/workdir", "Library/Application Support/x"]) await mkdir(join(home, dir), { recursive: true });
+    const subject = make({ folderGate: { homeDir: home, userDataDir: userData } });
+    for (const root of [home, join(home, ".ssh"), userData, join(userData, "workdir"), join(home, "Library/Application Support/x"), "/usr/share", join(state, ARCHIVE_STATE_DIRECTORY)]) {
+      expect({ root, result: await subject.captureBase("ses_touched_refused", root) }).toEqual({ root, result: { status: "skipped", reason: "not_archivable" } });
+    }
+    expect(server.calls).toEqual([]);
+  });
+
+  test("finals and app start for touched chains, and the chain and its touched paths survive a restart", async () => {
+    let now = Date.parse("2026-09-23T10:00:00Z");
+    const { server, root, state, make } = await touchedSetup({ now: () => new Date(now) });
+    const first = make();
+    const id = "ses_touched_final";
+    const unbased = "ses_touched_nobase";
+    expect(await first.captureBase(id, root, 4)).toEqual({ status: "skipped", reason: "unchanged" });
+    // A final archive with nothing touched yet: nothing, and still no base.
+    expect(await first.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "unchanged" });
+    await writeFile(join(root, "draft.md"), "draft one\n");
+    first.recordTouched(id, "draft.md");
+    // The idle final is the first capture with a touched file: the base, numbered with the turns seen.
+    expect(await first.captureFinal(id, "idle")).toMatchObject({ status: "queued", kind: "base", sequence: 0 });
+    await writeFile(join(root, "chart.svg"), "<svg/>\n");
+    first.recordTouched(id, "chart.svg");
+    expect(await first.captureFinal(id, "app_quit")).toMatchObject({ status: "queued", kind: "delta", sequence: 1 });
+    // Another session on the folder touches a file, and the app quits before any capture of it.
+    now += 1_000;
+    expect(await first.captureBase(unbased, root, 0)).toEqual({ status: "skipped", reason: "unchanged" });
+    await writeFile(join(root, "table.csv"), "a,b\n");
+    first.recordTouched(unbased, "table.csv");
+    await first.stop();
+
+    // Edited while the app was closed.
+    await writeFile(join(root, "draft.md"), "draft two, while the app was closed\n");
+    now += 60_000;
+    const second = make();
+    expect(await second.startFinalCandidates()).toEqual([unbased, id]);
+    expect(await second.captureFinal(unbased, "app_start")).toMatchObject({ status: "queued", kind: "base", sequence: 0 });
+    expect(await second.captureFinal(id, "app_start")).toMatchObject({ status: "queued", kind: "delta", sequence: 2 });
+    // The touched paths from before the restart still count: the next turn's edit of draft.md goes out.
+    await writeFile(join(root, "draft.md"), "draft three\n");
+    expect(await second.captureDelta(id, root, 5)).toMatchObject({ status: "queued", kind: "delta", sequence: 3 });
+    expect((await second.drain()).uploaded).toBe(5);
+
+    const chain = server.objects().filter((object) => object.request.session_id === id);
+    expect(chain.map((object) => [object.request.kind, object.request.sequence, object.request.turn, object.request.marker])).toEqual([
+      ["base", 0, 4, "touched"], ["delta", 1, 4, "touched"], ["delta", 2, 4, "touched"], ["delta", 3, 5, "touched"],
+    ]);
+    const manifests = await Promise.all(chain.map(async (object) => manifestOf(await openArchive(object.object!))));
+    expect(manifests.map((manifest) => [manifest.trigger, manifest.reason, manifest.scope])).toEqual([
+      [undefined, undefined, "touched"], ["final", "app_quit", "touched"], ["final", "app_start", "touched"], ["turn", undefined, "touched"],
+    ]);
+    expect(await Promise.all(chain.map(names))).toEqual([
+      ["__omnirush__/manifest.json", "draft.md"], ["__omnirush__/manifest.json", "chart.svg"], ["__omnirush__/manifest.json", "draft.md"], ["__omnirush__/manifest.json", "draft.md"],
+    ]);
+    const other = server.objects().find((object) => object.request.session_id === unbased)!;
+    expect(other.request).toMatchObject({ kind: "base", turn: 0, marker: "touched" });
+    expect(await names(other)).toEqual(["__omnirush__/manifest.json", "table.csv"]);
+
+    // Deleted in the app: its final, then its touched paths are gone.
+    await writeFile(join(root, "table.csv"), "a,b\n1,2\n");
+    expect(await second.captureFinal(unbased, "session_deleted")).toMatchObject({ status: "queued", kind: "delta" });
+    expect((await readdir(join(state, ARCHIVE_STATE_DIRECTORY, "touched"))).length).toBe(1);
+  });
+
+  test("a touched chain pauses while its policy is off and catches up once it is on again", async () => {
+    let now = Date.parse("2026-09-23T10:00:00Z");
+    const { server, root, subject } = await touchedSetup({ now: () => new Date(now) });
+    const id = "ses_touched_pause";
+    await subject.captureBase(id, root, 0);
+    await writeFile(join(root, "a.bin"), randomBytes(512));
+    subject.recordTouched(id, "a.bin");
+    expect(await subject.captureDelta(id, root, 1)).toMatchObject({ status: "queued", kind: "base" });
+    server.policy = { touched_files: false };
+    now += POLICY_TTL_MS;
+    await writeFile(join(root, "a.bin"), randomBytes(512));
+    expect(await subject.captureDelta(id, root, 2)).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(await subject.captureFinal(id, "idle")).toEqual({ status: "skipped", reason: "not_archivable" });
+    server.policy = TOUCHED_ON;
+    now += POLICY_TTL_MS;
+    expect(await subject.captureDelta(id, root, 3)).toMatchObject({ status: "queued", kind: "delta", sequence: 1 });
+    expect((await subject.drain()).uploaded).toBe(2);
+  });
+
+  test("422 archive_marker_not_allowed drops the session's chain once, with no retry, and no other touched chain starts until the policy is asked again", async () => {
+    let now = Date.parse("2026-09-23T10:00:00Z");
+    const { server, root, logs, subject } = await touchedSetup({ now: () => new Date(now) });
+    const id = "ses_touched_refuse";
+    await subject.captureBase(id, root, 0);
+    await writeFile(join(root, "a.bin"), randomBytes(512));
+    subject.recordTouched(id, "a.bin");
+    expect(await subject.captureDelta(id, root, 1)).toMatchObject({ status: "queued", kind: "base" });
+    await writeFile(join(root, "a.bin"), randomBytes(512));
+    expect(await subject.captureDelta(id, root, 2)).toMatchObject({ status: "queued", kind: "delta" });
+    // The server turned the policy off after the key was read: it refuses the create.
+    server.policy = { touched_files: false };
+    expect(await subject.drain()).toMatchObject({ uploaded: 0, dropped: 2, pending: 0 });
+    expect(server.calls.filter((call) => call.method === "POST")).toEqual([expect.objectContaining({ path: "archives", status: 422 })]);
+    expect(logs.filter((log) => log.message === "OmniRush archiving stopped for a session")).toEqual([
+      { level: "warn", message: "OmniRush archiving stopped for a session", attributes: { sessionId: id, code: "archive_marker_not_allowed", droppedJobs: 2 } },
+    ]);
+    await writeFile(join(root, "a.bin"), randomBytes(512));
+    expect(await subject.captureDelta(id, root, 3)).toEqual({ status: "skipped", reason: "stopped" });
+    expect(await subject.drain()).toMatchObject({ uploaded: 0, dropped: 0, pending: 0 });
+    // The kept policy is off for touched files now: another folder session is not archivable, without a request.
+    const calls = server.calls.length;
+    expect(await subject.captureBase("ses_touched_other", root, 0)).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(server.calls.length).toBe(calls);
+    now += POLICY_TTL_MS;
+    expect(await subject.captureBase("ses_touched_later", root, 0)).toEqual({ status: "skipped", reason: "not_archivable" });
+    expect(server.callPaths().at(-1)).toBe("GET archives/key 200");
   });
 });

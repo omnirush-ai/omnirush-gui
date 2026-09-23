@@ -15,7 +15,10 @@ import { realpath } from "node:fs/promises";
 
 import type { CaptureResult, DrainResult, FinalReason, SessionArchiver } from "./index.js";
 
-export type ProjectArchiver = Pick<SessionArchiver, "captureBase" | "captureDelta" | "captureFinal" | "startFinalCandidates" | "drain" | "signOut" | "stop">;
+export type ProjectArchiver = Pick<
+  SessionArchiver,
+  "captureBase" | "captureDelta" | "captureFinal" | "startFinalCandidates" | "recordTouched" | "forgetTouched" | "drain" | "signOut" | "stop"
+>;
 
 /** Engine reads for one session, resolving to the parsed JSON, or null when it cannot be read. */
 export type ArchiveEngineReads = {
@@ -269,6 +272,18 @@ export class ProjectArchiveLifecycle {
   }
 
   /**
+   * The collector saw the session touch a path (workspace-relative): a
+   * tool's path in the trace, or a change on disk. Kept for a touched-files
+   * session (the archiver drops it for any other); nothing for a session
+   * this app run has not started or knows is not archived.
+   */
+  pathTouched(sessionId: string, path: string): void {
+    const record = this.sessions.get(sessionId);
+    if (!this.active || this.consentOff || !record || (!record.root && !record.start)) return;
+    this.archiver.recordTouched(sessionId, path);
+  }
+
+  /**
    * The observer follows a turn of the session: it is not quiet. A turn that
    * ended just before (its turnCompleted can come after the next prompt's
    * sessionStarted, when that prompt went out while the turn settled) must
@@ -365,6 +380,7 @@ export class ProjectArchiveLifecycle {
     if (parent === undefined) return this.unresolved(sessionId, record, "the engine session could not be read");
     if (parent !== null) {
       record.start = null;
+      this.archiver.forgetTouched(sessionId);
       return true;
     }
     const root = await realpath(start.root).catch(() => null);

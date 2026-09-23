@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +9,7 @@ import { zstdDecompressSync } from "node:zlib";
 
 import { startCaptureService, type CaptureService, type CaptureServiceOptions } from "./capture-client.js";
 import { FakeArchiveServer, slowPartTwo } from "./session-archive/fake-archive-server.js";
+import { openArchive } from "./session-archive/test-helpers.js";
 
 /**
  * The capture worker: the collector's and the archiver's work runs off the
@@ -322,6 +324,61 @@ describe("capture worker", () => {
       expect(refreshFlags[0]).toBe(false);
       await capture.stop();
     }
+  }, 60_000);
+
+  test("on the worker, the paths the collector sees a session touch reach the touched-files archive: a folder without .git gets only those files", async () => {
+    const sessionId = "ses_touched_0001";
+    const engine = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => (new URL(request.url).pathname.endsWith("/message") ? Response.json([]) : Response.json({ id: sessionId })),
+    });
+    cleanups.push(() => engine.stop(true));
+    const home = await tempDir("home");
+    const root = join(home, "report");
+    await mkdir(root);
+    const brief = randomBytes(64 * 1024);
+    await writeFile(join(root, "brief.pdf"), brief);
+    await writeFile(join(root, "untouched.txt"), "never touched\n");
+    const archive = new FakeArchiveServer();
+    archive.policy = { touched_files: true };
+    const stateDir = await tempDir("state");
+    const capture = service({
+      stateDir,
+      collector: { upload: uploadSink().upload },
+      archive: {
+        enabled: true,
+        excludedDirs: [],
+        folderGate: { homeDir: home },
+        request: (path, init) => archive.respond(`https://api.omnirush.test/omnirush/${path}`, {
+          method: init.method,
+          headers: { authorization: `Bearer ${archive.token}` },
+          ...(init.body === undefined ? {} : { body: init.body }),
+        }),
+        refreshAccessToken: async () => null,
+        fetch: archive.respond,
+        baseIdleMs: 0,
+      },
+    });
+    capture.startSession(sessionId, "workspace-touched", root);
+    capture.archiveSessionStarted(sessionId, root, { baseUrl: `http://127.0.0.1:${engine.port}`, headers: [], search: "", engine: "v1" });
+    await until(() => archive.calls.some((call) => call.path === "archives/key"), 20_000, "the key read");
+    await capture.idle();
+    expect(capture.mode()).toBe("worker");
+    // Registered: nothing packed before a capture with a touched file.
+    expect(archive.callPaths()).toEqual(["GET archives/key 200"]);
+    // The agent reads the PDF; the app quits: the quit's final archive is the chain's base.
+    capture.recordTrace(sessionId, "tool.read", { input: { filePath: join(root, "brief.pdf") } });
+    await capture.idle();
+    await capture.stop();
+    const archiveDir = join(stateDir, "omnirush-archive");
+    const queue = await readdir(join(archiveDir, "queue"));
+    expect(queue).toHaveLength(1);
+    const record = JSON.parse(await readFile(join(archiveDir, "queue", queue[0]!), "utf8"));
+    expect(record.request).toMatchObject({ session_id: sessionId, kind: "base", sequence: 0, turn: 0, marker: "touched" });
+    const members = await openArchive(await readFile(join(archiveDir, "pending", record.sealed_file)));
+    expect(members.map((member) => member.name)).toEqual(["__omnirush__/manifest.json", "brief.pdf"]);
+    expect(members[1]!.content.equals(brief)).toBe(true);
   }, 60_000);
 
   test("OMNIRUSH_CAPTURE_WORKER=0 captures in-process with the same envelopes", async () => {

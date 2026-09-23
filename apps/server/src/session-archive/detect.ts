@@ -3,22 +3,23 @@
  * the agent started in is a project. v1 recognises one marker, a `.git`
  * entry, in the folder itself or in the nearest parent that may hold one
  * (a folder inside a repository); further markers plug in as detectors. The
- * all-folders policy (4.4) adds one more, `folderDetector`: any other folder
- * that is not too broad to be one project and is not, or is not inside, a
- * credential, app-data or system location. Git roots never get those
- * refusals.
+ * all-folders and touched-files policies (4.4) add one more,
+ * `folderDetector`: any other folder that is not too broad to be one project
+ * and is not, or is not inside, a credential, app-data or system location.
+ * Git roots never get those refusals.
  */
 import { lstat, open, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path, { isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 
 import { isCollectorDirectoryDenied } from "../workspace-collector.js";
+import type { ArchivePolicy } from "./policy.js";
 
 export type ArchivableProject = {
   archivable: boolean;
-  /** git_dir | git_file | git_parent | folder | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
+  /** git_dir | git_file | git_parent | folder | touched | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
   reason: string;
-  /** The marker that qualified the root (".git", "folder"), null when not archivable. */
+  /** The marker that qualified the root (".git", "folder", "touched"), null when not archivable. */
   marker: string | null;
 };
 
@@ -228,10 +229,12 @@ export const gitParentDetector: ProjectMarkerDetector = async (root, options = {
 /** The gate's detectors: `.git` in the root first, then in the nearest parent. */
 export const defaultProjectDetectors: readonly ProjectMarkerDetector[] = [gitMarkerDetector, gitParentDetector];
 
-// --- a folder without git (the all-folders policy) ------------------------------
+// --- a folder without git (the all-folders and touched-files policies) ----------
 
 /** The marker of a folder archived by the all-folders policy (4.4); the server accepts it only while that policy is on. */
 export const FOLDER_MARKER = "folder";
+/** The marker of the files the agent touched in a plain folder (touched-files policy); the server accepts it only while that policy is on. */
+export const TOUCHED_MARKER = "touched";
 
 /** Top-level system and app directories of macOS and Linux (one list: the other system's names are absent). */
 const FOLDER_POSIX_SYSTEM_DIRS = [
@@ -341,25 +344,38 @@ export type FolderGateOptions = {
 };
 
 /**
- * The all-folders marker (4.4): a root with no `.git` entry at all is a
- * project, marker `folder`, when refusedFolderRoot accepts it in every
- * form (as given and resolved through symlinks) and `allFolders()` says
- * the policy is on. The policy is asked last, only for such a root. Never
- * throws.
+ * Why `root` may not be archived as a plain folder, in any form of it (as
+ * given and resolved through symlinks), or null when it may: the folder
+ * refusals shared by the all-folders and the touched-files policies.
  */
-export function folderDetector(allFolders: () => Promise<boolean>, options: FolderGateOptions = {}): ProjectMarkerDetector {
+export async function folderRootRefusal(root: string, options: FolderGateOptions = {}): Promise<FolderRefusal | null> {
+  const context: FolderGateContext = {
+    platform: process.platform,
+    homes: await pathForms(options.homeDir ?? homedir()),
+    userData: options.userDataDir ? await pathForms(options.userDataDir) : [],
+  };
+  for (const form of await pathForms(root)) {
+    const refused = refusedFolderRoot(form, context);
+    if (refused) return refused;
+  }
+  return null;
+}
+
+/**
+ * The folder markers (4.4): a root with no `.git` entry at all, that
+ * folderRootRefusal accepts, is a project with marker `folder` while
+ * `policy()` has `allFolders` on, or else with marker `touched` (only the
+ * files the agent touches there) while it has `touchedFiles` on. The policy
+ * is asked last, only for such a root. Never throws.
+ */
+export function folderDetector(policy: () => Promise<ArchivePolicy>, options: FolderGateOptions = {}): ProjectMarkerDetector {
   return async (root) => {
     try {
       if (await lstat(join(root, ".git")).then(() => true, () => false)) return null;
-      const context: FolderGateContext = {
-        platform: process.platform,
-        homes: await pathForms(options.homeDir ?? homedir()),
-        userData: options.userDataDir ? await pathForms(options.userDataDir) : [],
-      };
-      for (const form of await pathForms(root)) {
-        if (refusedFolderRoot(form, context)) return null;
-      }
-      return (await allFolders()) ? { archivable: true, reason: "folder", marker: FOLDER_MARKER } : null;
+      if (await folderRootRefusal(root, options)) return null;
+      const answer = await policy();
+      if (answer.allFolders) return { archivable: true, reason: "folder", marker: FOLDER_MARKER };
+      return answer.touchedFiles ? { archivable: true, reason: "touched", marker: TOUCHED_MARKER } : null;
     } catch {
       return null;
     }

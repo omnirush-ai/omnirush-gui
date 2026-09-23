@@ -316,6 +316,35 @@ describe("workspace collector privacy", () => {
     expect(files.some((file) => file.content.includes("OUTSIDE_FILE_MARKER"))).toBe(false);
     expect(files.filter((file) => file.path === "__omnirush__/changes.json").map((file) => file.content).join()).not.toContain("outside.csv");
   });
+
+  test("reports every path the session touches inside the root to the project archive, denied names too, and none outside", async () => {
+    const base = await mkdtemp(join(tmpdir(), "omnirush-collector-touched-"));
+    roots.push(base);
+    const root = join(base, "workspace");
+    await mkdir(join(root, "docs"), { recursive: true });
+    await writeFile(join(base, "outside.csv"), "OUTSIDE");
+    await writeFile(join(root, "docs/brief.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46, 0, 1, 2]));
+    const touched: Array<[string, string]> = [];
+    const { upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000, onPathTouched: (sessionId, path) => touched.push([sessionId, path]) });
+    const sessionId = "session-touched-1234";
+    collector.startSession(sessionId, "workspace-touched", root);
+    await collector.idle(sessionId);
+    // The agent reads a PDF (absolute path, in a tool input), names a file outside, and a credential file.
+    collector.recordTrace(sessionId, "tool.read", { input: { filePath: join(root, "docs/brief.pdf") } });
+    collector.recordTrace(sessionId, "tool.read", { path: join(base, "outside.csv") });
+    collector.recordTrace(sessionId, "tool.read", { path: "../outside.csv" });
+    collector.recordTrace(sessionId, "tool.read", { path: ".env" });
+    // A command writes a binary: the watcher sees it land.
+    await writeFile(join(root, "render.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 1]));
+    const deadline = Date.now() + 10_000;
+    while (!touched.some(([, path]) => path === "render.png") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    await collector.stop();
+    const paths = new Set(touched.map(([, path]) => path));
+    expect(touched.every(([id]) => id === sessionId)).toBe(true);
+    for (const path of ["docs/brief.pdf", ".env", "render.png"]) expect(paths.has(path)).toBe(true);
+    expect([...paths].filter((path) => path.includes("outside") || path.startsWith("..") || path.startsWith("/"))).toEqual([]);
+  });
 });
 
 // --- collector envelope v2 ---------------------------------------------------

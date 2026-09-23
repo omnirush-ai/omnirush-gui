@@ -3,10 +3,11 @@
 When a chat runs in a folder that is a git project, OmniRush.ai keeps an
 encrypted copy of the whole project folder on omnirush.ai: when the chat
 starts, after every completed turn, and once more when the chat goes quiet,
-is deleted, or the app quits. With that copy, the project can be restored
-as it was after any turn of the chat, and as it was left at the end. This
-page describes what the desktop app uploads, when it uploads it, the size
-limits, and how to opt out.
+is deleted, or the app quits. In any other folder, it uploads the files the
+agent opens or changes there, as they are, including binaries. With that
+copy, the chat's work can be restored as it was after any turn of the chat,
+and as it was left at the end. This page describes what the desktop app
+uploads, when it uploads it, the size limits, and how to opt out.
 
 The project archive is separate from the workspace collector described in
 [workspace-collector-privacy.md](workspace-collector-privacy.md). The
@@ -35,19 +36,57 @@ All of these must be true:
   distribution, at the root of a disk or network share, or in a system
   or application folder (such as `/usr`, `/Applications`, `C:\Windows`,
   `C:\Program Files` or a WSL distribution's `/etc`) does not count.
-  Nothing is archived for other folders, unless omnirush.ai turns on
-  archiving for every folder (see below).
+  For any other folder, see [Other folders](#other-folders).
 - The folder is not your home folder, the root of a disk, or one of the
   app's own data folders. If the chat's folder is a symbolic link, the
   folder it points to is the one checked and archived.
 
+Sub-agent chats (tasks the agent starts on its own) are not archived. They
+work in the same folder as the chat that started them, which is already
+archived.
+
+## Other folders
+
+In any other folder, it uploads the files the agent opens or changes there,
+as they are, including binaries. That means every file in the chat's
+folder, or in a folder inside it, that during the chat:
+
+- the agent opens, reads, writes or edits with its tools (a sub-agent
+  counts for the chat that started it), or
+- is created, changed or deleted, for example by a command the agent runs.
+
+Nothing else in the folder is uploaded: not the files the agent does not
+touch, and not the content of a folder the agent only lists. Nothing outside
+the chat's folder is uploaded, or read by the app for the upload, even when
+the agent opens it, or a symbolic link in the folder points to it (such a
+link is skipped; a link to a file inside the folder counts as that file).
+The same files are left out as for a git project (see
+[What is left out](#what-is-left-out)), such as credential files.
+
+The first upload happens at the end of the first turn in which the agent
+touched a file (or at the first final copy, see
+[What gets uploaded](#what-gets-uploaded)) and holds the touched files. Each
+later upload holds the touched files that were added or changed since, and
+lists the touched files that were deleted. The list of touched files is kept
+on your computer, so a chat you continue after restarting the app keeps it,
+and changes made to those files while the app was closed are uploaded when
+it starts again.
+
+This is a setting on omnirush.ai too: while it is off for your account,
+nothing is uploaded for these folders, and no list of touched files is
+kept. If omnirush.ai turns on archiving every folder for your account (see
+below), a folder without `.git` is copied whole instead.
+
+### Archiving every folder
+
 Archiving every folder is a setting on omnirush.ai, and it is off. It
 applies only to accounts that accepted the omnirush.ai terms that describe
 it (the 2026-09-24 version or later); everyone else stays on git projects
-only. While it is off for your account, only git projects are archived and
-nothing else changes, apart from the check described below. Once it is on
-for your account, a chat folder without `.git` is archived the same way as
-a git project, including binaries, large files and files git would ignore.
+only. While it is off for your account, no folder without `.git` is copied
+whole, and nothing else changes, apart from the check described below.
+Once it is on for your account, a chat folder without `.git` is archived
+the same way as a git project, including binaries, large files and files
+git would ignore.
 A folder inside your home folder, such as `~/projects/app` or
 `~/Documents/report`, can be archived. A folder without `.git` is never
 archived when it is your home folder or a folder above it, the root of a
@@ -76,24 +115,28 @@ folder it resolves to through symbolic links):
   `ProgramData`, `$Recycle.Bin`, `System Volume Information`, `Recovery`
   and `PerfLogs` on any Windows drive.
 
-These limits apply to folders without `.git` only. A git project is archived
-as it is today, under the conditions at the top of this section, wherever it
-is, including inside one of these folders.
+The same limits apply to the files the agent touches in a folder without
+`.git`: nothing is uploaded from such a folder. These limits apply to folders
+without `.git` only. A git project is archived as it is today, under the
+conditions in [When it runs](#when-it-runs), wherever it is, including inside
+one of these folders.
 
-To learn whether the setting is on, the app asks omnirush.ai when a chat
+To learn whether these settings are on, the app asks omnirush.ai when a chat
 starts in a folder without `.git` that passes these limits: one request,
 with no retries, and any failure counts as off. The answer is kept for five
 minutes, so starting several chats sends one request, and a change on
 omnirush.ai reaches the app within five minutes, without an app update.
-While the setting is off for your account, a chat already archived this way
+While a setting is off for your account, a chat already archived that way
 uploads nothing more; its next upload after it is back on includes every
-change made meanwhile.
-
-Sub-agent chats (tasks the agent starts on its own) are not archived. They
-work in the same folder as the chat that started them, which is already
-archived.
+change made meanwhile. If omnirush.ai refuses an upload because the setting
+is off, the app stops archiving that chat.
 
 ## What gets uploaded
+
+This section describes a git project (and a folder archived whole). In
+another folder, the same moments apply to the files the agent touched
+there, as described in [Other folders](#other-folders): nothing is uploaded
+when the chat starts, and each upload holds only touched files.
 
 - **When the chat starts:** the whole folder as it is on disk. That
   includes the `.git` folder with the full history and files that git
@@ -128,7 +171,8 @@ archived.
     while it shuts down; the copy is uploaded the next time the app runs;
   - when the app starts again, for chats archived in the last 7 days:
     anything the last shutdown did not get to, and changes made while the
-    app was closed (for the most recent chat on each folder).
+    app was closed (for the most recent chat on each folder, and for every
+    chat whose touched files are uploaded).
 
   A folder that did not change uploads nothing. A final copy is only taken
   for a chat that already has its full copy, and only while the folder is

@@ -207,16 +207,16 @@ describe("all-folders gate (4.4)", () => {
   const NO_MARKER = { archivable: false, reason: "no_marker", marker: null };
 
   /** A policy stub that counts how often it was asked. */
-  function policy(allFolders: boolean) {
+  function policy(allFolders: boolean, touchedFiles = false) {
     const asked = { count: 0 };
-    return { asked, allFolders: async () => (asked.count += 1, allFolders) };
+    return { asked, read: async () => (asked.count += 1, { allFolders, touchedFiles }) };
   }
 
   test("policy off: a folder without .git stays not archivable, exactly as git-only", async () => {
     const home = await tempDir("folder-home");
     await mkdir(join(home, "notes"));
     const off = policy(false);
-    expect(await isArchivableProject(join(home, "notes"), [gitMarkerDetector, folderDetector(off.allFolders, { homeDir: home })])).toEqual(NO_MARKER);
+    expect(await isArchivableProject(join(home, "notes"), [gitMarkerDetector, folderDetector(off.read, { homeDir: home })])).toEqual(NO_MARKER);
     expect(off.asked.count).toBe(1);
   });
 
@@ -224,20 +224,20 @@ describe("all-folders gate (4.4)", () => {
     const home = await tempDir("folder-home");
     await mkdir(join(home, "projects/x"), { recursive: true });
     const on = policy(true);
-    const detectors = [gitMarkerDetector, folderDetector(on.allFolders, { homeDir: home })];
+    const detectors = [gitMarkerDetector, folderDetector(on.read, { homeDir: home })];
     expect(await isArchivableProject(join(home, "projects/x"), detectors)).toEqual(FOLDER);
     expect(await isArchivableProject(join(home, "projects"), detectors)).toEqual(FOLDER);
     expect(on.asked.count).toBe(2);
     expect(await isArchivableProject(home, detectors, { homeDir: home })).toEqual({ archivable: false, reason: "root_too_broad", marker: null });
     // The folder detector refuses home by itself too, without asking.
-    expect(await folderDetector(on.allFolders, { homeDir: home })(home)).toBeNull();
+    expect(await folderDetector(on.read, { homeDir: home })(home)).toBeNull();
     expect(on.asked.count).toBe(2);
   });
 
   test("git is still preferred, and any .git entry keeps the git result without asking the policy", async () => {
     const home = await tempDir("folder-home");
     const on = policy(true);
-    const detectors = [gitMarkerDetector, folderDetector(on.allFolders, { homeDir: home })];
+    const detectors = [gitMarkerDetector, folderDetector(on.read, { homeDir: home })];
     await mkdir(join(home, "repo/.git"), { recursive: true });
     expect(await isArchivableProject(join(home, "repo"), detectors)).toEqual({ archivable: true, reason: "git_dir", marker: ".git" });
     await mkdir(join(home, "broken"));
@@ -255,7 +255,7 @@ describe("all-folders gate (4.4)", () => {
     await mkdir(join(userData, "managed-opencode-workdir"), { recursive: true });
     await symlink("/usr", join(home, "system"));
     const on = policy(true);
-    const detector = folderDetector(on.allFolders, { homeDir: home, userDataDir: userData });
+    const detector = folderDetector(on.read, { homeDir: home, userDataDir: userData });
     for (const root of [userData, join(userData, "managed-opencode-workdir"), join(home, ".config"), join(home, "system/share"), "/usr", "/usr/share"]) {
       expect({ root, result: await detector(root) }).toEqual({ root, result: null });
     }
@@ -440,7 +440,7 @@ describe("all-folders gate (4.4)", () => {
     await mkdir(join(home, "work/links"), { recursive: true });
     await symlink(join(home, ".aws"), join(home, "work/links/aws"));
     const on = policy(true);
-    const detector = folderDetector(on.allFolders, { homeDir: home });
+    const detector = folderDetector(on.read, { homeDir: home });
     // work/links/aws/sso is a real directory reached through a link: its resolved form is ~/.aws/sso.
     for (const root of [...roots.map((dir) => join(home, dir)), join(home, "work/links/aws/sso")]) {
       expect({ root, result: await detector(root) }).toEqual({ root, result: null });

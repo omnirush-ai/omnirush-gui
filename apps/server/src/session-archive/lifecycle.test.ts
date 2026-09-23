@@ -34,6 +34,8 @@ class FakeArchiver implements ProjectArchiver {
   startFinals: string[] = [];
   /** The options of each stop() call. */
   readonly stops: Array<{ finals?: readonly string[]; budgetMs?: number }> = [];
+  /** recordTouched and forgetTouched calls (not in `calls`). */
+  readonly touched: string[] = [];
 
   async captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     this.calls.push(`base ${sessionId} ${root} ${turn}`);
@@ -52,6 +54,14 @@ class FakeArchiver implements ProjectArchiver {
 
   async startFinalCandidates(): Promise<string[]> {
     return this.startFinals;
+  }
+
+  recordTouched(sessionId: string, path: string): void {
+    this.touched.push(`record ${sessionId} ${path}`);
+  }
+
+  forgetTouched(sessionId: string): void {
+    this.touched.push(`forget ${sessionId}`);
   }
 
   async drain(): Promise<DrainResult> {
@@ -209,6 +219,43 @@ describe("ProjectArchiveLifecycle", () => {
     expect(archiver.captures()).toEqual([]);
     // Known to be a child: the engine is not asked again, and its messages are never read.
     expect(child.reads).toEqual({ session: 1, messages: 0 });
+  });
+
+  test("touched paths reach the archiver only for a session this run started that may be archived", async () => {
+    const archiver = new FakeArchiver();
+    const { subject } = lifecycle(archiver);
+    const root = await tempDir("root");
+    // Before its first prompt, the session is not known here.
+    subject.pathTouched("ses_touch_0001", "early.txt");
+    subject.sessionStarted({ sessionId: "ses_touch_0001", root, engine: engine().reader });
+    // While its start step waits, and once it is resolved with a root.
+    subject.pathTouched("ses_touch_0001", "brief.pdf");
+    await subject.settled();
+    subject.pathTouched("ses_touch_0001", "out/render.png");
+    // Not archivable: nothing more.
+    archiver.base = async () => skipped("not_archivable");
+    subject.sessionStarted({ sessionId: "ses_touch_0002", root, engine: engine().reader });
+    await subject.settled();
+    subject.pathTouched("ses_touch_0002", "x.txt");
+    // A child session: what it reported goes, and nothing more is passed on.
+    subject.sessionStarted({ sessionId: "ses_touch_child", root, engine: engine({ parentID: "ses_touch_0001" }).reader });
+    subject.pathTouched("ses_touch_child", "child.txt");
+    await subject.settled();
+    subject.pathTouched("ses_touch_child", "later.txt");
+    // Deleted: forgotten.
+    subject.sessionEnded("ses_touch_0001");
+    subject.pathTouched("ses_touch_0001", "after.txt");
+    await subject.settled();
+    expect(archiver.touched).toEqual([
+      "record ses_touch_0001 brief.pdf",
+      "record ses_touch_0001 out/render.png",
+      "record ses_touch_child child.txt",
+      "forget ses_touch_child",
+    ]);
+    // Signed out: nothing.
+    await subject.signOut();
+    subject.pathTouched("ses_touch_0001", "signed-out.txt");
+    expect(archiver.touched).toHaveLength(4);
   });
 
   test("delta turn numbers come from the engine's completed turns, in order after the base", async () => {

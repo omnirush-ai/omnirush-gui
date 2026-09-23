@@ -81,27 +81,46 @@ describe("archive upload client", () => {
     expect((await client.fetchKey()).status).toBe("unavailable");
   });
 
-  test("the key route's policy: all_folders only when it is the boolean true; anything else is off and the key still works", async () => {
+  test("the key route's policy: all_folders and touched_files each only when it is the boolean true; anything else is off and the key still works", async () => {
     const server = new FakeArchiveServer();
     const client = uploader(server);
-    const cases: Array<[unknown, boolean]> = [
-      [{ all_folders: true }, true],
-      [{ all_folders: true, other: "ignored" }, true],
-      [undefined, false],
-      [null, false],
-      [{}, false],
-      [{ all_folders: false }, false],
-      [{ all_folders: "true" }, false],
-      [{ all_folders: 1 }, false],
-      [{ all_folders: null }, false],
-      [[true], false],
-      ["all_folders", false],
+    const cases: Array<[unknown, boolean, boolean]> = [
+      [{ all_folders: true }, true, false],
+      [{ all_folders: true, other: "ignored" }, true, false],
+      [{ touched_files: true }, false, true],
+      [{ all_folders: true, touched_files: true }, true, true],
+      [{ all_folders: false, touched_files: true }, false, true],
+      [undefined, false, false],
+      [null, false, false],
+      [{}, false, false],
+      [{ all_folders: false }, false, false],
+      [{ all_folders: "true", touched_files: "true" }, false, false],
+      [{ all_folders: 1, touched_files: 1 }, false, false],
+      [{ all_folders: null, touched_files: null }, false, false],
+      [[true], false, false],
+      ["all_folders", false, false],
+      ["touched_files", false, false],
     ];
-    for (const [policy, allFolders] of cases) {
+    for (const [policy, allFolders, touchedFiles] of cases) {
       server.policy = policy;
       const fetched = await client.fetchKey();
-      expect({ policy, status: fetched.status, allFolders: fetched.status === "ok" && fetched.policy.allFolders }).toEqual({ policy, status: "ok", allFolders });
+      expect({ policy, status: fetched.status, policy_read: fetched.status === "ok" ? fetched.policy : null }).toEqual({ policy, status: "ok", policy_read: { allFolders, touchedFiles } });
     }
+  });
+
+  test("a create the server refuses for its marker (422 archive_marker_not_allowed) stops the session once; any other 422 stays archive_request_invalid", async () => {
+    const server = new FakeArchiveServer();
+    const client = uploader(server);
+    for (const marker of ["touched", "folder"]) {
+      const { job, persist } = await sealedJob(randomBytes(512), { marker });
+      expect(await client.upload(job, persist)).toEqual({ status: "stop_session", code: "archive_marker_not_allowed" });
+    }
+    expect(server.calls.filter((call) => call.path === "archives").map((call) => call.status)).toEqual([422, 422]);
+    server.policy = { touched_files: true };
+    const { job, persist } = await sealedJob(randomBytes(512), { marker: "touched" });
+    expect(await client.upload(job, persist)).toEqual({ status: "uploaded" });
+    const invalid = await sealedJob(randomBytes(512), { kind: "base", sequence: 3 });
+    expect(await client.upload(invalid.job, invalid.persist)).toEqual({ status: "stop_session", code: "archive_request_invalid" });
   });
 
   test("the policy probe is one GET: no backoff and no bearer refresh, whatever the failure", async () => {
