@@ -919,7 +919,7 @@ describe("SessionArchiver final archives", () => {
     expect(finals).toEqual([undefined, undefined, "app_start", undefined, "idle", "app_start"]);
   });
 
-  test("app start window: a record from before 1.0.11 counts from its last archive, and a final refused by a server without them does not extend it", async () => {
+  test("app start window: a record from before 1.1.0 counts from its last archive, and a final refused by a server without them does not extend it", async () => {
     const server = new FakeArchiveServer();
     server.strictTurns = true;
     const { root } = await project();

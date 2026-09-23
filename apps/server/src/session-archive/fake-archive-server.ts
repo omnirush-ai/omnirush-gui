@@ -4,7 +4,7 @@
  * to 7.7 closely enough for the client's behaviour to be checked: auth,
  * consent, replay and restart semantics, presigned URL expiry, NoSuchUpload,
  * part listing and completion checks. A delta's turn may repeat its parent's
- * (a final archive), as the backend accepts from 1.0.11 on; `strictTurns`
+ * (a final archive), as the backend accepts from 1.1.0 on; `strictTurns`
  * emulates the backend before that. A `folder` or `touched` archive is
  * refused (422 archive_marker_not_allowed) unless `policy` has its flag on.
  */

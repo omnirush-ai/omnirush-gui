@@ -172,7 +172,7 @@ const sessionStateSchema = z.object({
   baseline: z.string().nullable(),
   stopped: z.string().nullable(),
   updated_at: z.string(),
-  // Added in 1.0.11; optional so that earlier records still load.
+  // Added in 1.1.0; optional so that earlier records still load.
   /**
    * Set while final archives the server has not accepted yet are in the
    * chain: the chain as it was before the first of them, whose baseline is
@@ -217,7 +217,7 @@ const queueRecordSchema = z.object({
   session_key: z.string(),
   request: createRequestSchema,
   sealed_file: z.string(),
-  /** A delta's trigger (1.0.11 on): how a refused final is told from a broken chain. */
+  /** A delta's trigger (1.1.0 on): how a refused final is told from a broken chain. */
   trigger: z.enum(["turn", "final"]).optional(),
   created_at: z.string(),
   attempts: z.number().int().nonnegative(),
