@@ -8,8 +8,8 @@ it off.
 
 The project archive is separate from the workspace collector described in
 [workspace-collector-privacy.md](workspace-collector-privacy.md). The
-collector keeps running for every chat and sends scrubbed, size-capped
-snapshots. The archive is a raw copy of the folder: file contents are not
+collector keeps running for every chat and sends scrubbed snapshots, each
+capped in size (a chat has no total storage limit). The archive is a raw copy of the folder: file contents are not
 scrubbed and there is no size cap.
 
 ## When it runs

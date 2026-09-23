@@ -13,7 +13,6 @@ import {
   MAX_COLLECTOR_DIFF_BYTES,
   MAX_COLLECTOR_FILE_BYTES,
   MAX_COLLECTOR_FILES,
-  MAX_COLLECTOR_SESSION_BYTES,
   MAX_COLLECTOR_TRACE_BYTES,
   MAX_COLLECTOR_TRACE_EVENTS,
   MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES,
@@ -756,11 +755,53 @@ function traceEvents(uploads: Envelope[]): Array<{ type: string; data?: Record<s
 describe("workspace collector trace additions", () => {
   test("raises the caps to the contract values", () => {
     expect(MAX_COLLECTOR_FILE_BYTES).toBe(4 * 1024 * 1024);
-    expect(MAX_COLLECTOR_SESSION_BYTES).toBe(512 * 1024 * 1024);
     expect(MAX_COLLECTOR_DIFF_BYTES).toBe(2 * 1024 * 1024);
     expect(MAX_COLLECTOR_FILES).toBe(50_000);
     expect(MAX_COLLECTOR_WEB_VISIT_TEXT_BYTES).toBe(64 * 1024);
     expect(MAX_COLLECTOR_ATTACHMENT_TEXT_BYTES).toBe(256 * 1024);
+  });
+
+  test("keeps uploading every snapshot of a session that has already sent more than 512 MiB", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-nocap-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-collector-nocap-state-"));
+    roots.push(root, stateDir);
+    await writeFile(join(root, "app.txt"), "v0\n");
+    const sessionId = "session-nocap-1234";
+    // The session ledger stands in for the running total of a long session:
+    // it says 600 MiB were already accepted (past the 512 MiB per-session cap
+    // the collector used to stop at) without any of that data being written.
+    const sentBefore = 600 * 1024 * 1024;
+    await writeFile(join(stateDir, "omnirush-collector-sessions.json"), JSON.stringify({
+      version: 1,
+      sessions: { [sessionId]: { segment: 1, nextSequence: 40, sentBytes: sentBefore, lastSeenAt: new Date().toISOString() } },
+    }));
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ stateDir, upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
+    collector.startSession(sessionId, "workspace-nocap", root);
+    await collector.idle(sessionId);
+    await writeFile(join(root, "app.txt"), "v1\n");
+    collector.captureSnapshot(sessionId, "turn_completed");
+    await collector.idle(sessionId);
+    collector.recordTrace(sessionId, "file.read", { path: "app.txt" });
+    collector.flushTrace(sessionId);
+    await collector.stop();
+
+    // Sequence 41 onwards: the seeded total was loaded, and nothing was held back.
+    expect(uploads.map((item) => [item.snapshot_type, item.trigger, item.sequence])).toEqual([
+      ["start", "resume", 41],
+      ["change", "turn_completed", 42],
+      ["trace", "trace_flush", 43],
+      ["end", "session_end", 44],
+    ]);
+    expect(uploads[0]!.files.find((file) => file.path === "app.txt")?.content).toBe("v0\n");
+    expect(uploads[1]!.files.find((file) => file.path === "app.txt")?.content).toBe("v1\n");
+    expect(traceEvents(uploads).some((event) => event.type === "file.read")).toBe(true);
+    for (const envelope of uploads) expect(envelope.privacy).not.toHaveProperty("max_session_bytes");
+    const metadata = JSON.parse(uploads[0]!.files.find((file) => file.path === "__omnirush__/workspace.json")!.content) as Record<string, unknown>;
+    expect(metadata).not.toHaveProperty("max_session_bytes");
+    // The running total is still counted, for diagnostics only.
+    const ledger = JSON.parse(await readFile(join(stateDir, "omnirush-collector-sessions.json"), "utf8")) as { sessions: Record<string, { sentBytes: number }> };
+    expect(ledger.sessions[sessionId]!.sentBytes).toBeGreaterThan(sentBefore);
   });
 
   test("records the turn model and child sessions with checkpoints that survive a resume", async () => {

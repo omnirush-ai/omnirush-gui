@@ -45,6 +45,8 @@ While you are signed in, the app uploads the following to omnirush.ai, linked to
 - session traces: your prompts, the model's replies, and tool calls, for every model you use in the app;
 - snapshots of the workspace the chat runs in: file contents, the file list, and git metadata and diffs.
 
+There is no limit on how much one chat uploads in total: a chat keeps sending snapshots for as long as it runs. Only single uploads are limited (4 MiB per file, 64 MiB per snapshot).
+
 Before anything leaves your machine:
 
 - some paths are never uploaded: `.git`, `node_modules`, `.env*`, `.ssh`, `.aws`, `.gnupg`, `.npmrc`, `.pypirc`, `id_rsa` and `id_ed25519`, key and certificate files (`.pem`, `.key`, `.p12`, `.pfx`, `.jks`, `.keystore`), `.docker/config.json`, and any file or folder whose name has the word credential(s), secret(s) or private key(s) in it (`secrets.ts`, `aws-credentials.json`, `private_key.txt`);

@@ -15,8 +15,9 @@ const execFileAsync = promisify(execFile);
 export const COLLECTOR_SCHEMA_VERSION = 2;
 // Caps shared with the omnirush.ai collector endpoint (contract v2); the
 // backend enforces identical values, so a change here must land on both sides.
+// Every cap is per file or per request: there is no per-session storage cap, so
+// a session keeps uploading snapshots however much it has sent before.
 export const MAX_COLLECTOR_FILE_BYTES = 4 * 1024 * 1024;
-export const MAX_COLLECTOR_SESSION_BYTES = 512 * 1024 * 1024;
 export const MAX_COLLECTOR_DIFF_BYTES = 2 * 1024 * 1024;
 export const MAX_COLLECTOR_FILES = 50_000;
 export const MAX_COLLECTOR_SNAPSHOT_BYTES = 64 * 1024 * 1024;
@@ -276,6 +277,7 @@ type SessionState = {
   id: string;
   root: string;
   workspaceId: string;
+  /** Uncompressed bytes accepted for this session so far (diagnostics only; never gates an upload). */
   sentBytes: number;
   segment: number;
   sequence: number;
@@ -594,7 +596,6 @@ const PRIVACY_POLICY = {
   redaction: ["provider_secrets", "secret_assignments", "private_keys", "pii"],
   manifest_hash_basis: "sha256_of_redacted_utf8",
   max_file_bytes: MAX_COLLECTOR_FILE_BYTES,
-  max_session_bytes: MAX_COLLECTOR_SESSION_BYTES,
   max_files: MAX_FILES,
   max_diff_bytes: MAX_COLLECTOR_DIFF_BYTES,
 } as const;
@@ -2944,7 +2945,7 @@ export class WorkspaceCollector {
         await this.uploadWorkspace(state, "start", state.resumed ? "resume" : "session_start");
       } finally {
         state.started = true;
-        // No listing reached the plan (the session byte cap, a failed scan): poll.
+        // No listing reached the plan (a failed scan): poll.
         if (state.watchMode === "starting") this.installWatchers(state, null);
       }
     });
@@ -3776,8 +3777,6 @@ export class WorkspaceCollector {
    * whether a snapshot went out.
    */
   private async uploadWorkspace(state: SessionState, type: Exclude<SnapshotType, "trace">, trigger: CollectorTrigger): Promise<boolean> {
-    const remaining = MAX_COLLECTOR_SESSION_BYTES - state.sentBytes;
-    if (remaining <= 1_024) return false;
     const cache = state.cache;
     // Paths reported from here on belong to the next capture.
     const dirty = state.dirty;
@@ -3854,7 +3853,7 @@ export class WorkspaceCollector {
       let fixedBytes = serializedBytes(extras) + SNAPSHOT_WRAPPER_MARGIN_BYTES;
       for (const file of leading) fixedBytes += serializedBytes(file) + 1;
       for (const entry of scan.manifest.values()) fixedBytes += Buffer.byteLength(manifestEntryJson(entry)) + 1;
-      const budget = Math.max(0, Math.min(this.snapshotMaxBytes, remaining - 1_024) - fixedBytes);
+      const budget = Math.max(0, this.snapshotMaxBytes - fixedBytes);
       const selection = selectSnapshotContent(candidates, budget);
       let omittedCount = selection.omittedCount;
       let omittedBytes = selection.omittedBytes;
@@ -3936,9 +3935,8 @@ export class WorkspaceCollector {
   }
 
   private async uploadTrace(state: SessionState, traceEvents: TraceEvent[]): Promise<void> {
-    const remaining = MAX_COLLECTOR_SESSION_BYTES - state.sentBytes;
-    if (remaining <= 1_024 || traceEvents.length === 0) return;
-    const bounded = boundedTracePayload(state, traceEvents, Math.min(MAX_TRACE_BYTES, remaining - 1_024));
+    if (traceEvents.length === 0) return;
+    const bounded = boundedTracePayload(state, traceEvents, MAX_TRACE_BYTES);
     const content = bounded.toString("utf8");
     let events: unknown[] = [];
     try {
@@ -4106,7 +4104,6 @@ export class WorkspaceCollector {
     this.metrics.envelopesWritten += 1;
     const bytes = writer.bytes;
     try {
-      if (state.sentBytes + bytes > MAX_COLLECTOR_SESSION_BYTES) return false;
       if (bytes > this.snapshotMaxBytes) {
         // The backend answers an oversized envelope with 422, which is never
         // retried. The scan budget keeps this from happening; reaching it means
