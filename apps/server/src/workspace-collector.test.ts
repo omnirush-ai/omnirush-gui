@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, posix, win32 } from "node:path";
 import { promisify } from "node:util";
 import { zstdDecompressSync } from "node:zlib";
 
@@ -34,6 +34,7 @@ import {
   redactCollectorText,
   redactModeForPath,
   stripRemoteUserinfo,
+  workspaceRelativePath,
 } from "./workspace-collector.js";
 
 const execFileAsync = promisify(execFile);
@@ -263,6 +264,57 @@ describe("workspace collector privacy", () => {
     expect(workspaceFile?.content).toContain('"capture_policy":"consented_workspace_session"');
     expect(workspaceFile?.content).toContain('"touched_paths":["touched.ts"]');
     expect(JSON.stringify(uploads)).not.toContain("do-not-upload");
+  });
+
+  test("keeps paths outside the workspace root out of capture: parents, other Windows drives and UNC shares", async () => {
+    // Windows: path.relative returns a path on another drive as it is, which a `../` check let through.
+    const windowsRoot = "C:\\Users\\dev\\omnirush.ai";
+    for (const outside of [
+      "D:\\data\\file.csv",
+      "D:/data/file.csv",
+      "d:\\data\\file.csv",
+      "D:file.csv",
+      "\\\\server\\share\\file.csv",
+      "C:\\Users\\dev\\other\\file.csv",
+      "C:\\Users\\dev\\omnirush.ai-other\\file.csv",
+      "..\\file.csv",
+      "src\\..\\..\\file.csv",
+      windowsRoot,
+    ]) {
+      expect([outside, workspaceRelativePath(windowsRoot, outside, win32)]).toEqual([outside, null]);
+    }
+    expect(workspaceRelativePath(windowsRoot, "C:\\Users\\dev\\omnirush.ai\\src\\app.ts", win32)).toBe("src/app.ts");
+    expect(workspaceRelativePath(windowsRoot, "c:\\users\\dev\\omnirush.ai\\src\\app.ts", win32)).toBe("src/app.ts");
+    expect(workspaceRelativePath(windowsRoot, "src/app.ts", win32)).toBe("src/app.ts");
+    // POSIX.
+    for (const outside of ["/etc/hosts", "../ws-other/file.csv", "..", "/home/dev/ws"]) {
+      expect([outside, workspaceRelativePath("/home/dev/ws", outside, posix)]).toEqual([outside, null]);
+    }
+    expect(workspaceRelativePath("/home/dev/ws", "/home/dev/ws/..notes.md", posix)).toBe("..notes.md");
+    expect(workspaceRelativePath("/home/dev/ws", "src/app.ts", posix)).toBe("src/app.ts");
+
+    // Through the collector: a tool naming a file outside the root reads nothing of it.
+    const base = await mkdtemp(join(tmpdir(), "omnirush-collector-outside-"));
+    roots.push(base);
+    const root = join(base, "workspace");
+    await mkdir(root);
+    await writeFile(join(base, "outside.csv"), "OUTSIDE_FILE_MARKER");
+    await writeFile(join(root, "inside.txt"), "inside");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, changeDebounceMs: 10, fallbackScanMs: 60_000 });
+    const sessionId = "session-outside-1234";
+    collector.startSession(sessionId, "workspace-outside", root);
+    await collector.idle(sessionId);
+    collector.recordTrace(sessionId, "file.read", { path: join(base, "outside.csv") });
+    collector.recordTrace(sessionId, "file.read", { path: "../outside.csv" });
+    collector.recordTrace(sessionId, "file.read", { path: "inside.txt" });
+    collector.flushTrace(sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await collector.stop();
+    expect(uploads.at(-1)?.touched_paths).toEqual(["inside.txt"]);
+    const files = uploads.flatMap((envelope) => envelope.files);
+    expect(files.some((file) => file.content.includes("OUTSIDE_FILE_MARKER"))).toBe(false);
+    expect(files.filter((file) => file.path === "__omnirush__/changes.json").map((file) => file.content).join()).not.toContain("outside.csv");
   });
 });
 

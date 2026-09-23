@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { createReadStream, createWriteStream, watch, type FSWatcher, type WriteStream } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { release as osRelease, tmpdir } from "node:os";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import nodePath, { basename, dirname, extname, join, relative, resolve, sep, type PlatformPath } from "node:path";
 import { promisify } from "node:util";
 import { createZstdCompress } from "node:zlib";
 import { minimatch } from "minimatch";
@@ -637,6 +637,24 @@ function resolveCollectUrl(rawGatewayUrl: string | undefined): string | null {
 
 function portablePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
+}
+
+/**
+ * `candidate` (absolute, or relative to the root) as a portable path strictly
+ * inside the workspace root, or null for the root itself, a parent, another
+ * drive or a UNC share. path.relative returns a path on another Windows drive
+ * as it is (`D:\data\x.csv`, portable `D:/data/x.csv`), which a `../` check
+ * lets through; here any absolute result is refused, and the path it
+ * resolves to must start with the root and a separator, as inspectFile
+ * requires of every file it reads. `paths` is the platform's path module
+ * (path.win32 in tests).
+ */
+export function workspaceRelativePath(root: string, candidate: string, paths: PlatformPath = nodePath): string | null {
+  const base = paths.resolve(root);
+  const path = paths.relative(base, paths.resolve(base, candidate));
+  if (!path || paths.isAbsolute(path) || path === ".." || path.startsWith(`..${paths.sep}`)) return null;
+  if (!paths.resolve(base, path).startsWith(base.endsWith(paths.sep) ? base : `${base}${paths.sep}`)) return null;
+  return path.split(paths.sep).join("/");
 }
 
 export function collectorPathForUpload(path: string): string {
@@ -1971,8 +1989,8 @@ async function artifactStats(root: string): Promise<Map<string, ArtifactStat>> {
   const stats = new Map<string, ArtifactStat>();
   for (const path of await listUntrackedFiles(root)) {
     try {
+      if (workspaceRelativePath(root, path) === null) continue;
       const absolute = resolve(root, path);
-      if (portablePath(root, absolute).startsWith("../")) continue;
       const file = await lstat(absolute);
       if (!file.isFile() || file.isSymbolicLink()) continue;
       stats.set(path, { size: file.size, mtimeMs: file.mtimeMs });
@@ -2338,7 +2356,7 @@ async function readUploadContent(
 ): Promise<UploadContent | null> {
   const absolute = resolve(root, path);
   // A directory swapped for a symlink since the scan must not be followed either.
-  if (!(await hasRealAncestors(root, path, ancestors))) return null;
+  if (workspaceRelativePath(root, path) === null || !(await hasRealAncestors(root, path, ancestors))) return null;
   let file;
   try {
     file = await lstat(absolute);
@@ -3156,8 +3174,8 @@ export class WorkspaceCollector {
       return;
     }
     const relative = String(filename).replaceAll("\\", "/");
-    const path = prefix ? `${prefix}/${relative}` : relative;
-    if (!path || path.startsWith("../") || path.startsWith("/") || isCollectorPathDenied(path)) return;
+    const path = workspaceRelativePath(state.root, prefix ? `${prefix}/${relative}` : relative);
+    if (!path || isCollectorPathDenied(path)) return;
     if (path === ".gitignore" || path.endsWith("/.gitignore")) {
       // New ignore rules can hide or reveal any number of files: forget what
       // git answered so far and rescan the tree with the rules as they stand.
@@ -3419,13 +3437,8 @@ export class WorkspaceCollector {
   }
 
   private recordTouchedPath(state: SessionState, candidate: string): void {
-    let path = candidate.replaceAll("\\", "/");
-    if (path.startsWith("/")) {
-      path = portablePath(state.root, resolve(path));
-    } else {
-      path = portablePath(state.root, resolve(state.root, path));
-    }
-    if (!path || path.startsWith("../") || isCollectorPathDenied(path) || state.touchedPaths.has(path)) return;
+    const path = workspaceRelativePath(state.root, candidate.replaceAll("\\", "/"));
+    if (!path || isCollectorPathDenied(path) || state.touchedPaths.has(path)) return;
     state.touchedPaths.add(path);
     this.markDirty(state, path);
     this.queueChangedPath(state, path);
@@ -3778,9 +3791,8 @@ export class WorkspaceCollector {
 
   private queueChangedPath(state: SessionState, filename: string): void {
     if (state.finished) return;
-    const absolute = resolve(state.root, filename);
-    const path = portablePath(state.root, absolute);
-    if (!path || path.startsWith("../") || isCollectorPathDenied(path)) return;
+    const path = workspaceRelativePath(state.root, filename);
+    if (!path || isCollectorPathDenied(path)) return;
     // Several events for one path before its capture starts collapse into one read.
     if (state.pendingJournal.has(path)) return;
     state.pendingJournal.add(path);
@@ -3810,9 +3822,10 @@ export class WorkspaceCollector {
   private async captureChangedPath(state: SessionState, path: string): Promise<void> {
     if (state.finished) return;
     const absolute = resolve(state.root, path);
-    // Reached through a symlinked directory: a file outside the workspace (a
-    // traced read of `linked/util.ts`), never journaled.
-    if (!(await hasRealAncestors(state.root, path))) return;
+    // Outside the root (another drive), or reached through a symlinked
+    // directory: a file outside the workspace (a traced read of
+    // `linked/util.ts`), never journaled.
+    if (workspaceRelativePath(state.root, path) === null || !(await hasRealAncestors(state.root, path))) return;
     let entry: ChangeJournalEntry;
     try {
       const file = await lstat(absolute);
