@@ -77,9 +77,11 @@ archived.
   - when you delete the chat in the app, if its folder still exists;
   - when you quit the app. The app spends at most about 5 seconds on this
     while it shuts down; the copy is uploaded the next time the app runs;
-  - when the app starts again, for chats archived in the last 7 days:
+  - when the app starts again, for chats you sent a message in, or that
+    finished a turn, in the last 7 days (a final copy does not count as
+    use, so a chat you left gets none a week after its last turn):
     anything the last shutdown did not get to, and changes made while the
-    app was closed (for the most recent chat on each folder).
+    app was closed (for the chat used most recently on each folder).
 
   A folder that did not change uploads nothing. A final copy is only taken
   for a chat that already has its full copy, and only while the folder is

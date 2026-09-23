@@ -59,7 +59,7 @@ const MAX_JOB_AGE_MS = 7 * 24 * 60 * 60_000;
 const JOB_RETRY_BASE_MS = 60_000;
 const JOB_RETRY_MAX_MS = 60 * 60_000;
 const SIGN_OUT_ABORT_TIMEOUT_MS = 5_000;
-/** At app start, sessions whose chain moved within this long may get a final archive (startFinalCandidates). */
+/** At app start, sessions active (a base, a prompt, a turn) within this long may get a final archive (startFinalCandidates). */
 const START_FINAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
 /** At most this many sessions are scanned for a final archive at app start. */
 const MAX_START_FINALS = 10;
@@ -153,7 +153,15 @@ const sessionStateSchema = z.object({
   final_due: z.boolean().optional(),
   /** When the session was deleted in the app: no final archive at app start. */
   ended: z.string().nullable().optional(),
-});
+  /**
+   * When the session was last active: its base, a prompt (captureBase once
+   * per app run) or a turn end (captureDelta). Never a final archive, a
+   * rewind or other bookkeeping, which move updated_at: the app-start window
+   * counts from this. A record without it (1.0.10) counts from its
+   * updated_at, and keeps that time from then on.
+   */
+  last_activity_at: z.string().optional(),
+}).transform((state) => ({ ...state, last_activity_at: state.last_activity_at ?? state.updated_at }));
 type SessionState = z.infer<typeof sessionStateSchema>;
 
 const createRequestSchema = z.object({
@@ -303,15 +311,20 @@ export class SessionArchiver {
   /**
    * Base archive at session start (new session, or a resumed one without a
    * base). No-op when the gate says not archivable, archiving is off, or the
-   * session already has a base. Checks consent through GET /archives/key
-   * before packing anything.
+   * session already has a base (its record then only notes the prompt as
+   * activity, for the app-start window). Checks consent through GET
+   * /archives/key before packing anything.
    */
   captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     return this.guard("base", sessionId, turn, async () => this.withSession(sessionId, async () => {
       const generation = this.generation;
       const state = await this.loadSession(sessionId);
       if (state?.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
-      if (state && state.next_sequence > 0) return { status: "skipped", reason: "exists" };
+      if (state && state.next_sequence > 0) {
+        // A prompt on a session archived in an earlier app run: it is active again.
+        if (generation === this.generation) await this.saveSession({ ...state, last_activity_at: this.now().toISOString() });
+        return { status: "skipped", reason: "exists" };
+      }
       return this.captureBaseLocked(sessionId, resolve(root), turn, generation);
     }));
   }
@@ -321,15 +334,19 @@ export class SessionArchiver {
    * stopped archiving, or when nothing in the folder changed. A session whose
    * base could not be captured yet (key unavailable) gets its base instead.
    * A null turn (the engine's messages could not be read) follows the last
-   * archived turn.
+   * archived turn. Whatever it captures, the turn counts as the session's
+   * activity (the app-start window).
    */
   captureDelta(sessionId: string, root: string, turn: number | null): Promise<CaptureResult> {
     return this.guard("delta", sessionId, turn ?? 0, async () => this.withSession(sessionId, async () => {
       const generation = this.generation;
       if (this.disabled) return { status: "skipped", reason: "disabled" };
-      const state = await this.loadSession(sessionId);
-      if (!state) return { status: "skipped", reason: "no_base" };
-      if (state.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
+      const loaded = await this.loadSession(sessionId);
+      if (!loaded) return { status: "skipped", reason: "no_base" };
+      if (loaded.stopped || this.stoppedSessions.has(sessionId)) return { status: "skipped", reason: "stopped" };
+      // A turn ended: the session was active, whatever this capture does.
+      const state: SessionState = { ...loaded, last_activity_at: this.now().toISOString() };
+      if (generation === this.generation) await this.saveSession(state);
       if (resolve(root) !== state.root) this.log("warn", "OmniRush archive delta root differs from the session root; using the session root", { sessionId });
       if (state.next_sequence === 0) return this.captureBaseLocked(sessionId, state.root, turn ?? 0, generation);
       const next = turn ?? (state.last_turn ?? 0) + 1;
@@ -384,10 +401,12 @@ export class SessionArchiver {
   /**
    * The sessions to give a final archive once at app start: every session
    * with a turn captured since its last final archive (the app quit before
-   * that final, or crashed), and the most recent session on each other
-   * folder (the folder may have changed while the app was closed). Only
-   * sessions whose chain moved within the last 7 days, not stopped and not
-   * deleted; the most recent first, at most 10.
+   * that final, or crashed), and the most recently active session on each
+   * other folder (the folder may have changed while the app was closed).
+   * Only sessions active (a base, a prompt, a turn) within the last 7 days,
+   * not stopped and not deleted: a final archive never extends the window,
+   * so a chat left alone gets none a week after its last turn, however
+   * often the app starts. The most recently active first, at most 10.
    */
   async startFinalCandidates(): Promise<string[]> {
     try {
@@ -400,10 +419,10 @@ export class SessionArchiver {
         const parsed = sessionStateSchema.safeParse(await readJsonFile(join(this.dirs.sessions, name)));
         if (!parsed.success || name !== `${stateKey(parsed.data.session_id)}.json`) continue;
         const state = parsed.data;
-        if (state.stopped || state.ended || state.next_sequence === 0 || !(nowMs - Date.parse(state.updated_at) <= START_FINAL_WINDOW_MS)) continue;
+        if (state.stopped || state.ended || state.next_sequence === 0 || !(nowMs - Date.parse(state.last_activity_at) <= START_FINAL_WINDOW_MS)) continue;
         sessions.push(state);
       }
-      sessions.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+      sessions.sort((left, right) => right.last_activity_at.localeCompare(left.last_activity_at));
       const roots = new Set<string>();
       const picked: string[] = [];
       for (const state of sessions) {
@@ -563,6 +582,7 @@ export class SessionArchiver {
       baseline: null,
       stopped: null,
       updated_at: this.now().toISOString(),
+      last_activity_at: this.now().toISOString(),
     };
     if (fetched.status === "unavailable") {
       // Remembered with next_sequence 0: the next captureDelta tries the base again.
