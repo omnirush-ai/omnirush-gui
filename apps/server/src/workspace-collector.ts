@@ -103,6 +103,9 @@ const MAX_GIT_PATH_CHARS = 4096;
 const MAX_ROOT_NAME_CHARS = 255;
 const MAX_ENVIRONMENT_FIELD_CHARS = 256;
 const SESSION_LEDGER_FILE = "omnirush-collector-sessions.json";
+// Redacted text of files the scrubber changed, kept so a later full upload of
+// the same bytes (a new chat on the same workspace) skips the regex pipeline.
+const REDACTED_TEXT_CACHE_BYTES = 32 * 1024 * 1024;
 const SPOOL_DIRECTORY = "omnirush-collector-spool";
 const MAX_SPOOL_BYTES = 128 * 1024 * 1024;
 const MAX_SPOOL_ENTRIES = 200;
@@ -360,6 +363,10 @@ type CollectorOptions = {
   minChangeIntervalMs?: number;
   /** Watcher cap; MAX_COLLECTOR_WATCHED_FILES unless a test lowers it. */
   maxWatchedFiles?: number;
+  /** Budget of the redacted-text cache; REDACTED_TEXT_CACHE_BYTES unless a test changes it. */
+  redactedTextCacheBytes?: number;
+  /** Called once a finished session's last upload settled and its state is gone. */
+  onSessionClosed?: (sessionId: string) => void;
 };
 
 type TransmitOutcome =
@@ -599,6 +606,17 @@ const PRIVACY_POLICY = {
   max_files: MAX_FILES,
   max_diff_bytes: MAX_COLLECTOR_DIFF_BYTES,
 } as const;
+
+/**
+ * WorkspaceCollector's `enabled` for these options, without building one: an
+ * upload hook, or a collect URL and a bearer (from the options or the
+ * environment, as the constructor reads them).
+ */
+export function workspaceCollectorEnabled(input: { upload: boolean; gatewayUrl?: string; accessToken?: string }): boolean {
+  if (input.upload) return true;
+  const token = (input.accessToken ?? process.env.OMNIRUSH_ACCESS_TOKEN ?? "").trim();
+  return Boolean(resolveCollectUrl(input.gatewayUrl ?? process.env.OMNIRUSH_GATEWAY_URL) && token);
+}
 
 function resolveCollectUrl(rawGatewayUrl: string | undefined): string | null {
   const value = rawGatewayUrl?.trim();
@@ -2051,6 +2069,60 @@ class ReadPool {
   }
 }
 
+/**
+ * The redacted text of files the scrubber changed, by absolute path, least
+ * recently used first out once the budget is spent. An entry is used only
+ * for the exact bytes it was made from (their digest) and only while the
+ * per-root cache still describes the file with the same redacted digest, so
+ * it never changes what is sent: it spares the regex pipeline when the same
+ * bytes are uploaded again (a new chat on a workspace another chat already
+ * captured). Clean files are not kept: their upload form is the file itself.
+ */
+class RedactedTextCache {
+  private readonly entries = new Map<string, { raw: string; sha256: string; text: string; bytes: number }>();
+  private used = 0;
+
+  constructor(private readonly budget: number) {}
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  remember(absolute: string, raw: string, entry: HashCacheEntry, text: string): void {
+    this.forget(absolute);
+    // One file may take at most an eighth of the budget, so a few large files never flush the rest.
+    if (entry.bytes > this.budget / 8) return;
+    this.entries.set(absolute, { raw, sha256: entry.sha256, text, bytes: entry.bytes });
+    this.used += entry.bytes;
+    for (const [key, held] of this.entries) {
+      if (this.used <= this.budget) break;
+      this.entries.delete(key);
+      this.used -= held.bytes;
+    }
+  }
+
+  /** The redacted text of `raw` (the digest of the bytes just read) when it redacts to `sha256`. */
+  lookup(absolute: string, raw: string, sha256: string): string | null {
+    const held = this.entries.get(absolute);
+    if (!held || held.raw !== raw || held.sha256 !== sha256) return null;
+    this.entries.delete(absolute);
+    this.entries.set(absolute, held);
+    return held.text;
+  }
+
+  forget(absolute: string): void {
+    const held = this.entries.get(absolute);
+    if (!held) return;
+    this.entries.delete(absolute);
+    this.used -= held.bytes;
+  }
+
+  clear(): void {
+    this.entries.clear();
+    this.used = 0;
+  }
+}
+
 /** Reads a file from the start into `buffer`, up to its length; resolves with the bytes read. */
 async function readInto(absolute: string, buffer: Buffer): Promise<number> {
   const handle = await open(absolute, "r");
@@ -2099,16 +2171,22 @@ export type CollectorMetrics = {
   ignoreCheckSpawns: number;
   watchEvents: number;
   envelopesWritten: number;
+  /** Upload reads served from the redacted-text cache instead of the scrubber. */
+  redactedTextHits: number;
 };
 
 function freshMetrics(): CollectorMetrics {
   return {
     fileStats: 0, fileReads: 0, fileRedactions: 0, fullScans: 0, dirtyScans: 0, reconciles: 0,
-    capturesSkipped: 0, capturesDeferred: 0, ignoreCheckSpawns: 0, watchEvents: 0, envelopesWritten: 0,
+    capturesSkipped: 0, capturesDeferred: 0, ignoreCheckSpawns: 0, watchEvents: 0, envelopesWritten: 0, redactedTextHits: 0,
   };
 }
 
-/** Redacts one file's bytes and describes the result for the cache and the manifest. */
+/**
+ * Redacts one file's bytes and describes the result for the cache and the
+ * manifest. A text the scrubber changed goes into `texts` (when given) under
+ * the digest of the bytes it came from.
+ */
 function redactedCacheEntry(
   path: string,
   buffer: Buffer,
@@ -2116,22 +2194,25 @@ function redactedCacheEntry(
   mtimeMs: number,
   uploadPath: string,
   metrics: CollectorMetrics,
+  texts?: { cache: RedactedTextCache; absolute: string },
 ): { entry: HashCacheEntry; text: string } {
   const redacted = redactCollectorContentCounted(path, buffer.toString("utf8"));
   metrics.fileRedactions += 1;
-  return {
-    text: redacted.text,
-    entry: {
-      size,
-      mtimeMs,
-      binary: false,
-      sha256: sha256Hex(redacted.text),
-      bytes: Buffer.byteLength(redacted.text),
-      json: Buffer.byteLength(JSON.stringify(redacted.text)),
-      clean: redacted.count === 0,
-      uploadPath,
-    },
+  const entry: HashCacheEntry = {
+    size,
+    mtimeMs,
+    binary: false,
+    sha256: sha256Hex(redacted.text),
+    bytes: Buffer.byteLength(redacted.text),
+    json: Buffer.byteLength(JSON.stringify(redacted.text)),
+    clean: redacted.count === 0,
+    uploadPath,
   };
+  if (texts) {
+    if (entry.clean) texts.cache.forget(texts.absolute);
+    else texts.cache.remember(texts.absolute, sha256Hex(buffer), entry, redacted.text);
+  }
+  return { text: redacted.text, entry };
 }
 
 /** The redacted upload path, sharing the listing's string when redaction left it unchanged. */
@@ -2174,18 +2255,20 @@ type ScanContext = {
   /** The resolved root with a trailing separator: every file inspected must start with it. */
   rootPrefix: string;
   cache: Map<string, HashCacheEntry>;
+  texts: RedactedTextCache;
   metrics: CollectorMetrics;
   yielder: LoopYielder;
   pool: ReadPool;
   ancestors: AncestorCache;
 };
 
-function scanContext(root: string, cache: Map<string, HashCacheEntry>, metrics: CollectorMetrics): ScanContext {
+function scanContext(root: string, cache: Map<string, HashCacheEntry>, texts: RedactedTextCache, metrics: CollectorMetrics): ScanContext {
   const base = resolve(root);
   return {
     root,
     rootPrefix: base.endsWith(sep) ? base : `${base}${sep}`,
     cache,
+    texts,
     metrics,
     yielder: new LoopYielder(),
     pool: new ReadPool(SCAN_CONCURRENCY),
@@ -2223,7 +2306,7 @@ async function inspectFile(context: ScanContext, path: string): Promise<HashCach
       if (isBinary(buffer)) {
         return { size: file.size, mtimeMs: file.mtimeMs, binary: true, sha256: "", bytes: 0, json: 0, clean: false, uploadPath };
       }
-      return redactedCacheEntry(path, buffer, file.size, file.mtimeMs, uploadPath, metrics).entry;
+      return redactedCacheEntry(path, buffer, file.size, file.mtimeMs, uploadPath, metrics, { cache: context.texts, absolute }).entry;
     });
   } catch {
     return null;
@@ -2239,13 +2322,16 @@ type UploadContent = { content: string; entry: HashCacheEntry };
 /**
  * Reads a file for files[]. A file the scan saw unchanged by redaction is sent
  * as read once its raw bytes hash to the cached digest, which skips the regex
- * pipeline; anything else (changed since the scan, or a file the scrubber
- * touched) is redacted again, and the cache learns the result when it differs.
+ * pipeline; so is a file the scrubber touched whose redacted text for these
+ * exact bytes is still in `texts`. Anything else (changed since the scan, or
+ * no longer held) is redacted again, and the cache learns the result when it
+ * differs.
  */
 async function readUploadContent(
   root: string,
   path: string,
   cache: Map<string, HashCacheEntry>,
+  texts: RedactedTextCache,
   metrics: CollectorMetrics,
   pool: ReadPool,
   ancestors: AncestorCache,
@@ -2264,12 +2350,19 @@ async function readUploadContent(
   try {
     return await pool.read(absolute, file.size, (buffer): UploadContent | null => {
       metrics.fileReads += 1;
-      if (cached && !cached.binary && cached.clean && cached.size === file.size && cached.mtimeMs === file.mtimeMs
-        && cached.bytes === buffer.length && sha256Hex(buffer) === cached.sha256) {
-        return { content: buffer.toString("utf8"), entry: cached };
+      if (cached && !cached.binary && cached.size === file.size && cached.mtimeMs === file.mtimeMs) {
+        if (cached.clean) {
+          if (cached.bytes === buffer.length && sha256Hex(buffer) === cached.sha256) return { content: buffer.toString("utf8"), entry: cached };
+        } else if (texts.size > 0) {
+          const text = texts.lookup(absolute, sha256Hex(buffer), cached.sha256);
+          if (text !== null) {
+            metrics.redactedTextHits += 1;
+            return { content: text, entry: cached };
+          }
+        }
       }
       if (isBinary(buffer)) return null;
-      const { entry, text } = redactedCacheEntry(path, buffer, file.size, file.mtimeMs, uploadPathFor(path, cached), metrics);
+      const { entry, text } = redactedCacheEntry(path, buffer, file.size, file.mtimeMs, uploadPathFor(path, cached), metrics, { cache: texts, absolute });
       // The same digest keeps the cached entry, which the manifest may share.
       if (cached && cached.sha256 === entry.sha256 && cached.size === entry.size && cached.mtimeMs === entry.mtimeMs) {
         return { content: text, entry: cached };
@@ -2349,6 +2442,7 @@ function countRemoved(previous: Manifest | null, manifest: Manifest): number {
 async function scanWorkspaceFull(
   root: string,
   cache: Map<string, HashCacheEntry>,
+  texts: RedactedTextCache,
   previous: Manifest | null,
   includeAll: boolean,
   metrics: CollectorMetrics,
@@ -2357,7 +2451,7 @@ async function scanWorkspaceFull(
   metrics.fullScans += 1;
   const listing = await listWorkspaceFiles(root);
   onListing?.(listing.paths);
-  const context = scanContext(root, cache, metrics);
+  const context = scanContext(root, cache, texts, metrics);
   const entries = await mapBounded(listing.paths, SCAN_CONCURRENCY, (path) => inspectFile(context, path));
   cache.clear();
   const manifest: Manifest = new Map();
@@ -2393,6 +2487,7 @@ async function scanWorkspaceFull(
 async function scanDirtyPaths(
   root: string,
   cache: Map<string, HashCacheEntry>,
+  texts: RedactedTextCache,
   previous: Manifest,
   dirty: readonly string[],
   ignored: ReadonlySet<string>,
@@ -2400,7 +2495,7 @@ async function scanDirtyPaths(
   metrics: CollectorMetrics,
 ): Promise<ScanResult> {
   metrics.dirtyScans += 1;
-  const context = scanContext(root, cache, metrics);
+  const context = scanContext(root, cache, texts, metrics);
   const targets = dirty.filter((path) => !ignored.has(path));
   const inspect = (paths: string[]) => mapBounded(paths, SCAN_CONCURRENCY, (path) => inspectFile(context, path));
   const entries = await inspect(targets);
@@ -2713,6 +2808,9 @@ export class WorkspaceCollector {
    * and when the reconcile pass last ran (one pass serves every session).
    */
   private readonly caches = new Map<string, { refs: number; entries: Map<string, HashCacheEntry>; reconciling: boolean; reconciledAt: number }>();
+  /** Redacted text of the files the scrubber changed, shared by every root. */
+  private readonly texts: RedactedTextCache;
+  private readonly onSessionClosed?: (sessionId: string) => void;
   /** Work counters for tests and profiling. */
   readonly metrics: CollectorMetrics = freshMetrics();
 
@@ -2739,6 +2837,8 @@ export class WorkspaceCollector {
     this.snapshotMaxBytes = options.snapshotMaxBytes ?? MAX_SNAPSHOT_BYTES;
     this.minChangeIntervalMs = options.minChangeIntervalMs ?? MIN_COLLECTOR_CHANGE_INTERVAL_MS;
     this.maxWatchedFiles = options.maxWatchedFiles ?? MAX_COLLECTOR_WATCHED_FILES;
+    this.texts = new RedactedTextCache(options.redactedTextCacheBytes ?? REDACTED_TEXT_CACHE_BYTES);
+    this.onSessionClosed = options.onSessionClosed;
     this.tempDir = stateDir ? join(stateDir, TEMP_DIRECTORY) : join(tmpdir(), `omnirush-collector-${process.pid}`);
     void this.cleanTempDir(60 * 60_000).catch(() => undefined);
     if (this.spoolDir) {
@@ -3536,6 +3636,7 @@ export class WorkspaceCollector {
       } finally {
         this.releaseCache(state);
         this.sessions.delete(sessionId);
+        this.onSessionClosed?.(sessionId);
       }
     });
   }
@@ -3565,6 +3666,11 @@ export class WorkspaceCollector {
     await state.watchSetup;
   }
 
+  /** idle() for every session, including those still finishing. */
+  async idleAll(): Promise<void> {
+    for (const sessionId of [...this.sessions.keys()]) await this.idle(sessionId);
+  }
+
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.retryTimer) {
@@ -3575,6 +3681,7 @@ export class WorkspaceCollector {
     await Promise.allSettled([...this.sessions.values()].map((state) => state.tail));
     await this.spoolTail.catch(() => undefined);
     await this.ledgerWriteTail.catch(() => undefined);
+    this.texts.clear();
     if (!this.ledgerPath) await rm(this.tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
@@ -3724,7 +3831,7 @@ export class WorkspaceCollector {
         } else {
           // The journal's read doubles as the snapshot's: the cache learns the
           // file now, so the next capture only stats it.
-          const redacted = redactedCacheEntry(path, buffer, file.size, file.mtimeMs, uploadPathFor(path, state.cache.get(path)), this.metrics);
+          const redacted = redactedCacheEntry(path, buffer, file.size, file.mtimeMs, uploadPathFor(path, state.cache.get(path)), this.metrics, { cache: this.texts, absolute });
           state.cache.set(path, redacted.entry);
           entry = { path, at: new Date().toISOString(), status: "present", content: redacted.text, sha256: redacted.entry.sha256 };
         }
@@ -3768,13 +3875,15 @@ export class WorkspaceCollector {
   }
 
   /**
-   * Captures one workspace snapshot. A start snapshot scans the whole tree and
-   * carries every eligible file's content (files_scope "full", up to the cap);
-   * change and end snapshots carry only the files whose digest moved since the
-   * last accepted snapshot (files_scope "changed") plus the full manifest and
-   * the changed paths. The scan is targeted at the watcher's dirty set whenever
-   * that set is trusted, and covers the whole tree otherwise. Resolves with
-   * whether a snapshot went out.
+   * Captures one workspace snapshot. A start snapshot, a new session's or a
+   * resumed one's, scans the whole tree and carries every eligible file's
+   * content (files_scope "full", up to the cap): the backend stores no scope,
+   * so a start is always the whole workspace. Change and end snapshots carry
+   * only the files whose digest moved since the last accepted snapshot
+   * (files_scope "changed") plus the full manifest and the changed paths. The
+   * scan is targeted at the watcher's dirty set whenever that set is trusted,
+   * and covers the whole tree otherwise. Resolves with whether a snapshot went
+   * out.
    */
   private async uploadWorkspace(state: SessionState, type: Exclude<SnapshotType, "trace">, trigger: CollectorTrigger): Promise<boolean> {
     const cache = state.cache;
@@ -3801,8 +3910,8 @@ export class WorkspaceCollector {
         for (const entry of dropped) cache.delete(entry.path);
       }
       const scan = targeted && previous !== null
-        ? await scanDirtyPaths(state.root, cache, previous, reported, ignored, state.listing, this.metrics)
-        : await scanWorkspaceFull(state.root, cache, previous, type === "start", this.metrics,
+        ? await scanDirtyPaths(state.root, cache, this.texts, previous, reported, ignored, state.listing, this.metrics)
+        : await scanWorkspaceFull(state.root, cache, this.texts, previous, type === "start", this.metrics,
           type === "start" ? (paths) => this.installWatchers(state, paths) : undefined);
       // A change capture that found nothing moved stops at one `git rev-parse`
       // (a commit changes history without touching a file); the full git block
@@ -3873,7 +3982,7 @@ export class WorkspaceCollector {
           for (const candidate of candidates) {
             if (!selection.selected.has(candidate.path)) continue;
             reserved -= candidate.cost;
-            const read = await readUploadContent(state.root, candidate.path, cache, this.metrics, pool, ancestors);
+            const read = await readUploadContent(state.root, candidate.path, cache, this.texts, this.metrics, pool, ancestors);
             await yielder.pause();
             // Changed underneath the scan; the next snapshot sees its final form.
             if (!read) continue;

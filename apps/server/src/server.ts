@@ -157,11 +157,11 @@ import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
 import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provider-sync.js";
 import { createEngineV2Preview, type EngineV2Preview } from "./engine-v2-preview.js";
-import { MAX_COLLECTOR_CHILD_SESSION_DEPTH, WorkspaceCollector, type CollectorSessionModel } from "./workspace-collector.js";
-import { collectPromptAttachments, promptBodyForTrace } from "./collector-attachments.js";
+import { workspaceCollectorEnabled } from "./workspace-collector.js";
+import { startCaptureService, type CaptureService } from "./capture-client.js";
+import { buildOpencodeProxyUrl, engineTarget } from "./collector-observer.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
-import { createProjectArchive } from "./project-archive.js";
-import { isFinishedAssistantMessage, type ArchiveEngineReads, type ProjectArchiveLifecycle } from "./session-archive/lifecycle.js";
+import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
@@ -180,13 +180,7 @@ let desktopCloudSyncQueue: Promise<void> = Promise.resolve();
 const agentDiagnosticsLastRunByServer = new WeakMap<ServerConfig, Map<string, number>>();
 const agentDiagnosticsInFlightByServer = new WeakMap<ServerConfig, Set<string>>();
 const commandAdmissionsByServer = new WeakMap<ServerConfig, Map<string, { fingerprint: string; admittedAt: number }>>();
-const workspaceCollectorsByServer = new WeakMap<ServerConfig, WorkspaceCollector>();
-const projectArchivesByServer = new WeakMap<ServerConfig, ProjectArchiveLifecycle>();
-const collectorObserversByServer = new WeakMap<ServerConfig, {
-  sessions: Set<string>;
-  lastMessageIds: Map<string, string>;
-  controller: AbortController;
-}>();
+const captureServicesByServer = new WeakMap<ServerConfig, CaptureService>();
 const AGENT_DIAGNOSTICS_RATE_LIMIT_CAPACITY = 1_000;
 const AGENT_DIAGNOSTICS_MAX_IN_FLIGHT_PER_SERVER = 16;
 const AGENT_DIAGNOSTICS_MAX_REQUEST_BYTES = 256 * 1024;
@@ -766,7 +760,7 @@ function collectorAccountRequiredResponse(): Response {
  */
 function collectorDispatchRefused(config: ServerConfig, workspace: WorkspaceInfo | undefined): boolean {
   if (!workspace || workspace.workspaceType === "remote") return false;
-  return !workspaceCollectorsByServer.get(config)?.enabled && !collectorGateBypassed();
+  return !captureServicesByServer.get(config)?.collectorEnabled && !collectorGateBypassed();
 }
 
 /** The gate as an ApiError, for dispatches that are not proxied HTTP requests. */
@@ -779,25 +773,6 @@ export function assertCollectorDispatchAllowed(config: ServerConfig, workspace: 
 // The v2 daemon's dispatch routes, matched on the decoded path like the v1 classifier.
 function isCollectorV2PromptDispatch(method: string, routePath: string): boolean {
   return method === "POST" && /^\/api\/session\/[^/]+\/(?:prompt|prompt_async|command|generate)$/.test(routePath.replace(/\/+$/, ""));
-}
-
-/**
- * A v2 prompt body as recorded in the "engine.request" trace event. Inline
- * file attachments (`files[].uri` data URLs, at the top level or under
- * `prompt`) are replaced by a marker, as promptBodyForTrace does for v1 parts.
- */
-function v2PromptBodyForTrace(payload: unknown): unknown {
-  const stripFiles = (value: unknown): unknown => {
-    if (!isRecord(value) || !Array.isArray(value.files)) return value;
-    const files = value.files.map((file) => {
-      if (!isRecord(file) || typeof file.uri !== "string" || !file.uri.startsWith("data:")) return file;
-      const mime = (file.uri.slice(5).split(",")[0] ?? "").split(";")[0] || "application/octet-stream";
-      return { ...file, uri: `data:${mime};omitted`, omitted_uri_chars: file.uri.length };
-    });
-    return { ...value, files };
-  };
-  const stripped = stripFiles(promptBodyForTrace(payload));
-  return isRecord(stripped) && isRecord(stripped.prompt) ? { ...stripped, prompt: stripFiles(stripped.prompt) } : stripped;
 }
 
 /**
@@ -822,84 +797,6 @@ export function createLocalWorkflowPromptDispatcher(config: ServerConfig): Local
   };
 }
 
-function optionalTraceString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-/**
- * The model the turn ran on, read from the turn's first assistant message
- * (providerID / modelID / mode or agent). The user message that opened the
- * turn supplies the variant and agent when the assistant record lacks them.
- */
-function turnModelFromMessages(messages: unknown): CollectorSessionModel | null {
-  if (!Array.isArray(messages)) return null;
-  let userVariant: string | null = null;
-  let userAgent: string | null = null;
-  for (const message of messages) {
-    if (!isRecord(message)) continue;
-    const info = isRecord(message.info) ? message.info : message;
-    const model = isRecord(info.model) ? info.model : {};
-    // v2 context messages carry the role as `type` and the model as a ModelRef.
-    const role = info.role ?? info.type;
-    if (role === "user") {
-      userVariant = optionalTraceString(info.variant) ?? optionalTraceString(model.variant) ?? userVariant;
-      userAgent = optionalTraceString(info.agent) ?? userAgent;
-      continue;
-    }
-    if (role !== "assistant") continue;
-    const providerId = optionalTraceString(info.providerID) ?? optionalTraceString(model.providerID);
-    const modelId = optionalTraceString(info.modelID) ?? optionalTraceString(model.modelID) ?? optionalTraceString(model.id);
-    if (!providerId && !modelId) continue;
-    return {
-      provider_id: providerId,
-      model_id: modelId,
-      variant: optionalTraceString(info.variant) ?? optionalTraceString(model.variant) ?? userVariant,
-      agent: optionalTraceString(info.agent) ?? optionalTraceString(info.mode) ?? userAgent,
-    };
-  }
-  return null;
-}
-
-/**
- * Walks the task-tool subagent tree below a settled root session: one
- * "session.child" event per child carrying only the messages that are new
- * since that child's checkpoint, recursively for grandchildren.
- */
-async function captureChildSessions(input: {
-  collector: WorkspaceCollector;
-  rootSessionId: string;
-  parentSessionId: string;
-  depth: number;
-  fetchJson: (path: string, maxBytes: number) => Promise<unknown>;
-  checkpoints: Record<string, string>;
-  known: Set<string>;
-  visited: Set<string>;
-}): Promise<void> {
-  if (input.depth > MAX_COLLECTOR_CHILD_SESSION_DEPTH) return;
-  const children = await input.fetchJson(`/session/${encodeURIComponent(input.parentSessionId)}/children`, 1024 * 1024);
-  if (!Array.isArray(children)) return;
-  for (const child of children.slice(0, 200)) {
-    const childId = isRecord(child) && typeof child.id === "string" && child.id ? child.id : null;
-    if (!childId || childId === input.rootSessionId || input.visited.has(childId)) continue;
-    input.visited.add(childId);
-    const messages = await input.fetchJson(`/session/${encodeURIComponent(childId)}/message`, 8 * 1024 * 1024);
-    const list = Array.isArray(messages) ? messages : [];
-    const delta = newTraceMessages(list, input.checkpoints[childId]);
-    const newMessages = Array.isArray(delta) ? delta : [];
-    if (newMessages.length > 0 || !input.known.has(childId)) {
-      input.collector.recordChildSession(input.rootSessionId, {
-        childSessionId: childId,
-        parentSessionId: input.parentSessionId,
-        title: isRecord(child) ? optionalTraceString(child.title) : null,
-        agent: turnModelFromMessages(list)?.agent ?? null,
-        messages: newMessages,
-        lastMessageId: traceMessageId(list.at(-1)),
-      });
-    }
-    await captureChildSessions({ ...input, parentSessionId: childId, depth: input.depth + 1 });
-  }
-}
-
 // The session a collected engine request belongs to, read from the decoded
 // route path exactly as the engine reads its `:id` parameter. Null when the
 // path is not a session request or its identifier is malformed.
@@ -912,237 +809,6 @@ function collectorDeletedSessionId(method: string, proxyPath: string): string | 
   if (method !== "DELETE") return null;
   const match = normalizeOpencodeProxyPath(proxyPath).match(/^\/session\/([^/]+)$/);
   return match?.[1] ? decodeEngineRouteParam(match[1]) : null;
-}
-
-function collectorRequestPayload(body: ArrayBuffer | undefined): unknown {
-  if (!body || body.byteLength > 4 * 1024 * 1024) return undefined;
-  try {
-    return JSON.parse(new TextDecoder().decode(body));
-  } catch {
-    return undefined;
-  }
-}
-
-function collectorDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolvePromise, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(resolvePromise, ms);
-    timer.unref?.();
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    }, { once: true });
-  });
-}
-
-async function readCollectorResponse(response: Response, maxBytes = 8 * 1024 * 1024): Promise<unknown> {
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) throw new Error("trace response exceeded local limit");
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return JSON.parse(new TextDecoder().decode(bytes));
-}
-
-function traceHasTerminalAssistant(messages: unknown): boolean {
-  if (!Array.isArray(messages)) return false;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!isRecord(message)) continue;
-    const info = isRecord(message.info) ? message.info : message;
-    if ((info.role ?? info.type) !== "assistant") continue;
-    return isFinishedAssistantMessage(message);
-  }
-  return false;
-}
-
-function traceMessageId(message: unknown): string | null {
-  if (!isRecord(message)) return null;
-  const info = isRecord(message.info) ? message.info : message;
-  return typeof info.id === "string" && info.id ? info.id : null;
-}
-
-function newTraceMessages(messages: unknown, previousId: string | undefined): unknown {
-  if (!Array.isArray(messages) || !previousId) return messages;
-  const index = messages.findIndex((message) => traceMessageId(message) === previousId);
-  return index >= 0 ? messages.slice(index + 1) : messages;
-}
-
-/**
- * The engine reads behind a project archive session start (is it a child
- * session, how many turns has it completed), made like the collector
- * observer's: same engine, headers and query, never from the request path.
- */
-function projectArchiveEngineReads(input: {
-  baseUrl: string;
-  headers: Headers;
-  search: string;
-  sessionId: string;
-  engine?: "v1" | "v2";
-}): ArchiveEngineReads {
-  const v2 = input.engine === "v2";
-  const headers = new Headers(input.headers);
-  headers.delete("content-length");
-  headers.delete("content-type");
-  const read = async (path: string, maxBytes: number): Promise<unknown> => {
-    const response = await loopbackFetch(buildOpencodeProxyUrl(input.baseUrl, path, input.search), {
-      headers,
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      return null;
-    }
-    const payload = await readCollectorResponse(response, maxBytes);
-    return v2 && isRecord(payload) && "data" in payload ? payload.data : payload;
-  };
-  const session = `${v2 ? "/api/session" : "/session"}/${encodeURIComponent(input.sessionId)}`;
-  return {
-    session: () => read(session, 1024 * 1024),
-    // The same message list the observer counts turns from at turn end.
-    messages: () => read(v2 ? `${session}/context` : `${session}/message`, 8 * 1024 * 1024),
-  };
-}
-
-function observeCollectedSession(input: {
-  config: ServerConfig;
-  collector: WorkspaceCollector;
-  sessionId: string;
-  baseUrl: string;
-  headers: Headers;
-  search: string;
-  /** The v2 daemon reports activity and context through its own routes, wrapped in `data`. */
-  engine?: "v1" | "v2";
-}) {
-  if (!input.collector.enabled) return;
-  const observer = collectorObserversByServer.get(input.config);
-  if (!observer || observer.sessions.has(input.sessionId)) return;
-  observer.sessions.add(input.sessionId);
-  const v2 = input.engine === "v2";
-  const headers = new Headers(input.headers);
-  headers.delete("content-length");
-  headers.delete("content-type");
-  const statusUrl = buildOpencodeProxyUrl(input.baseUrl, v2 ? "/api/session/active" : "/session/status", input.search);
-  const messagesUrl = buildOpencodeProxyUrl(
-    input.baseUrl,
-    v2 ? `/api/session/${encodeURIComponent(input.sessionId)}/context` : `/session/${encodeURIComponent(input.sessionId)}/message`,
-    input.search,
-  );
-  const enginePayload = (payload: unknown) => (v2 && isRecord(payload) && "data" in payload ? payload.data : payload);
-  void (async () => {
-    let observedBusy = false;
-    let consecutiveSettled = 0;
-    const checkpoint = await input.collector.sessionCheckpoint(input.sessionId);
-    if (checkpoint.lastMessageId) observer.lastMessageIds.set(input.sessionId, checkpoint.lastMessageId);
-    for (let attempt = 0; attempt < 3_600; attempt += 1) {
-      await collectorDelay(1_000, observer.controller.signal);
-      const response = await loopbackFetch(statusUrl, {
-        headers,
-        signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(10_000)]),
-      });
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        consecutiveSettled = 0;
-        continue;
-      }
-      const statuses = enginePayload(await readCollectorResponse(response, 1024 * 1024));
-      const session = isRecord(statuses) ? statuses[input.sessionId] : undefined;
-      const statusType = isRecord(session) && typeof session.type === "string" ? session.type : "idle";
-      if (statusType !== "idle") {
-        observedBusy = true;
-        consecutiveSettled = 0;
-        continue;
-      }
-      const messagesResponse = await loopbackFetch(messagesUrl, {
-        headers,
-        signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]),
-      });
-      const messages = messagesResponse.ok
-        ? enginePayload(await readCollectorResponse(messagesResponse))
-        : { status: messagesResponse.status, unavailable: true };
-      const terminal = traceHasTerminalAssistant(messages);
-      consecutiveSettled += 1;
-      if ((!observedBusy && !terminal) || consecutiveSettled < 2 || attempt < 3) continue;
-      const delta = newTraceMessages(messages, observer.lastMessageIds.get(input.sessionId));
-      if (Array.isArray(messages)) {
-        const lastId = traceMessageId(messages.at(-1));
-        if (lastId) {
-          observer.lastMessageIds.set(input.sessionId, lastId);
-          void input.collector.setSessionCheckpoint(input.sessionId, lastId);
-        }
-      }
-      const model = turnModelFromMessages(delta);
-      if (model) input.collector.recordSessionModel(input.sessionId, model);
-      // The v2 daemon has no subagent children route; only its root turn is captured.
-      if (!v2) {
-        try {
-          await captureChildSessions({
-            collector: input.collector,
-            rootSessionId: input.sessionId,
-            parentSessionId: input.sessionId,
-            depth: 1,
-            fetchJson: async (path, maxBytes) => {
-              const response = await loopbackFetch(buildOpencodeProxyUrl(input.baseUrl, path, input.search), {
-                headers,
-                signal: AbortSignal.any([observer.controller.signal, AbortSignal.timeout(20_000)]),
-              });
-              if (!response.ok) {
-                await response.body?.cancel().catch(() => undefined);
-                return null;
-              }
-              return readCollectorResponse(response, maxBytes);
-            },
-            checkpoints: await input.collector.childCheckpoints(input.sessionId),
-            known: new Set(await input.collector.childSessionIds(input.sessionId)),
-            visited: new Set([input.sessionId]),
-          });
-        } catch (error) {
-          if (observer.controller.signal.aborted) throw error;
-          input.collector.recordTrace(input.sessionId, "session.children_failed", {
-            error: error instanceof Error ? error.message : "unknown",
-          });
-        }
-      }
-      input.collector.recordTrace(input.sessionId, "session.idle", { status: statusType });
-      // The turn snapshot runs first so the artifacts it discovers are part of
-      // the trace flushed right behind it.
-      input.collector.captureSnapshot(input.sessionId, "turn_completed");
-      input.collector.flushTrace(input.sessionId, { messages: delta });
-      // The delta's turn number is the engine's completed-turn count, which survives app restarts.
-      projectArchivesByServer.get(input.config)?.turnCompleted(input.sessionId, messages);
-      return;
-    }
-    input.collector.recordTrace(input.sessionId, "session.observer_timeout");
-    input.collector.flushTrace(input.sessionId);
-  })().catch((error: unknown) => {
-    if (!observer.controller.signal.aborted) {
-      input.collector.recordTrace(input.sessionId, "session.observer_failed", {
-        error: error instanceof Error ? error.message : "unknown",
-      });
-      input.collector.flushTrace(input.sessionId);
-    }
-  }).finally(() => {
-    observer.sessions.delete(input.sessionId);
-  });
 }
 
 export async function startServer(config: ServerConfig): Promise<ServeResult> {
@@ -1172,8 +838,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
           // collector uploads and queued project archives: a signed-out
           // account leaves nothing queued.
           invalidate: async () => {
-            await projectArchive.signOut();
-            await workspaceCollector.clearSpool().catch(() => undefined);
+            await capture.signOut();
             await gatewayCredentials.invalidate?.();
           },
         }
@@ -1185,34 +850,41 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const appVersion = config.appVersion?.trim()
     || process.env.OMNIRUSH_APP_VERSION?.trim()
     || SERVER_VERSION;
-  const workspaceCollector = new WorkspaceCollector({
-    ...(gatewayBroker.enabled
-      ? {
-          upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed),
-          refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
-        }
-      : {}),
+  // The workspace collector, and whole-folder archives of git projects beside
+  // it (session-archive/README.md), run on the capture worker: their file
+  // work never holds this event loop (capture-client.ts).
+  const archiveSettings = projectArchiveSettings({
+    config,
+    gatewayBroker,
+    collectorEnabled: workspaceCollectorEnabled({ upload: gatewayBroker.enabled }),
+  });
+  const capture = startCaptureService({
     stateDir: runtimeStorageDir(config),
     appVersion,
     engineVersion: OPENCODE_VERSION,
     log: (level, message, attributes) => logger.log(level, message, attributes),
+    collector: gatewayBroker.enabled
+      ? {
+          upload: (sessionId, compressed) => gatewayBroker.collect(sessionId, compressed),
+          refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
+        }
+      : {},
+    archive: {
+      enabled: archiveSettings.enabled,
+      excludedDirs: archiveSettings.excludedDirs,
+      ...(archiveSettings.auth === "broker"
+        ? {
+            request: (path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal }) => gatewayBroker.archiveRequest(path, init),
+            refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
+          }
+        : archiveSettings.auth === "environment"
+          ? { gatewayUrl: archiveSettings.gatewayUrl, accessToken: archiveSettings.accessToken }
+          : {}),
+      baseIdleMs: PROJECT_ARCHIVE_BASE_IDLE_MS,
+      baseMaxDeferMs: PROJECT_ARCHIVE_BASE_MAX_DEFER_MS,
+    },
   });
-  workspaceCollectorsByServer.set(config, workspaceCollector);
-  // Whole-folder archives of git projects, beside the collector (session-archive/README.md).
-  const projectArchive = createProjectArchive({
-    config,
-    gatewayBroker,
-    collectorEnabled: workspaceCollector.enabled,
-    log: (level, message, attributes) => logger.log(level, message, attributes),
-  });
-  projectArchivesByServer.set(config, projectArchive);
-  projectArchive.start();
-  const collectorObserver = {
-    sessions: new Set<string>(),
-    lastMessageIds: new Map<string, string>(),
-    controller: new AbortController(),
-  };
-  collectorObserversByServer.set(config, collectorObserver);
+  captureServicesByServer.set(config, capture);
   try {
     await reconcileLocalManagedMcpRuntimeEntries(config);
   } catch (error) {
@@ -1547,14 +1219,10 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     });
   } catch (error) {
     // First, and synchronously: archive part uploads in flight are aborted now, not after the other shutdown steps.
-    const archiveStopped = projectArchive.stop();
+    const captureStopped = capture.stop();
     await taskRecovery?.stop().catch(() => undefined);
-    collectorObserver.controller.abort();
-    await workspaceCollector.stop().catch(() => undefined);
-    await archiveStopped;
-    workspaceCollectorsByServer.delete(config);
-    projectArchivesByServer.delete(config);
-    collectorObserversByServer.delete(config);
+    await captureStopped;
+    captureServicesByServer.delete(config);
     captureServerException(error, { method: "START", route: "startServer" });
     cloudProviderSync.stop();
     await engineV2Preview.stop().catch(() => undefined);
@@ -1603,15 +1271,11 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       // First, and synchronously: a stop is also how a user sign-out reaches
       // this server (the desktop clears the account, then restarts it), so
       // archive part uploads in flight are aborted before anything else runs.
-      const archiveStopped = projectArchive.stop();
+      const captureStopped = capture.stop();
       let recoveryError: unknown;
       try { await taskRecovery?.stop(); } catch (error) { recoveryError = error; }
-      collectorObserver.controller.abort();
-      await workspaceCollector.stop().catch(() => undefined);
-      await archiveStopped;
-      workspaceCollectorsByServer.delete(config);
-      projectArchivesByServer.delete(config);
-      collectorObserversByServer.delete(config);
+      await captureStopped;
+      captureServicesByServer.delete(config);
       await localWorkflowServices.get(config)?.stop();
       managedDesktopPolicy(config).onChange = undefined;
       cloudProviderSync.stop();
@@ -1625,14 +1289,6 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       if (recoveryError) throw recoveryError;
     },
   };
-}
-
-function buildOpencodeProxyUrl(baseUrl: string, path: string, search: string) {
-  const target = new URL(baseUrl);
-  const trimmedPath = path.replace(/^\/opencode/, "");
-  target.pathname = trimmedPath.startsWith("/") ? trimmedPath : `/${trimmedPath}`;
-  target.search = search;
-  return target.toString();
 }
 
 /**
@@ -1790,50 +1446,24 @@ export async function proxyOpencodeV2Request(input: {
   // Collection, identical to the v1 mount: the session starts (or resumes) on
   // its first dispatch, the prompt milestone is snapshotted, the request and
   // response are traced and the turn is observed until it settles.
-  const collector = collectible ? workspaceCollectorsByServer.get(input.config) : undefined;
-  const collectedSessionId = collector?.enabled && promptDispatch && sessionId ? sessionId : null;
-  const deletedCollectedSessionId = collector?.enabled && method === "DELETE" && sessionId && /^\/api\/session\/[^/]+$/.test(routePath)
+  const capture = collectible ? captureServicesByServer.get(input.config) : undefined;
+  const collectedSessionId = capture?.collectorEnabled && promptDispatch && sessionId ? sessionId : null;
+  const deletedCollectedSessionId = capture?.collectorEnabled && method === "DELETE" && sessionId && /^\/api\/session\/[^/]+$/.test(routePath)
     ? sessionId
     : null;
-  if (collector && collectedSessionId) {
-    collector.startSession(collectedSessionId, input.workspace.id, input.workspace.path);
-    const requestPayload = collectorRequestPayload(requestBody);
-    collector.recordTrace(collectedSessionId, "engine.request", {
-      method,
-      path: routePath,
-      body: v2PromptBodyForTrace(requestPayload),
-    });
-    collector.captureSnapshot(collectedSessionId, "prompt");
-    projectArchivesByServer.get(input.config)?.sessionStarted({
-      sessionId: collectedSessionId,
-      root: input.workspace.path,
-      engine: projectArchiveEngineReads({ baseUrl: input.connection.url, headers, search: target.search, sessionId: collectedSessionId, engine: "v2" }),
-    });
-    void collectPromptAttachments(requestPayload, input.workspace.path).then((attachments) => {
-      for (const attachment of attachments) collector.recordAttachment(collectedSessionId, attachment);
-    }).catch(() => undefined);
+  const engine = capture && collectedSessionId ? engineTarget(input.connection.url, headers, target.search, "v2") : null;
+  if (capture && collectedSessionId && engine) {
+    capture.startSession(collectedSessionId, input.workspace.id, input.workspace.path);
+    capture.recordPrompt(collectedSessionId, { method, path: routePath, body: requestBody, engine: "v2", root: input.workspace.path, attachments: true });
+    capture.captureSnapshot(collectedSessionId, "prompt");
+    capture.archiveSessionStarted(collectedSessionId, input.workspace.path, engine);
   }
   const response = await loopbackFetch(target.toString(), { method, headers, body, signal: input.recoverySignal });
-  if (collector && collectedSessionId) {
-    collector.recordTrace(collectedSessionId, "engine.response", { method, path: routePath, status: response.status });
-    if (response.ok) {
-      observeCollectedSession({
-        config: input.config,
-        collector,
-        sessionId: collectedSessionId,
-        baseUrl: input.connection.url,
-        headers,
-        search: target.search,
-        engine: "v2",
-      });
-    }
+  if (capture && collectedSessionId && engine) {
+    capture.recordTrace(collectedSessionId, "engine.response", { method, path: routePath, status: response.status });
+    if (response.ok) capture.observeSession(collectedSessionId, engine);
   }
-  if (collector && deletedCollectedSessionId && response.ok) {
-    collector.recordTrace(deletedCollectedSessionId, "session.deleted");
-    collector.finishSession(deletedCollectedSessionId);
-    projectArchivesByServer.get(input.config)?.sessionEnded(deletedCollectedSessionId);
-    collectorObserversByServer.get(input.config)?.lastMessageIds.delete(deletedCollectedSessionId);
-  }
+  if (capture && deletedCollectedSessionId && response.ok) capture.sessionDeleted(deletedCollectedSessionId);
   if (method === "GET" && /^\/api\/provider(?:\/|$)/.test(decodedPath) && response.ok) {
     // Provider.Info includes request settings/headers, which may contain the
     // mirrored server-owned key. Clients only need public catalog metadata.
@@ -2132,28 +1762,23 @@ export async function proxyOpencodeRequest(input: {
   const body = method === "GET" || method === "HEAD"
     ? undefined
     : await input.request.arrayBuffer().then((buf) => (buf.byteLength > 0 ? buf : undefined));
-  const collector = workspace ? workspaceCollectorsByServer.get(input.config) : undefined;
+  const capture = workspace ? captureServicesByServer.get(input.config) : undefined;
   const collectedSessionId = collectorSessionId(proxyPath);
   const deletedCollectedSessionId = collectorDeletedSessionId(method, proxyPath);
-  if (collector?.enabled && collectedSessionId && workspace && workspace.workspaceType !== "remote") {
-    collector.startSession(collectedSessionId, workspace.id, workspace.path);
-    const requestPayload = collectorRequestPayload(body);
-    collector.recordTrace(collectedSessionId, "engine.request", {
+  if (capture?.collectorEnabled && collectedSessionId && workspace && workspace.workspaceType !== "remote") {
+    const promptDispatch = isCollectorPromptDispatch(method, proxyPath);
+    capture.startSession(collectedSessionId, workspace.id, workspace.path);
+    capture.recordPrompt(collectedSessionId, {
       method,
       path: normalizeOpencodeProxyPath(proxyPath),
-      body: promptBodyForTrace(requestPayload),
+      body,
+      engine: "v1",
+      root: workspace.path,
+      attachments: promptDispatch,
     });
-    if (isCollectorPromptDispatch(method, proxyPath)) {
-      collector.captureSnapshot(collectedSessionId, "prompt");
-      projectArchivesByServer.get(input.config)?.sessionStarted({
-        sessionId: collectedSessionId,
-        root: workspace.path,
-        engine: projectArchiveEngineReads({ baseUrl, headers, search, sessionId: collectedSessionId }),
-      });
-      const promptSessionId = collectedSessionId;
-      void collectPromptAttachments(requestPayload, workspace.path).then((attachments) => {
-        for (const attachment of attachments) collector.recordAttachment(promptSessionId, attachment);
-      }).catch(() => undefined);
+    if (promptDispatch) {
+      capture.captureSnapshot(collectedSessionId, "prompt");
+      capture.archiveSessionStarted(collectedSessionId, workspace.path, engineTarget(baseUrl, headers, search));
     }
   }
   if (pool && method === "GET" && isEngineEventPath(proxyPath)) {
@@ -2224,20 +1849,18 @@ export async function proxyOpencodeRequest(input: {
       body,
     }).then((response) => {
       enginePoolForConfig(input.config)?.reportRequestSuccess(baseUrl);
-      if (collector?.enabled && collectedSessionId) {
-        collector.recordTrace(collectedSessionId, "engine.response", {
+      if (capture?.collectorEnabled && collectedSessionId) {
+        capture.recordTrace(collectedSessionId, "engine.response", {
           method,
           path: normalizeOpencodeProxyPath(proxyPath),
           status: response.status,
         });
-        if (workspace && response.ok) {
-          observeCollectedSession({ config: input.config, collector, sessionId: collectedSessionId, baseUrl, headers, search });
-        }
+        if (workspace && response.ok) capture.observeSession(collectedSessionId, engineTarget(baseUrl, headers, search));
       }
     }).catch((error: unknown) => {
       if (workspace) enginePoolForConfig(input.config)?.reportRequestFailure(baseUrl, error, workspace);
-      if (collector?.enabled && collectedSessionId) {
-        collector.recordTrace(collectedSessionId, "engine.error", {
+      if (capture?.collectorEnabled && collectedSessionId) {
+        capture.recordTrace(collectedSessionId, "engine.error", {
           method,
           path: normalizeOpencodeProxyPath(proxyPath),
           error: error instanceof Error ? error.message : "unknown",
@@ -2279,22 +1902,15 @@ export async function proxyOpencodeRequest(input: {
 
   const forwardAndCollect = async () => {
     const response = await forward();
-    if (collector?.enabled && collectedSessionId) {
-      collector.recordTrace(collectedSessionId, "engine.response", {
+    if (capture?.collectorEnabled && collectedSessionId) {
+      capture.recordTrace(collectedSessionId, "engine.response", {
         method,
         path: normalizeOpencodeProxyPath(proxyPath),
         status: response.status,
       });
-      if (workspace && response.ok) {
-        observeCollectedSession({ config: input.config, collector, sessionId: collectedSessionId, baseUrl, headers, search });
-      }
+      if (workspace && response.ok) capture.observeSession(collectedSessionId, engineTarget(baseUrl, headers, search));
     }
-    if (collector?.enabled && deletedCollectedSessionId && response.ok) {
-      collector.recordTrace(deletedCollectedSessionId, "session.deleted");
-      collector.finishSession(deletedCollectedSessionId);
-      projectArchivesByServer.get(input.config)?.sessionEnded(deletedCollectedSessionId);
-      collectorObserversByServer.get(input.config)?.lastMessageIds.delete(deletedCollectedSessionId);
-    }
+    if (capture?.collectorEnabled && deletedCollectedSessionId && response.ok) capture.sessionDeleted(deletedCollectedSessionId);
     return response;
   };
 
@@ -3649,10 +3265,10 @@ function createRoutes(
     const ancestry = Array.isArray(body.ancestry)
       ? body.ancestry.filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, 8)
       : [];
-    const collector = workspaceCollectorsByServer.get(config);
-    if (!collector?.enabled) return jsonResponse({ ok: true, recorded: 0 });
+    const capture = captureServicesByServer.get(config);
+    if (!capture?.collectorEnabled) return jsonResponse({ ok: true, recorded: 0 });
     // A subagent's tool call belongs to the root session the collector tracks.
-    const target = [body.sessionId, ...ancestry].find((id) => collector.hasSession(id));
+    const target = [body.sessionId, ...ancestry].find((id) => capture.hasSession(id));
     if (!target) return jsonResponse({ ok: true, recorded: 0 });
     let recorded = 0;
     for (const event of body.events.slice(0, 32)) {
@@ -3662,7 +3278,7 @@ function createRoutes(
         title: typeof event.data.title === "string" ? event.data.title : null,
         text: typeof event.data.text === "string" ? event.data.text : null,
       };
-      if (collector.recordWebVisit(target, visit)) recorded += 1;
+      if (capture.recordWebVisit(target, visit)) recorded += 1;
     }
     return jsonResponse({ ok: true, recorded });
   });

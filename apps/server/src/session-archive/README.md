@@ -81,27 +81,41 @@ archiving off.
 
 ### As implemented
 
-`../project-archive.ts` builds one `SessionArchiver` per server with the
-collector's state dir (`runtimeStorageDir(config)`), the gateway broker's
-`archiveRequest` and `refreshAccessToken` (or, without a broker, the
-collector's `OMNIRUSH_GATEWAY_URL` + `OMNIRUSH_ACCESS_TOKEN`), and the app's
-config, data and OpenCode data/cache dirs as `excludedDirs`. It wraps the
-archiver in a `ProjectArchiveLifecycle`, which is enabled when the collector
-has an account and `OMNIRUSH_ARCHIVE_ENABLED` is not `0`/`false`/`no`/`off`.
-`server.ts` keeps it in `projectArchivesByServer` and calls:
+`../project-archive.ts` works out one archiver per server
+(`projectArchiveSettings`): the collector's state dir
+(`runtimeStorageDir(config)`), the gateway broker's `archiveRequest` and
+`refreshAccessToken` (or, without a broker, the collector's
+`OMNIRUSH_GATEWAY_URL` + `OMNIRUSH_ACCESS_TOKEN`), and the app's config, data
+and OpenCode data/cache dirs as `excludedDirs`. The archiver is wrapped in a
+`ProjectArchiveLifecycle`, which is enabled when the collector has an account
+and `OMNIRUSH_ARCHIVE_ENABLED` is not `0`/`false`/`no`/`off`.
+
+The lifecycle, its `SessionArchiver` and the workspace collector run
+together in `../capture-host.ts`, which `server.ts` starts on a worker thread
+(`../capture-client.ts`, `../capture-worker.ts`): scanning, hashing, tar,
+zstd and sealing never run on the server's main event loop, which in the
+desktop app is the Electron main process. The worker asks the main thread
+for the broker's `archiveRequest` and `refreshAccessToken` and for the S3
+part PUTs (external egress goes through the embedding runtime's network
+stack), each as one message with its body transferred, and cancels them the
+same way. Where no worker can start (`OMNIRUSH_CAPTURE_WORKER=0`, or a
+runtime that cannot load the worker module, such as the single-file CLI
+binary) the same host runs in-process. `server.ts` keeps the capture service
+in `captureServicesByServer` and calls:
 
 | Server hook | Lifecycle call |
 | --- | --- |
-| `startServer`, next to `new WorkspaceCollector` | `start()`: a drain when enabled; otherwise `signOut()` clears what a previous run left (a no-op, touching nothing, when there is no `omnirush-archive/`) |
-| A prompt dispatch on a local workspace (v1 `prompt_async`/`prompt`/`command`, v2 `prompt`/`prompt_async`/`command`/`generate`), after `collector.startSession` | `sessionStarted({sessionId, root: workspace.path, engine})` |
-| The collector observer's `turn_completed`, with the engine messages it just read | `turnCompleted(sessionId, messages)` |
+| `startServer` (`startCaptureService`) | `start()`: a drain when enabled; otherwise `signOut()` clears what a previous run left (a no-op, touching nothing, when there is no `omnirush-archive/`) |
+| A prompt dispatch on a local workspace (v1 `prompt_async`/`prompt`/`command`, v2 `prompt`/`prompt_async`/`command`/`generate`), after the collector's `startSession` | `sessionStarted({sessionId, root: workspace.path, engine})`, the engine reads built on the worker from the request's engine target |
+| The collector observer's `turn_completed` (on the worker), with the engine messages it just read | `turnCompleted(sessionId, messages)` |
 | `collector.finishSession` (session deleted) | `sessionEnded(sessionId)`: forgets the session, kicks a drain |
 | The broker's `invalidate` hook (revoked or expired account), before `clearSpool()` | `signOut()` |
-| Server shutdown and a failed start | `stop()`, started first so part uploads in flight are aborted before the task-recovery checkpoint (up to 10 s) and the collector stop run. A user sign-out reaches the server this way too: the desktop clears the account, then restarts the server |
+| Server shutdown and a failed start | `stop()`, started first: the main thread aborts the part uploads it is making for the worker at once, before the task-recovery checkpoint (up to 10 s), then the worker stops the archiver and the collector; the worker is terminated after 20 s at the latest. A user sign-out reaches the server this way too: the desktop clears the account, then restarts the server |
 
 What the lifecycle adds on top of the calls below:
 
-- **Every call returns at once.** Engine reads and captures run in the background, one at a time (`concurrency`, default 1: the embedded server shares the Electron main process), and each session's steps run in call order, so a turn's delta never overtakes the session's base. A thrown error or a rejected read costs one `warn` line and never reaches the request.
+- **Every call returns at once.** Engine reads and captures run in the background, one at a time (`concurrency`, default 1), and each session's steps run in call order, so a turn's delta never overtakes the session's base. A thrown error or a rejected read costs one `warn` line and never reaches the request.
+- **A base waits for a quiet moment.** The server passes `baseIdleMs` 2 s and `baseMaxDeferMs` 10 s (`PROJECT_ARCHIVE_BASE_IDLE_MS`, `PROJECT_ARCHIVE_BASE_MAX_DEFER_MS`): a base is packed once no prompt has been dispatched on any session for 2 s, and at the latest 10 s after its own prompt. Chats opened and prompted one after another are packed once the burst is over, one at a time; a lone chat's base still shows the folder as its first turn began. The wait holds no concurrency slot, and `stop()` or `signOut()` ends it without packing. Each session still gets its own base (sequence 0 of its own chain, section 7 of the backend spec); a second chat on the same folder packs from the root's persisted hash cache, so pass 1 of an unchanged tree reads no file (pass 2 streams and hashes the bytes it packs, as section 5.9 requires).
 - **Root sessions only.** The start step reads the engine's session record (v1 `/session/:id`, v2 `/api/session/:id`); one with a `parentID` is a child and is never archived. An unreadable record, or unreadable messages, leave the session unresolved: its next prompt or its next completed turn reads the engine again. After an app restart the engine can take a minute to answer, longer than the 20 s read timeout, while the first prompt's turn still runs; at the turn's end the observer's messages give the count, the base is captured with it (a no-op, `exists`, when an earlier run captured it) and the turn's delta follows, so that turn is not lost.
 - **Turn numbers from the engine.** `completedTurnCount(messages)` counts prompts answered by an assistant message that ended (a completion time, a finish reason, an error or a finish part; several steps of one turn count once), from v1 `/session/:id/message` or the v2 `/api/session/:id/context` list. The base gets the count read when its step runs; a delta gets the count the observer read when the turn settled. The count survives restarts. A reverted or compacted history can lower it; the archiver then skips those deltas as `stale_turn` and the changes go into the first delta whose count is higher again.
 - **Real path.** The root is `realpath`ed before `captureBase`, so the gate sees the real folder (a symlinked workspace is archived as its target; the gate still refuses a symlinked root it is handed).

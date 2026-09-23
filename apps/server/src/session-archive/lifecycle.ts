@@ -2,8 +2,10 @@
  * The project archive's place in the embedded server's session lifecycle
  * (README "Wiring"). Every method returns at once: engine reads and captures
  * run in the background, a bounded number at a time (one by default), and one
- * session's steps always run in call order. Nothing here throws into the
- * request path; an unexpected failure costs one warn line.
+ * session's steps always run in call order. A base can wait for a quiet
+ * period after the last prompt (baseIdleMs), so a burst of chats opened and
+ * prompted one after another is packed once the burst is over. Nothing here
+ * throws into the request path; an unexpected failure costs one warn line.
  */
 import { realpath } from "node:fs/promises";
 
@@ -30,6 +32,13 @@ export type ProjectArchiveLifecycleOptions = {
   concurrency?: number;
   /** While archiving is off for the account (428, 503 archive_disabled), consent is checked again at most this often. */
   consentRecheckMs?: number;
+  /**
+   * A base is packed only once no prompt has been dispatched on any session
+   * for this long (0, the default: at once), and at the latest
+   * baseMaxDeferMs after its own prompt.
+   */
+  baseIdleMs?: number;
+  baseMaxDeferMs?: number;
   /** Tests. */
   now?: () => number;
 };
@@ -113,6 +122,8 @@ export class ProjectArchiveLifecycle {
   private readonly log: ArchiveLifecycleLog;
   private readonly concurrency: number;
   private readonly consentRecheckMs: number;
+  private readonly baseIdleMs: number;
+  private readonly baseMaxDeferMs: number;
   private readonly now: () => number;
   private readonly enabled: boolean;
   private signedOut = false;
@@ -126,6 +137,10 @@ export class ProjectArchiveLifecycle {
   private readonly background = new Set<Promise<void>>();
   private running = 0;
   private readonly waiting: Array<() => void> = [];
+  /** When the last prompt was dispatched on any session: bases wait for a quiet period after it. */
+  private lastPromptAt = 0;
+  /** Bases waiting for the quiet period; stop() and signOut() wake them. */
+  private readonly sleepers = new Set<() => void>();
 
   constructor(options: ProjectArchiveLifecycleOptions) {
     this.archiver = options.archiver;
@@ -133,6 +148,8 @@ export class ProjectArchiveLifecycle {
     this.log = options.log;
     this.concurrency = Math.max(1, options.concurrency ?? 1);
     this.consentRecheckMs = options.consentRecheckMs ?? DEFAULT_CONSENT_RECHECK_MS;
+    this.baseIdleMs = Math.max(0, options.baseIdleMs ?? 0);
+    this.baseMaxDeferMs = Math.max(this.baseIdleMs, options.baseMaxDeferMs ?? this.baseIdleMs * 5);
     this.now = options.now ?? Date.now;
   }
 
@@ -162,6 +179,8 @@ export class ProjectArchiveLifecycle {
    */
   sessionStarted(input: { sessionId: string; root: string; engine: ArchiveEngineReads }): void {
     if (!this.active || this.consentOff) return;
+    const promptedAt = this.now();
+    this.lastPromptAt = promptedAt;
     const known = this.sessions.get(input.sessionId);
     // Resolved, or its start step is still queued: nothing to add.
     if (known && (!known.start || known.starting)) return;
@@ -176,7 +195,7 @@ export class ProjectArchiveLifecycle {
       } finally {
         record.starting = false;
       }
-    });
+    }, () => this.quietPeriod(promptedAt));
   }
 
   /**
@@ -214,6 +233,7 @@ export class ProjectArchiveLifecycle {
    */
   async signOut(): Promise<void> {
     this.signedOut = true;
+    this.wakeSleepers();
     this.sessions.clear();
     await this.archiver.signOut().catch((error: unknown) => this.warn("sign-out", error));
   }
@@ -221,6 +241,7 @@ export class ProjectArchiveLifecycle {
   /** Server shutdown: no new steps; the queue stays on disk for the next start. */
   async stop(): Promise<void> {
     this.stopped = true;
+    this.wakeSleepers();
     await this.archiver.stop().catch((error: unknown) => this.warn("stop", error));
   }
 
@@ -295,10 +316,41 @@ export class ProjectArchiveLifecycle {
     void work.finally(() => this.background.delete(work));
   }
 
-  /** Runs `task` after the session's earlier steps, within the concurrency bound; never rejects. */
-  private schedule(sessionId: string, step: string, task: () => Promise<void>): void {
+  /**
+   * Resolves once no prompt has been dispatched for baseIdleMs, or
+   * baseMaxDeferMs after `since`, or when archiving stops. Waiting takes no
+   * concurrency slot, so other sessions' deltas go ahead meanwhile.
+   */
+  private async quietPeriod(since: number): Promise<void> {
+    if (this.baseIdleMs === 0) return;
+    while (this.active) {
+      const now = this.now();
+      const wait = Math.min(this.lastPromptAt + this.baseIdleMs, since + this.baseMaxDeferMs) - now;
+      if (wait <= 0) return;
+      await new Promise<void>((resolvePromise) => {
+        const wake = () => {
+          clearTimeout(timer);
+          this.sleepers.delete(wake);
+          resolvePromise();
+        };
+        const timer = setTimeout(wake, wait);
+        timer.unref?.();
+        this.sleepers.add(wake);
+      });
+    }
+  }
+
+  private wakeSleepers(): void {
+    for (const wake of [...this.sleepers]) wake();
+  }
+
+  /**
+   * Runs `task` after the session's earlier steps and `before` (a wait that
+   * never rejects), within the concurrency bound; never rejects.
+   */
+  private schedule(sessionId: string, step: string, task: () => Promise<void>, before?: () => Promise<void>): void {
     const previous = this.tails.get(sessionId) ?? Promise.resolve();
-    const run = previous.then(() => this.bounded(async () => {
+    const run = previous.then(before).then(() => this.bounded(async () => {
       if (!this.active) return;
       try {
         await task();

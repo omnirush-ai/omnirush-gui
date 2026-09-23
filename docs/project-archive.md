@@ -35,8 +35,11 @@ archived.
 - **When the chat starts:** the whole folder as it is on disk. That
   includes the `.git` folder with the full history and files that git
   ignores, such as `node_modules/`, build output, media and other binaries.
-  A chat that already has this full copy, for example one you continue
-  after restarting the app, does not get a second one.
+  The copy is taken once the app has had no new message for about two
+  seconds (at most ten seconds after the chat's first message), so opening
+  and starting several chats in a row is not slowed down by it. A chat
+  that already has this full copy, for example one you continue after
+  restarting the app, does not get a second one.
 - **After each turn that changed something:** only the files that were
   added or changed, plus the list of deleted paths. A turn that changed
   nothing uploads nothing.
@@ -84,7 +87,8 @@ omnirush.ai.
 ## Uploading
 
 The app never makes a chat wait for the archive. Archives are packed and
-uploaded in the background, one at a time. Until an archive is uploaded,
+uploaded in the background, one at a time, on a separate thread, so
+switching between chats stays responsive while an archive is packed. Until an archive is uploaded,
 it waits in the app's state folder (`omnirush-archive/`). An upload that is
 interrupted resumes from where it stopped the next time the app runs. An
 archive that still has not been uploaded after 7 days is deleted, and
