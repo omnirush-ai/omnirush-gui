@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 
-import { collectUploadTimeoutMs } from "./collect-upload-budget.js";
+import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import type { OmniRushGatewayCredentialBundle, OmniRushGatewayCredentials } from "./types.js";
 
@@ -9,6 +9,8 @@ type BrokerOptions = {
   engineToken?: string;
   fetch?: typeof externalFetch;
   log?: (level: "info" | "warn" | "error", message: string, attributes?: Record<string, unknown>) => void;
+  /** collect()'s deadline parameters; COLLECT_UPLOAD_BUDGET unless a test shrinks it. */
+  collectUploadBudget?: CollectUploadBudget;
 };
 
 /**
@@ -515,6 +517,7 @@ export class OmniRushGatewayBroker {
   private readonly latest?: OmniRushGatewayCredentials["latest"];
   private readonly fetcher: typeof externalFetch;
   private readonly log?: BrokerOptions["log"];
+  private readonly collectUploadBudget: CollectUploadBudget;
   private refreshInFlight: Promise<boolean> | null = null;
   /**
    * The pair this broker held before it adopted one from the store. Spent as
@@ -539,6 +542,7 @@ export class OmniRushGatewayBroker {
     this.latest = options.credentials?.latest;
     this.fetcher = options.fetch ?? externalFetch;
     this.log = options.log;
+    this.collectUploadBudget = options.collectUploadBudget ?? COLLECT_UPLOAD_BUDGET;
   }
 
   get enabled(): boolean {
@@ -601,11 +605,12 @@ export class OmniRushGatewayBroker {
 
   /**
    * One collector envelope. The deadline grows with the envelope's size
-   * (collect-upload-budget.ts); `signal`, the collector's own deadline or
-   * cancel, ends it sooner.
+   * (collect-upload-budget.ts), and the retry with a refreshed bearer gets a
+   * deadline of its own; `signal`, the collector's own deadline or cancel,
+   * ends either sooner.
    */
   collect(sessionId: string, body: Uint8Array, signal?: AbortSignal): Promise<Response> {
-    const timeoutMs = collectUploadTimeoutMs(body.byteLength);
+    const timeoutMs = collectUploadTimeoutMs(body.byteLength, this.collectUploadBudget);
     return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, "collect"), {
       method: "POST",
       headers: {

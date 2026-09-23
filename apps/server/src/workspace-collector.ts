@@ -2948,6 +2948,8 @@ export class WorkspaceCollector {
    * upload carried is not spooled.
    */
   private account = new AbortController();
+  /** Aborted once by abortUploads(): a shutdown out of time ends every upload in flight and sends nothing more. */
+  private readonly halted = new AbortController();
   private stopped = false;
   private readonly minChangeIntervalMs: number;
   private readonly maxWatchedFiles: number;
@@ -3954,6 +3956,18 @@ export class WorkspaceCollector {
     if (!this.ledgerPath) await rm(this.tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
+  /**
+   * A shutdown that ran out of time and has no worker thread to terminate
+   * (capture-client.ts, capture in-process): every upload in flight, live or
+   * from the spool, ends now, and any envelope still to go out is spooled
+   * without being sent, all of it for the next start. stop() still settles
+   * the sessions; this only keeps their uploads from outliving it by up to
+   * an upload deadline.
+   */
+  abortUploads(): void {
+    this.halted.abort(new DOMException("The capture is shutting down", "AbortError"));
+  }
+
   private scheduleChange(state: SessionState, trigger: Extract<ChangeTrigger, "fs_change" | "periodic">): void {
     if (state.finished) return;
     if (!state.turnInProgress && this.turnOnRootElsewhere(state)) state.changesHeld = true;
@@ -4385,13 +4399,12 @@ export class WorkspaceCollector {
   }
 
   /**
-   * One POST of an envelope. Its deadline grows with the envelope's size
-   * (collect-upload-budget.ts: fetch reports no upload progress, so sending
-   * the body and the gateway's answer share one size-scaled deadline);
-   * `cancel` ends it sooner.
+   * One POST of an envelope, ended by `deadline` (the attempt's size-scaled
+   * deadline, collect-upload-budget.ts: fetch reports no upload progress, so
+   * sending the body and the gateway's answer share one deadline) or sooner
+   * by `cancel`.
    */
-  private send(sessionId: string, compressed: Uint8Array, cancel?: AbortSignal): Promise<Response> {
-    const deadline = AbortSignal.timeout(collectUploadTimeoutMs(compressed.byteLength, this.uploadBudget));
+  private send(sessionId: string, compressed: Uint8Array, deadline: AbortSignal, cancel?: AbortSignal): Promise<Response> {
     const signal = cancel ? AbortSignal.any([deadline, cancel]) : deadline;
     if (signal.aborted) return Promise.reject(signal.reason);
     if (this.uploader) return untilAborted(this.uploader(sessionId, compressed, signal), signal);
@@ -4420,13 +4433,23 @@ export class WorkspaceCollector {
     }
   }
 
+  /**
+   * Sends an envelope, up to `attempts` times. A quick failure (a dropped
+   * connection, a 5xx) is tried again after a short delay; an attempt that
+   * ran out its deadline is not: at a size-scaled deadline one more attempt
+   * could hold the session's queue for many minutes, so the envelope goes to
+   * the spool at once and the spool drain retries it on its own backoff.
+   */
   private async transmit(sessionId: string, compressed: Uint8Array, attempts = UPLOAD_ATTEMPTS, cancel?: AbortSignal): Promise<TransmitOutcome> {
+    const timeoutMs = collectUploadTimeoutMs(compressed.byteLength, this.uploadBudget);
     let lastReason = "collector upload unavailable";
     let refreshAttempted = false;
     let attempt = 0;
     while (attempt < attempts) {
+      // Each attempt, the retry with a refreshed bearer too, gets a deadline of its own.
+      const deadline = AbortSignal.timeout(timeoutMs);
       try {
-        const response = await this.send(sessionId, compressed, cancel);
+        const response = await this.send(sessionId, compressed, deadline, cancel);
         if (response.ok) return { ok: true };
         lastReason = `collector upload failed with status ${response.status}`;
         if (UNAUTHORIZED_STATUSES.has(response.status)) {
@@ -4455,6 +4478,11 @@ export class WorkspaceCollector {
       } catch (error) {
         lastReason = error instanceof Error ? error.message : "collector upload unavailable";
         if (cancel?.aborted) return { ok: false, retryable: true, reason: lastReason };
+        // Out of time: this attempt's deadline, or the gateway broker's own
+        // (the same size-scaled budget, reported across the worker boundary by name).
+        if (deadline.aborted || (error instanceof Error && error.name === "TimeoutError")) {
+          return { ok: false, retryable: true, reason: lastReason };
+        }
       }
       attempt += 1;
       if (attempt < attempts && !cancel?.aborted) {
@@ -4557,7 +4585,7 @@ export class WorkspaceCollector {
       }
       const compressed = await readFile(path);
       const account = this.account.signal;
-      const outcome = await this.transmit(state.id, compressed, UPLOAD_ATTEMPTS, account);
+      const outcome = await this.transmit(state.id, compressed, UPLOAD_ATTEMPTS, AbortSignal.any([account, this.halted.signal]));
       if (!outcome.ok) {
         if ((!outcome.retryable || !this.spoolDir) && !account.aborted) {
           await this.recordLedgerOutcome(state.id, "failure").catch(() => undefined);
@@ -4745,7 +4773,7 @@ export class WorkspaceCollector {
       return this.drainQueued;
     }
     const controller = new AbortController();
-    const run = this.runDrain(controller.signal).finally(() => {
+    const run = this.runDrain(AbortSignal.any([controller.signal, this.halted.signal])).finally(() => {
       if (this.draining?.controller === controller) this.draining = null;
     });
     this.draining = { run, controller };
