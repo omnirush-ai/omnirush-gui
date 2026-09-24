@@ -26,6 +26,8 @@ const ENV_NAMES = [
   "OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS",
   "OMNIRUSH_POOL_LOG",
   "OMNIRUSH_POOL_STATE",
+  "OMNIRUSH_ENGINE_DRAIN_REQUEST_GRACE_MS",
+  "OMNIRUSH_ENGINE_PROMPT_START_GRACE_MS",
 ];
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -90,9 +92,12 @@ async function writeFakeEngineBin(root: string): Promise<string> {
     "const server = Bun.serve({",
     "  hostname: '127.0.0.1',",
     "  port: requestedPort,",
-    "  fetch(request) {",
+    "  async fetch(request) {",
     "    const url = new URL(request.url);",
     "    append(`${server.port} ${request.method} ${url.pathname}`);",
+    "    // A slow answer (a session create waiting on a cold instance).",
+    "    const delay = Number(url.searchParams.get('delay') ?? 0);",
+    "    if (delay > 0) await Bun.sleep(delay);",
     "    if (url.pathname === '/session/status') {",
     "      const entries = busySessions(server.port, url.searchParams.get('directory')).map((id) => [id, { type: 'busy' }]);",
     "      return Response.json(Object.fromEntries(entries));",
@@ -757,6 +762,136 @@ describe("engine pool", () => {
     const events = await (await proxy("/event")).text();
     expect(events).toContain('"sessionID":"ses_live"');
     expect(events).toContain(`"sessionID":"ses_${newPort}"`);
+  });
+
+  test("a drained engine stays up while a request to it is in flight, and names the engine that took over before it closes", async () => {
+    const fixture = await createFixture();
+    const replaced: Array<{ closed: string; replacement: string; aliveWhenTold: boolean }> = [];
+    let first: ManagedOpencodeServer | null = null;
+    fixture.hooks.onEngineReplaced = (closed, replacement) => {
+      replaced.push({ closed, replacement: replacement.baseUrl, aliveWhenTold: first?.isAlive() === true });
+    };
+    const { pool, primary } = await createPool(fixture);
+    first = primary;
+    // A session create went to the engine before the model catalog reload flipped it.
+    const release = pool.beginRequest(primary.url);
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+
+    const outcome = await pool.requestRollover({ reason: "omnirush_model_catalog", workspace: fixture.workspace, forceStandby: true });
+
+    expect(outcome).toMatchObject({ action: "rolled_over", drainingSessions: 0 });
+    // Idle, yet not closed under the request.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(primary.isAlive()).toBe(true);
+    release();
+    expect(await waitUntil(() => !primary.isAlive(), 5_000)).toBe(true);
+    expect(replaced).toEqual([{ closed: primary.url, replacement: pool.primaryUrl() ?? "", aliveWhenTold: true }]);
+  });
+
+  test("a prompt the engine accepted but has not started when the catalog reload flips drains with it instead of being dropped", async () => {
+    const fixture = await createFixture();
+    const { pool, primary } = await createPool(fixture);
+    const oldPort = portOf(primary.url);
+    // The prompt was answered (204) before its run started: the engine does not report the session busy yet.
+    pool.beginRequest(primary.url, { method: "POST", proxyPath: "/session/ses_starting/prompt_async" })();
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+
+    const outcome = await pool.requestRollover({ reason: "omnirush_model_catalog", workspace: fixture.workspace, forceStandby: true });
+
+    expect(outcome).toMatchObject({ action: "rolled_over", drainingSessions: 1 });
+    expect(pool.routeRequest("GET", "/session/ses_starting/message")?.target.baseUrl).toBe(primary.url);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(primary.isAlive()).toBe(true);
+    // The run starts, then ends: the engine closes once it is idle.
+    await fixture.setBusy(oldPort, ["ses_starting"]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(primary.isAlive()).toBe(true);
+    await fixture.setBusy(oldPort, []);
+    expect(await waitUntil(() => !primary.isAlive(), 5_000)).toBe(true);
+  });
+
+  test("a prompt that never starts holds a drained engine only for the start grace period", async () => {
+    const fixture = await createFixture();
+    setEnv("OMNIRUSH_ENGINE_PROMPT_START_GRACE_MS", "500");
+    const { pool, primary } = await createPool(fixture);
+    pool.beginRequest(primary.url, { method: "POST", proxyPath: "/session/ses_never/prompt_async" })();
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+    expect(await pool.requestRollover({ reason: "omnirush_model_catalog", workspace: fixture.workspace, forceStandby: true }))
+      .toMatchObject({ action: "rolled_over", drainingSessions: 1 });
+    expect(await waitUntil(() => !primary.isAlive(), 5_000)).toBe(true);
+  });
+
+  test("a request that never answers holds a drained engine only for the grace period", async () => {
+    const fixture = await createFixture();
+    setEnv("OMNIRUSH_ENGINE_DRAIN_REQUEST_GRACE_MS", "300");
+    const { pool, primary } = await createPool(fixture);
+    pool.beginRequest(primary.url);
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+    expect((await pool.requestRollover({ reason: "omnirush_model_catalog", workspace: fixture.workspace, forceStandby: true })).action)
+      .toBe("rolled_over");
+    expect(await waitUntil(() => !primary.isAlive(), 5_000)).toBe(true);
+  });
+
+  test("a session created while the startup catalog reload rolls the engine over is answered, never a 500", async () => {
+    const fixture = await createFixture();
+    const { pool, primary } = await createPool(fixture);
+    const oldPort = portOf(primary.url);
+    // The create waits on the old engine's cold instance while the reload flips to a standby.
+    const url = new URL("http://127.0.0.1/opencode/session?delay=2500");
+    const create = proxyOpencodeRequest({
+      config: fixture.config,
+      request: new Request(url, { method: "POST", body: JSON.stringify({ title: "new" }), headers: { "content-type": "application/json" } }),
+      url,
+      workspace: fixture.workspace,
+      proxyPath: "/session",
+    });
+    const settled = create.then(() => "answered", () => "failed");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+
+    expect((await pool.requestRollover({ reason: "omnirush_model_catalog", workspace: fixture.workspace, forceStandby: true })).action)
+      .toBe("rolled_over");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(await Promise.race([settled, Promise.resolve("pending")])).toBe("pending");
+
+    const response = await create;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ port: oldPort, path: "/session" });
+    // Then the drained engine closes.
+    expect(await waitUntil(() => !primary.isAlive(), 5_000)).toBe(true);
+  });
+
+  test("a request that finds its engine gone mid-rollover is sent again to the engine that took over", async () => {
+    const fixture = await createFixture();
+    let flip: () => void = () => undefined;
+    const flipped = new Promise<void>((resolve) => { flip = resolve; });
+    let standbyReady: () => void = () => undefined;
+    const standbyHealthy = new Promise<void>((resolve) => { standbyReady = resolve; });
+    fixture.hooks.prepareStandby = async () => {
+      standbyReady();
+      await flipped;
+    };
+    const { pool, primary } = await createPool(fixture);
+    await fixture.setRuntimeConfig(JSON.stringify({ generation: 2 }));
+    const rollover = pool.requestRollover({ reason: "omnirush_model_catalog", workspace: fixture.workspace, forceStandby: true });
+    await standbyHealthy;
+    // The old engine is gone before the flip; a request is routed to it all the same.
+    await primary.close();
+    const url = new URL("http://127.0.0.1/opencode/session");
+    const create = proxyOpencodeRequest({
+      config: fixture.config,
+      request: new Request(url, { method: "POST", body: "{}", headers: { "content-type": "application/json" } }),
+      url,
+      workspace: fixture.workspace,
+      proxyPath: "/session",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    flip();
+    expect((await rollover).action).toBe("rolled_over");
+
+    const response = await create;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ port: portOf(pool.primaryUrl() ?? "http://127.0.0.1:0"), path: "/session" });
   });
 
   test("returns a controlled 502 when the selected engine is unreachable", async () => {

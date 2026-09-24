@@ -95,6 +95,13 @@ export type EnginePoolHooks = {
   onPrimaryLost?: (config: ServerConfig) => void;
   /** Called once when the pool shuts down, before its engines are retired. */
   onDisposed?: () => void;
+  /**
+   * Called when an engine is closed while another serves (a drained
+   * generation retired, a dead primary replaced), before it closes: whatever
+   * still reads the closed engine (the collector's turn observers) moves to
+   * `replacement`, which reads the same sessions from the shared database.
+   */
+  onEngineReplaced?: (closedBaseUrl: string, replacement: EnginePoolConnection) => void;
   logger?: EnginePoolLogger;
 };
 
@@ -119,6 +126,10 @@ type Generation = {
   drainTimer: ReturnType<typeof setInterval> | null;
   drainDeadline: number | null;
   drainActivityWatch: AbortController | null;
+  /** Proxied requests in flight to this engine (a drained engine closes only once they answered, or a grace period passed). */
+  requestsInFlight: number;
+  /** Re-runs the drain check (set while draining). */
+  drainCheck: (() => void) | null;
 };
 
 export type EnginePoolSnapshot = {
@@ -176,6 +187,24 @@ function drainTimeoutMs(): number {
   return positiveIntFromEnv("OMNIRUSH_ENGINE_DRAIN_TIMEOUT_MS", 15 * 60_000);
 }
 
+/**
+ * How long a drained engine stays up for proxied requests still in flight to
+ * it (a session create waiting on the instance's cold boot) before it closes
+ * anyway.
+ */
+function drainRequestGraceMs(): number {
+  return nonNegativeIntFromEnv("OMNIRUSH_ENGINE_DRAIN_REQUEST_GRACE_MS", 60_000);
+}
+
+/**
+ * How long a session an engine was just sent a prompt for counts as running
+ * there before the engine reports it (the engine accepts a prompt before its
+ * run starts, which may wait on the folder's instance booting).
+ */
+function promptStartGraceMs(): number {
+  return nonNegativeIntFromEnv("OMNIRUSH_ENGINE_PROMPT_START_GRACE_MS", 60_000);
+}
+
 /** Delay before the drain activity watch reconnects to a lost engine event stream. */
 function drainActivityReconnectMs(): number {
   return positiveIntFromEnv("OMNIRUSH_ENGINE_DRAIN_ACTIVITY_RECONNECT_MS", 1_000);
@@ -226,14 +255,15 @@ export function isEngineConnectionFailure(error: unknown): boolean {
   let current: unknown = error;
   for (let depth = 0; depth < 6 && current !== null && current !== undefined; depth += 1) {
     if (typeof current === "string") {
-      return /ECONNREFUSED|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|socket hang up|Unable to connect|Headers Timeout Error/i.test(current);
+      return /ECONNREFUSED|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_SOCKET|other side closed|socket hang up|Unable to connect|Headers Timeout Error/i.test(current);
     }
     if (!isRecord(current) || visited.has(current)) return false;
     visited.add(current);
     const code = current.code;
-    if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_HEADERS_TIMEOUT") return true;
+    // UND_ERR_SOCKET ("other side closed"): the engine closed the connection before it answered.
+    if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_HEADERS_TIMEOUT" || code === "UND_ERR_SOCKET") return true;
     const message = current.message;
-    if (typeof message === "string" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|socket hang up|Unable to connect|Headers Timeout Error/i.test(message)) return true;
+    if (typeof message === "string" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_SOCKET|other side closed|socket hang up|Unable to connect|Headers Timeout Error/i.test(message)) return true;
     current = current.cause;
   }
   return false;
@@ -250,6 +280,14 @@ function isConnectionRefused(error: unknown): boolean {
 
 export function isConnectionRefusedClassError(error: unknown): boolean {
   return isEngineConnectionFailure(error);
+}
+
+function sameOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return left === right;
+  }
 }
 
 function isRoutableGeneration(
@@ -428,6 +466,12 @@ export class EnginePool {
   private readonly activeSessionsByGeneration = new Map<string, Set<string>>();
   private readonly eventProxyControllers = new Set<AbortController>();
   private readonly drainWaiters = new Set<() => void>();
+  /**
+   * Prompts sent to an engine whose session it may not report busy yet (the
+   * engine answers a prompt before its run starts), by session: the engine
+   * they went to and when. Such a session drains like a running one.
+   */
+  private readonly startingPrompts = new Map<string, { generationId: string; at: number }>();
 
   constructor(input: { config: ServerConfig; template: EngineSpawnTemplate; hooks: EnginePoolHooks }) {
     this.config = input.config;
@@ -456,6 +500,8 @@ export class EnginePool {
       drainTimer: null,
       drainDeadline: null,
       drainActivityWatch: null,
+      requestsInFlight: 0,
+      drainCheck: null,
     });
     this.lastSpawnAt = Date.now();
   }
@@ -488,6 +534,49 @@ export class EnginePool {
       "engine.recovery.last_error": error instanceof Error ? error.message : String(error),
     });
     void this.recoverDeadPrimary(workspace).catch(() => undefined);
+  }
+
+  /**
+   * A proxied request to `baseUrl` is going out: a draining engine is not
+   * closed under it (for at most OMNIRUSH_ENGINE_DRAIN_REQUEST_GRACE_MS).
+   * Call the returned release once the engine answered or the request failed.
+   */
+  beginRequest(baseUrl: string, request?: { method: string; proxyPath: string }): () => void {
+    const generation = this.generationForUrl(baseUrl);
+    if (!generation) return () => undefined;
+    const sessionId = request && isPromptishSessionRequest(request.method, request.proxyPath) ? sessionIdFromPath(request.proxyPath) : null;
+    if (sessionId) this.noteStartingPrompt(generation, sessionId);
+    generation.requestsInFlight += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      generation.requestsInFlight = Math.max(0, generation.requestsInFlight - 1);
+      if (generation.requestsInFlight === 0 && generation.status === "draining") generation.drainCheck?.();
+    };
+  }
+
+  /**
+   * After a proxied request to `failedBaseUrl` failed to connect: the route
+   * to retry it on once a rollover moved the engine it went to (that engine
+   * is no longer serving, or a new primary took over while it was being
+   * replaced). Waits for a rollover in flight to flip, at most `timeoutMs`.
+   * Null when there is nothing to retry on: the engine it went to is still
+   * the one serving.
+   */
+  async rerouteAfterFailure(method: string, proxyPath: string, failedBaseUrl: string, timeoutMs: number): Promise<EnginePoolRoute | null> {
+    const deadline = this.now() + timeoutMs;
+    while (!this.disposed) {
+      const route = this.routeRequest(method, proxyPath);
+      if (route && !sameOrigin(route.target.baseUrl, failedBaseUrl)) return route;
+      // The engine it went to still serves: only a rollover (or a recovery) in flight can replace it.
+      if ((!this.inFlight && !this.recoveryInFlight) || this.now() >= deadline) return null;
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 100);
+        timer.unref?.();
+      });
+    }
+    return null;
   }
 
   connections(): EnginePoolConnection[] {
@@ -793,6 +882,8 @@ export class EnginePool {
       drainTimer: null,
       drainDeadline: null,
       drainActivityWatch: null,
+      requestsInFlight: 0,
+      drainCheck: null,
     };
     this.generations.push(generation);
 
@@ -845,7 +936,8 @@ export class EnginePool {
       }).catch(() => undefined);
     }
 
-    const drainingSessions = await this.nonIdleSessionIds(primary);
+    // A prompt the primary accepted but has not started yet drains with it too.
+    const drainingSessions = this.withStartingPrompts(primary, await this.nonIdleSessionIds(primary));
     const pinnedRequestIds = await this.pendingRequestIds(primary);
     this.flip(generation, primary, drainingSessions, pinnedRequestIds);
 
@@ -932,14 +1024,23 @@ export class EnginePool {
   private startDrainMonitor(generation: Generation, workspace: WorkspaceInfo): void {
     generation.drainDeadline = Date.now() + drainTimeoutMs();
     this.watchDrainActivity(generation);
+    // When the drained engine was first found idle with requests still in flight to it.
+    let idleWithRequestsSince: number | null = null;
     const tick = async (): Promise<void> => {
       if (generation.status !== "draining") return;
-      const remaining = await this.nonIdleSessionIds(generation);
+      const remaining = this.withStartingPrompts(generation, await this.nonIdleSessionIds(generation));
       this.updateActiveSessions(generation, remaining);
       if (remaining.length === 0) {
+        // A request it still serves (a session create waiting on a cold
+        // instance) would fail mid-flight: it closes once they answered.
+        if (generation.requestsInFlight > 0) {
+          idleWithRequestsSince ??= this.now();
+          if (this.now() - idleWithRequestsSince < drainRequestGraceMs()) return;
+        }
         await this.retire(generation, "idle");
         return;
       }
+      idleWithRequestsSince = null;
       if (generation.drainDeadline !== null && Date.now() >= generation.drainDeadline) {
         this.hooks.logger?.log("warn", "Engine drain saw no session activity for the grace period; aborting the remaining sessions.", {
           "engine.drain.sessions": remaining.join(","),
@@ -955,6 +1056,7 @@ export class EnginePool {
     const timer = setInterval(() => void tick().catch(() => undefined), drainPollIntervalMs());
     timer.unref?.();
     generation.drainTimer = timer;
+    generation.drainCheck = () => void tick().catch(() => undefined);
     // Sessions can finish between the flip and the first poll.
     void tick().catch(() => undefined);
   }
@@ -1051,7 +1153,9 @@ export class EnginePool {
     generation.drainActivityWatch?.abort();
     generation.drainActivityWatch = null;
     generation.drainDeadline = null;
+    generation.drainCheck = null;
     this.activeSessionsByGeneration.delete(generation.id);
+    if (cause !== "shutdown") this.notifyEngineReplaced(generation);
     for (const [sessionId, generationId] of this.sessionOwnership) {
       if (generationId === generation.id) this.sessionOwnership.delete(sessionId);
     }
@@ -1209,6 +1313,8 @@ export class EnginePool {
         drainTimer: null,
         drainDeadline: null,
         drainActivityWatch: null,
+        requestsInFlight: 0,
+        drainCheck: null,
       };
       this.generations.push(generation);
       if (handle.pid) {
@@ -1228,6 +1334,7 @@ export class EnginePool {
       }
       this.flip(generation, null, [], []);
       replacement = null;
+      if (previous) this.notifyEngineReplaced(previous);
       this.consecutiveConnectionFailures = 0;
       this.recoveryWorkspace = null;
       if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
@@ -1324,6 +1431,51 @@ export class EnginePool {
 
   private now(): number {
     return this.hooks.now?.() ?? Date.now();
+  }
+
+  private noteStartingPrompt(generation: Generation, sessionId: string): void {
+    const now = this.now();
+    for (const [id, entry] of this.startingPrompts) {
+      if (now - entry.at >= promptStartGraceMs()) this.startingPrompts.delete(id);
+    }
+    this.startingPrompts.set(sessionId, { generationId: generation.id, at: now });
+  }
+
+  /**
+   * `nonIdle` (the sessions `generation` reports running) plus those it was
+   * sent a prompt for within the start grace period and has not reported
+   * running yet. A session seen running is tracked by its status from then on.
+   */
+  private withStartingPrompts(generation: Generation | null, nonIdle: string[]): string[] {
+    if (!generation) return nonIdle;
+    const sessions = new Set(nonIdle);
+    const now = this.now();
+    for (const [sessionId, entry] of this.startingPrompts) {
+      if (entry.generationId !== generation.id) continue;
+      if (sessions.has(sessionId) || now - entry.at >= promptStartGraceMs()) {
+        this.startingPrompts.delete(sessionId);
+        continue;
+      }
+      sessions.add(sessionId);
+    }
+    return [...sessions];
+  }
+
+  /** Tells the pool's owner that `closed` is going away and which engine serves its sessions now. */
+  private notifyEngineReplaced(closed: Generation): void {
+    const primary = this.generations.find(
+      (entry): entry is Generation & { status: "primary" } => entry.status === "primary" && entry.id !== closed.id,
+    );
+    if (!primary || !this.hooks.onEngineReplaced) return;
+    try {
+      this.hooks.onEngineReplaced(closed.handle.url, this.connectionFor(primary));
+    } catch {
+      // Advisory: closing the engine never waits on its readers.
+    }
+  }
+
+  private generationForUrl(baseUrl: string): Generation | null {
+    return this.generations.find((entry) => entry.status !== "dead" && sameOrigin(entry.handle.url, baseUrl)) ?? null;
   }
 
   private isPrimaryEndpoint(baseUrl: string): boolean {

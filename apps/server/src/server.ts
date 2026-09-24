@@ -1501,7 +1501,7 @@ export async function proxyOpencodeV2Request(input: {
   const engine = capture && collectedSessionId ? engineTarget(input.connection.url, headers, target.search, "v2") : null;
   if (capture && collectedSessionId && engine) {
     capture.startSession(collectedSessionId, input.workspace.id, input.workspace.path);
-    capture.recordPrompt(collectedSessionId, { method, path: routePath, body: requestBody, engine: "v2", root: input.workspace.path, attachments: true });
+    capture.recordPrompt(collectedSessionId, { method, path: routePath, body: requestBody, engine: "v2", root: input.workspace.path, attachments: true, dispatchedAt: Date.now() });
     capture.captureSnapshot(collectedSessionId, "prompt");
     capture.archiveSessionStarted(collectedSessionId, input.workspace.path, engine);
   }
@@ -1614,6 +1614,38 @@ export async function proxyOpencodeV2Request(input: {
     return sanitizeProxyResponse(new Response(JSON.stringify(scopedPayload), { status: response.status, headers: responseHeaders }));
   }
   return sanitizeProxyResponse(response);
+}
+
+/** How many times a proxied request an engine rollover cut off is sent again. */
+const ENGINE_ROLLOVER_RETRIES = 2;
+
+/** How long a request that failed on an engine being replaced waits for the replacement to serve. */
+function engineRolloverRetryWaitMs(): number {
+  const configured = Number(process.env.OMNIRUSH_ENGINE_ROLLOVER_RETRY_WAIT_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 30_000;
+}
+
+/**
+ * Whether a proxied request that failed to reach its engine may be sent
+ * again to the engine that took over. A request that starts a turn is sent
+ * again only when the engine never received it (nothing listened on its
+ * port); any other request may have been cut off mid-flight and is sent again.
+ */
+function engineRolloverRetryable(method: string, proxyPath: string, error: unknown): boolean {
+  if (!isEngineConnectionFailure(error)) return false;
+  const startsTurn = method === "POST"
+    && /^\/session\/[^/]+\/(?:message|prompt|prompt_async|command|shell)$/.test(normalizeOpencodeProxyPath(proxyPath));
+  return !startsTurn || engineNeverReceivedRequest(error);
+}
+
+function engineNeverReceivedRequest(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && typeof current === "object" && current !== null; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (code === "ECONNREFUSED" || code === "UND_ERR_CONNECT_TIMEOUT") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 function opencodeUnreachableError(error: unknown, path: string): ApiError {
@@ -1822,6 +1854,8 @@ export async function proxyOpencodeRequest(input: {
       engine: "v1",
       root: workspace.path,
       attachments: promptDispatch,
+      // Taken before the engine sees the prompt: the session's previous turn ends here.
+      ...(promptDispatch ? { dispatchedAt: Date.now() } : {}),
     });
     if (promptDispatch) {
       capture.captureSnapshot(collectedSessionId, "prompt");
@@ -1880,6 +1914,8 @@ export async function proxyOpencodeRequest(input: {
     return jsonResponse(true);
   }
   const targetUrl = buildOpencodeProxyUrl(baseUrl, proxyPath, search);
+  // The engine that answered: a request an engine rollover cut off is sent again to the engine that took over.
+  let served = { baseUrl, headers };
   // Managed OpenCode proxy traffic is loopback/engine I/O; keep streaming on Node fetch.
   if (isSessionCommandProxyRequest(method, proxyPath)) {
     const commandAdmission = commandAdmissionFromBody(body);
@@ -1898,11 +1934,12 @@ export async function proxyOpencodeRequest(input: {
         }, 409);
       }
     }
+    const release = pool?.beginRequest(baseUrl, { method, proxyPath: decodeEngineRoutePath(proxyPath) });
     void loopbackFetch(targetUrl, {
       method,
       headers,
       body,
-    }).then((response) => {
+    }).finally(() => release?.()).then((response) => {
       enginePoolForConfig(input.config)?.reportRequestSuccess(baseUrl);
       if (capture?.collectorEnabled && collectedSessionId) {
         capture.recordTrace(collectedSessionId, "engine.response", {
@@ -1927,13 +1964,33 @@ export async function proxyOpencodeRequest(input: {
   }
   const forward = async () => {
     let response: Response;
-    try {
-      response = await loopbackFetch(targetUrl, { method, headers, body, signal: input.recoverySignal });
-      enginePoolForConfig(input.config)?.reportRequestSuccess(baseUrl);
-    } catch (error) {
-      if (workspace) enginePoolForConfig(input.config)?.reportRequestFailure(baseUrl, error, workspace);
-      if (isEngineConnectionFailure(error)) throw opencodeUnreachableError(error, proxyPath);
-      throw error;
+    for (let attempt = 0; ; attempt += 1) {
+      const release = pool?.beginRequest(served.baseUrl, { method, proxyPath: decodeEngineRoutePath(proxyPath) });
+      try {
+        response = attempt === 0
+          ? await loopbackFetch(targetUrl, { method, headers, body, signal: input.recoverySignal })
+          : await loopbackFetch(buildOpencodeProxyUrl(served.baseUrl, proxyPath, search), { method, headers: served.headers, body, signal: input.recoverySignal });
+        enginePoolForConfig(input.config)?.reportRequestSuccess(served.baseUrl);
+        break;
+      } catch (error) {
+        if (workspace) enginePoolForConfig(input.config)?.reportRequestFailure(served.baseUrl, error, workspace);
+        const reroute = pool && attempt < ENGINE_ROLLOVER_RETRIES && !input.request.signal.aborted && !input.recoverySignal?.aborted
+          && engineRolloverRetryable(method, proxyPath, error)
+          ? await pool.rerouteAfterFailure(method, decodeEngineRoutePath(proxyPath), served.baseUrl, engineRolloverRetryWaitMs())
+          : null;
+        if (!reroute) {
+          if (isEngineConnectionFailure(error)) throw opencodeUnreachableError(error, proxyPath);
+          throw error;
+        }
+        createServerLogger(input.config).log("info", "Engine request retried on the engine that took over.", {
+          "engine.retry.path": normalizeOpencodeProxyPath(proxyPath),
+          "engine.retry.attempt": attempt + 1,
+          "engine.retry.cause": error instanceof Error ? error.message : String(error),
+        });
+        served = { baseUrl: reroute.target.baseUrl, headers: headersForEngineConnection(headers, reroute.target) };
+      } finally {
+        release?.();
+      }
     }
 
     if (response.status === 404 && route?.fallback) {
@@ -1963,7 +2020,7 @@ export async function proxyOpencodeRequest(input: {
         path: normalizeOpencodeProxyPath(proxyPath),
         status: response.status,
       });
-      if (workspace && response.ok) capture.observeSession(collectedSessionId, engineTarget(baseUrl, headers, search));
+      if (workspace && response.ok) capture.observeSession(collectedSessionId, engineTarget(served.baseUrl, served.headers, search));
     }
     if (capture?.collectorEnabled && deletedCollectedSessionId && response.ok) capture.sessionDeleted(deletedCollectedSessionId);
     return response;
@@ -5843,6 +5900,13 @@ export function createEnginePoolForConfig(input: {
         reloadOpencodeEngineInPlace(poolConfig, workspace, undefined, options),
       engineBusy: (poolConfig, workspace) => engineHasActiveSessions(poolConfig, workspace, true),
       onPrimaryLost: (poolConfig) => requeueTaskRecoveryAfterEngineLoss(poolConfig),
+      // Turn observers still reading a closed engine read the sessions from the one that took over.
+      onEngineReplaced: (closedBaseUrl, replacement) => {
+        captureServicesByServer.get(config)?.engineReplaced(closedBaseUrl, {
+          baseUrl: replacement.baseUrl,
+          authorization: buildEngineAuthProbeHeader(replacement.username, replacement.password),
+        });
+      },
       postRefreshSync: async (poolConfig, workspace) => {
         await postEngineRefreshSync(poolConfig, workspace, activeEngineMcpServerState(poolConfig));
         await syncAllWorkspacesRuntimeMcpToEngine(poolConfig);

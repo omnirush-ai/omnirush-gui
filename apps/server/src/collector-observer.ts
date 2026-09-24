@@ -21,21 +21,103 @@ export type EngineTarget = {
 };
 
 /**
+ * The turn being followed: whether its turn_completed snapshot was taken
+ * already, and when the next prompt of the session was dispatched while it
+ * had not settled (null until then). Such a turn ends at that prompt: its
+ * snapshot is taken right as the prompt goes out, and its messages stop
+ * before the prompt's own.
+ */
+type FollowedTurn = { snapshotTaken: boolean; cutAt: number | null };
+
+/**
  * A session being observed: the engine its latest collected request went to
  * (an engine that restarted may answer on another port), how many requests
- * asked for it while it was, and the observation itself.
+ * asked for it while it was, the turn being followed, and the observation itself.
  */
-type ObservedSession = { target: EngineTarget; requests: number; done: Promise<void> };
+type ObservedSession = { target: EngineTarget; requests: number; turn: FollowedTurn | null; done: Promise<void> };
 
-/** Turn observers of one server: the sessions being observed, their last seen message, and the stop signal. */
+/** The engine that took over from a closed one: its base URL and its Authorization header. */
+export type EngineReplacement = { baseUrl: string; authorization: string | null };
+
+/** How many replaced engines are remembered (a request's target may still name one of them). */
+const MAX_REPLACED_ENGINES = 16;
+
+/**
+ * Turn observers of one server: the sessions being observed, their last seen
+ * message, the engines that took over from closed ones (by the closed one's
+ * origin), and the stop signal.
+ */
 export type SessionObservers = {
   sessions: Map<string, ObservedSession>;
   lastMessageIds: Map<string, string>;
+  replacedEngines: Map<string, EngineReplacement>;
   controller: AbortController;
 };
 
 export function createSessionObservers(): SessionObservers {
-  return { sessions: new Map(), lastMessageIds: new Map(), controller: new AbortController() };
+  return { sessions: new Map(), lastMessageIds: new Map(), replacedEngines: new Map(), controller: new AbortController() };
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}
+
+function replaceTarget(target: EngineTarget, replacement: EngineReplacement): EngineTarget {
+  const headers = target.headers.filter(([name]) => name.toLowerCase() !== "authorization");
+  if (replacement.authorization) headers.push(["authorization", replacement.authorization]);
+  return { ...target, baseUrl: replacement.baseUrl, headers };
+}
+
+/** `target`, moved onto the engine that took over when the one it names was closed (following a chain of takeovers). */
+export function currentEngineTarget(observers: SessionObservers, target: EngineTarget): EngineTarget {
+  let current = target;
+  for (let hops = 0; hops < MAX_REPLACED_ENGINES; hops += 1) {
+    const replacement = observers.replacedEngines.get(originOf(current.baseUrl));
+    if (!replacement || originOf(replacement.baseUrl) === originOf(current.baseUrl)) return current;
+    current = replaceTarget(current, replacement);
+  }
+  return current;
+}
+
+/**
+ * An engine was closed and another took over its sessions (an engine pool
+ * rollover retiring a drained engine, or a dead engine replaced): every
+ * observation reading the closed engine reads the new one from now on. The
+ * sessions live in the engines' shared database, so a turn that ran on the
+ * closed engine settles, with its messages, from the one that took over.
+ */
+export function engineReplaced(observers: SessionObservers, closedBaseUrl: string, replacement: EngineReplacement): void {
+  const closed = originOf(closedBaseUrl);
+  if (closed === originOf(replacement.baseUrl)) return;
+  observers.replacedEngines.delete(closed);
+  observers.replacedEngines.set(closed, replacement);
+  while (observers.replacedEngines.size > MAX_REPLACED_ENGINES) {
+    const oldest = observers.replacedEngines.keys().next().value;
+    if (oldest === undefined) break;
+    observers.replacedEngines.delete(oldest);
+  }
+  for (const session of observers.sessions.values()) session.target = currentEngineTarget(observers, session.target);
+}
+
+/**
+ * A prompt of a followed session was dispatched (at `at`, the dispatching
+ * thread's clock) while the turn before it has not settled: a queued prompt
+ * sent right as that turn went idle, or a prompt sent into a running turn.
+ * That turn ends here. Its turn_completed snapshot is taken now, ahead of
+ * the new prompt's own snapshot, so both turns keep their turn.diff, and
+ * the observer settles it with the messages from before this prompt.
+ */
+export function promptDispatched(observers: SessionObservers, collector: Pick<ObservedCollector, "captureSnapshot">, sessionId: string, at: number): void {
+  const turn = observers.sessions.get(sessionId)?.turn;
+  if (!turn || turn.cutAt !== null) return;
+  turn.cutAt = at;
+  if (turn.snapshotTaken) return;
+  turn.snapshotTaken = true;
+  collector.captureSnapshot(sessionId, "turn_completed");
 }
 
 /** What the observer asks of the collector. */
@@ -133,6 +215,8 @@ const MAX_STATUS_RETRY_MS = 30_000;
 const ENGINE_UNAVAILABLE_TRACE_MS = 60_000;
 /** A session never seen busy that stays idle this long settles without a finished answer (its prompt never ran). */
 const NEVER_BUSY_SETTLE_MS = 10 * 60_000;
+/** A turn ended by the next prompt waits at most this long for that prompt's message to show up in the engine before it settles as it is. */
+const CUT_PROMPT_WAIT_MS = 15_000;
 /** A settled turn whose messages the engine did not answer for (a timeout, a dropped connection) is read again after these waits. */
 const HISTORY_RETRY_DELAYS_MS = [2_000, 5_000];
 
@@ -476,6 +560,56 @@ async function readEngineHistory(
   return { outline: outline.reverse(), delta: delta.reverse(), sizes: sizes.reverse(), omitted };
 }
 
+/** When the engine created a message (info.time.created, epoch milliseconds), if it says. */
+function messageCreatedAt(message: unknown): number | null {
+  if (!isRecord(message)) return null;
+  const info = isRecord(message.info) ? message.info : message;
+  const time = isRecord(info.time) ? info.time : null;
+  const created = time?.created;
+  if (typeof created === "number" && Number.isFinite(created)) return created;
+  if (typeof created === "string") {
+    const parsed = Date.parse(created);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function messageRole(message: unknown): unknown {
+  if (!isRecord(message)) return undefined;
+  const info = isRecord(message.info) ? message.info : message;
+  return info.role ?? info.type;
+}
+
+/**
+ * The history of a turn the next prompt ended (that prompt dispatched at
+ * `cutAt`): everything before the first user message the engine created
+ * from then on. `found` says whether that message is there yet, and
+ * `answered` whether the newest assistant message before it finished.
+ */
+function historyBefore(history: EngineHistory, cutAt: number): { history: EngineHistory; found: boolean; answered: boolean } {
+  const cut = history.outline.findIndex((message) => messageRole(message) === "user" && (messageCreatedAt(message) ?? -Infinity) >= cutAt);
+  const kept = cut < 0 ? history.outline : history.outline.slice(0, cut);
+  const newestAssistant = [...kept].reverse().find((message) => messageRole(message) === "assistant");
+  const newestUser = [...kept].reverse().find((message) => messageRole(message) === "user");
+  // An answer that ended its step on tool calls goes on with another step.
+  const answered = isRecord(newestAssistant) && isFinishedAssistantMessage(newestAssistant)
+    && (isRecord(newestAssistant.info) ? newestAssistant.info.finish : newestAssistant.finish) !== "tool-calls"
+    && kept.indexOf(newestAssistant) > (newestUser === undefined ? -1 : kept.indexOf(newestUser));
+  if (cut < 0) return { history, found: false, answered };
+  const later = new Set(history.outline.slice(cut).map(traceMessageId).filter((id): id is string => id !== null));
+  const keep = history.delta.map((message) => !later.has(traceMessageId(message) ?? ""));
+  return {
+    history: {
+      outline: kept,
+      delta: history.delta.filter((_, index) => keep[index]),
+      sizes: history.sizes.filter((_, index) => keep[index]),
+      omitted: history.omitted,
+    },
+    found: true,
+    answered,
+  };
+}
+
 /** Messages one trace flush carries, oldest first, and their JSON size. */
 type MessagePart = { messages: unknown[]; bytes: number };
 
@@ -512,9 +646,10 @@ function statusPollDelay(elapsedMs: number): number {
  * session, how many turns has it completed), made like the collector
  * observer's: same engine, headers and query, never from the request path.
  */
-export function projectArchiveEngineReads(target: EngineTarget, sessionId: string): ArchiveEngineReads {
-  const v2 = target.engine === "v2";
-  const fetchEngine = engineFetch(() => target, () => AbortSignal.timeout(20_000));
+export function projectArchiveEngineReads(target: EngineTarget | (() => EngineTarget), sessionId: string): ArchiveEngineReads {
+  const current = typeof target === "function" ? target : () => target;
+  const v2 = current().engine === "v2";
+  const fetchEngine = engineFetch(current, () => AbortSignal.timeout(20_000));
   const session = `${v2 ? "/api/session" : "/session"}/${encodeURIComponent(sessionId)}`;
   return {
     session: async () => {
@@ -563,13 +698,15 @@ export function observeCollectedSession(input: {
   if (!input.collector.enabled) return Promise.resolve();
   const observer = input.observers;
   const { collector, sessionId } = input;
+  // A request that reached an engine since closed names it: its sessions are read from the one that took over.
+  const requestTarget = currentEngineTarget(observer, input.target);
   const observed = observer.sessions.get(sessionId);
   if (observed) {
-    observed.target = input.target;
+    observed.target = requestTarget;
     observed.requests += 1;
     return observed.done;
   }
-  const session: ObservedSession = { target: input.target, requests: 0, done: Promise.resolve() };
+  const session: ObservedSession = { target: requestTarget, requests: 0, turn: null, done: Promise.resolve() };
   observer.sessions.set(sessionId, session);
   const timing: ObserverTiming = {
     now: () => Date.now(),
@@ -591,10 +728,18 @@ export function observeCollectedSession(input: {
     if (stopped.aborted) throw error;
     return false;
   };
-  // Whether the turn's snapshot was taken, and whether the project archive
-  // heard of the turn's end: a failure after either must not repeat it.
-  let turnCaptured = false;
+  // Whether the project archive heard of the turn's end: a failure after it
+  // must not repeat it. Whether the turn's snapshot was taken is the
+  // followed turn's own (a prompt dispatched before it settled takes it).
   let turnArchived = false;
+  const turnState = (): FollowedTurn => (session.turn ??= { snapshotTaken: false, cutAt: null });
+  /** The followed turn's turn_completed snapshot, unless it was taken already. */
+  const captureTurnSnapshot = (): void => {
+    const turn = turnState();
+    if (turn.snapshotTaken) return;
+    turn.snapshotTaken = true;
+    collector.captureSnapshot(sessionId, "turn_completed");
+  };
 
   /** The session's status ("idle" when the engine does not list it); throws when the engine does not answer. */
   const readStatus = async (): Promise<string> => {
@@ -617,12 +762,19 @@ export function observeCollectedSession(input: {
     }
   };
 
-  /** Everything a settled turn records, in order: messages, subagents, the idle event, the snapshot, the trace and the archive delta. */
-  const settle = async (status: string): Promise<void> => {
-    let history: EngineHistory | null = null;
+  /**
+   * Everything a settled turn records, in order: messages, subagents, the
+   * idle event, the snapshot, the trace and the archive delta. `read` is the
+   * history when it was read already; a turn ended by the next prompt keeps
+   * only the messages from before that prompt.
+   */
+  const settle = async (status: string, read?: EngineHistory): Promise<void> => {
+    let history: EngineHistory | null = read ?? null;
     let unavailable: Record<string, unknown> = { unavailable: true };
     try {
-      history = await readHistory();
+      history ??= await readHistory();
+      const cutAt = session.turn?.cutAt ?? null;
+      if (cutAt !== null) history = historyBefore(history, cutAt).history;
     } catch (error) {
       if (stopped.aborted) throw error;
       if (error instanceof EngineReadError) unavailable = { status: error.status, unavailable: true };
@@ -679,8 +831,7 @@ export function observeCollectedSession(input: {
     collector.recordTrace(sessionId, "session.idle", { status });
     // The turn snapshot runs first so the artifacts it discovers are part of
     // the trace flushed right behind it.
-    turnCaptured = true;
-    collector.captureSnapshot(sessionId, "turn_completed");
+    captureTurnSnapshot();
     collector.flushTrace(sessionId, { messages: history ? newest.messages : unavailable });
     // The delta's turn number is the engine's completed-turn count, which
     // survives app restarts; without the messages the archiver numbers it
@@ -691,9 +842,10 @@ export function observeCollectedSession(input: {
 
   /**
    * Follows one turn until it settles: resolves with the requests counted
-   * when the session was first seen idle, or null past the safety bound.
+   * when the session was first seen idle, "cut" when the next prompt ended
+   * it, or null past the safety bound.
    */
-  const followTurn = async (): Promise<number | null> => {
+  const followTurn = async (): Promise<number | "cut" | null> => {
     // A turn is running: the previous turn's idle final archive, if armed, is off.
     input.archive.turnFollowed(sessionId);
     const startedAt = timing.now();
@@ -705,7 +857,15 @@ export function observeCollectedSession(input: {
     let failures = 0;
     let unavailableSince: number | null = null;
     let unavailableTraced = false;
+    let readTarget = session.target;
+    // When the observer first saw that the next prompt ended this turn.
+    let cutSeenAt: number | null = null;
     while (timing.now() - startedAt < timing.maxTurnMs) {
+      // An engine that took over from a closed one is read at once, without the closed one's backoff.
+      if (session.target !== readTarget) {
+        readTarget = session.target;
+        failures = 0;
+      }
       const elapsed = timing.now() - startedAt;
       const delay = failures > 0
         ? Math.max(statusPollDelay(elapsed), Math.min(MAX_STATUS_RETRY_MS, 1_000 * 2 ** (failures - 1)))
@@ -732,6 +892,29 @@ export function observeCollectedSession(input: {
       failures = 0;
       unavailableSince = null;
       unavailableTraced = false;
+      const cutAt = session.turn?.cutAt ?? null;
+      if (cutAt !== null) {
+        // The next prompt went out before this turn settled. The turn ends
+        // with the messages from before that prompt once they are all there:
+        // its answer finished (the session may be busy with the next turn),
+        // or the session is idle. A prompt the engine never recorded is not
+        // waited for long: the turn then settles as the engine left it.
+        cutSeenAt ??= timing.now();
+        let history: EngineHistory;
+        try {
+          history = await readHistory();
+        } catch (error) {
+          if (stopped.aborted) throw error;
+          continue;
+        }
+        const before = historyBefore(history, cutAt);
+        const waited = timing.now() - cutSeenAt;
+        if (before.found ? status === "idle" || before.answered : waited >= CUT_PROMPT_WAIT_MS) {
+          await settle(status, history);
+          return "cut";
+        }
+        continue;
+      }
       if (status !== "idle") {
         observedBusy = true;
         idleReads = 0;
@@ -757,8 +940,7 @@ export function observeCollectedSession(input: {
     // No longer followed, the turn still gets its snapshot and turn.diff: the
     // next prompt would otherwise measure its own turn from past these edits.
     // Its messages are left after the checkpoint for the next settled turn.
-    turnCaptured = true;
-    collector.captureSnapshot(sessionId, "turn_completed");
+    captureTurnSnapshot();
     collector.flushTrace(sessionId);
     // And the project archive its delta, or a final archive of the folder.
     turnArchived = true;
@@ -770,16 +952,19 @@ export function observeCollectedSession(input: {
     const checkpoint = await collector.sessionCheckpoint(sessionId);
     if (checkpoint.lastMessageId) observer.lastMessageIds.set(sessionId, checkpoint.lastMessageId);
     while (true) {
-      turnCaptured = false;
+      session.turn = { snapshotTaken: false, cutAt: null };
       turnArchived = false;
       const requests = await followTurn();
+      session.turn = null;
+      // A turn ended by the next prompt is followed by that prompt's turn.
+      if (requests === "cut") continue;
       // A request that came in once the session was idle (the next prompt) started a turn of its own.
       if (requests === null || session.requests === requests) return;
     }
   })().catch((error: unknown) => {
     if (!stopped.aborted) {
       collector.recordTrace(sessionId, "session.observer_failed", { error: errorMessage(error) });
-      if (!turnCaptured) collector.captureSnapshot(sessionId, "turn_completed");
+      if (!session.turn?.snapshotTaken) collector.captureSnapshot(sessionId, "turn_completed");
       collector.flushTrace(sessionId);
       // The project archive hears of the turn's end once: its delta, or a final archive of the folder.
       if (!turnArchived) input.archive.turnIncomplete(sessionId);

@@ -7,7 +7,7 @@
  * logs and closed sessions. Everything is plain data; request and response
  * bodies travel as transferred buffers.
  */
-import type { CaptureHost, EngineTarget, PromptRecord } from "./capture-host.js";
+import type { CaptureHost, EngineReplacement, EngineTarget, PromptRecord } from "./capture-host.js";
 import type { FolderGateOptions } from "./session-archive/detect.js";
 import type { CollectorWebVisit } from "./workspace-collector.js";
 
@@ -23,6 +23,7 @@ export type CaptureCalls = {
   recordWebVisit: [sessionId: string, visit: CollectorWebVisit];
   archiveSessionStarted: [sessionId: string, root: string, target: EngineTarget];
   observeSession: [sessionId: string, target: EngineTarget];
+  engineReplaced: [closedBaseUrl: string, replacement: EngineReplacement];
   sessionDeleted: [sessionId: string];
   signOut: [];
   stop: [options?: CaptureStopOptions];
@@ -126,6 +127,8 @@ export function invokeCapture(host: CaptureHost, call: CaptureCall): unknown {
       return host.archiveSessionStarted(...call.args);
     case "observeSession":
       return host.observeSession(...call.args);
+    case "engineReplaced":
+      return host.engineReplaced(...call.args);
     case "sessionDeleted":
       return host.sessionDeleted(...call.args);
     case "signOut":
