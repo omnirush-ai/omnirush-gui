@@ -36,7 +36,7 @@ export type RouteSession = Session & {
 
 type RouteSessionListResult =
   | { data: RouteSession[]; error?: undefined; request: Request; response: Response }
-  | { data?: undefined; error: unknown; request: Request; response: Response };
+  | { data?: undefined; error: unknown; request: Request; response?: Response };
 export type RouteSessionListTransport = (input: {
   endpoint: ResolvedWorkspaceEndpoint;
   limit: number;
@@ -47,8 +47,43 @@ const nativeRouteSessionList: RouteSessionListTransport = async ({ endpoint, lim
     mode: "omnirush",
     token: endpoint.token,
   });
-  return client.session.list({ limit });
+  // The engine's /session list only returns sessions filed under the folder's
+  // current project id, which changes when an agent turns the folder into a
+  // git repo or adds a remote, and it matches the folder byte for byte. The
+  // local server's by-folder list has every session of the folder, so both
+  // are merged; a server without it (older or remote) answers 404.
+  const [byProject, byFolder] = await Promise.all([
+    client.session.list({ limit }),
+    endpoint.isRemote
+      ? Promise.resolve(null)
+      : endpoint.client.listWorkspaceSessionsByFolder(endpoint.workspaceId, limit).catch(() => null),
+  ]);
+  return mergeRouteSessionLists(byProject, byFolder as RouteSession[] | null, limit);
 };
+
+/**
+ * One list from the engine's session list and the folder's sessions: every
+ * session once, most recently updated first, at most `limit`. The result fails
+ * only when neither list answered.
+ */
+export function mergeRouteSessionLists(
+  byProject: RouteSessionListResult,
+  byFolder: RouteSession[] | null,
+  limit: number,
+): RouteSessionListResult {
+  if (!Array.isArray(byFolder)) return byProject;
+  const listed = Array.isArray(byProject.data) ? byProject.data : [];
+  if (!Array.isArray(byProject.data) && byFolder.length === 0) return byProject;
+  const seen = new Set<string>();
+  const merged: RouteSession[] = [];
+  for (const session of [...listed, ...byFolder]) {
+    if (!session?.id || seen.has(session.id)) continue;
+    seen.add(session.id);
+    merged.push(session);
+  }
+  merged.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
+  return { data: merged.slice(0, limit), request: byProject.request, response: byProject.response ?? new Response(null, { status: 200 }) };
+}
 
 export const v2RouteSessionList: RouteSessionListTransport = async ({ endpoint, limit }) =>
   createClientV2(`${endpoint.mountedBaseUrl}/opencode2`, undefined, {
