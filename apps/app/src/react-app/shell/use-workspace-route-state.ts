@@ -104,6 +104,10 @@ type ModernRouteSessionResolution =
  * which the session pane renders as an indefinite loading state. */
 const ROUTE_REFRESH_STEP_TIMEOUT_MS = 15_000;
 const ROUTE_WORKSPACE_ACTIVATION_SETTLE_MS = 750;
+// Slow retry rounds for a local task list that keeps failing (engine still
+// starting or restarting): 20 rounds of 15 s cover about five minutes.
+const LOCAL_LIST_RETRY_ROUNDS = 20;
+const LOCAL_LIST_RETRY_ROUND_DELAY_MS = 15_000;
 
 function withRouteRefreshTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -244,6 +248,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const hydratedRouteSessionIdsRef = useRef<Record<string, string>>({});
   const startupRetryTimerRef = useRef<number | null>(null);
   const [retryingWorkspaceIds, setRetryingWorkspaceIds] = useState<string[]>([]);
+  const localListRetryRoundsRef = useRef(new Map<string, number>());
   const reconnectAttemptedWorkspaceIdRef = useRef("");
   const backgroundSessionLoadCoalescerRef = useRef(createRouteWorkspaceLoadCoalescer());
   const loadedWorkspaceIdsRef = useRef(new Set<string>());
@@ -368,6 +373,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
           sessionsByWorkspaceIdRef.current = next;
           setSessionsByWorkspaceId(next);
           loadedWorkspaceIdsRef.current.add(workspace.id);
+          localListRetryRoundsRef.current.delete(workspace.id);
           setErrorsByWorkspaceId((current) => ({ ...current, [workspace.id]: null }));
           setWorkspaceConnectionOverrides((current) => {
             if (isRemoteOmniRushWorkspace) {
@@ -418,6 +424,25 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
           }
           // Final failure: keep local workspace startup quiet, but give
           // remote workers a precise endpoint/token/workspace diagnostic.
+          if (workspace.workspaceType !== "remote") {
+            // A local engine that is still starting (or restarting) must not
+            // leave the group as an empty "No tasks yet": keep it loading and
+            // try again in slower rounds, then show the error if it persists.
+            const rounds = (localListRetryRoundsRef.current.get(workspace.id) ?? 0) + 1;
+            localListRetryRoundsRef.current.set(workspace.id, rounds);
+            if (classifyRouteSessionReadError(error) === "retryable" && rounds < LOCAL_LIST_RETRY_ROUNDS) {
+              window.setTimeout(() => {
+                if (backgroundSessionLoadCoalescerRef.current.isInFlight(workspace.id)) return;
+                void backgroundSessionLoadCoalescerRef.current.run(
+                  workspace.id,
+                  () => fetchWithRetries(workspace, 0),
+                );
+              }, LOCAL_LIST_RETRY_ROUND_DELAY_MS);
+              return;
+            }
+            localListRetryRoundsRef.current.delete(workspace.id);
+            setErrorsByWorkspaceId((current) => ({ ...current, [workspace.id]: message }));
+          }
           if (workspace.workspaceType === "remote") {
             const connectionState = await diagnoseRemoteWorkspaceTaskLoadFailure(workspace, message);
             setErrorsByWorkspaceId((current) => ({
