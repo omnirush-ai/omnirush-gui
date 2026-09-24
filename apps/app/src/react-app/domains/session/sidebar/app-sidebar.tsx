@@ -135,6 +135,7 @@ import {
   isActiveWorkSessionStatus,
   isNeedsAttentionSessionStatus,
   isSessionArchived,
+  isWorkspaceTaskListUnavailable,
   partitionArchivedSessions,
   workspaceKindLabel,
   workspaceLabel,
@@ -937,6 +938,7 @@ export type AppSidebarProps = {
   onRevealWorkspace: (workspaceId: string) => void;
   onRecoverWorkspace: (workspaceId: string) => Promise<boolean> | boolean | void;
   onTestWorkspaceConnection: (workspaceId: string) => Promise<boolean> | boolean | void;
+  onRetryWorkspaceTasks?: (workspaceId: string) => void;
   onEditWorkspaceConnection: (workspaceId: string) => void;
   onForgetWorkspace: (workspaceId: string) => void;
   onOpenCreateWorkspace: () => void;
@@ -1201,6 +1203,7 @@ export function AppSidebar(props: AppSidebarProps) {
     onRevealWorkspace: props.onRevealWorkspace,
     onRecoverWorkspace: props.onRecoverWorkspace,
     onTestWorkspaceConnection: props.onTestWorkspaceConnection,
+    onRetryWorkspaceTasks: props.onRetryWorkspaceTasks,
     onEditWorkspaceConnection: props.onEditWorkspaceConnection,
     onForgetWorkspace: props.onForgetWorkspace,
     expandWorkspace,
@@ -1919,6 +1922,22 @@ function WorkspaceSidebarGroup({
                       className={cn("text-xs", taskLoadError.tone === "offline" ? "text-amber-600" : "text-destructive")}
                     >
                       <span className="truncate">{taskLoadError.message}</span>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                ) : isWorkspaceTaskListUnavailable(group) ? (
+                  <SidebarMenuSubItem>
+                    <SidebarMenuSubButton
+                      data-workspace-tasks-load-failed
+                      className="text-muted-foreground text-xs"
+                      title={group.listError ?? undefined}
+                      onClick={() => ctx.onRetryWorkspaceTasks?.(workspace.id)}
+                    >
+                      <span className="truncate">
+                        {t("workspace.tasks_load_failed")}
+                        {ctx.onRetryWorkspaceTasks ? (
+                          <span className="text-foreground underline-offset-2 hover:underline"> · {t("workspace.tasks_load_retry")}</span>
+                        ) : null}
+                      </span>
                     </SidebarMenuSubButton>
                   </SidebarMenuSubItem>
                 ) : (

@@ -5,6 +5,13 @@ import { t } from "../../../../i18n";
 
 export const MAX_SESSIONS_PREVIEW = 6;
 
+/**
+ * A group with no sessions to show whose list failed to load. It renders a
+ * "Couldn't load tasks · Retry" row, never the "No tasks yet" empty state.
+ */
+export const isWorkspaceTaskListUnavailable = (group: Pick<WorkspaceSessionGroup, "status" | "listError">): boolean =>
+  group.status !== "loading" && Boolean(group.listError?.trim());
+
 export type SessionListItem = WorkspaceSessionGroup["sessions"][number];
 export type FlattenedSessionRow = { session: SessionListItem };
 

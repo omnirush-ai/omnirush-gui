@@ -73,15 +73,26 @@ function sessionOperations(endpoint: NativeSessionEndpoint, dependencies?: Nativ
   return (dependencies?.createOperations ?? createNativeOperations)(endpoint);
 }
 
-function unwrapSessionResult<T>(result: FieldsResult<T>, notFoundCode?: string): NonNullable<T> {
+/**
+ * Unwraps a native SDK result and tags the thrown error with the HTTP status
+ * and error code the route retry logic classifies. When fetch itself rejected
+ * (built-in server not listening, transport timeout) the SDK returns no
+ * `response`; the original transport error ("Failed to fetch", "Request timed
+ * out.") is rethrown untouched so callers keep treating it as transient.
+ */
+export function unwrapNativeSessionResult<T>(result: FieldsResult<T>, notFoundCode?: string): NonNullable<T> {
+  const status = result.response?.status;
+  if (result.data === undefined && status === undefined && result.error instanceof Error) {
+    throw result.error;
+  }
   try {
     return unwrap(result);
   } catch (error) {
     if (error instanceof Error) {
-      Object.assign(error, { status: result.response.status });
+      if (typeof status === "number") Object.assign(error, { status });
       const code = result.error && typeof result.error === "object" && "code" in result.error && typeof result.error.code === "string"
         ? result.error.code
-        : result.response.status === 404
+        : status === 404
           ? notFoundCode
           : undefined;
       if (code) Object.assign(error, { code });
@@ -89,6 +100,8 @@ function unwrapSessionResult<T>(result: FieldsResult<T>, notFoundCode?: string):
     throw error;
   }
 }
+
+const unwrapSessionResult = unwrapNativeSessionResult;
 
 export async function getNativeSession(
   endpoint: NativeSessionEndpoint,

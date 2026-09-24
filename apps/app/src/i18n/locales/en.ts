@@ -1989,6 +1989,8 @@ export default {
   "workspace.local_badge": "Local",
   "workspace.new_task_inline": "+ New task",
   "workspace.no_tasks": "No tasks yet.",
+  "workspace.tasks_load_failed": "Couldn't load tasks",
+  "workspace.tasks_load_retry": "Retry",
   "workspace.remote_badge": "Remote",
   "workspace.rename_description": "Update the name shown in the sidebar.",
   "workspace.rename_label": "Workspace name",

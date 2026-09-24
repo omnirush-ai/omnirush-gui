@@ -3,9 +3,14 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { desktopFetch } from "./desktop";
 import { isDesktopRuntime } from "./runtime-env";
 
+/**
+ * Mirrors the SDK's fields-style result. On an error the SDK omits `response`
+ * when fetch itself rejected (server not listening, transport timeout), so
+ * error readers must not assume an HTTP status exists.
+ */
 export type FieldsResult<T> =
   | ({ data: T; error?: undefined } & { request: Request; response: Response })
-  | ({ data?: undefined; error: unknown } & { request: Request; response: Response });
+  | ({ data?: undefined; error: unknown } & { request: Request; response?: Response });
 
 type PromptAsyncParameters = {
   sessionID: string;
@@ -47,6 +52,14 @@ const MCP_AUTH_OPENCODE_REQUEST_TIMEOUT_MS = 90_000;
 // Bound the acceptance handshake, not the task. A timeout leaves admission
 // unknown, so the transport must never automatically resend the prompt.
 const PROMPT_ASYNC_REQUEST_TIMEOUT_MS = 30_000;
+// Listing or reading sessions waits on the engine to start the workspace's
+// instance (cold boot, restart after the built-in server came back). The
+// generic 10 s budget aborted those reads, and the sidebar then showed an
+// empty workspace. Keep them bounded, but long enough to outlast a start.
+export const SESSION_READ_REQUEST_TIMEOUT_MS = 45_000;
+// GET <base>/session (list) and GET <base>/session/<id> (get), v1 or v2
+// (/api/session). The 300 ms status poll keeps the short budget.
+const SESSION_READ_PATH_RE = /\/session(?:\/(?!status$)[^/]+)?\/?$/;
 const SESSION_LONG_RUNNING_URL_RE = /\/session\/[^/?#]+\/(?:command|summarize)(?:[?#]|$)/;
 const SESSION_PROMPT_ASYNC_URL_RE = /\/session\/[^/?#]+\/prompt_async(?:[?#]|$)/;
 
@@ -82,8 +95,27 @@ function getRequestUrl(input: RequestInfo | URL): string {
   return String(input);
 }
 
-function resolveRequestTimeoutMs(input: RequestInfo | URL, fallbackMs: number): number {
+function getRequestMethod(input: RequestInfo | URL, init?: RequestInit): string {
+  if (init?.method) return init.method.toUpperCase();
+  if (typeof Request !== "undefined" && input instanceof Request) return input.method.toUpperCase();
+  return "GET";
+}
+
+function isSessionReadPath(url: string): boolean {
+  let pathname: string;
+  try {
+    pathname = new URL(url, "http://localhost").pathname;
+  } catch {
+    pathname = url.split(/[?#]/)[0] ?? "";
+  }
+  return SESSION_READ_PATH_RE.test(pathname);
+}
+
+export function resolveRequestTimeoutMs(input: RequestInfo | URL, fallbackMs: number, init?: RequestInit): number {
   const url = getRequestUrl(input);
+  if (fallbackMs > 0 && getRequestMethod(input, init) === "GET" && isSessionReadPath(url)) {
+    return Math.max(fallbackMs, SESSION_READ_REQUEST_TIMEOUT_MS);
+  }
   if (SESSION_LONG_RUNNING_URL_RE.test(url)) {
     return 0;
   }
@@ -179,7 +211,7 @@ async function fetchWithTimeout(
   init: RequestInit | undefined,
   timeoutMs: number,
 ) {
-  const effectiveTimeoutMs = resolveRequestTimeoutMs(input, timeoutMs);
+  const effectiveTimeoutMs = resolveRequestTimeoutMs(input, timeoutMs, init);
   if (!Number.isFinite(effectiveTimeoutMs) || effectiveTimeoutMs <= 0) {
     return fetchImpl(input, init);
   }

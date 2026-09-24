@@ -61,8 +61,11 @@ import {
   classifyRouteSessionReadError,
   describeRouteError,
   listRouteSessions,
+  loadRouteSessionWithRetry,
   mapDesktopWorkspace,
   refreshRouteWorkspaceListState,
+  sessionListRecoveryDelayMs,
+  sessionsAfterListFailure,
   stabilizeRouteWorkspaceOrder,
   type RouteSession,
   type RouteWorkspace,
@@ -70,8 +73,10 @@ import {
 } from "./route-workspaces";
 import {
   readActiveWorkspaceId,
+  readCachedWorkspaceSessions,
   readWorkspaceOrderIds,
   writeActiveWorkspaceId,
+  writeCachedWorkspaceSessions,
   writeWorkspaceOrderIds,
 } from "./session-memory";
 import {
@@ -195,6 +200,9 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const [workspaceOrderIds, setWorkspaceOrderIds] = useState<string[]>(() => readWorkspaceOrderIds());
   const [sessionsByWorkspaceId, setSessionsByWorkspaceId] = useState<Record<string, RouteSession[]>>({});
   const [errorsByWorkspaceId, setErrorsByWorkspaceId] = useState<Record<string, string | null>>({});
+  // Session-list load failures, kept apart from errorsByWorkspaceId: a list
+  // that failed to load must not disable the workspace's composer or client.
+  const [sessionListErrorsByWorkspaceId, setSessionListErrorsByWorkspaceId] = useState<Record<string, string | null>>({});
   const [workspaceConnectionOverrides, setWorkspaceConnectionOverrides] = useState<Record<string, WorkspaceConnectionState>>({});
   const [routeError, setRouteError] = useState<string | null>(null);
   // True while the desktop local server has not (re)published a usable base
@@ -247,6 +255,10 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const reconnectAttemptedWorkspaceIdRef = useRef("");
   const backgroundSessionLoadCoalescerRef = useRef(createRouteWorkspaceLoadCoalescer());
   const loadedWorkspaceIdsRef = useRef(new Set<string>());
+  // Per-workspace automatic reload after a session list failed to load.
+  const sessionListRecoveryRef = useRef<Record<string, { timer: number | null; round: number }>>({});
+  // Workspaces whose sidebar list came from a successful load in this window.
+  const listedWorkspaceIdsRef = useRef(new Set<string>());
   const serverActiveWorkspaceIdRef = useRef("");
   const workspaceSelectionCommitTimerRef = useRef<number | null>(null);
   const commitStableWorkspaceOrder = useCallback((nextWorkspaces: RouteWorkspace[]) => {
@@ -315,10 +327,50 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
       hydratedSessionId,
     );
   }, []);
+  const clearSessionListRecovery = useCallback((workspaceId: string) => {
+    const entry = sessionListRecoveryRef.current[workspaceId];
+    if (!entry) return;
+    if (entry.timer !== null) window.clearTimeout(entry.timer);
+    delete sessionListRecoveryRef.current[workspaceId];
+  }, []);
+  // A list that failed to load keeps the sessions the sidebar already shows;
+  // with none, it falls back to the last list saved for this workspace.
+  const keepKnownSessionsAfterListFailure = useCallback((workspaceId: string) => {
+    const current = sessionsByWorkspaceIdRef.current;
+    const currentItems = current[workspaceId] ?? [];
+    const currentIsListed = listedWorkspaceIdsRef.current.has(workspaceId);
+    if (currentIsListed && currentItems.length > 0) return;
+    const sessions = sessionsAfterListFailure({
+      current: currentItems,
+      cached: readCachedWorkspaceSessions(workspaceId) as RouteSession[] | null,
+      currentIsListed,
+    });
+    if (sessions.length === currentItems.length) return;
+    const next = { ...current, [workspaceId]: sessions };
+    sessionsByWorkspaceIdRef.current = next;
+    setSessionsByWorkspaceId(next);
+  }, []);
   const loadWorkspaceSessionsInBackground = useCallback(
     async (workspaces: RouteWorkspace[]) => {
       const MAX_ATTEMPTS = 6;
       const backoffMs = (attempt: number) => Math.min(500 * Math.pow(2, attempt), 4_000);
+
+      const scheduleRecovery = (workspaceId: string) => {
+        const entry = sessionListRecoveryRef.current[workspaceId] ?? { timer: null, round: 0 };
+        sessionListRecoveryRef.current[workspaceId] = entry;
+        if (entry.timer !== null) return;
+        const delayMs = sessionListRecoveryDelayMs(entry.round);
+        entry.round += 1;
+        entry.timer = window.setTimeout(() => {
+          entry.timer = null;
+          const workspace = workspacesRef.current.find((item) => item.id === workspaceId);
+          if (!workspace) {
+            delete sessionListRecoveryRef.current[workspaceId];
+            return;
+          }
+          void backgroundSessionLoadCoalescerRef.current.run(workspaceId, () => fetchWithRetries(workspace, 0));
+        }, delayMs);
+      };
 
       const fetchWithRetries = async (workspace: RouteWorkspace, attempt: number): Promise<void> => {
         const isRemoteOmniRushWorkspace = workspace.workspaceType === "remote" && workspace.remoteType !== "opencode";
@@ -338,6 +390,9 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
             setRetryingWorkspaceIds((current) =>
               current.includes(workspace.id) ? current.filter((id) => id !== workspace.id) : current,
             );
+          } else if (sessionListRecoveryRef.current[workspace.id]) {
+            // The built-in server is between restarts; keep the reload alive.
+            scheduleRecovery(workspace.id);
           }
           return;
         }
@@ -368,6 +423,15 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
           sessionsByWorkspaceIdRef.current = next;
           setSessionsByWorkspaceId(next);
           loadedWorkspaceIdsRef.current.add(workspace.id);
+          listedWorkspaceIdsRef.current.add(workspace.id);
+          if (workspace.workspaceType !== "remote") writeCachedWorkspaceSessions(workspace.id, nextItems);
+          clearSessionListRecovery(workspace.id);
+          setSessionListErrorsByWorkspaceId((current) => {
+            if (!current[workspace.id]) return current;
+            const next = { ...current };
+            delete next[workspace.id];
+            return next;
+          });
           setErrorsByWorkspaceId((current) => ({ ...current, [workspace.id]: null }));
           setWorkspaceConnectionOverrides((current) => {
             if (isRemoteOmniRushWorkspace) {
@@ -412,6 +476,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
           // in the meantime instead of flashing "error" next to the
           // workspace name.
           if (attempt + 1 < MAX_ATTEMPTS && classifyRouteSessionReadError(error) === "retryable") {
+            if (workspace.workspaceType !== "remote") keepKnownSessionsAfterListFailure(workspace.id);
             await new Promise((r) => window.setTimeout(r, backoffMs(attempt)));
             await fetchWithRetries(workspace, attempt + 1);
             return;
@@ -430,6 +495,19 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
                 [workspace.id]: connectionState,
               };
             });
+          } else {
+            // Never let a failed list read as "No tasks yet": keep the known
+            // sessions, flag the group, and reload it again later. A later
+            // route refresh (reconnect, restart) also reloads it because it
+            // no longer counts as loaded.
+            console.warn("[session-route] session list failed to load", { workspaceId: workspace.id, message });
+            recordInspectorEvent("route.session_list.error", { workspaceId: workspace.id, message });
+            keepKnownSessionsAfterListFailure(workspace.id);
+            loadedWorkspaceIdsRef.current.delete(workspace.id);
+            setSessionListErrorsByWorkspaceId((current) =>
+              current[workspace.id] === message ? current : { ...current, [workspace.id]: message },
+            );
+            scheduleRecovery(workspace.id);
           }
           setRetryingWorkspaceIds((current) =>
             current.includes(workspace.id) ? current.filter((id) => id !== workspace.id) : current,
@@ -444,7 +522,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
         ),
       );
     },
-    [endpointForWorkspace, mergeFetchedSessionsWithPending],
+    [clearSessionListRecovery, endpointForWorkspace, keepKnownSessionsAfterListFailure, mergeFetchedSessionsWithPending],
   );
   const reloadWorkspaceSessions = useCallback(async (workspaceId: string): Promise<void> => {
     const workspace = workspacesRef.current.find((item) => item.id === workspaceId);
@@ -452,6 +530,18 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
     loadedWorkspaceIdsRef.current.delete(workspaceId);
     await loadWorkspaceSessionsInBackground([workspace]);
   }, [loadWorkspaceSessionsInBackground]);
+  /** The sidebar's "Retry" on a workspace whose task list could not be loaded. */
+  const retryWorkspaceSessions = useCallback((workspaceId: string) => {
+    clearSessionListRecovery(workspaceId);
+    setRetryingWorkspaceIds((current) => current.includes(workspaceId) ? current : [...current, workspaceId]);
+    void reloadWorkspaceSessions(workspaceId);
+  }, [clearSessionListRecovery, reloadWorkspaceSessions]);
+  useEffect(() => () => {
+    for (const entry of Object.values(sessionListRecoveryRef.current)) {
+      if (entry.timer !== null) window.clearTimeout(entry.timer);
+    }
+    sessionListRecoveryRef.current = {};
+  }, []);
   const workspaceSelectionCommitRef = useRef<(workspaceId: string) => Promise<void>>(async () => undefined);
   workspaceSelectionCommitRef.current = async (workspaceId) => {
     await commitRouteWorkspaceSelection({
@@ -1111,55 +1201,46 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
     setModernRouteSessionResolution({ key: modernRouteSessionLoadKey, status: "loading" });
 
     const hydrateSelectedSession = async () => {
-      const maxAttempts = 6;
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        if (cancelled) return;
-        try {
-          const session = engineV2ChatRouting
-            ? unwrap(await createClientV2(opencode2BaseUrl, selectedWorkspaceRoot || undefined, {
-                token: selectedWorkspaceServerToken,
-              }).session.get({ sessionID: selectedSessionId }))
-            : await getNativeSession(selectedWorkspaceEndpoint, selectedSessionId);
-          if (cancelled) return;
-          if (session.id !== selectedSessionId) {
-            setModernRouteSessionResolution({
-              key: modernRouteSessionLoadKey,
-              status: "error",
-              message: "The server returned a different session.",
-            });
-            return;
-          }
-          setSessionsByWorkspaceId((current) => {
-            const currentItems = current[selectedWorkspaceId] ?? [];
-            if (currentItems.some((session) => session.id === selectedSessionId)) {
-              delete hydratedRouteSessionIdsRef.current[selectedWorkspaceId];
-              return current;
-            }
-            hydratedRouteSessionIdsRef.current[selectedWorkspaceId] = selectedSessionId;
-            const nextItems = mergeWorkspaceRouteSession(currentItems, session);
-            const next = { ...current, [selectedWorkspaceId]: nextItems };
-            sessionsByWorkspaceIdRef.current = next;
-            return next;
-          });
-          setErrorsByWorkspaceId((current) => ({ ...current, [selectedWorkspaceId]: null }));
-          setModernRouteSessionResolution(null);
-          return;
-        } catch (error) {
-          if (cancelled) return;
-          const message = error instanceof Error ? error.message : describeRouteError(error);
-          const kind = classifyRouteSessionReadError(error);
-          if (kind !== "retryable" || attempt + 1 >= maxAttempts) {
-            setModernRouteSessionResolution({
-              key: modernRouteSessionLoadKey,
-              status: kind === "not-found" ? "not-found" : "error",
-              message,
-            });
-            return;
-          }
-          await new Promise((resolve) => window.setTimeout(resolve, Math.min(500 * Math.pow(2, attempt), 4_000)));
-          if (cancelled) return;
-        }
+      const outcome = await loadRouteSessionWithRetry({
+        isCancelled: () => cancelled,
+        load: async () => engineV2ChatRouting
+          ? unwrap(await createClientV2(opencode2BaseUrl, selectedWorkspaceRoot || undefined, {
+              token: selectedWorkspaceServerToken,
+            }).session.get({ sessionID: selectedSessionId }))
+          : await getNativeSession(selectedWorkspaceEndpoint, selectedSessionId),
+      });
+      if (cancelled || outcome.status === "cancelled") return;
+      if (outcome.status !== "loaded") {
+        setModernRouteSessionResolution({
+          key: modernRouteSessionLoadKey,
+          status: outcome.status,
+          message: outcome.message,
+        });
+        return;
       }
+      const session = outcome.value;
+      if (session.id !== selectedSessionId) {
+        setModernRouteSessionResolution({
+          key: modernRouteSessionLoadKey,
+          status: "error",
+          message: "The server returned a different session.",
+        });
+        return;
+      }
+      setSessionsByWorkspaceId((current) => {
+        const currentItems = current[selectedWorkspaceId] ?? [];
+        if (currentItems.some((session) => session.id === selectedSessionId)) {
+          delete hydratedRouteSessionIdsRef.current[selectedWorkspaceId];
+          return current;
+        }
+        hydratedRouteSessionIdsRef.current[selectedWorkspaceId] = selectedSessionId;
+        const nextItems = mergeWorkspaceRouteSession(currentItems, session);
+        const next = { ...current, [selectedWorkspaceId]: nextItems };
+        sessionsByWorkspaceIdRef.current = next;
+        return next;
+      });
+      setErrorsByWorkspaceId((current) => ({ ...current, [selectedWorkspaceId]: null }));
+      setModernRouteSessionResolution(null);
     };
 
     void hydrateSelectedSession();
@@ -1282,6 +1363,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
     sessionsByWorkspaceIdRef,
     errorsByWorkspaceId,
     setErrorsByWorkspaceId,
+    sessionListErrorsByWorkspaceId,
     workspaceConnectionOverrides,
     routeError,
     setRouteError,
@@ -1303,6 +1385,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
     endpointForWorkspace,
     refreshRouteState,
     reloadWorkspaceSessions,
+    retryWorkspaceSessions,
     loadWorkspaceSessionsInBackground,
     rememberPendingCreatedSession,
     handleRuntimeSessionCreated,

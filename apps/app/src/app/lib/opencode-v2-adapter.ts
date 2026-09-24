@@ -1418,7 +1418,7 @@ export function createClientV2(
       reply: parameters.reply,
       message: parameters.message,
     }, options);
-    if (result.error !== undefined) {
+    if (result.error !== undefined || !result.response) {
       return { error: result.error, request: result.request, response: result.response };
     }
     return { data: true, request: result.request, response: result.response };
@@ -1433,7 +1433,7 @@ export function createClientV2(
       requestID: parameters.permissionID,
       reply: parameters.response,
     }, options);
-    if (result.error !== undefined) {
+    if (result.error !== undefined || !result.response) {
       return { error: result.error, request: result.request, response: result.response };
     }
     return { data: true, request: result.request, response: result.response };
