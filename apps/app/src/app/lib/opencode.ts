@@ -5,7 +5,9 @@ import { isDesktopRuntime } from "./runtime-env";
 
 export type FieldsResult<T> =
   | ({ data: T; error?: undefined } & { request: Request; response: Response })
-  | ({ data?: undefined; error: unknown } & { request: Request; response: Response });
+  // `response` is missing when fetch itself rejected (server not listening, or
+  // the request timed out), so every error-path reader must tolerate it.
+  | ({ data?: undefined; error: unknown } & { request: Request; response?: Response });
 
 type PromptAsyncParameters = {
   sessionID: string;

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { resolveWorkspaceEndpoint } from "../src/app/lib/workspace-endpoint";
-import { listRouteSessions, readRouteSessionsWithRetry } from "../src/react-app/shell/route-workspaces";
+import { classifyRouteSessionReadError, listRouteSessions, readRouteSessionsWithRetry } from "../src/react-app/shell/route-workspaces";
 
 describe("workspace route native session lists", () => {
   test("loads a bare session array through the local native transport input", async () => {
@@ -29,6 +29,31 @@ describe("workspace route native session lists", () => {
     expect(inputs).toEqual([{ endpoint, limit: 200 }]);
     expect(endpoint.opencodeBaseUrl).toBe("https://local.example.test/workspace/local%20workspace/opencode");
     expect(endpoint.token).toBe("local-token");
+  });
+
+  test("a list request with no response (server down or timed out) stays retryable", async () => {
+    const endpoint = resolveWorkspaceEndpoint({
+      id: "local workspace",
+      workspaceType: "local",
+    }, {
+      baseUrl: "https://local.example.test",
+      token: "local-token",
+    });
+    if (!endpoint) throw new Error("Expected a local endpoint");
+
+    for (const cause of [new TypeError("Failed to fetch"), new Error("Request timed out.")]) {
+      try {
+        await listRouteSessions(endpoint, async () => ({
+          error: cause,
+          request: new Request(`${endpoint.opencodeBaseUrl}/session?limit=200`),
+          response: undefined,
+        }));
+        throw new Error("Expected the list to fail");
+      } catch (error) {
+        expect((error as Error).message).toBe(cause.message);
+        expect(classifyRouteSessionReadError(error)).toBe("retryable");
+      }
+    }
   });
 
   test("retries a remote native list failure on the remote endpoint and token", async () => {

@@ -13,6 +13,7 @@ import {
   getNativeSessionMessages,
   type NativeSessionOperations,
 } from "../src/app/lib/opencode-session-native";
+import { classifyRouteSessionReadError } from "../src/react-app/shell/route-workspaces";
 
 const endpoint = {
   opencodeBaseUrl: "https://worker.example/workspace/ws-native/opencode",
@@ -196,6 +197,25 @@ describe("native OpenCode session operations", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(Error);
       expect(error).toMatchObject({ status: 404, code: "session_not_found" });
+    }
+  });
+
+  test("a request with no response keeps its own error and stays retryable", async () => {
+    for (const cause of [new TypeError("Failed to fetch"), new Error("Request timed out.")]) {
+      const promise = getNativeSession(endpoint, "ses_native", undefined, {
+        createOperations: () => operations({
+          get: async () => ({ error: cause, request: new Request(endpoint.opencodeBaseUrl), response: undefined }),
+        }),
+      });
+      try {
+        await promise;
+        throw new Error("Expected native session read to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toBe(cause.message);
+        expect(error).not.toHaveProperty("status");
+        expect(classifyRouteSessionReadError(error)).toBe("retryable");
+      }
     }
   });
 

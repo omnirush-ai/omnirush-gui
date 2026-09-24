@@ -1421,7 +1421,8 @@ export function createClientV2(
     if (result.error !== undefined) {
       return { error: result.error, request: result.request, response: result.response };
     }
-    return { data: true, request: result.request, response: result.response };
+    // No error means fetch completed, so the response is present.
+    return { data: true, request: result.request, response: result.response as Response };
   };
 
   const respondPermission = async (
@@ -1436,7 +1437,8 @@ export function createClientV2(
     if (result.error !== undefined) {
       return { error: result.error, request: result.request, response: result.response };
     }
-    return { data: true, request: result.request, response: result.response };
+    // No error means fetch completed, so the response is present.
+    return { data: true, request: result.request, response: result.response as Response };
   };
 
   const listQuestions = async (

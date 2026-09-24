@@ -88,7 +88,8 @@ export async function listRouteSessions(
     return unwrap(result);
   } catch (error) {
     if (error instanceof Error) {
-      Object.assign(error, { status: result.response.status });
+      const status = result.response?.status;
+      if (typeof status === "number") Object.assign(error, { status });
       if (result.error && typeof result.error === "object" && "code" in result.error && typeof result.error.code === "string") {
         Object.assign(error, { code: result.error.code });
       }
