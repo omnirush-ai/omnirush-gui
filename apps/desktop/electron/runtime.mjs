@@ -9,6 +9,12 @@ import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import {
+  appendRuntimeRestartRecord,
+  decideDeferredRestart,
+  decideRuntimeRestart,
+  readRuntimeRestartRecords,
+} from "./runtime-restart-log.mjs";
+import {
   desktopBootstrapPath,
   normalizeWorkspaceRootPath,
   omnirushEnvStorePath,
@@ -1888,6 +1894,187 @@ export function createRuntimeManager({
   // In-process server handle. Kept alive across restarts so we can stop it.
   let inProcessServer = null;
 
+  // ── Restart guard ───────────────────────────────────────────────────────
+  // Stopping the running server ends every live run (the collector closes
+  // each session and the engine is killed). Automatic triggers therefore never
+  // stop a healthy server that still has running sessions: the request waits
+  // until the engine is idle. Every stop is recorded with its reason.
+  const DEFERRED_RESTART_POLL_MS = 15_000;
+  let pendingRestart = null;
+  let pendingRestartTimer = null;
+  let pendingRestartChecking = false;
+  let nextStartReason = null;
+
+  function restartLogFile() {
+    return omnirushServerState.logFilePath ?? resolveOmniRushServerLogFile(userDataDir);
+  }
+
+  function recordRestart(record) {
+    appendRuntimeRestartRecord({
+      serverLogFile: restartLogFile(),
+      record: { kind: "server", generation: omnirushServerState.generation ?? null, ...record },
+    });
+  }
+
+  function restartRequest(options, fallbackSource) {
+    const reason = typeof options?.reason === "string" && options.reason.trim() ? options.reason.trim() : "unspecified";
+    const source = typeof options?.source === "string" && options.source.trim() ? options.source.trim() : fallbackSource;
+    return { reason, source, userInitiated: options?.userInitiated === true };
+  }
+
+  async function probeRunningServer() {
+    const baseUrl = omnirushServerState.baseUrl;
+    if (!inProcessServer || !baseUrl) return { running: false, healthy: false };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await fetchJson(`${baseUrl.replace(/\/+$/, "")}/health`, {}, 5000);
+        return { running: true, healthy: true };
+      } catch {
+        // One retry: a single slow answer is not a dead server.
+      }
+    }
+    return { running: true, healthy: false };
+  }
+
+  async function readBusySessions() {
+    const server = inProcessServer;
+    if (typeof server?.busySessions !== "function") return { sessions: 0, unknown: 1 };
+    let timer = null;
+    try {
+      const result = await Promise.race([
+        server.busySessions(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("busy session probe timed out")), 8000);
+        }),
+      ]);
+      return { sessions: result.sessions.length, unknown: result.unknown };
+    } catch {
+      return { sessions: 0, unknown: 1 };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Returns { verdict, why, reason, source, userInitiated, busy }. Callers stop
+   * the server only on "proceed"; "defer" queues the request until idle and
+   * "skip" keeps the healthy server.
+   */
+  async function guardRestart(action, options, fallbackSource, extra = {}) {
+    const request = restartRequest(options, fallbackSource);
+    const probe = await probeRunningServer();
+    const busy = probe.running && probe.healthy ? await readBusySessions() : { sessions: 0, unknown: 0 };
+    const decision = decideRuntimeRestart({
+      action,
+      userInitiated: request.userInitiated,
+      serverRunning: probe.running,
+      serverHealthy: probe.healthy,
+      busy,
+      sameSettings: extra.sameSettings,
+    });
+    const result = { ...decision, ...request, busy };
+    if (decision.verdict === "proceed") {
+      if (probe.running) {
+        recordRestart({
+          action: "restarting",
+          reason: request.reason,
+          source: request.source,
+          trigger: action,
+          why: decision.why,
+          busySessions: busy.sessions,
+          busyUnknown: busy.unknown,
+        });
+      }
+      if (request.userInitiated) clearPendingRestart();
+      nextStartReason = request.reason;
+    } else {
+      recordRestart({
+        action: decision.verdict === "defer" ? "deferred" : "skipped",
+        reason: request.reason,
+        source: request.source,
+        trigger: action,
+        why: decision.why,
+        busySessions: busy.sessions,
+        busyUnknown: busy.unknown,
+      });
+      if (decision.verdict === "defer") queuePendingRestart(action, options, request);
+    }
+    return result;
+  }
+
+  function clearPendingRestart() {
+    pendingRestart = null;
+    if (pendingRestartTimer) clearInterval(pendingRestartTimer);
+    pendingRestartTimer = null;
+  }
+
+  function queuePendingRestart(action, options, request) {
+    pendingRestart = {
+      action,
+      options: { ...(options ?? {}) },
+      reason: request.reason,
+      source: request.source,
+      requestedAt: pendingRestart?.requestedAt ?? Date.now(),
+    };
+    if (pendingRestartTimer) return;
+    pendingRestartTimer = setInterval(() => void runPendingRestartIfIdle(), DEFERRED_RESTART_POLL_MS);
+    pendingRestartTimer.unref?.();
+  }
+
+  async function runPendingRestartIfIdle() {
+    const pending = pendingRestart;
+    if (!pending || pendingRestartChecking) return;
+    pendingRestartChecking = true;
+    try {
+      const probe = await probeRunningServer();
+      const busy = probe.running && probe.healthy ? await readBusySessions() : { sessions: 0, unknown: 0 };
+      const verdict = decideDeferredRestart({
+        serverRunning: probe.running,
+        serverHealthy: probe.healthy,
+        busy,
+        deferredForMs: Date.now() - pending.requestedAt,
+      });
+      if (verdict === "wait" || pendingRestart !== pending) return;
+      clearPendingRestart();
+      if (verdict === "drop") {
+        recordRestart({ action: "dropped", reason: pending.reason, source: pending.source, trigger: pending.action });
+        return;
+      }
+      const options = {
+        ...pending.options,
+        reason: `${pending.reason} (deferred until idle)`,
+        source: pending.source,
+        deferredRun: true,
+      };
+      await (pending.action === "engine-restart"
+        ? withRuntimeLifecycle(() => engineRestart(options))
+        : withRuntimeLifecycle(() => omnirushServerRestart(options))
+      ).catch((error) => {
+        appendOutput(omnirushServerState, "lastStderr", `Deferred restart failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      });
+    } finally {
+      pendingRestartChecking = false;
+    }
+  }
+
+  function pendingRestartSummary() {
+    return pendingRestart
+      ? {
+          action: pendingRestart.action,
+          reason: pendingRestart.reason,
+          source: pendingRestart.source,
+          requestedAt: new Date(pendingRestart.requestedAt).toISOString(),
+        }
+      : null;
+  }
+
+  /** Record a stop that is not a restart request (quit, stop, fresh runtime). */
+  function recordStop(options, fallbackSource) {
+    if (!inProcessServer) return;
+    const request = restartRequest(options, fallbackSource);
+    recordRestart({ action: "stopping", reason: request.reason, source: request.source });
+  }
+
   async function startOmniRushServer(options) {
     // The inner start stops any previous runtime before mutating state, so a
     // throw below always happens with nothing left running.
@@ -2044,6 +2231,9 @@ export function createRuntimeManager({
     omnirushServerState.baseUrl = baseUrl;
     omnirushServerState.clientToken = tokens.clientToken;
     omnirushServerState.hostToken = tokens.hostToken;
+    recordRestart({ action: "started", reason: nextStartReason ?? "startup", source: "runtime" });
+    nextStartReason = null;
+    clearPendingRestart();
 
     const connectUrls = options.remoteAccessEnabled ? buildConnectUrls(boundPort) : { connectUrl: null, mdnsUrl: null, lanUrl: null };
     omnirushServerState.connectUrl = connectUrls.connectUrl;
@@ -2098,6 +2288,7 @@ export function createRuntimeManager({
 
   async function stopAllRuntimeChildren() {
     // Stop the in-process server (and its managed OpenCode child) if running.
+    clearPendingRestart();
     if (inProcessServer) {
       try { await inProcessServer.stop(); } catch { /* ignore */ }
       inProcessServer = null;
@@ -2109,7 +2300,12 @@ export function createRuntimeManager({
     Object.assign(omnirushServerState, createOmniRushServerState());
   }
 
-  async function prepareFreshRuntime() {
+  async function prepareFreshRuntime(options = {}) {
+    recordStop(options, "prepare-fresh-runtime");
+    await resetRuntime();
+  }
+
+  async function resetRuntime() {
     lifecycleState = "cleaning";
     await stopAllRuntimeChildren();
     await cleanupPackagedSidecars();
@@ -2169,7 +2365,7 @@ export function createRuntimeManager({
     // resolveOmniRushServerReuse also spans workspace switches: requesting a
     // different projectDir retargets the running runtime instead of killing
     // the process and every in-flight run with it.
-    const reuseDecision = resolveOmniRushServerReuse({
+    let reuseDecision = resolveOmniRushServerReuse({
       forceRestart: options.forceRestart,
       inProcess: omnirushServerState.inProcess,
       lifecycleState,
@@ -2179,6 +2375,20 @@ export function createRuntimeManager({
       requestedProjectDir: safeProjectDir,
       platform: workspacePlatform,
     });
+    if (!reuseDecision.reuse && options.forceRestart !== true && inProcessServer) {
+      // Not a restart request, yet it would replace the running server
+      // (remote-access mismatch, or a lifecycle state left behind by an
+      // earlier failure). Only a user action may do that to a healthy one.
+      const guard = await guardRestart("engine-start", options, "engine-start");
+      if (guard.verdict === "skip") {
+        lifecycleState = "healthy";
+        reuseDecision = {
+          reuse: true,
+          retarget: normalizeWorkspaceKey(engineState.projectDir, workspacePlatform)
+            !== normalizeWorkspaceKey(safeProjectDir, workspacePlatform),
+        };
+      }
+    }
     if (reuseDecision.reuse) {
       const existing = snapshotOmniRushServerState(omnirushServerState);
       if (existing.running && existing.baseUrl && (existing.ownerToken || existing.clientToken)) {
@@ -2211,7 +2421,7 @@ export function createRuntimeManager({
       settleAfterWorkspacePreparationFailure();
       throw error;
     }
-    await prepareFreshRuntime();
+    await resetRuntime();
 
     const workspacePaths = prioritizeWorkspacePaths(safeProjectDir, options.workspacePaths, {
       platform: workspacePlatform,
@@ -2241,7 +2451,8 @@ export function createRuntimeManager({
     }
   }
 
-  async function engineStop() {
+  async function engineStop(options = {}) {
+    recordStop(options, "engine-stop");
     lifecycleState = "stopping";
     await stopAllRuntimeChildren();
     lifecycleState = "idle";
@@ -2252,6 +2463,20 @@ export function createRuntimeManager({
     const projectDir = engineState.projectDir;
     if (!projectDir) {
       throw new Error("OpenCode is not configured for a local workspace");
+    }
+    if (options.deferredRun === true) {
+      const request = restartRequest(options, "deferred");
+      recordRestart({ action: "restarting", reason: request.reason, source: request.source, trigger: "engine-restart", why: "idle" });
+      nextStartReason = request.reason;
+    } else {
+      const guard = await guardRestart("engine-restart", options, "engine-restart");
+      if (guard.verdict !== "proceed") {
+        return {
+          ...snapshotEngineState(engineState),
+          restartDeferred: guard.verdict === "defer",
+          busySessions: guard.busy.sessions,
+        };
+      }
     }
     const omnirushRemoteAccess = typeof options.omnirushRemoteAccess === "boolean"
       ? options.omnirushRemoteAccess
@@ -2282,10 +2507,36 @@ export function createRuntimeManager({
   }
 
   async function omnirushServerInfo() {
-    return snapshotOmniRushServerState(omnirushServerState);
+    return {
+      ...snapshotOmniRushServerState(omnirushServerState),
+      restarts: await readRuntimeRestartRecords(restartLogFile()),
+      pendingRestart: pendingRestartSummary(),
+    };
   }
 
   async function omnirushServerRestart(options = {}) {
+    // Keep the running host binding unless the caller asks to change it: a
+    // restart for another reason (account change) must not drop remote access.
+    const remoteAccessEnabled = typeof options.remoteAccessEnabled === "boolean"
+      ? options.remoteAccessEnabled
+      : omnirushServerState.remoteAccessEnabled === true;
+    if (options.deferredRun === true) {
+      const request = restartRequest(options, "deferred");
+      recordRestart({ action: "restarting", reason: request.reason, source: request.source, trigger: "server-restart", why: "idle" });
+      nextStartReason = request.reason;
+    } else {
+      const guard = await guardRestart("server-restart", options, "server-restart", {
+        sameSettings: omnirushServerState.remoteAccessEnabled === remoteAccessEnabled,
+      });
+      if (guard.verdict !== "proceed") {
+        return {
+          ...snapshotOmniRushServerState(omnirushServerState),
+          restartDeferred: guard.verdict === "defer",
+          restartSkipped: guard.verdict === "skip",
+          busySessions: guard.busy.sessions,
+        };
+      }
+    }
     const workspacePaths = prioritizeWorkspacePaths(engineState.projectDir, await listLocalWorkspacePaths(), {
       platform: workspacePlatform,
     });
@@ -2297,7 +2548,7 @@ export function createRuntimeManager({
       opencodeBaseUrl: shouldManageOpencode ? null : engineState.baseUrl,
       opencodeUsername: shouldManageOpencode ? null : engineState.opencodeUsername,
       opencodePassword: shouldManageOpencode ? null : engineState.opencodePassword,
-      remoteAccessEnabled: options.remoteAccessEnabled === true,
+      remoteAccessEnabled,
       manageOpencode: shouldManageOpencode,
       opencodeBinPath: engineState.opencodeBinPath ?? omnirushServerState.managedOpencodeBinPath,
     });
@@ -2382,10 +2633,13 @@ export function createRuntimeManager({
   return {
     systemCaCertificates: async () => (await systemCa()).trustedCertificates,
     engineStart: (projectDir, options) => withRuntimeLifecycle(() => engineStart(projectDir, options)),
-    engineStop: () => withRuntimeLifecycle(() => engineStop()),
+    engineStop: (options) => withRuntimeLifecycle(() => engineStop(options)),
     engineRestart: (options) => withRuntimeLifecycle(() => engineRestart(options)),
-    prepareFreshRuntime: () => withRuntimeLifecycle(() => prepareFreshRuntime()),
-    dispose: () => withRuntimeLifecycle(() => stopAllRuntimeChildren()),
+    prepareFreshRuntime: (options) => withRuntimeLifecycle(() => prepareFreshRuntime(options)),
+    dispose: (options) => withRuntimeLifecycle(() => {
+      recordStop(options ?? { reason: "app_quit" }, "dispose");
+      return stopAllRuntimeChildren();
+    }),
     runtimeStatus,
     engineInfo,
     engineDoctor,

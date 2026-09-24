@@ -1481,7 +1481,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
                   if (!unreachable || !isDesktopRuntime()) {
                     throw error;
                   }
-                  await engineRestart({});
+                  await engineRestart({ reason: "provider_reload_engine_unreachable", source: "provider-auth" });
                 }
                 reloaded = true;
               }
@@ -2379,7 +2379,11 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
               // Explicit desktop sign-out must replace that process so an
               // account-scoped provider cannot remain connected in the UI.
               if (isDesktopRuntime()) {
-                await engineRestart({}).catch(() => undefined);
+                await engineRestart({
+                  reason: "account_signed_out",
+                  source: "provider-auth",
+                  userInitiated: true,
+                }).catch(() => undefined);
               }
             })();
           }

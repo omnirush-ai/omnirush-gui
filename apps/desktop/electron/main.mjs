@@ -1221,7 +1221,7 @@ async function persistConnectLinkClaims(claims) {
     await uiControlServer.start().catch((error) => {
       console.warn("[ui-control] failed to start", error);
     });
-    await runtimeManager.prepareFreshRuntime();
+    await runtimeManager.prepareFreshRuntime({ reason: "desktop_activated", source: "connect-link" });
   }
   return config;
 }
@@ -1899,11 +1899,11 @@ const desktopCommandHandlers = {
   },
   "engineStart": async (event, ...args) => {
       const projectDir = String(args[0] ?? "").trim();
-      const options = args[1] ?? {};
+      const options = { source: "renderer", ...(args[1] ?? {}) };
       return runtimeManager.engineStart(projectDir, options);
   },
   "prepareFreshRuntime": async (event, ...args) => {
-      return runtimeManager.prepareFreshRuntime();
+      return runtimeManager.prepareFreshRuntime({ source: "renderer" });
   },
   "runtimeBootstrap": async (event, ...args) => {
       return ensureRuntimeBootstrap();
@@ -1912,10 +1912,10 @@ const desktopCommandHandlers = {
       return runtimeManager.runtimeStatus();
   },
   "engineStop": async (event, ...args) => {
-      return runtimeManager.engineStop();
+      return runtimeManager.engineStop({ source: "renderer" });
   },
   "engineRestart": async (event, ...args) => {
-      return runtimeManager.engineRestart(args[0] ?? {});
+      return runtimeManager.engineRestart({ source: "renderer", ...(args[0] ?? {}) });
   },
   "engineInfo": async (event, ...args) => {
       return runtimeManager.engineInfo();
@@ -2031,7 +2031,7 @@ const desktopCommandHandlers = {
         await uiControlServer.start().catch((error) => {
           console.warn("[ui-control] failed to start", error);
         });
-        await runtimeManager.prepareFreshRuntime();
+        await runtimeManager.prepareFreshRuntime({ reason: "desktop_activated", source: "bootstrap-config" });
       }
       return next;
   },
@@ -2110,19 +2110,19 @@ const desktopCommandHandlers = {
         deviceName: String(input.deviceName ?? "").trim() || `${app.getName()} on ${os.hostname()}`,
         openVerification: (url) => shell.openExternal(url),
       });
-      await runtimeManager.omnirushServerRestart({});
+      await runtimeManager.omnirushServerRestart({ reason: "account_connected", source: "account", userInitiated: true });
       return result;
   },
   "omnirushAccountSignOut": async (event, ...args) => {
       const result = await omnirushAccountStore.clear();
-      await runtimeManager.omnirushServerRestart({});
+      await runtimeManager.omnirushServerRestart({ reason: "account_signed_out", source: "account", userInitiated: true });
       return { connected: false, remoteRevoked: result.remoteRevoked, reason: result.reason };
   },
   "automationRunnerConfigure": async (event, ...args) => {
       return desktopAutomationRunner.configure(args[0] ?? null);
   },
   "omnirushServerRestart": async (event, ...args) => {
-      return runtimeManager.omnirushServerRestart(args[0] ?? {});
+      return runtimeManager.omnirushServerRestart({ source: "renderer", ...(args[0] ?? {}) });
   },
   "pickDirectory": async (event, ...args) => {
       const options = args[0] ?? {};
@@ -2949,7 +2949,7 @@ or use: pnpm dev:worktree`);
     }
     applicationMenu.install();
     if (!desktopActivationRequired(DESKTOP_DISTRIBUTION, bootstrapConfig)) {
-      await runtimeManager.prepareFreshRuntime().catch(() => undefined);
+      await runtimeManager.prepareFreshRuntime({ reason: "app_launch", source: "boot" }).catch(() => undefined);
     }
 
     // Use Tauri's existing workspace state file as canonical so rollback and

@@ -736,6 +736,8 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     }
 
     const info = await engineStartCmd(workspacePath, {
+      reason: "debug_view_restart",
+      userInitiated: true,
       runtime: "direct",
       workspacePaths,
       opencodeEnableExa: readOpencodeEnableExa(),
@@ -807,6 +809,8 @@ export function useDebugViewModel(options: UseDebugViewModelOptions) {
     setServiceRestartError(null);
     try {
       await omnirushServerRestartCmd({
+        reason: "debug_view_restart",
+        userInitiated: true,
         remoteAccessEnabled: omnirushServerSnapshot.omnirushServerSettings.remoteAccessEnabled === true,
       });
       setOmniRushServiceStatus({

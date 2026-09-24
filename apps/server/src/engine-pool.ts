@@ -28,6 +28,7 @@ import {
   updateEngineInstanceRole,
 } from "./engine-registry.js";
 import { createManagedOpencodeServer, type ManagedOpencodeServer } from "./managed-opencode.js";
+import { appendRuntimeRestartRecord } from "./runtime-restart-log.js";
 import { loopbackFetch } from "./server-fetch.js";
 import type { ServerConfig, WorkspaceInfo } from "./types.js";
 
@@ -81,6 +82,17 @@ export type EnginePoolHooks = {
   now?: () => number;
   schedule?: (operation: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   waitForHealthy?: (handle: ManagedOpencodeServer) => Promise<void>;
+  /**
+   * One liveness probe of a running engine: "ok" when it answered at all,
+   * "refused" when nothing listens on its port, "failed" for anything else
+   * (timeout, reset). Defaults to GET /global/health.
+   */
+  probeHealth?: (handle: ManagedOpencodeServer) => Promise<"ok" | "refused" | "failed">;
+  /**
+   * Called right before the watchdog closes a primary it confirmed dead, so
+   * the runs it was carrying can be queued for task recovery.
+   */
+  onPrimaryLost?: (config: ServerConfig) => void;
   /** Called once when the pool shuts down, before its engines are retired. */
   onDisposed?: () => void;
   logger?: EnginePoolLogger;
@@ -174,6 +186,17 @@ function minSpawnIntervalMs(): number {
   return nonNegativeIntFromEnv("OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS", 30_000);
 }
 
+/**
+ * Spacing between the watchdog's liveness probes of a primary that stopped
+ * answering proxied requests. Three probes spread over this interval must all
+ * fail before a live engine process is closed.
+ */
+function recoveryProbeIntervalMs(): number {
+  return nonNegativeIntFromEnv("OMNIRUSH_ENGINE_RECOVERY_PROBE_INTERVAL_MS", 10_000);
+}
+
+const RECOVERY_PROBE_ATTEMPTS = 3;
+
 function drainPollIntervalMs(): number {
   return positiveIntFromEnv("OMNIRUSH_ENGINE_DRAIN_POLL_MS", 5_000);
 }
@@ -211,6 +234,15 @@ export function isEngineConnectionFailure(error: unknown): boolean {
     if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_HEADERS_TIMEOUT") return true;
     const message = current.message;
     if (typeof message === "string" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|socket hang up|Unable to connect|Headers Timeout Error/i.test(message)) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+function isConnectionRefused(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && isRecord(current); depth += 1) {
+    if (current.code === "ECONNREFUSED") return true;
     current = current.cause;
   }
   return false;
@@ -447,9 +479,14 @@ export class EnginePool {
     if (this.consecutiveConnectionFailures < 3) return;
     const now = this.now();
     if (now - this.lastRecoveryAt < minSpawnIntervalMs()) return;
+    const failures = this.consecutiveConnectionFailures;
     this.consecutiveConnectionFailures = 0;
     this.lastRecoveryAt = now;
     this.recoveryWorkspace = workspace;
+    this.hooks.logger?.log("warn", "Managed engine stopped answering; checking whether it is still alive.", {
+      "engine.recovery.consecutive_failures": failures,
+      "engine.recovery.last_error": error instanceof Error ? error.message : String(error),
+    });
     void this.recoverDeadPrimary(workspace).catch(() => undefined);
   }
 
@@ -569,6 +606,41 @@ export class EnginePool {
     };
   }
 
+  /**
+   * Non-idle sessions on every routable engine, for the desktop's restart
+   * guard. `unknown` counts the probes that could not be read; callers treat
+   * those as busy. Only the given directories are probed, so an instance the
+   * engine never booted is not booted just to learn that it is idle.
+   */
+  async activeSessions(directories: string[]): Promise<{ sessions: string[]; unknown: number }> {
+    const sessions = new Set<string>();
+    let unknown = 0;
+    const targets = this.generations.filter(isRoutableGeneration);
+    await Promise.all(targets.flatMap((generation) => directories.map(async (directory) => {
+      if (!generation.handle.isAlive()) return;
+      try {
+        const url = new URL("/session/status", generation.handle.url);
+        url.searchParams.set("directory", directory);
+        const response = await loopbackFetch(url.toString(), {
+          headers: { Authorization: buildEngineAuthProbeHeader(generation.handle.username, generation.handle.password) },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        const payload: unknown = await response.json();
+        if (!isRecord(payload)) throw new Error("unreadable status");
+        for (const [sessionId, status] of Object.entries(payload)) {
+          if (isRecord(status) && status.type !== "idle") sessions.add(sessionId);
+        }
+      } catch {
+        unknown += 1;
+      }
+    })));
+    for (const owned of this.activeSessionsByGeneration.values()) {
+      for (const sessionId of owned) sessions.add(sessionId);
+    }
+    return { sessions: [...sessions], unknown };
+  }
+
   /** Provider sync treats an active drain as busy so it defers instead of parking on waitForDrain(). */
   hasDrainingGeneration(): boolean {
     return this.generations.some((entry) => entry.status === "draining");
@@ -645,7 +717,9 @@ export class EnginePool {
 
     const busy = forceStandby
       ? true
-      : await this.hooks.engineBusy(this.config, workspace).catch(() => false);
+      // Unknown activity counts as busy: a busy engine rolls over to a
+      // standby, while an in-place dispose would abort whatever it runs.
+      : await this.hooks.engineBusy(this.config, workspace).catch(() => true);
     if (!busy) {
       await this.hooks.reloadInPlace(this.config, workspace, { awaitPostRefreshSync });
       if (primary) primary.fingerprint = fingerprint;
@@ -1082,6 +1156,31 @@ export class EnginePool {
         this.recoveryOrphan = null;
       }
       if (previous) {
+        const liveness = await this.confirmPrimaryDead(previous);
+        if (!liveness.dead) {
+          // A slow or overloaded engine still carries every live run; closing
+          // it here would abort them all. Only a dead one is replaced.
+          this.consecutiveConnectionFailures = 0;
+          this.hooks.logger?.log("warn", "Managed engine recovery skipped: the engine still answers its health check.", {
+            "engine.recovery.reason": liveness.reason,
+          });
+          return;
+        }
+        this.hooks.logger?.log("warn", "Managed engine recovery started.", {
+          "engine.recovery.reason": liveness.reason,
+          "engine.pid": previous.handle.pid ?? null,
+        });
+        appendRuntimeRestartRecord({
+          kind: "engine",
+          action: "restarted",
+          reason: `engine_unreachable:${liveness.reason}`,
+          source: "engine-pool-watchdog",
+        });
+        try {
+          this.hooks.onPrimaryLost?.(this.config);
+        } catch {
+          // Recovery bookkeeping must never block replacing a dead engine.
+        }
         if (previous.trustedIdentity) {
           try {
             this.hooks.clearTrusted(this.config, previous.trustedIdentity);
@@ -1148,6 +1247,40 @@ export class EnginePool {
       });
       this.scheduleRecovery(workspace);
       throw error;
+    }
+  }
+
+  /**
+   * Decide whether a primary that failed several proxied requests is really
+   * gone. A process that exited or a port nobody listens on is dead at once;
+   * timeouts and resets are only trusted after every spaced probe fails.
+   */
+  private async confirmPrimaryDead(generation: Generation): Promise<{ dead: boolean; reason: string }> {
+    for (let attempt = 1; attempt <= RECOVERY_PROBE_ATTEMPTS; attempt += 1) {
+      if (!generation.handle.isAlive()) return { dead: true, reason: "process_exited" };
+      const verdict = await this.probeHealth(generation.handle);
+      if (verdict === "ok") return { dead: false, reason: "health_ok" };
+      if (verdict === "refused") return { dead: true, reason: "connection_refused" };
+      if (attempt < RECOVERY_PROBE_ATTEMPTS) {
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, recoveryProbeIntervalMs());
+          timer.unref?.();
+        });
+      }
+    }
+    return { dead: true, reason: "health_probe_failed" };
+  }
+
+  private async probeHealth(handle: ManagedOpencodeServer): Promise<"ok" | "refused" | "failed"> {
+    if (this.hooks.probeHealth) return this.hooks.probeHealth(handle);
+    try {
+      await loopbackFetch(new URL("/global/health", handle.url).toString(), {
+        headers: { Authorization: buildEngineAuthProbeHeader(handle.username, handle.password) },
+        signal: AbortSignal.timeout(5_000),
+      });
+      return "ok";
+    } catch (error) {
+      return isConnectionRefused(error) ? "refused" : "failed";
     }
   }
 

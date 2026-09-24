@@ -26,6 +26,7 @@ import {
 import { createManagedOpencodeServer, type ManagedOpencodeServer, type OpencodeExecutionSnapshot } from "./managed-opencode.js";
 import {
   clearTrustedOpencodeProcess,
+  collectBusyEngineSessions,
   createEnginePoolForConfig,
   createServerLogger,
   registerTrustedOpencodeProcess,
@@ -78,6 +79,11 @@ export type EmbeddedServerHandle = {
   managedOpencode: { pid: number | null; isAlive: () => boolean } | null;
   /** Current managed-engine generations for desktop diagnostics and acceptance checks. */
   managedOpencodePool: () => EnginePoolSnapshot | null;
+  /**
+   * Sessions still running on the managed engine. The desktop asks before any
+   * unattended restart; `unknown` counts unreadable probes, which it treats as busy.
+   */
+  busySessions: () => Promise<{ sessions: string[]; unknown: number }>;
   /** Stop the HTTP server and managed OpenCode (if any). */
   stop: () => Promise<void>;
 };
@@ -364,6 +370,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         }
       : null,
     managedOpencodePool: () => enginePool?.snapshot() ?? null,
+    busySessions: () => collectBusyEngineSessions(config),
     stop,
   };
 }

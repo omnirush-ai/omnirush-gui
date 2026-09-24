@@ -713,6 +713,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
           if (!isDesktopRuntime()) return false;
           try {
             await omnirushServerRestart({
+              reason: "share_remote_access_changed",
+              userInitiated: true,
               remoteAccessEnabled:
                 readOmniRushServerSettings().remoteAccessEnabled === true,
             });
@@ -1892,6 +1894,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     if (!isDesktopRuntime()) return false;
     try {
       await omnirushServerRestart({
+        reason: "extension_settings_restart",
+        userInitiated: true,
         remoteAccessEnabled:
           readOmniRushServerSettings().remoteAccessEnabled === true,
       });
@@ -2095,6 +2099,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
       workspacePaths.unshift(selectedWorkspaceRoot);
     }
     await engineStart(selectedWorkspaceRoot, {
+      reason: "environment_applied",
+      userInitiated: true,
       preferSidecar: true,
       runtime: "direct",
       workspacePaths,

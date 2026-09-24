@@ -112,6 +112,9 @@ function pickHostInfo(info: OmniRushServerInfo | null) {
     lanUrl: info.lanUrl ?? null,
     lastStdout: info.lastStdout ?? null,
     lastStderr: info.lastStderr ?? null,
+    // Built-in server/engine restarts with reason, trigger and time (newest first).
+    restarts: info.restarts ?? [],
+    pendingRestart: info.pendingRestart ?? null,
   };
 }
 

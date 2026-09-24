@@ -5,10 +5,13 @@ import { createManagedProcessClose, type ManagedChildProcess, type ManagedOpenco
 import type { ServerConfig, WorkspaceInfo } from "./types.js";
 
 const previousSpawnInterval = process.env.OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS;
+const previousProbeInterval = process.env.OMNIRUSH_ENGINE_RECOVERY_PROBE_INTERVAL_MS;
 
 afterEach(() => {
   if (previousSpawnInterval === undefined) delete process.env.OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS;
   else process.env.OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS = previousSpawnInterval;
+  if (previousProbeInterval === undefined) delete process.env.OMNIRUSH_ENGINE_RECOVERY_PROBE_INTERVAL_MS;
+  else process.env.OMNIRUSH_ENGINE_RECOVERY_PROBE_INTERVAL_MS = previousProbeInterval;
 });
 
 function managedHandle(port: number) {
@@ -29,7 +32,7 @@ function managedHandle(port: number) {
   return { handle, closeCalls: () => closeCalls };
 }
 
-function fixture(spawn: EnginePoolHooks["spawn"]) {
+function fixture(spawn: EnginePoolHooks["spawn"], overrides: Partial<EnginePoolHooks> = {}) {
   let now = 0;
   const scheduled: Array<() => void> = [];
   const workspace: WorkspaceInfo = {
@@ -75,6 +78,9 @@ function fixture(spawn: EnginePoolHooks["spawn"]) {
       return setTimeout(() => undefined, 60_000);
     },
     waitForHealthy: async () => undefined,
+    // Nothing listens on these fake engines' ports.
+    probeHealth: async () => "refused",
+    ...overrides,
   };
   const pool = new EnginePool({ config, template, hooks });
   return { pool, config, workspace, scheduled, setNow: (value: number) => { now = value; } };
@@ -181,6 +187,105 @@ describe("managed engine self-heal", () => {
     expect(spawnCalls).toBe(1);
     expect(old.handle.isAlive()).toBe(false);
     expect(testFixture.pool.primaryUrl()).toBe(replacement.handle.url);
+    await testFixture.pool.disposeAll();
+  });
+
+  test("keeps a live primary that still answers its health check", async () => {
+    process.env.OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS = "30000";
+    const old = managedHandle(44001);
+    let spawnCalls = 0;
+    let lost = 0;
+    const testFixture = fixture(async () => {
+      spawnCalls += 1;
+      return managedHandle(44002).handle;
+    }, { probeHealth: async () => "ok", onPrimaryLost: () => { lost += 1; } });
+    testFixture.pool.adoptPrimary({ handle: old.handle, fingerprint: "one", registryId: null, trustedIdentity: null });
+
+    // An overloaded engine resets or times out proxied requests but is alive.
+    for (let failure = 0; failure < 3; failure += 1) {
+      testFixture.pool.reportRequestFailure(old.handle.url, connectionReset(), testFixture.workspace);
+    }
+    await settle();
+
+    expect(spawnCalls).toBe(0);
+    expect(lost).toBe(0);
+    expect(old.closeCalls()).toBe(0);
+    expect(testFixture.pool.primaryUrl()).toBe(old.handle.url);
+    await testFixture.pool.disposeAll();
+  });
+
+  test("replaces an unresponsive live primary only after every spaced probe fails", async () => {
+    process.env.OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS = "30000";
+    process.env.OMNIRUSH_ENGINE_RECOVERY_PROBE_INTERVAL_MS = "1";
+    const old = managedHandle(45001);
+    const replacement = managedHandle(45002);
+    let probes = 0;
+    let lost = 0;
+    const testFixture = fixture(async () => replacement.handle, {
+      probeHealth: async () => {
+        probes += 1;
+        return "failed";
+      },
+      onPrimaryLost: () => { lost += 1; },
+    });
+    testFixture.pool.adoptPrimary({ handle: old.handle, fingerprint: "one", registryId: null, trustedIdentity: null });
+
+    for (let failure = 0; failure < 3; failure += 1) {
+      testFixture.pool.reportRequestFailure(old.handle.url, timedOut(), testFixture.workspace);
+    }
+    await settle();
+
+    expect(probes).toBe(3);
+    expect(lost).toBe(1);
+    expect(old.handle.isAlive()).toBe(false);
+    expect(testFixture.pool.primaryUrl()).toBe(replacement.handle.url);
+    await testFixture.pool.disposeAll();
+  });
+
+  test("replaces a primary whose process already exited without probing it", async () => {
+    process.env.OMNIRUSH_ENGINE_MIN_SPAWN_INTERVAL_MS = "30000";
+    const old = managedHandle(46001);
+    const replacement = managedHandle(46002);
+    let probes = 0;
+    const testFixture = fixture(async () => replacement.handle, {
+      probeHealth: async () => {
+        probes += 1;
+        return "ok";
+      },
+    });
+    testFixture.pool.adoptPrimary({ handle: old.handle, fingerprint: "one", registryId: null, trustedIdentity: null });
+    await old.handle.close();
+
+    for (let failure = 0; failure < 3; failure += 1) {
+      testFixture.pool.reportRequestFailure(old.handle.url, refused(), testFixture.workspace);
+    }
+    await settle();
+
+    expect(probes).toBe(0);
+    expect(testFixture.pool.primaryUrl()).toBe(replacement.handle.url);
+    await testFixture.pool.disposeAll();
+  });
+
+  test("a reload whose busy probe fails rolls over instead of disposing the engine in place", async () => {
+    const old = managedHandle(47001);
+    const standby = managedHandle(47002);
+    let inPlace = 0;
+    let spawnCalls = 0;
+    const testFixture = fixture(async () => {
+      spawnCalls += 1;
+      return standby.handle;
+    }, {
+      engineBusy: async () => { throw new Error("status probe timed out"); },
+      reloadInPlace: async () => { inPlace += 1; },
+    });
+    testFixture.pool.adoptPrimary({ handle: old.handle, fingerprint: "one", registryId: null, trustedIdentity: null });
+
+    const outcome = await testFixture.pool.requestRollover({ reason: "test", workspace: testFixture.workspace, manual: true });
+
+    expect(outcome.action).toBe("rolled_over");
+    expect(inPlace).toBe(0);
+    expect(spawnCalls).toBe(1);
+    expect(testFixture.pool.primaryUrl()).toBe(standby.handle.url);
     await testFixture.pool.disposeAll();
   });
 
