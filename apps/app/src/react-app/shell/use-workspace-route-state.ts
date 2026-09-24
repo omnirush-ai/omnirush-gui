@@ -418,11 +418,16 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
         }
         try {
           // The sidebar lists from whichever engine chat is routed to.
-          const fetchedItems = workspace.workspaceType !== "remote" && engineV2ChatRoutingRef.current
+          const usesV2List = workspace.workspaceType !== "remote" && engineV2ChatRoutingRef.current;
+          const fetchedItems = usesV2List
             ? await listRouteSessions(endpoint, v2RouteSessionList)
             : await listRouteSessions(endpoint);
           const workspaceRoot = normalizeDirectoryPath(workspace.path ?? "");
-          const items = workspaceRoot && !isRemoteOmniRushWorkspace
+          // The local server already scopes the v1 list to this folder, also
+          // under its real path (symlink, junction, subst drive), which this
+          // string compare would drop. Other lists still need the filter.
+          const serverScoped = workspace.workspaceType !== "remote" && !usesV2List;
+          const items = workspaceRoot && !isRemoteOmniRushWorkspace && !serverScoped
             ? fetchedItems.filter((session) =>
                 normalizeDirectoryPath(session?.directory ?? "") === workspaceRoot,
               )
