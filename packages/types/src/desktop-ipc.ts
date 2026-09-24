@@ -628,6 +628,9 @@ export type DesktopCommandMap = {
   opencodeMcpAuth: { args: [action: string, name: string]; result: ExecResult };
   setWindowDecorations: { args: [decorated: boolean]; result: unknown };
 
+  /** Opens <userData>/logs in the system file manager. Takes no path from the renderer. */
+  openLogsFolder: { args: []; result: { ok: boolean; error?: string } };
+
   // Window / OS utilities (dunder commands)
   __openPath: { args: [target: string]; result: unknown };
   __revealItemInDir: { args: [target: string]; result: unknown };

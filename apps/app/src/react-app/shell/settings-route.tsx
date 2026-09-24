@@ -98,6 +98,7 @@ import {
   loadConnectCapabilities,
   readCachedConnectCapabilities,
 } from "@/react-app/domains/connections/cloud-inventory-cache";
+import { buildDiagnosticsBundleJson } from "@/app/lib/diagnostics-bundle";
 import { createOpaqueDiagnosticsScopeKey } from "@/react-app/domains/settings/pages/agent-context-diagnostics-section";
 import { CloudProvidersView } from "@/react-app/domains/settings/pages/cloud-providers-view";
 import { DebugView } from "@/react-app/domains/settings/pages/debug-view";
@@ -2246,6 +2247,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             developerMode={developerMode}
             omnirushClient={omnirushClient}
             runtimeWorkspaceId={runtimeWorkspaceId}
+            buildDiagnosticsBundle={() => buildDiagnosticsBundleJson({
+              developerMode,
+              omnirushServerStatus: routeOmniRushStatus,
+              runtimeWorkspaceId,
+              selectedWorkspaceId,
+            })}
           />
         );
       case "permissions":

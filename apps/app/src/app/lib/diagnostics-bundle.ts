@@ -43,6 +43,8 @@ export type DiagnosticsBundleInputs = {
   hostInfo: OmniRushServerInfo | null;
   developerLogs: DevLogRecord[];
   perfLogs: PerfLogRecord[];
+  /** Renderer-side platform guess, used when the desktop bridge does not report its OS. */
+  platform?: string | null;
   context?: DiagnosticsBundleContext;
   cloudMcpHealth?: unknown;
 };
@@ -65,6 +67,8 @@ function pickAppInfo(info: AppBuildInfo | null) {
     gitSha: info.gitSha ?? null,
     buildEpoch: info.buildEpoch ?? null,
     omnirushDevMode: info.omnirushDevMode ?? null,
+    os: info.os ?? null,
+    arch: info.arch ?? null,
   };
 }
 
@@ -103,8 +107,13 @@ function pickEngineInfo(info: EngineInfo | null) {
 
 function pickHostInfo(info: OmniRushServerInfo | null) {
   if (!info) return null;
+  const generation = typeof info.generation === "number" ? info.generation : null;
   return {
     running: Boolean(info.running),
+    // The desktop runtime counts built-in server starts per app launch; it
+    // does not record restart reasons or times (those are in omnirush-server.log).
+    generation,
+    restartsThisLaunch: generation === null ? null : Math.max(0, generation - 1),
     remoteAccessEnabled: info.remoteAccessEnabled,
     baseUrl: info.baseUrl ?? null,
     connectUrl: info.connectUrl ?? null,
@@ -157,6 +166,7 @@ export function composeDiagnosticsBundleJson(input: DiagnosticsBundleInputs): st
     opencodeEngine: pickEngineInfo(input.engineInfo),
     runtime: {
       tauri: input.desktopRuntime,
+      platform: input.appInfo?.os ?? input.platform ?? null,
       developerMode: context?.developerMode === true,
     },
     session: {
@@ -225,6 +235,13 @@ async function readHostInfo(desktopRuntime: boolean) {
   }
 }
 
+function readNavigatorPlatform(): string | null {
+  if (typeof navigator === "undefined") return null;
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const platform = nav.userAgentData?.platform || nav.platform || "";
+  return platform.trim() || null;
+}
+
 export async function buildDiagnosticsBundleJson(context?: DiagnosticsBundleContext): Promise<string> {
   const desktopRuntime = isDesktopRuntime();
   const hasContextHostInfo = context !== undefined && "hostInfo" in context;
@@ -241,6 +258,7 @@ export async function buildDiagnosticsBundleJson(context?: DiagnosticsBundleCont
     hostInfo,
     developerLogs: readDevLogs(80),
     perfLogs: readPerfLogs(80),
+    platform: readNavigatorPlatform(),
     context,
   });
 }
