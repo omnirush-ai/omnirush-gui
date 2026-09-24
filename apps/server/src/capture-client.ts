@@ -12,7 +12,7 @@
  */
 import { Worker } from "node:worker_threads";
 
-import { CaptureHost, type CaptureDiagnostics, type CaptureHostOptions, type EngineTarget, type PromptRecord } from "./capture-host.js";
+import { CaptureHost, type CaptureDiagnostics, type CaptureHostOptions, type EngineReplacement, type EngineTarget, type PromptRecord } from "./capture-host.js";
 import {
   invokeCapture,
   serializeResponse,
@@ -61,6 +61,8 @@ export type CaptureService = {
   recordWebVisit(sessionId: string, visit: CollectorWebVisit): boolean;
   archiveSessionStarted(sessionId: string, root: string, target: EngineTarget): void;
   observeSession(sessionId: string, target: EngineTarget): void;
+  /** An engine was closed and another took over its sessions: turn observers reading it move there. */
+  engineReplaced(closedBaseUrl: string, replacement: EngineReplacement): void;
   sessionDeleted(sessionId: string): void;
   signOut(): Promise<void>;
   /**
@@ -156,6 +158,10 @@ class CaptureClient implements CaptureService {
 
   observeSession(sessionId: string, target: EngineTarget): void {
     this.send({ kind: "call", id: null, method: "observeSession", args: [sessionId, target] });
+  }
+
+  engineReplaced(closedBaseUrl: string, replacement: EngineReplacement): void {
+    this.send({ kind: "call", id: null, method: "engineReplaced", args: [closedBaseUrl, replacement] });
   }
 
   sessionDeleted(sessionId: string): void {

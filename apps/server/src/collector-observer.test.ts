@@ -6,8 +6,10 @@ import { zstdDecompressSync } from "node:zlib";
 
 import {
   createSessionObservers,
+  engineReplaced,
   observeCollectedSession,
   projectArchiveEngineReads,
+  promptDispatched,
   type EngineTarget,
   type ObservedCollector,
   type ObserverTiming,
@@ -70,6 +72,8 @@ function startEngine() {
     /** Real milliseconds the next status reads take to answer, one entry per read. */
     statusDelaysMs: [] as number[],
     statusReads: 0,
+    /** The Authorization header of every request. */
+    authorizations: [] as string[],
     /** Runs once a page of messages was read. */
     onMessagesRead: null as (() => void) | null,
   };
@@ -78,6 +82,7 @@ function startEngine() {
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      control.authorizations.push(request.headers.get("authorization") ?? "");
       if (url.pathname === "/session/status") {
         control.statusReads += 1;
         const delay = control.statusDelaysMs.shift();
@@ -440,6 +445,129 @@ describe("collector observer", () => {
     // The first turn completed; the second, which failed, is incomplete, and neither is told twice.
     expect(archive.calls).toEqual(["followed", "completed", "followed", "incomplete"]);
     expect(observers.sessions.size).toBe(0);
+  });
+});
+
+describe("collector observer across engine rollovers and queued prompts", () => {
+  /** A message the engine created at `created` (epoch ms); an assistant one finished. */
+  const at = (id: string, role: "user" | "assistant", created: number): EngineMessage => {
+    const each = message(id, role);
+    each.info.time = role === "assistant" ? { created, completed: created + 1 } : { created };
+    if (role === "assistant") each.info.finish = "stop";
+    return each;
+  };
+
+  test("an engine closed mid-turn by a rollover hands the observation to the engine that took over: the turn settles there with its messages and snapshot", async () => {
+    const clock = fakeClock();
+    // Two engine generations over one shared database: the same messages answer on both.
+    const draining = startEngine();
+    const primary = startEngine();
+    const collector = new FakeCollector();
+    const archive = fakeArchive();
+    const observers = createSessionObservers();
+    const shared = [message("msg_user_0001", "user")];
+    draining.control.messages = shared;
+    primary.control.messages = shared;
+    // The turn runs on the draining engine; the new primary never ran it, so it reports the session idle.
+    draining.control.status = () => (clock.elapsed() < 90_000 ? "busy" : "idle");
+    primary.control.status = () => "idle";
+    // The turn ends; a moment later (before the observer saw it idle twice) the pool retires the
+    // drained engine: it tells the observers first, then closes it.
+    clock.at(90_000, () => shared.push(message("msg_assistant_0001", "assistant")));
+    clock.at(90_500, () => {
+      engineReplaced(observers, draining.target.baseUrl, { baseUrl: primary.target.baseUrl, authorization: "Basic bmV3LWVuZ2luZQ==" });
+      void draining.server.stop(true);
+    });
+
+    await observe({ collector, archive, observers, target: draining.target, timing: clock.timing });
+
+    expect(collector.labels()).not.toContain("session.engine_unavailable");
+    expect(collector.labels()).not.toContain("session.observer_timeout");
+    expect(collector.labels()).toEqual(["session.idle", "snapshot:turn_completed", "flush:turn"]);
+    expect(collector.turnMessageIds()).toEqual([["msg_user_0001", "msg_assistant_0001"]]);
+    expect(archive.calls).toEqual(["followed", "completed"]);
+    // It settled within seconds of the turn's end, reading the new engine with that engine's credentials.
+    expect(clock.elapsed()).toBeLessThan(100_000);
+    expect(primary.control.authorizations.length).toBeGreaterThan(0);
+    expect(new Set(primary.control.authorizations)).toEqual(new Set(["Basic bmV3LWVuZ2luZQ=="]));
+    // A request that still names the closed engine (it was routed before the close) is read from the new one.
+    const late = new FakeCollector();
+    const lateArchive = fakeArchive();
+    await observe({ collector: late, archive: lateArchive, observers, target: draining.target, timing: clock.timing });
+    expect(late.labels()).toEqual(["session.idle", "snapshot:turn_completed", "flush:turn"]);
+    expect(observers.sessions.size).toBe(0);
+  });
+
+  test("a prompt sent within two seconds of the turn going idle ends that turn: each prompt gets its own snapshot, messages and settle", async () => {
+    const clock = fakeClock();
+    const engine = startEngine();
+    const collector = new FakeCollector();
+    const archive = fakeArchive();
+    const observers = createSessionObservers();
+    const start = clock.timing.now!();
+    engine.control.messages = [at("msg_user_0001", "user", start)];
+    let busyUntil = 59_500;
+    engine.control.status = () => (clock.elapsed() < busyUntil ? "busy" : "idle");
+    clock.at(59_500, () => engine.control.messages.push(at("msg_assistant_0001", "assistant", start + 59_000)));
+    // A queued prompt goes out a second after the turn went idle, between the observer's first idle
+    // read and the second one it settles on: the server records the dispatch, then the engine stores
+    // the prompt and runs a second turn.
+    clock.at(60_500, () => {
+      const dispatchedAt = clock.timing.now!();
+      promptDispatched(observers, collector, SESSION, dispatchedAt);
+      busyUntil = 3 * 60_000;
+      engine.control.messages.push(at("msg_user_0002", "user", dispatchedAt + 5));
+      // The prompt's response reaches the observer like any collected request.
+      void observe({ collector, archive, observers, target: engine.target, timing: clock.timing });
+    });
+    clock.at(3 * 60_000, () => engine.control.messages.push(at("msg_assistant_0002", "assistant", start + 179_000)));
+
+    await observe({ collector, archive, observers, target: engine.target, timing: clock.timing });
+
+    expect(collector.labels()).toEqual([
+      // Turn 1's end snapshot is taken as prompt 2 goes out (ahead of prompt 2's own snapshot).
+      "snapshot:turn_completed",
+      "session.idle", "flush:turn",
+      "session.idle", "snapshot:turn_completed", "flush:turn",
+    ]);
+    expect(collector.turnMessageIds()).toEqual([
+      ["msg_user_0001", "msg_assistant_0001"],
+      ["msg_user_0002", "msg_assistant_0002"],
+    ]);
+    expect(collector.checkpoint).toBe("msg_assistant_0002");
+    expect(archive.calls).toEqual(["followed", "completed", "followed", "completed"]);
+    expect(archive.turns.map((turn) => turn?.length)).toEqual([2, 4]);
+  });
+
+  test("a prompt sent into a turn still answering waits for that answer to finish before the turn settles", async () => {
+    const clock = fakeClock();
+    const engine = startEngine();
+    const collector = new FakeCollector();
+    const archive = fakeArchive();
+    const observers = createSessionObservers();
+    const start = clock.timing.now!();
+    const answering = at("msg_assistant_0001", "assistant", start + 1_000);
+    answering.info.time = { created: start + 1_000 };
+    delete answering.info.finish;
+    engine.control.messages = [at("msg_user_0001", "user", start), answering];
+    engine.control.status = () => (clock.elapsed() < 5 * 60_000 ? "busy" : "idle");
+    clock.at(30_000, () => {
+      const dispatchedAt = clock.timing.now!();
+      promptDispatched(observers, collector, SESSION, dispatchedAt);
+      engine.control.messages.push(at("msg_user_0002", "user", dispatchedAt + 5));
+    });
+    // Turn 1's answer ends a minute later; turn 2 answers after it.
+    clock.at(90_000, () => { answering.info.time = { created: start + 1_000, completed: start + 90_000 }; answering.info.finish = "stop"; });
+    clock.at(5 * 60_000, () => engine.control.messages.push(at("msg_assistant_0002", "assistant", start + 200_000)));
+
+    await observe({ collector, archive, observers, target: engine.target, timing: clock.timing });
+
+    expect(collector.turnMessageIds()).toEqual([
+      ["msg_user_0001", "msg_assistant_0001"],
+      ["msg_user_0002", "msg_assistant_0002"],
+    ]);
+    expect(collector.labels().filter((label) => label === "snapshot:turn_completed")).toHaveLength(2);
+    expect(archive.calls).toEqual(["followed", "completed", "followed", "completed"]);
   });
 });
 

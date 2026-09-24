@@ -11,8 +11,12 @@
 import { collectPromptAttachments, promptBodyForTrace, v2PromptBodyForTrace } from "./collector-attachments.js";
 import {
   createSessionObservers,
+  currentEngineTarget,
+  engineReplaced,
   observeCollectedSession,
   projectArchiveEngineReads,
+  promptDispatched,
+  type EngineReplacement,
   type EngineTarget,
   type SessionObservers,
 } from "./collector-observer.js";
@@ -21,7 +25,7 @@ import { SessionArchiver, type SessionArchiverOptions } from "./session-archive/
 import { ProjectArchiveLifecycle, type ArchiveLifecycleLog } from "./session-archive/lifecycle.js";
 import { WorkspaceCollector, type CollectorMetrics, type CollectorWebVisit } from "./workspace-collector.js";
 
-export type { EngineTarget } from "./collector-observer.js";
+export type { EngineReplacement, EngineTarget } from "./collector-observer.js";
 
 export type CaptureLog = ArchiveLifecycleLog;
 
@@ -39,6 +43,11 @@ export type PromptRecord = {
   root: string;
   /** A prompt dispatch: its file parts become "attachment" events. */
   attachments: boolean;
+  /**
+   * When a prompt dispatch went out (epoch milliseconds, taken before the
+   * engine saw it): a turn of the session still being followed ends here.
+   */
+  dispatchedAt?: number;
 };
 
 export type CaptureHostOptions = {
@@ -117,6 +126,8 @@ export class CaptureHost {
 
   /** The "engine.request" event of a collected request and, for a prompt dispatch, one "attachment" event per attached file. */
   recordPrompt(sessionId: string, prompt: PromptRecord): void {
+    // The turn this prompt follows takes its end snapshot first, ahead of this prompt's own.
+    if (prompt.dispatchedAt !== undefined) promptDispatched(this.observers, this.collector, sessionId, prompt.dispatchedAt);
     const payload = requestPayload(prompt.body);
     this.collector.recordTrace(sessionId, "engine.request", {
       method: prompt.method,
@@ -139,7 +150,12 @@ export class CaptureHost {
 
   /** A prompt was dispatched: the project archive's session start (a base once per session, see lifecycle.ts). */
   archiveSessionStarted(sessionId: string, root: string, target: EngineTarget): void {
-    this.archive.sessionStarted({ sessionId, root, engine: projectArchiveEngineReads(target, sessionId) });
+    this.archive.sessionStarted({ sessionId, root, engine: projectArchiveEngineReads(() => currentEngineTarget(this.observers, target), sessionId) });
+  }
+
+  /** An engine was closed and `replacement` took over its sessions: observations reading it move there. */
+  engineReplaced(closedBaseUrl: string, replacement: EngineReplacement): void {
+    engineReplaced(this.observers, closedBaseUrl, replacement);
   }
 
   /** The engine accepted a collected request: follow the session until its turn settles. */
