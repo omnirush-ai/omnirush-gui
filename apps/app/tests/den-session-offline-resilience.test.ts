@@ -380,4 +380,28 @@ describe("explicit sign-out", () => {
     ) as CustomEvent<{ status?: string }> | undefined;
     expect(sessionUpdated?.detail.status).toBe("signed_out");
   });
+
+  test("marks the signed_out notification user-initiated only when the caller says so", () => {
+    const dispatched: CustomEvent<{ status?: string; userInitiated?: boolean }>[] = [];
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: memoryStorage(),
+        dispatchEvent: (event: Event) => {
+          if (event.type === "omnirush-den-session-updated") {
+            dispatched.push(event as CustomEvent<{ status?: string; userInitiated?: boolean }>);
+          }
+          return true;
+        },
+      },
+    });
+
+    // The automatic expiry path (den-auth-provider) calls it bare.
+    clearDenSession();
+    clearDenSession({ includeBaseUrls: false });
+    clearDenSession({ userInitiated: true });
+
+    expect(dispatched.map((event) => event.detail.status)).toEqual(["signed_out", "signed_out", "signed_out"]);
+    expect(dispatched.map((event) => event.detail.userInitiated)).toEqual([undefined, undefined, true]);
+  });
 });

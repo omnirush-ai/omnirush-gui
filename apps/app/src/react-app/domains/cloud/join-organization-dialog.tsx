@@ -186,7 +186,7 @@ export function JoinOrganizationDialog({
       setBusy(false);
       return;
     }
-    clearDenSession({ includeBaseUrls: false });
+    clearDenSession({ includeBaseUrls: false, userInitiated: true });
     platform.openLink(invite.url);
     setStatus({ phase: "invite-opened", host: invite.host });
     setBusy(false);
@@ -201,7 +201,7 @@ export function JoinOrganizationDialog({
       setError(t("join_org.error_invalid"));
       return true;
     }
-    clearDenSession({ includeBaseUrls: false });
+    clearDenSession({ includeBaseUrls: false, userInitiated: true });
     setStatus({ phase: "server-saved", host: hostFromUrl(persisted.baseUrl) });
     return true;
   }, []);

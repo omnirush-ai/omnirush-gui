@@ -491,4 +491,52 @@ describe("session-route cloud provider sync wiring", () => {
     // The legacy renderer-side reconciliation still runs for remote workspaces.
     expect(requests.some((request) => request.url === "https://den.example/api/den/v1/llm-providers")).toBe(true);
   });
+
+  // An automatic sign-out (token expiry or a revoked session found by the
+  // background getSession refresh) must not force the built-in server down
+  // under live runs: only an explicit sign-out passes userInitiated, which
+  // bypasses the desktop restart guard's busy-session deferral.
+  async function signOutEngineRestarts(clear: () => void) {
+    const storage = installWindow();
+    installCloudSession(storage);
+    const desktopCalls: Array<{ command: string; args: unknown[] }> = [];
+    (window as unknown as { __OMNIRUSH_ELECTRON__: unknown }).__OMNIRUSH_ELECTRON__ = {
+      invokeDesktop: async (command: string, ...args: unknown[]) => {
+        desktopCalls.push({ command, args });
+        return undefined;
+      },
+    };
+    const requests: RecordedRequest[] = [];
+    installFetchMock(requests);
+    const store = createSessionRouteStore({
+      endpoint: makeEndpoint({ origin: LOCAL_SERVER_ORIGIN, isRemote: false }),
+      hostToken: "host-token-live",
+    });
+
+    store.start();
+    clear();
+    const restarts = () => desktopCalls.filter((call) => call.command === "engineRestart");
+    for (let attempt = 0; attempt < 50 && restarts().length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    store.dispose();
+    expect(
+      requests.filter((request) => request.method === "DELETE" && new URL(request.url).pathname === "/den-session"),
+    ).toHaveLength(1);
+    return restarts().map((call) => call.args[0] as Record<string, unknown>);
+  }
+
+  test("an automatic sign-out restarts the engine without userInitiated so live runs defer it", async () => {
+    const restarts = await signOutEngineRestarts(() => clearDenSession());
+
+    expect(restarts).toHaveLength(1);
+    expect(restarts[0]).toMatchObject({ reason: "account_signed_out", source: "provider-auth" });
+    expect(restarts[0]?.userInitiated).toBeUndefined();
+  });
+
+  test("an explicit sign-out restarts the engine as user-initiated", async () => {
+    const restarts = await signOutEngineRestarts(() => clearDenSession({ userInitiated: true }));
+
+    expect(restarts).toEqual([{ reason: "account_signed_out", source: "provider-auth", userInitiated: true }]);
+  });
 });

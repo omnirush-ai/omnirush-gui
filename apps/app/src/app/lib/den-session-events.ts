@@ -10,6 +10,13 @@ export type DenSessionUpdatedDetail = {
   user?: DenUser | null;
   email?: string | null;
   message?: string | null;
+  /**
+   * Set only when a person explicitly signed out or changed the control
+   * plane. An automatic sign-out (token expiry, revoked session) leaves it
+   * unset, so consumers must not force disruptive work such as restarting
+   * the built-in server while runs are live.
+   */
+  userInitiated?: boolean;
 };
 
 export function dispatchDenSessionUpdated(detail: DenSessionUpdatedDetail) {

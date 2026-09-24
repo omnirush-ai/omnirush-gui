@@ -1657,7 +1657,12 @@ export function writeDenSettings(
   });
 }
 
-export function clearDenSession(options?: { includeBaseUrls?: boolean }) {
+/**
+ * Pass `userInitiated: true` only from an explicit user action (sign-out
+ * button, control-plane change). Automatic sign-outs (expired or revoked
+ * token) omit it so listeners defer disruptive restarts until runs are idle.
+ */
+export function clearDenSession(options?: { includeBaseUrls?: boolean; userInitiated?: boolean }) {
   if (typeof window === "undefined") {
     return;
   }
@@ -1695,6 +1700,7 @@ export function clearDenSession(options?: { includeBaseUrls?: boolean }) {
   dispatchDenSessionUpdated({
     status: "signed_out",
     baseUrl: readDenSettings().baseUrl,
+    ...(options?.userInitiated === true ? { userInitiated: true } : {}),
   });
 }
 

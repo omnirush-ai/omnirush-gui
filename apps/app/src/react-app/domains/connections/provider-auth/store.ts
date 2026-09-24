@@ -2378,11 +2378,14 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
               // but a running OpenCode child retains its spawn environment.
               // Explicit desktop sign-out must replace that process so an
               // account-scoped provider cannot remain connected in the UI.
+              // An automatic sign-out (token expiry, revoked session) is not
+              // user-initiated: the restart guard then defers until no run
+              // is live instead of ending every running session.
               if (isDesktopRuntime()) {
                 await engineRestart({
                   reason: "account_signed_out",
                   source: "provider-auth",
-                  userInitiated: true,
+                  ...(detail.userInitiated === true ? { userInitiated: true } : {}),
                 }).catch(() => undefined);
               }
             })();
