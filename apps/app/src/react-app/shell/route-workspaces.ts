@@ -7,7 +7,7 @@ import type { Session } from "@opencode-ai/sdk/v2/client";
 
 import { createClient, unwrap } from "@/app/lib/opencode";
 import { createClientV2, isOpencodeV2BaseUrl } from "@/app/lib/opencode-v2-adapter";
-import { deleteNativeSession } from "@/app/lib/opencode-session-native";
+import { deleteNativeSession, unwrapNativeSessionResult } from "@/app/lib/opencode-session-native";
 import { OmniRushServerError, type OmniRushWorkspaceInfo } from "@/app/lib/omnirush-server";
 import type { ResolvedWorkspaceEndpoint } from "@/app/lib/workspace-endpoint";
 import type { WorkspaceInfo } from "@/app/lib/desktop-types";
@@ -36,6 +36,7 @@ export type RouteSession = Session & {
 
 type RouteSessionListResult =
   | { data: RouteSession[]; error?: undefined; request: Request; response: Response }
+  // No response when fetch itself rejected (server down, transport timeout).
   | { data?: undefined; error: unknown; request: Request; response?: Response };
 export type RouteSessionListTransport = (input: {
   endpoint: ResolvedWorkspaceEndpoint;
@@ -118,19 +119,7 @@ export async function listRouteSessions(
   endpoint: ResolvedWorkspaceEndpoint,
   transport: RouteSessionListTransport = nativeRouteSessionList,
 ): Promise<RouteSession[]> {
-  const result = await transport({ endpoint, limit: 200 });
-  try {
-    return unwrap(result);
-  } catch (error) {
-    if (error instanceof Error) {
-      const status = result.response?.status;
-      if (typeof status === "number") Object.assign(error, { status });
-      if (result.error && typeof result.error === "object" && "code" in result.error && typeof result.error.code === "string") {
-        Object.assign(error, { code: result.error.code });
-      }
-    }
-    throw error;
-  }
+  return unwrapNativeSessionResult(await transport({ endpoint, limit: 200 }));
 }
 
 export function mapDesktopWorkspace(workspace: WorkspaceInfo): RouteWorkspace {
@@ -252,6 +241,51 @@ export async function withTransientEngineRetry<T>(input: {
 }
 
 export const readRouteSessionsWithRetry = withTransientEngineRetry;
+
+/** Waits between reads of a routed session the engine could not answer yet; the last one repeats. */
+export const ROUTE_SESSION_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000, 4_000, 8_000, 15_000];
+
+export type RouteSessionLoadOutcome<T> =
+  | { status: "loaded"; value: T }
+  | { status: "not-found" | "error"; message: string; error: unknown }
+  | { status: "cancelled" };
+
+/**
+ * Loads the session named by the route. Transient failures (built-in server
+ * restarting, engine still starting, request timeout) keep retrying with
+ * backoff while the caller still wants the session, so a restart window never
+ * ends in a terminal "Session could not be loaded". A missing session and
+ * terminal errors (auth, bad request) resolve at once.
+ */
+export async function loadRouteSessionWithRetry<T>(input: {
+  load: () => Promise<T>;
+  isCancelled: () => boolean;
+  retryDelaysMs?: readonly number[];
+  /** Total attempts including the first; unbounded by default. */
+  maxAttempts?: number;
+  wait?: (delayMs: number) => Promise<void>;
+}): Promise<RouteSessionLoadOutcome<T>> {
+  const retryDelaysMs = input.retryDelaysMs ?? ROUTE_SESSION_RETRY_DELAYS_MS;
+  const maxAttempts = input.maxAttempts ?? Number.POSITIVE_INFINITY;
+  const wait = input.wait ?? ((delayMs: number) => new Promise<void>((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  }));
+  for (let attempt = 0; ; attempt += 1) {
+    if (input.isCancelled()) return { status: "cancelled" };
+    try {
+      const value = await input.load();
+      return input.isCancelled() ? { status: "cancelled" } : { status: "loaded", value };
+    } catch (error) {
+      if (input.isCancelled()) return { status: "cancelled" };
+      const kind = classifyRouteSessionReadError(error);
+      if (kind !== "retryable" || attempt + 1 >= maxAttempts) {
+        return { status: kind === "not-found" ? "not-found" : "error", message: describeRouteError(error), error };
+      }
+      const delayMs = retryDelaysMs[Math.min(attempt, retryDelaysMs.length - 1)] ?? 0;
+      await wait(delayMs);
+    }
+  }
+}
 
 /** Waits between task-creation attempts; each attempt itself may take the 10 s request timeout. */
 export const TASK_CREATE_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000];
@@ -518,6 +552,7 @@ export function toSessionGroups(
   sessionsByWorkspaceId: Record<string, RouteSession[]>,
   errorsByWorkspaceId: Record<string, string | null>,
   loadingWorkspaceIds: Set<string>,
+  listErrorsByWorkspaceId: Record<string, string | null> = {},
 ): WorkspaceSessionGroup[] {
   return workspaces.map((workspace) => ({
     workspace,
@@ -528,7 +563,59 @@ export function toSessionGroups(
         ? "error"
         : "ready",
     error: errorsByWorkspaceId[workspace.id],
+    listError: listErrorsByWorkspaceId[workspace.id] ?? null,
   }));
+}
+
+/**
+ * Pause before each further round of automatic session-list reloads once a
+ * round's own quick retries failed. The last value repeats: a workspace whose
+ * list cannot load keeps being retried until it loads or disappears.
+ */
+export const SESSION_LIST_RECOVERY_DELAYS_MS: readonly number[] = [5_000, 10_000, 20_000, 30_000, 60_000];
+
+export function sessionListRecoveryDelayMs(round: number): number {
+  const delays = SESSION_LIST_RECOVERY_DELAYS_MS;
+  return delays[Math.min(Math.max(0, round), delays.length - 1)] ?? 60_000;
+}
+
+/**
+ * Sessions to show after a list load failed: never swap known sessions for an
+ * empty list. A list that was loaded in this window stays as it is. Otherwise
+ * the few sessions already present (just created, or opened from the route)
+ * are completed with the last saved list for the workspace.
+ */
+export function sessionsAfterListFailure<T extends { id: string }>(input: {
+  current: readonly T[] | undefined;
+  cached: readonly T[] | null | undefined;
+  currentIsListed: boolean;
+}): T[] {
+  const current = input.current ?? [];
+  if (input.currentIsListed && current.length > 0) return [...current];
+  const currentIds = new Set(current.map((session) => session.id));
+  return [...current, ...(input.cached ?? []).filter((session) => !currentIds.has(session.id))];
+}
+
+/**
+ * Consecutive empty lists a workspace may return, while the renderer still
+ * knows sessions for it, before the empty list replaces them. Each recheck
+ * waits one step of the recovery schedule, so the known sessions stay shown
+ * for about two minutes of empty answers.
+ */
+export const SESSION_LIST_EMPTY_RECHECKS = 5;
+
+/**
+ * An empty list that loaded fine is confirmed before it replaces sessions the
+ * sidebar already knows (listed earlier in this window, or saved from an
+ * earlier run). Until then the known sessions stay and the list is asked for
+ * again, instead of the group dropping to "No tasks yet".
+ */
+export function shouldRecheckEmptySessionList(input: {
+  fetchedCount: number;
+  knownCount: number;
+  recheckCount: number;
+}): boolean {
+  return input.fetchedCount === 0 && input.knownCount > 0 && input.recheckCount < SESSION_LIST_EMPTY_RECHECKS;
 }
 
 export function isActiveSessionStatus(status: unknown) {
