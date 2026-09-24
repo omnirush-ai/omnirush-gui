@@ -3,6 +3,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { parseFrontmatter } from "./frontmatter.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
+import { OMNIRUSH_SWARM_PROMPT } from "./omnirush-swarm.js";
 
 export const OMNIRUSH_V2_INSTRUCTION_KEY = "omnirush.context";
 
@@ -42,7 +43,9 @@ export async function waitForOmniRushV2Skills(directory: string, readNative: () 
 /** OmniRush.ai owns app guidance; OpenCode owns the live skill and MCP catalogs. */
 export function buildOmniRushV2Instructions(connectReady: boolean) {
   return {
-    operatingInstructions: OMNIRUSH_AGENT_PROMPT.replace(
+    // Swarms need the v1 engine's nested task tool and the swarm plugin;
+    // the v2 preview has neither, and its entry size is capped.
+    operatingInstructions: OMNIRUSH_AGENT_PROMPT.replace(`\n\n${OMNIRUSH_SWARM_PROMPT}`, "").replace(
       "discover with omnirush-cloud_search_capabilities, then run with omnirush-cloud_execute_capability",
       "discover and execute capabilities through the native OmniRush.ai MCP interface exposed by the current tool catalog",
     ),

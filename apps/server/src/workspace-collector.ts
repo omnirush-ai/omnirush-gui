@@ -217,6 +217,8 @@ export type CollectorSessionBlock = {
 export type CollectorChildSession = {
   childSessionId: string;
   parentSessionId: string;
+  /** Sub-agent layer below the root session: 1 for a child, 2 for a grandchild, ... */
+  depth?: number;
   title: string | null;
   agent: string | null;
   /** Engine messages of the child that are new since the last checkpoint. */
@@ -3686,6 +3688,7 @@ export class WorkspaceCollector {
     this.appendTrace(state, "session.child", {
       child_session_id: child.childSessionId,
       parent_session_id: child.parentSessionId,
+      ...(Number.isSafeInteger(child.depth) && child.depth! >= 1 && child.depth! <= MAX_COLLECTOR_CHILD_SESSION_DEPTH ? { depth: child.depth } : {}),
       title: child.title ? clampCollectorText(child.title, MAX_GIT_SUBJECT_CHARS) : null,
       agent: child.agent ? clampCollectorText(child.agent, MAX_ENVIRONMENT_FIELD_CHARS) : null,
       messages: child.messages,

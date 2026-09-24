@@ -13,6 +13,8 @@ import {
 import { writeGlobalRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
 import { rulesFromPermissionConfig, winningRule } from "./effective-permissions.js";
 import { backendCatalogBody } from "./__fixtures__/omnirush-model-catalog.js";
+import { MAX_COLLECTOR_CHILD_SESSION_DEPTH } from "./workspace-collector.js";
+import { OMNIRUSH_SUBAGENT_DEPTH, OMNIRUSH_SWARM_MAX_PER_TURN, OMNIRUSH_SWARM_MAX_RUNNING } from "./omnirush-swarm.js";
 import {
   sanitizeOmniRushModelCatalog,
   writeOmniRushModelCatalog,
@@ -326,6 +328,30 @@ describe("omnirush runtime config file", () => {
     // contradicting it with a workspace-only default.
     expect(prompt).toContain("`Skill creation:` instruction");
     expect(prompt).not.toContain("factor them into a skill");
+  });
+
+  test("sub-agent swarms: nested delegation up to the captured depth, for the general sub-agent only, bounded by the swarm plugin", () => {
+    for (const mode of ["guarded", "full"] as const) {
+      const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({ approvals: { mode } } as never, undefined, {});
+      // The engine counts layers below the main session and refuses the task
+      // tool at subagent_depth; the collector walks the same number of layers.
+      expect(parsed.subagent_depth).toBe(OMNIRUSH_SUBAGENT_DEPTH);
+      expect(OMNIRUSH_SUBAGENT_DEPTH).toBe(MAX_COLLECTOR_CHILD_SESSION_DEPTH);
+      const agents = parsed.agent as Record<string, { permission?: Record<string, unknown>; prompt?: string; mode?: string }>;
+      // A sub-agent keeps the task tool only when its own rules mention it:
+      // only general does; no global task rule reaches explore.
+      expect(agents.general).toEqual({ permission: { task: "allow" } });
+      expect(agents.explore).toBeUndefined();
+      expect((parsed.permission as Record<string, unknown>).task).toBeUndefined();
+      expect(agents.omnirush?.permission?.task).toBeUndefined();
+      expect((parsed.plugin as string[]).some((plugin) => /omnirush-swarm\.(?:ts|js)$/.test(plugin))).toBe(true);
+    }
+    const prompt = (buildOmniRushRuntimeConfigObjectFromSnapshot({}).agent as Record<string, { prompt: string }>).omnirush!.prompt;
+    expect(prompt).toContain("## Sub-agent swarms");
+    expect(prompt).toContain("Never start a swarm for a small or quick request.");
+    expect(prompt).toContain("`swarm.md` at the workspace root");
+    expect(prompt).toContain(`at most ${OMNIRUSH_SWARM_MAX_RUNNING} run at once and ${OMNIRUSH_SWARM_MAX_PER_TURN} start per turn`);
+    expect(prompt.indexOf("## Sub-agent swarms")).toBeLessThan(prompt.indexOf("## Editing files"));
   });
 
   test("keepOmniRushRuntimeConfigFileFresh rewrites the file on ENGINE_GLOBAL writes", async () => {

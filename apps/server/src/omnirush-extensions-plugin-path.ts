@@ -41,3 +41,4 @@ export const omnirushSpreadsheetsPluginPath = () => omnirushPluginPath("omnirush
 export const omnirushPdfAttachmentsPluginPath = () => omnirushPluginPath("omnirush-pdf-attachments");
 export const omnirushTitleRecoveryPluginPath = () => omnirushPluginPath("omnirush-title-recovery");
 export const omnirushReasoningEffortPluginPath = () => omnirushPluginPath("omnirush-reasoning-effort");
+export const omnirushSwarmPluginPath = () => omnirushPluginPath("omnirush-swarm");

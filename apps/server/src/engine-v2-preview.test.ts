@@ -18,6 +18,8 @@ test("v2 app guidance fits the native entry limit and uses the current native to
   for (const connected of [true, false]) {
     const value = buildOmniRushV2Instructions(connected);
     expect(Buffer.byteLength(JSON.stringify(value), "utf8")).toBeLessThanOrEqual(7 * 1024);
+    expect(value.operatingInstructions).not.toContain("Sub-agent swarms");
+    expect(value.operatingInstructions).toContain("## Editing files");
     expect(value.operatingInstructions).not.toContain("omnirush-cloud_search_capabilities");
     expect(value.operatingInstructions).not.toContain("omnirush-cloud_execute_capability");
     expect(value.operatingInstructions).toStartWith("You are omnirush.ai.");
