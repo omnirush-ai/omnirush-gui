@@ -20,10 +20,6 @@ export function canRestartDesktopForReloadError(error: unknown) {
   );
 }
 
-function isEngineUnreachableError(error: unknown) {
-  return error instanceof OmniRushServerError && error.code === "opencode_engine_unreachable";
-}
-
 /**
  * Aborted or timed-out fetches are client→server transport blips (including
  * AbortSignal-cancelable fetch cancellations), not proof the engine is gone.
@@ -56,15 +52,18 @@ export type ReloadEngineFallbackOptions = {
 /**
  * Reload the workspace engine; escalate to a full desktop engine restart only
  * when the reload keeps failing with a restartable server-reported code.
- * `opencode_engine_unreachable` gets one delayed retry first — if the engine
- * answers the second attempt, no session is disturbed.
+ * Both codes get one delayed retry first — an engine that is still starting
+ * or recovering answers the second attempt, and no session is disturbed.
+ * The desktop then defers the restart while any session is still running
+ * (it reports `restartDeferred`), so this never ends live runs by itself.
  */
 export async function reloadEngineWithDesktopFallback(
   client: Pick<OmniRushServerClient, "reloadEngine">,
   workspaceId: string,
   options?: ReloadEngineFallbackOptions,
 ): Promise<ReloadEngineFallbackResult> {
-  const restartEngine = options?.restartEngine ?? (() => engineRestart({}));
+  const restartEngine = options?.restartEngine
+    ?? (() => engineRestart({ reason: "engine_reload_failed", source: "engine-reload" }));
   const isDesktop = options?.isDesktop ?? isDesktopRuntime;
   try {
     await client.reloadEngine(workspaceId);
@@ -74,17 +73,17 @@ export async function reloadEngineWithDesktopFallback(
     if (!canRestartDesktopForReloadError(error) || !isDesktop()) {
       throw error;
     }
-    if (isEngineUnreachableError(error)) {
-      await delay(options?.retryDelayMs ?? UNREACHABLE_RETRY_DELAY_MS);
-      try {
-        await client.reloadEngine(workspaceId);
-        return { restartedEngine: false };
-      } catch (retryError) {
-        if (isTransientTransportError(retryError)) throw retryError;
-        if (!canRestartDesktopForReloadError(retryError)) throw retryError;
-      }
+    await delay(options?.retryDelayMs ?? UNREACHABLE_RETRY_DELAY_MS);
+    try {
+      await client.reloadEngine(workspaceId);
+      return { restartedEngine: false };
+    } catch (retryError) {
+      if (isTransientTransportError(retryError)) throw retryError;
+      if (!canRestartDesktopForReloadError(retryError)) throw retryError;
     }
-    await restartEngine();
-    return { restartedEngine: true };
+    const restart = await restartEngine();
+    const deferred = typeof restart === "object" && restart !== null && "restartDeferred" in restart
+      && restart.restartDeferred === true;
+    return { restartedEngine: !deferred };
   }
 }

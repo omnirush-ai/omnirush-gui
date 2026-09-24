@@ -807,7 +807,11 @@ export function createOmniRushServerStore(options: CreateOmniRushServerStoreOpti
     }
 
     try {
+      // Not a user action: the desktop keeps a server that still answers it
+      // and only replaces one that is really gone.
       hostInfo = await omnirushServerRestart({
+        reason: "renderer_health_check_failed",
+        source: "omnirush-server-store",
         remoteAccessEnabled: state.omnirushServerSettings.remoteAccessEnabled === true,
       }) as OmniRushServerInfo;
       mutateState((current) => ({ ...current, omnirushServerHostInfo: hostInfo }));

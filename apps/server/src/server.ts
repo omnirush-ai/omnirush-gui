@@ -1,6 +1,15 @@
 import { managedDesktopPolicy } from "./managed-desktop-policy.js";
 import { parseApprovalMode, resolveApprovalMode } from "./approval-mode.js";
-import { createTaskRecovery, setTaskRecovery } from "./task-recovery.js";
+import { createTaskRecovery, requeueTaskRecoveryAfterEngineLoss, setTaskRecovery } from "./task-recovery.js";
+import {
+  directoryMatchKey,
+  EmptySessionDirectoryCache,
+  isSessionListRequest,
+  listSessionsByDirectory,
+  serveSessionListWithFallback,
+  sessionListFallbackDeadlineMs,
+  sessionListFallbackQuery,
+} from "./session-list-fallback.js";
 import { managedPolicyActionSchema } from "./managed-policy-rules.js";
 import { readFile, realpath, writeFile, rm, stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
@@ -659,7 +668,12 @@ async function assertWorkspaceOwnsProxiedSessionRead(
         realpath(sessionDirectory).catch(() => sessionDirectory),
       ])
     : [directory, sessionDirectory];
-  if (!actualDirectory || actualDirectory !== expectedDirectory) {
+  // Local folders compare the way their file system does: a session created
+  // before a case-only rename (Windows, macOS) still belongs to the folder.
+  const sameDirectory = workspace.workspaceType === "local" && actualDirectory
+    ? directoryMatchKey(actualDirectory) === directoryMatchKey(expectedDirectory)
+    : actualDirectory === expectedDirectory;
+  if (!actualDirectory || !sameDirectory) {
     throw new ApiError(404, "session_not_found", "Session not found");
   }
 }
@@ -1857,6 +1871,14 @@ export async function proxyOpencodeRequest(input: {
       kind: engineAggregateKind(proxyPath) ?? "pending",
     });
   }
+  if (pool && workspace && workspace.workspaceType !== "remote" && method === "POST"
+    && normalizeOpencodeProxyPath(proxyPath) === "/instance/dispose") {
+    // A client-side dispose (provider refresh) would abort every run in this
+    // folder. The pool applies it the same way without that: in place when
+    // idle, through a standby while sessions are running.
+    await reloadOpencodeEngine(input.config, workspace, undefined, { reason: "client_instance_dispose", manual: true });
+    return jsonResponse(true);
+  }
   const targetUrl = buildOpencodeProxyUrl(baseUrl, proxyPath, search);
   // Managed OpenCode proxy traffic is loopback/engine I/O; keep streaming on Node fetch.
   if (isSessionCommandProxyRequest(method, proxyPath)) {
@@ -1950,7 +1972,64 @@ export async function proxyOpencodeRequest(input: {
   if (workspace && workspace.workspaceType !== "remote" && isPromptAsyncProxyRequest(method, proxyPath)) {
     return withEngineDirectoryFence(input.config, workspace, forwardAndCollect);
   }
+  if (pool && workspace && workspace.workspaceType !== "remote" && isSessionListRequest(method, normalizeOpencodeProxyPath(proxyPath))) {
+    return serveLocalSessionList(input.config, workspace, search, forwardAndCollect());
+  }
   return forwardAndCollect();
+}
+
+const emptySessionDirectoriesByServer = new WeakMap<ServerConfig, EmptySessionDirectoryCache>();
+
+/**
+ * A local workspace's session list must not depend on its engine instance
+ * finishing a cold boot, or on the stored project id and directory string
+ * still matching the folder exactly. See session-list-fallback.ts.
+ */
+async function serveLocalSessionList(
+  config: ServerConfig,
+  workspace: WorkspaceInfo,
+  search: string,
+  primary: Promise<Response>,
+): Promise<Response> {
+  const directory = resolveOpencodeDirectory(workspace) ?? workspace.path;
+  const cacheKey = directoryMatchKey(directory);
+  const cache = emptySessionDirectoriesByServer.get(config) ?? new EmptySessionDirectoryCache();
+  emptySessionDirectoriesByServer.set(config, cache);
+  const query = sessionListFallbackQuery(search);
+  return serveSessionListWithFallback({
+    primary,
+    deadlineMs: sessionListFallbackDeadlineMs(),
+    fallback: async (cause) => {
+      if (cause === "empty" && cache.has(cacheKey)) return [];
+      const engine = primaryManagedEngineConnection(config);
+      if (!engine) throw new Error("The managed engine is unavailable for the session index");
+      const canonical = await realpath(directory).catch(() => directory);
+      const items = await listSessionsByDirectory({
+        directories: [workspace.path, directory, canonical],
+        query,
+        fetchPage: async (params) => {
+          const response = await loopbackFetch(`${engine.baseUrl.replace(/\/+$/, "")}/experimental/session?${params.toString()}`, {
+            headers: { Authorization: buildEngineAuthProbeHeader(engine.username, engine.password) },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) throw new Error(`OpenCode session index failed with status ${response.status}`);
+          const payload: unknown = await response.json();
+          if (!Array.isArray(payload)) throw new Error("OpenCode session index returned an unreadable page");
+          return { items: payload, nextCursor: response.headers.get("x-next-cursor") };
+        },
+      });
+      if (items.length === 0) cache.remember(cacheKey);
+      else cache.forget(cacheKey);
+      return items;
+    },
+    onFallback: ({ cause, count }) => {
+      createServerLogger(config).log("warn", "Session list served from the engine session index.", {
+        "workspace.id": workspace.id,
+        "session_list.fallback_cause": cause,
+        "session_list.count": count,
+      });
+    },
+  });
 }
 
 function isEngineEventPath(proxyPath: string): boolean {
@@ -4788,17 +4867,35 @@ async function requireWorkspaceRunModeIdle(config: ServerConfig, workspace: Work
 /**
  * True when the managed engine reports any non-idle session (subagent child
  * sessions carry their own ids and statuses, so they count too). Unknown
- * activity reports false: a reload against a dead engine fails loudly on its
- * own, and "unknown" must never park reloads forever.
+ * activity reports `unknownIsBusy`: false for callers that would otherwise
+ * park a reload forever against a dead engine, true for the rollover pool,
+ * where "busy" only means rolling over to a standby instead of disposing an
+ * engine that may still be running sessions.
  */
-async function engineHasActiveSessions(config: ServerConfig, workspace: WorkspaceInfo): Promise<boolean> {
+async function engineHasActiveSessions(
+  config: ServerConfig,
+  workspace: WorkspaceInfo,
+  unknownIsBusy = false,
+): Promise<boolean> {
   try {
     const opencode = createWorkspaceOpencodeClient(config, workspace);
     const statuses = unwrapOpencodeResult(await opencode.session.status(), "/session/status");
     return Object.values(statuses).some((status) => status.type !== "idle");
   } catch {
-    return false;
+    return unknownIsBusy;
   }
+}
+
+/**
+ * Sessions still running on the managed engine, for the desktop's restart
+ * guard. Only directories the engine already serves are probed; `unknown`
+ * counts probes that could not be read and callers treat them as busy.
+ */
+export async function collectBusyEngineSessions(config: ServerConfig): Promise<{ sessions: string[]; unknown: number }> {
+  const pool = enginePoolForConfig(config);
+  if (!pool) return { sessions: [], unknown: 0 };
+  const directories = new Set(engineInstanceReaperForConfig(config)?.snapshot().map((instance) => instance.directory) ?? []);
+  return pool.activeSessions([...directories]);
 }
 
 function primaryManagedEngineConnection(config: ServerConfig): EnginePoolConnection | null {
@@ -5675,7 +5772,8 @@ export function createEnginePoolForConfig(input: {
       onDisposed: () => threadApprovals?.stop(),
       reloadInPlace: (poolConfig, workspace, options) =>
         reloadOpencodeEngineInPlace(poolConfig, workspace, undefined, options),
-      engineBusy: (poolConfig, workspace) => engineHasActiveSessions(poolConfig, workspace),
+      engineBusy: (poolConfig, workspace) => engineHasActiveSessions(poolConfig, workspace, true),
+      onPrimaryLost: (poolConfig) => requeueTaskRecoveryAfterEngineLoss(poolConfig),
       postRefreshSync: async (poolConfig, workspace) => {
         await postEngineRefreshSync(poolConfig, workspace, activeEngineMcpServerState(poolConfig));
         await syncAllWorkspacesRuntimeMcpToEngine(poolConfig);

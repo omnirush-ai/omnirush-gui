@@ -736,7 +736,7 @@ async function bestEffort(errors, label, task, timeoutMs) {
 async function quiesceForNuke({ runtimeManager, uiControlServer, removeWindowsBrandShortcut }, errors, options = {}) {
   await bestEffort(errors, "ui-control-server", () => uiControlServer.stop(), 3000);
   await bestEffort(errors, "runtime-dispose", () => runtimeManager.dispose(), 12_000);
-  await bestEffort(errors, "packaged-sidecar-reaper", () => runtimeManager.prepareFreshRuntime(), 16_000);
+  await bestEffort(errors, "packaged-sidecar-reaper", () => runtimeManager.prepareFreshRuntime({ reason: "reset_app_data", source: "nuke" }), 16_000);
   // Container cleanup matches on name prefix across the whole Docker host, so it
   // cannot tell this profile's containers from another profile's. Only the
   // default profile may run it; isolated profiles leave containers alone rather

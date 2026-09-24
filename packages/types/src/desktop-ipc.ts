@@ -85,6 +85,17 @@ export type DesktopIntegrationResult = {
   error?: string;
 };
 
+/** One built-in server or engine restart, as recorded in runtime-restarts.jsonl. */
+export type OmniRushRuntimeRestartRecord = {
+  at: string;
+  kind: "server" | "engine";
+  /** restarting, started, deferred, skipped, dropped, stopping, or restarted (engine watchdog). */
+  action: string;
+  reason: string;
+  source: string;
+  [key: string]: unknown;
+};
+
 export type OmniRushServerInfo = {
   running: boolean;
   /**
@@ -113,6 +124,13 @@ export type OmniRushServerInfo = {
   lastStdout: string | null;
   lastStderr: string | null;
   managedOpencodeExecution: OpencodeExecutionSnapshot | null;
+  /** Recent restarts, newest first (omnirushServerInfo only). */
+  restarts?: OmniRushRuntimeRestartRecord[];
+  /** An automatic restart that waits until no session is running. */
+  pendingRestart?: { action: string; reason: string; source: string; requestedAt: string } | null;
+  /** Set on an omnirushServerRestart answer that kept the running server. */
+  restartDeferred?: boolean;
+  restartSkipped?: boolean;
 };
 
 /** Outcome of the remote device-session revocation attempted during sign-out. */

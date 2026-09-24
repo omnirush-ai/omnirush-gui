@@ -22,6 +22,14 @@ import {
   snapshotEngineState,
   snapshotOmniRushServerState,
 } from "./runtime.mjs";
+import {
+  appendRuntimeRestartRecord,
+  decideDeferredRestart,
+  decideRuntimeRestart,
+  DEFERRED_RESTART_UNKNOWN_MAX_MS,
+  readRuntimeRestartRecords,
+  runtimeRestartLogPath,
+} from "./runtime-restart-log.mjs";
 
 describe("workspace root preparation", () => {
   it("reports an inaccessible Windows drive as a controlled recoverable error", async () => {
@@ -481,5 +489,134 @@ describe("resetRuntimeStatesAfterFailedServerStart", () => {
     assert.equal(serverState.inProcess, false);
     assert.equal(engineState.baseUrl, "http://127.0.0.1:4097");
     assert.equal(engineState.projectDir, "/workspace/current");
+  });
+});
+
+describe("built-in server restart guard", () => {
+  const idle = { sessions: 0, unknown: 0 };
+  const busy = { sessions: 3, unknown: 0 };
+
+  it("never lets an automatic trigger stop a healthy server with running sessions", () => {
+    for (const action of ["engine-restart", "server-restart"]) {
+      assert.deepEqual(
+        decideRuntimeRestart({ action, userInitiated: false, serverRunning: true, serverHealthy: true, busy, sameSettings: false }),
+        { verdict: "defer", why: "sessions_busy" },
+      );
+    }
+  });
+
+  it("treats an unreadable busy probe as busy", () => {
+    assert.equal(
+      decideRuntimeRestart({ action: "engine-restart", serverRunning: true, serverHealthy: true, busy: { sessions: 0, unknown: 1 } }).verdict,
+      "defer",
+    );
+  });
+
+  it("keeps a healthy server that already runs with the requested settings", () => {
+    // A renderer health check that timed out while the server was busy, or a
+    // renderer reload re-running boot, must not restart anything.
+    assert.equal(
+      decideRuntimeRestart({ action: "server-restart", serverRunning: true, serverHealthy: true, busy: idle, sameSettings: true }).verdict,
+      "skip",
+    );
+    assert.equal(
+      decideRuntimeRestart({ action: "engine-start", serverRunning: true, serverHealthy: true, busy }).verdict,
+      "skip",
+    );
+  });
+
+  it("restarts when the user asked, when nothing runs, when the server is gone, or when idle", () => {
+    assert.equal(decideRuntimeRestart({ action: "server-restart", userInitiated: true, serverRunning: true, serverHealthy: true, busy, sameSettings: true }).verdict, "proceed");
+    assert.equal(decideRuntimeRestart({ action: "server-restart", serverRunning: false, serverHealthy: false, busy: idle }).verdict, "proceed");
+    assert.deepEqual(
+      decideRuntimeRestart({ action: "engine-restart", serverRunning: true, serverHealthy: false, busy }),
+      { verdict: "proceed", why: "server_unresponsive" },
+    );
+    assert.equal(decideRuntimeRestart({ action: "engine-restart", serverRunning: true, serverHealthy: true, busy: idle }).verdict, "proceed");
+  });
+
+  it("runs a deferred restart once idle, and gives up waiting on an engine that stays unreadable", () => {
+    assert.equal(decideDeferredRestart({ serverRunning: true, serverHealthy: true, busy, deferredForMs: 60 * 60_000 }), "wait");
+    assert.equal(decideDeferredRestart({ serverRunning: true, serverHealthy: true, busy: idle, deferredForMs: 0 }), "run");
+    assert.equal(decideDeferredRestart({ serverRunning: true, serverHealthy: true, busy: { sessions: 0, unknown: 1 }, deferredForMs: 1_000 }), "wait");
+    assert.equal(
+      decideDeferredRestart({ serverRunning: true, serverHealthy: true, busy: { sessions: 0, unknown: 1 }, deferredForMs: DEFERRED_RESTART_UNKNOWN_MAX_MS }),
+      "run",
+    );
+    assert.equal(decideDeferredRestart({ serverRunning: true, serverHealthy: false, busy, deferredForMs: 0 }), "run");
+    assert.equal(decideDeferredRestart({ serverRunning: false, serverHealthy: false, busy: idle, deferredForMs: 0 }), "drop");
+  });
+});
+
+describe("built-in server restart record", () => {
+  it("writes each restart to omnirush-server.log and the history, newest first", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-restart-log-"));
+    try {
+      const serverLogFile = path.join(root, "logs", "omnirush-server.log");
+      appendRuntimeRestartRecord({
+        serverLogFile,
+        now: () => new Date("2026-09-24T07:11:00.000Z"),
+        record: { kind: "server", action: "deferred", reason: "engine_reload_failed", source: "engine-reload", busySessions: 3 },
+      });
+      appendRuntimeRestartRecord({
+        serverLogFile,
+        now: () => new Date("2026-09-24T07:40:00.000Z"),
+        record: { kind: "server", action: "restarting", reason: "engine_reload_failed (deferred until idle)", source: "engine-reload" },
+      });
+
+      const records = await readRuntimeRestartRecords(serverLogFile);
+      assert.deepEqual(records.map((record) => [record.at, record.action]), [
+        ["2026-09-24T07:40:00.000Z", "restarting"],
+        ["2026-09-24T07:11:00.000Z", "deferred"],
+      ]);
+      assert.equal(records[1].busySessions, 3);
+
+      const logLines = (await readFile(serverLogFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      assert.equal(logLines.length, 2);
+      assert.equal(logLines[0].body, "Built-in server deferred: engine_reload_failed (engine-reload)");
+      assert.equal(logLines[0].attributes["runtime.restart.busy_sessions"], 3);
+      assert.equal(logLines[0].timeUnixNano, "1790233860000000000");
+      assert.equal(path.dirname(runtimeRestartLogPath(serverLogFile)), path.dirname(serverLogFile));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips torn lines and reports an empty history when there is none", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-restart-log-"));
+    try {
+      const serverLogFile = path.join(root, "omnirush-server.log");
+      assert.deepEqual(await readRuntimeRestartRecords(serverLogFile), []);
+      await writeFile(runtimeRestartLogPath(serverLogFile), '{"at":"2026-09-24T00:00:00.000Z","action":"started"}\n{"at":"2026-09-24T', "utf8");
+      assert.deepEqual((await readRuntimeRestartRecords(serverLogFile)).map((record) => record.action), ["started"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the history and any pending restart with the server info", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-runtime-restarts-"));
+    const previous = process.env.OMNIRUSH_SERVER_LOG_FILE;
+    delete process.env.OMNIRUSH_SERVER_LOG_FILE;
+    try {
+      appendRuntimeRestartRecord({
+        serverLogFile: resolveOmniRushServerLogFile(root),
+        record: { kind: "engine", action: "restarted", reason: "engine_unreachable:process_exited", source: "engine-pool-watchdog" },
+      });
+      const manager = createRuntimeManager({
+        app: { getPath: (name) => name === "exe" ? path.join(root, "OmniRush.ai.exe") : root, isPackaged: false },
+        desktopRoot: path.dirname(fileURLToPath(import.meta.url)),
+        listLocalWorkspacePaths: async () => [],
+        localManagedMcpVaultKey: "test-key",
+      });
+      const info = await manager.omnirushServerInfo();
+      assert.equal(info.running, false);
+      assert.equal(info.pendingRestart, null);
+      assert.deepEqual(info.restarts.map((record) => record.reason), ["engine_unreachable:process_exited"]);
+    } finally {
+      if (previous === undefined) delete process.env.OMNIRUSH_SERVER_LOG_FILE;
+      else process.env.OMNIRUSH_SERVER_LOG_FILE = previous;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

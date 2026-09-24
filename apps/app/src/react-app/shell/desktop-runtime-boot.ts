@@ -118,7 +118,11 @@ export function useDesktopRuntimeBoot() {
 
         const startServerWithoutDesktopWorkspace = async () => {
           setPhase("starting-engine", "Starting omnirush.ai server");
-          const serverInfo = await omnirushServerRestart({ remoteAccessEnabled: preferredRemoteAccess }).catch((error) => {
+          const serverInfo = await omnirushServerRestart({
+            reason: "renderer_boot_without_local_workspace",
+            source: "desktop-runtime-boot",
+            remoteAccessEnabled: preferredRemoteAccess,
+          }).catch((error) => {
             console.warn("[desktop-boot] omnirushServerRestart failed:", error);
             return null;
           });
@@ -181,7 +185,11 @@ export function useDesktopRuntimeBoot() {
           }
           let serverInfo = boot.omnirushServer;
           if (preferredRemoteAccess && serverInfo?.remoteAccessEnabled !== true) {
-            const restarted = await omnirushServerRestart({ remoteAccessEnabled: true }).catch((error) => {
+            const restarted = await omnirushServerRestart({
+              reason: "renderer_boot_remote_access",
+              source: "desktop-runtime-boot",
+              remoteAccessEnabled: true,
+            }).catch((error) => {
               console.warn("[desktop-boot] omnirushServerRestart failed:", error);
               return null;
             });
