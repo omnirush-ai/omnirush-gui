@@ -41,46 +41,17 @@ const partDone = (hooks: Hooks, callID: string, status = "completed") =>
   hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "tool", tool: "task", callID, state: { status } } } } });
 
 describe("omnirush swarm plugin", () => {
-  test("limits the sub-agents of one main-session tree running at once, across every layer", async () => {
+  test("puts no cap on how many sub-agents run at once or start per turn", async () => {
     const { hooks } = await setup();
     await created(hooks, "ses_main");
     await created(hooks, "ses_child", "ses_main");
     await created(hooks, "ses_grand", "ses_child");
-    for (let i = 0; i < OMNIRUSH_SWARM_MAX_RUNNING; i += 1) {
+    // Far past the old caps (8 running, 24 per turn), none refused.
+    for (let i = 0; i < 200; i += 1) {
       await task(hooks, i % 3 === 0 ? "ses_main" : i % 3 === 1 ? "ses_child" : "ses_grand", `call_${i}`);
     }
-    await expect(task(hooks, "ses_grand", "call_over")).rejects.toThrow(/already running/);
-    // Another main session has its own budget.
-    await created(hooks, "ses_other");
-    await task(hooks, "ses_other", "other_1");
-    // One finished (event) and one failed call free two slots.
-    await partDone(hooks, "call_0");
-    await partDone(hooks, "call_1", "error");
-    await task(hooks, "ses_child", "call_again_1");
-    await task(hooks, "ses_main", "call_again_2");
-    await expect(task(hooks, "ses_main", "call_again_3")).rejects.toThrow(/already running/);
-    // tool.execute.after frees a slot too; the main session going idle frees all.
-    await hooks["tool.execute.after"]({ tool: "task", callID: "call_2" });
-    await task(hooks, "ses_main", "call_again_3");
-    await hooks.event({ event: { type: "session.status", properties: { sessionID: "ses_main", status: { type: "idle" } } } });
-    await task(hooks, "ses_grand", "after_idle");
-  });
-
-  test("limits sub-agents started per main-session turn; a new prompt to the main session refills it", async () => {
-    const { hooks } = await setup();
-    await created(hooks, "ses_main");
-    await created(hooks, "ses_child", "ses_main");
-    for (let i = 0; i < OMNIRUSH_SWARM_MAX_PER_TURN; i += 1) {
-      const callID = `call_${i}`;
-      await task(hooks, i % 2 ? "ses_child" : "ses_main", callID);
-      await partDone(hooks, callID);
-    }
-    await expect(task(hooks, "ses_child", "call_over")).rejects.toThrow(`started ${OMNIRUSH_SWARM_MAX_PER_TURN} sub-agents`);
-    // A sub-agent's own prompt is not a new turn.
-    await hooks["chat.message"]({ sessionID: "ses_child" });
-    await expect(task(hooks, "ses_main", "call_over")).rejects.toThrow(/Do not retry/);
-    await hooks["chat.message"]({ sessionID: "ses_main" });
-    await task(hooks, "ses_child", "next_turn");
+    expect(OMNIRUSH_SWARM_MAX_RUNNING).toBe(Number.POSITIVE_INFINITY);
+    expect(OMNIRUSH_SWARM_MAX_PER_TURN).toBe(Number.POSITIVE_INFINITY);
   });
 
   test("other tools and unknown sessions pass; parents are read from the engine once", async () => {

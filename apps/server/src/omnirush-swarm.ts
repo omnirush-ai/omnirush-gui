@@ -21,11 +21,13 @@
  */
 export const OMNIRUSH_SUBAGENT_DEPTH = 3;
 
-/** Sub-agents of one main session (all layers) running at the same time. */
-export const OMNIRUSH_SWARM_MAX_RUNNING = 8;
-
-/** Sub-agents one main-session turn may start in all (all layers, resumes included). */
-export const OMNIRUSH_SWARM_MAX_PER_TURN = 24;
+/**
+ * Sub-agents of one main session running at once, and started per turn: no
+ * cap by owner decision (2026-09-24: "one should spawn as many as
+ * required"); only the depth stays bounded.
+ */
+export const OMNIRUSH_SWARM_MAX_RUNNING = Number.POSITIVE_INFINITY;
+export const OMNIRUSH_SWARM_MAX_PER_TURN = Number.POSITIVE_INFINITY;
 
 /** The coordination board, relative to the workspace root. */
 export const OMNIRUSH_SWARM_FILE = "swarm.md";
@@ -42,7 +44,7 @@ Most requests need no sub-agents, or one or two task calls. Run a swarm only whe
 A swarm is coordinated through \`${OMNIRUSH_SWARM_FILE}\` at the workspace root:
 1. Before delegating, create or update \`${OMNIRUSH_SWARM_FILE}\` with: \`# Goal\` (one paragraph), \`## Tasks\` (a table: id, task, owner, status, result; ids like T1, T2, and T1.1 for a sub-task of T1; status is todo, running, done or blocked), \`## Findings\` (shared facts, one bullet each, with the task id), \`## Decisions\` (choices every agent must follow).
 2. Give each sub-agent one task id. Its task-tool prompt names the id, the task, and says: read \`${OMNIRUSH_SWARM_FILE}\` first; set your row to running; when done, set it to done with a one-line result and append your findings under your id; edit only your own rows and sections; report back briefly.
-3. Sub-agents may split their own task: they add sub-task rows (T1.1, T1.2) and give the same instructions to their own sub-agents. Sub-agents nest at most ${OMNIRUSH_SUBAGENT_DEPTH} layers deep; at most ${OMNIRUSH_SWARM_MAX_RUNNING} run at once and ${OMNIRUSH_SWARM_MAX_PER_TURN} start per turn. If the task tool refuses because of a limit, finish the work yourself instead of retrying.
+3. Sub-agents may split their own task: they add sub-task rows (T1.1, T1.2) and give the same instructions to their own sub-agents. Sub-agents nest at most ${OMNIRUSH_SUBAGENT_DEPTH} layers deep. There is no limit on how many run at once or start per turn: start as many as the work needs, and no more.
 4. Launch independent tasks in parallel (several task calls in one message); give tasks that edit the same files to one agent.
 5. When every task is done, read \`${OMNIRUSH_SWARM_FILE}\`, check and merge the results, record the outcome under \`## Decisions\` or a final \`## Summary\`, and answer the user. Keep \`${OMNIRUSH_SWARM_FILE}\` in the workspace unless the user asks you to remove it.`;
 
