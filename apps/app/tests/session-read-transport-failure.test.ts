@@ -17,7 +17,9 @@ import {
   readRouteSessionsWithRetry,
   ROUTE_SESSION_RETRY_DELAYS_MS,
   sessionListRecoveryDelayMs,
+  SESSION_LIST_EMPTY_RECHECKS,
   sessionsAfterListFailure,
+  shouldRecheckEmptySessionList,
   toSessionGroups,
   type RouteSession,
   type RouteSessionListTransport,
@@ -26,8 +28,10 @@ import {
 import {
   forgetWorkspaceMemory,
   readCachedWorkspaceSessions,
+  removeCachedWorkspaceSession,
   writeCachedWorkspaceSessions,
 } from "../src/react-app/shell/session-memory";
+import { planSessionListReloadAfterReconnect } from "../src/react-app/shell/route-refresh-control";
 import { isWorkspaceTaskListUnavailable } from "../src/react-app/domains/session/sidebar/utils";
 
 const nativeEndpoint = {
@@ -317,6 +321,63 @@ describe("failed session lists in the sidebar", () => {
   });
 });
 
+describe("empty session lists and reconnects", () => {
+  test("an empty list is asked for again while the workspace is known to have sessions", () => {
+    expect(shouldRecheckEmptySessionList({ fetchedCount: 0, knownCount: 3, recheckCount: 0 })).toBe(true);
+    expect(shouldRecheckEmptySessionList({ fetchedCount: 0, knownCount: 3, recheckCount: SESSION_LIST_EMPTY_RECHECKS - 1 }))
+      .toBe(true);
+  });
+
+  test("a repeated empty answer, a non-empty list or an unknown workspace is taken as it is", () => {
+    expect(shouldRecheckEmptySessionList({ fetchedCount: 0, knownCount: 3, recheckCount: SESSION_LIST_EMPTY_RECHECKS }))
+      .toBe(false);
+    expect(shouldRecheckEmptySessionList({ fetchedCount: 1, knownCount: 3, recheckCount: 0 })).toBe(false);
+    expect(shouldRecheckEmptySessionList({ fetchedCount: 0, knownCount: 0, recheckCount: 0 })).toBe(false);
+  });
+
+  test("the rechecks span about two minutes of the recovery schedule", () => {
+    let total = 0;
+    for (let round = 0; round < SESSION_LIST_EMPTY_RECHECKS; round += 1) total += sessionListRecoveryDelayMs(round);
+    expect(total).toBe(125_000);
+  });
+
+  const workspaces = [
+    { id: "ws_helm", workspaceType: "local" },
+    { id: "ws_taskforge" },
+    { id: "ws_remote", workspaceType: "remote" },
+  ];
+
+  test("a restarted built-in server reloads every local list", () => {
+    expect(planSessionListReloadAfterReconnect({
+      previousConnectionKey: "http://127.0.0.1:1\ntoken-a",
+      nextConnectionKey: "http://127.0.0.1:2\ntoken-b",
+      connectionGapSeen: false,
+      workspaces,
+    })).toEqual(["ws_helm", "ws_taskforge"]);
+    expect(planSessionListReloadAfterReconnect({
+      previousConnectionKey: "http://127.0.0.1:1\ntoken-a",
+      nextConnectionKey: "http://127.0.0.1:1\ntoken-a",
+      connectionGapSeen: true,
+      workspaces,
+    })).toEqual(["ws_helm", "ws_taskforge"]);
+  });
+
+  test("the first connection and a plain refresh reload nothing extra", () => {
+    expect(planSessionListReloadAfterReconnect({
+      previousConnectionKey: "",
+      nextConnectionKey: "http://127.0.0.1:1\ntoken-a",
+      connectionGapSeen: true,
+      workspaces,
+    })).toEqual([]);
+    expect(planSessionListReloadAfterReconnect({
+      previousConnectionKey: "http://127.0.0.1:1\ntoken-a",
+      nextConnectionKey: "http://127.0.0.1:1\ntoken-a",
+      connectionGapSeen: false,
+      workspaces,
+    })).toEqual([]);
+  });
+});
+
 describe("saved session lists", () => {
   const originalWindow = globalThis.window;
 
@@ -365,6 +426,15 @@ describe("saved session lists", () => {
       time: { created: 1, updated: 2, archived: 3 },
     }]);
     expect(readCachedWorkspaceSessions("ws_other")).toBeNull();
+  });
+
+  test("lose a session deleted in the app", () => {
+    installStorage();
+    writeCachedWorkspaceSessions("ws_taskforge", [session, { ...session, id: "ses_2" }]);
+    removeCachedWorkspaceSession("ws_taskforge", "ses_1");
+    expect(readCachedWorkspaceSessions("ws_taskforge")?.map((item) => item.id)).toEqual(["ses_2"]);
+    removeCachedWorkspaceSession("ws_missing", "ses_2");
+    expect(readCachedWorkspaceSessions("ws_missing")).toBeNull();
   });
 
   test("are dropped when the workspace is forgotten and tolerate bad storage", () => {

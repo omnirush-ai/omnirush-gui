@@ -55,6 +55,7 @@ import {
   mapRouteWorkspaceLoads,
   planRouteConnectionGap,
   planRouteWorkspaceLoads,
+  planSessionListReloadAfterReconnect,
   routeWorkspaceSelectionCommitter,
 } from "./route-refresh-control";
 import {
@@ -66,6 +67,7 @@ import {
   refreshRouteWorkspaceListState,
   sessionListRecoveryDelayMs,
   sessionsAfterListFailure,
+  shouldRecheckEmptySessionList,
   stabilizeRouteWorkspaceOrder,
   type RouteSession,
   type RouteWorkspace,
@@ -75,6 +77,7 @@ import {
   readActiveWorkspaceId,
   readCachedWorkspaceSessions,
   readWorkspaceOrderIds,
+  removeCachedWorkspaceSession,
   writeActiveWorkspaceId,
   writeCachedWorkspaceSessions,
   writeWorkspaceOrderIds,
@@ -259,6 +262,13 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const sessionListRecoveryRef = useRef<Record<string, { timer: number | null; round: number }>>({});
   // Workspaces whose sidebar list came from a successful load in this window.
   const listedWorkspaceIdsRef = useRef(new Set<string>());
+  // Consecutive empty lists per workspace that were not yet trusted over the
+  // sessions the sidebar already knew for it.
+  const emptyListRechecksRef = useRef<Record<string, number>>({});
+  // The built-in server connection the session lists were last loaded
+  // against, and whether a connection gap (server restart) happened since.
+  const lastConnectionKeyRef = useRef("");
+  const connectionGapSeenRef = useRef(false);
   const serverActiveWorkspaceIdRef = useRef("");
   const workspaceSelectionCommitTimerRef = useRef<number | null>(null);
   const commitStableWorkspaceOrder = useCallback((nextWorkspaces: RouteWorkspace[]) => {
@@ -417,6 +427,50 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
                 normalizeDirectoryPath(session?.directory ?? "") === workspaceRoot,
               )
             : fetchedItems;
+          if (workspace.workspaceType !== "remote") {
+            const currentItems = sessionsByWorkspaceIdRef.current[workspace.id] ?? [];
+            const currentIsListed = listedWorkspaceIdsRef.current.has(workspace.id);
+            const known = currentIsListed
+              ? currentItems
+              : sessionsAfterListFailure({
+                  current: currentItems,
+                  cached: readCachedWorkspaceSessions(workspace.id) as RouteSession[] | null,
+                  currentIsListed,
+                });
+            const recheckCount = emptyListRechecksRef.current[workspace.id] ?? 0;
+            if (shouldRecheckEmptySessionList({ fetchedCount: items.length, knownCount: known.length, recheckCount })) {
+              // The list answered but holds none of the sessions this
+              // workspace is known to have. Keep showing them and ask again
+              // on the recovery schedule; only a repeated empty answer
+              // replaces them. It does not count as loaded, so a reconnect
+              // refresh asks again too.
+              emptyListRechecksRef.current[workspace.id] = recheckCount + 1;
+              console.warn("[session-route] session list came back empty; keeping known sessions", {
+                workspaceId: workspace.id,
+                knownSessions: known.length,
+                recheck: recheckCount + 1,
+              });
+              recordInspectorEvent("route.session_list.empty_recheck", {
+                workspaceId: workspace.id,
+                knownSessions: known.length,
+                recheck: recheckCount + 1,
+              });
+              keepKnownSessionsAfterListFailure(workspace.id);
+              loadedWorkspaceIdsRef.current.delete(workspace.id);
+              setSessionListErrorsByWorkspaceId((current) => {
+                if (!current[workspace.id]) return current;
+                const next = { ...current };
+                delete next[workspace.id];
+                return next;
+              });
+              setRetryingWorkspaceIds((current) =>
+                current.includes(workspace.id) ? current.filter((id) => id !== workspace.id) : current,
+              );
+              scheduleRecovery(workspace.id);
+              return;
+            }
+            delete emptyListRechecksRef.current[workspace.id];
+          }
           const current = sessionsByWorkspaceIdRef.current;
           const nextItems = mergeFetchedSessionsWithPending(workspace.id, items, current[workspace.id] ?? []);
           const next = { ...current, [workspace.id]: nextItems };
@@ -613,6 +667,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
           // this refresh. Only seed workspaces when the route has none so a
           // fresh renderer still shows the sidebar under the boot overlay.
           setConnectionPending(true);
+          connectionGapSeenRef.current = true;
           updateLocalServer({ baseUrl: "", token: "" });
           setClient(null);
           setBaseUrl("");
@@ -627,6 +682,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
           return;
         }
         onHostInfo(hostInfo);
+        connectionGapSeenRef.current = true;
         // Keep the workspace endpoint resolver in lockstep with the disconnected state.
         // Otherwise a previously-cached baseUrl/token would still resolve a
         // (now invalid) endpoint for any callback that consults the resolver ref.
@@ -681,6 +737,27 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
       const nextWorkspaces = commitStableWorkspaceOrder(workspaceListState.workspaces);
       serverActiveWorkspaceIdRef.current = workspaceListState.activeId ?? "";
 
+      // A restarted built-in server (new URL/token, or a gap since the last
+      // connection) answers for every local workspace afresh: lists loaded or
+      // failed against the old one are fetched again. Groups that already
+      // show sessions reload silently.
+      const connectionKey = `${normalizedBaseUrl}\n${resolvedToken}`;
+      const reconnectReloadIds = planSessionListReloadAfterReconnect({
+        previousConnectionKey: lastConnectionKeyRef.current,
+        nextConnectionKey: connectionKey,
+        connectionGapSeen: connectionGapSeenRef.current,
+        workspaces: nextWorkspaces,
+      });
+      lastConnectionKeyRef.current = connectionKey;
+      connectionGapSeenRef.current = false;
+      for (const workspaceId of reconnectReloadIds) loadedWorkspaceIdsRef.current.delete(workspaceId);
+      const silentReloadIds = new Set(
+        reconnectReloadIds.filter((workspaceId) => (sessionsByWorkspaceIdRef.current[workspaceId]?.length ?? 0) > 0),
+      );
+      if (reconnectReloadIds.length > 0) {
+        recordInspectorEvent("route.session_list.reload_after_reconnect", { workspaces: reconnectReloadIds.length });
+      }
+
       // Preserve any sessions we already have cached so switching routes
       // doesn't erase the sidebar while we refetch.
       const alreadyLoadedWorkspaceIds = new Set(loadedWorkspaceIdsRef.current);
@@ -732,7 +809,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
         }
         return next;
       });
-      setRetryingWorkspaceIds(backgroundWorkspaceIds);
+      setRetryingWorkspaceIds(backgroundWorkspaceIds.filter((workspaceId) => !silentReloadIds.has(workspaceId)));
       setLegacySelectedWorkspaceId(nextWorkspaceId);
       writeActiveWorkspaceId(nextWorkspaceId || null);
       recordInspectorEvent("route.refresh.complete", {
@@ -858,6 +935,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   }, [rememberPendingCreatedSession, selectedWorkspaceId]);
   const handleRuntimeSessionDeleted = useCallback((sessionId: string) => {
     if (!selectedWorkspaceId) return;
+    removeCachedWorkspaceSession(selectedWorkspaceId, sessionId);
     setSessionsByWorkspaceId((current) => {
       const list = current[selectedWorkspaceId] ?? [];
       const nextList = removeWorkspaceRouteSession(list, sessionId);

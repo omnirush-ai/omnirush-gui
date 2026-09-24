@@ -262,6 +262,18 @@ export function writeCachedWorkspaceSessions(
   writeWorkspaceSessionListCache(cache);
 }
 
+/** Drop one deleted session from a workspace's saved list so it cannot come back from the cache. */
+export function removeCachedWorkspaceSession(workspaceId: string | null | undefined, sessionId: string): void {
+  const wsId = workspaceId?.trim();
+  const id = sessionId.trim();
+  if (!wsId || !id) return;
+  const cache = readWorkspaceSessionListCache();
+  const entry = cache[wsId];
+  if (!entry || !entry.sessions.some((session) => session.id === id)) return;
+  cache[wsId] = { ...entry, sessions: entry.sessions.filter((session) => session.id !== id) };
+  writeWorkspaceSessionListCache(cache);
+}
+
 export function forgetWorkspaceMemory(workspaceId: string): void {
   const wsId = workspaceId?.trim();
   if (!wsId) return;

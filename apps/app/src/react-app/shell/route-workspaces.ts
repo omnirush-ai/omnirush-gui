@@ -561,6 +561,28 @@ export function sessionsAfterListFailure<T extends { id: string }>(input: {
   return [...current, ...(input.cached ?? []).filter((session) => !currentIds.has(session.id))];
 }
 
+/**
+ * Consecutive empty lists a workspace may return, while the renderer still
+ * knows sessions for it, before the empty list replaces them. Each recheck
+ * waits one step of the recovery schedule, so the known sessions stay shown
+ * for about two minutes of empty answers.
+ */
+export const SESSION_LIST_EMPTY_RECHECKS = 5;
+
+/**
+ * An empty list that loaded fine is confirmed before it replaces sessions the
+ * sidebar already knows (listed earlier in this window, or saved from an
+ * earlier run). Until then the known sessions stay and the list is asked for
+ * again, instead of the group dropping to "No tasks yet".
+ */
+export function shouldRecheckEmptySessionList(input: {
+  fetchedCount: number;
+  knownCount: number;
+  recheckCount: number;
+}): boolean {
+  return input.fetchedCount === 0 && input.knownCount > 0 && input.recheckCount < SESSION_LIST_EMPTY_RECHECKS;
+}
+
 export function isActiveSessionStatus(status: unknown) {
   return status === "running" || status === "retry" || status === "busy" || status === "streaming";
 }
