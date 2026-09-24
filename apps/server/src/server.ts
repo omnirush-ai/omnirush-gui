@@ -3438,6 +3438,22 @@ function createRoutes(
     });
   });
 
+  // Every session of this workspace's folder, whatever engine project it is
+  // filed under. The engine's own /session list only returns the folder's
+  // current project (which changes when an agent turns the folder into a git
+  // repo or adds a remote) and matches the folder byte for byte; either can
+  // hide sessions that still exist. The sidebar merges this with that list.
+  addRoute(routes, "GET", "/workspace/:id/sessions/by-folder", "client", async (ctx) => {
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const directory = resolveOpencodeDirectory(workspace);
+    if (workspace.workspaceType === "remote" || !directory) {
+      throw new ApiError(404, "not_found", "Sessions by folder are only listed for local workspaces");
+    }
+    const requested = Number(ctx.url.searchParams.get("limit"));
+    const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 500) : 200;
+    return jsonResponse(await listEngineSessionsInFolder(config, workspace, directory, limit));
+  });
+
   addRoute(routes, "GET", "/workspace/:id/opencode-config", "client", async (ctx) => {
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const scope = normalizeOpencodeScope(ctx.url.searchParams.get("scope"));
@@ -4791,6 +4807,59 @@ async function requireWorkspaceRunModeIdle(config: ServerConfig, workspace: Work
  * activity reports false: a reload against a dead engine fails loudly on its
  * own, and "unknown" must never park reloads forever.
  */
+/**
+ * Whether two session folders are the same folder: the Windows extended-length
+ * prefix, slash direction and a trailing slash never matter, and case does not
+ * matter on Windows and macOS (both case-insensitive by default).
+ */
+export function isSameSessionFolder(left: string, right: string, platform: NodeJS.Platform = process.platform): boolean {
+  const normalize = (value: string) => {
+    const unified = normalizeOpencodeDirectory(value.trim(), platform).replace(/\\/g, "/").replace(/\/+$/, "");
+    const folder = unified || "/";
+    return platform === "win32" || platform === "darwin" ? folder.toLowerCase() : folder;
+  };
+  return Boolean(left.trim()) && normalize(left) === normalize(right);
+}
+
+/** Most recently updated sessions across every engine project (up to this many are scanned). */
+const SESSIONS_BY_FOLDER_SCAN = 2_000;
+
+/**
+ * The sessions stored for `directory`, newest first, read from the engine's
+ * unscoped session list: no project filter and no exact folder filter.
+ */
+export async function listEngineSessionsInFolder(
+  config: ServerConfig,
+  workspace: WorkspaceInfo,
+  directory: string,
+  limit: number,
+  fetchImpl: (input: string, init?: RequestInit) => Promise<Response> = loopbackFetch,
+): Promise<unknown[]> {
+  const pool = enginePoolForConfig(config);
+  const route = pool?.routeRequest("GET", "/experimental/session") ?? null;
+  const connection = route ? null : resolveWorkspaceOpencodeConnection(config, workspace);
+  const baseUrl = route?.target.baseUrl ?? connection?.baseUrl?.trim() ?? "";
+  if (!baseUrl) throw new ApiError(503, "opencode_unconfigured", "OpenCode base URL is missing for this workspace");
+  const headers = new Headers();
+  // The header picks the folder's engine instance; with no `directory` query
+  // the engine lists sessions of every folder and project.
+  headers.set("x-opencode-directory", buildOpencodeDirectoryHeader(directory));
+  const auth = route
+    ? buildEngineAuthProbeHeader(route.target.username, route.target.password)
+    : connection?.authHeader ?? null;
+  if (auth) headers.set("Authorization", auth);
+  const url = buildOpencodeProxyUrl(baseUrl, "/experimental/session", `?limit=${SESSIONS_BY_FOLDER_SCAN}&archived=true`);
+  const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(45_000) });
+  if (!response.ok) {
+    throw new ApiError(response.status === 404 ? 404 : 502, "opencode_engine_unreachable", `The engine session list failed with status ${response.status}`);
+  }
+  const payload: unknown = await response.json();
+  if (!Array.isArray(payload)) return [];
+  return payload
+    .filter((session) => isRecord(session) && typeof session.directory === "string" && isSameSessionFolder(session.directory, directory))
+    .slice(0, limit);
+}
+
 async function engineHasActiveSessions(config: ServerConfig, workspace: WorkspaceInfo): Promise<boolean> {
   try {
     const opencode = createWorkspaceOpencodeClient(config, workspace);

@@ -1901,6 +1901,12 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         body: payload,
         timeoutMs: timeouts.config,
       }),
+    listWorkspaceSessionsByFolder: (workspaceId: string, limit: number) =>
+      requestJson<unknown[]>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/sessions/by-folder?limit=${limit}`, {
+        token,
+        hostToken,
+        timeoutMs: 45_000,
+      }),
     readOpencodeConfigFile: (workspaceId: string, scope: "project" | "global" = "project") => {
       const query = `?scope=${scope}`;
       return requestJson<OpencodeConfigFile>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/opencode-config${query}`, {

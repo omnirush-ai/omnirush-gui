@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { resolveWorkspaceEndpoint } from "../src/app/lib/workspace-endpoint";
-import { classifyRouteSessionReadError, listRouteSessions, readRouteSessionsWithRetry } from "../src/react-app/shell/route-workspaces";
+import { classifyRouteSessionReadError, listRouteSessions, mergeRouteSessionLists, readRouteSessionsWithRetry } from "../src/react-app/shell/route-workspaces";
 
 describe("workspace route native session lists", () => {
   test("loads a bare session array through the local native transport input", async () => {
@@ -29,6 +29,20 @@ describe("workspace route native session lists", () => {
     expect(inputs).toEqual([{ endpoint, limit: 200 }]);
     expect(endpoint.opencodeBaseUrl).toBe("https://local.example.test/workspace/local%20workspace/opencode");
     expect(endpoint.token).toBe("local-token");
+  });
+
+  test("sessions filed under another engine project come back through the folder list", () => {
+    const request = new Request("https://local.example.test/workspace/ws/opencode/session?limit=200");
+    const session = (id: string, updated: number) => ({ id, directory: "C:\\work\\taskforge", time: { created: 1, updated } }) as never;
+    const byProject = { data: [session("ses_current", 5)], request, response: Response.json([]) };
+    const merged = mergeRouteSessionLists(byProject, [session("ses_old_project", 9), session("ses_current", 5)], 200);
+    expect(merged.data?.map((item) => item.id)).toEqual(["ses_old_project", "ses_current"]);
+    expect(mergeRouteSessionLists(byProject, null, 200)).toBe(byProject);
+    expect(mergeRouteSessionLists(byProject, [session("a", 3), session("b", 2), session("c", 1)], 2).data?.map((item) => item.id))
+      .toEqual(["ses_current", "a"]);
+    const failed = { error: new Error("Request timed out."), request, response: undefined };
+    expect(mergeRouteSessionLists(failed, [session("ses_old_project", 9)], 200).data?.map((item) => item.id)).toEqual(["ses_old_project"]);
+    expect(mergeRouteSessionLists(failed, [], 200)).toBe(failed);
   });
 
   test("a list request with no response (server down or timed out) stays retryable", async () => {
