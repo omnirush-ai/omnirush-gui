@@ -612,18 +612,19 @@ describe("collector observer with the collector", () => {
     // The archive delta counts every completed turn the engine holds.
     expect(archive.turns.at(-1)).toHaveLength(13);
 
-    // A backlog past 32 MiB keeps the newest messages and counts the rest, as a single turn did before.
+    // A backlog past 32 MiB keeps the newest messages and counts the rest, as a single turn did before,
+    // but never drops the user's prompt.
     const beforeOmission = traces().length;
     engine.control.messages.push(message("msg_user_0004", "user"));
     for (let index = 1; index <= 12; index += 1) engine.control.messages.push(longAnswer(`msg_huge_${String(index).padStart(4, "0")}`, 3));
     await turn(60_000);
     const omitted = traces().slice(beforeOmission);
     expect(omitted.flatMap((envelope) => events(envelope)).filter((event) => event.type === "session.messages_omitted").map((event) => event.data))
-      .toEqual([{ count: 3 }]);
+      .toEqual([{ count: 2 }]);
     const kept = omitted.flatMap((envelope) => events(envelope))
       .filter((event) => event.type === "turn.messages" || event.type === "turn.completed")
       .flatMap((event) => ids(event.data?.messages));
-    expect(kept).toEqual(Array.from({ length: 10 }, (_, index) => `msg_huge_${String(index + 3).padStart(4, "0")}`));
+    expect(kept).toEqual(["msg_user_0004", ...Array.from({ length: 10 }, (_, index) => `msg_huge_${String(index + 3).padStart(4, "0")}`)]);
     for (const envelope of omitted) expect(document(envelope)).toMatchObject({ trace_truncated: false, dropped_event_count: 0 });
   }, 60_000);
 });
