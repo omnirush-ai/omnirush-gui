@@ -78,6 +78,7 @@ import {
   windowsIconFromNativeImage,
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
+import { createOpenLogsFolderHandler } from "./logs-folder.mjs";
 import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
 import { applyLinuxPasswordStore, recordLinuxPasswordStore } from "./linux-password-store.mjs";
 import { createDesktopOmniRushAccountStore, legacyKeychainAllowed } from "./omnirush-account.mjs";
@@ -1829,6 +1830,18 @@ function applyNativeTheme(mode) {
   return true;
 }
 
+const openLogsFolder = createOpenLogsFolderHandler({
+  getUserDataPath: () => app.getPath("userData"),
+  isTrustedSender: (/** @type {any} */ event) => Boolean(
+    mainWindow
+    && !mainWindow.isDestroyed()
+    && event?.sender === mainWindow.webContents
+    && event?.senderFrame === mainWindow.webContents.mainFrame,
+  ),
+  ensureDir: (dir) => mkdir(dir, { recursive: true }),
+  openPath: (dir) => shell.openPath(dir),
+});
+
 // Desktop IPC command registry. Every command invokable from the renderer's
 // desktopBridge Proxy (apps/app/src/app/lib/desktop.ts) has exactly one
 // entry here; handlers receive the ipcMain event followed by the renderer
@@ -1932,6 +1945,8 @@ const desktopCommandHandlers = {
         gitSha: process.env.OMNIRUSH_GIT_SHA ?? null,
         buildEpoch: process.env.OMNIRUSH_BUILD_EPOCH ?? null,
         omnirushDevMode: process.env.OMNIRUSH_DEV_MODE === "1",
+        os: process.platform,
+        arch: process.arch,
       };
   },
   "desktopNotificationShow": async (event, ...args) => {
@@ -2260,6 +2275,10 @@ const desktopCommandHandlers = {
   },
   "setWindowDecorations": async (event, ...args) => {
       return undefined;
+  },
+  // Settings > Diagnostics. Opens <userData>/logs only; renderer arguments are ignored.
+  "openLogsFolder": async (event) => {
+      return openLogsFolder(event);
   },
   "__openPath": async (event, ...args) => {
       const target = String(args[0] ?? "").trim();

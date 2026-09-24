@@ -771,6 +771,7 @@ const {
   resetOpencodeCache,
   opencodeMcpAuth,
   setWindowDecorations,
+  openLogsFolder,
 } = desktopBridge;
 
 export {
@@ -829,4 +830,5 @@ export {
   resetOpencodeCache,
   opencodeMcpAuth,
   setWindowDecorations,
+  openLogsFolder,
 };

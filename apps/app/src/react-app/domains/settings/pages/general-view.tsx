@@ -31,6 +31,7 @@ import {
   useApprovalMode,
   type ApprovalsClient,
 } from "../approval-mode";
+import { DiagnosticsSection } from "./diagnostics-section";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
@@ -39,6 +40,8 @@ export type GeneralSettingsViewProps = {
   omnirushClient?: ApprovalsClient | null;
   /** Workspace whose engine is reloaded after the approval mode changes. */
   runtimeWorkspaceId?: string | null;
+  /** Builds the sanitized diagnostics bundle with the route's context. */
+  buildDiagnosticsBundle?: () => Promise<string>;
 };
 
 type NativeAccountStatus = Awaited<ReturnType<typeof omnirushAccountStatus>>;
@@ -328,6 +331,8 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
           onToggle={(enabled) => void approvalMode.setFullPermissions(enabled)}
         />
       ) : null}
+
+      <DiagnosticsSection buildBundle={props.buildDiagnosticsBundle} />
     </div>
   );
 }
