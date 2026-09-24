@@ -201,7 +201,7 @@ export function OmniRushWebAccessGate({ children }: { children: ReactNode }) {
     if (authToken) {
       void createDenClient({ baseUrl: settings.baseUrl, token: authToken }).signOut().catch(() => undefined);
     }
-    clearDenSession();
+    clearDenSession({ userInitiated: true });
     void denAuth.refresh();
   };
 

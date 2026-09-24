@@ -98,6 +98,7 @@ import {
   loadConnectCapabilities,
   readCachedConnectCapabilities,
 } from "@/react-app/domains/connections/cloud-inventory-cache";
+import { buildDiagnosticsBundleJson } from "@/app/lib/diagnostics-bundle";
 import { createOpaqueDiagnosticsScopeKey } from "@/react-app/domains/settings/pages/agent-context-diagnostics-section";
 import { CloudProvidersView } from "@/react-app/domains/settings/pages/cloud-providers-view";
 import { DebugView } from "@/react-app/domains/settings/pages/debug-view";
@@ -713,6 +714,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
           if (!isDesktopRuntime()) return false;
           try {
             await omnirushServerRestart({
+              reason: "share_remote_access_changed",
+              userInitiated: true,
               remoteAccessEnabled:
                 readOmniRushServerSettings().remoteAccessEnabled === true,
             });
@@ -1892,6 +1895,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     if (!isDesktopRuntime()) return false;
     try {
       await omnirushServerRestart({
+        reason: "extension_settings_restart",
+        userInitiated: true,
         remoteAccessEnabled:
           readOmniRushServerSettings().remoteAccessEnabled === true,
       });
@@ -2095,6 +2100,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
       workspacePaths.unshift(selectedWorkspaceRoot);
     }
     await engineStart(selectedWorkspaceRoot, {
+      reason: "environment_applied",
+      userInitiated: true,
       preferSidecar: true,
       runtime: "direct",
       workspacePaths,
@@ -2246,6 +2253,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             developerMode={developerMode}
             omnirushClient={omnirushClient}
             runtimeWorkspaceId={runtimeWorkspaceId}
+            buildDiagnosticsBundle={() => buildDiagnosticsBundleJson({
+              developerMode,
+              omnirushServerStatus: routeOmniRushStatus,
+              runtimeWorkspaceId,
+              selectedWorkspaceId,
+            })}
           />
         );
       case "permissions":

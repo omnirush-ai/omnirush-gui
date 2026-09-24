@@ -78,6 +78,7 @@ import {
   windowsIconFromNativeImage,
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
+import { createOpenLogsFolderHandler } from "./logs-folder.mjs";
 import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
 import { applyLinuxPasswordStore, recordLinuxPasswordStore } from "./linux-password-store.mjs";
 import { createDesktopOmniRushAccountStore, legacyKeychainAllowed } from "./omnirush-account.mjs";
@@ -1221,7 +1222,7 @@ async function persistConnectLinkClaims(claims) {
     await uiControlServer.start().catch((error) => {
       console.warn("[ui-control] failed to start", error);
     });
-    await runtimeManager.prepareFreshRuntime();
+    await runtimeManager.prepareFreshRuntime({ reason: "desktop_activated", source: "connect-link" });
   }
   return config;
 }
@@ -1829,6 +1830,18 @@ function applyNativeTheme(mode) {
   return true;
 }
 
+const openLogsFolder = createOpenLogsFolderHandler({
+  getUserDataPath: () => app.getPath("userData"),
+  isTrustedSender: (/** @type {any} */ event) => Boolean(
+    mainWindow
+    && !mainWindow.isDestroyed()
+    && event?.sender === mainWindow.webContents
+    && event?.senderFrame === mainWindow.webContents.mainFrame,
+  ),
+  ensureDir: (dir) => mkdir(dir, { recursive: true }),
+  openPath: (dir) => shell.openPath(dir),
+});
+
 // Desktop IPC command registry. Every command invokable from the renderer's
 // desktopBridge Proxy (apps/app/src/app/lib/desktop.ts) has exactly one
 // entry here; handlers receive the ipcMain event followed by the renderer
@@ -1899,11 +1912,11 @@ const desktopCommandHandlers = {
   },
   "engineStart": async (event, ...args) => {
       const projectDir = String(args[0] ?? "").trim();
-      const options = args[1] ?? {};
+      const options = { source: "renderer", ...(args[1] ?? {}) };
       return runtimeManager.engineStart(projectDir, options);
   },
   "prepareFreshRuntime": async (event, ...args) => {
-      return runtimeManager.prepareFreshRuntime();
+      return runtimeManager.prepareFreshRuntime({ source: "renderer" });
   },
   "runtimeBootstrap": async (event, ...args) => {
       return ensureRuntimeBootstrap();
@@ -1912,10 +1925,10 @@ const desktopCommandHandlers = {
       return runtimeManager.runtimeStatus();
   },
   "engineStop": async (event, ...args) => {
-      return runtimeManager.engineStop();
+      return runtimeManager.engineStop({ source: "renderer" });
   },
   "engineRestart": async (event, ...args) => {
-      return runtimeManager.engineRestart(args[0] ?? {});
+      return runtimeManager.engineRestart({ source: "renderer", ...(args[0] ?? {}) });
   },
   "engineInfo": async (event, ...args) => {
       return runtimeManager.engineInfo();
@@ -1932,6 +1945,8 @@ const desktopCommandHandlers = {
         gitSha: process.env.OMNIRUSH_GIT_SHA ?? null,
         buildEpoch: process.env.OMNIRUSH_BUILD_EPOCH ?? null,
         omnirushDevMode: process.env.OMNIRUSH_DEV_MODE === "1",
+        os: process.platform,
+        arch: process.arch,
       };
   },
   "desktopNotificationShow": async (event, ...args) => {
@@ -2031,7 +2046,7 @@ const desktopCommandHandlers = {
         await uiControlServer.start().catch((error) => {
           console.warn("[ui-control] failed to start", error);
         });
-        await runtimeManager.prepareFreshRuntime();
+        await runtimeManager.prepareFreshRuntime({ reason: "desktop_activated", source: "bootstrap-config" });
       }
       return next;
   },
@@ -2110,19 +2125,19 @@ const desktopCommandHandlers = {
         deviceName: String(input.deviceName ?? "").trim() || `${app.getName()} on ${os.hostname()}`,
         openVerification: (url) => shell.openExternal(url),
       });
-      await runtimeManager.omnirushServerRestart({});
+      await runtimeManager.omnirushServerRestart({ reason: "account_connected", source: "account", userInitiated: true });
       return result;
   },
   "omnirushAccountSignOut": async (event, ...args) => {
       const result = await omnirushAccountStore.clear();
-      await runtimeManager.omnirushServerRestart({});
+      await runtimeManager.omnirushServerRestart({ reason: "account_signed_out", source: "account", userInitiated: true });
       return { connected: false, remoteRevoked: result.remoteRevoked, reason: result.reason };
   },
   "automationRunnerConfigure": async (event, ...args) => {
       return desktopAutomationRunner.configure(args[0] ?? null);
   },
   "omnirushServerRestart": async (event, ...args) => {
-      return runtimeManager.omnirushServerRestart(args[0] ?? {});
+      return runtimeManager.omnirushServerRestart({ source: "renderer", ...(args[0] ?? {}) });
   },
   "pickDirectory": async (event, ...args) => {
       const options = args[0] ?? {};
@@ -2260,6 +2275,10 @@ const desktopCommandHandlers = {
   },
   "setWindowDecorations": async (event, ...args) => {
       return undefined;
+  },
+  // Settings > Diagnostics. Opens <userData>/logs only; renderer arguments are ignored.
+  "openLogsFolder": async (event) => {
+      return openLogsFolder(event);
   },
   "__openPath": async (event, ...args) => {
       const target = String(args[0] ?? "").trim();
@@ -2949,7 +2968,7 @@ or use: pnpm dev:worktree`);
     }
     applicationMenu.install();
     if (!desktopActivationRequired(DESKTOP_DISTRIBUTION, bootstrapConfig)) {
-      await runtimeManager.prepareFreshRuntime().catch(() => undefined);
+      await runtimeManager.prepareFreshRuntime({ reason: "app_launch", source: "boot" }).catch(() => undefined);
     }
 
     // Use Tauri's existing workspace state file as canonical so rollback and

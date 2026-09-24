@@ -36,7 +36,11 @@ export function useRemoteAccessRestart(options: UseRemoteAccessRestartOptions) {
       options.onSettingsChanged();
 
       try {
-        const info = await omnirushServerRestart({ remoteAccessEnabled: enabled }) as OmniRushServerInfo;
+        const info = await omnirushServerRestart({
+          reason: "remote_access_toggled",
+          userInitiated: true,
+          remoteAccessEnabled: enabled,
+        }) as OmniRushServerInfo;
         writeOmniRushServerSettings({
           urlOverride: info.baseUrl?.trim() || undefined,
           token:

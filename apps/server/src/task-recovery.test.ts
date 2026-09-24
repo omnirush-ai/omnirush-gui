@@ -92,6 +92,7 @@ async function fixture(engine: "v1" | "v2") {
   return {
     tasks, resumes, tick, config,
     readHook(hook?: () => Promise<void>) { beforeRead = hook; },
+    engineLost() { recovery.requeueAfterEngineLoss(); },
     policy(ready: boolean) { policyReady = ready; },
     loseAck() { loseAcknowledgement = true; },
     async send(id: string, stop = false, optOut = false) {
@@ -197,6 +198,28 @@ for (const engine of ["v1", "v2"] as const) {
     expect(f.resumes).toHaveLength(1);
     await f.tick(); await f.crash(true); await f.tick();
     expect(f.resumes).toHaveLength(1);
+  });
+
+  test(`${engine}: a running turn whose engine was replaced without a server restart resumes once`, async () => {
+    const f = await fixture(engine);
+    await f.send("ses_work"); await f.send("ses_done"); await f.tick();
+    // The watchdog replaced a dead engine: both runs stopped, one had finished.
+    f.tasks.get("ses_work")!.active = false;
+    f.tasks.get("ses_done")!.active = false;
+    f.tasks.get("ses_done")!.completed = true;
+    f.engineLost();
+    await f.tick(); await f.tick();
+    expect(f.resumes.map((resume) => resume.id)).toEqual(["ses_work"]);
+    await f.tick(); await f.tick();
+    expect(f.resumes).toHaveLength(1);
+  });
+
+  test(`${engine}: without an engine replacement an idle turn is never re-prompted`, async () => {
+    const f = await fixture(engine);
+    await f.send("ses_work"); await f.tick();
+    f.tasks.get("ses_work")!.active = false;
+    await f.tick(); await f.tick();
+    expect(f.resumes).toEqual([]);
   });
 
   test(`${engine}: shutdown checkpoints a just-admitted task before the first poll`, async () => {

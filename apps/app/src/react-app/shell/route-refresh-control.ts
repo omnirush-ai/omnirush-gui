@@ -209,6 +209,25 @@ export function planRouteWorkspaceLoads(
   return [...selectedFirst, ...remaining];
 }
 
+/**
+ * Local workspaces whose session lists must be fetched again because the
+ * built-in server came back from a restart: it published a different
+ * URL/token, or the route saw a connection gap since the last connection.
+ * Their lists were loaded (or failed) against the previous server, so they no
+ * longer count as loaded. Remote workspaces live on their own servers and are
+ * left alone. The first connection of a window reloads nothing extra.
+ */
+export function planSessionListReloadAfterReconnect(input: {
+  previousConnectionKey: string;
+  nextConnectionKey: string;
+  connectionGapSeen: boolean;
+  workspaces: ReadonlyArray<{ id: string; workspaceType?: string | null }>;
+}): string[] {
+  if (!input.previousConnectionKey || !input.nextConnectionKey) return [];
+  if (input.previousConnectionKey === input.nextConnectionKey && !input.connectionGapSeen) return [];
+  return input.workspaces.flatMap((workspace) => workspace.workspaceType === "remote" ? [] : [workspace.id]);
+}
+
 export function createRouteRefreshLifecycle(): RouteRefreshLifecycle {
   let latestGeneration = 0;
   let inFlightGeneration = 0;

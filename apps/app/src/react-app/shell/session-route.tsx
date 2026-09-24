@@ -481,6 +481,7 @@ export function SessionRoute() {
     sessionsByWorkspaceIdRef,
     errorsByWorkspaceId,
     setErrorsByWorkspaceId,
+    sessionListErrorsByWorkspaceId,
     workspaceConnectionOverrides,
     routeError,
     setRouteError,
@@ -502,6 +503,7 @@ export function SessionRoute() {
     endpointForWorkspace,
     refreshRouteState,
     reloadWorkspaceSessions,
+    retryWorkspaceSessions,
     rememberPendingCreatedSession,
     handleRuntimeSessionCreated,
     handleRuntimeSessionUpdated,
@@ -744,8 +746,14 @@ export function SessionRoute() {
 
 
   const workspaceSessionGroups = useMemo(
-    () => toSessionGroups(workspaces, sessionsByWorkspaceId, errorsByWorkspaceId, new Set(retryingWorkspaceIds)),
-    [errorsByWorkspaceId, retryingWorkspaceIds, sessionsByWorkspaceId, workspaces],
+    () => toSessionGroups(
+      workspaces,
+      sessionsByWorkspaceId,
+      errorsByWorkspaceId,
+      new Set(retryingWorkspaceIds),
+      sessionListErrorsByWorkspaceId,
+    ),
+    [errorsByWorkspaceId, retryingWorkspaceIds, sessionListErrorsByWorkspaceId, sessionsByWorkspaceId, workspaces],
   );
   useSessionGroupSync({ workspaces, endpointForWorkspace });
   const selectedWorkspaceGroupState = sessionManagementStore((state) => (
@@ -3581,6 +3589,7 @@ export function SessionRoute() {
         onRevealWorkspace: (id) => void handleRevealWorkspace(id),
         onRecoverWorkspace: (workspaceId) => runRemoteWorkspaceConnectionCheck(workspaceId, "recover"),
         onTestWorkspaceConnection: (workspaceId) => runRemoteWorkspaceConnectionCheck(workspaceId, "test"),
+        onRetryWorkspaceTasks: retryWorkspaceSessions,
         onEditWorkspaceConnection: remoteWorkspaceConnectionEditor.open,
         onForgetWorkspace: (id) => void handleForgetWorkspace(id),
         onOpenCreateWorkspace: handleOpenCreateWorkspace,

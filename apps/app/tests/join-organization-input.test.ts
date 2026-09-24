@@ -73,7 +73,7 @@ describe("welcome one-field contract", () => {
     expect(source).toContain("platform.openLink(invite.url)");
     expect(source).toContain('setStatus({ phase: "invite-opened", host: invite.host });');
     expect(source).toContain('setStatus({ phase: "server-saved", host: hostFromUrl(persisted.baseUrl) });');
-    expect(source).toContain('clearDenSession({ includeBaseUrls: false });');
+    expect(source).toContain('clearDenSession({ includeBaseUrls: false, userInitiated: true });');
   });
 
   test("the welcome page has one join door and no separate server-URL affordance", () => {

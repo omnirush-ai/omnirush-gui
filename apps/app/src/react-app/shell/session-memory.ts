@@ -8,6 +8,9 @@ const ACTIVE_WORKSPACE_KEY = "omnirush.react.activeWorkspace";
 const SESSION_BY_WORKSPACE_KEY = "omnirush.react.sessionByWorkspace";
 const WORKSPACE_ORDER_KEY = "omnirush.react.workspaceOrder";
 const WORKSPACE_PROJECT_DIMENSION_KEY = "omnirush.react.workspaceProjectDimension";
+const WORKSPACE_SESSION_LIST_KEY = "omnirush.react.workspaceSessionList";
+const WORKSPACE_SESSION_LIST_MAX_WORKSPACES = 20;
+const WORKSPACE_SESSION_LIST_MAX_SESSIONS = 100;
 
 function safeGet(key: string): string | null {
   if (typeof window === "undefined") return null;
@@ -155,9 +158,130 @@ export function writeWorkspaceProjectDimension(
   safeSet(WORKSPACE_PROJECT_DIMENSION_KEY, Object.keys(map).length ? JSON.stringify(map) : null);
 }
 
+/**
+ * The sidebar fields of a session, kept so a workspace whose session list
+ * cannot be loaded (engine starting, built-in server restarting) still shows
+ * its last known tasks instead of "No tasks yet". Heavy fields (diffs,
+ * permissions, metadata) are dropped.
+ */
+export type CachedWorkspaceSession = {
+  id: string;
+  slug: string;
+  projectID: string;
+  directory: string;
+  parentID?: string;
+  title: string;
+  version: string;
+  time: { created: number; updated: number; archived?: number };
+};
+
+type WorkspaceSessionListCache = Record<string, { savedAt: number; sessions: CachedWorkspaceSession[] }>;
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function toCachedWorkspaceSession(value: unknown): CachedWorkspaceSession | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  if (!id) return null;
+  const time = record.time && typeof record.time === "object" ? record.time as Record<string, unknown> : {};
+  const archived = finiteNumber(time.archived);
+  const parentID = typeof record.parentID === "string" && record.parentID ? record.parentID : undefined;
+  return {
+    id,
+    slug: typeof record.slug === "string" ? record.slug : "",
+    projectID: typeof record.projectID === "string" ? record.projectID : "",
+    directory: typeof record.directory === "string" ? record.directory : "",
+    ...(parentID ? { parentID } : {}),
+    title: typeof record.title === "string" ? record.title : "",
+    version: typeof record.version === "string" ? record.version : "",
+    time: {
+      created: finiteNumber(time.created) ?? 0,
+      updated: finiteNumber(time.updated) ?? finiteNumber(time.created) ?? 0,
+      ...(archived !== undefined ? { archived } : {}),
+    },
+  };
+}
+
+function readWorkspaceSessionListCache(): WorkspaceSessionListCache {
+  const raw = safeGet(WORKSPACE_SESSION_LIST_KEY);
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: WorkspaceSessionListCache = {};
+    for (const [workspaceId, entry] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!workspaceId.trim() || !entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      if (!Array.isArray(record.sessions)) continue;
+      result[workspaceId] = {
+        savedAt: finiteNumber(record.savedAt) ?? 0,
+        sessions: record.sessions.flatMap((session) => {
+          const cached = toCachedWorkspaceSession(session);
+          return cached ? [cached] : [];
+        }),
+      };
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeWorkspaceSessionListCache(cache: WorkspaceSessionListCache): void {
+  const entries = Object.entries(cache)
+    .sort(([, a], [, b]) => b.savedAt - a.savedAt)
+    .slice(0, WORKSPACE_SESSION_LIST_MAX_WORKSPACES);
+  safeSet(WORKSPACE_SESSION_LIST_KEY, entries.length ? JSON.stringify(Object.fromEntries(entries)) : null);
+}
+
+/** Last successfully loaded session list for a workspace, or null when none was saved. */
+export function readCachedWorkspaceSessions(workspaceId: string | null | undefined): CachedWorkspaceSession[] | null {
+  const wsId = workspaceId?.trim();
+  if (!wsId) return null;
+  return readWorkspaceSessionListCache()[wsId]?.sessions ?? null;
+}
+
+export function writeCachedWorkspaceSessions(
+  workspaceId: string | null | undefined,
+  sessions: readonly unknown[],
+  now: number = Date.now(),
+): void {
+  const wsId = workspaceId?.trim();
+  if (!wsId) return;
+  const cache = readWorkspaceSessionListCache();
+  cache[wsId] = {
+    savedAt: now,
+    sessions: sessions.slice(0, WORKSPACE_SESSION_LIST_MAX_SESSIONS).flatMap((session) => {
+      const cached = toCachedWorkspaceSession(session);
+      return cached ? [cached] : [];
+    }),
+  };
+  writeWorkspaceSessionListCache(cache);
+}
+
+/** Drop one deleted session from a workspace's saved list so it cannot come back from the cache. */
+export function removeCachedWorkspaceSession(workspaceId: string | null | undefined, sessionId: string): void {
+  const wsId = workspaceId?.trim();
+  const id = sessionId.trim();
+  if (!wsId || !id) return;
+  const cache = readWorkspaceSessionListCache();
+  const entry = cache[wsId];
+  if (!entry || !entry.sessions.some((session) => session.id === id)) return;
+  cache[wsId] = { ...entry, sessions: entry.sessions.filter((session) => session.id !== id) };
+  writeWorkspaceSessionListCache(cache);
+}
+
 export function forgetWorkspaceMemory(workspaceId: string): void {
   const wsId = workspaceId?.trim();
   if (!wsId) return;
+  const sessionListCache = readWorkspaceSessionListCache();
+  if (wsId in sessionListCache) {
+    delete sessionListCache[wsId];
+    writeWorkspaceSessionListCache(sessionListCache);
+  }
   const map = readSessionByWorkspaceMap();
   if (wsId in map) {
     delete map[wsId];

@@ -102,6 +102,43 @@ describe("diagnostics bundle", () => {
     expect(json).not.toContain("opencodeUsername");
   });
 
+  test("reports built-in server restarts with reason, trigger and time", () => {
+    const input = baseInputs();
+    input.desktopRuntime = true;
+    input.hostInfo = {
+      running: true,
+      generation: 3,
+      remoteAccessEnabled: false,
+      host: "127.0.0.1",
+      port: 4096,
+      baseUrl: "http://127.0.0.1:4096",
+      connectUrl: null,
+      mdnsUrl: null,
+      lanUrl: null,
+      clientToken: null,
+      ownerToken: null,
+      hostToken: null,
+      managedOpencodeBinPath: null,
+      managedOpencodeBinSource: null,
+      logFilePath: null,
+      pid: null,
+      lastStdout: null,
+      lastStderr: null,
+      managedOpencodeExecution: null,
+      restarts: [
+        { at: "2026-09-24T07:11:02.000Z", kind: "server", action: "deferred", reason: "engine_reload_failed", source: "engine-reload", busySessions: 3 },
+        { at: "2026-09-24T02:57:40.000Z", kind: "engine", action: "restarted", reason: "engine_unreachable:process_exited", source: "engine-pool-watchdog" },
+      ],
+      pendingRestart: { action: "engine-restart", reason: "engine_reload_failed", source: "engine-reload", requestedAt: "2026-09-24T07:11:02.000Z" },
+    };
+
+    const parsed = JSON.parse(composeDiagnosticsBundleJson(input));
+
+    expect(parsed.omnirushServer.host.restarts).toHaveLength(2);
+    expect(parsed.omnirushServer.host.restarts[0]).toMatchObject({ action: "deferred", reason: "engine_reload_failed", busySessions: 3 });
+    expect(parsed.omnirushServer.host.pendingRestart.reason).toBe("engine_reload_failed");
+  });
+
   test("produces valid JSON without desktop info", () => {
     const json = composeDiagnosticsBundleJson(baseInputs());
     const parsed = JSON.parse(json);
@@ -171,5 +208,77 @@ describe("diagnostics bundle", () => {
     expect(json).not.toContain("owt_mcp_synthetic_secret");
     expect(json).not.toContain("owt_den_synthetic_secret");
     expect(json).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+  });
+  test("reports app version, platform and built-in server starts this launch", () => {
+    const input = baseInputs();
+    input.desktopRuntime = true;
+    input.platform = "MacIntel";
+    input.appInfo = { version: "1.1.1", gitSha: "abc1234", os: "win32", arch: "x64" };
+    input.hostInfo = {
+      running: true,
+      generation: 3,
+      remoteAccessEnabled: false,
+      host: "127.0.0.1",
+      port: 4096,
+      baseUrl: "http://127.0.0.1:4096",
+      connectUrl: null,
+      mdnsUrl: null,
+      lanUrl: null,
+      clientToken: null,
+      ownerToken: null,
+      hostToken: null,
+      managedOpencodeBinPath: null,
+      managedOpencodeBinSource: null,
+      logFilePath: "C:\\Users\\someone\\AppData\\Roaming\\ai.omnirush.desktop\\logs\\omnirush-server.log",
+      pid: null,
+      lastStdout: null,
+      lastStderr: null,
+      managedOpencodeExecution: null,
+    };
+
+    const json = composeDiagnosticsBundleJson(input);
+    const parsed = JSON.parse(json);
+
+    expect(parsed.app.version).toBe("1.1.1");
+    expect(parsed.app.os).toBe("win32");
+    expect(parsed.app.arch).toBe("x64");
+    expect(parsed.runtime.platform).toBe("win32");
+    expect(parsed.omnirushServer.host.generation).toBe(3);
+    expect(parsed.omnirushServer.host.restartsThisLaunch).toBe(2);
+    // The log file path names the user's home folder; the bundle never carries it.
+    expect(json).not.toContain("omnirush-server.log");
+    expect(json).not.toContain("someone");
+  });
+
+  test("falls back to the renderer platform and reports unknown server starts as null", () => {
+    const input = baseInputs();
+    input.platform = "Linux x86_64";
+    input.hostInfo = {
+      running: false,
+      generation: null,
+      remoteAccessEnabled: false,
+      host: null,
+      port: null,
+      baseUrl: null,
+      connectUrl: null,
+      mdnsUrl: null,
+      lanUrl: null,
+      clientToken: null,
+      ownerToken: null,
+      hostToken: null,
+      managedOpencodeBinPath: null,
+      managedOpencodeBinSource: null,
+      logFilePath: null,
+      pid: null,
+      lastStdout: null,
+      lastStderr: null,
+      managedOpencodeExecution: null,
+    };
+
+    const parsed = JSON.parse(composeDiagnosticsBundleJson(input));
+
+    expect(parsed.runtime.platform).toBe("Linux x86_64");
+    expect(parsed.omnirushServer.host.generation).toBeNull();
+    expect(parsed.omnirushServer.host.restartsThisLaunch).toBeNull();
   });
 });

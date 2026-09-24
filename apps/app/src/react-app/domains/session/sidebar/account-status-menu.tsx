@@ -331,7 +331,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
         .signOut()
         .catch(() => undefined);
     }
-    clearDenSession();
+    clearDenSession({ userInitiated: true });
     void denAuth.refresh();
   };
 

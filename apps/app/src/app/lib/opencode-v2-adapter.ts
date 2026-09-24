@@ -1418,7 +1418,7 @@ export function createClientV2(
       reply: parameters.reply,
       message: parameters.message,
     }, options);
-    if (result.error !== undefined) {
+    if (result.error !== undefined || !result.response) {
       return { error: result.error, request: result.request, response: result.response };
     }
     // No error means fetch completed, so the response is present.
@@ -1434,7 +1434,7 @@ export function createClientV2(
       requestID: parameters.permissionID,
       reply: parameters.response,
     }, options);
-    if (result.error !== undefined) {
+    if (result.error !== undefined || !result.response) {
       return { error: result.error, request: result.request, response: result.response };
     }
     // No error means fetch completed, so the response is present.

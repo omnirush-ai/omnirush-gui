@@ -69,11 +69,32 @@ describe("reloadEngineWithDesktopFallback", () => {
     expect(harness.restartCalls).toBe(1);
   });
 
-  test("an unconfigured engine restarts immediately — there is nothing to re-probe", async () => {
-    const harness = makeHarness([unconfiguredError()]);
+  test("an engine that is still starting (unconfigured) recovers on the retry without a restart", async () => {
+    const harness = makeHarness([unconfiguredError(), null]);
+    const result = await reloadEngineWithDesktopFallback(harness.client, "ws", harness.options);
+    expect(result.restartedEngine).toBe(false);
+    expect(harness.reloadCalls).toBe(2);
+    expect(harness.restartCalls).toBe(0);
+  });
+
+  test("a persistently unconfigured engine escalates to a restart after one retry", async () => {
+    const harness = makeHarness([unconfiguredError(), unconfiguredError()]);
     const result = await reloadEngineWithDesktopFallback(harness.client, "ws", harness.options);
     expect(result.restartedEngine).toBe(true);
-    expect(harness.reloadCalls).toBe(1);
+    expect(harness.reloadCalls).toBe(2);
+    expect(harness.restartCalls).toBe(1);
+  });
+
+  test("a restart the desktop deferred because sessions are running is not reported as a restart", async () => {
+    const harness = makeHarness([unreachableError(), unreachableError()]);
+    const result = await reloadEngineWithDesktopFallback(harness.client, "ws", {
+      ...harness.options,
+      restartEngine: async () => {
+        harness.restartCalls += 1;
+        return { running: true, restartDeferred: true, busySessions: 3 };
+      },
+    });
+    expect(result.restartedEngine).toBe(false);
     expect(harness.restartCalls).toBe(1);
   });
 

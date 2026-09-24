@@ -170,12 +170,12 @@ export function useDenSession({
   const clearSignedInState = React.useCallback(
     (
       message?: string | null,
-      options?: { includeBaseUrls?: boolean },
+      options?: { includeBaseUrls?: boolean; userInitiated?: boolean },
     ) => {
       const includeBaseUrls = options?.includeBaseUrls ?? !developerMode;
       const previousSettings = readDenSettings();
       return runBeforeSignedOut(onBeforeSignedOut, previousSettings).then(() => {
-        clearDenSession({ includeBaseUrls });
+        clearDenSession({ includeBaseUrls, userInitiated: options?.userInitiated === true });
       if (includeBaseUrls) {
         setBaseUrl(DEFAULT_DEN_BASE_URL);
         setBaseUrlDraft(DEFAULT_DEN_BASE_URL);
@@ -273,7 +273,7 @@ export function useDenSession({
 
       setBaseUrl(persisted.baseUrl);
       setBaseUrlDraft(persisted.baseUrl);
-      await clearSignedInState(t("den.status_base_url_updated"), { includeBaseUrls: false });
+      await clearSignedInState(t("den.status_base_url_updated"), { includeBaseUrls: false, userInitiated: true });
     } catch (error) {
       setBaseUrlError(error instanceof Error ? error.message : t("den.error_base_url"));
     } finally {
@@ -294,7 +294,7 @@ export function useDenSession({
       setBaseUrlError(null);
       setBaseUrl(persisted.baseUrl);
       setBaseUrlDraft(persisted.baseUrl);
-      await clearSignedInState(t("den.status_base_url_updated"), { includeBaseUrls: false });
+      await clearSignedInState(t("den.status_base_url_updated"), { includeBaseUrls: false, userInitiated: true });
     } catch (error) {
       setBaseUrlError(error instanceof Error ? error.message : t("den.error_base_url"));
     } finally {
@@ -326,7 +326,7 @@ export function useDenSession({
       );
       setBaseUrl(resolved.baseUrl);
       setBaseUrlDraft(resolved.baseUrl);
-      await clearSignedInState(t("den.status_server_config_cleared"), { includeBaseUrls: false });
+      await clearSignedInState(t("den.status_server_config_cleared"), { includeBaseUrls: false, userInitiated: true });
     } catch (error) {
       setBaseUrlError(error instanceof Error ? error.message : t("den.error_base_url"));
     } finally {
@@ -538,7 +538,7 @@ export function useDenSession({
       if (authToken.trim()) {
         await client.signOut();
       }
-      await clearSignedInState(t("den.status_signed_out"));
+      await clearSignedInState(t("den.status_signed_out"), { userInitiated: true });
     } catch (error) {
       setAuthError(
         error instanceof DenApiError

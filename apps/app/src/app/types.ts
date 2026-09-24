@@ -35,6 +35,8 @@ export type WorkspaceSessionGroup = {
   sessions: SidebarSessionItem[];
   status: "idle" | "loading" | "ready" | "error";
   error?: string | null;
+  /** The session list could not be loaded; `sessions` holds the last known list, if any. */
+  listError?: string | null;
 };
 
 export type PlaceholderMessageInfo = {

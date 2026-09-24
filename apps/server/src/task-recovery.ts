@@ -204,6 +204,24 @@ export async function createTaskRecovery(
   return {
     tick,
     owns: (request: Request) => ownedRequests.has(request),
+    /**
+     * The managed engine died under running turns and is being replaced
+     * without a server restart. Treat those turns exactly like the ones a
+     * restart interrupted: the startup path re-observes each one against the
+     * new engine and resumes it only if the same turn is still unfinished.
+     */
+    requeueAfterEngineLoss() {
+      if (stopped) return;
+      let changed = false;
+      for (const record of records.values()) {
+        if (record.phase !== "running" || record.userId === null) continue;
+        record.shutdown = true;
+        startup.add(key(record));
+        recovered.delete(key(record));
+        changed = true;
+      }
+      if (changed) void persist().catch(() => undefined);
+    },
     async forward(workspace: WorkspaceInfo, engine: Engine, path: string, req: Request, send: () => Promise<Response>) {
       if (workspace.workspaceType !== "local" || !["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return send();
       const match = path.replace(/^\/opencode2\/api|^\/opencode/, "").match(/^\/session\/([^/]+)(.*)$/);
@@ -276,3 +294,4 @@ type TaskRecovery = Awaited<ReturnType<typeof createTaskRecovery>>;
 const coordinators = new WeakMap<ServerConfig, TaskRecovery>();
 export function setTaskRecovery(config: ServerConfig, recovery: TaskRecovery) { coordinators.set(config, recovery); }
 export async function stopTaskRecovery(config: ServerConfig) { await coordinators.get(config)?.stop(); }
+export function requeueTaskRecoveryAfterEngineLoss(config: ServerConfig) { coordinators.get(config)?.requeueAfterEngineLoss(); }

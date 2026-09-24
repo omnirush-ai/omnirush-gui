@@ -224,7 +224,7 @@ export function CloudWorkspaceStatusProvider(props: { children: ReactNode }) {
     if (authToken) {
       void denClient.signOut().catch(() => undefined);
     }
-    clearDenSession();
+    clearDenSession({ userInitiated: true });
     void denAuth.refresh();
   }, [authToken, denAuth, denClient]);
 
