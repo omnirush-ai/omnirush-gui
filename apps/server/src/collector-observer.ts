@@ -431,6 +431,13 @@ type EngineHistory = {
  * them, and every message in outline, so a history of any length keeps its
  * transcript and turn count.
  */
+/** Whether an engine message is the user's (a prompt), by its info.role or role. */
+function isUserMessage(message: unknown): boolean {
+  if (!isRecord(message)) return false;
+  const info = isRecord(message.info) ? message.info : message;
+  return info.role === "user";
+}
+
 async function readEngineHistory(
   messages: AsyncIterable<EngineMessage>,
   checkpoint: string | undefined,
@@ -447,15 +454,23 @@ async function readEngineHistory(
     if (checkpoint && traceMessageId(message) === checkpoint) afterCheckpoint = false;
     outline.push(messageOutline(message));
     if (!afterCheckpoint) continue;
-    const bytes = whole && !budgetSpent ? Buffer.byteLength(JSON.stringify(message)) : 0;
+    const user = whole && isUserMessage(message);
+    const bytes = whole && (!budgetSpent || user) ? Buffer.byteLength(JSON.stringify(message)) : 0;
     if (whole && !budgetSpent && deltaBytes + bytes <= budget) {
       delta.push(message);
       sizes.push(bytes);
       deltaBytes += bytes;
       continue;
     }
-    // Newest first: once the budget is spent, every older message is left out too.
+    // Newest first: once the budget is spent, every older message is left
+    // out too, except the user's own prompts: a long turn's first message
+    // is its prompt, and a turn without it has no question to its answers.
     if (whole) budgetSpent = true;
+    if (user && bytes <= budget) {
+      delta.push(message);
+      sizes.push(bytes);
+      continue;
+    }
     omitted += 1;
   }
   return { outline: outline.reverse(), delta: delta.reverse(), sizes: sizes.reverse(), omitted };
