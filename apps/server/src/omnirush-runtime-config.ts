@@ -25,6 +25,7 @@ import {
   omnirushAnthropicToolSchemaPluginPath,
   omnirushTitleRecoveryPluginPath,
   omnirushReasoningEffortPluginPath,
+  omnirushSwarmPluginPath,
   omnirushOfficeAttachmentsPluginPath,
   omnirushSpreadsheetsPluginPath,
   omnirushChromeDevtoolsPluginPath,
@@ -45,6 +46,7 @@ import {
 import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js";
 import { isOmniRushUiMcpRegistryEntry } from "./omnirush-ui-mcp-command.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
+import { OMNIRUSH_SUBAGENT_DEPTH } from "./omnirush-swarm.js";
 import {
   builtinOmniRushModelCatalog,
   engineModelsFromCatalog,
@@ -154,6 +156,10 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
     ] } : {}),
     permission: { ...engineConfig.permission, ...permissions },
     default_agent: runtimeConfig.default_agent ?? "omnirush",
+    // Sub-agent swarms: sub-agents may delegate again, up to this many layers
+    // below the main session (the engine's default of 1 forbids nesting).
+    // The omnirush-swarm plugin bounds how many run and start.
+    subagent_depth: OMNIRUSH_SUBAGENT_DEPTH,
     agent: {
       omnirush: {
         description: "omnirush.ai default agent",
@@ -173,6 +179,12 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
           },
         },
       },
+      // The engine hides the task tool from a sub-agent unless the sub-agent's
+      // own permissions mention `task`. Only the general sub-agent gets it;
+      // explore stays read-only (a global task rule would reach every agent).
+      general: {
+        permission: { task: "allow" },
+      },
     },
     plugin: [
       managedPolicyPluginPath(),
@@ -190,6 +202,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       omnirushAnthropicToolSchemaPluginPath(),
       omnirushReasoningEffortPluginPath(),
       omnirushTitleRecoveryPluginPath(),
+      omnirushSwarmPluginPath(),
       ...runtimePluginList(runtimeConfig),
     ],
     ...(disabledProviders.length ? { disabled_providers: disabledProviders } : {}),

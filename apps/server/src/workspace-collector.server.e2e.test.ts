@@ -109,6 +109,9 @@ function startMockEngine(input: { provider: string; model: string; history?: Eng
   const root: EngineMessage[] = [...(input.history ?? [])];
   const child: EngineMessage[] = [];
   const grandchild: EngineMessage[] = [];
+  // A swarm three layers deep, and a fourth layer past the capture depth.
+  const great: EngineMessage[] = [];
+  const tooDeep: EngineMessage[] = [];
   const workflow: EngineMessage[] = [];
   const prompts: unknown[] = [];
   const workflowPrompts: unknown[] = [];
@@ -176,6 +179,8 @@ function startMockEngine(input: { provider: string; model: string; history?: Eng
         root.push(message("ses_root", `user_${turn}`, "user", `prompt ${turn}`), message("ses_root", `assistant_${turn}`, "assistant", `answer ${turn}`));
         if (turn === 1 || turn === 2) child.push(message("ses_child", `child_${turn}`, "assistant", `child answer ${turn} for jane@example.com`));
         if (turn === 1 || turn === 3) grandchild.push(message("ses_grandchild", `grand_${turn}`, "assistant", `grandchild answer ${turn}`));
+        if (turn === 1) great.push(message("ses_great", `great_${turn}`, "assistant", `great-grandchild answer ${turn}`));
+        if (turn === 1) tooDeep.push(message("ses_toodeep", `deep_${turn}`, "assistant", `too deep ${turn}`));
         setTimeout(() => { busy = false; }, control.busyMs);
         return new Response(null, { status: 204 });
       }
@@ -188,7 +193,11 @@ function startMockEngine(input: { provider: string; model: string; history?: Eng
       if (pathname === "/session/ses_child/message") return messagePage(url, child);
       if (pathname === "/session/ses_child/children") return Response.json([session("ses_grandchild", "ses_child")]);
       if (pathname === "/session/ses_grandchild/message") return messagePage(url, grandchild);
-      if (pathname === "/session/ses_grandchild/children") return Response.json([]);
+      if (pathname === "/session/ses_grandchild/children") return Response.json([session("ses_great", "ses_grandchild")]);
+      if (pathname === "/session/ses_great/message") return messagePage(url, great);
+      if (pathname === "/session/ses_great/children") return Response.json([session("ses_toodeep", "ses_great")]);
+      if (pathname === "/session/ses_toodeep/message") return messagePage(url, tooDeep);
+      if (pathname === "/session/ses_toodeep/children") return Response.json([]);
       if (pathname === "/session/ses_root/todo") return Response.json([]);
       return Response.json({ code: "not_found", message: `Not found: ${request.method} ${pathname}` }, { status: 404 });
     },
@@ -463,15 +472,19 @@ describe("workspace collector server integration", () => {
       provider_id: "omnirush", model_id: "gpt-5.6-sol", variant: "high", agent: "build",
     });
     const children = events(trace).filter((event) => event.type === "session.child");
-    expect(children.map((event) => [event.data?.child_session_id, event.data?.parent_session_id, event.data?.title, event.data?.agent])).toEqual([
-      ["ses_child", "ses_root", "Subtask ses_child", "build"],
-      ["ses_grandchild", "ses_child", "Subtask ses_grandchild", "build"],
+    // Every swarm layer the engine allows (3) is captured with its parent and
+    // depth; a fourth layer is not walked.
+    expect(children.map((event) => [event.data?.child_session_id, event.data?.parent_session_id, event.data?.depth, event.data?.title, event.data?.agent])).toEqual([
+      ["ses_child", "ses_root", 1, "Subtask ses_child", "build"],
+      ["ses_grandchild", "ses_child", 2, "Subtask ses_grandchild", "build"],
+      ["ses_great", "ses_grandchild", 3, "Subtask ses_great", "build"],
     ]);
+    expect(JSON.stringify(children)).not.toContain("ses_toodeep");
     expect((children[0]?.data?.messages as unknown[]).length).toBe(1);
     expect(JSON.stringify(children)).not.toContain("jane@example.com");
-    expect(trace.session).toEqual({ provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: ["ses_child", "ses_grandchild"] });
+    expect(trace.session).toEqual({ provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: ["ses_child", "ses_grandchild", "ses_great"] });
     const end = anthropic.uploads.at(-1)!.envelope;
-    expect(end.session.child_session_ids).toEqual(["ses_child", "ses_grandchild"]);
+    expect(end.session.child_session_ids).toEqual(["ses_child", "ses_grandchild", "ses_great"]);
     expect(end.session.provider_id).toBe("anthropic");
     // The prompt and turn milestones are both recorded even though nothing changed.
     expect(events(trace).filter((event) => event.type === "collector.trigger").map((event) => event.data)).toEqual([
@@ -496,7 +509,7 @@ describe("workspace collector server integration", () => {
     const childEvents = (envelope: Envelope | undefined) => events(envelope)
       .filter((event) => event.type === "session.child")
       .map((event) => [event.data?.child_session_id, (event.data?.messages as Array<{ info: { id: string } }>).map((message) => message.info.id)]);
-    expect(childEvents(turnOne)).toEqual([["ses_child", ["child_1"]], ["ses_grandchild", ["grand_1"]]]);
+    expect(childEvents(turnOne)).toEqual([["ses_child", ["child_1"]], ["ses_grandchild", ["grand_1"]], ["ses_great", ["great_1"]]]);
     // Turn 2: only the child spoke again, and only its new message is uploaded.
     expect(childEvents(turnTwo)).toEqual([["ses_child", ["child_2"]]]);
     expect(events(turnTwo).find((event) => event.type === "turn.completed")?.data).toEqual({
@@ -511,7 +524,7 @@ describe("workspace collector server integration", () => {
     await second.stop();
     const resumedStart = gateway.uploads.find((upload) => upload.envelope.snapshot_type === "start" && upload.envelope.session_segment === 2)!;
     expect(resumedStart.envelope.session_resumed).toBe(true);
-    expect(resumedStart.envelope.session).toEqual({ provider_id: "openai", model_id: "gpt-5", variant: "high", child_session_ids: ["ses_child", "ses_grandchild"] });
+    expect(resumedStart.envelope.session).toEqual({ provider_id: "openai", model_id: "gpt-5", variant: "high", child_session_ids: ["ses_child", "ses_grandchild", "ses_great"] });
     const turnThree = traces(gateway.uploads)[2]!;
     expect(turnThree.session_resumed).toBe(true);
     expect(childEvents(turnThree)).toEqual([["ses_grandchild", ["grand_3"]]]);

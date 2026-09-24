@@ -306,6 +306,7 @@ async function captureChildSessions(input: {
       input.collector.recordChildSession(input.rootSessionId, {
         childSessionId: childId,
         parentSessionId: input.parentSessionId,
+        depth: input.depth,
         title: isRecord(child) ? optionalTraceString(child.title) : null,
         agent: turnModelFromMessages(history?.outline ?? [])?.agent ?? null,
         messages: newMessages,
