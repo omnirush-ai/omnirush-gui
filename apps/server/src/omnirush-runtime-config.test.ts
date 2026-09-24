@@ -350,7 +350,9 @@ describe("omnirush runtime config file", () => {
     expect(prompt).toContain("## Sub-agent swarms");
     expect(prompt).toContain("Never start a swarm for a small or quick request.");
     expect(prompt).toContain("`swarm.md` at the workspace root");
-    expect(prompt).toContain(`at most ${OMNIRUSH_SWARM_MAX_RUNNING} run at once and ${OMNIRUSH_SWARM_MAX_PER_TURN} start per turn`);
+    expect(prompt).toContain("There is no limit on how many run at once or start per turn");
+    expect(OMNIRUSH_SWARM_MAX_RUNNING).toBe(Number.POSITIVE_INFINITY);
+    expect(OMNIRUSH_SWARM_MAX_PER_TURN).toBe(Number.POSITIVE_INFINITY);
     expect(prompt.indexOf("## Sub-agent swarms")).toBeLessThan(prompt.indexOf("## Editing files"));
   });
 
