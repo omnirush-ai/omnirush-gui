@@ -214,6 +214,28 @@ describe("tool part mapper", () => {
     });
   });
 
+  test("a finished task forwards the model its sub-agent ran on and a fallback to the main model", () => {
+    const completed = writeToolPart(
+      "completed",
+      { description: "Explore", prompt: "look around", subagent_type: "general" },
+      { id: "part-task", tool: "task", callID: "call-task" },
+    );
+    if (completed.state.status !== "completed") throw new Error("Expected completed fixture");
+    completed.state.metadata = {
+      sessionId: "ses_child_1",
+      model: { providerID: "omnirush", modelID: "gpt-6-astra" },
+      omnirushModelFallback: { requested: "gpt-6-sol", used: "gpt-6-astra", reason: "refused" },
+    };
+    expect(parseDynamicToolUIPart(completed)?.callProviderMetadata).toEqual({
+      opencode: { partId: "part-task" },
+      omnirush: {
+        childSessionId: "ses_child_1",
+        subagentModel: "gpt-6-astra",
+        subagentModelFallback: { requested: "gpt-6-sol", used: "gpt-6-astra", reason: "refused" },
+      },
+    });
+  });
+
   test("does not forward session metadata for non-task tools", () => {
     const part = writeToolPart("completed", { filePath: "src/a.ts" });
     if (part.state.status !== "completed") throw new Error("Expected completed fixture");

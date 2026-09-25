@@ -398,3 +398,15 @@ export function taskChildSessionId(part: TaskToolPart): string | null {
   const value = part.callProviderMetadata?.omnirush?.childSessionId;
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
+
+/**
+ * The model a finished task's sub-agent ran on, and the model it was meant to
+ * run on when it fell back to the main one (`callProviderMetadata.omnirush`).
+ */
+export function taskSubagentModel(part: TaskToolPart): { model: string; fallbackFrom: string | null } | null {
+  const omnirush = part.callProviderMetadata?.omnirush as Record<string, unknown> | undefined;
+  const model = omnirush?.subagentModel;
+  if (typeof model !== "string" || !model.trim()) return null;
+  const fallback = omnirush?.subagentModelFallback as { requested?: unknown } | undefined;
+  return { model: model.trim(), fallbackFrom: typeof fallback?.requested === "string" ? fallback.requested : null };
+}

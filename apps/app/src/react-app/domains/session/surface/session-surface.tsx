@@ -51,6 +51,7 @@ import type {
 import { ReactSessionComposer } from "./composer/composer";
 import { WorkspaceRunModeMenu } from "./composer/workspace-run-mode-menu";
 import { FullPermissionsToggle } from "./composer/full-permissions-toggle";
+import { SubagentModelMenu } from "./composer/subagent-model-menu";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import type { ModelAvailability } from "./model-availability";
@@ -3224,6 +3225,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         <ReactSessionComposer
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}
           fullPermissionsControl={<FullPermissionsToggle client={props.client} workspaceId={props.workspaceId} />}
+          subagentModelControl={<SubagentModelMenu client={props.client} />}
           draft={autoSendPayload ? draft : autoSending ? "" : draft}
           mentions={mentions}
           onDraftChange={handleComposerDraftChange}

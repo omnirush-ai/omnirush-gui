@@ -2332,6 +2332,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             onDesktopNotificationsChange={(desktopNotifications) => {
               local.setPrefs((previous) => ({ ...previous, desktopNotifications }));
             }}
+            subagentModelClient={omnirushClient}
           />
         );
       case "extensions":

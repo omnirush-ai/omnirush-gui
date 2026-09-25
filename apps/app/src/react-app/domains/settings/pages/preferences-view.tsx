@@ -28,6 +28,8 @@ import {
   LayoutStack,
 } from "../settings-layout";
 import { DesktopIntegrationSection } from "../desktop-integration-section";
+import { SubagentModelSettings } from "../subagent-model-settings";
+import type { SubagentModelClient } from "../subagent-model";
 
 export type PreferencesViewProps = {
   busy: boolean;
@@ -40,6 +42,8 @@ export type PreferencesViewProps = {
   onToggleAnalytics: () => void;
   desktopNotifications: DesktopNotificationPreference;
   onDesktopNotificationsChange: (value: DesktopNotificationPreference) => void;
+  /** The server whose sub-agent model setting the Model section shows; hidden without one. */
+  subagentModelClient?: SubagentModelClient | null;
 };
 
 function desktopNotificationPreferenceLabel(value: DesktopNotificationPreference) {
@@ -98,6 +102,9 @@ export function PreferencesView(props: PreferencesViewProps) {
             </LayoutSectionItemHeaderActions>
           </LayoutSectionItemHeader>
         </LayoutSectionItem>
+
+        {/* Sub-agent model and effort */}
+        <SubagentModelSettings client={props.subagentModelClient ?? null} busy={props.busy} />
       </LayoutSection>
 
       <LayoutSection>

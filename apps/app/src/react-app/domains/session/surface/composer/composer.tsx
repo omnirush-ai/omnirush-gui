@@ -120,6 +120,8 @@ type ComposerProps = {
   runModeControl?: ReactNode;
   /** The "Full permissions" switch, rendered right after the model selector. */
   fullPermissionsControl?: ReactNode;
+  /** The "Sub-agents" model and effort menu, shown right after the model selector. */
+  subagentModelControl?: ReactNode;
 };
 
 const FLUSH_PROMPT_EVENT = "omnirush:flushPromptDraft";
@@ -1763,6 +1765,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                     if (!props.steering) props.onModelVariantChange(value);
                   }}
                 />
+                {props.subagentModelControl}
                 {props.fullPermissionsControl}
                 {props.modelUnavailable ? props.onRefreshOrganizationModels ? (
                   <button
