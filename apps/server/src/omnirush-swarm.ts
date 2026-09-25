@@ -29,6 +29,20 @@ export const OMNIRUSH_SUBAGENT_DEPTH = 3;
 export const OMNIRUSH_SWARM_MAX_RUNNING = Number.POSITIVE_INFINITY;
 export const OMNIRUSH_SWARM_MAX_PER_TURN = Number.POSITIVE_INFINITY;
 
+/**
+ * Private request headers the swarm plugin puts on a sub-agent's model
+ * request when the sub-agent runs on a model picked for sub-agents
+ * (omnirush-subagent-model.ts): the main model to fall back to, its effort,
+ * and the main session. The local gateway broker consumes them; they never
+ * leave the machine.
+ */
+export const SUBAGENT_FALLBACK_MODEL_HEADER = "x-omnirush-subagent-fallback-model";
+export const SUBAGENT_FALLBACK_EFFORT_HEADER = "x-omnirush-subagent-fallback-effort";
+export const SUBAGENT_ROOT_SESSION_HEADER = "x-omnirush-subagent-root";
+
+/** The collector trace event recording that a sub-agent ran on the main model instead of the picked one. */
+export const SUBAGENT_MODEL_FALLBACK_TRACE = "subagent.model_fallback";
+
 /** The coordination board, relative to the workspace root. */
 export const OMNIRUSH_SWARM_FILE = "swarm.md";
 

@@ -1049,3 +1049,111 @@ describe("OmniRush gateway broker collect deadline", () => {
     expect(attempts[1]!.signal.reason).toBe(reason);
   });
 });
+
+describe("OmniRush gateway broker: sub-agent model fallback", () => {
+  type Reply = (body: Record<string, unknown>) => Response;
+  function fallbackBroker(reply: Reply) {
+    const calls: UpstreamCall[] = [];
+    const events: Array<Record<string, unknown>> = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
+      engineToken: "local-engine-token",
+      subagentRetryDelayMs: 1,
+      onSubagentFallback: (event) => events.push(event),
+      fetch: async (_input, init) => {
+        const raw = init?.body;
+        const body = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw as ArrayBuffer)) as Record<string, unknown>;
+        calls.push({ body, headers: new Headers(init?.headers) });
+        return reply(body);
+      },
+    });
+    return { broker, calls, events };
+  }
+  const subagentHeaders = {
+    "x-omnirush-subagent-fallback-model": "gpt-6-astra",
+    "x-omnirush-subagent-fallback-effort": "max",
+    "x-omnirush-subagent-root": "ses_main",
+    "x-omnirush-session-id": "ses_child",
+    "x-omnirush-task-id": "msg_1",
+  };
+  const refuse = (status: number, code: string) => Response.json({ detail: code }, { status });
+
+  test("a picked model the gateway does not serve moves to the main model at once, with the main effort", async () => {
+    const { broker, calls, events } = fallbackBroker((body) => body.model === "meta-muse-spark"
+      ? refuse(400, "model_unavailable")
+      : Response.json({ output: [{ type: "output_text", text: "ok" }] }));
+    const response = await broker.handle(gatewayRequest(
+      { model: "meta-muse-spark", input: "x", reasoning: { effort: "medium", summary: "auto" } },
+      subagentHeaders,
+    ), "responses");
+
+    expect(response.status).toBe(200);
+    expect(calls.map((call) => call.body)).toEqual([
+      { model: "meta-muse-spark", input: "x", reasoning: { effort: "medium", summary: "auto" } },
+      { model: "gpt-6-astra", input: "x", reasoning: { summary: "auto", effort: "max" } },
+    ]);
+    // The private headers never leave the machine.
+    for (const call of calls) {
+      expect([...call.headers.keys()].filter((name) => name.startsWith("x-omnirush-subagent"))).toEqual([]);
+      expect(call.headers.get("x-omnirush-session-id")).toBe("ses_child");
+    }
+    expect(events).toEqual([expect.objectContaining({
+      sessionId: "ses_child",
+      rootSessionId: "ses_main",
+      messageId: "msg_1",
+      requested: "meta-muse-spark",
+      used: "gpt-6-astra",
+      effort: "max",
+      reason: "model_unavailable",
+      status: 200,
+      ok: true,
+    })]);
+  });
+
+  test("a busy picked model is tried once more, then moves; a second success stays on it", async () => {
+    let busy = 2;
+    const stays = fallbackBroker((body) => body.model === "gpt-6-sol" && busy-- > 1
+      ? refuse(429, "model_concurrency_limited")
+      : Response.json({ output: [] }));
+    expect((await stays.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "a" }, subagentHeaders), "responses")).status).toBe(200);
+    expect(stays.calls.map((call) => call.body.model)).toEqual(["gpt-6-sol", "gpt-6-sol"]);
+    expect(stays.events).toEqual([]);
+
+    const moves = fallbackBroker((body) => body.model === "gpt-6-sol"
+      ? new Response("upstream down", { status: 503 })
+      : Response.json({ output: [] }));
+    expect((await moves.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b", reasoning_effort: "high" }, subagentHeaders), "responses")).status).toBe(200);
+    expect(moves.calls.map((call) => call.body)).toEqual([
+      { model: "gpt-6-sol", input: "b", reasoning_effort: "high" },
+      { model: "gpt-6-sol", input: "b", reasoning_effort: "high" },
+      { model: "gpt-6-astra", input: "b", reasoning: { effort: "max" } },
+    ]);
+    expect(moves.events.map((event) => event.reason)).toEqual(["http_503"]);
+  });
+
+  test("account-wide refusals, other errors and requests without the header pass through untouched", async () => {
+    const account = fallbackBroker(() => refuse(429, "daily_grant_exhausted"));
+    const refused = await account.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "a" }, subagentHeaders), "responses");
+    expect(refused.status).toBe(429);
+    expect(account.calls).toHaveLength(1);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("daily_grant_exhausted");
+
+    const main = fallbackBroker(() => refuse(400, "model_unavailable"));
+    expect((await main.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "a" }), "responses")).status).toBe(400);
+    expect(main.calls).toHaveLength(1);
+
+    const same = fallbackBroker(() => refuse(400, "model_unavailable"));
+    expect((await same.broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "a" }, subagentHeaders), "responses")).status).toBe(400);
+    expect(same.calls).toHaveLength(1);
+    expect(same.events).toEqual([]);
+  });
+
+  test("when the main model refuses too, its error reaches the engine readably", async () => {
+    const { broker, calls, events } = fallbackBroker(() => refuse(400, "model_unavailable"));
+    const response = await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "a" }, subagentHeaders), "responses");
+    expect(response.status).toBe(400);
+    expect(calls.map((call) => call.body.model)).toEqual(["gpt-6-sol", "gpt-6-astra"]);
+    expect(events.map((event) => event.ok)).toEqual([false]);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toContain("not available");
+  });
+});

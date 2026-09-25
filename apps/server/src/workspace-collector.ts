@@ -11,6 +11,7 @@ import { minimatch } from "minimatch";
 import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import { TurnBaseStore, TurnDiffBuilder, type TurnDiffInput } from "./turn-diff.js";
+import { SUBAGENT_MODEL_FALLBACK_TRACE } from "./omnirush-swarm.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -214,6 +215,52 @@ export type CollectorSessionBlock = {
   child_session_ids: string[];
 };
 
+/** A "subagent.model_fallback" trace event of kind "gateway", as the collector keeps it. */
+type SubagentModelFallback = { requested: string; used: string; effort: string | null; at: number };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function subagentModelFallback(data: unknown): { child: string; fallback: SubagentModelFallback } | null {
+  if (!isRecord(data) || data.kind !== "gateway" || data.ok === false) return null;
+  const child = typeof data.child_session_id === "string" ? data.child_session_id : "";
+  const requested = typeof data.requested_model === "string" ? data.requested_model : "";
+  const used = typeof data.used_model === "string" ? data.used_model : "";
+  const at = typeof data.at === "number" && Number.isFinite(data.at) ? data.at : Date.now();
+  if (!child || !requested || !used || requested === used) return null;
+  return { child, fallback: { requested, used, effort: typeof data.used_effort === "string" ? data.used_effort : null, at } };
+}
+
+/**
+ * The child's engine messages with the model that really answered: an
+ * omnirush.ai assistant message on the picked model that was still running
+ * when the broker moved its session to the main model (or started after)
+ * names the main model and effort, and keeps the picked one under
+ * `omnirushModelFallback`. Other messages pass unchanged (same objects).
+ */
+function withSubagentFallbacks(messages: unknown[], fallbacks: readonly SubagentModelFallback[] | undefined): unknown[] {
+  if (!fallbacks?.length) return messages;
+  return messages.map((message) => {
+    if (!isRecord(message) || !isRecord(message.info)) return message;
+    const info = message.info;
+    if (info.role !== "assistant" || info.providerID !== "omnirush" || typeof info.modelID !== "string") return message;
+    const time = isRecord(info.time) ? info.time : {};
+    const completed = typeof time.completed === "number" ? time.completed : Number.POSITIVE_INFINITY;
+    const fallback = fallbacks.find((entry) => entry.requested === info.modelID && completed >= entry.at);
+    if (!fallback) return message;
+    return {
+      ...message,
+      info: {
+        ...info,
+        modelID: fallback.used,
+        ...(fallback.effort ? { variant: fallback.effort } : {}),
+        omnirushModelFallback: { requested: fallback.requested, ...(typeof info.variant === "string" ? { requestedVariant: info.variant } : {}), reason: "gateway_refused" },
+      },
+    };
+  });
+}
+
 export type CollectorChildSession = {
   childSessionId: string;
   parentSessionId: string;
@@ -359,6 +406,13 @@ type SessionState = {
   model: CollectorSessionModel | null;
   childSessionIds: string[];
   childCheckpoints: Map<string, string>;
+  /**
+   * Sub-agent requests the gateway broker moved from the picked sub-agent
+   * model to the main model, per sub-agent session (in memory only): the
+   * engine still names the picked model on those messages, so the recorded
+   * child messages are corrected to the model that answered.
+   */
+  subagentFallbacks: Map<string, SubagentModelFallback[]>;
   failureCount: number;
   lastFailureAt?: string;
   lastSuccessAt?: string;
@@ -3213,6 +3267,7 @@ export class WorkspaceCollector {
       model: null,
       childSessionIds: [],
       childCheckpoints: new Map(),
+      subagentFallbacks: new Map(),
       failureCount: 0,
       ready: Promise.resolve(),
       tail: Promise.resolve(),
@@ -3608,6 +3663,17 @@ export class WorkspaceCollector {
     const state = this.sessions.get(sessionId);
     if (!state || state.finished) return;
     for (const candidate of pathCandidates(data)) this.recordTouchedPath(state, candidate);
+    if (type === SUBAGENT_MODEL_FALLBACK_TRACE) {
+      const entry = subagentModelFallback(data);
+      if (entry) {
+        const list = state.subagentFallbacks.get(entry.child) ?? [];
+        list.push(entry.fallback);
+        state.subagentFallbacks.set(entry.child, list.slice(-32));
+        while (state.subagentFallbacks.size > MAX_CHILD_SESSIONS) {
+          state.subagentFallbacks.delete(state.subagentFallbacks.keys().next().value as string);
+        }
+      }
+    }
     this.appendTrace(state, type, data);
   }
 
@@ -3691,7 +3757,7 @@ export class WorkspaceCollector {
       ...(Number.isSafeInteger(child.depth) && child.depth! >= 1 && child.depth! <= MAX_COLLECTOR_CHILD_SESSION_DEPTH ? { depth: child.depth } : {}),
       title: child.title ? clampCollectorText(child.title, MAX_GIT_SUBJECT_CHARS) : null,
       agent: child.agent ? clampCollectorText(child.agent, MAX_ENVIRONMENT_FIELD_CHARS) : null,
-      messages: child.messages,
+      messages: withSubagentFallbacks(child.messages, state.subagentFallbacks.get(child.childSessionId)),
     });
     void this.persistOnceReady(state);
   }

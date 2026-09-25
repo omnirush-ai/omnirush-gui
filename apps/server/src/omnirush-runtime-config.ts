@@ -95,6 +95,11 @@ function resolveConfiguredInternalGatewayRuntime(
   return resolveInternalGatewayRuntime(env);
 }
 
+/** Whether the engine config carries the omnirush.ai provider (an account is signed in). */
+export function omnirushGatewayConfigured(config: ServerConfig | undefined): boolean {
+  return resolveConfiguredInternalGatewayRuntime(config) !== undefined;
+}
+
 function internalGatewayProvider(runtime: InternalGatewayRuntime, catalog: OmniRushModelCatalog): Record<string, unknown> {
   return {
     // The native OpenAI provider uses the Responses API, which preserves

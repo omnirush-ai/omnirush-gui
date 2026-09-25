@@ -3,6 +3,30 @@ import { timingSafeEqual } from "node:crypto";
 import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget } from "./collect-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import type { OmniRushGatewayCredentialBundle, OmniRushGatewayCredentials } from "./types.js";
+import {
+  SUBAGENT_FALLBACK_EFFORT_HEADER,
+  SUBAGENT_FALLBACK_MODEL_HEADER,
+  SUBAGENT_ROOT_SESSION_HEADER,
+} from "./omnirush-swarm.js";
+
+/** A sub-agent request the gateway refused on the picked model and that was sent again on the main model. */
+export type SubagentModelFallbackEvent = {
+  /** The sub-agent session (x-omnirush-session-id), when the request named it. */
+  sessionId: string | null;
+  /** The main session above it, when the swarm plugin named it. */
+  rootSessionId: string | null;
+  /** The engine message id of the prompt (x-omnirush-task-id). */
+  messageId: string | null;
+  requested: string;
+  used: string;
+  effort: string | null;
+  /** The gateway's error code, or `http_<status>` without one. */
+  reason: string;
+  status: number;
+  /** Whether the main model answered. */
+  ok: boolean;
+  at: number;
+};
 
 type BrokerOptions = {
   credentials?: OmniRushGatewayCredentials;
@@ -11,6 +35,10 @@ type BrokerOptions = {
   log?: (level: "info" | "warn" | "error", message: string, attributes?: Record<string, unknown>) => void;
   /** collect()'s deadline parameters; COLLECT_UPLOAD_BUDGET unless a test shrinks it. */
   collectUploadBudget?: CollectUploadBudget;
+  /** Hears every sub-agent request moved to the main model (see subagentFallback). */
+  onSubagentFallback?: (event: SubagentModelFallbackEvent) => void;
+  /** The pause before a busy picked model is tried once more; tests shrink it. */
+  subagentRetryDelayMs?: number;
 };
 
 /**
@@ -497,6 +525,117 @@ function withReasoningEffort(body: ArrayBuffer, effort: string): ArrayBuffer | s
   return JSON.stringify({ ...parsed, reasoning: { ...reasoning, effort } });
 }
 
+/**
+ * Gateway refusals of a sub-agent's picked model that move the request to
+ * the main model at once: the model is not served to this account (or at
+ * all), cannot take this request, or its route is not set up.
+ */
+const SUBAGENT_MODEL_REFUSED = new Set([
+  "model_unavailable",
+  "model_not_allowed",
+  "model_not_found",
+  "model_input_not_supported",
+  "reasoning_effort_not_allowed",
+  "unsupported_model_endpoint",
+  "muse_relay_not_configured",
+  "model_upstream_auth_failed",
+  "model_upstream_misconfigured",
+]);
+/** Busy or down: the picked model is tried once more, then the request moves to the main model. */
+const SUBAGENT_MODEL_BUSY = new Set([
+  "model_concurrency_limited",
+  "model_upstream_unavailable",
+  "internal_proxy_unavailable",
+  "provider_unavailable",
+  "provider_rate_limited",
+  "capacity_unavailable",
+  "circuit_open",
+  "maintenance",
+  "draining",
+  "auth_unavailable",
+  "token_capacity",
+  "gateway_overload",
+  "queue_timeout",
+]);
+/** Account-wide refusals: another model would be refused the same way, so nothing moves. */
+const ACCOUNT_REFUSED = new Set([
+  "daily_grant_exhausted",
+  "grant_check_unavailable",
+  "account_inactive",
+  "consent_required",
+  "consent_version_outdated",
+  "omnirush_account_required",
+  "model_request_too_large",
+]);
+const SUBAGENT_BUSY_STATUSES = new Set([429, 502, 503, 504]);
+const SUBAGENT_RETRY_DELAY_MS = 1_500;
+const FALLBACK_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+type SubagentRefusal = { move: "now" | "after_retry" | "never"; reason: string };
+
+/** The gateway error code of a refused response, read from a clone so the body stays readable. */
+async function refusalCode(response: Response): Promise<string | null> {
+  if (!(response.headers.get("content-type") ?? "").includes("application/json")) return null;
+  const text = await response.clone().text().catch(() => "");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(payload)) return null;
+  const nested = isRecord(payload.error) ? payload.error : null;
+  const code = stringField(payload.detail) ?? stringField(payload.error) ?? stringField(nested?.code) ?? stringField(payload.code);
+  return code ? code.replace(/^upstream_/, "") : null;
+}
+
+async function subagentRefusal(response: Response): Promise<SubagentRefusal> {
+  const code = await refusalCode(response);
+  const reason = code ?? `http_${response.status}`;
+  if (code && ACCOUNT_REFUSED.has(code)) return { move: "never", reason };
+  if (code && SUBAGENT_MODEL_REFUSED.has(code)) return { move: "now", reason };
+  if ((code && SUBAGENT_MODEL_BUSY.has(code)) || SUBAGENT_BUSY_STATUSES.has(response.status)) return { move: "after_retry", reason };
+  return { move: "never", reason };
+}
+
+function requestedModel(body: ArrayBuffer | string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(typeof body === "string" ? body : new TextDecoder().decode(body));
+    return isRecord(parsed) ? stringField(parsed.model) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The same request on another model: its effort replaced (or dropped for the model's default). */
+function withModel(body: ArrayBuffer | string, model: string, effort: string | null): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(typeof body === "string" ? body : new TextDecoder().decode(body));
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+  const { reasoning_effort: _legacy, ...rest } = parsed;
+  const reasoning = isRecord(rest.reasoning) ? { ...rest.reasoning } : null;
+  if (reasoning) delete reasoning.effort;
+  const nextReasoning = effort ? { ...(reasoning ?? {}), effort } : reasoning;
+  return JSON.stringify({ ...rest, model, ...(nextReasoning ? { reasoning: nextReasoning } : {}) });
+}
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
 function responseHeaders(headers: Headers): Headers {
   const result = new Headers();
   for (const [name, value] of headers) {
@@ -518,6 +657,8 @@ export class OmniRushGatewayBroker {
   private readonly fetcher: typeof externalFetch;
   private readonly log?: BrokerOptions["log"];
   private readonly collectUploadBudget: CollectUploadBudget;
+  private readonly onSubagentFallback?: BrokerOptions["onSubagentFallback"];
+  private readonly subagentRetryDelayMs: number;
   private refreshInFlight: Promise<boolean> | null = null;
   /**
    * The pair this broker held before it adopted one from the store. Spent as
@@ -543,6 +684,8 @@ export class OmniRushGatewayBroker {
     this.fetcher = options.fetch ?? externalFetch;
     this.log = options.log;
     this.collectUploadBudget = options.collectUploadBudget ?? COLLECT_UPLOAD_BUDGET;
+    this.onSubagentFallback = options.onSubagentFallback;
+    this.subagentRetryDelayMs = options.subagentRetryDelayMs ?? SUBAGENT_RETRY_DELAY_MS;
   }
 
   get enabled(): boolean {
@@ -583,6 +726,9 @@ export class OmniRushGatewayBroker {
           code: "omnirush_account_required",
         },
       }, { status: 401 });
+    }
+    if (!response.ok && response.status !== 401 && body !== undefined) {
+      response = await this.subagentFallback(request, normalizedPath, body, response);
     }
     const contentType = response.headers.get("content-type") ?? "";
     // Sign-in failures keep their own answer above; every other gateway
@@ -696,6 +842,62 @@ export class OmniRushGatewayBroker {
     const effort = requestedReasoningEffort(request);
     if (!effort || (path !== "responses" && path !== "responses/compact")) return body;
     return withReasoningEffort(body, effort);
+  }
+
+  /**
+   * A sub-agent runs on a model picked for sub-agents, and the swarm plugin
+   * names the main model it falls back to (SUBAGENT_FALLBACK_MODEL_HEADER).
+   * When the gateway refuses the picked model before answering (the model is
+   * not served, or it stays busy or down on a second try), the same request
+   * goes to the main model instead, so the sub-agent's task continues rather
+   * than failing. Account-wide refusals and every other error pass through.
+   */
+  private async subagentFallback(request: Request, path: string, body: ArrayBuffer | string, response: Response): Promise<Response> {
+    const fallback = request.headers.get(SUBAGENT_FALLBACK_MODEL_HEADER)?.trim() ?? "";
+    if (!fallback || !FALLBACK_MODEL_ID.test(fallback) || (path !== "responses" && path !== "responses/compact")) return response;
+    const requested = requestedModel(body);
+    if (!requested || requested === fallback) return response;
+    let refusal = await subagentRefusal(response);
+    if (refusal.move === "never") return response;
+    if (refusal.move === "after_retry") {
+      await response.body?.cancel().catch(() => undefined);
+      await pause(this.subagentRetryDelayMs, request.signal);
+      if (request.signal.aborted || !this.state) return response;
+      const again = await this.forward(request, path, body);
+      if (again.ok || again.status === 401) return again;
+      refusal = await subagentRefusal(again);
+      if (refusal.move === "never") return again;
+      response = again;
+    }
+    const effortHeader = request.headers.get(SUBAGENT_FALLBACK_EFFORT_HEADER)?.trim().toLowerCase() ?? "";
+    const effort = REASONING_EFFORTS.has(effortHeader) ? effortHeader : null;
+    const moved = withModel(body, fallback, effort);
+    if (moved === null || !this.state) return response;
+    await response.body?.cancel().catch(() => undefined);
+    const next = await this.forward(request, path, moved);
+    this.log?.("warn", "omnirush.ai sub-agent model refused; sent on the main model", {
+      requested,
+      used: fallback,
+      reason: refusal.reason,
+      status: next.status,
+    });
+    try {
+      this.onSubagentFallback?.({
+        sessionId: request.headers.get("x-omnirush-session-id"),
+        rootSessionId: request.headers.get(SUBAGENT_ROOT_SESSION_HEADER),
+        messageId: request.headers.get("x-omnirush-task-id"),
+        requested,
+        used: fallback,
+        effort,
+        reason: refusal.reason,
+        status: next.status,
+        ok: next.ok,
+        at: Date.now(),
+      });
+    } catch {
+      // A listener never breaks the request.
+    }
+    return next;
   }
 
   private forward(request: Request, path: string, body: ArrayBuffer | string | undefined, accessToken?: string): Promise<Response> {
