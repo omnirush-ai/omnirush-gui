@@ -7,4 +7,7 @@ protocols:
       - omnirush
 linux:
   executableName: omnirush
+pacman:
+  # The AUR package's name, so the two replace each other cleanly.
+  packageName: omnirush
 artifactName: omnirush-${os}-${arch}-${version}.${ext}
