@@ -88,6 +88,16 @@ jobs:
             target: x86_64-unknown-linux-gnu
             builder_args: --linux --x64
             update_manifest: latest-linux.yml
+          # Built natively on an arm64 runner, so electron-builder installs
+          # and rebuilds the native modules (better-sqlite3, node-pty) for the
+          # host CPU and prepare-sidecar fetches the arm64 opencode. Same
+          # Ubuntu release as x64, so both need the same glibc.
+          - name: Linux arm64
+            runner: ubuntu-22.04-arm
+            platform: linux
+            target: aarch64-unknown-linux-gnu
+            builder_args: --linux --arm64
+            update_manifest: latest-linux-arm64.yml
     runs-on: ${{ matrix.runner }}
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}

@@ -5,14 +5,18 @@
 pkgname=omnirush
 pkgver=0.0.0
 pkgrel=1 # pkgrel should change when PKGBUILD does. Standard is to change back to 1 next time. Any interger is valid.
-pkgdesc="An Open source alternative to Claude Cowork"
+pkgdesc="OmniRush.ai desktop app: AI agents for every profession"
 arch=('x86_64' 'aarch64')
 url="https://github.com/omnirush-ai/omnirush-gui"
 license=('MIT')
 depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'xdg-utils' 'at-spi2-core' 'libdrm' 'libxkbcommon' 'mesa' 'dbus' 'hicolor-icon-theme')
 optdepends=('libsecret: encrypt the sign-in with a Secret Service keyring'
             'gnome-keyring: Secret Service keyring for window-manager sessions (Hyprland, sway, i3)')
-options=(!strip)
+options=(!strip !debug)
+
+# The license text of the tagged release (MIT, with the ee/ exceptions it lists).
+source=("${pkgname}-${pkgver}-LICENSE::${url}/raw/v${pkgver}/LICENSE")
+sha256sums=('SKIP')
 
 # Architecture-specific sources and checksums
 source_x86_64=("${pkgname}-${pkgver}-x64.tar.gz::${url}/releases/download/v${pkgver}/omnirush-linux-x64-${pkgver}.tar.gz")
@@ -41,9 +45,16 @@ package() {
   install -d "${pkgdir}/opt/omnirush"
   cp -a "${bundle_dir}/." "${pkgdir}/opt/omnirush/"
 
+  # The Electron executable is named by linux.executableName in
+  # apps/desktop/electron-builder.yml.
   install -d "${pkgdir}/usr/bin"
-  ln -s /opt/omnirush/@omnirushdesktop "${pkgdir}/usr/bin/omnirush"
+  ln -s /opt/omnirush/omnirush "${pkgdir}/usr/bin/omnirush"
 
+  local size
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "${pkgdir}/opt/omnirush/resources/icons/linux/${size}x${size}.png" \
+      "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/omnirush.png"
+  done
   install -Dm644 "${pkgdir}/opt/omnirush/resources/app-dist/omnirush-logo-square.svg" \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/omnirush.svg"
 
@@ -51,15 +62,18 @@ package() {
   cat > "${pkgdir}/usr/share/applications/omnirush.desktop" <<'EOF'
 [Desktop Entry]
 Name=OmniRush.ai
-Comment=Run agents, skills, and MCP workflows
+Comment=OmniRush.ai desktop app
 Exec=omnirush %U
 Terminal=false
 Type=Application
 Icon=omnirush
-StartupWMClass=OmniRush.ai
-Categories=Development;Utility;
+StartupWMClass=ai.omnirush
+Categories=Development;
 MimeType=x-scheme-handler/omnirush;
 EOF
+
+  install -Dm644 "${srcdir}/${pkgname}-${pkgver}-LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 
   chmod 4755 "${pkgdir}/opt/omnirush/chrome-sandbox"
 }

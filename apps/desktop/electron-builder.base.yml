@@ -91,6 +91,25 @@ linux:
     - AppImage
     - deb
     - tar.gz
+    - pacman
+# Arch Linux package (`sudo pacman -U omnirush-linux-<arch>-<version>.pacman`).
+# electron-builder's default pacman dependencies name packages Arch no longer
+# ships (http-parser) or moved to the AUR (libappindicator-gtk3), which makes
+# `pacman -U` fail; these are the ones in packaging/aur/PKGBUILD.
+pacman:
+  depends:
+    - gtk3
+    - nss
+    - alsa-lib
+    - libxss
+    - libxtst
+    - xdg-utils
+    - at-spi2-core
+    - libdrm
+    - libxkbcommon
+    - mesa
+    - dbus
+    - hicolor-icon-theme
 win:
   icon: resources/icons/icon.ico
   extraResources:

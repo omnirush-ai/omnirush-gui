@@ -102,5 +102,12 @@ text = re.sub(
     flags=re.M,
 )
 text = re.sub(r"^\s*sha256sums_aarch64 = .*", f"\tsha256sums_aarch64 = {sha_arm64}", text, flags=re.M)
+# The license comes from the release tag too (source=, not per-arch).
+text = re.sub(
+    r"^\s*source = (\S+?)-[^-\s]+-LICENSE::(\S+?)/raw/v[^/\s]+/LICENSE$",
+    lambda m: f"\tsource = {m.group(1)}-{version}-LICENSE::{m.group(2)}/raw/v{version}/LICENSE",
+    text,
+    flags=re.M,
+)
 srcinfo_path.write_text(text)
 PY
