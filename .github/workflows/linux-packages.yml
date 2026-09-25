@@ -229,8 +229,11 @@ jobs:
           # Binary repack: the runtime depends are installed by pacman -U.
           sudo -u builder makepkg -f -d --noconfirm
           # .zst on Arch, .xz on Arch Linux ARM (makepkg.conf PKGEXT).
-          pkg=$(ls omnirush-"$PACKAGE_VERSION"-1-${{ matrix.carch }}.pkg.tar.* | grep -v '\.sig$' | head -1)
-          [ -n "$pkg" ]
+          pkg=
+          for f in omnirush-"$PACKAGE_VERSION"-1-${{ matrix.carch }}.pkg.tar.*; do
+            case "$f" in *.sig) ;; *) pkg=$f ;; esac
+          done
+          [ -f "$pkg" ]
           namcap "$pkg" || true
           for attempt in 1 2 3; do
             pacman -U --noconfirm "$pkg" && break
