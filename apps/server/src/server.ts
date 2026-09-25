@@ -1160,7 +1160,24 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       const gatewayMount = url.pathname.match(/^\/omnirush-gateway\/v1\/(.+)$/);
       if (gatewayMount?.[1]) {
         authMode = "client";
-        return finalize(await gatewayBroker.handle(request, gatewayMount[1]));
+        try {
+          return finalize(await gatewayBroker.handle(request, gatewayMount[1]));
+        } catch (error) {
+          // The broker answers every upstream failure itself; anything that
+          // still escapes is logged with its cause and reaches the engine as a
+          // readable, retryable error instead of a bare 500 from serve-node.
+          const requestCanceled = isExpectedRequestCancellation(error, request.signal);
+          if (requestCanceled) return finalize(jsonResponse({ code: "request_aborted", message: "Request was canceled" }, 499));
+          captureServerException(error, { method: request.method, route: "/omnirush-gateway/v1", requestSignal: request.signal });
+          logger.log("error", "omnirush.ai gateway request failed", {
+            path: gatewayMount[1],
+            error: error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : "unknown",
+          });
+          errorMessage = "gateway_error";
+          return finalize(new Response(JSON.stringify({
+            error: { message: "omnirush.ai: the model request failed inside the app. Retrying shortly.", type: "omnirush_error", code: "gateway_local_error" },
+          }), { status: 502, headers: { "content-type": "application/json", "retry-after": "2" } }));
+        }
       }
 
       const canonicalOpencodeMount = parseWorkspaceOpencodeMount(url.pathname);

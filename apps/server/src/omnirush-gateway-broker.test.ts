@@ -376,7 +376,8 @@ describe("OmniRush gateway broker credential adoption", () => {
     });
     // Nothing has landed in the store yet: the request fails without a sign-out.
     const contended = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
-    expect(contended.status).toBe(401);
+    // A retryable answer, not a sign-in error that would end the turn.
+    expect(contended.status).toBe(503);
     expect(await contended.text()).not.toContain("omnirush_account_required");
     expect(refreshCalls).toEqual(["refresh-1"]);
     expect(invalidated).toBe(0);
@@ -599,7 +600,7 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
     server.expired.add("access-1");
     server.contendNext = true;
     const contended = await broker.handle(prompt(), "responses");
-    expect(contended.status).toBe(401);
+    expect(contended.status).toBe(503);
     expect(await contended.text()).not.toContain("omnirush_account_required");
     expect(await store.load()).toMatchObject({ refreshToken: "refresh-1" });
     // The desktop's rotation lands in the store...
@@ -1166,5 +1167,82 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     // Without the fallback header (the main agent, or an untouched setting) nothing moves.
     expect((await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b" }), "responses")).status).toBe(200);
     expect(calls.at(-1)?.body.model).toBe("gpt-6-sol");
+  });
+});
+
+describe("OmniRush gateway broker: connection failures never become a bare 500", () => {
+  const credentials = { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" };
+  const request = (body: Record<string, unknown> = { model: "muse-spark-1.1", input: "x" }) => gatewayRequest(body);
+
+  test("a request whose connection fails before an answer is sent again, and answers when one lands", async () => {
+    let calls = 0;
+    const logs: string[] = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      log: (_level, message) => logs.push(message),
+      fetch: async () => {
+        calls += 1;
+        if (calls < 3) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET", message: "socket hang up" } });
+        return Response.json({ output: [] });
+      },
+    });
+    const response = await broker.handle(request(), "responses");
+    expect(response.status).toBe(200);
+    expect(calls).toBe(3);
+    expect(logs.filter((line) => line.includes("failed before an answer"))).toHaveLength(2);
+  });
+
+  test("a connection that keeps failing answers a retryable 503 with readable copy", async () => {
+    const broker = new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      fetch: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }); },
+    });
+    const response = await broker.handle(request(), "responses");
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("2");
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("gateway_unreachable");
+    expect(body.error.message).toContain("could not be reached (UND_ERR_SOCKET)");
+  });
+
+  test("a refresh that cannot reach omnirush.ai keeps the session and answers every waiting request with a retryable 503", async () => {
+    let refreshes = 0;
+    let invalidated = false;
+    const broker = new OmniRushGatewayBroker({
+      credentials: { ...credentials, invalidate: async () => { invalidated = true; } },
+      engineToken: "local-engine-token",
+      fetch: async (input) => {
+        if (String(input).endsWith("/device/refresh")) {
+          refreshes += 1;
+          throw new DOMException("The operation timed out.", "TimeoutError");
+        }
+        return Response.json({ error: "expired" }, { status: 401 });
+      },
+    });
+    const responses = await Promise.all(Array.from({ length: 6 }, () => broker.handle(request(), "responses")));
+    expect(responses.map((response) => response.status)).toEqual([503, 503, 503, 503, 503, 503]);
+    expect(((await responses[0]!.json()) as { error: { code: string } }).error.code).toBe("device_refresh_unavailable");
+    expect(refreshes).toBe(1);
+    expect(invalidated).toBe(false);
+    expect(broker.enabled).toBe(true);
+  });
+
+  test("an upstream stream that fails mid-way ends with the readable interrupted event", async () => {
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new TextEncoder().encode('event: response.created\ndata: {"type":"response.created"}\n\n'));
+          return;
+        }
+        controller.error(new TypeError("terminated"));
+      },
+    });
+    const text = await new Response(guardEventStream(body)).text();
+    expect(text).toContain("response.created");
+    expect(text).toContain("upstream_stream_interrupted");
   });
 });

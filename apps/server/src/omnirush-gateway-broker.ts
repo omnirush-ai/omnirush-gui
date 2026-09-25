@@ -356,7 +356,16 @@ export function guardEventStream(
       // Read until at least one whole event can be forwarded: a pull that
       // enqueues nothing would not be called again.
       for (;;) {
-        const result = await read();
+        let result: Awaited<ReturnType<typeof read>>;
+        try {
+          result = await read();
+        } catch {
+          // The upstream connection failed mid-stream (reset, network change):
+          // end with the same readable, retryable error as an early close.
+          await reader.cancel().catch(() => undefined);
+          interrupt(controller, "truncated");
+          return;
+        }
         if ("idle" in result) {
           await reader.cancel().catch(() => undefined);
           interrupt(controller, "idle");
@@ -570,6 +579,35 @@ const ACCOUNT_REFUSED = new Set([
   "model_request_too_large",
 ]);
 const SUBAGENT_BUSY_STATUSES = new Set([429, 502, 503, 504]);
+
+/**
+ * Pauses before a model request whose connection to omnirush.ai failed
+ * (no response at all: reset, refused, network change, TLS or HTTP/2 session
+ * failure) is sent again. Once they are spent the engine gets a retryable
+ * 503 with readable copy instead of a bare 500.
+ */
+const UNREACHABLE_RETRY_DELAYS_MS = [500, 2_000];
+
+/** The failure's name, code and cause code, for the log: never a URL, header or body. */
+function fetchFailure(error: unknown): { name: string; message: string; code: string | null } {
+  const value = error instanceof Error ? error : new Error(String(error));
+  const code = (value as { code?: unknown }).code;
+  const cause = (value as { cause?: { code?: unknown; message?: unknown } }).cause;
+  const causeCode = cause && typeof cause.code === "string" ? cause.code : null;
+  const causeMessage = cause && typeof cause.message === "string" ? cause.message : "";
+  return {
+    name: value.name,
+    message: `${value.message}${causeMessage && !value.message.includes(causeMessage) ? ` (${causeMessage})` : ""}`.slice(0, 300),
+    code: typeof code === "string" ? code : causeCode,
+  };
+}
+
+function unreachableResponse(code: string, message: string): Response {
+  return new Response(JSON.stringify({ error: { message, type: "omnirush_error", code } }), {
+    status: 503,
+    headers: { "content-type": "application/json", "retry-after": "2" },
+  });
+}
 const SUBAGENT_RETRY_DELAY_MS = 1_500;
 const FALLBACK_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
@@ -663,6 +701,8 @@ export class OmniRushGatewayBroker {
   private readonly subagentRetryDelayMs: number;
   private readonly subagentModelRefused?: (model: string) => boolean;
   private refreshInFlight: Promise<boolean> | null = null;
+  /** Whether the last failed refresh left the session as it was (unreachable, 5xx, contended). */
+  private lastRefreshTransient = false;
   /**
    * The pair this broker held before it adopted one from the store. Spent as
    * a last resort when the adopted pair turns out to be dead too, so a stale
@@ -714,16 +754,29 @@ export class OmniRushGatewayBroker {
     const skipped = requestBody === undefined ? null : this.skipRefusedSubagentModel(request, normalizedPath, requestBody);
     const body = skipped?.body ?? requestBody;
     let spent = this.state.accessToken;
-    let response = await this.forward(request, normalizedPath, body, spent);
+    let response = await this.forwardModelRequest(request, normalizedPath, body, spent);
     // Two rounds at most: the first may only adopt a pair the desktop rotated,
     // whose own access token can have expired while the app was idle.
+    let refreshUnavailable = false;
     for (let round = 0; round < 2 && response.status === 401 && this.state; round += 1) {
       const credentialAlreadyRotated = this.state.accessToken !== spent;
-      if (!credentialAlreadyRotated && !(await this.refresh(spent))) break;
+      if (!credentialAlreadyRotated && !(await this.refresh(spent))) {
+        refreshUnavailable = this.state !== null && this.lastRefreshTransient;
+        break;
+      }
       if (!this.state) break;
       await response.body?.cancel().catch(() => undefined);
       spent = this.state.accessToken;
-      response = await this.forward(request, normalizedPath, body, spent);
+      response = await this.forwardModelRequest(request, normalizedPath, body, spent);
+    }
+    if (response.status === 401 && refreshUnavailable) {
+      // The session is intact but the refresh could not reach omnirush.ai:
+      // a retryable answer, not a sign-in error that ends the turn.
+      await response.body?.cancel().catch(() => undefined);
+      return unreachableResponse(
+        "device_refresh_unavailable",
+        "omnirush.ai: the session could not be renewed right now (the service did not answer). Retrying shortly.",
+      );
     }
     if (response.status === 401 && !this.state) {
       await response.body?.cancel().catch(() => undefined);
@@ -873,7 +926,7 @@ export class OmniRushGatewayBroker {
       await response.body?.cancel().catch(() => undefined);
       await pause(this.subagentRetryDelayMs, request.signal);
       if (request.signal.aborted || !this.state) return response;
-      const again = await this.forward(request, path, body);
+      const again = await this.forwardModelRequest(request, path, body);
       if (again.ok || again.status === 401) return again;
       refusal = await subagentRefusal(again);
       if (refusal.move === "never") return again;
@@ -884,7 +937,7 @@ export class OmniRushGatewayBroker {
     const moved = withModel(body, fallback, effort);
     if (moved === null || !this.state) return response;
     await response.body?.cancel().catch(() => undefined);
-    const next = await this.forward(request, path, moved);
+    const next = await this.forwardModelRequest(request, path, moved);
     this.log?.("warn", "omnirush.ai sub-agent model refused; sent on the main model", {
       requested,
       used: fallback,
@@ -928,6 +981,49 @@ export class OmniRushGatewayBroker {
     }
   }
 
+  /**
+   * forward() for a model request, never throwing: a connection that fails
+   * before any response is sent again after a short pause (the request never
+   * reached, or never got an answer from, omnirush.ai), and once the retries
+   * are spent the engine gets a retryable 503 with readable copy. Previously
+   * the exception escaped the route and the engine saw a bare
+   * `500 {"error":"internal_error"}` from the local server.
+   */
+  private async forwardModelRequest(
+    request: Request,
+    path: string,
+    body: ArrayBuffer | string | undefined,
+    accessToken?: string,
+  ): Promise<Response> {
+    let failure: ReturnType<typeof fetchFailure> | null = null;
+    for (let attempt = 0; attempt <= UNREACHABLE_RETRY_DELAYS_MS.length; attempt += 1) {
+      if (attempt > 0) {
+        await pause(UNREACHABLE_RETRY_DELAYS_MS[attempt - 1]!, request.signal);
+        if (request.signal.aborted) break;
+      }
+      if (!this.state) break;
+      try {
+        return await this.forward(request, path, body, attempt === 0 ? accessToken : this.state.accessToken);
+      } catch (error) {
+        if (request.signal.aborted) throw error;
+        failure = fetchFailure(error);
+        this.log?.("warn", "omnirush.ai model request failed before an answer", {
+          path,
+          attempt: attempt + 1,
+          error: failure.name,
+          code: failure.code,
+          message: failure.message,
+        });
+      }
+    }
+    if (request.signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
+    if (!this.state) return Response.json({ error: "omnirush_account_required" }, { status: 401 });
+    return unreachableResponse(
+      "gateway_unreachable",
+      `omnirush.ai: the model service could not be reached${failure?.code ? ` (${failure.code})` : ""}. Retrying shortly.`,
+    );
+  }
+
   private forward(request: Request, path: string, body: ArrayBuffer | string | undefined, accessToken?: string): Promise<Response> {
     if (!this.state) throw new Error("OmniRush gateway credentials are unavailable");
     const headers = new Headers();
@@ -948,9 +1044,21 @@ export class OmniRushGatewayBroker {
 
   private refresh(expectedAccessToken: string): Promise<boolean> {
     if (this.state?.accessToken !== expectedAccessToken) return Promise.resolve(true);
-    this.refreshInFlight ??= this.performRefresh(expectedAccessToken).finally(() => {
-      this.refreshInFlight = null;
-    });
+    this.refreshInFlight ??= this.performRefresh(expectedAccessToken)
+      .then((rotated) => {
+        if (rotated) this.lastRefreshTransient = false;
+        return rotated;
+      }, (error: unknown) => {
+        // Never shared as a rejection: every request waiting on this refresh
+        // would otherwise fail with an unhandled 500 at once.
+        this.lastRefreshTransient = true;
+        const failure = fetchFailure(error);
+        this.log?.("warn", "omnirush.ai device refresh failed; keeping the session", { error: failure.name, code: failure.code, message: failure.message });
+        return false;
+      })
+      .finally(() => {
+        this.refreshInFlight = null;
+      });
     return this.refreshInFlight;
   }
 
@@ -1002,6 +1110,7 @@ export class OmniRushGatewayBroker {
     const spent = this.state;
     const outcome = await this.rotate(spent);
     if (outcome.kind === "rotated") return true;
+    this.lastRefreshTransient = outcome.kind === "unavailable" || outcome.kind === "contended";
     if (outcome.kind === "unavailable") return false;
     if (this.state !== spent) return Boolean(this.state);
     // The token may have been spent elsewhere while this call was in flight;
