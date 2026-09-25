@@ -162,7 +162,16 @@ jobs:
       PACKAGE_VERSION: 0.0.${{ github.run_number }}
     steps:
       - name: Install test tools
-        run: pacman -Syu --noconfirm --needed git xorg-server-xvfb file desktop-file-utils namcap
+        run: |
+          # pacman 7 confines its downloads with Landlock, which the runner's
+          # container runtime does not permit ("restricting filesystem access
+          # failed"). The official archlinux image already sets
+          # DisableSandboxFilesystem; do the same on Arch Linux ARM.
+          sed -i 's/^#[[:space:]]*DisableSandboxFilesystem/DisableSandboxFilesystem/' /etc/pacman.conf
+          grep -q '^DisableSandboxFilesystem' /etc/pacman.conf \
+            || sed -i '0,/^\[options\]/s//[options]\nDisableSandboxFilesystem/' /etc/pacman.conf
+          grep -nE '^(DownloadUser|DisableSandbox)' /etc/pacman.conf
+          pacman -Syu --noconfirm --needed git xorg-server-xvfb file desktop-file-utils namcap
 
       - uses: actions/checkout@v4
 
