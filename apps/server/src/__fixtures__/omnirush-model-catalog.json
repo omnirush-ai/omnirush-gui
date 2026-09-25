@@ -31,6 +31,35 @@
       }
     },
     {
+      "id": "gpt-6-sol",
+      "object": "model",
+      "created": 0,
+      "owned_by": "omnirush",
+      "display_name": "GPT 6 Sol",
+      "default": false,
+      "reasoning_levels": [
+        "low",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "family": "OpenAI",
+      "status": "active",
+      "order": 1,
+      "api": "responses",
+      "limits": {
+        "context": 400000,
+        "output": 128000
+      },
+      "capabilities": {
+        "reasoning": true,
+        "tool_call": true,
+        "web_search": true,
+        "image_input": true,
+        "file_input": true
+      }
+    },
+    {
       "id": "gpt-5.6-sol",
       "object": "model",
       "created": 0,
@@ -45,7 +74,7 @@
       ],
       "family": "OpenAI",
       "status": "active",
-      "order": 1,
+      "order": 2,
       "api": "responses",
       "limits": {
         "context": 400000,
@@ -75,7 +104,7 @@
       ],
       "family": "Meta Muse",
       "status": "active",
-      "order": 20,
+      "order": 3,
       "api": "responses",
       "limits": {
         "context": 158000,
@@ -105,7 +134,7 @@
       ],
       "family": "Meta Muse",
       "status": "active",
-      "order": 21,
+      "order": 4,
       "api": "responses",
       "limits": {
         "context": 158000,
@@ -135,7 +164,7 @@
       ],
       "family": "Meta Muse",
       "status": "beta",
-      "order": 23,
+      "order": 5,
       "api": "responses",
       "limits": {
         "context": 99000,

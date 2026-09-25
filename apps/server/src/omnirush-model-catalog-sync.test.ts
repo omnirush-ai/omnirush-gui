@@ -113,10 +113,10 @@ function harness(config: ServerConfig, options: {
   return Object.assign(record, { sync });
 }
 
-const MUSE_IDS = ["gpt-6-astra", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1", "muse-spark-1.3"];
+const MUSE_IDS = ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1", "muse-spark-1.3"];
 /** The engine config file is written with sorted keys. */
 const MUSE_ENGINE_IDS = [...MUSE_IDS].sort();
-const BUILTIN_ENGINE_IDS = ["gpt-5.6-sol", "gpt-6-astra"];
+const BUILTIN_ENGINE_IDS = ["gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol"];
 
 describe("omnirush model catalog sync", () => {
   test("a changed catalog is stored and ALWAYS reloads the engine, even when the config file already moved on", async () => {
@@ -163,7 +163,7 @@ describe("omnirush model catalog sync", () => {
   test("an account without Muse keeps the built-ins and never reloads on first sync", async () => {
     const config = await setup();
     const body = backendCatalogBody();
-    const state = harness(config, { respond: async () => Response.json({ ...body, data: body.data.slice(0, 2) }) });
+    const state = harness(config, { respond: async () => Response.json({ ...body, data: body.data.slice(0, 3) }) });
 
     expect(await state.sync.run()).toBe("unchanged");
     expect(state.reloads).toEqual([]);
@@ -174,7 +174,7 @@ describe("omnirush model catalog sync", () => {
     const config = await setup();
     await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog(backendCatalogBody())!);
     const body = backendCatalogBody();
-    const state = harness(config, { respond: async () => Response.json({ ...body, data: body.data.slice(0, 2) }) });
+    const state = harness(config, { respond: async () => Response.json({ ...body, data: body.data.slice(0, 3) }) });
 
     expect(await state.sync.run()).toBe("applied");
     expect(state.reloads).toEqual([BUILTIN_ENGINE_IDS]);

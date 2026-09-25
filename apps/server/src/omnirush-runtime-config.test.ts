@@ -197,10 +197,11 @@ describe("omnirush runtime config file", () => {
       .filter(([, options]) => options.disabled !== true)
       .map(([key]) => key);
 
-    expect(Object.keys(models)).toEqual(["gpt-6-astra", "gpt-5.6-sol"]);
+    expect(Object.keys(models)).toEqual(["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"]);
     expect(models["gpt-6-astra"]).toMatchObject({ name: "GPT 6 Astra", reasoning: true, tool_call: true, variants });
+    expect(models["gpt-6-sol"]).toMatchObject({ name: "GPT 6 Sol", reasoning: true, tool_call: true, variants });
     expect(models["gpt-5.6-sol"]).toMatchObject({ name: "GPT-5.6 Sol", reasoning: true, tool_call: true, variants });
-    for (const id of ["gpt-6-astra", "gpt-5.6-sol"]) {
+    for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"]) {
       expect(Object.keys(models[id]!.variants as object).sort()).toEqual(Object.keys(variants).sort());
       expect(enabledVariants(models[id]!)).toEqual(["low", "high", "xhigh", "max"]);
     }
@@ -467,7 +468,7 @@ function v109OmniRushProvider(baseURL: string) {
     name: "omnirush.ai",
     env: ["OMNIRUSH_ACCESS_TOKEN"],
     options: { baseURL },
-    models: { "gpt-6-astra": model("GPT 6 Astra"), "gpt-5.6-sol": model("GPT-5.6 Sol") },
+    models: { "gpt-6-astra": model("GPT 6 Astra"), "gpt-6-sol": model("GPT 6 Sol"), "gpt-5.6-sol": model("GPT-5.6 Sol") },
   };
 }
 
@@ -490,14 +491,14 @@ describe("omnirush runtime config from the model catalog", () => {
     };
   }
 
-  test("Astra and Sol render exactly as in v1.0.9: built-in, from the new backend, and from an older one", () => {
+  test("Astra and both Sols render exactly as in v1.0.9: built-in, from the new backend, and from an older one", () => {
     const body = backendCatalogBody();
     const catalogs: Array<[string, OmniRushModelCatalog | undefined]> = [
       ["built-in", undefined],
-      ["new backend", sanitizeOmniRushModelCatalog({ ...body, data: body.data.slice(0, 2) })!],
+      ["new backend", sanitizeOmniRushModelCatalog({ ...body, data: body.data.slice(0, 3) })!],
       ["older backend", sanitizeOmniRushModelCatalog({
         object: "list",
-        data: body.data.slice(0, 2).map(({ id, display_name, reasoning_levels }) => ({ id, display_name, default: id === "gpt-6-astra", reasoning_levels })),
+        data: body.data.slice(0, 3).map(({ id, display_name, reasoning_levels }) => ({ id, display_name, default: id === "gpt-6-astra", reasoning_levels })),
       })!],
     ];
     for (const [source, catalog] of catalogs) {
@@ -512,7 +513,7 @@ describe("omnirush runtime config from the model catalog", () => {
     signIn(config);
     const before = await buildOmniRushRuntimeConfig(config);
     const body = backendCatalogBody();
-    await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog({ ...body, data: body.data.slice(0, 2) })!);
+    await writeOmniRushModelCatalog(config, sanitizeOmniRushModelCatalog({ ...body, data: body.data.slice(0, 3) })!);
     expect(await buildOmniRushRuntimeConfig(config)).toBe(before);
   });
 
@@ -535,7 +536,7 @@ describe("omnirush runtime config from the model catalog", () => {
     };
 
     expect(parsed.model).toBe("omnirush/gpt-6-astra");
-    expect(Object.keys(models).sort()).toEqual(["gpt-5.6-sol", "gpt-6-astra", "meta-muse-spark", "muse-spark-1.1", "muse-spark-1.3"]);
+    expect(Object.keys(models).sort()).toEqual(["gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "meta-muse-spark", "muse-spark-1.1", "muse-spark-1.3"]);
     const { models: _v109Models, ...v109Plumbing } = v109OmniRushProvider("http://127.0.0.1:48123/omnirush-gateway/v1");
     const { models: _models, ...plumbing } = provider;
     expect(plumbing).toEqual(v109Plumbing);

@@ -23,7 +23,7 @@ export type BackendCatalogBody = { object: string; catalog_version: string; data
 /**
  * GET /omnirush/v1/models as the backend's catalog serves it to an account
  * with Meta Muse on (rendered from the backend's own catalog code): Astra
- * (default) and Sol, then meta-muse-spark, muse-spark-1.1 and muse-spark-1.3
+ * (default), GPT 6 Sol and GPT-5.6 Sol, then meta-muse-spark, muse-spark-1.1 and muse-spark-1.3
  * (beta, text only). muse-spark-1.2 is unlisted. A fresh copy on every call.
  */
 export function backendCatalogBody(): BackendCatalogBody {
