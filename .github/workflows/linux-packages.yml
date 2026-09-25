@@ -170,8 +170,17 @@ jobs:
           sed -i 's/^#[[:space:]]*DisableSandboxFilesystem/DisableSandboxFilesystem/' /etc/pacman.conf
           grep -q '^DisableSandboxFilesystem' /etc/pacman.conf \
             || sed -i '0,/^\[options\]/s//[options]\nDisableSandboxFilesystem/' /etc/pacman.conf
-          grep -nE '^(DownloadUser|DisableSandbox)' /etc/pacman.conf
-          pacman -Syu --noconfirm --needed git xorg-server-xvfb file desktop-file-utils namcap
+          # Arch Linux ARM mirrors stall now and then; wait instead of
+          # aborting after 10 s under 1 B/s, and retry the whole install.
+          grep -q '^DisableDownloadTimeout' /etc/pacman.conf \
+            || sed -i '0,/^\[options\]/s//[options]\nDisableDownloadTimeout/' /etc/pacman.conf
+          grep -nE '^(DownloadUser|DisableSandbox|DisableDownloadTimeout)' /etc/pacman.conf
+          for attempt in 1 2 3; do
+            pacman -Syu --noconfirm --needed git xorg-server-xvfb file desktop-file-utils namcap && break
+            [ "$attempt" -lt 3 ] || exit 1
+            echo "pacman failed (attempt $attempt); retrying" >&2
+            sleep 10
+          done
 
       - uses: actions/checkout@v4
 
@@ -186,7 +195,11 @@ jobs:
           pkg=$(ls dist/omnirush-linux-*-"$PACKAGE_VERSION".pacman)
           bsdtar -xOf "$pkg" .PKGINFO | grep -E "^(pkgname|pkgver|arch|depend) "
           bsdtar -xOf "$pkg" .PKGINFO | grep -q "^arch = ${{ matrix.carch }}$"
-          pacman -U --noconfirm "$pkg"
+          for attempt in 1 2 3; do
+            pacman -U --noconfirm "$pkg" && break
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep 10
+          done
           echo "launcher -> $(readlink -f /usr/bin/omnirush)"
           file -L /usr/bin/omnirush
           set +e
@@ -217,7 +230,11 @@ jobs:
           sudo -u builder makepkg -f -d --noconfirm
           pkg=$(ls omnirush-"$PACKAGE_VERSION"-1-${{ matrix.carch }}.pkg.tar.zst)
           namcap "$pkg" || true
-          pacman -U --noconfirm "$pkg"
+          for attempt in 1 2 3; do
+            pacman -U --noconfirm "$pkg" && break
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep 10
+          done
           echo "launcher -> $(readlink -f /usr/bin/omnirush)"
           file -L /usr/bin/omnirush | grep -q "$( [ "${{ matrix.carch }}" = x86_64 ] && echo x86-64 || echo aarch64 )"
           ls /usr/share/icons/hicolor/*/apps/omnirush.*
