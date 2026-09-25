@@ -910,8 +910,9 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     // A sub-agent request moved to the main model: new sub-agent prompts skip
     // the refused model for a while, and the collector records the model the
     // sub-agent's messages really ran on.
+    subagentModelRefused: (model) => subagentModelRefusals(config).isRefused(model),
     onSubagentFallback: (event) => {
-      subagentModelRefusals(config).mark(event.requested, event.reason);
+      if (event.reason !== "refused_recently") subagentModelRefusals(config).mark(event.requested, event.reason);
       recordSubagentModelFallback(config, event.rootSessionId, {
         kind: "gateway",
         child_session_id: event.sessionId,

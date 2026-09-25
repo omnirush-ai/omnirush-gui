@@ -1052,13 +1052,14 @@ describe("OmniRush gateway broker collect deadline", () => {
 
 describe("OmniRush gateway broker: sub-agent model fallback", () => {
   type Reply = (body: Record<string, unknown>) => Response;
-  function fallbackBroker(reply: Reply) {
+  function fallbackBroker(reply: Reply, refused: (model: string) => boolean = () => false) {
     const calls: UpstreamCall[] = [];
     const events: Array<Record<string, unknown>> = [];
     const broker = new OmniRushGatewayBroker({
       credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
       engineToken: "local-engine-token",
       subagentRetryDelayMs: 1,
+      subagentModelRefused: refused,
       onSubagentFallback: (event) => events.push(event),
       fetch: async (_input, init) => {
         const raw = init?.body;
@@ -1155,5 +1156,15 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     expect(calls.map((call) => call.body.model)).toEqual(["gpt-6-sol", "gpt-6-astra"]);
     expect(events.map((event) => event.ok)).toEqual([false]);
     expect(((await response.json()) as { error: { message: string } }).error.message).toContain("not available");
+  });
+
+  test("a picked model in its refusal cooldown goes straight to the main model", async () => {
+    const { broker, calls, events } = fallbackBroker(() => Response.json({ output: [] }), (model) => model === "gpt-6-sol");
+    expect((await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "a" }, subagentHeaders), "responses")).status).toBe(200);
+    expect(calls.map((call) => call.body)).toEqual([{ model: "gpt-6-astra", input: "a", reasoning: { effort: "max" } }]);
+    expect(events.map((event) => [event.requested, event.used, event.reason, event.ok])).toEqual([["gpt-6-sol", "gpt-6-astra", "refused_recently", true]]);
+    // Without the fallback header (the main agent, or an untouched setting) nothing moves.
+    expect((await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b" }), "responses")).status).toBe(200);
+    expect(calls.at(-1)?.body.model).toBe("gpt-6-sol");
   });
 });

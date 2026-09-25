@@ -39,6 +39,8 @@ type BrokerOptions = {
   onSubagentFallback?: (event: SubagentModelFallbackEvent) => void;
   /** The pause before a busy picked model is tried once more; tests shrink it. */
   subagentRetryDelayMs?: number;
+  /** Whether a picked sub-agent model is in its refusal cooldown (sent straight to the main model). */
+  subagentModelRefused?: (model: string) => boolean;
 };
 
 /**
@@ -659,6 +661,7 @@ export class OmniRushGatewayBroker {
   private readonly collectUploadBudget: CollectUploadBudget;
   private readonly onSubagentFallback?: BrokerOptions["onSubagentFallback"];
   private readonly subagentRetryDelayMs: number;
+  private readonly subagentModelRefused?: (model: string) => boolean;
   private refreshInFlight: Promise<boolean> | null = null;
   /**
    * The pair this broker held before it adopted one from the store. Spent as
@@ -686,6 +689,7 @@ export class OmniRushGatewayBroker {
     this.collectUploadBudget = options.collectUploadBudget ?? COLLECT_UPLOAD_BUDGET;
     this.onSubagentFallback = options.onSubagentFallback;
     this.subagentRetryDelayMs = options.subagentRetryDelayMs ?? SUBAGENT_RETRY_DELAY_MS;
+    this.subagentModelRefused = options.subagentModelRefused;
   }
 
   get enabled(): boolean {
@@ -702,9 +706,13 @@ export class OmniRushGatewayBroker {
       || (request.method === "POST" && (normalizedPath === "responses" || normalizedPath === "responses/compact"));
     if (!allowed) return Response.json({ error: "unsupported_gateway_path" }, { status: 404 });
 
-    const body = request.method === "GET"
+    const requestBody = request.method === "GET"
       ? undefined
       : await this.requestBody(request, normalizedPath);
+    // A picked sub-agent model the gateway refused moments ago is not tried
+    // again for every step of a running sub-agent: it goes to the main model.
+    const skipped = requestBody === undefined ? null : this.skipRefusedSubagentModel(request, normalizedPath, requestBody);
+    const body = skipped?.body ?? requestBody;
     let spent = this.state.accessToken;
     let response = await this.forward(request, normalizedPath, body, spent);
     // Two rounds at most: the first may only adopt a pair the desktop rotated,
@@ -727,7 +735,9 @@ export class OmniRushGatewayBroker {
         },
       }, { status: 401 });
     }
-    if (!response.ok && response.status !== 401 && body !== undefined) {
+    if (skipped) {
+      this.reportSubagentFallback(request, { ...skipped.event, status: response.status, ok: response.ok });
+    } else if (!response.ok && response.status !== 401 && body !== undefined) {
       response = await this.subagentFallback(request, normalizedPath, body, response);
     }
     const contentType = response.headers.get("content-type") ?? "";
@@ -881,23 +891,41 @@ export class OmniRushGatewayBroker {
       reason: refusal.reason,
       status: next.status,
     });
+    this.reportSubagentFallback(request, { requested, used: fallback, effort, reason: refusal.reason, status: next.status, ok: next.ok });
+    return next;
+  }
+
+  /** The request moved to the main model up front when its picked model is in its refusal cooldown. */
+  private skipRefusedSubagentModel(
+    request: Request,
+    path: string,
+    body: ArrayBuffer | string,
+  ): { body: string; event: { requested: string; used: string; effort: string | null; reason: string } } | null {
+    const fallback = request.headers.get(SUBAGENT_FALLBACK_MODEL_HEADER)?.trim() ?? "";
+    if (!fallback || !FALLBACK_MODEL_ID.test(fallback) || !this.subagentModelRefused || (path !== "responses" && path !== "responses/compact")) return null;
+    const requested = requestedModel(body);
+    if (!requested || requested === fallback || !this.subagentModelRefused(requested)) return null;
+    const effortHeader = request.headers.get(SUBAGENT_FALLBACK_EFFORT_HEADER)?.trim().toLowerCase() ?? "";
+    const effort = REASONING_EFFORTS.has(effortHeader) ? effortHeader : null;
+    const moved = withModel(body, fallback, effort);
+    return moved === null ? null : { body: moved, event: { requested, used: fallback, effort, reason: "refused_recently" } };
+  }
+
+  private reportSubagentFallback(
+    request: Request,
+    event: { requested: string; used: string; effort: string | null; reason: string; status: number; ok: boolean },
+  ): void {
     try {
       this.onSubagentFallback?.({
         sessionId: request.headers.get("x-omnirush-session-id"),
         rootSessionId: request.headers.get(SUBAGENT_ROOT_SESSION_HEADER),
         messageId: request.headers.get("x-omnirush-task-id"),
-        requested,
-        used: fallback,
-        effort,
-        reason: refusal.reason,
-        status: next.status,
-        ok: next.ok,
+        ...event,
         at: Date.now(),
       });
     } catch {
       // A listener never breaks the request.
     }
-    return next;
   }
 
   private forward(request: Request, path: string, body: ArrayBuffer | string | undefined, accessToken?: string): Promise<Response> {
