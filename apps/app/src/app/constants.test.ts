@@ -24,7 +24,8 @@ describe("omnirush.ai extension catalog platform filter", () => {
   });
 
   test("recognises every omnirush.ai catalog model, not just the built-in ones", () => {
-    expect([...BUILTIN_OMNIRUSH_MODEL_IDS]).toEqual(["gpt-6-astra", "gpt-5.6-sol"]);
+    expect([...BUILTIN_OMNIRUSH_MODEL_IDS]).toEqual(["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"]);
+    expect(isOmniRushModelID("gpt-6-sol")).toEqual(true);
     expect(isOmniRushModelID("gpt-5.6-sol")).toEqual(true);
     expect(isOmniRushModelID("GPT-6-Astra")).toEqual(true);
     expect(isOmniRushModelID("meta-muse-spark")).toEqual(true);

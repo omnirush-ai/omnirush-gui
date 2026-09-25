@@ -135,6 +135,7 @@ test("composer focus and optimistic sends preserve drafts through snapshots and 
   mock.module("@/components/model-select", () => ({ ModelSelect: () => null }));
   mock.module("@/react-app/domains/session/surface/composer/workspace-run-mode-menu", () => ({ WorkspaceRunModeMenu: () => null }));
   mock.module("@/react-app/domains/session/surface/composer/full-permissions-toggle", () => ({ FullPermissionsToggle: () => null }));
+  mock.module("@/react-app/domains/session/surface/composer/subagent-model-menu", () => ({ SubagentModelMenu: () => null }));
   mock.module("@/app/lib/opencode-session-native", () => ({
     composeNativeSessionSnapshot: async () => fetchedSnapshot,
   }));

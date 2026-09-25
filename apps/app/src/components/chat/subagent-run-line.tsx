@@ -9,7 +9,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { useMessageList } from "@/components/chat/message-list-provider"
-import { taskChildSessionId, type TaskToolPart } from "@/lib/build-in-tools"
+import { taskChildSessionId, taskSubagentModel, type TaskToolPart } from "@/lib/build-in-tools"
+import { resolveModelDisplayName } from "@/app/utils"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { formatElapsedSeconds, getToolCallStartedAt, trackToolCallDuration } from "@/lib/tool-call-duration"
 import { cn } from "@/lib/utils"
@@ -113,6 +114,7 @@ export function SubagentRunLine({ part, className, parentActive = true, parentLa
   }, [inFlight, startedAt, part.toolCallId, syncDegraded])
   const title = part.input?.description?.trim().slice(0, 160) || "Sub-agent task"
   const agent = agentName(part.input?.subagent_type ?? "")
+  const ranOn = !inFlight && !isFailed ? taskSubagentModel(part) : null
   const status = permissionPending
     ? t("session.subagent_permission_needed")
     : questionPending ? "Waiting for your answer"
@@ -152,6 +154,12 @@ export function SubagentRunLine({ part, className, parentActive = true, parentLa
       <span className={cn("min-w-0 truncate text-xs", permissionPending ? "font-medium text-amber-11" : "text-muted-foreground/70")}>
         {status}
         {!inFlight && !isFailed && duration ? ` · ${duration}` : ""}
+        {ranOn ? (
+          <span data-subagent-model={ranOn.model} data-subagent-model-fallback={ranOn.fallbackFrom ?? undefined} className={ranOn.fallbackFrom ? "text-amber-11" : undefined}>
+            {` · ${resolveModelDisplayName(ranOn.model)}`}
+            {ranOn.fallbackFrom ? ` (${resolveModelDisplayName(ranOn.fallbackFrom)} unavailable)` : ""}
+          </span>
+        ) : null}
       </span>
       {inFlight && child?.latestActivity ? (
         <span className="text-xs text-muted-foreground/70">Last activity: {child.latestActivity}{child.lastProgressAt > 0 ? ` · ${formatElapsedSeconds(Math.max(0, Math.floor((Date.now() - child.lastProgressAt) / 1000)))} ago` : ""}</span>

@@ -70,9 +70,21 @@ function toolCallProviderMetadata(part: ToolPart): ProviderMetadata {
   const childSessionId = part.tool === "task" && typeof stateMetadata.sessionId === "string" && stateMetadata.sessionId.trim()
     ? stateMetadata.sessionId.trim()
     : null;
+  // A finished task names the model its sub-agent ran on (the swarm plugin
+  // corrects the engine's start-time guess) and a fallback to the main model.
+  const finishedTask = part.tool === "task" && part.state.status === "completed";
+  const subagentModel = finishedTask && isRecord(stateMetadata.model) && typeof stateMetadata.model.modelID === "string" && stateMetadata.model.modelID.trim()
+    ? stateMetadata.model.modelID.trim().slice(0, 128)
+    : null;
+  const fallback = finishedTask && isRecord(stateMetadata.omnirushModelFallback) ? stateMetadata.omnirushModelFallback : null;
+  const subagentModelFallback = fallback && typeof fallback.requested === "string" && typeof fallback.used === "string"
+    ? { requested: fallback.requested.slice(0, 128), used: fallback.used.slice(0, 128), reason: typeof fallback.reason === "string" ? fallback.reason.slice(0, 64) : "unavailable" }
+    : null;
   const omnirush = {
     ...(mcpResult ? { mcpResult } : {}),
     ...(childSessionId ? { childSessionId } : {}),
+    ...(subagentModel ? { subagentModel } : {}),
+    ...(subagentModelFallback ? { subagentModelFallback } : {}),
     ...(part.metadata?.omnirushV2CodeMode === true ? {
       codeMode: {
         calls: Array.isArray(stateMetadata.toolCalls) && isJsonValue(stateMetadata.toolCalls) ? stateMetadata.toolCalls : [],

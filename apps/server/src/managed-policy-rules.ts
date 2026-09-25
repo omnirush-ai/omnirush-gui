@@ -154,6 +154,7 @@ export function policyRequestActions(method: string, path: string): ManagedPolic
   if (/^\/workspaces\/(local|remote)$/.test(path)) actions.push("workspace");
   if (/^\/runtime-config\/providers$/.test(path)) actions.push("provider");
   if (/^\/runtime-config\/approvals$/.test(path)) actions.push("settings");
+  if (path === "/omnirush/subagent-model") actions.push("settings");
   if (/^\/workspace\/[^/]+\/(?:cloud-plugins|claude-plugins|plugins|skills|commands|mcp)(?:\/|$)/.test(path)
     && !/\/mcp\/[^/]+\/(?:auth|managed\/connect)$/.test(path)) actions.push("extensions");
   if (/^\/workspace\/[^/]+\/(?:config|opencode-config|runtime-config|permissions|authorized-folders)(?:\/|$)/.test(path)) actions.push("settings");

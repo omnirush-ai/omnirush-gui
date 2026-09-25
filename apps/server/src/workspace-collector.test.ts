@@ -1389,6 +1389,50 @@ describe("workspace collector trace additions", () => {
     await second.stop();
   });
 
+  test("sub-agents on their own models keep them; a gateway fallback records the model that really answered", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-collector-subagent-model-"));
+    roots.push(root);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const { uploads, upload } = makeUploads();
+    const collector = new WorkspaceCollector({ upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-subagent-model-1";
+    collector.startSession(sessionId, "workspace-subagent-model", root);
+    await collector.idle(sessionId);
+    collector.recordSessionModel(sessionId, { provider_id: "omnirush", model_id: "gpt-6-astra", variant: "max", agent: "omnirush" });
+    const assistant = (id: string, session: string, modelID: string, variant: string, completed: number) => ({
+      info: { id, role: "assistant", sessionID: session, providerID: "omnirush", modelID, variant, agent: "general", time: { created: completed - 10, completed } },
+      parts: [{ type: "text", text: `answer ${id}` }],
+    });
+    // The gateway refused GPT 6 Sol for ses_sol at t=2000; ses_muse ran on Muse all along.
+    collector.recordTrace(sessionId, "subagent.model_fallback", {
+      kind: "gateway", child_session_id: "ses_sol", requested_model: "gpt-6-sol", used_model: "gpt-6-astra", used_effort: "high", reason: "model_unavailable", ok: true, at: 2_000,
+    });
+    collector.recordTrace(sessionId, "subagent.model_fallback", {
+      kind: "selection", child_session_id: "ses_other", requested_model: "meta-muse-spark", used_model: "gpt-6-astra", reason: "not_in_catalog", at: 2_000,
+    });
+    collector.recordChildSession(sessionId, {
+      childSessionId: "ses_muse", parentSessionId: sessionId, depth: 1, title: "Muse task", agent: "general",
+      messages: [assistant("m1", "ses_muse", "meta-muse-spark", "xhigh", 5_000)], lastMessageId: "m1",
+    });
+    collector.recordChildSession(sessionId, {
+      childSessionId: "ses_sol", parentSessionId: sessionId, depth: 1, title: "Sol task", agent: "general",
+      messages: [assistant("s1", "ses_sol", "gpt-6-sol", "high", 1_000), assistant("s2", "ses_sol", "gpt-6-sol", "high", 3_000)], lastMessageId: "s2",
+    });
+    collector.flushTrace(sessionId);
+    await collector.stop();
+
+    const events = traceEvents(uploads);
+    const child = (id: string) => events.find((event) => event.type === "session.child" && event.data?.child_session_id === id)?.data?.messages as Array<{ info: Record<string, unknown> }>;
+    expect(child("ses_muse").map((message) => [message.info.modelID, message.info.variant])).toEqual([["meta-muse-spark", "xhigh"]]);
+    expect(child("ses_sol").map((message) => [message.info.modelID, message.info.variant, message.info.omnirushModelFallback ?? null])).toEqual([
+      ["gpt-6-sol", "high", null],
+      ["gpt-6-astra", "high", { requested: "gpt-6-sol", requestedVariant: "high", reason: "gateway_refused" }],
+    ]);
+    expect(events.filter((event) => event.type === "subagent.model_fallback").map((event) => event.data?.kind)).toEqual(["gateway", "selection"]);
+    // The main session's model is the main agent's own.
+    expect(uploads.at(-1)!.session).toMatchObject({ provider_id: "omnirush", model_id: "gpt-6-astra", variant: "max" });
+  });
+
   test("keeps only the newest 5,000 events across every push site", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-collector-cap-"));
     roots.push(root);

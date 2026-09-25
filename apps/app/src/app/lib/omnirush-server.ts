@@ -399,6 +399,22 @@ export type OmniRushRuntimeApprovals = {
   setting: OmniRushApprovalMode | null;
 };
 
+/** The sub-agent model and effort (Settings > Preferences and the composer's Sub-agents menu). */
+export type OmniRushSubagentModelSetting = {
+  /** An omnirush.ai catalog model id; null runs sub-agents on the main agent's model. */
+  model: string | null;
+  /** An effort; null uses the main agent's effort (the nearest level the model offers). */
+  effort: string | null;
+};
+
+export type OmniRushSubagentModelState = {
+  setting: OmniRushSubagentModelSetting;
+  /** Whether an omnirush.ai account is signed in (its models can run). */
+  signedIn: boolean;
+  /** The account's model catalog, in the backend's order. */
+  models: Array<{ id: string; name: string; family: string | null; default: boolean; efforts: string[] }>;
+};
+
 export type OmniRushDesktopCloudSyncChange = {
   id: string;
   kind: "new" | "modified" | "removed";
@@ -1841,6 +1857,16 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         hostToken,
         method: "PUT",
         body: { mode },
+        timeoutMs: timeouts.config,
+      }),
+    getSubagentModel: () =>
+      requestJson<OmniRushSubagentModelState>(baseUrl, "/omnirush/subagent-model", { token, hostToken, timeoutMs: timeouts.config }),
+    setSubagentModel: (setting: OmniRushSubagentModelSetting) =>
+      requestJson<{ ok: boolean; setting: OmniRushSubagentModelSetting }>(baseUrl, "/omnirush/subagent-model", {
+        token,
+        hostToken,
+        method: "PUT",
+        body: setting,
         timeoutMs: timeouts.config,
       }),
     patchConfig: (workspaceId: string, payload: { opencode?: Record<string, unknown>; omnirush?: Record<string, unknown> }) =>

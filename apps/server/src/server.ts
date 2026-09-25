@@ -161,7 +161,17 @@ import {
   seedOmniRushWorkspaceConfigIfEmpty,
   writeOmniRushWorkspaceConfig,
 } from "./omnirush-workspace-config-store.js";
-import { buildOmniRushRuntimeConfigObject, omnirushRuntimeConfigFilePath, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
+import { buildOmniRushRuntimeConfigObject, omnirushGatewayConfigured, omnirushRuntimeConfigFilePath, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
+import { readOmniRushModelCatalog } from "./omnirush-model-catalog.js";
+import {
+  SUBAGENT_MODEL_FALLBACK_TRACE,
+  readSubagentModelSetting,
+  resolveSubagentModel,
+  sanitizeSubagentModelSetting,
+  subagentModelRefusals,
+  writeSubagentModelSetting,
+  type EngineModelRef,
+} from "./omnirush-subagent-model.js";
 import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
 import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provider-sync.js";
@@ -192,6 +202,43 @@ const agentDiagnosticsLastRunByServer = new WeakMap<ServerConfig, Map<string, nu
 const agentDiagnosticsInFlightByServer = new WeakMap<ServerConfig, Set<string>>();
 const commandAdmissionsByServer = new WeakMap<ServerConfig, Map<string, { fingerprint: string; admittedAt: number }>>();
 const captureServicesByServer = new WeakMap<ServerConfig, CaptureService>();
+
+/** Recent gateway fallbacks per sub-agent session, for the swarm plugin's task-result note. */
+const subagentGatewayFallbacks = new WeakMap<ServerConfig, Map<string, Array<Record<string, unknown>>>>();
+
+/**
+ * Records a sub-agent model fallback: a "subagent.model_fallback" trace event
+ * on the main session the collector tracks (a gateway fallback also makes the
+ * collector record the model those sub-agent messages really ran on), and,
+ * for a gateway fallback, the per-session note the swarm plugin reads back.
+ */
+function recordSubagentModelFallback(config: ServerConfig, rootSessionId: string | null, data: Record<string, unknown>): void {
+  const child = typeof data.child_session_id === "string" ? data.child_session_id : null;
+  if (data.kind === "gateway" && child) {
+    let byChild = subagentGatewayFallbacks.get(config);
+    if (!byChild) {
+      byChild = new Map();
+      subagentGatewayFallbacks.set(config, byChild);
+    }
+    const list = byChild.get(child) ?? [];
+    list.push(data);
+    byChild.delete(child);
+    byChild.set(child, list.slice(-16));
+    while (byChild.size > 512) byChild.delete(byChild.keys().next().value as string);
+  }
+  const capture = captureServicesByServer.get(config);
+  if (!rootSessionId || !capture?.collectorEnabled || !capture.hasSession(rootSessionId)) return;
+  capture.recordTrace(rootSessionId, SUBAGENT_MODEL_FALLBACK_TRACE, data);
+}
+
+function engineModelRef(value: unknown): (EngineModelRef & { variant: string | null }) | null {
+  if (!isRecord(value)) return null;
+  const providerID = typeof value.providerID === "string" ? value.providerID.trim() : "";
+  const modelID = typeof value.modelID === "string" ? value.modelID.trim() : "";
+  if (!providerID || !modelID || providerID.length > 128 || modelID.length > 256) return null;
+  const variant = typeof value.variant === "string" && value.variant.trim() ? value.variant.trim().slice(0, 32) : null;
+  return { providerID, modelID, variant };
+}
 const AGENT_DIAGNOSTICS_RATE_LIMIT_CAPACITY = 1_000;
 const AGENT_DIAGNOSTICS_MAX_IN_FLIGHT_PER_SERVER = 16;
 const AGENT_DIAGNOSTICS_MAX_REQUEST_BYTES = 256 * 1024;
@@ -860,6 +907,25 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
         }
       : undefined,
     engineToken: config.omnirushEngineToken,
+    // A sub-agent request moved to the main model: new sub-agent prompts skip
+    // the refused model for a while, and the collector records the model the
+    // sub-agent's messages really ran on.
+    subagentModelRefused: (model) => subagentModelRefusals(config).isRefused(model),
+    onSubagentFallback: (event) => {
+      if (event.reason !== "refused_recently") subagentModelRefusals(config).mark(event.requested, event.reason);
+      recordSubagentModelFallback(config, event.rootSessionId, {
+        kind: "gateway",
+        child_session_id: event.sessionId,
+        message_id: event.messageId,
+        requested_model: event.requested,
+        used_model: event.used,
+        used_effort: event.effort,
+        reason: event.reason,
+        status: event.status,
+        ok: event.ok,
+        at: event.at,
+      });
+    },
   });
   // Under the desktop the embedding host passes the Electron app version
   // through ServerConfig; a standalone server reports its own version.
@@ -1094,7 +1160,24 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       const gatewayMount = url.pathname.match(/^\/omnirush-gateway\/v1\/(.+)$/);
       if (gatewayMount?.[1]) {
         authMode = "client";
-        return finalize(await gatewayBroker.handle(request, gatewayMount[1]));
+        try {
+          return finalize(await gatewayBroker.handle(request, gatewayMount[1]));
+        } catch (error) {
+          // The broker answers every upstream failure itself; anything that
+          // still escapes is logged with its cause and reaches the engine as a
+          // readable, retryable error instead of a bare 500 from serve-node.
+          const requestCanceled = isExpectedRequestCancellation(error, request.signal);
+          if (requestCanceled) return finalize(jsonResponse({ code: "request_aborted", message: "Request was canceled" }, 499));
+          captureServerException(error, { method: request.method, route: "/omnirush-gateway/v1", requestSignal: request.signal });
+          logger.log("error", "omnirush.ai gateway request failed", {
+            path: gatewayMount[1],
+            error: error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : "unknown",
+          });
+          errorMessage = "gateway_error";
+          return finalize(new Response(JSON.stringify({
+            error: { message: "omnirush.ai: the model request failed inside the app. Retrying shortly.", type: "omnirush_error", code: "gateway_local_error" },
+          }), { status: 502, headers: { "content-type": "application/json", "retry-after": "2" } }));
+        }
       }
 
       const canonicalOpencodeMount = parseWorkspaceOpencodeMount(url.pathname);
@@ -1293,11 +1376,15 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
         reason: "omnirush_model_catalog",
       });
     },
-    engineBusy: () => {
+    // A catalog change waits until no session runs: a standby engine next to
+    // live runs means two engine processes writing one session database, and
+    // new models are never urgent enough for that.
+    engineBusy: async () => {
       const pool = enginePoolForConfig(config);
-      return pool
-        ? Promise.resolve(pool.hasDrainingGeneration())
-        : engineHasActiveSessions(config, resolveEngineRuntimeWorkspace(config));
+      if (!pool) return engineHasActiveSessions(config, resolveEngineRuntimeWorkspace(config));
+      if (pool.hasDrainingGeneration()) return true;
+      const busy = await collectBusyEngineSessions(config);
+      return busy.sessions.length > 0 || busy.unknown > 0;
     },
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
@@ -3450,6 +3537,80 @@ function createRoutes(
       if (capture.recordWebVisit(target, visit)) recorded += 1;
     }
     return jsonResponse({ ok: true, recorded });
+  });
+
+  // Sub-agent model and effort (omnirush-subagent-model.ts). The app reads
+  // and writes the setting; the swarm engine plugin resolves every sub-agent
+  // prompt against it with the evaluation token it already holds.
+  addRoute(routes, "GET", "/omnirush/subagent-model", "client", async () => {
+    const catalog = await readOmniRushModelCatalog(config);
+    return jsonResponse({
+      setting: await readSubagentModelSetting(config),
+      signedIn: omnirushGatewayConfigured(config),
+      models: catalog.map((model) => ({
+        id: model.id,
+        name: model.display_name,
+        family: model.family,
+        default: model.default,
+        efforts: model.reasoning_levels,
+      })),
+    });
+  });
+
+  addRoute(routes, "PUT", "/omnirush/subagent-model", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const body = await readJsonBody(ctx.request);
+    if (body.model !== null && body.model !== undefined && typeof body.model !== "string") {
+      throw new ApiError(400, "invalid_payload", "model must be a model id or null");
+    }
+    if (body.effort !== null && body.effort !== undefined && typeof body.effort !== "string") {
+      throw new ApiError(400, "invalid_payload", "effort must be an effort or null");
+    }
+    const setting = sanitizeSubagentModelSetting({ model: body.model || null, effort: body.effort || null });
+    if ((body.model && !setting.model) || (body.effort && !setting.effort)) {
+      throw new ApiError(400, "invalid_payload", "unknown model id or effort");
+    }
+    return jsonResponse({ ok: true, setting: await writeSubagentModelSetting(config, setting) });
+  });
+
+  addRoute(routes, "POST", "/omnirush/subagent-model/resolve", "policy", async (ctx) => {
+    const body = await readJsonBody(ctx.request);
+    const inherited = engineModelRef(body.inherited);
+    if (!inherited) throw new ApiError(400, "invalid_payload", "inherited model is required");
+    const setting = await readSubagentModelSetting(config);
+    if (!setting.model && !setting.effort) return jsonResponse({});
+    const refusals = subagentModelRefusals(config);
+    const resolution = resolveSubagentModel({
+      setting,
+      catalog: await readOmniRushModelCatalog(config),
+      gateway: omnirushGatewayConfigured(config),
+      inherited,
+      main: engineModelRef(body.main),
+      refused: (model) => refusals.isRefused(model),
+    });
+    if (resolution.fallback) {
+      recordSubagentModelFallback(config, typeof body.rootSessionId === "string" ? body.rootSessionId : null, {
+        kind: "selection",
+        child_session_id: typeof body.sessionId === "string" ? body.sessionId : null,
+        requested_model: resolution.fallback.requested,
+        used_model: resolution.fallback.used,
+        used_effort: resolution.variant ?? null,
+        reason: resolution.fallback.reason,
+        at: Date.now(),
+      });
+    }
+    return jsonResponse(resolution);
+  });
+
+  addRoute(routes, "GET", "/omnirush/subagent-model/fallbacks", "policy", async (ctx) => {
+    const session = ctx.url.searchParams.get("session") ?? "";
+    const events = subagentGatewayFallbacks.get(config)?.get(session) ?? [];
+    const catalog = await readOmniRushModelCatalog(config);
+    const name = (id: unknown) => catalog.find((model) => model.id === id)?.display_name ?? id;
+    return jsonResponse({
+      fallbacks: events.map((event) => ({ ...event, requested_name: name(event.requested_model), used_name: name(event.used_model) })),
+    });
   });
 
   addRoute(routes, "GET", "/managed-policy", "client", async () =>

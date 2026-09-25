@@ -110,6 +110,9 @@ test("the composer stays editable when snapshot refresh fails or the model is un
   mock.module("@/react-app/domains/session/surface/composer/full-permissions-toggle", () => ({
     FullPermissionsToggle: () => null,
   }));
+  mock.module("@/react-app/domains/session/surface/composer/subagent-model-menu", () => ({
+    SubagentModelMenu: () => null,
+  }));
   mock.module("@/app/lib/opencode-session-native", () => ({
     composeNativeSessionSnapshot: async () => {
       if (rejectSnapshot) throw new Error("snapshot refresh failed");

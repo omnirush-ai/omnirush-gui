@@ -12,6 +12,7 @@ import { DEFAULT_MODEL } from "@/app/constants";
 import { ReactSessionComposer } from "@/react-app/domains/session/surface/composer/composer";
 import { WorkspaceRunModeMenu } from "@/react-app/domains/session/surface/composer/workspace-run-mode-menu";
 import { FullPermissionsToggle } from "@/react-app/domains/session/surface/composer/full-permissions-toggle";
+import { SubagentModelMenu } from "@/react-app/domains/session/surface/composer/subagent-model-menu";
 import {
   snapshotComposerSessionState,
   type ComposerSessionState,
@@ -425,6 +426,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     <ReactSessionComposer
       runModeControl={<WorkspaceRunModeMenu client={workspaceClient} workspaceId={workspaceId} busy={props.busy} />}
       fullPermissionsControl={<FullPermissionsToggle client={workspaceClient} workspaceId={workspaceId} />}
+      subagentModelControl={<SubagentModelMenu client={workspaceClient} />}
       draft={props.draft}
       mentions={mentions}
       onDraftChange={handleDraftChange}
