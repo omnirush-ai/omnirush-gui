@@ -8,8 +8,8 @@ Every GitHub release carries a pacman package per architecture, built by
 electron-builder next to the `.deb` and `.AppImage`:
 
 ```bash
-# x86_64
-sudo pacman -U https://github.com/omnirush-ai/omnirush-gui/releases/download/v<version>/omnirush-linux-x86_64-<version>.pacman
+# x86_64 (electron-builder names this file x64; the package inside is x86_64)
+sudo pacman -U https://github.com/omnirush-ai/omnirush-gui/releases/download/v<version>/omnirush-linux-x64-<version>.pacman
 # aarch64
 sudo pacman -U https://github.com/omnirush-ai/omnirush-gui/releases/download/v<version>/omnirush-linux-aarch64-<version>.pacman
 ```
