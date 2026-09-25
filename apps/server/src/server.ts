@@ -1376,11 +1376,15 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
         reason: "omnirush_model_catalog",
       });
     },
-    engineBusy: () => {
+    // A catalog change waits until no session runs: a standby engine next to
+    // live runs means two engine processes writing one session database, and
+    // new models are never urgent enough for that.
+    engineBusy: async () => {
       const pool = enginePoolForConfig(config);
-      return pool
-        ? Promise.resolve(pool.hasDrainingGeneration())
-        : engineHasActiveSessions(config, resolveEngineRuntimeWorkspace(config));
+      if (!pool) return engineHasActiveSessions(config, resolveEngineRuntimeWorkspace(config));
+      if (pool.hasDrainingGeneration()) return true;
+      const busy = await collectBusyEngineSessions(config);
+      return busy.sessions.length > 0 || busy.unknown > 0;
     },
     log: (level, message, attributes) => logger.log(level, message, attributes),
   });
