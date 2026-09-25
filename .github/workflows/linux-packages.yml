@@ -228,7 +228,9 @@ jobs:
             -e "s/^sha256sums_${{ matrix.carch }}=.*/sha256sums_${{ matrix.carch }}=('$sha')/" PKGBUILD
           # Binary repack: the runtime depends are installed by pacman -U.
           sudo -u builder makepkg -f -d --noconfirm
-          pkg=$(ls omnirush-"$PACKAGE_VERSION"-1-${{ matrix.carch }}.pkg.tar.zst)
+          # .zst on Arch, .xz on Arch Linux ARM (makepkg.conf PKGEXT).
+          pkg=$(ls omnirush-"$PACKAGE_VERSION"-1-${{ matrix.carch }}.pkg.tar.* | grep -v '\.sig$' | head -1)
+          [ -n "$pkg" ]
           namcap "$pkg" || true
           for attempt in 1 2 3; do
             pacman -U --noconfirm "$pkg" && break
