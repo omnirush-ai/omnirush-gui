@@ -1,19 +1,20 @@
 /**
  * Scanning a session root for the project archive (sections 5.2 to 5.8): the
- * whole folder, `.git/` and ignored content included, minus the exclusions of
- * 5.2; streaming SHA-256 with a (path, size, mtimeNs, ctimeNs, ino) cache;
+ * whole folder, `.git/` included, minus the exclusions of 5.2 and minus every
+ * gitignored path (`ignore.ts`: an ignored directory is pruned unwalked);
+ * streaming SHA-256 with a (path, size, mtimeNs, ctimeNs, ino) cache;
  * delta computation against the previous archive's entry list; and the
  * `__omnirush__/manifest.json` document.
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants as fsConstants, realpathSync, type BigIntStats } from "node:fs";
+import { constants as fsConstants, type BigIntStats } from "node:fs";
 import { lstat, open, readdir, readlink, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { clampCollectorBytes, isCollectorPathDenied, stripRemoteUserinfo } from "../workspace-collector.js";
 import { hintGarbageCollection } from "./files.js";
+import { ArchiveIgnore, gitCeilingDirectories, scopeIgnores, type IgnoreScope, type IgnoreSource } from "./ignore.js";
 
 export const ARCHIVE_SCHEMA = "omnirush.archive.v1";
 export const RESERVED_ROOT_NAME = "__omnirush__";
@@ -340,7 +341,13 @@ export type ScanOptions = {
   signal?: AbortSignal;
 };
 
-export type ScanResult = { entries: ScannedEntry[]; excluded: ExcludedCounts };
+/**
+ * `ignored`: entries left out because git ignores them (an ignored directory
+ * counts once, its content is never walked), and where the root's answer came
+ * from. Not part of the manifest's `excluded` object (section 5.6 is
+ * unchanged); the archiver logs it.
+ */
+export type ScanResult = { entries: ScannedEntry[]; excluded: ExcludedCounts; ignored: number; ignoreSource: IgnoreSource };
 
 /**
  * Runs `operation` over `items` with at most `limit` in flight. The workers
@@ -446,8 +453,9 @@ async function hashFile(absolute: string, size: number, buffer: Buffer, metrics:
 
 /**
  * Pass 1: walks the root with lstat (never following a symlink), applies the
- * exclusions of section 5.2 and hashes every file whose cache key changed.
- * Entries come back sorted by UTF-8 bytes.
+ * exclusions of section 5.2, leaves out what git ignores (a whole ignored
+ * directory without walking it) and hashes every file whose cache key
+ * changed. Entries come back sorted by UTF-8 bytes.
  */
 export async function scanArchiveTree(root: string, options: ScanOptions = {}): Promise<ScanResult> {
   const concurrency = options.statConcurrency ?? STAT_CONCURRENCY;
@@ -459,11 +467,17 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const includeCredentials = options.includeCredentialFiles === true;
   const entries: ScannedEntry[] = [];
   const toHash: ScannedEntry[] = [];
+  const ignore = new ArchiveIgnore(resolve(root), signal);
 
-  const inspect = async (relDir: string, absDir: string, name: string, next: Array<{ rel: string; abs: string }>): Promise<void> => {
+  const inspect = async (relDir: string, absDir: string, name: string, scope: IgnoreScope, next: Array<{ rel: string; abs: string; scope: IgnoreScope }>): Promise<void> => {
     signal?.throwIfAborted();
     const rel = relDir ? [relDir, name].join("/") : name;
     const abs = join(absDir, name);
+    // Git's answer names ignored directories and files alike: no lstat needed.
+    if (scope.kind === "git" && scopeIgnores(scope, rel, false)) {
+      ignore.ignored += 1;
+      return;
+    }
     let stats: BigIntStats;
     try {
       stats = await lstat(abs, { bigint: true });
@@ -473,13 +487,17 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
       excluded.unreadable += 1;
       return;
     }
+    if (scope.kind === "rules" && scopeIgnores(scope, rel, stats.isDirectory())) {
+      ignore.ignored += 1;
+      return;
+    }
     if (stats.isDirectory()) {
       if (prunedDirs.has(rel)) {
         excluded.app_state += 1;
         return;
       }
       entries.push({ path: rel, type: "dir", size: 0, sha256: null, ...statFields(stats) });
-      next.push({ rel, abs });
+      next.push({ rel, abs, scope });
       return;
     }
     if (!stats.isFile() && !stats.isSymbolicLink()) {
@@ -518,9 +536,12 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
 
   // Breadth-first, one directory level at a time: list the level's
   // directories, then lstat every name found, both with bounded concurrency.
-  let level: Array<{ rel: string; abs: string }> = [{ rel: "", abs: resolve(root) }];
+  // Each directory carries its parent's ignore scope; listing it works out
+  // its own (a nested repository, a .gitignore under the rules fallback).
+  let level: Array<{ rel: string; abs: string; scope: IgnoreScope }> = [{ rel: "", abs: resolve(root), scope: { kind: "none" } }];
+  let ignoreSource: IgnoreSource = "rules";
   while (level.length > 0) {
-    const names: Array<{ relDir: string; absDir: string; name: string }> = [];
+    const names: Array<{ relDir: string; absDir: string; name: string; scope: IgnoreScope }> = [];
     await forEachBounded(level, concurrency, async (dir) => {
       signal?.throwIfAborted();
       let raw: Buffer[];
@@ -532,15 +553,29 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
         excluded.unreadable += 1;
         return;
       }
+      const listed: string[] = [];
+      let hasGit = false;
+      let hasGitignore = false;
       for (const bytes of raw) {
         const name = decodeName(bytes);
         if (name === null) excluded.non_utf8 += 1;
         else if (!dir.rel && name === RESERVED_ROOT_NAME) excluded.reserved += 1;
-        else names.push({ relDir: dir.rel, absDir: dir.abs, name });
+        else {
+          listed.push(name);
+          if (name.toLowerCase() === ".git") hasGit = true;
+          else if (name === ".gitignore") hasGitignore = true;
+        }
       }
+      let scope: IgnoreScope;
+      if (dir.rel) scope = await ignore.enter(dir.rel, dir.abs, dir.scope, { git: hasGit, gitignore: hasGitignore });
+      else {
+        scope = await ignore.rootScope(hasGitignore);
+        ignoreSource = ignore.source;
+      }
+      for (const name of listed) names.push({ relDir: dir.rel, absDir: dir.abs, name, scope });
     });
-    const next: Array<{ rel: string; abs: string }> = [];
-    await forEachBounded(names, concurrency, (item) => inspect(item.relDir, item.absDir, item.name, next));
+    const next: Array<{ rel: string; abs: string; scope: IgnoreScope }> = [];
+    await forEachBounded(names, concurrency, (item) => inspect(item.relDir, item.absDir, item.name, item.scope, next));
     level = next;
   }
 
@@ -567,7 +602,7 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
   const kept = unreadable.size > 0 ? entries.filter((entry) => !unreadable.has(entry)) : entries;
   kept.sort((left, right) => compareArchivePaths(left.path, right.path));
   cache?.commitScan();
-  return { entries: kept, excluded };
+  return { entries: kept, excluded, ignored: ignore.ignored, ignoreSource };
 }
 
 // --- delta ----------------------------------------------------------------------
@@ -701,23 +736,6 @@ export function buildManifestBytes(input: ManifestInput): Buffer {
 // --- git ------------------------------------------------------------------------
 
 type GitRun = { ok: boolean; stdout: string; truncated: boolean };
-
-/**
- * GIT_CEILING_DIRECTORIES with the real home directory appended: git never
- * climbs into home, so a folder whose nearest `.git` git rejects (an empty
- * folder, say) cannot pick up a dotfiles repository there.
- */
-function gitCeilingDirectories(): string {
-  let home = homedir();
-  try {
-    home = realpathSync(home);
-  } catch {
-    // An unreadable home is used as given.
-  }
-  const existing = process.env.GIT_CEILING_DIRECTORIES;
-  if (!home) return existing ?? "";
-  return existing ? `${existing}${delimiter}${home}` : home;
-}
 
 /** Runs git in the root without locks, prompts or fsmonitor hooks, never above home; reads at most `maxBytes` of stdout. */
 function runGit(root: string, args: string[], maxBytes = 64 * 1024): Promise<GitRun> {

@@ -7,7 +7,7 @@
  * disk, and scanTouchedFiles turns them into archive entries at capture
  * time: regular files inside the root only, never through a symlinked
  * folder, a touched folder never expanded, with the whole-folder scan's
- * exclusions. Nothing outside the root is ever opened or stat'ed: a path is
+ * exclusions, and never a file git ignores (`ignore.ts`). Nothing outside the root is ever opened or stat'ed: a path is
  * checked lexically first, then walked from the root one lstat at a time.
  */
 import { createHash } from "node:crypto";
@@ -37,6 +37,7 @@ import {
   type ScannedEntry,
 } from "./manifest.js";
 import { stateKey } from "./files.js";
+import { touchedIgnoredPaths } from "./ignore.js";
 import type { ArchiveLog } from "./upload.js";
 
 /** A session keeps at most this many touched paths; later ones are not archived (one log line). */
@@ -69,10 +70,13 @@ export type TouchedScanResult = {
   /**
    * Touched paths that hold no regular file inside the root any more: gone,
    * a folder, a symlink, a special file, or reached through a folder that is
-   * no longer a real folder. A delta deletes those it archived before.
+   * no longer a real folder, or a file git now ignores. A delta deletes
+   * those it archived before.
    */
   gone: Set<string>;
   excluded: ExcludedCounts;
+  /** Touched files left out because git ignores them (not in `excluded`, section 5.6 is unchanged). */
+  ignored: number;
 };
 
 /** A touched path's components when it is a plain relative path (portable `/`), else null. */
@@ -112,7 +116,8 @@ function linkTargetInside(path: string, target: string, roots: readonly string[]
  * inside the root it leads to) walked from the root with lstat, never
  * following a link, then hashed; excluded like the whole-folder scan
  * (credential files, app state, reserved names, special files, unreadable
- * and non-UTF-8 names). A path that is not plain, or whose link leads out of
+ * and non-UTF-8 names), and a file git ignores is left out (and deletes a
+ * copy the chain holds, like a gone file). A path that is not plain, or whose link leads out of
  * the root, is skipped without touching the file system outside the root.
  */
 export async function scanTouchedFiles(root: string, paths: Iterable<string>, options: TouchedScanOptions = {}): Promise<TouchedScanResult> {
@@ -230,6 +235,18 @@ export async function scanTouchedFiles(root: string, paths: Iterable<string>, op
 
   await forEachBounded([...paths], STAT_CONCURRENCY, (path) => visit(path, 0));
 
+  // Git's answer for just the files found, so the folder is never walked.
+  const ignoredPaths = await touchedIgnoredPaths(base, entries.map((entry) => entry.path), signal);
+  signal?.throwIfAborted();
+  if (ignoredPaths.size > 0) {
+    let kept = 0;
+    for (const entry of entries) {
+      if (ignoredPaths.has(entry.path)) gone.add(entry.path);
+      else entries[kept++] = entry;
+    }
+    entries.length = kept;
+  }
+
   const unreadable = new Set<ScannedEntry>();
   const buffers: Buffer[] = [];
   await forEachBounded(entries, HASH_CONCURRENCY, async (entry) => {
@@ -260,7 +277,7 @@ export async function scanTouchedFiles(root: string, paths: Iterable<string>, op
   excluded.unreadable += unreadable.size;
   const kept = unreadable.size > 0 ? entries.filter((entry) => !unreadable.has(entry)) : entries;
   kept.sort((left, right) => compareArchivePaths(left.path, right.path));
-  return { entries: kept, gone, excluded };
+  return { entries: kept, gone, excluded, ignored: ignoredPaths.size };
 }
 
 /** SHA-256 of the first entry.size bytes of the very file pass 1 lstat'ed (same st_dev and st_ino), else null. */

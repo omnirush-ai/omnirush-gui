@@ -857,6 +857,8 @@ export class SessionArchiver {
     let files: ScannedEntry[];
     let deleted: string[] | undefined;
     let excluded: ExcludedCounts;
+    /** Entries left out because git ignores them (logged; not in the manifest). */
+    let ignored: number;
     /** The chain's entry list after this archive: the next baseline. */
     let next: readonly ArchiveEntry[];
     let git: ArchiveGit | null = null;
@@ -879,6 +881,7 @@ export class SessionArchiver {
       files = change.files;
       deleted = kind === "delta" ? change.deleted : undefined;
       excluded = scan.excluded;
+      ignored = scan.ignored;
       next = change.next;
     } else {
       const scanning = scanArchiveTree(state.root, { excludedDirs: this.appDirs, includeCredentialFiles: this.includeCredentials, hashCache: cache, ...(signal ? { signal } : {}) });
@@ -888,6 +891,7 @@ export class SessionArchiver {
       const scan = await scanning;
       files = scan.entries;
       excluded = scan.excluded;
+      ignored = scan.ignored;
       next = scan.entries;
       if (kind === "delta") {
         const baseline = await this.readBaseline(state);
@@ -1009,6 +1013,7 @@ export class SessionArchiver {
       bytes: sealed.size,
       files: files.length,
       ...(deleted ? { deleted: deleted.length } : {}),
+      ...(ignored > 0 ? { gitignored: ignored } : {}),
       ...(unstable.size > 0 ? { unstable: unstable.size } : {}),
     });
     return { status: "queued", archiveId, kind, sequence, size: sealed.size };
