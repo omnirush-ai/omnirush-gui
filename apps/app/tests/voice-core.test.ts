@@ -389,27 +389,29 @@ describe("remote transcriber", () => {
   };
 
   test("posts a multipart segment and reads the text", async () => {
-    let seen: FormData | null = null;
-    let headers: Record<string, string> = {};
+    let seen: Request | null = null;
     const transcriber = new RemoteTranscriber({
       url: "http://127.0.0.1:1/omnirush/voice/transcribe",
       headers: () => ({ Authorization: "Bearer t" }),
-      fetch: async (_url, init) => {
-        seen = init.body as FormData;
-        headers = init.headers as Record<string, string>;
+      fetch: async (url, init) => {
+        // Plain bytes, never a Blob (a browser may page Blobs to disk).
+        expect(init.body).toBeInstanceOf(Uint8Array);
+        seen = new Request(url, init);
         return Response.json({ text: "hello", provider: "primary", duration_ms: 100 });
       },
     });
     expect(await transcriber.transcribe(request, new AbortController().signal)).toEqual({ text: "hello" });
-    const form = seen as unknown as FormData;
+    const upload = seen as unknown as Request;
+    expect(upload.headers.get("authorization")).toBe("Bearer t");
+    const form = await upload.formData();
     expect(form.get("segment_index")).toBe("2");
     expect(form.get("recording_id")).toBe("abc");
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt_terms")).toBe("OmniRush, voice");
     const file = form.get("file") as File;
-    expect(file.type).toBe("audio/wav");
+    expect(file.type).toMatch(/wav/);
     expect(file.size).toBe(request.wav.length);
-    expect(headers.Authorization).toBe("Bearer t");
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(request.wav);
   });
 
   test.each([

@@ -116,7 +116,7 @@ describe("dictation in the composer", () => {
     const fetchStub = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (!url.endsWith("/omnirush/voice/transcribe")) return new Response("{}", { status: 404 });
-      const form = init?.body as FormData;
+      const form = await new Request(url, init).formData();
       uploads.push(form);
       await new Promise((resolve) => setTimeout(resolve, 30));
       return answers(Number(form.get("segment_index")));

@@ -70,6 +70,28 @@ export function voiceErrorFromResponse(status: number, code: string | null, retr
 }
 
 /**
+ * multipart/form-data as plain bytes. Not FormData with a Blob: a browser
+ * may page Blob contents into its blob store on disk, and audio must only
+ * ever be in memory.
+ */
+export function multipartBody(wav: Uint8Array, filename: string, fields: ReadonlyArray<[string, string]>): { body: Uint8Array<ArrayBuffer>; contentType: string } {
+  const random = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(random);
+  const boundary = `----omnirush-voice-${Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  const encoder = new TextEncoder();
+  const head = encoder.encode(
+    fields.map(([name, value]) => `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value.replace(/[\r\n]+/g, " ")}\r\n`).join("")
+      + `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: audio/wav\r\n\r\n`,
+  );
+  const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
+  const body = new Uint8Array(head.length + wav.length + tail.length);
+  body.set(head, 0);
+  body.set(wav, head.length);
+  body.set(tail, head.length + wav.length);
+  return { body, contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
+/**
  * A Transcriber over HTTP: one multipart POST per segment (`file`,
  * `language`, `prompt_terms`, `segment_index`, `recording_id`), answered
  * with `{"text": "..."}`. The audio lives only in the request body.
@@ -78,21 +100,18 @@ export class RemoteTranscriber implements Transcriber {
   constructor(private readonly options: RemoteTranscriberOptions) {}
 
   async transcribe(request: TranscribeRequest, signal: AbortSignal): Promise<TranscribeResult> {
-    const form = new FormData();
-    const wav = request.wav;
-    form.append("file", new Blob([wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength) as ArrayBuffer], { type: "audio/wav" }), `segment-${request.segmentIndex}.wav`);
-    if (request.language) form.append("language", request.language);
-    if (request.keyterms.length > 0) form.append("prompt_terms", request.keyterms.join(", "));
-    form.append("segment_index", String(request.segmentIndex));
-    form.append("recording_id", request.recordingId);
+    const fields: Array<[string, string]> = [["segment_index", String(request.segmentIndex)], ["recording_id", request.recordingId]];
+    if (request.language) fields.push(["language", request.language]);
+    if (request.keyterms.length > 0) fields.push(["prompt_terms", request.keyterms.join(", ")]);
+    const { body: upload, contentType } = multipartBody(request.wav, `segment-${request.segmentIndex}.wav`, fields);
     const fetcher = this.options.fetch ?? ((input: string, init: RequestInit) => fetch(input, init));
     const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 30_000);
     let response: Response;
     try {
       response = await fetcher(this.options.url, {
         method: "POST",
-        headers: { Accept: "application/json", ...(await this.options.headers?.()) },
-        body: form,
+        headers: { Accept: "application/json", "Content-Type": contentType, ...(await this.options.headers?.()) },
+        body: upload,
         signal: AbortSignal.any([signal, timeout]),
       });
     } catch (error) {

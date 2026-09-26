@@ -16,6 +16,6 @@ export { Downsampler, resampleTo16k } from "./resample";
 export { LevelMeter, Segmenter, levelFromRms, rms, type Segment, type SegmenterOptions } from "./segmenter";
 export { countWords, isCjk, isLikelyHallucination, padInsertion, stitch } from "./text";
 export { DEV_KEYTERMS, applyKeyterms, buildKeyterms, splitIdentifier, type KeytermContext } from "./keyterms";
-export { RemoteTranscriber, errorCode, voiceErrorFromResponse, type RemoteTranscriberOptions } from "./transcriber";
+export { RemoteTranscriber, errorCode, multipartBody, voiceErrorFromResponse, type RemoteTranscriberOptions } from "./transcriber";
 export { CircuitBreaker, VoiceSession, type VoiceSessionOptions } from "./session";
 export { VOICE_INPUT_FILE_ENV, WavFileSource, voiceInputFileFromEnv } from "./file-source";
