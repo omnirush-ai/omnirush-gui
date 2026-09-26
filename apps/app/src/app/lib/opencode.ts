@@ -62,6 +62,11 @@ export const SESSION_READ_REQUEST_TIMEOUT_MS = 45_000;
 const SESSION_READ_PATH_RE = /\/session(?:\/(?!status$)[^/]+)?\/?$/;
 const SESSION_LONG_RUNNING_URL_RE = /\/session\/[^/?#]+\/(?:command|summarize)(?:[?#]|$)/;
 const SESSION_PROMPT_ASYNC_URL_RE = /\/session\/[^/?#]+\/prompt_async(?:[?#]|$)/;
+// DELETE <base>/session/<id>: the local server first stops the session's run
+// and its sub-agents, then the engine removes it. Past the generic budget the
+// person would see a failure for a delete that is still completing.
+const SESSION_DELETE_URL_RE = /\/session\/[^/?#]+\/?(?:[?#]|$)/;
+const SESSION_DELETE_REQUEST_TIMEOUT_MS = 30_000;
 
 export class PromptAdmissionUnknownError extends Error {
   readonly admission = "unknown";
@@ -121,6 +126,9 @@ export function resolveRequestTimeoutMs(input: RequestInfo | URL, fallbackMs: nu
   }
   if (SESSION_PROMPT_ASYNC_URL_RE.test(url)) {
     return Math.max(fallbackMs, PROMPT_ASYNC_REQUEST_TIMEOUT_MS);
+  }
+  if (fallbackMs > 0 && getRequestMethod(input, init) === "DELETE" && SESSION_DELETE_URL_RE.test(url)) {
+    return Math.max(fallbackMs, SESSION_DELETE_REQUEST_TIMEOUT_MS);
   }
   if (/\/provider\/oauth\//.test(url) || /\/mcp\/auth\/callback\b/.test(url)) {
     return Math.max(fallbackMs, OAUTH_OPENCODE_REQUEST_TIMEOUT_MS);

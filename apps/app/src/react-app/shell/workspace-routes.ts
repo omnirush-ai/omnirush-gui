@@ -106,6 +106,33 @@ export function removeWorkspaceRouteSession<T extends { id: string }>(sessions: 
   return next.length === sessions.length ? sessions : next;
 }
 
+/**
+ * Every workspace's list without a deleted session, whichever workspace
+ * listed it, and the workspaces that did. The same object when none did.
+ */
+export function removeSessionFromWorkspaceLists<T extends { id: string }>(
+  lists: Record<string, T[]>,
+  sessionId: string,
+): { lists: Record<string, T[]>; workspaceIds: string[] } {
+  let next = lists;
+  const workspaceIds: string[] = [];
+  for (const [workspaceId, list] of Object.entries(lists)) {
+    const nextList = removeWorkspaceRouteSession(list, sessionId);
+    if (nextList === list) continue;
+    if (next === lists) next = { ...lists };
+    next[workspaceId] = nextList;
+    workspaceIds.push(workspaceId);
+  }
+  return { lists: next, workspaceIds };
+}
+
+/** A fetched list without the sessions deleted since it was requested. */
+export function withoutDeletedSessions<T extends { id?: string | null }>(sessions: T[], deleted: ReadonlySet<string>): T[] {
+  if (deleted.size === 0) return sessions;
+  const next = sessions.filter((session) => !deleted.has(String(session?.id ?? "")));
+  return next.length === sessions.length ? sessions : next;
+}
+
 export function legacySessionRoute(sessionId?: string | null) {
   const session = sessionId?.trim();
   return session ? `/session/${encodeURIComponent(session)}` : "/session";

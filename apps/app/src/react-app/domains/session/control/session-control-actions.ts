@@ -40,6 +40,8 @@ type UseSessionControlActionsInput = {
   createTaskInWorkspace: (workspaceId: string) => Promise<string | null> | string | null;
   openModelPicker: () => void;
   refreshRouteState: () => Promise<unknown> | unknown;
+  /** Drops a deleted session from every sidebar list at once. */
+  forgetDeletedSession?: (sessionId: string) => void;
 };
 
 function workspaceLabel(workspace: SessionControlWorkspace) {
@@ -74,6 +76,7 @@ export function useSessionControlActions(input: UseSessionControlActionsInput) {
     canCreateTask,
     createTaskInWorkspace,
     endpointForWorkspace,
+    forgetDeletedSession,
     navigateToSession,
     navigateToSessionRoot,
     openModelPicker,
@@ -220,13 +223,14 @@ export function useSessionControlActions(input: UseSessionControlActionsInput) {
       const endpoint = endpointForWorkspace(targetWorkspace);
       if (!endpoint) return { ok: false, error: "Workspace runtime is not connected" };
       await deleteRouteSession(endpoint, sessionId);
+      forgetDeletedSession?.(sessionId);
       if (selectedSessionId === sessionId) {
         navigateToSessionRoot();
       }
       await refreshRouteState();
       return { ok: true, sessionId, deleted: true };
     },
-  }), [endpointForWorkspace, navigateToSessionRoot, omnirushClient, refreshRouteState, selectedSessionId, sessionsByWorkspaceId, workspaces]);
+  }), [endpointForWorkspace, forgetDeletedSession, navigateToSessionRoot, omnirushClient, refreshRouteState, selectedSessionId, sessionsByWorkspaceId, workspaces]);
   useControlAction(deleteSessionControlAction);
 
   const modelPickerControlAction = useMemo<OmniRushControlAction>(() => ({
