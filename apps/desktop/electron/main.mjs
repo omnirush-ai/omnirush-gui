@@ -79,6 +79,7 @@ import {
 } from "./brand-icon-windows.mjs";
 import { resetMacDockIcon } from "./brand-icon-darwin.mjs";
 import { createOpenLogsFolderHandler } from "./logs-folder.mjs";
+import { readSkillFolder } from "./skill-folder.mjs";
 import { createDesktopVaultKeyProvider } from "./secure-vault-key.mjs";
 import { applyLinuxPasswordStore, recordLinuxPasswordStore } from "./linux-password-store.mjs";
 import { createDesktopOmniRushAccountStore, legacyKeychainAllowed } from "./omnirush-account.mjs";
@@ -2193,6 +2194,11 @@ const desktopCommandHandlers = {
       }
       await cp(sourceDir, destination, { recursive: true });
       return execResult(true, `Imported skill to ${destination}`);
+  },
+  "readSkillFolder": async (event, ...args) => {
+      // Upload source for "Add skill > Upload folder": walked here (not in the
+      // renderer) so links are seen and refused; the local server re-validates.
+      return readSkillFolder(String(args[0] ?? "").trim());
   },
   "installSkillTemplate": async (event, ...args) => {
       const projectDir = String(args[0] ?? "").trim();
