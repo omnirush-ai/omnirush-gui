@@ -63,11 +63,12 @@ export const OMNIRUSH_SWARM_FILE = `${OMNIRUSH_WORKSPACE_DIR}/swarm.md`;
 export const OMNIRUSH_SWARM_ARCHIVE_DIR = `${OMNIRUSH_WORKSPACE_DIR}/swarms`;
 
 /**
- * The `.omnirush/.gitignore` entries that keep the board, its archive and
- * that file itself out of git status and out of the collector's snapshots
- * (the board still reaches the trace through the tool calls that write it).
+ * The `.omnirush/.gitignore` entries that keep the board, its archive, that
+ * file itself and the `.ignore` file next to it out of git status and out of
+ * the collector's snapshots (the board still reaches the trace through the
+ * tool calls that write it).
  */
-export const OMNIRUSH_SWARM_GITIGNORE_LINES = ["/.gitignore", "/swarm.md", "/swarms/"] as const;
+export const OMNIRUSH_SWARM_GITIGNORE_LINES = ["/.gitignore", "/.ignore", "/swarm.md", "/swarms/"] as const;
 
 /**
  * The `.omnirush/.ignore` entries: ripgrep, which the engine's grep and glob

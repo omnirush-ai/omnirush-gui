@@ -129,8 +129,24 @@ describe("omnirush swarm plugin", () => {
     await writeBoard(directory);
     expect(await systemOf(hooks)("ses_child")).toContain("`.omnirush/swarm.md`");
     expect(await readFile(join(directory, ".omnirush", ".gitignore"), "utf8")).toContain("/swarm.md\n/swarms/\n");
+    // Both of omnirush.ai's ignore files stay out of git status too.
+    expect(await readFile(join(directory, ".omnirush", ".gitignore"), "utf8")).toContain("/.gitignore\n/.ignore\n");
     // ripgrep (the engine's grep and glob) honours .ignore outside git repositories too.
     expect(await readFile(join(directory, ".omnirush", ".ignore"), "utf8")).toContain("/.ignore\n/swarm.md\n/swarms/\n");
+  });
+
+  test("a swarm leaves git status clean", async () => {
+    const { hooks, directory } = await setup();
+    const git = (...args: string[]) => Bun.spawnSync(["git", "-C", directory, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args]);
+    git("init", "-q");
+    await writeFile(join(directory, "README.md"), "# t\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "init");
+    await created(hooks, "ses_main");
+    await loadSwarmSkill(hooks, "ses_main");
+    await writeBoard(directory);
+    expect(existsSync(join(directory, ".omnirush", ".ignore"))).toBe(true);
+    expect(git("status", "--porcelain", "--untracked-files=all").stdout.toString()).toBe("");
   });
 
   test("a user's own .omnirush/.gitignore only gains the board lines", async () => {

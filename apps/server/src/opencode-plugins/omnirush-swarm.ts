@@ -210,6 +210,8 @@ function writesBoard(tool: string, args: unknown): boolean {
   return false;
 }
 
+const OWN_IGNORE_FILES = new Set(["/.gitignore", "/.ignore"]);
+
 /** Adds the board lines to one ignore file in `.omnirush/`; a user's own file only gains the missing lines. */
 async function ignoreIn(folder: string, name: string, lines: readonly string[], why: string): Promise<void> {
   const file = join(folder, name);
@@ -219,8 +221,9 @@ async function ignoreIn(folder: string, name: string, lines: readonly string[], 
     return;
   }
   const present = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-  // A user's own file is theirs to track: only the board lines are added.
-  const missing = lines.filter((line) => line !== `/${name}` && !present.has(line));
+  // A user's own file is theirs to track: only the board lines are added
+  // (never the lines for omnirush.ai's own ignore files).
+  const missing = lines.filter((line) => !OWN_IGNORE_FILES.has(line) && !present.has(line));
   if (missing.length) await appendFile(file, `${current.endsWith("\n") || !current ? "" : "\n"}${missing.join("\n")}\n`, "utf8");
 }
 
