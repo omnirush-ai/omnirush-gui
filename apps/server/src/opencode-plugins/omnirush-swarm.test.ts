@@ -135,13 +135,14 @@ describe("omnirush swarm plugin", () => {
     expect(await system("ses_main")).toBe("");
     const child = await system("ses_child");
     expect(child).toContain("Do your task yourself.");
-    expect(child).toContain("Instructions about sub-agents in your task text");
-    expect(child).toContain("were meant for the main session, not you");
-    expect(child).toContain("never re-delegate your whole task");
+    expect(child).toContain("Instructions about sub-agents that the user wrote");
+    expect(child).toContain("were meant for the main session, which already carried them out");
+    expect(child).toContain("only if your task explicitly tells you to");
+    expect(child).toContain("Never re-delegate your whole task");
     expect(await system("ses_grand")).toContain("layer 2 of at most 3");
     const great = await system("ses_great");
     expect(great).toContain("You cannot delegate further");
-    expect(great).not.toContain("Delegate with the task tool");
+    expect(great).not.toContain("Start sub-agents with the task tool");
     // Same text on every step (prompt cache).
     expect(await system("ses_child")).toBe(child);
   });
