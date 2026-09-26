@@ -453,24 +453,27 @@ export function ModelSelect({
               disabled={disabled}
               aria-label="Change model"
               aria-keyshortcuts="Meta+Alt+/"
-              className="flex h-9 max-h-9 min-w-0 max-w-fit flex-1 items-center overflow-hidden gap-1.5 rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12 disabled:pointer-events-none disabled:opacity-60"
+              data-testid="model-select-trigger"
+              // Shrinks (truncating the model name) before it would push into
+              // the controls beside it; never below a readable width.
+              className="flex h-9 max-h-9 min-w-24 shrink items-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12 disabled:pointer-events-none disabled:opacity-60"
             />
           }
         >
-          <span className="flex min-w-0 max-w-56 items-center gap-1.5">
-            <span className="truncate">
+          <span className="flex min-w-0 max-w-64 items-center gap-1.5">
+            <span className="min-w-0 truncate">
               {selectedValueHidden || !value.modelID
                 ? "Select model"
                 : selectedModelTitle}
             </span>
             {!selectedValueHidden && value.modelID && selectedProviderTitle ? (
-              <span className="hidden shrink-0 text-xs text-gray-9 sm:inline">· {selectedProviderTitle}</span>
+              <span className="hidden shrink-0 text-xs text-gray-9 @min-[820px]/composer:inline">· {selectedProviderTitle}</span>
             ) : null}
             {showBehavior ? (
               <span className="shrink-0 text-gray-9">· {effectiveBehaviorLabel}</span>
             ) : null}
           </span>
-          <ChevronDown className="h-3 w-3" />
+          <ChevronDown className="h-3 w-3 shrink-0" />
         </TooltipTrigger>
         <TooltipContent>
           Change model · Cycle thinking ({shortcutLabel} forward, {reverseShortcutLabel} back)
