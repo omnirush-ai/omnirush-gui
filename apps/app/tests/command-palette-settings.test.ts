@@ -32,6 +32,7 @@ describe("command palette settings", () => {
       "settings:advanced",
       "settings:ai",
       "settings:appearance",
+      "settings:voice",
       "settings:environment",
       "settings:updates",
       "settings:advanced/organization-server",

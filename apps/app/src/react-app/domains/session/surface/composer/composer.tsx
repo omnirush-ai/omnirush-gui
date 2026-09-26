@@ -36,6 +36,8 @@ import {
   mergeComposerConnectionInventory,
 } from "./composer-connections";
 import { DevProfiler } from "@/react-app/shell/dev-profiler";
+import { useVoiceDictation, type VoiceClient } from "@/react-app/domains/voice/use-voice-dictation";
+import { VoiceButton, VoicePermissionCard } from "@/react-app/domains/voice/voice-button";
 
 type MentionItem = {
   id: string;
@@ -122,6 +124,10 @@ type ComposerProps = {
   fullPermissionsControl?: ReactNode;
   /** The "Sub-agents" model and effort menu, shown right after the model selector. */
   subagentModelControl?: ReactNode;
+  /** Voice dictation's local server hop; without it there is no mic button. */
+  voiceClient?: VoiceClient | null;
+  /** The workspace whose repository and branch hint the transcription. */
+  voiceWorkspaceId?: string | null;
 };
 
 const FLUSH_PROMPT_EVENT = "omnirush:flushPromptDraft";
@@ -352,7 +358,24 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
 
   // Editor submit (Enter). While idle this sends normally; while busy
   // Enter queues until the agent finishes, and Cmd/Ctrl+Enter steers.
+  // Auto-send after dictation waits until the dictated text has reached the draft.
+  const [voiceAutoSendPrompt, setVoiceAutoSendPrompt] = useState<string | null>(null);
+  const voice = useVoiceDictation({
+    client: props.voiceClient ?? null,
+    workspaceId: props.voiceWorkspaceId,
+    recentFiles: props.recentFiles,
+    editorRef,
+    rootRef,
+    disabled: props.disabled,
+    onAutoSend: setVoiceAutoSendPrompt,
+  });
+
   const handleEditorSubmit = useCallback((options: { queue: boolean }) => {
+    // Enter while dictating ends the dictation; the text is then editable before sending.
+    if (voice.active) {
+      void voice.stop();
+      return;
+    }
     const hasContent = props.draft.trim().length > 0 || props.attachments.length > 0;
     if (!hasContent) return;
     if (props.submissionPreparing) return;
@@ -362,7 +385,13 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       return;
     }
     void props.onSend();
-  }, [props.busy, props.draft, props.attachments, props.onSend, props.onSteer, props.onQueue, props.submissionPreparing]);
+  }, [props.busy, props.draft, props.attachments, props.onSend, props.onSteer, props.onQueue, props.submissionPreparing, voice.active, voice.stop]);
+
+  useEffect(() => {
+    if (voiceAutoSendPrompt === null || props.draft !== voiceAutoSendPrompt) return;
+    setVoiceAutoSendPrompt(null);
+    handleEditorSubmit({ queue: false });
+  }, [handleEditorSubmit, props.draft, voiceAutoSendPrompt]);
 
   const slashCommandQuery = getSlashCommandQuery(props.draft);
   const slashOpenNext = slashCommandQuery !== null;
@@ -1287,6 +1316,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       className={props.flush ? `relative ${toolMenuOpen ? "z-50" : "z-20"}` : `sticky bottom-0 ${toolMenuOpen ? "z-50" : "z-20"} bg-gradient-to-t from-dls-surface via-dls-surface/95 to-transparent px-4 pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))] max-lg:px-3 lg:px-8 ${props.compactTopSpacing ? "pt-0" : "pt-1"}`}
       style={{ contain: "layout style" }}
       onKeyDownCapture={handleKeyDownCapture}
+      onFocusCapture={voice.claimHotkey}
       onCompositionStart={() => {
         imeComposingRef.current = true;
       }}
@@ -1300,6 +1330,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
           className={`@container/composer relative overflow-visible rounded-[18px] border border-dls-border bg-dls-surface transition-all ${panelRoundedClass}`}
         >
           {props.topAccessory ? <div className="relative z-10">{props.topAccessory}</div> : null}
+          <VoicePermissionCard voice={voice} />
 
           {renderMentionMenu()}
           {renderSlashMenu()}
@@ -1675,6 +1706,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                 >
                   <Paperclip size={16} />
                 </button>
+                <VoiceButton voice={voice} disabled={props.disabled} />
 
                 </div>
 
@@ -1815,7 +1847,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                   }
                   disabled={
                     props.disabled
-                    || (!props.busy && (!canSend || props.submissionPreparing))
+                    || (!props.busy && (!canSend || props.submissionPreparing || voice.active))
                   }
                   aria-label={
                     props.busy

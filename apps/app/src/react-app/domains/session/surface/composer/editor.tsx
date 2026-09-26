@@ -38,6 +38,7 @@ import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMe
 import { parseConnectSkillToken } from "./connect-skill-token";
 import { shouldCollapsePastedText, splitPastedText } from "./pasted-text";
 import { insertPastedText } from "./pasted-text-insertion";
+import { padInsertion } from "@/app/lib/voice-core/text";
 
 type PastedTextToken = { label: string; lines: number; text: string };
 
@@ -68,6 +69,14 @@ type EditorProps = {
 
 export type LexicalPromptEditorHandle = {
   insertSkillAtSelection: (skillName: string, skillToken?: string) => void;
+  /** Voice dictation: marks the cursor with a live (dim) transcript placeholder. */
+  voiceBegin: () => void;
+  /** The dictated text so far, and whether more is still being transcribed. False once the placeholder is gone. */
+  voiceUpdate: (text: string, pending: boolean) => boolean;
+  /** Replaces the placeholder with plain, editable text and puts the cursor after it; returns the whole prompt. */
+  voiceCommit: (text: string) => string;
+  /** Removes the placeholder: the prompt is as it was before dictation. */
+  voiceCancel: () => void;
 };
 
 type SerializedComposerMentionNode = Spread<
@@ -661,6 +670,132 @@ type ComposerInlineTokenNode =
   | ComposerPastedTextNode
   | ComposerAttachmentNode;
 
+const VOICE_EMPTY = "\u200b";
+const VOICE_NODE_CLASS = "rounded-sm bg-[color:color-mix(in_oklab,var(--dls-accent)_10%,transparent)] italic text-dls-secondary";
+const VOICE_PENDING_CLASS = "after:ml-0.5 after:inline-block after:animate-pulse after:content-['…']";
+
+/**
+ * The live transcript while dictating: dim, italic, not editable, at the
+ * cursor where recording started. Committing turns it into a plain text
+ * node; cancelling removes it.
+ */
+class ComposerVoiceNode extends TextNode {
+  __pending: boolean;
+
+  static override getType() {
+    return "composer-voice";
+  }
+
+  static override clone(node: ComposerVoiceNode) {
+    const clone = new ComposerVoiceNode(node.__text, node.__key);
+    clone.__pending = node.__pending;
+    return clone;
+  }
+
+  static override importJSON(serializedNode: SerializedTextNode) {
+    return $applyNodeReplacement(new ComposerVoiceNode(serializedNode.text));
+  }
+
+  constructor(text = VOICE_EMPTY, key?: NodeKey) {
+    super(text || VOICE_EMPTY, key);
+    this.__pending = true;
+  }
+
+  override exportJSON(): SerializedTextNode {
+    return { ...super.exportJSON(), type: "composer-voice", version: 1 };
+  }
+
+  override getTextContent(): string {
+    return super.getTextContent().replaceAll(VOICE_EMPTY, "");
+  }
+
+  override createDOM(config: EditorConfig) {
+    const dom = super.createDOM(config);
+    dom.className = `${VOICE_NODE_CLASS} ${this.__pending ? VOICE_PENDING_CLASS : ""}`;
+    dom.contentEditable = "false";
+    dom.setAttribute("data-voice-interim", "true");
+    dom.setAttribute("data-voice-pending", String(this.__pending));
+    return dom;
+  }
+
+  override updateDOM(prevNode: this, dom: HTMLElement, config: EditorConfig) {
+    const changed = super.updateDOM(prevNode, dom, config);
+    if (prevNode.__pending !== this.__pending) {
+      dom.className = `${VOICE_NODE_CLASS} ${this.__pending ? VOICE_PENDING_CLASS : ""}`;
+      dom.setAttribute("data-voice-pending", String(this.__pending));
+    }
+    return changed;
+  }
+
+  setVoice(text: string, pending: boolean) {
+    const writable = this.getWritable();
+    writable.__text = text || VOICE_EMPTY;
+    writable.__pending = pending;
+  }
+
+  override canInsertTextBefore(): false {
+    return false;
+  }
+
+  override canInsertTextAfter(): false {
+    return false;
+  }
+
+  override isToken(): true {
+    return true;
+  }
+}
+
+function neighbourText(node: TextNode, side: "before" | "after"): string {
+  const sibling = side === "before" ? node.getPreviousSibling() : node.getNextSibling();
+  return sibling ? sibling.getTextContent() : "";
+}
+
+function voiceNode(): ComposerVoiceNode | null {
+  return $nodesOfType(ComposerVoiceNode)[0] ?? null;
+}
+
+function beginVoice() {
+  for (const stale of $nodesOfType(ComposerVoiceNode)) stale.remove();
+  const node = $applyNodeReplacement(new ComposerVoiceNode());
+  const selection = $getSelection();
+  if ($isRangeSelection(selection)) {
+    if (!selection.isCollapsed()) selection.removeText();
+    selection.insertNodes([node]);
+  } else {
+    const root = $getRoot();
+    const last = root.getLastChild();
+    const paragraph = $isElementNode(last) ? last : $createParagraphNode();
+    if (!$isElementNode(last)) root.append(paragraph);
+    paragraph.append(node);
+  }
+}
+
+function updateVoice(text: string, pending: boolean): boolean {
+  const node = voiceNode();
+  if (!node) return false;
+  node.setVoice(padInsertion(neighbourText(node, "before"), text, neighbourText(node, "after")), pending);
+  return true;
+}
+
+function commitVoice(text: string) {
+  const node = voiceNode();
+  if (!node) {
+    // The placeholder was removed (a draft rebuild): the words still land at the cursor.
+    const selection = $getSelection();
+    if (text.trim() && $isRangeSelection(selection)) selection.insertText(text.trim());
+    return;
+  }
+  const padded = padInsertion(neighbourText(node, "before"), text, neighbourText(node, "after"));
+  if (!padded) {
+    node.remove();
+    return;
+  }
+  const plain = $createTextNode(padded);
+  node.replace(plain);
+  plain.select(padded.length, padded.length);
+}
+
 function isComposerInlineTokenNode(node: unknown): node is ComposerInlineTokenNode {
   return node instanceof ComposerMentionNode
     || node instanceof ComposerSlashCommandNode
@@ -1166,6 +1301,28 @@ function ImperativeHandlePlugin(props: { editorRef: ForwardedRef<LexicalPromptEd
       editor.update(() => insertSkillAtSelection(skillName, skillToken));
       editor.focus();
     },
+    voiceBegin() {
+      editor.update(() => beginVoice(), { discrete: true });
+      // Started from the hotkey anywhere in the window: the composer takes focus.
+      editor.focus();
+    },
+    voiceUpdate(text: string, pending: boolean) {
+      let present = false;
+      editor.update(() => {
+        present = updateVoice(text, pending);
+      }, { discrete: true, tag: "history-merge" });
+      return present;
+    },
+    voiceCommit(text: string) {
+      editor.update(() => commitVoice(text), { discrete: true });
+      editor.focus();
+      return editor.getEditorState().read(() => serializePromptFromRoot());
+    },
+    voiceCancel() {
+      editor.update(() => {
+        for (const node of $nodesOfType(ComposerVoiceNode)) node.remove();
+      }, { discrete: true, tag: "history-merge" });
+    },
   }), [editor]);
 
   return null;
@@ -1232,7 +1389,7 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
         throw error;
       },
       editable: true,
-      nodes: [ComposerMentionNode, ComposerSlashCommandNode, ComposerSkillNode, ComposerPastedTextNode, ComposerAttachmentNode],
+      nodes: [ComposerMentionNode, ComposerSlashCommandNode, ComposerSkillNode, ComposerPastedTextNode, ComposerAttachmentNode, ComposerVoiceNode],
       editorState: () => {
         setPrompt(props.value, props.mentions, props.pastedText, props.attachments);
       },
