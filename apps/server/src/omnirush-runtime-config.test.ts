@@ -20,8 +20,11 @@ import {
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
   OMNIRUSH_SWARM_SKILL,
+  OMNIRUSH_SWARM_ARCHIVE_DIR,
   OMNIRUSH_SWARM_SKILL_NAME,
+  OMNIRUSH_SWARM_TOOL_NAME,
   omnirushSwarmSkillMarkdown,
+  omnirushSwarmSubagentNote,
 } from "./omnirush-swarm.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import {
@@ -354,6 +357,9 @@ describe("omnirush runtime config file", () => {
       expect(agents.explore).toBeUndefined();
       expect((parsed.permission as Record<string, unknown>).task).toBeUndefined();
       expect(agents.omnirush?.permission?.task).toBeUndefined();
+      // The board tool is for sub-agents only: hidden from the main agent.
+      expect(agents.omnirush?.permission?.[OMNIRUSH_SWARM_TOOL_NAME]).toBe("deny");
+      expect(agents.general?.permission?.[OMNIRUSH_SWARM_TOOL_NAME]).toBeUndefined();
       expect((parsed.plugin as string[]).some((plugin) => /omnirush-swarm\.(?:ts|js)$/.test(plugin))).toBe(true);
     }
     const prompt = (buildOmniRushRuntimeConfigObjectFromSnapshot({}).agent as Record<string, { prompt: string }>).omnirush!.prompt;
@@ -377,12 +383,24 @@ describe("omnirush runtime config file", () => {
     expect(OMNIRUSH_SWARM_SKILL).toContain("`.omnirush/swarm.md`");
     expect(OMNIRUSH_SWARM_SKILL).toContain("never a file in the project root");
     expect(OMNIRUSH_SWARM_SKILL).toContain("For 1-2 sub-agents, stop here");
-    expect(OMNIRUSH_SWARM_SKILL).toContain("`.omnirush/swarms/<YYYYMMDD-HHMMSS>.md`");
     expect(OMNIRUSH_SWARM_SKILL).toContain("There is no limit on how many run at once or start per turn");
+    // Sub-agents use the board tool instead of reading the whole board, and
+    // omnirush.ai (not the model) clears the board when the turn ends.
+    expect(OMNIRUSH_SWARM_SKILL).toContain(`use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool with your task id`);
+    expect(OMNIRUSH_SWARM_SKILL).toContain("do not read or edit the board file");
+    expect(OMNIRUSH_SWARM_SKILL).toContain("omnirush.ai does that when the turn ends");
     const { data, body } = parseFrontmatter(omnirushSwarmSkillMarkdown());
     expect(data.name).toBe(OMNIRUSH_SWARM_SKILL_NAME);
     expect(String(data.description)).toContain("Required before starting 3 or more sub-agents for one request");
     expect(body.trim()).toBe(OMNIRUSH_SWARM_SKILL);
+  });
+
+  test("no prompt, skill or sub-agent note points a model at archived boards", () => {
+    const prompt = (buildOmniRushRuntimeConfigObjectFromSnapshot({}).agent as Record<string, { prompt: string }>).omnirush!.prompt;
+    for (const text of [prompt, OMNIRUSH_SWARM_SKILL, omnirushSwarmSkillMarkdown(), omnirushSwarmSubagentNote(1), omnirushSwarmSubagentNote(3)]) {
+      expect(text).not.toContain(OMNIRUSH_SWARM_ARCHIVE_DIR);
+      expect(text).not.toContain("swarms/");
+    }
   });
 
   test("the engine loads the swarm skill from the runtime folder", async () => {

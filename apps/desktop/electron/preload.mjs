@@ -248,7 +248,9 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
     } : {}),
   },
   terminal: {
+    shells() { return ipcRenderer.invoke("omnirush:terminal:shells"); },
     create(options) { return ipcRenderer.invoke("omnirush:terminal:create", options); },
+    killWorkspace(workspaceId) { return ipcRenderer.invoke("omnirush:terminal:killWorkspace", workspaceId); },
     write(terminalId, data) { return ipcRenderer.invoke("omnirush:terminal:write", terminalId, data); },
     resize(terminalId, cols, rows) { return ipcRenderer.invoke("omnirush:terminal:resize", terminalId, cols, rows); },
     kill(terminalId) { return ipcRenderer.invoke("omnirush:terminal:kill", terminalId); },

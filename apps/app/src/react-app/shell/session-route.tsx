@@ -10,6 +10,7 @@ import {
 import { useLocation, useNavigate } from "react-router";
 import { Archive, ArchiveRestore } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
+import { closeWorkspaceTerminals } from "../domains/session/terminal/terminal-runtime";
 import type { ProviderListResponse } from "@opencode-ai/sdk/v2/client";
 
 import { captureAnalyticsEvent, markTaskRunStart } from "@/app/lib/analytics";
@@ -2120,6 +2121,7 @@ export function SessionRoute() {
           workspaceId,
           deleteFromServer: client ? (id) => client.deleteWorkspace(id) : null,
           forgetOnDesktop: isDesktopRuntime() ? workspaceForget : null,
+          closeTerminals: closeWorkspaceTerminals,
         });
       } catch (error) {
         console.error("[session-route] remove workspace failed", error);

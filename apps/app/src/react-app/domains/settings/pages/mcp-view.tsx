@@ -32,6 +32,13 @@ import { evaluateEnablement } from "../../../../app/enablement";
 import type { EnablementResult } from "../../../../app/extensions";
 import type { CloudImportedPlugin, CloudImportedPluginFile } from "../../../../app/cloud/import-state";
 import { ExtensionCard, type ExtensionLayout } from "../../../design-system/extension-card";
+import { SkillFilesPanel } from "./skill-files-panel";
+import type {
+  SkillBundleInstallResult,
+  SkillBundlePreview,
+  SkillFileTree,
+  SkillUploadFile,
+} from "../../../../app/lib/skill-upload";
 import { ExtensionDetailModal } from "../../../design-system/extension-detail-modal";
 import {
   isOrgMcpConnectionReady,
@@ -237,6 +244,17 @@ export type McpViewProps = {
    * with a message when the server refuses the skill.
    */
   createWorkspaceSkill?: (input: WorkspaceSkillDraft) => Promise<void>;
+  /** Skill folder / .zip upload through the local server (preview, then install). */
+  previewSkillBundle?: (payload: { files: SkillUploadFile[]; name?: string }) => Promise<SkillBundlePreview>;
+  installSkillBundle?: (payload: {
+    files: SkillUploadFile[];
+    name?: string;
+    onConflict?: "fail" | "replace";
+  }) => Promise<SkillBundleInstallResult>;
+  /** Helper files and SKILL.md of an installed workspace skill. */
+  listSkillFiles?: (name: string) => Promise<SkillFileTree>;
+  updateSkillFiles?: (name: string, payload: { add?: SkillUploadFile[]; remove?: string[] }) => Promise<SkillFileTree>;
+  saveSkillContent?: (input: { name: string; content: string }) => Promise<void>;
   /** Reload composer command and agent lists after a Library create. */
   onLibraryListsRefresh?: () => Promise<void> | void;
   onRefresh?: () => void;
@@ -1112,7 +1130,22 @@ export function McpView(props: McpViewProps) {
             instructionsHint={t("extensions.detail_instructions_skill_hint")}
             openFileLabel={t("extensions.detail_open_skill")}
             contentPreview={detailSkillContent ?? undefined}
-            configSlot={openInDenAction({ id: detailSkill.path })}
+            configSlot={(
+              <>
+                {openInDenAction({ id: detailSkill.path })}
+                {detailSkill.origin !== "omnirush-connect" && props.listSkillFiles && props.updateSkillFiles && props.saveSkillContent ? (
+                  <SkillFilesPanel
+                    key={detailSkill.name}
+                    name={detailSkill.name}
+                    listFiles={props.listSkillFiles}
+                    updateFiles={props.updateSkillFiles}
+                    content={detailSkillContent}
+                    saveContent={props.saveSkillContent}
+                    onContentSaved={(content) => setDetailSkillContent(content)}
+                  />
+                ) : null}
+              </>
+            )}
             onReveal={detailSkill.path && detailSkill.origin !== "omnirush-connect" ? () => {
               void revealDesktopItemInDir(detailSkill.path);
             } : undefined}
@@ -1685,6 +1718,8 @@ export function McpView(props: McpViewProps) {
           busy={props.busy}
           onClose={() => setWorkspaceSkillModalOpen(false)}
           onCreate={props.createWorkspaceSkill}
+          onPreviewBundle={props.previewSkillBundle}
+          onInstallBundle={props.installSkillBundle}
           onCreated={() => {
             // The store's skill refresh lands the new card; keep the user on
             // the skills list so it appears in place.

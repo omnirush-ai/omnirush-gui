@@ -148,7 +148,10 @@ export async function removeRouteWorkspace(input: {
   workspaceId: string;
   deleteFromServer: ((workspaceId: string) => Promise<unknown>) | null;
   forgetOnDesktop: ((workspaceId: string) => Promise<unknown>) | null;
+  /** Ends the workspace's terminal shells first: an open shell keeps its folder busy (and locked on Windows). */
+  closeTerminals?: ((workspaceId: string) => Promise<unknown>) | null;
 }): Promise<void> {
+  await input.closeTerminals?.(input.workspaceId);
   if (input.deleteFromServer) {
     try {
       await input.deleteFromServer(input.workspaceId);
