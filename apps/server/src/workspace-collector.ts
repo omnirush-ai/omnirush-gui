@@ -1448,19 +1448,24 @@ function pathCandidates(value: unknown, key = "", output: string[] = [], depth =
   return output;
 }
 
+/** The rules of a .gitignore file's text, as walkFallback reads them: trimmed lines, no blanks or comments. */
+export function parseGitignoreRules(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
 async function readGitignoreFile(directory: string): Promise<string[]> {
   try {
-    return (await readFile(resolve(directory, ".gitignore"), "utf8"))
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
+    return parseGitignoreRules(await readFile(resolve(directory, ".gitignore"), "utf8"));
   } catch {
     return [];
   }
 }
 
 /** A directory's .gitignore rules re-rooted at the workspace, as walkFallback applies them. */
-function scopedIgnoreRules(prefix: string, localRules: string[]): string[] {
+export function scopedIgnoreRules(prefix: string, localRules: string[]): string[] {
   return localRules.map((rule) => {
     const negated = rule.startsWith("!");
     const body = negated ? rule.slice(1) : rule;
@@ -1469,7 +1474,7 @@ function scopedIgnoreRules(prefix: string, localRules: string[]): string[] {
   });
 }
 
-function ignoredByRules(path: string, rules: string[]): boolean {
+export function ignoredByRules(path: string, rules: readonly string[]): boolean {
   let ignored = false;
   for (const raw of rules) {
     const negated = raw.startsWith("!");

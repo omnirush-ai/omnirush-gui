@@ -89,6 +89,40 @@ describe("scanTouchedFiles", () => {
   });
 });
 
+describe("scanTouchedFiles and gitignored files", () => {
+  test("a touched file git ignores is skipped (nested .gitignore, an ignored folder, a nested repository), and deletes the chain's copy", async () => {
+    const root = await tempDir("touched-ignored");
+    await writeFile(join(root, ".gitignore"), "node_modules/\n*.log\n");
+    await mkdir(join(root, "node_modules/dep"), { recursive: true });
+    await writeFile(join(root, "node_modules/dep/index.js"), "dep");
+    await writeFile(join(root, "run.log"), "log");
+    await writeFile(join(root, "report.pdf"), "pdf");
+    await mkdir(join(root, "app/cache"), { recursive: true });
+    await writeFile(join(root, "app/.gitignore"), "cache/\n");
+    await writeFile(join(root, "app/cache/blob"), "cached");
+    await writeFile(join(root, "app/main.py"), "print(1)");
+    await mkdir(join(root, "clone/build"), { recursive: true });
+    await execFileAsync("git", ["-C", join(root, "clone"), "init", "-q"]);
+    await writeFile(join(root, "clone/.gitignore"), "build/\n");
+    await writeFile(join(root, "clone/build/out.o"), "o");
+    await writeFile(join(root, "clone/src.c"), "int main;");
+    const touched = ["node_modules/dep/index.js", "run.log", "report.pdf", "app/cache/blob", "app/main.py", "clone/build/out.o", "clone/src.c", ".gitignore"];
+
+    const scan = await scanTouchedFiles(root, touched);
+    expect(scan.entries.map((entry) => entry.path)).toEqual([".gitignore", "app/main.py", "clone/src.c", "report.pdf"]);
+    expect(scan.ignored).toBe(4);
+    for (const path of ["node_modules/dep/index.js", "run.log", "app/cache/blob", "clone/build/out.o"]) expect(scan.gone.has(path)).toBe(true);
+
+    // A file archived before it became ignored is deleted by the next delta.
+    const baseline = scan.entries.map((entry): ArchiveEntry => ({ path: entry.path, type: "file", mode: entry.mode, size: entry.size, sha256: entry.sha256 }));
+    await appendFile(join(root, ".gitignore"), "*.pdf\n");
+    const change = touchedChange(baseline, await scanTouchedFiles(root, [...touched, ...baseline.map((entry) => entry.path)]));
+    expect(change.deleted).toEqual(["report.pdf"]);
+    expect(change.files.map((entry) => entry.path)).toEqual([".gitignore"]);
+    expect(change.next.map((entry) => entry.path)).toEqual([".gitignore", "app/main.py", "clone/src.c"]);
+  });
+});
+
 describe("touchedChange", () => {
   test("a delta carries added and modified files, deletes only what is gone, and keeps what it could not read", () => {
     const entry = (path: string, sha: string): ArchiveEntry => ({ path, type: "file", mode: 0o644, size: 1, sha256: sha.repeat(64) });
@@ -97,6 +131,7 @@ describe("touchedChange", () => {
     const change = touchedChange(baseline, {
       entries: [scanned("doc.pdf", "e"), scanned("new.txt", "f"), scanned("same.png", "d")],
       gone: new Set(["gone.txt", "never-archived.txt"]),
+      ignored: 0,
       excluded: { credential: 0, special: 0, app_state: 0, reserved: 0, unreadable: 1, non_utf8: 0 },
     });
     expect(change.files.map((file) => file.path)).toEqual(["doc.pdf", "new.txt"]);

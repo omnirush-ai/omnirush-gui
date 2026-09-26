@@ -56,7 +56,7 @@ async function project(): Promise<{ root: string; blend: Buffer; head: string }>
 }
 
 describe("SessionArchiver", () => {
-  test("whole folder: base with .git and ignored content, credentials left out, then a delta after a change", async () => {
+  test("whole folder: base with .git and without gitignored content, credentials left out, then a delta after a change", async () => {
     const server = new FakeArchiveServer();
     const { root, blend, head } = await project();
     const state = await tempDir("state");
@@ -73,8 +73,12 @@ describe("SessionArchiver", () => {
     expect(first!.request.sha256).toBe(sha256(first!.object!));
     const members = await openArchive(first!.object!);
     const names = members.map((member) => member.name);
-    for (const present of [".git/HEAD", ".git/config", ".git/refs/heads/main", ".git/refs/heads/token-fix", "node_modules/left-pad/index.js", "dist/bundle.js", "assets/scene.blend", "src/app.ts", ".gitignore"]) {
+    for (const present of [".git/HEAD", ".git/config", ".git/refs/heads/main", ".git/refs/heads/token-fix", "assets/scene.blend", "src/app.ts", ".gitignore"]) {
       expect(names).toContain(present);
+    }
+    // Gitignored content can be reproduced: none of it is archived.
+    for (const ignored of ["node_modules", "node_modules/left-pad", "node_modules/left-pad/index.js", "dist", "dist/bundle.js"]) {
+      expect(names).not.toContain(ignored);
     }
     expect(names).not.toContain(".env");
     expect(names).not.toContain("id_rsa");
@@ -94,11 +98,15 @@ describe("SessionArchiver", () => {
     expect("deleted" in manifest).toBe(false);
     expect(Array.isArray(manifest.files) ? manifest.files.length : -1).toBe(members.length - 1);
 
-    // A turn edits, adds, deletes and commits.
+    // A turn edits, adds, deletes and commits, and rebuilds ignored content.
     await writeFile(join(root, "src/app.ts"), "export const app = 2;\n");
     await writeFile(join(root, "src/new.ts"), "export const added = true;\n");
+    await rm(join(root, "assets/scene.blend"));
     await rm(join(root, "dist/bundle.js"));
-    await git(root, "add", "src");
+    await writeFile(join(root, "dist/bundle.2.js"), "console.log(2);\n");
+    await mkdir(join(root, "node_modules/is-odd"), { recursive: true });
+    await writeFile(join(root, "node_modules/is-odd/index.js"), "module.exports = (n) => n % 2;\n");
+    await git(root, "add", "-A", "src", "assets");
     await git(root, "commit", "-q", "-m", "turn one");
     const delta = await subject.captureDelta("ses_whole_folder", root, 1);
     expect(delta).toMatchObject({ status: "queued", kind: "delta", sequence: 1 });
@@ -107,11 +115,10 @@ describe("SessionArchiver", () => {
     expect(second.request).toMatchObject({ kind: "delta", sequence: 1, turn: 1, parent_archive_id: first!.request.archive_id });
     const deltaMembers = await openArchive(second.object!);
     const deltaManifest = manifestOf(deltaMembers);
-    expect(deltaManifest).toMatchObject({ kind: "delta", sequence: 1, turn: 1, parent_archive_id: first!.request.archive_id, deleted: ["dist/bundle.js"] });
+    expect(deltaManifest).toMatchObject({ kind: "delta", sequence: 1, turn: 1, parent_archive_id: first!.request.archive_id, deleted: ["assets/scene.blend"] });
     const changed = deltaMembers.slice(1).map((member) => member.name);
     expect(changed).toEqual(expect.arrayContaining(["src/app.ts", "src/new.ts", ".git/refs/heads/main", ".git/index"]));
-    expect(changed).not.toContain("node_modules/left-pad/index.js");
-    expect(changed).not.toContain("assets/scene.blend");
+    expect(changed.filter((name) => name.startsWith("node_modules") || name.startsWith("dist"))).toEqual([]);
     expect(deltaMembers.find((member) => member.name === "src/app.ts")!.content.toString()).toBe("export const app = 2;\n");
 
     // Nothing changed: no archive and no sequence number used.
@@ -181,8 +188,10 @@ describe("SessionArchiver", () => {
     await mkdir(join(root, "node_modules/dep"), { recursive: true });
     await writeFile(join(root, "node_modules/dep/index.js"), "module.exports = 1;\n");
     await mkdir(join(root, "dist"));
+    await writeFile(join(root, "dist/app.js"), "built\n");
+    await mkdir(join(root, "wasm"));
     const binary = randomBytes(200 * 1024);
-    await writeFile(join(root, "dist/app.wasm"), binary);
+    await writeFile(join(root, "wasm/app.wasm"), binary);
     await writeFile(join(root, ".env"), "TOKEN=abc\n");
     await mkdir(join(repo, "packages/other"), { recursive: true });
     await writeFile(join(repo, "packages/other/sibling.ts"), "export {};\n");
@@ -196,11 +205,13 @@ describe("SessionArchiver", () => {
     expect(first!.request).toMatchObject({ kind: "base", marker: ".git" });
     const members = await openArchive(first!.object!);
     const names = members.map((member) => member.name);
-    expect(names).toEqual(expect.arrayContaining(["src/main.ts", "src/deep/deeper/data.bin", "node_modules/dep/index.js", "dist/app.wasm"]));
+    expect(names).toEqual(expect.arrayContaining(["src/main.ts", "src/deep/deeper/data.bin", "wasm/app.wasm"]));
+    // The repository's .gitignore (node_modules/, dist/ at any depth) applies to the folder inside it.
+    expect(names.filter((name) => name.startsWith("node_modules") || name.startsWith("dist"))).toEqual([]);
     expect(names.filter((name) => name.split("/").includes(".git"))).toEqual([]);
     for (const outside of ["src/app.ts", ".gitignore", "assets/scene.blend", "sibling.ts", "packages/other/sibling.ts", ".env"]) expect(names).not.toContain(outside);
     expect(names.every((name) => !name.startsWith("/") && !name.split("/").includes(".."))).toBe(true);
-    expect(members.find((member) => member.name === "dist/app.wasm")!.content.equals(binary)).toBe(true);
+    expect(members.find((member) => member.name === "wasm/app.wasm")!.content.equals(binary)).toBe(true);
     expect(manifestOf(members)).toMatchObject({
       workspace: { label: "app", marker: ".git", git: { head, branch: "main", remote: "https://github.com/acme/app.git", dirty: true, path: "packages/app" } },
       excluded: { credential: 1 },
@@ -247,7 +258,7 @@ describe("SessionArchiver", () => {
     expect(JSON.parse(stdout)).toEqual([null, null]);
   });
 
-  test("with the all-folders policy on, a folder without .git is archived whole: binaries and ignored-looking files kept, credentials left out", async () => {
+  test("with the all-folders policy on, a folder without .git is archived whole: binaries kept, its .gitignore applied, credentials left out", async () => {
     const server = new FakeArchiveServer();
     server.policy = { all_folders: true };
     const home = await tempDir("home");
@@ -260,8 +271,7 @@ describe("SessionArchiver", () => {
     await mkdir(join(root, "assets"));
     const blend = randomBytes(300 * 1024);
     await writeFile(join(root, "assets/scene.blend"), blend);
-    const backup = randomBytes(64 * 1024);
-    await writeFile(join(root, "assets/scene.blend1"), backup);
+    await writeFile(join(root, "assets/scene.blend1"), randomBytes(64 * 1024));
     await writeFile(join(root, ".env"), "API_KEY=sk-live-1234567890\n");
     await writeFile(join(root, "id_rsa"), "-----BEGIN OPENSSH PRIVATE KEY-----\n");
     const subject = archiver(server, await tempDir("state"), { folderGate: { homeDir: home } });
@@ -276,11 +286,11 @@ describe("SessionArchiver", () => {
     expect(first!.request).toMatchObject({ session_id: "ses_plain_folder", kind: "base", sequence: 0, marker: "folder" });
     const members = await openArchive(first!.object!);
     const names = members.map((member) => member.name);
-    expect(names).toEqual(expect.arrayContaining([".gitignore", "node_modules/left-pad/index.js", "dist/bundle.js", "assets/scene.blend", "assets/scene.blend1"]));
+    expect(names).toEqual(expect.arrayContaining([".gitignore", "assets/scene.blend"]));
+    for (const ignored of ["node_modules", "node_modules/left-pad/index.js", "dist", "dist/bundle.js", "assets/scene.blend1"]) expect(names).not.toContain(ignored);
     expect(names).not.toContain(".env");
     expect(names).not.toContain("id_rsa");
     expect(members.find((member) => member.name === "assets/scene.blend")!.content.equals(blend)).toBe(true);
-    expect(members.find((member) => member.name === "assets/scene.blend1")!.content.equals(backup)).toBe(true);
     expect(manifestOf(members)).toMatchObject({ kind: "base", workspace: { label: "render-job", marker: "folder", git: null }, excluded: { credential: 2 } });
 
     const edited = randomBytes(1024);

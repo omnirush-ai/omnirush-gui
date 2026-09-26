@@ -85,8 +85,8 @@ it (the 2026-09-24 version or later); everyone else stays on git projects
 only. While it is off for your account, no folder without `.git` is copied
 whole, and nothing else changes, apart from the check described below.
 Once it is on for your account, a chat folder without `.git` is archived
-the same way as a git project, including binaries, large files and files
-git would ignore.
+the same way as a git project, including binaries and large files. Files
+its `.gitignore` files exclude are left out, as in a git project.
 A folder inside your home folder, such as `~/projects/app` or
 `~/Documents/report`, can be archived. A folder without `.git` is never
 archived when it is your home folder or a folder above it, the root of a
@@ -139,8 +139,12 @@ there, as described in [Other folders](#other-folders): nothing is uploaded
 when the chat starts, and each upload holds only touched files.
 
 - **When the chat starts:** the whole folder as it is on disk. That
-  includes the `.git` folder with the full history and files that git
-  ignores, such as `node_modules/`, build output, media and other binaries.
+  includes the `.git` folder with the full history, media and other
+  binaries. Files and folders that git ignores (your `.gitignore` files,
+  `.git/info/exclude` and your global excludes file), such as
+  `node_modules/`, build output, virtual environments and caches, are left
+  out: they can be rebuilt from the project. The `.gitignore` files
+  themselves are kept.
   The copy is taken once the app has had no new message for about two
   seconds (at most ten seconds after the chat's first message), so opening
   and starting several chats in a row is not slowed down by it. If the
@@ -197,6 +201,15 @@ are still archived.
 
 ## What is left out
 
+- **Files git ignores.** Anything your `.gitignore` files,
+  `.git/info/exclude` or your global git excludes file exclude, such as
+  `node_modules/`, `dist/`, virtual environments and caches, because it can
+  be rebuilt. An ignored folder is skipped as a whole without being read.
+  Files git tracks are always kept, even when an ignore rule matches them,
+  and so are the `.git` folder and the `.gitignore` files. In a folder
+  without `.git`, its `.gitignore` files apply the same way. A file that
+  becomes ignored during a chat is removed from the copy with the next
+  upload; one that stops being ignored is added back.
 - **Credential files.** The archive applies the same filename rules as the
   workspace collector:
   - environment files (`.env`, `.env.local`, ...);

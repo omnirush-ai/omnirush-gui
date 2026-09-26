@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -60,7 +61,7 @@ describe("credential filter", () => {
 });
 
 describe("scan", () => {
-  test("the whole folder: .git, ignored and build content present; exclusions counted", async () => {
+  test("the whole folder: .git and unignored build content present, gitignored content absent; exclusions counted", async () => {
     const root = await tempDir("scan");
     const state = join(root, ".omnirush-state");
     await mkdir(join(root, ".git/refs/heads"), { recursive: true });
@@ -70,11 +71,13 @@ describe("scan", () => {
     await writeFile(join(root, "node_modules/js-tokens/index.js"), "module.exports = 1;\n");
     await mkdir(join(root, ".venv/bin"), { recursive: true });
     await symlink("/usr/bin/python3", join(root, ".venv/bin/python"));
+    await mkdir(join(root, "tools"), { recursive: true });
+    await symlink("/usr/bin/python3", join(root, "tools/python"));
     await mkdir(join(root, "dist"), { recursive: true });
     await writeFile(join(root, "dist/out.js"), "built\n");
     await mkdir(join(root, "build"), { recursive: true });
     await writeFile(join(root, "build/app.o"), Buffer.from([0, 1, 2, 3]));
-    await writeFile(join(root, ".gitignore"), "node_modules/\ndist/\nbuild/\n.venv/\n");
+    await writeFile(join(root, ".gitignore"), "node_modules/\ndist/\n.venv/\n");
     await writeFile(join(root, ".env"), "SECRET=1\n");
     await writeFile(join(root, "id_rsa"), "key\n");
     await mkdir(join(root, ".ssh"));
@@ -87,20 +90,25 @@ describe("scan", () => {
     await writeFile(join(root, "locked/inner/file.txt"), "x");
     await chmod(join(root, "locked"), 0o000);
     try {
-      const { entries, excluded } = await scanArchiveTree(root, { excludedDirs: [state] });
+      const { entries, excluded, ignored } = await scanArchiveTree(root, { excludedDirs: [state] });
       const listed = paths(entries);
-      for (const present of [".git", ".git/HEAD", ".git/refs/heads/token-fix", "node_modules/js-tokens/index.js", ".venv/bin/python", "dist/out.js", "build/app.o", ".gitignore", ".ssh", "locked"]) {
+      for (const present of [".git", ".git/HEAD", ".git/refs/heads/token-fix", "tools/python", "build", "build/app.o", ".gitignore", ".ssh", "locked"]) {
         expect(listed).toContain(present);
       }
+      // The .gitignore applies (git reads this folder's rules even where its .git is not a repository).
+      for (const absent of ["node_modules", "node_modules/js-tokens/index.js", ".venv", ".venv/bin/python", "dist", "dist/out.js"]) {
+        expect(listed).not.toContain(absent);
+      }
+      expect(ignored).toBe(3);
       for (const absent of [".env", "id_rsa", ".ssh/config", "__omnirush__", ".omnirush-state", "pipe", "locked/inner"]) {
         expect(listed).not.toContain(absent);
       }
       const running = typeof process.getuid === "function" ? process.getuid() : -1;
       expect(excluded).toEqual({ credential: 3, special: 1, app_state: 1, reserved: 1, unreadable: running === 0 ? 0 : 1, non_utf8: 0 });
       expect(listed).toEqual([...listed].sort(compareArchivePaths));
-      const link = entries.find((entry) => entry.path === ".venv/bin/python")!;
+      const link = entries.find((entry) => entry.path === "tools/python")!;
       expect(link).toMatchObject({ type: "symlink", size: 0, sha256: null, target: "/usr/bin/python3" });
-      const dir = entries.find((entry) => entry.path === "dist")!;
+      const dir = entries.find((entry) => entry.path === "build")!;
       expect(dir).toMatchObject({ type: "dir", size: 0, sha256: null });
       const file = entries.find((entry) => entry.path === "build/app.o")!;
       expect(file).toMatchObject({ type: "file", size: 4, sha256: "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8" });
@@ -294,5 +302,159 @@ describe("manifest and git block", () => {
     await readArchiveGit(root);
     const after = await scanArchiveTree(root);
     expect(computeArchiveDelta(before, after.entries)).toEqual({ files: [], deleted: [] });
+  });
+});
+
+describe("gitignored content", () => {
+  test("a repository: nested .gitignore, .git/info/exclude, an ignored file beside a tracked one; tracked, .git and .gitignore kept", async () => {
+    const root = await tempDir("ignored-repo");
+    await git(root, "init", "-q", "-b", "main");
+    await writeFile(join(root, ".gitignore"), "node_modules/\ndist/\n*.log\nbuild/*\n!build/keep.txt\n");
+    await mkdir(join(root, "src/generated"), { recursive: true });
+    await writeFile(join(root, "src/app.ts"), "export {};\n");
+    await writeFile(join(root, "src/app.log"), "noise\n");
+    await writeFile(join(root, "src/.gitignore"), "generated/\n*.tmp\n");
+    await writeFile(join(root, "src/generated/types.ts"), "export {};\n");
+    await writeFile(join(root, "src/cache.tmp"), "tmp\n");
+    await writeFile(join(root, "README.tmp"), "only src/ ignores *.tmp\n");
+    await mkdir(join(root, "node_modules/left-pad"), { recursive: true });
+    await writeFile(join(root, "node_modules/left-pad/index.js"), "module.exports = 1;\n");
+    await mkdir(join(root, "dist"));
+    await writeFile(join(root, "dist/bundle.js"), "built\n");
+    await writeFile(join(root, "dist/vendor.js"), "force-added\n");
+    await mkdir(join(root, "build"));
+    await writeFile(join(root, "build/out.o"), "o");
+    await writeFile(join(root, "build/keep.txt"), "kept by a negation\n");
+    await writeFile(join(root, "local-notes.md"), "excluded locally\n");
+    await appendFile(join(root, ".git/info/exclude"), "local-notes.md\n");
+    await git(root, "add", ".gitignore", "src/app.ts", "src/.gitignore");
+    await git(root, "add", "-f", "dist/vendor.js");
+    await git(root, "commit", "-q", "-m", "initial");
+    // A nested repository answers for itself: the outer one never looks inside it.
+    await mkdir(join(root, "vendor/lib/node_modules/dep"), { recursive: true });
+    await git(join(root, "vendor/lib"), "init", "-q");
+    await writeFile(join(root, "vendor/lib/.gitignore"), "node_modules/\n");
+    await writeFile(join(root, "vendor/lib/index.js"), "module.exports = 2;\n");
+    await writeFile(join(root, "vendor/lib/node_modules/dep/index.js"), "module.exports = 3;\n");
+
+    const { entries, ignored, ignoreSource } = await scanArchiveTree(root);
+    const listed = paths(entries);
+    expect(ignoreSource).toBe("repository");
+    for (const present of [".git", ".git/HEAD", ".git/info/exclude", ".gitignore", "src", "src/.gitignore", "src/app.ts", "README.tmp", "dist", "dist/vendor.js", "build", "build/keep.txt", "vendor/lib/.git/HEAD", "vendor/lib/.gitignore", "vendor/lib/index.js"]) {
+      expect(listed).toContain(present);
+    }
+    for (const absent of ["node_modules", "node_modules/left-pad/index.js", "dist/bundle.js", "src/app.log", "src/generated", "src/generated/types.ts", "src/cache.tmp", "build/out.o", "local-notes.md", "vendor/lib/node_modules", "vendor/lib/node_modules/dep/index.js"]) {
+      expect(listed).not.toContain(absent);
+    }
+    expect(ignored).toBe(8);
+  });
+
+  test("an ignored directory with thousands of files is pruned, never walked", async () => {
+    const root = await tempDir("ignored-big");
+    await git(root, "init", "-q", "-b", "main");
+    await writeFile(join(root, ".gitignore"), "node_modules/\n");
+    await writeFile(join(root, "index.js"), "require('dep');\n");
+    for (let pkg = 0; pkg < 50; pkg += 1) {
+      const dir = join(root, "node_modules", `pkg-${pkg}`, "lib");
+      await mkdir(dir, { recursive: true });
+      await Promise.all(Array.from({ length: 100 }, (_, file) => writeFile(join(dir, `f${file}.js`), `module.exports = ${file};\n`)));
+    }
+    const metrics = emptyScanMetrics();
+    const started = performance.now();
+    const { entries, ignored } = await scanArchiveTree(root, { metrics });
+    const elapsed = performance.now() - started;
+    expect(paths(entries).filter((path) => !path.startsWith(".git/") && path !== ".git")).toEqual([".gitignore", "index.js"]);
+    expect(ignored).toBe(1);
+    // Only the root's names are looked at outside .git: none of the 5,000 ignored files, nor their 100 folders.
+    const gitEntries = entries.filter((entry) => entry.path === ".git" || entry.path.startsWith(".git/")).length;
+    expect(metrics.stats).toBe(gitEntries + 2);
+    expect(metrics.fileReads).toBeLessThanOrEqual(gitEntries + 2);
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
+  test("a folder that is not a repository: its .gitignore files apply as git applies them", async () => {
+    const root = await tempDir("ignored-folder");
+    await writeFile(join(root, ".gitignore"), "node_modules/\n.venv/\n__pycache__/\n*.blend1\n!keep.blend1\n");
+    await mkdir(join(root, "app/node_modules/dep"), { recursive: true });
+    await writeFile(join(root, "app/node_modules/dep/index.js"), "nested node_modules\n");
+    await mkdir(join(root, ".venv/bin"), { recursive: true });
+    await writeFile(join(root, ".venv/bin/activate"), "venv\n");
+    await mkdir(join(root, "app/__pycache__"), { recursive: true });
+    await writeFile(join(root, "app/__pycache__/m.pyc"), "pyc");
+    await writeFile(join(root, "app/main.py"), "print(1)\n");
+    await writeFile(join(root, "app/.gitignore"), "renders/\n");
+    await mkdir(join(root, "app/renders"), { recursive: true });
+    await writeFile(join(root, "app/renders/frame.exr"), "exr");
+    await writeFile(join(root, "scene.blend"), "blend");
+    await writeFile(join(root, "scene.blend1"), "backup");
+    await writeFile(join(root, "keep.blend1"), "kept");
+
+    const scratchDirs = async () => (await readdir(tmpdir())).filter((name) => name.startsWith("omnirush-archive-ignore-")).length;
+    const scratchBefore = await scratchDirs();
+    const { entries, ignored, ignoreSource } = await scanArchiveTree(root);
+    const listed = paths(entries);
+    expect(ignoreSource).toBe("folder");
+    // The private repository is gone once the scan is done.
+    expect(await scratchDirs()).toBeLessThanOrEqual(scratchBefore);
+    expect(listed).toEqual([".gitignore", "app", "app/.gitignore", "app/main.py", "keep.blend1", "scene.blend"]);
+    expect(ignored).toBe(5);
+    // The scan writes nothing into the folder.
+    expect(listed).not.toContain(".git");
+  });
+
+  test("without git, the folder's .gitignore files still apply (the collector's walkFallback rules)", async () => {
+    const root = await tempDir("ignored-nogit");
+    await writeFile(join(root, ".gitignore"), "node_modules/\ndist/\n*.log\n");
+    await mkdir(join(root, "node_modules/dep"), { recursive: true });
+    await writeFile(join(root, "node_modules/dep/index.js"), "x");
+    await mkdir(join(root, "dist"));
+    await writeFile(join(root, "dist/out.js"), "x");
+    await writeFile(join(root, "run.log"), "x");
+    await mkdir(join(root, "src"));
+    await writeFile(join(root, "src/.gitignore"), "gen/\n");
+    await mkdir(join(root, "src/gen"));
+    await writeFile(join(root, "src/gen/a.ts"), "x");
+    await writeFile(join(root, "src/a.ts"), "x");
+    const path = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      const metrics = emptyScanMetrics();
+      const { entries, ignoreSource } = await scanArchiveTree(root, { metrics });
+      expect(ignoreSource).toBe("rules");
+      expect(paths(entries)).toEqual([".gitignore", "src", "src/.gitignore", "src/a.ts"]);
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
+  test("deltas: a file that becomes ignored is deleted, one that is un-ignored comes back, a rename into an ignored folder is a deletion", async () => {
+    const root = await tempDir("ignored-delta");
+    await git(root, "init", "-q", "-b", "main");
+    await writeFile(join(root, ".gitignore"), "dist/\n");
+    await writeFile(join(root, "notes.txt"), "notes\n");
+    await writeFile(join(root, "debug.log"), "log\n");
+    await mkdir(join(root, "out"));
+    await writeFile(join(root, "out/report.html"), "<p>\n");
+    await writeFile(join(root, "move-me.txt"), "moving\n");
+    await mkdir(join(root, "dist"));
+    await writeFile(join(root, "dist/bundle.js"), "built\n");
+    const scan = async () => (await scanArchiveTree(root)).entries.filter((entry) => entry.path !== ".git" && !entry.path.startsWith(".git/"));
+    const base = (await scan()).map(archiveEntry);
+    expect(paths(base)).toEqual([".gitignore", "debug.log", "move-me.txt", "notes.txt", "out", "out/report.html"]);
+
+    // The rules change: *.log and out/ become ignored, dist/ no longer is.
+    await writeFile(join(root, ".gitignore"), "*.log\nout/\n");
+    await rename(join(root, "move-me.txt"), join(root, "out/move-me.txt"));
+    const current = await scan();
+    const delta = computeArchiveDelta(base, current);
+    expect(paths(delta.files)).toEqual([".gitignore", "dist", "dist/bundle.js"]);
+    expect(delta.deleted).toEqual(["debug.log", "move-me.txt", "out", "out/report.html"]);
+
+    // And back: the next delta restores what is no longer ignored.
+    const next = current.map(archiveEntry);
+    await writeFile(join(root, ".gitignore"), "dist/\n");
+    const back = computeArchiveDelta(next, await scan());
+    expect(paths(back.files)).toEqual([".gitignore", "debug.log", "out", "out/move-me.txt", "out/report.html"]);
+    expect(back.deleted).toEqual(["dist", "dist/bundle.js"]);
   });
 });
