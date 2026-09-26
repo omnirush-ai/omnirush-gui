@@ -10,9 +10,16 @@
  *   - at most OMNIRUSH_SWARM_MAX_PER_TURN start during one main-session turn.
  *
  * A task call over a limit fails before it creates a session, with a message
- * telling the model to do the work itself. It also reminds sub-agent
- * sessions of the `swarm.md` board while that file exists, so every layer
- * reads and updates it.
+ * telling the model to do the work itself.
+ *
+ * Swarm board: a main session runs a swarm once its tree loads the
+ * omnirush-swarm skill or writes the board (`.omnirush/swarm.md`). Only then
+ * are its sub-agents reminded of the board (while it exists), so 1-2 plain
+ * task calls never hear of one. The plugin keeps the board out of git
+ * (`.omnirush/.gitignore`), moves a board left by an earlier swarm to
+ * `.omnirush/swarms/` when a new one starts, and archives the board there
+ * when the swarm's main session goes idle if the main agent did not, so a
+ * later request never finds a stale board.
  *
  * Sub-agent model and effort: every prompt of a sub-agent session (any
  * layer) is resolved against the app's sub-agent setting by the OmniRush.ai
@@ -31,12 +38,18 @@
  * bounded maps; nothing is persisted.
  */
 import { existsSync } from "node:fs";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   OMNIRUSH_SUBAGENT_DEPTH,
+  OMNIRUSH_SWARM_GITIGNORE_LINES,
+  OMNIRUSH_SWARM_SKILL_NAME,
+  OMNIRUSH_WORKSPACE_DIR,
+  omnirushSwarmArchiveName,
   SUBAGENT_FALLBACK_EFFORT_HEADER,
   SUBAGENT_FALLBACK_MODEL_HEADER,
   SUBAGENT_ROOT_SESSION_HEADER,
+  OMNIRUSH_SWARM_ARCHIVE_DIR,
   OMNIRUSH_SWARM_FILE,
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
@@ -163,6 +176,50 @@ function remember<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
   }
 }
 
+/** A workspace-relative path with `/` separators, as a file-writing tool argument names it. */
+function normalizedPath(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\\/g, "/") : "";
+}
+
+/** Whether a file-writing tool call (or a shell command) touches the swarm board. */
+function writesBoard(tool: string, args: unknown): boolean {
+  if (!record(args)) return false;
+  if (tool === "write" || tool === "edit" || tool === "multiedit") {
+    const path = normalizedPath(args.filePath);
+    return path === OMNIRUSH_SWARM_FILE || path.endsWith(`/${OMNIRUSH_SWARM_FILE}`);
+  }
+  if (tool === "apply_patch") return normalizedPath(args.patchText).includes(OMNIRUSH_SWARM_FILE);
+  if (tool === "bash") return normalizedPath(args.command).includes(OMNIRUSH_SWARM_FILE);
+  return false;
+}
+
+/** Keeps the board and its archive out of git; a user's own `.omnirush/.gitignore` only gains the missing lines. */
+async function ignoreBoard(directory: string): Promise<void> {
+  const folder = join(directory, OMNIRUSH_WORKSPACE_DIR);
+  const file = join(folder, ".gitignore");
+  await mkdir(folder, { recursive: true });
+  const current = await readFile(file, "utf8").catch(() => null);
+  if (current === null) {
+    await writeFile(file, `# omnirush.ai: the swarm board and its archive stay out of git\n${OMNIRUSH_SWARM_GITIGNORE_LINES.join("\n")}\n`, "utf8");
+    return;
+  }
+  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  // A user's own file is theirs to track: only the board lines are added.
+  const missing = OMNIRUSH_SWARM_GITIGNORE_LINES.filter((line) => line !== "/.gitignore" && !lines.has(line));
+  if (missing.length) await appendFile(file, `${current.endsWith("\n") || !current ? "" : "\n"}${missing.join("\n")}\n`, "utf8");
+}
+
+/** Moves the board to `.omnirush/swarms/<stamp>.md`; no board, no move. */
+async function archiveBoard(directory: string): Promise<string | null> {
+  const board = join(directory, OMNIRUSH_SWARM_FILE);
+  if (!existsSync(board)) return null;
+  await mkdir(join(directory, OMNIRUSH_SWARM_ARCHIVE_DIR), { recursive: true });
+  let name = omnirushSwarmArchiveName();
+  for (let n = 2; existsSync(join(directory, name)); n += 1) name = omnirushSwarmArchiveName().replace(/\.md$/, `-${n}.md`);
+  await rename(board, join(directory, name));
+  return name;
+}
+
 // Only export the factory: the engine treats every export as a plugin.
 export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: string }) => {
   /** Session id -> parent id (null for a main session). */
@@ -179,6 +236,8 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
   const notes = new Map<string, { model: ModelChoice; fallback: Resolution["fallback"] | null; at: number }>();
   /** Sub-agent sessions whose title already carries the fallback note. */
   const titled = new Set<string>();
+  /** Main sessions running a swarm: their tree loaded the swarm skill or wrote the board. */
+  const swarms = new Set<string>();
 
   const learn = (info: unknown) => {
     if (!record(info) || typeof info.id !== "string" || !info.id) return;
@@ -283,6 +342,34 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
     trees.get(root)?.running.delete(callId);
   };
 
+  /**
+   * Marks the main session above `sessionId` as running a swarm. A board
+   * left by an earlier swarm is archived first (unless another main session's
+   * swarm is still running on it), and the board folder is kept out of git.
+   */
+  const startSwarm = async (sessionId: string, archiveStale: boolean) => {
+    const directory = input?.directory;
+    if (!directory) return;
+    const { root } = await locate(sessionId);
+    if (swarms.has(root)) return;
+    try {
+      if (archiveStale && swarms.size === 0) await archiveBoard(directory);
+      await ignoreBoard(directory);
+    } catch {
+      // Best effort: the swarm runs either way.
+    }
+    swarms.add(root);
+    if (swarms.size > MAX_TRACKED_TREES) swarms.delete(swarms.values().next().value as string);
+  };
+
+  /** A swarm's main session went idle: its board is archived if the main agent left it. */
+  const endSwarm = async (root: string) => {
+    if (!swarms.delete(root)) return;
+    const directory = input?.directory;
+    if (!directory || swarms.size > 0) return;
+    await archiveBoard(directory).catch(() => null);
+  };
+
   return {
     event: async ({ event }: { event: EngineEvent }) => {
       const properties = record(event?.properties) ? event.properties : {};
@@ -298,6 +385,7 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
             mainModels.delete(properties.info.id);
             overrides.delete(properties.info.id);
             notes.delete(properties.info.id);
+            swarms.delete(properties.info.id);
           }
           return;
         case "message.part.updated": {
@@ -311,6 +399,7 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
           // A main session that went idle has no running sub-agents left.
           const status = record(properties.status) ? properties.status.type : undefined;
           if (status !== "idle" || typeof properties.sessionID !== "string") return;
+          await endSwarm(properties.sessionID);
           const tree = trees.get(properties.sessionID);
           if (!tree) return;
           for (const callId of tree.running.keys()) calls.delete(callId);
@@ -353,8 +442,17 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
       output.headers[SUBAGENT_ROOT_SESSION_HEADER] = override.root;
     },
 
-    "tool.execute.before": async (call: { tool: string; sessionID: string; callID: string }) => {
-      if (call?.tool !== "task" || typeof call.sessionID !== "string") return;
+    "tool.execute.before": async (call: { tool: string; sessionID: string; callID: string }, output?: { args?: unknown }) => {
+      if (typeof call?.sessionID !== "string") return;
+      if (call.tool === "skill") {
+        if (record(output?.args) && output.args.name === OMNIRUSH_SWARM_SKILL_NAME) await startSwarm(call.sessionID, true);
+        return;
+      }
+      if (writesBoard(call.tool, output?.args)) {
+        await startSwarm(call.sessionID, false);
+        return;
+      }
+      if (call.tool !== "task") return;
       const { root } = await locate(call.sessionID);
       const tree = treeOf(root);
       const now = Date.now();
@@ -426,8 +524,9 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
       const directory = input?.directory;
       if (!directory || typeof request?.sessionID !== "string" || !Array.isArray(output?.system)) return;
       if ((await parentOf(request.sessionID)) === null) return;
-      if (!existsSync(join(directory, OMNIRUSH_SWARM_FILE))) return;
-      const { depth } = await locate(request.sessionID);
+      const { root, depth } = await locate(request.sessionID);
+      // Only the sub-agents of a running swarm, and only while its board exists.
+      if (!swarms.has(root) || !existsSync(join(directory, OMNIRUSH_SWARM_FILE))) return;
       output.system.push(omnirushSwarmSubagentNote(Math.min(Math.max(depth, 1), OMNIRUSH_SUBAGENT_DEPTH)));
     },
   };
