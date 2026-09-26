@@ -218,10 +218,14 @@ export class VoiceSession {
     const last = this.segmenter.flush();
     if (last) this.enqueue(last);
     const deadline = this.options.finalizeTimeoutMs ?? 45_000;
+    // The deadline's timer is cancelled as soon as the race is decided, so a
+    // finished recording leaves nothing pending.
+    const deadlineDone = new AbortController();
     const timedOut = await Promise.race([
       this.whenIdle().then(() => false),
-      wait(deadline, this.abort.signal).then(() => true),
+      wait(deadline, AbortSignal.any([this.abort.signal, deadlineDone.signal])).then(() => !deadlineDone.signal.aborted),
     ]);
+    deadlineDone.abort();
     if (this.phase === "cancelled") return this.result ?? { text: "", words: 0, segments: 0, error: null };
     if (timedOut && this.active + this.queue.length > 0) {
       this.abort.abort();

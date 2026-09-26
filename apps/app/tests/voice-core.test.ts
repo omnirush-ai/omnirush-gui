@@ -345,6 +345,37 @@ describe("voice session", () => {
     expect(session.snapshot().pending).toBe(0);
   });
 
+  test("a finished recording leaves no timer pending (the finalize deadline is cleared)", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const pending = new Map<unknown, number>();
+    globalThis.setTimeout = ((handler: () => void, ms?: number, ...args: unknown[]) => {
+      const id = realSetTimeout(() => {
+        pending.delete(id);
+        handler();
+      }, ms, ...args);
+      pending.set(id, ms ?? 0);
+      return id;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((id: Parameters<typeof clearTimeout>[0]) => {
+      pending.delete(id);
+      realClearTimeout(id);
+    }) as typeof clearTimeout;
+    try {
+      const transcriber = fakeTranscriber(async (request) => {
+        await sleep(20);
+        return `part ${request.segmentIndex}`;
+      });
+      const { result } = await dictate(THREE_PHRASES, transcriber, { finalizeTimeoutMs: 45_000 });
+      expect(result.text).toBe("part 0 part 1 part 2");
+      await sleep(10);
+      expect([...pending.values()].filter((ms) => ms >= 1_000)).toEqual([]);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
+  });
+
   test("the breaker opens after three failures in ten seconds", async () => {
     let now = 1_000;
     const breaker = new CircuitBreaker(3, 10_000, 30_000, () => now);
