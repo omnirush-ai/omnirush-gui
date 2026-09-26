@@ -1618,7 +1618,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
     capabilities: 6_000,
     listWorkspaces: 8_000,
     activateWorkspace: 10_000,
-    deleteWorkspace: 10_000,
+    // The server first stops the workspace's running sessions and releases its engine instance.
+    deleteWorkspace: 30_000,
     sessionRead: 12_000,
     status: 6_000,
     diagnostics: AGENT_CONTEXT_DIAGNOSTICS_REQUEST_TIMEOUT_MS,

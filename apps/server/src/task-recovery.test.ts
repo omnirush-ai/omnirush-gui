@@ -257,3 +257,41 @@ for (const engine of ["v1", "v2"] as const) {
     expect(f.resumes).toEqual([]);
   });
 }
+
+test("stop and delete never queue behind a session's long synchronous request", async () => {
+  const root = await mkdtemp(join(tmpdir(), "task-recovery-"));
+  const previousDb = process.env.OMNIRUSH_RUNTIME_DB;
+  process.env.OMNIRUSH_RUNTIME_DB = join(root, "runtime.sqlite");
+  const workspace = { id: "ws", name: "Work", path: root, preset: "starter", workspaceType: "local" as const };
+  const config: ServerConfig = {
+    host: "127.0.0.1", port: 1234, token: "test-token", hostToken: "test-host", configPath: join(root, "server.json"),
+    approval: { mode: "auto", timeoutMs: 1000 }, corsOrigins: [], workspaces: [workspace], authorizedRoots: [root],
+    readOnly: false, startedAt: Date.now(), tokenSource: "generated", hostTokenSource: "generated", logFormat: "json", logRequests: false,
+  };
+  const recovery = await createTaskRecovery(config, async () => new Response(null, { status: 204 }));
+  cleanups.push(async () => {
+    await recovery.stop();
+    if (previousDb === undefined) delete process.env.OMNIRUSH_RUNTIME_DB;
+    else process.env.OMNIRUSH_RUNTIME_DB = previousDb;
+    await rm(root, { recursive: true, force: true });
+  });
+  const forward = (method: string, path: string, send: () => Promise<Response>) =>
+    recovery.forward(workspace, "v1", `/opencode${path}`, new Request(`http://localhost/workspace/ws/opencode${path}`, { method }), send);
+  const sent: string[] = [];
+  let finishShell: () => void = () => undefined;
+  // A `!` shell command: the engine answers only when the command ends.
+  const shell = forward("POST", "/session/ses_1/shell", () => new Promise<Response>((resolve) => {
+    sent.push("shell");
+    finishShell = () => resolve(Response.json({}));
+  }));
+  await Bun.sleep(20);
+  const revert = forward("POST", "/session/ses_1/revert", async () => { sent.push("revert"); return Response.json(true); });
+  const abort = await forward("POST", "/session/ses_1/abort", async () => { sent.push("abort"); return Response.json(true); });
+  const deleted = await forward("DELETE", "/session/ses_1", async () => { sent.push("delete"); return Response.json(true); });
+  expect([abort.status, deleted.status]).toEqual([200, 200]);
+  // Other mutations still wait their turn behind the running command.
+  expect(sent).toEqual(["shell", "abort", "delete"]);
+  finishShell();
+  await Promise.all([shell, revert]);
+  expect(sent).toEqual(["shell", "abort", "delete", "revert"]);
+});

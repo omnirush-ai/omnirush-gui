@@ -86,7 +86,9 @@ import {
   legacySessionRoute,
   mergeWorkspaceRouteSession,
   preserveWorkspaceRouteSession,
+  removeSessionFromWorkspaceLists,
   removeWorkspaceRouteSession,
+  withoutDeletedSessions,
   sessionIdForLegacyWorkspaceInference,
   automationsRoute,
   dashboardRoute,
@@ -252,6 +254,10 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const remoteWorkspaceCheckRunCounterRef = useRef(0);
   const sessionsByWorkspaceIdRef = useRef<Record<string, RouteSession[]>>({});
   const pendingCreatedSessionIdsRef = useRef<Record<string, Record<string, number>>>({});
+  // Sessions deleted in this window. A list load that started before the
+  // delete (a coalesced reload hands its caller that same load) still
+  // carries them; they never come back into the sidebar from it.
+  const deletedSessionIdsRef = useRef(new Set<string>());
   const hydratedRouteSessionIdsRef = useRef<Record<string, string>>({});
   const startupRetryTimerRef = useRef<number | null>(null);
   const [retryingWorkspaceIds, setRetryingWorkspaceIds] = useState<string[]>([]);
@@ -293,7 +299,8 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
       [id]: Date.now(),
     };
   }, []);
-  const mergeFetchedSessionsWithPending = useCallback((workspaceId: string, fetched: RouteSession[], current: RouteSession[]) => {
+  const mergeFetchedSessionsWithPending = useCallback((workspaceId: string, listed: RouteSession[], current: RouteSession[]) => {
+    const fetched = withoutDeletedSessions(listed, deletedSessionIdsRef.current);
     const pending = pendingCreatedSessionIdsRef.current[workspaceId];
     let merged = fetched;
     if (pending) {
@@ -938,18 +945,24 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
       return next;
     });
   }, [rememberPendingCreatedSession, selectedWorkspaceId]);
-  const handleRuntimeSessionDeleted = useCallback((sessionId: string) => {
-    if (!selectedWorkspaceId) return;
-    removeCachedWorkspaceSession(selectedWorkspaceId, sessionId);
-    setSessionsByWorkspaceId((current) => {
-      const list = current[selectedWorkspaceId] ?? [];
-      const nextList = removeWorkspaceRouteSession(list, sessionId);
-      if (nextList === list) return current;
-      const next = { ...current, [selectedWorkspaceId]: nextList };
-      sessionsByWorkspaceIdRef.current = next;
-      return next;
-    });
+  /**
+   * A deleted session leaves every sidebar list, the saved lists and any
+   * pending-created overlay at once, whichever workspace lists it: the delete
+   * may have gone through another workspace's engine, whose event the
+   * owning workspace never receives.
+   */
+  const forgetDeletedSession = useCallback((sessionId: string) => {
+    const id = sessionId.trim();
+    if (!id) return;
+    deletedSessionIdsRef.current.add(id);
+    for (const pending of Object.values(pendingCreatedSessionIdsRef.current)) delete pending[id];
+    const { lists, workspaceIds } = removeSessionFromWorkspaceLists(sessionsByWorkspaceIdRef.current, id);
+    for (const workspaceId of new Set([...workspaceIds, selectedWorkspaceId])) removeCachedWorkspaceSession(workspaceId, id);
+    if (workspaceIds.length === 0) return;
+    sessionsByWorkspaceIdRef.current = lists;
+    setSessionsByWorkspaceId(lists);
   }, [selectedWorkspaceId]);
+  const handleRuntimeSessionDeleted = forgetDeletedSession;
 
   useEffect(() => {
     workspacesRef.current = workspaces;
@@ -1474,6 +1487,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
     handleRuntimeSessionCreated,
     handleRuntimeSessionUpdated,
     handleRuntimeSessionDeleted,
+    forgetDeletedSession,
     handleRemoteWorkspaceConnectionSaved,
     runRemoteWorkspaceConnectionCheck,
   };

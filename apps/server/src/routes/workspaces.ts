@@ -32,6 +32,12 @@ interface RegisterWorkspaceRoutesOptions {
    * so activation never reloads or disposes an engine instance.
    */
   syncWorkspaceRuntimeMcp: (config: ServerConfig, workspace: WorkspaceInfo) => Promise<void>;
+  /**
+   * Stops everything that may still write into a workspace being removed: its
+   * running sessions are aborted and its engine instance (file watcher, tool
+   * processes, open handles) is released. Best effort; never throws.
+   */
+  stopWorkspaceWork?: (config: ServerConfig, workspace: WorkspaceInfo) => Promise<void>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -213,6 +219,27 @@ function serializeWorkspaceConfigEntry(workspace: WorkspaceInfo): Record<string,
   };
 }
 
+const RENAME_RETRY_DELAYS_MS = [50, 150, 400, 1_000];
+
+/**
+ * Windows refuses to replace a file another process has open for a moment
+ * (antivirus, indexer, a concurrent reader): EPERM, EACCES or EBUSY. Those
+ * clear on their own; a registry change must not be lost to one.
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = isRecord(error) && typeof error.code === "string" ? error.code : "";
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !["EPERM", "EACCES", "EBUSY"].includes(code)) throw error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
+    }
+  }
+}
+
 async function persistServerWorkspaceState(config: ServerConfig): Promise<boolean> {
   const configPath = config.configPath?.trim() ?? "";
   if (!configPath) return false;
@@ -228,7 +255,7 @@ async function persistServerWorkspaceState(config: ServerConfig): Promise<boolea
   const tmpPath = `${configPath}.tmp.${shortId()}`;
   try {
     await writeFile(tmpPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-    await rename(tmpPath, configPath);
+    await renameWithRetry(tmpPath, configPath);
     return true;
   } finally {
     try {
@@ -490,17 +517,39 @@ export function registerWorkspaceRoutes(options: RegisterWorkspaceRoutesOptions)
   addRoute(routes, "DELETE", "/workspaces/:id", "host", async (ctx) => {
     ensureWritable(config);
 
-    const workspace = await resolveWorkspaceForRegistry(ctx.params.id);
+    // Only the registry entry: resolving the workspace would bootstrap it,
+    // recreating a folder the person already deleted, and a folder that is
+    // gone or locked must never block its removal.
+    const workspaceId = ctx.params.id.trim();
+    const aliasWorkspaceId = workspaceId.startsWith("rem_") ? workspaceId.slice("rem_".length) : "";
+    const workspace = config.workspaces.find((entry) => entry.id === workspaceId)
+      ?? (aliasWorkspaceId ? config.workspaces.find((entry) => entry.id === aliasWorkspaceId) : undefined);
+    if (!workspace) {
+      throw new ApiError(404, "workspace_not_found", "Workspace not found");
+    }
+    if (workspace.workspaceType !== "remote") await options.stopWorkspaceWork?.(config, workspace);
 
-    const before = config.workspaces.length;
+    const previousWorkspaces = config.workspaces;
+    const previousAuthorizedRoots = config.authorizedRoots;
     config.workspaces = config.workspaces.filter((entry) => entry.id !== workspace.id);
-    const deleted = before !== config.workspaces.length;
+    const deleted = previousWorkspaces.length !== config.workspaces.length;
 
     if (deleted && workspace.workspaceType === "local") {
       // Only remove exact matches; authorizedRoots can contain broader entries.
       config.authorizedRoots = config.authorizedRoots.filter((root) => resolve(root) !== resolve(workspace.path));
     }
-    const persisted = await persistServerWorkspaceState(config);
+    let persisted: boolean;
+    try {
+      persisted = await persistServerWorkspaceState(config);
+    } catch (error) {
+      // Not saved: the next start would bring the workspace back, so it stays
+      // listed now too and the person sees the failure instead.
+      config.workspaces = previousWorkspaces;
+      config.authorizedRoots = previousAuthorizedRoots;
+      throw new ApiError(500, "workspace_registry_write_failed", "The workspace could not be removed: saving the workspace list failed", {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
     onWorkspacesChanged();
 
     await recordAudit(workspace.path, {
@@ -511,7 +560,7 @@ export function registerWorkspaceRoutes(options: RegisterWorkspaceRoutesOptions)
       target: "workspace",
       summary: "Deleted workspace from OmniRush.ai server",
       timestamp: Date.now(),
-    });
+    }).catch(() => undefined); // The removal is saved; a failed audit line must not report it as failed.
 
     const active = config.workspaces[0] ?? null;
     return jsonResponse({

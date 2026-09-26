@@ -48,6 +48,7 @@ import {
   type RouteSession,
   createRouteSession,
   describeRouteError,
+  removeRouteWorkspace,
   downloadWorkspaceJson,
   getSessionStatus,
   isActiveSessionStatus,
@@ -2188,16 +2189,23 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     throw new Error("omnirush.ai server is unavailable. Reconnect the server before exporting workspace config.");
   }, [workspaceServerClientResolver, workspaces]);
 
-  const handleForgetWorkspace = useCallback(async (workspaceId: string) => {
-    if (typeof window !== "undefined") {
-      const message = t("workspace_list.remove_confirm") || "Remove this workspace from the sidebar?";
-      if (!window.confirm(message)) return;
-    }
-    if (omnirushClient) {
-      await omnirushClient.deleteWorkspace(workspaceId).catch(() => undefined);
-    }
-    if (isDesktopRuntime()) {
-      await workspaceForget(workspaceId).catch(() => undefined);
+  const removeWorkspaceConfirmed = useCallback(async (workspaceId: string): Promise<void> => {
+    try {
+      await removeRouteWorkspace({
+        workspaceId,
+        deleteFromServer: omnirushClient ? (id) => omnirushClient.deleteWorkspace(id) : null,
+        forgetOnDesktop: isDesktopRuntime() ? workspaceForget : null,
+      });
+    } catch (error) {
+      console.error("[settings-route] remove workspace failed", error);
+      toast.error(t("workspace_list.remove_failed"), {
+        id: `workspace-remove:${workspaceId}`,
+        duration: 30_000,
+        description: describeRouteError(error),
+        action: { label: t("common.retry"), onClick: () => void removeWorkspaceConfirmed(workspaceId) },
+      });
+      await refreshRouteState();
+      return;
     }
     if (selectedWorkspaceId === workspaceId) {
       const nextWorkspace = workspaces.find((workspace) => workspace.id !== workspaceId);
@@ -2209,6 +2217,14 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     }
     await refreshRouteState();
   }, [omnirushClient, refreshRouteState, selectedWorkspaceId, workspaces]);
+
+  const handleForgetWorkspace = useCallback(async (workspaceId: string) => {
+    if (typeof window !== "undefined") {
+      const message = t("workspace_list.remove_confirm") || "Remove this workspace from the sidebar?";
+      if (!window.confirm(message)) return;
+    }
+    await removeWorkspaceConfirmed(workspaceId);
+  }, [removeWorkspaceConfirmed]);
 
   if (route.redirectPath && !props.embedded) {
     const target = props.standaloneExtensions

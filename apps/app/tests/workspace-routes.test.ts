@@ -7,8 +7,10 @@ import {
   mergeRouteWorkspaces,
   readRouteSessionsWithRetry,
   refreshRouteWorkspaceListState,
+  removeRouteWorkspace,
   stabilizeRouteWorkspaceOrder,
 } from "../src/react-app/shell/route-workspaces";
+import { OmniRushServerError } from "../src/app/lib/omnirush-server";
 import {
   createRouteWorkspaceLoadCoalescer,
   mapRouteWorkspaceLoads,
@@ -16,8 +18,10 @@ import {
 import {
   mergeWorkspaceRouteSession,
   preserveWorkspaceRouteSession,
+  removeSessionFromWorkspaceLists,
   removeWorkspaceRouteSession,
   sessionIdForLegacyWorkspaceInference,
+  withoutDeletedSessions,
   settingsNavigationFromPathname,
   globalExtensionsRoute,
   workspaceExtensionsRoute,
@@ -80,11 +84,103 @@ describe("workspace session mutations", () => {
       });
       if (!endpoint) throw new Error("Workspace endpoint missing");
       await expect(createRouteSession(endpoint, "/existing")).rejects.toThrow();
-      await expect(deleteRouteSession(endpoint, "ses_created")).rejects.toThrow();
-      expect(methods).toEqual(["GET", "GET"]);
+      await expect(deleteRouteSession(endpoint, "ses_created", { retryDelaysMs: [1, 1] })).rejects.toThrow();
+      // The routing read is retried as a transient gap, but never turns into a blind delete.
+      expect(methods).toEqual(["GET", "GET", "GET", "GET"]);
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe("deleting a session", () => {
+  async function withEngine(answers: Array<() => Response>, run: (endpoint: NonNullable<ReturnType<typeof resolveWorkspaceEndpoint>>, deletes: () => number) => Promise<void>) {
+    const originalFetch = globalThis.fetch;
+    let deletes = 0;
+    globalThis.fetch = async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (new URL(request.url).pathname === "/experimental/engine-v2-preview/status") return Response.json({}, { status: 404 });
+      const answer = answers[deletes] ?? answers[answers.length - 1];
+      deletes += 1;
+      return answer();
+    };
+    try {
+      const endpoint = resolveWorkspaceEndpoint({ id: "ws_existing", workspaceType: "local" }, { baseUrl: "http://owner.test", token: "fixture-token" });
+      if (!endpoint) throw new Error("Workspace endpoint missing");
+      await run(endpoint, () => deletes);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  test("a session that is already gone counts as deleted (second click, lost answer, another window)", async () => {
+    await withEngine([() => Response.json({ name: "NotFoundError", data: { message: "Session not found: ses_gone" } }, { status: 404 })], async (endpoint, deletes) => {
+      expect(await deleteRouteSession(endpoint, "ses_gone", { retryDelaysMs: [] })).toBe(true);
+      expect(deletes()).toBe(1);
+    });
+  });
+
+  test("a transient engine gap (restart, rollover) is retried until the delete lands", async () => {
+    await withEngine([
+      () => Response.json({ code: "opencode_unreachable", message: "OpenCode engine is unavailable" }, { status: 502 }),
+      () => Response.json({ code: "opencode_unreachable", message: "OpenCode engine is unavailable" }, { status: 502 }),
+      () => Response.json(true),
+    ], async (endpoint, deletes) => {
+      expect(await deleteRouteSession(endpoint, "ses_busy", { retryDelaysMs: [1, 1, 1] })).toBe(true);
+      expect(deletes()).toBe(3);
+    });
+  });
+
+  test("any other failure reaches the caller instead of passing silently", async () => {
+    await withEngine([() => Response.json({ code: "workspace_not_found", message: "Workspace not found" }, { status: 404 })], async (endpoint) => {
+      await expect(deleteRouteSession(endpoint, "ses_x", { retryDelaysMs: [1] })).rejects.toThrow("Workspace not found");
+    });
+  });
+
+  test("a deleted session leaves every workspace list, and stale lists cannot bring it back", () => {
+    const lists = {
+      alpha: [{ id: "ses_a" }],
+      beta: [{ id: "ses_b" }, { id: "ses_deleted" }],
+    };
+    const removed = removeSessionFromWorkspaceLists(lists, "ses_deleted");
+    expect(removed.workspaceIds).toEqual(["beta"]);
+    expect(removed.lists).toEqual({ alpha: [{ id: "ses_a" }], beta: [{ id: "ses_b" }] });
+    expect(removed.lists.alpha).toBe(lists.alpha);
+    expect(removeSessionFromWorkspaceLists(removed.lists, "ses_deleted").lists).toBe(removed.lists);
+    // A list load that started before the delete still carries it.
+    const staleLoad = [{ id: "ses_b" }, { id: "ses_deleted" }];
+    expect(withoutDeletedSessions(staleLoad, new Set(["ses_deleted"]))).toEqual([{ id: "ses_b" }]);
+    expect(withoutDeletedSessions(staleLoad, new Set())).toBe(staleLoad);
+  });
+});
+
+describe("removing a workspace", () => {
+  test("a server that cannot remove it stops the removal and the desktop keeps it", async () => {
+    const forgotten: string[] = [];
+    await expect(removeRouteWorkspace({
+      workspaceId: "ws_1",
+      deleteFromServer: async () => { throw new OmniRushServerError(500, "workspace_registry_write_failed", "saving the workspace list failed"); },
+      forgetOnDesktop: async (id) => { forgotten.push(id); },
+    })).rejects.toThrow("saving the workspace list failed");
+    expect(forgotten).toEqual([]);
+  });
+
+  test("a workspace the server does not register only leaves the desktop list", async () => {
+    const forgotten: string[] = [];
+    await removeRouteWorkspace({
+      workspaceId: "rem_remote",
+      deleteFromServer: async () => { throw new OmniRushServerError(404, "workspace_not_found", "Workspace not found"); },
+      forgetOnDesktop: async (id) => { forgotten.push(id); },
+    });
+    expect(forgotten).toEqual(["rem_remote"]);
+  });
+
+  test("a desktop list that cannot be saved is reported too", async () => {
+    await expect(removeRouteWorkspace({
+      workspaceId: "ws_1",
+      deleteFromServer: async () => ({ ok: true }),
+      forgetOnDesktop: async () => { throw new Error("EPERM: operation not permitted, rename"); },
+    })).rejects.toThrow("EPERM");
   });
 });
 

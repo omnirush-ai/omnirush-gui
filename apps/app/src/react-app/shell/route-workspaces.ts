@@ -111,8 +111,52 @@ export async function createRouteSession(endpoint: ResolvedWorkspaceEndpoint, di
   return unwrap(await client.session.create({ directory }));
 }
 
-export async function deleteRouteSession(endpoint: ResolvedWorkspaceEndpoint, sessionId: string): Promise<boolean> {
-  return deleteNativeSession(await routeSessionEndpoint(endpoint), sessionId);
+const DELETE_SESSION_RETRY_DELAYS_MS = [500, 1_500, 3_000];
+
+/**
+ * Delete a session so that the result is the person's intent, not one
+ * request's fate: a session that is already gone (a delete whose answer was
+ * lost, a second click, another window) counts as deleted, and a transient
+ * engine gap (restart, rollover, a slow instance boot) is retried. Anything
+ * else is thrown for the caller to show.
+ */
+export async function deleteRouteSession(
+  endpoint: ResolvedWorkspaceEndpoint,
+  sessionId: string,
+  options: { retryDelaysMs?: readonly number[] } = {},
+): Promise<boolean> {
+  try {
+    return await withTransientEngineRetry({
+      load: async () => deleteNativeSession(await routeSessionEndpoint(endpoint), sessionId),
+      retryDelaysMs: options.retryDelaysMs ?? DELETE_SESSION_RETRY_DELAYS_MS,
+      wait: (delayMs) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)),
+    });
+  } catch (error) {
+    if (classifyRouteSessionReadError(error) === "not-found") return true;
+    throw error;
+  }
+}
+
+/**
+ * Remove a workspace from the local server's registry and the desktop's list,
+ * or throw so the person sees why. Neither failure may be swallowed: the
+ * server's list is merged into the sidebar and is what the next start
+ * loads, so a half-removed workspace comes back. A workspace the server does
+ * not register (remote, or already removed) only leaves the desktop list.
+ */
+export async function removeRouteWorkspace(input: {
+  workspaceId: string;
+  deleteFromServer: ((workspaceId: string) => Promise<unknown>) | null;
+  forgetOnDesktop: ((workspaceId: string) => Promise<unknown>) | null;
+}): Promise<void> {
+  if (input.deleteFromServer) {
+    try {
+      await input.deleteFromServer(input.workspaceId);
+    } catch (error) {
+      if (!(error instanceof OmniRushServerError && error.status === 404)) throw error;
+    }
+  }
+  await input.forgetOnDesktop?.(input.workspaceId);
 }
 
 export async function listRouteSessions(
