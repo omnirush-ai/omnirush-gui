@@ -65,6 +65,7 @@ import {
 import { deleteSkill, listSkills, renderSkillContentForResponse, upsertSkill } from "./skills.js";
 import { deleteCommand, listCommands, repairCommands, upsertCommand } from "./commands.js";
 import { ApiError, formatError } from "./errors.js";
+import { errorCode } from "./atomic-write.js";
 import { readJsoncFile, updateJsoncTopLevel, writeJsoncFile } from "./jsonc.js";
 import { recordAudit, readAuditEntries, readLastAudit } from "./audit.js";
 import { ReloadEventStore } from "./events.js";
@@ -171,6 +172,7 @@ import {
   subagentModelRefusals,
   writeSubagentModelSetting,
   type EngineModelRef,
+  type SubagentModelSetting,
 } from "./omnirush-subagent-model.js";
 import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
@@ -3638,7 +3640,15 @@ function createRoutes(
     if ((body.model && !setting.model) || (body.effort && !setting.effort)) {
       throw new ApiError(400, "invalid_payload", "unknown model id or effort");
     }
-    return jsonResponse({ ok: true, setting: await writeSubagentModelSetting(config, setting) });
+    let saved: SubagentModelSetting;
+    try {
+      saved = await writeSubagentModelSetting(config, setting);
+    } catch (error) {
+      // Never a silent success: the app shows this and keeps the previous setting.
+      const code = errorCode(error);
+      throw new ApiError(500, "settings_write_failed", `The sub-agent setting could not be saved: ${code}`, { code });
+    }
+    return jsonResponse({ ok: true, setting: saved });
   });
 
   addRoute(routes, "POST", "/omnirush/subagent-model/resolve", "policy", async (ctx) => {

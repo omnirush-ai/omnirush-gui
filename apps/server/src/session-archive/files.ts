@@ -1,6 +1,8 @@
-/** Durable state files for the archiver: every write goes to a temp name, is fsynced, then renamed. */
+/** Durable state files for the archiver: every write goes to a temp name, is fsynced, then renamed (with retry). */
 import { createHash, randomBytes } from "node:crypto";
-import { open, readFile, rename, rm } from "node:fs/promises";
+import { open, readFile, rm } from "node:fs/promises";
+
+import { commitTempFile } from "../atomic-write.js";
 
 /** The first 32 hex characters of SHA-256(text): state file names for session ids and root paths. */
 export function stateKey(text: string): string {
@@ -42,12 +44,8 @@ export async function writeChunksAtomic(path: string, chunks: Iterable<string>):
     throw error;
   }
   await handle.close();
-  try {
-    await rename(temp, path);
-  } catch (error) {
-    await rm(temp, { force: true });
-    throw error;
-  }
+  // Retried while Windows reports the target busy; the temp file is removed if it still fails.
+  await commitTempFile(temp, path);
 }
 
 export function writeJsonAtomic(path: string, value: unknown): Promise<void> {

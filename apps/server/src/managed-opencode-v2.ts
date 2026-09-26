@@ -4,12 +4,13 @@ import type { EnginePermissionRule } from "./managed-policy-rules.js";
 // deliberately has no reload/dispose call, unlike managed-opencode.ts and server.ts reloadOpencodeEngine.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export { installOpencodeV2Binary } from "./opencode-v2-binary.js";
 
 import { loopbackFetch } from "./server-fetch.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 export interface OpencodeV2ModelSpec {
   id: string;
@@ -215,14 +216,12 @@ export async function createManagedOpencodeV2Server(
       };
     }
     const target = join(configDir, "opencode.json");
-    const temporary = `${target}.tmp-${randomBytes(8).toString("hex")}`;
-    await writeFile(temporary, `${JSON.stringify({
+    await writeFileAtomic(target, `${JSON.stringify({
       $schema: "https://opencode.ai/config.json",
       providers: providerConfig,
       ...(options.permissions ? { permissions: await options.permissions() } : {}),
       ...(options.env?.OMNIRUSH_SERVER_URL ? { plugins: [managedPolicyPluginPath(true)] } : {}),
     }, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, target);
   }
 
   async function close(): Promise<void> {
