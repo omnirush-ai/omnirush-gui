@@ -63,6 +63,17 @@ import {
   parseMcpAppSandboxCsp,
 } from "./mcp-app-sandbox.js";
 import { deleteSkill, listSkills, renderSkillContentForResponse, upsertSkill } from "./skills.js";
+import {
+  findSkillConflict,
+  installSkillBundle,
+  listSkillTree,
+  prepareSkillBundle,
+  readBoundedJsonBody,
+  resolveProjectSkillDir,
+  SKILL_BUNDLE_MAX_REQUEST_BYTES,
+  summarizeSkillBundle,
+  updateSkillFiles,
+} from "./skill-bundle.js";
 import { deleteCommand, listCommands, repairCommands, upsertCommand } from "./commands.js";
 import { ApiError, formatError } from "./errors.js";
 import { errorCode } from "./atomic-write.js";
@@ -4173,6 +4184,100 @@ function createRoutes(
       path: result.path,
     });
     return jsonResponse({ name, path: result.path, description: description ?? "", scope: "project" });
+  });
+
+  // Skill folders: SKILL.md plus helper files, uploaded as a folder or a .zip
+  // that the client flattened to relative paths + base64 bytes. The preview
+  // runs every check the install runs (and reports a name collision) without
+  // writing anything.
+  addRoute(routes, "POST", "/workspace/:id/skills/bundle/preview", "client", async (ctx) => {
+    requireClientScope(ctx, "collaborator");
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const body = await readBoundedJsonBody(ctx.request, SKILL_BUNDLE_MAX_REQUEST_BYTES);
+    const bundle = prepareSkillBundle({ files: body.files, name: typeof body.name === "string" ? body.name : null });
+    const conflict = await findSkillConflict(workspace.path, bundle.name);
+    return jsonResponse({ ...summarizeSkillBundle(bundle), conflict });
+  });
+
+  addRoute(routes, "POST", "/workspace/:id/skills/bundle", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const body = await readBoundedJsonBody(ctx.request, SKILL_BUNDLE_MAX_REQUEST_BYTES);
+    const bundle = prepareSkillBundle({ files: body.files, name: typeof body.name === "string" ? body.name : null });
+    const onConflict = body.onConflict === "replace" ? "replace" : "fail";
+    const targetDir = join(workspace.path, ".opencode", "skills", bundle.name);
+    await requireApproval(ctx, {
+      workspaceId: workspace.id,
+      action: "skills.upsert",
+      summary: `Install skill ${bundle.name} (${bundle.files.length} files)`,
+      paths: [targetDir],
+    });
+    const result = await installSkillBundle(workspace.path, bundle, { onConflict });
+    await recordAudit(workspace.path, {
+      id: shortId(),
+      workspaceId: workspace.id,
+      actor: ctx.actor ?? { type: "remote" },
+      action: "skills.upsert",
+      target: result.dir,
+      summary: `${result.action === "updated" ? "Replaced" : "Installed"} skill ${bundle.name} from an upload (${bundle.files.length} files)`,
+      timestamp: Date.now(),
+    });
+    emitReloadEvent(ctx.reloadEvents, workspace, "skills", {
+      type: "skill",
+      name: bundle.name,
+      action: result.action,
+      path: result.path,
+    });
+    return jsonResponse({
+      ...summarizeSkillBundle(bundle),
+      path: result.path,
+      dir: result.dir,
+      action: result.action,
+      scope: "project",
+    });
+  });
+
+  addRoute(routes, "GET", "/workspace/:id/skills/:name/files", "client", async (ctx) => {
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const dir = await resolveProjectSkillDir(workspace.path, String(ctx.params.name ?? ""));
+    const tree = await listSkillTree(dir);
+    return jsonResponse({ name: String(ctx.params.name ?? "").trim(), dir, ...tree });
+  });
+
+  addRoute(routes, "POST", "/workspace/:id/skills/:name/files", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const name = String(ctx.params.name ?? "").trim();
+    const dir = await resolveProjectSkillDir(workspace.path, name);
+    const body = await readBoundedJsonBody(ctx.request, SKILL_BUNDLE_MAX_REQUEST_BYTES);
+    const addPaths = Array.isArray(body.add) ? body.add.map((file) => String((file as { path?: unknown })?.path ?? "")) : [];
+    const removePaths = Array.isArray(body.remove) ? body.remove.map(String) : [];
+    await requireApproval(ctx, {
+      workspaceId: workspace.id,
+      action: "skills.upsert",
+      summary: `Update files of skill ${name}`,
+      paths: [...addPaths, ...removePaths].map((path) => join(dir, path)),
+    });
+    const result = await updateSkillFiles(dir, { add: body.add, remove: body.remove });
+    await recordAudit(workspace.path, {
+      id: shortId(),
+      workspaceId: workspace.id,
+      actor: ctx.actor ?? { type: "remote" },
+      action: "skills.upsert",
+      target: dir,
+      summary: `Updated files of skill ${name} (+${result.added.length} -${result.removed.length})`,
+      timestamp: Date.now(),
+    });
+    emitReloadEvent(ctx.reloadEvents, workspace, "skills", {
+      type: "skill",
+      name,
+      action: "updated",
+      path: join(dir, "SKILL.md"),
+    });
+    const tree = await listSkillTree(dir);
+    return jsonResponse({ name, dir, ...result, ...tree });
   });
 
   addRoute(routes, "DELETE", "/workspace/:id/skills/:name", "client", async (ctx) => {
