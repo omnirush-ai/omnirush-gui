@@ -25,6 +25,7 @@ import {
   OMNIRUSH_SWARM_TOOL_NAME,
   omnirushSwarmSkillMarkdown,
   omnirushSwarmSubagentNote,
+  omnirushSubagentNote,
 } from "./omnirush-swarm.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import {
@@ -323,8 +324,9 @@ describe("omnirush runtime config file", () => {
     expect(prompt).toContain("## Memory\n");
     expect(prompt).toContain("## OmniRush.ai Artifacts");
     expect(prompt).toContain("## Connected work");
-    expect(prompt).toContain("delegate bounded, independent work to subagents");
-    expect(prompt).toContain("make that many distinct task-tool calls");
+    expect(prompt).toContain("Do simple work yourself: a question a few tool calls can answer needs no sub-agent.");
+    expect(prompt).toContain("make exactly that many task calls, no more and no fewer, and start them all in one message");
+    expect(prompt).toContain("Never paste the user's whole message, or the user's instructions about sub-agents, into a task prompt");
     expect(prompt).toContain("Never replace an explicit delegation request with a simulated multi-role answer");
     expect(prompt).toContain("Wait for every delegated task");
     // Den removed the Memory Bank; the prompt must not teach capabilities that
@@ -374,7 +376,7 @@ describe("omnirush runtime config file", () => {
     const section = prompt.slice(prompt.indexOf("## Sub-agent swarms"), prompt.indexOf("## Editing files"));
     expect(section).toContain(`load the \`${OMNIRUSH_SWARM_SKILL_NAME}\` skill first`);
     expect(section).toContain("Before you start 3 or more sub-agents for one request");
-    expect(section).toContain("at most 1-2 sub-agents with the task tool and no board");
+    expect(section).toContain("the 1-2 sub-agents the work needs with the task tool and no board");
     // No board mechanics on every request: no file name, no table, no layers.
     expect(prompt).not.toContain("swarm.md");
     expect(prompt).not.toContain("## Tasks");
@@ -383,7 +385,8 @@ describe("omnirush runtime config file", () => {
     expect(OMNIRUSH_SWARM_SKILL).toContain("`.omnirush/swarm.md`");
     expect(OMNIRUSH_SWARM_SKILL).toContain("never a file in the project root");
     expect(OMNIRUSH_SWARM_SKILL).toContain("For 1-2 sub-agents, stop here");
-    expect(OMNIRUSH_SWARM_SKILL).toContain("There is no limit on how many run at once or start per turn");
+    expect(OMNIRUSH_SWARM_SKILL).toContain("Sub-agents do their own task themselves");
+    expect(OMNIRUSH_SWARM_SKILL).toContain("never the user's whole message or instructions about sub-agents");
     // Sub-agents use the board tool instead of reading the whole board, and
     // omnirush.ai (not the model) clears the board when the turn ends.
     expect(OMNIRUSH_SWARM_SKILL).toContain(`use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool with your task id`);
@@ -397,7 +400,7 @@ describe("omnirush runtime config file", () => {
 
   test("no prompt, skill or sub-agent note points a model at archived boards", () => {
     const prompt = (buildOmniRushRuntimeConfigObjectFromSnapshot({}).agent as Record<string, { prompt: string }>).omnirush!.prompt;
-    for (const text of [prompt, OMNIRUSH_SWARM_SKILL, omnirushSwarmSkillMarkdown(), omnirushSwarmSubagentNote(1), omnirushSwarmSubagentNote(3)]) {
+    for (const text of [prompt, OMNIRUSH_SWARM_SKILL, omnirushSwarmSkillMarkdown(), omnirushSwarmSubagentNote(1), omnirushSwarmSubagentNote(3), omnirushSubagentNote(1), omnirushSubagentNote(3)]) {
       expect(text).not.toContain(OMNIRUSH_SWARM_ARCHIVE_DIR);
       expect(text).not.toContain("swarms/");
     }

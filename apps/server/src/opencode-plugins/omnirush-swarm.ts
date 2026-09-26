@@ -12,6 +12,11 @@
  * A task call over a limit fails before it creates a session, with a message
  * telling the model to do the work itself.
  *
+ * Delegation restraint: every sub-agent session gets a system note
+ * (omnirushSubagentNote) to do its own task and ignore sub-agent
+ * instructions copied into its prompt, and the task tool description gains
+ * omnirush.ai's delegation rules (OMNIRUSH_TASK_TOOL_NOTE).
+ *
  * Swarm board: a main session runs a swarm once its tree loads the
  * omnirush-swarm skill or writes the board (`.omnirush/swarm.md`). Only then
  * are its sub-agents reminded of the board (while it exists), so 1-2 plain
@@ -70,7 +75,9 @@ import {
   OMNIRUSH_SWARM_FILE,
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
+  omnirushSubagentNote,
   omnirushSwarmSubagentNote,
+  OMNIRUSH_TASK_TOOL_NOTE,
 } from "../omnirush-swarm.js";
 
 type SessionInfo = { id?: unknown; parentID?: unknown; title?: unknown };
@@ -665,12 +672,23 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
       if (!directory || typeof request?.sessionID !== "string" || !Array.isArray(output?.system)) return;
       if ((await parentOf(request.sessionID)) === null) return;
       const { root, depth } = await locate(request.sessionID);
-      // Only the sub-agents of a running swarm, and only while its board exists.
+      const layer = Math.min(Math.max(depth, 1), OMNIRUSH_SUBAGENT_DEPTH);
+      // Every sub-agent does its own task (whatever its prompt says about
+      // sub-agents). The notes are the same on every step (a changing system
+      // prompt would defeat the model's prompt cache).
+      output.system.push(omnirushSubagentNote(layer));
+      // The board note: only the sub-agents of a running swarm, and only
+      // while its board exists; the agent's rows come from the tool.
       if (!swarms.has(root)) return;
       if (!existsSync(join(directory, OMNIRUSH_SWARM_FILE))) return;
-      // The note is the same on every step (a changing system prompt would
-      // defeat the model's prompt cache); the agent's rows come from the tool.
-      output.system.push(omnirushSwarmSubagentNote(Math.min(Math.max(depth, 1), OMNIRUSH_SUBAGENT_DEPTH)));
+      output.system.push(omnirushSwarmSubagentNote(layer));
+    },
+
+    // The engine's task tool text asks for detailed prompts and parallel
+    // launches "whenever possible"; omnirush.ai's delegation rules follow it.
+    "tool.definition": async (request: { toolID?: string }, output: { description?: unknown }) => {
+      if (request?.toolID !== "task" || typeof output?.description !== "string") return;
+      if (!output.description.includes(OMNIRUSH_TASK_TOOL_NOTE)) output.description = `${output.description}\n\n${OMNIRUSH_TASK_TOOL_NOTE}`;
     },
 
     tool: {

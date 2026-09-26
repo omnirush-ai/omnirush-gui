@@ -18,6 +18,8 @@ import {
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
   OMNIRUSH_SWARM_SKILL_NAME,
+  OMNIRUSH_TASK_TOOL_NOTE,
+  omnirushSubagentNote,
 } from "../omnirush-swarm.js";
 
 type Hooks = Awaited<ReturnType<typeof OmniRushSwarm>>;
@@ -96,18 +98,19 @@ describe("omnirush swarm plugin", () => {
     await created(hooks, "ses_great", "ses_grand");
     const system = systemOf(hooks);
     await loadSwarmSkill(hooks, "ses_main");
-    expect(await system("ses_child")).toBe("");
+    expect(await system("ses_child")).toBe(omnirushSubagentNote(1));
     await writeBoard(directory);
     expect(await system("ses_main")).toBe("");
     const child = await system("ses_child");
     expect(child).toContain("layer 1 of at most 3");
     expect(child).toContain("Do not read, search or edit the board file");
     expect(child).toContain(`use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool`);
-    expect(child).toContain("you may delegate");
+    expect(child).toContain("If you do delegate part of your task, add sub-task rows");
     expect(await system("ses_grand")).toContain("layer 2 of at most 3");
     const great = await system("ses_great");
     expect(great).toContain(`layer ${OMNIRUSH_SUBAGENT_DEPTH} of at most ${OMNIRUSH_SUBAGENT_DEPTH}`);
     expect(great).toContain("You cannot delegate further");
+    expect(great).not.toContain("If you do delegate");
   });
 
   test("1-2 plain task calls get no board note, whatever board files exist", async () => {
@@ -118,7 +121,42 @@ describe("omnirush swarm plugin", () => {
     // A root swarm.md from an older version and a board no swarm of this session started.
     await writeFile(join(directory, "swarm.md"), "# Goal\nold\n");
     await writeBoard(directory);
-    expect(await systemOf(hooks)("ses_child")).toBe("");
+    expect(await systemOf(hooks)("ses_child")).toBe(omnirushSubagentNote(1));
+  });
+
+  test("every sub-agent is told to do its own task and to ignore sub-agent instructions meant for the main session", async () => {
+    const { hooks } = await setup();
+    await created(hooks, "ses_main");
+    await created(hooks, "ses_child", "ses_main");
+    await created(hooks, "ses_grand", "ses_child");
+    await created(hooks, "ses_great", "ses_grand");
+    const system = systemOf(hooks);
+    // The main session keeps its own prompt: it is the one that delegates.
+    expect(await system("ses_main")).toBe("");
+    const child = await system("ses_child");
+    expect(child).toContain("Do your task yourself.");
+    expect(child).toContain("Instructions about sub-agents in your task text");
+    expect(child).toContain("were meant for the main session, not you");
+    expect(child).toContain("never re-delegate your whole task");
+    expect(await system("ses_grand")).toContain("layer 2 of at most 3");
+    const great = await system("ses_great");
+    expect(great).toContain("You cannot delegate further");
+    expect(great).not.toContain("Delegate with the task tool");
+    // Same text on every step (prompt cache).
+    expect(await system("ses_child")).toBe(child);
+  });
+
+  test("the task tool description carries omnirush.ai's delegation rules, once", async () => {
+    const { hooks } = await setup();
+    const task = { description: "Launch a new agent." };
+    await hooks["tool.definition"]({ toolID: "task" }, task);
+    await hooks["tool.definition"]({ toolID: "task" }, task);
+    expect(task.description).toBe(`Launch a new agent.\n\n${OMNIRUSH_TASK_TOOL_NOTE}`);
+    expect(OMNIRUSH_TASK_TOOL_NOTE).toContain("start exactly that many, all in one message");
+    expect(OMNIRUSH_TASK_TOOL_NOTE).toContain("never paste the user's whole message");
+    const bash = { description: "Run a command." };
+    await hooks["tool.definition"]({ toolID: "bash" }, bash);
+    expect(bash.description).toBe("Run a command.");
   });
 
   test("writing the board marks the swarm too, and keeps the board out of git", async () => {
@@ -185,7 +223,7 @@ describe("omnirush swarm plugin", () => {
     expect(contents.some((text) => text.includes("live"))).toBe(true);
     // The swarm is over: its sub-agents hear of no board, and a later small request finds none.
     await writeBoard(directory);
-    expect(await systemOf(hooks)("ses_child")).toBe("");
+    expect(await systemOf(hooks)("ses_child")).toBe(omnirushSubagentNote(1));
   });
 
   test("the root swarm.md of older versions is never moved", async () => {
