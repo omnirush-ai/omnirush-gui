@@ -874,6 +874,57 @@ function collectorDeletedSessionId(method: string, proxyPath: string): string | 
   return match?.[1] ? decodeEngineRouteParam(match[1]) : null;
 }
 
+type EngineRequestTarget = { baseUrl: string; headers: Headers };
+
+const SESSION_STOP_TIMEOUT_MS = 5_000;
+const SESSION_STOP_MAX_SESSIONS = 100;
+
+async function engineJson(target: EngineRequestTarget, path: string, directory: string | null, init?: { method: string }): Promise<unknown> {
+  const scoped = scopeWorkspaceOpencodeRequest(target.headers, "", directory);
+  const response = await loopbackFetch(buildOpencodeProxyUrl(target.baseUrl, path, scoped.search), {
+    method: init?.method ?? "GET",
+    headers: scoped.headers,
+    signal: AbortSignal.timeout(SESSION_STOP_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  return response.json().catch(() => null);
+}
+
+/**
+ * The engine's session delete removes the records and cancels background
+ * jobs, not the session's own run: a turn inside a long tool call goes on
+ * running (and writing into the folder) with its status stuck on busy, which
+ * also parks every engine restart that waits for running sessions. Abort the
+ * session and its sub-agent sessions first, each in its own folder's engine
+ * instance (the one its run lives in) and on every engine that may run it.
+ * Best effort and bounded: the delete goes ahead whatever this finds.
+ */
+async function stopSessionTreeBeforeDelete(targets: EngineRequestTarget[], sessionId: string, requestDirectory: string | null): Promise<void> {
+  await Promise.all(targets.map(async (target) => {
+    const sessions: Array<{ id: string; directory: string | null }> = [];
+    const queue = [sessionId];
+    const seen = new Set<string>();
+    while (queue.length > 0 && sessions.length < SESSION_STOP_MAX_SESSIONS) {
+      const id = queue.shift() ?? "";
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const info = await engineJson(target, `/session/${encodeURIComponent(id)}`, requestDirectory).catch(() => null);
+      if (!isRecord(info)) continue;
+      sessions.push({ id, directory: typeof info.directory === "string" && info.directory.trim() ? info.directory : null });
+      const children = await engineJson(target, `/session/${encodeURIComponent(id)}/children`, requestDirectory).catch(() => null);
+      if (Array.isArray(children)) {
+        for (const child of children) if (isRecord(child) && typeof child.id === "string") queue.push(child.id);
+      }
+    }
+    await Promise.all(sessions.map((session) =>
+      engineJson(target, `/session/${encodeURIComponent(session.id)}/abort`, session.directory, { method: "POST" }).catch(() => null),
+    ));
+  }));
+}
+
 export async function startServer(config: ServerConfig): Promise<ServeResult> {
   let taskRecovery: Awaited<ReturnType<typeof createTaskRecovery>> | undefined;
   const approvals = new ApprovalService(config.approval);
@@ -2113,6 +2164,15 @@ export async function proxyOpencodeRequest(input: {
     return response;
   };
 
+  if (deletedCollectedSessionId && workspace && workspace.workspaceType !== "remote") {
+    await stopSessionTreeBeforeDelete(
+      pool
+        ? pool.connections().map((connection) => ({ baseUrl: connection.baseUrl, headers: headersForEngineConnection(headers, connection) }))
+        : [{ baseUrl, headers }],
+      deletedCollectedSessionId,
+      directory,
+    );
+  }
   if (workspace && workspace.workspaceType !== "remote" && isPromptAsyncProxyRequest(method, proxyPath)) {
     return withEngineDirectoryFence(input.config, workspace, forwardAndCollect);
   }
@@ -2867,6 +2927,7 @@ function createRoutes(
         serverState: activeEngineMcpServerState(routeConfig),
         trigger: "workspace_activate",
       }),
+    stopWorkspaceWork: stopWorkspaceEngineWork,
   });
 
   registerSessionGroupRoutes({
@@ -4685,7 +4746,7 @@ async function resolveWorkspace(config: ServerConfig, id: string): Promise<Works
   const workspace = await resolveWorkspaceWithoutBootstrap(config, id);
   const resolvedWorkspace = workspace.path;
   if (!config.readOnly) {
-    const ensured = await ensureWorkspaceFiles(resolvedWorkspace, workspace.preset ?? "starter");
+    const ensured = await ensureWorkspaceFiles(resolvedWorkspace, workspace.preset ?? "starter", { createMissing: false });
     const bootstrapReloadReasons = new Set<ReloadReason>(ensured.reloadReasons);
     if (await repairCommands(resolvedWorkspace)) {
       bootstrapReloadReasons.add("commands");
@@ -5237,6 +5298,50 @@ async function disposeIdleEngineInstance(
     signal: AbortSignal.timeout(opencodeDisposeTimeoutMs()),
   });
   if (!response.ok) throw new Error(`OpenCode instance dispose failed with status ${response.status}`);
+}
+
+/**
+ * Before a local workspace is removed: abort its running sessions and, on the
+ * engines this server manages, dispose its per-folder instance, so no agent
+ * run, tool process, file watcher or open handle keeps writing into the
+ * folder (and bringing it back after the person deletes it) or keeps it
+ * locked on Windows. Bounded; a failure never blocks the removal.
+ */
+async function stopWorkspaceEngineWork(config: ServerConfig, workspace: WorkspaceInfo): Promise<void> {
+  const directory = resolveOpencodeDirectory(workspace);
+  if (!directory) return;
+  const pool = enginePoolForConfig(config);
+  const connection = pool ? null : resolveWorkspaceOpencodeConnection(config, workspace);
+  const targets: EngineRequestTarget[] = pool
+    ? pool.connections().map((entry) => ({
+        baseUrl: entry.baseUrl,
+        headers: new Headers({ Authorization: buildEngineAuthProbeHeader(entry.username, entry.password) }),
+      }))
+    : connection?.baseUrl?.trim()
+      ? [{ baseUrl: connection.baseUrl.trim(), headers: new Headers(connection.authHeader ? { Authorization: connection.authHeader } : {}) }]
+      : [];
+  await Promise.all(targets.map(async (target) => {
+    const statuses = await engineJson(target, "/session/status", directory).catch(() => null);
+    const busy = isRecord(statuses)
+      ? Object.entries(statuses).flatMap(([id, status]) => isRecord(status) && status.type !== "idle" ? [id] : [])
+      : [];
+    await Promise.all(busy.map((id) =>
+      engineJson(target, `/session/${encodeURIComponent(id)}/abort`, directory, { method: "POST" }).catch(() => null),
+    ));
+    if (!pool) return;
+    await loopbackFetch(buildOpencodeReloadUrl(target.baseUrl, directory), {
+      method: "POST",
+      headers: target.headers,
+      signal: AbortSignal.timeout(Math.min(opencodeDisposeTimeoutMs(), 2 * SESSION_STOP_TIMEOUT_MS)),
+    }).then((response) => response.body?.cancel()).catch((error: unknown) => {
+      createServerLogger(config).log("warn", "Engine instance dispose for a removed workspace failed.", {
+        "workspace.id": workspace.id,
+        "error.message": error instanceof Error ? error.message : String(error),
+      });
+    });
+  }));
+  const mcpState = activeEngineMcpServerState(config);
+  if (mcpState) invalidateEngineMcpWorkspace(mcpState, workspace.id);
 }
 
 /**

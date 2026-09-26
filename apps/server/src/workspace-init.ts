@@ -66,10 +66,23 @@ async function ensureOpencodeConfig(workspaceRoot: string): Promise<boolean> {
   return false;
 }
 
-export async function ensureWorkspaceFiles(workspaceRoot: string, presetInput: string): Promise<EnsureWorkspaceFilesResult> {
+/**
+ * `createMissing: false` is for a workspace that is already registered: its
+ * folder is never recreated. A folder the person deleted (or is deleting,
+ * with the workspace about to be removed) must stay gone; only creating a
+ * workspace makes its folder.
+ */
+export async function ensureWorkspaceFiles(
+  workspaceRoot: string,
+  presetInput: string,
+  options: { createMissing?: boolean } = {},
+): Promise<EnsureWorkspaceFilesResult> {
   const preset = normalizePreset(presetInput);
   if (!workspaceRoot.trim()) {
     throw new ApiError(400, "invalid_workspace_path", "workspace path is required");
+  }
+  if (options.createMissing === false && !(await exists(workspaceRoot))) {
+    return { changed: false, reloadReasons: [] };
   }
   try {
     await ensureDir(workspaceRoot);
@@ -104,11 +117,12 @@ export async function ensureWorkspaceFiles(workspaceRoot: string, presetInput: s
  */
 export async function ensureLocalWorkspaceFiles(
   workspaces: ReadonlyArray<Pick<WorkspaceInfo, "path" | "preset" | "workspaceType">>,
+  options: { createMissing?: boolean } = {},
 ): Promise<void> {
   for (const workspace of workspaces) {
     if (workspace.workspaceType === "remote" || !workspace.path.trim()) continue;
     try {
-      await ensureWorkspaceFiles(workspace.path, workspace.preset);
+      await ensureWorkspaceFiles(workspace.path, workspace.preset, options);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`Failed to provision workspace files at ${workspace.path}: ${message}`);

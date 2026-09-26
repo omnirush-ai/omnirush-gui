@@ -177,6 +177,15 @@ describe("ensureWorkspaceFiles", () => {
 });
 
 describe("ensureLocalWorkspaceFiles", () => {
+  test("never recreates the deleted folder of a registered workspace", async () => {
+    await withWorkspace(async (root) => {
+      const deleted = join(root, "deleted-project");
+      await expect(ensureWorkspaceFiles(deleted, "starter", { createMissing: false })).resolves.toEqual({ changed: false, reloadReasons: [] });
+      await ensureLocalWorkspaceFiles([{ path: deleted, preset: "starter", workspaceType: "local" }], { createMissing: false });
+      await expect(stat(deleted)).rejects.toThrow();
+    });
+  });
+
   test("continues provisioning after an uncreatable workspace path", async () => {
     await withWorkspace(async (root) => {
       const blockingFile = join(root, "blocking-file");
