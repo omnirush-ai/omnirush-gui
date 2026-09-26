@@ -1,12 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OmniRushSwarm } from "./omnirush-swarm.js";
 import {
+  compactSwarmBoard,
   OMNIRUSH_SUBAGENT_DEPTH,
+  OMNIRUSH_SWARM_ARCHIVES_KEPT,
+  OMNIRUSH_SWARM_CELL_MAX_CHARS,
   OMNIRUSH_SWARM_FILE,
+  OMNIRUSH_SWARM_FINDINGS_PER_TASK,
+  OMNIRUSH_SWARM_LINE_MAX_CHARS,
+  OMNIRUSH_SWARM_TOOL_NAME,
+  swarmBoardView,
+  updateSwarmBoard,
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
   OMNIRUSH_SWARM_SKILL_NAME,
@@ -93,7 +101,8 @@ describe("omnirush swarm plugin", () => {
     expect(await system("ses_main")).toBe("");
     const child = await system("ses_child");
     expect(child).toContain("layer 1 of at most 3");
-    expect(child).toContain("Read `.omnirush/swarm.md` before you start");
+    expect(child).toContain("Do not read, search or edit the board file");
+    expect(child).toContain(`use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool`);
     expect(child).toContain("you may delegate");
     expect(await system("ses_grand")).toContain("layer 2 of at most 3");
     const great = await system("ses_great");
@@ -120,6 +129,8 @@ describe("omnirush swarm plugin", () => {
     await writeBoard(directory);
     expect(await systemOf(hooks)("ses_child")).toContain("`.omnirush/swarm.md`");
     expect(await readFile(join(directory, ".omnirush", ".gitignore"), "utf8")).toContain("/swarm.md\n/swarms/\n");
+    // ripgrep (the engine's grep and glob) honours .ignore outside git repositories too.
+    expect(await readFile(join(directory, ".omnirush", ".ignore"), "utf8")).toContain("/.ignore\n/swarm.md\n/swarms/\n");
   });
 
   test("a user's own .omnirush/.gitignore only gains the board lines", async () => {
@@ -168,6 +179,186 @@ describe("omnirush swarm plugin", () => {
     await loadSwarmSkill(hooks, "ses_main");
     await idle(hooks, "ses_main");
     expect(await readFile(join(directory, "swarm.md"), "utf8")).toBe("# Goal\nuser file\n");
+  });
+});
+
+const BOARD = [
+  "# Goal",
+  "Review the project.",
+  "",
+  "## Tasks",
+  "| id | task | owner | status | result |",
+  "|---|---|---|---|---|",
+  "| T1 | review math | agent 1 | todo | |",
+  "| T2 | review strings | agent 2 | todo | |",
+  "| T3 | write tests | agent 3 | todo | |",
+  "",
+  "## Findings",
+  "",
+  "## Decisions",
+  "- Do not edit source files.",
+  "",
+].join("\n");
+
+const busyStatus = (hooks: Hooks, sessionID: string) =>
+  hooks.event({ event: { type: "session.status", properties: { sessionID, status: { type: "busy" } } } });
+const boardTool = (hooks: Hooks) => hooks.tool[OMNIRUSH_SWARM_TOOL_NAME];
+
+describe("omnirush swarm board: size limits", () => {
+  test("compaction cuts cells, findings and decisions to one short line and keeps a few findings per task", () => {
+    const long = "x".repeat(1000);
+    const board = BOARD
+      .replace("| T1 | review math | agent 1 | todo | |", `| T1 | review math | agent 1 | done | ${long} |`)
+      .replace("## Findings\n", `## Findings\n- T1: ${long}\n- T1: second\n  - nested detail\n- T1: third\n- T1: fourth\n- T1: fifth\n\`\`\`\ncode dump\n\`\`\`\nA paragraph of prose.\n### T2\n- one\n`)
+      .replace("- Do not edit source files.", `- ${long}`);
+    const compact = compactSwarmBoard(board);
+    const row = compact.split("\n").find((line) => line.startsWith("| T1"))!;
+    expect(row.length).toBeLessThan(OMNIRUSH_SWARM_CELL_MAX_CHARS + 60);
+    expect(compact).not.toContain("fourth");
+    expect(compact).not.toContain("fifth");
+    expect(compact).not.toContain("nested detail");
+    expect(compact).not.toContain("code dump");
+    expect(compact).not.toContain("A paragraph");
+    expect(compact).toContain("- T1: third");
+    expect(compact).toContain("### T2\n- one");
+    for (const line of compact.split("\n")) expect(line.length).toBeLessThanOrEqual(OMNIRUSH_SWARM_LINE_MAX_CHARS + 2);
+    expect(compact.length).toBeLessThan(board.length / 2);
+    // A board within the limits is left exactly as it is.
+    expect(compactSwarmBoard(BOARD)).toBe(BOARD);
+    expect(compactSwarmBoard(compact)).toBe(compact);
+  });
+
+  test("an update sets the agent's own row, adds sub-task rows and appends capped one-line findings", () => {
+    let board = updateSwarmBoard(BOARD, { task: "t2", status: "running" });
+    expect(board).toContain("| T2 | review strings | agent 2 | running |  |");
+    board = updateSwarmBoard(board, { task: "T2", subtasks: [{ id: "T2.1", task: "check shout" }] });
+    expect(board).toContain("| T2.1 | check shout |  | todo |  |");
+    board = updateSwarmBoard(board, {
+      task: "T2",
+      status: "done",
+      result: "found 2 issues\nsee report | details",
+      findings: ["T2: banner() double-spaces", "whisper drops punctuation", "x".repeat(900), "four", "five"],
+    });
+    expect(board).toContain("| T2 | review strings | agent 2 | done | found 2 issues see report / details |");
+    expect(board).toContain("## Findings\n- T2: banner() double-spaces\n- T2: whisper drops punctuation\n- T2: xxx");
+    expect(board).not.toContain("four");
+    expect(board.indexOf("## Findings")).toBeLessThan(board.indexOf("## Decisions"));
+    // An id without a row gets one.
+    expect(updateSwarmBoard(BOARD, { task: "T9", status: "running" })).toContain("| T9 |  |  | running |  |");
+  });
+
+  test("an agent's view is its own rows and the Decisions, not the rest of the board", () => {
+    const board = updateSwarmBoard(updateSwarmBoard(BOARD, { task: "T1", subtasks: [{ id: "T1.1", task: "sub" }] }), { task: "T3", findings: ["other agent's finding"] });
+    const view = swarmBoardView(board, "T1");
+    expect(view).toContain("| T1 | review math |");
+    expect(view).toContain("| T1.1 | sub |");
+    expect(view).not.toContain("T2");
+    expect(view).not.toContain("other agent's finding");
+    expect(view).toContain("Decisions:\n- Do not edit source files.");
+    expect(swarmBoardView(board, "T7")).toContain("(no row for T7 yet)");
+  });
+});
+
+describe("omnirush swarm plugin: board tool, notes and cleanup", () => {
+  test("sub-agents update the board through the tool, one write at a time, and see only their rows", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await loadSwarmSkill(hooks, "ses_main");
+    const tool = boardTool(hooks);
+    expect(await tool.execute({ task: "T1", status: "running" })).toContain("No swarm board is running");
+    await writeBoard(directory, BOARD);
+    // Many agents at once: no update is lost.
+    await Promise.all(["T1", "T2", "T3"].flatMap((task) => [
+      tool.execute({ task, status: "done", result: `${task} ok` }),
+      tool.execute({ task, findings: [`fact from ${task}`] }),
+    ]));
+    const board = await readFile(join(directory, OMNIRUSH_SWARM_FILE), "utf8");
+    for (const task of ["T1", "T2", "T3"]) {
+      expect(board).toContain(`| ${task} |`);
+      expect(board).toContain(`| done | ${task} ok |`);
+      expect(board).toContain(`- ${task}: fact from ${task}`);
+    }
+    const answer = await tool.execute({ task: "T2" });
+    expect(answer).toContain("Board unchanged.");
+    expect(answer).toContain("| T2 |");
+    expect(answer).not.toContain("| T1 |");
+    expect(answer.length).toBeLessThan(board.length);
+  });
+
+  test("a sub-agent's system note stays the same while the board changes (prompt cache)", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await created(hooks, "ses_child", "ses_main");
+    await loadSwarmSkill(hooks, "ses_main");
+    await writeBoard(directory, BOARD);
+    const first = await systemOf(hooks)("ses_child");
+    await boardTool(hooks).execute({ task: "T2", status: "running", findings: ["something"] });
+    expect(await systemOf(hooks)("ses_child")).toBe(first);
+    expect(first).not.toContain("| T2 |");
+  });
+
+  test("a board written with the model's own file tools is cut to the limits", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await writeBoard(directory, BOARD.replace("## Findings\n", `## Findings\n- T1: ${"y".repeat(2000)}\n`));
+    await hooks["tool.execute.after"]({ tool: "edit", callID: "e1", args: { filePath: join(directory, OMNIRUSH_SWARM_FILE) } }, { output: "" });
+    const board = await readFile(join(directory, OMNIRUSH_SWARM_FILE), "utf8");
+    expect(board.length).toBeLessThan(BOARD.length + OMNIRUSH_SWARM_LINE_MAX_CHARS + 20);
+    // Other files are never touched.
+    await writeFile(join(directory, "notes.md"), `- T1: ${"y".repeat(2000)}\n`);
+    await hooks["tool.execute.after"]({ tool: "write", callID: "w1", args: { filePath: join(directory, "notes.md") } }, { output: "" });
+    expect((await readFile(join(directory, "notes.md"), "utf8")).length).toBeGreaterThan(2000);
+  });
+
+  test("the board is archived only once the main session and every sub-agent are idle", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await created(hooks, "ses_child", "ses_main");
+    await loadSwarmSkill(hooks, "ses_main");
+    await writeBoard(directory, BOARD);
+    await busyStatus(hooks, "ses_main");
+    await busyStatus(hooks, "ses_child");
+    await idle(hooks, "ses_main");
+    // A sub-agent is still running: the board stays.
+    expect(existsSync(join(directory, OMNIRUSH_SWARM_FILE))).toBe(true);
+    await idle(hooks, "ses_child");
+    expect(existsSync(join(directory, OMNIRUSH_SWARM_FILE))).toBe(false);
+    expect(await readdir(join(directory, ".omnirush", "swarms"))).toHaveLength(1);
+  });
+
+  test("a board left by an earlier engine run is archived when a turn ends, even without a swarm", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await writeBoard(directory, BOARD);
+    const old = new Date(Date.now() - 60 * 60_000);
+    await utimes(join(directory, OMNIRUSH_SWARM_FILE), old, old);
+    await busyStatus(hooks, "ses_main");
+    await idle(hooks, "ses_main");
+    expect(existsSync(join(directory, OMNIRUSH_SWARM_FILE))).toBe(false);
+    // A board written during this run by no swarm the plugin knows is left alone.
+    await writeBoard(directory, BOARD);
+    await idle(hooks, "ses_main");
+    expect(existsSync(join(directory, OMNIRUSH_SWARM_FILE))).toBe(true);
+  });
+
+  test(`only the newest ${OMNIRUSH_SWARM_ARCHIVES_KEPT} archived boards are kept`, async () => {
+    const { hooks, directory } = await setup();
+    const archive = join(directory, ".omnirush", "swarms");
+    await mkdir(archive, { recursive: true });
+    const names = Array.from({ length: OMNIRUSH_SWARM_ARCHIVES_KEPT + 3 }, (_, i) => `20260101-0000${String(i).padStart(2, "0")}.md`);
+    for (const name of names) await writeFile(join(archive, name), "# old\n");
+    await writeFile(join(archive, "keep-me.txt"), "user file\n");
+    await created(hooks, "ses_main");
+    await loadSwarmSkill(hooks, "ses_main");
+    await writeBoard(directory, BOARD);
+    await idle(hooks, "ses_main");
+    const left = await readdir(archive);
+    expect(left).toContain("keep-me.txt");
+    const boards = left.filter((name) => name.endsWith(".md"));
+    expect(boards).toHaveLength(OMNIRUSH_SWARM_ARCHIVES_KEPT);
+    expect(boards).not.toContain(names[0]);
+    expect(boards).not.toContain(names[3]);
+    expect(boards).toContain(names.at(-1)!);
   });
 });
 
