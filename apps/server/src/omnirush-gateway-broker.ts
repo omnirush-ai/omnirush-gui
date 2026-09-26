@@ -126,6 +126,9 @@ const GATEWAY_ERROR_COPY: Record<string, string> = {
   gateway_overload: BUSY_COPY,
   queue_timeout: BUSY_COPY,
   provider_rate_limited: BUSY_COPY,
+  voice_unavailable: "voice input is not available on this account yet.",
+  transcription_unavailable: "the transcription service did not answer. Try again in a moment.",
+  audio_unreadable: "the recording could not be read. Try again.",
 };
 
 /** Readable copy for a gateway error code, or null for a code it does not know. */
@@ -498,6 +501,11 @@ function apiUrl(gatewayUrl: string, path: string): string {
   return url.toString();
 }
 
+/** The backend's voice route, relative to the gateway URL (…/omnirush/v1/audio/transcriptions). */
+export const VOICE_TRANSCRIPTIONS_PATH = "audio/transcriptions";
+/** The backend allows 20 s for its primary provider and 30 s for the fallback. */
+const VOICE_TRANSCRIBE_TIMEOUT_MS = 35_000;
+
 /** The project archive routes the session archiver calls (archives, archives/key, archives/<id>/parts|complete|abort). */
 const ARCHIVE_API_PATH = /^archives(?:\/key|\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:parts|complete|abort))?$/;
 
@@ -742,8 +750,8 @@ export class OmniRushGatewayBroker {
       return Response.json({ error: "invalid_local_gateway_credential" }, { status: 401 });
     }
     const normalizedPath = path.replace(/^\/+/, "");
-    const allowed = (request.method === "GET" && normalizedPath === "models")
-      || (request.method === "POST" && (normalizedPath === "responses" || normalizedPath === "responses/compact"));
+    const allowed = (request.method === "GET" && (normalizedPath === "models" || normalizedPath === VOICE_TRANSCRIPTIONS_PATH))
+      || (request.method === "POST" && (normalizedPath === "responses" || normalizedPath === "responses/compact" || normalizedPath === VOICE_TRANSCRIPTIONS_PATH));
     if (!allowed) return Response.json({ error: "unsupported_gateway_path" }, { status: 404 });
 
     const requestBody = request.method === "GET"
@@ -864,6 +872,31 @@ export class OmniRushGatewayBroker {
       method: "GET",
       headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
       signal: AbortSignal.timeout(8_000),
+    }));
+  }
+
+  /**
+   * One voice segment for the backend's POST /omnirush/v1/audio/transcriptions,
+   * authenticated like collect(): the device bearer and the same bounded 401
+   * refresh. The multipart body goes through as it came and is held only
+   * for this call.
+   */
+  /** GET /omnirush/v1/audio/transcriptions: whether this account may dictate, its limits and today's usage. */
+  voiceStatus(): Promise<Response> {
+    return this.withDeviceBearer((state) => this.fetcher(upstreamUrl(state.gatewayUrl, VOICE_TRANSCRIPTIONS_PATH), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(8_000),
+    }));
+  }
+
+  transcribe(body: ArrayBuffer, contentType: string, signal?: AbortSignal): Promise<Response> {
+    const timeout = AbortSignal.timeout(VOICE_TRANSCRIBE_TIMEOUT_MS);
+    return this.withDeviceBearer((state) => this.fetcher(upstreamUrl(state.gatewayUrl, VOICE_TRANSCRIPTIONS_PATH), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${state.accessToken}`, "Content-Type": contentType, Accept: "application/json" },
+      body,
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     }));
   }
 

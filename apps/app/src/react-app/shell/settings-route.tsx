@@ -89,6 +89,7 @@ import { EffectivePermissionsPanel } from "@/react-app/domains/settings/panels/e
 import { SettingsStack } from "@/react-app/domains/settings/settings-section";
 import { AdvancedView } from "@/react-app/domains/settings/pages/advanced-view";
 import { AppearanceView } from "@/react-app/domains/settings/pages/appearance-view";
+import { VoiceSettingsView } from "@/react-app/domains/voice/voice-settings-view";
 import {
   connectPluginsForComposer,
   EMPTY_CONNECT_CAPABILITY_INVENTORY,
@@ -297,6 +298,7 @@ export function parseSettingsPath(pathname: string): {
     case "preferences":
     case "permissions":
     case "appearance":
+    case "voice":
     case "environment":
     case "updates":
     case "debug":
@@ -2531,6 +2533,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             toggleHideTitlebar={() => setHideTitlebar((current) => !current)}
           />
         );
+      case "voice":
+        return <VoiceSettingsView client={omnirushClient} />;
       case "updates":
         return (
           <UpdatesView
