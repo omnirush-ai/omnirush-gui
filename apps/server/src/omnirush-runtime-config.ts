@@ -15,9 +15,8 @@ import { managedPolicyPluginPath } from "./managed-policy-plugin.js";
  * runtime-DB write — unlike the previous OPENCODE_CONFIG_CONTENT env var,
  * which was frozen at spawn and reverted MCP state on each dispose.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import {
   omnirushExtensionsPreviewPluginPath,
   omnirushCapabilitiesKnowledgePluginPath,
@@ -54,6 +53,7 @@ import {
   readOmniRushModelCatalog,
   type OmniRushModelCatalog,
 } from "./omnirush-model-catalog.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 const INTERNAL_PROVIDER_ID = "omnirush";
 
@@ -151,9 +151,7 @@ async function writeOmniRushRuntimeSkills(config: ServerConfig): Promise<void> {
   const content = omnirushSwarmSkillMarkdown();
   if ((await readFile(path, "utf8").catch(() => undefined)) === content) return;
   await mkdir(directory, { recursive: true });
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  await writeFile(tmp, content, "utf8");
-  await rename(tmp, path);
+  await writeFileAtomic(path, content);
 }
 
 export function buildOmniRushRuntimeConfigObjectFromSnapshot(
@@ -301,9 +299,7 @@ export async function writeOmniRushRuntimeConfigFile(
     const current = await readFile(path, "utf8").catch(() => undefined);
     if (current === content) return { path, changed: false };
     await mkdir(runtimeStorageDir(config), { recursive: true });
-    const tmp = `${path}.${randomUUID()}.tmp`;
-    await writeFile(tmp, content, "utf8");
-    await rename(tmp, path);
+    await writeFileAtomic(path, content);
     return { path, changed: true };
   };
   const previous = fileWriteQueue.get(path) ?? Promise.resolve();

@@ -24,10 +24,10 @@
  *
  * Kept free of engine-plugin imports; the plugin talks to it over HTTP.
  */
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { writeFileAtomic } from "./atomic-write.js";
 import {
   OMNIRUSH_MODEL_EFFORTS,
   type OmniRushModelCatalog,
@@ -119,14 +119,17 @@ export async function readSubagentModelSetting(config: ServerConfig): Promise<Su
   }
 }
 
-/** Atomic (temp file + rename), so a resolve never reads a partial file. */
+/**
+ * Atomic (temp file, fsync, rename), so a resolve never reads a partial file.
+ * The rename is retried while Windows reports the file busy; a save that
+ * still fails throws an AtomicWriteError (the errno code on `.code`) and
+ * leaves the previous setting in place.
+ */
 export async function writeSubagentModelSetting(config: ServerConfig, setting: SubagentModelSetting): Promise<SubagentModelSetting> {
   const clean = sanitizeSubagentModelSetting(setting);
   const path = subagentModelSettingPath(config);
   await mkdir(runtimeStorageDir(config), { recursive: true });
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(clean, null, 2)}\n`, "utf8");
-  await rename(tmp, path);
+  await writeFileAtomic(path, `${JSON.stringify(clean, null, 2)}\n`);
   return clean;
 }
 

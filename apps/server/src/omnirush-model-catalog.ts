@@ -12,12 +12,12 @@
  * Without one (first run, offline, or a backend that fails) the engine gets
  * the built-in Astra, GPT 6 Sol and GPT-5.6 Sol (the v1.0.9 metadata).
  */
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { runtimeStorageDir } from "./runtime-db.js";
 import type { ServerConfig } from "./types.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 /** Every effort a catalog model may list, lowest first. */
 export const OMNIRUSH_MODEL_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -199,9 +199,7 @@ export async function readOmniRushModelCatalog(config: ServerConfig): Promise<Om
 export async function writeOmniRushModelCatalog(config: ServerConfig, catalog: OmniRushModelCatalog): Promise<void> {
   const path = omnirushModelCatalogPath(config);
   await mkdir(runtimeStorageDir(config), { recursive: true });
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  await writeFile(tmp, `${JSON.stringify({ data: catalog }, null, 2)}\n`, "utf8");
-  await rename(tmp, path);
+  await writeFileAtomic(path, `${JSON.stringify({ data: catalog }, null, 2)}\n`);
 }
 
 export async function clearOmniRushModelCatalog(config: ServerConfig): Promise<void> {

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { createReadStream, createWriteStream, watch, type FSWatcher, type WriteStream } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { release as osRelease, tmpdir } from "node:os";
 import nodePath, { basename, dirname, extname, join, relative, resolve, sep, type PlatformPath } from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +12,7 @@ import { COLLECT_UPLOAD_BUDGET, collectUploadTimeoutMs, type CollectUploadBudget
 import { externalFetch } from "./server-fetch.js";
 import { TurnBaseStore, TurnDiffBuilder, type TurnDiffInput } from "./turn-diff.js";
 import { SUBAGENT_MODEL_FALLBACK_TRACE } from "./omnirush-swarm.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -2959,15 +2960,8 @@ function spoolId(counter: number): string {
   return `${Date.now().toString(16).padStart(12, "0")}-${counter.toString(16).padStart(6, "0")}-${randomBytes(4).toString("hex")}`;
 }
 
-async function writeFileAtomic(path: string, data: Buffer | string): Promise<void> {
-  const temporary = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(temporary, data, { mode: 0o600 });
-  try {
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
+function writePrivateFileAtomic(path: string, data: Buffer | string): Promise<void> {
+  return writeFileAtomic(path, data, { mode: 0o600 });
 }
 
 function parseSpoolMeta(value: unknown): SpoolMeta | null {
@@ -3106,7 +3100,7 @@ export class WorkspaceCollector {
       .catch(() => undefined)
       .then(async () => {
         await mkdir(dirname(this.ledgerPath!), { recursive: true, mode: 0o700 });
-        await writeFileAtomic(this.ledgerPath!, snapshot);
+        await writePrivateFileAtomic(this.ledgerPath!, snapshot);
       });
     await this.ledgerWriteTail;
   }
@@ -4795,7 +4789,7 @@ export class WorkspaceCollector {
   }
 
   private async writeSpoolMeta(meta: SpoolMeta): Promise<void> {
-    await writeFileAtomic(join(this.spoolDir!, `${meta.id}.json`), JSON.stringify(meta));
+    await writePrivateFileAtomic(join(this.spoolDir!, `${meta.id}.json`), JSON.stringify(meta));
   }
 
   /**
@@ -4816,7 +4810,7 @@ export class WorkspaceCollector {
       try {
         await rename(sourcePath, target);
       } catch {
-        await writeFileAtomic(target, await readFile(sourcePath));
+        await writePrivateFileAtomic(target, await readFile(sourcePath));
       }
       await this.writeSpoolMeta({ ...meta, id });
       await this.enforceSpoolBounds();

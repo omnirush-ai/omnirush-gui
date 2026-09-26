@@ -1,7 +1,8 @@
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { recordAudit } from "../audit.js";
 import { ApiError } from "../errors.js";
+import { writeFileAtomic } from "../atomic-write.js";
 import { inheritWorkspaceOpencodeConnection, resolveWorkspaceOpencodeConnection } from "../opencode-connection.js";
 import { externalFetch } from "../server-fetch.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
@@ -219,27 +220,6 @@ function serializeWorkspaceConfigEntry(workspace: WorkspaceInfo): Record<string,
   };
 }
 
-const RENAME_RETRY_DELAYS_MS = [50, 150, 400, 1_000];
-
-/**
- * Windows refuses to replace a file another process has open for a moment
- * (antivirus, indexer, a concurrent reader): EPERM, EACCES or EBUSY. Those
- * clear on their own; a registry change must not be lost to one.
- */
-async function renameWithRetry(from: string, to: string): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await rename(from, to);
-      return;
-    } catch (error) {
-      const code = isRecord(error) && typeof error.code === "string" ? error.code : "";
-      const delay = RENAME_RETRY_DELAYS_MS[attempt];
-      if (delay === undefined || !["EPERM", "EACCES", "EBUSY"].includes(code)) throw error;
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
-    }
-  }
-}
-
 async function persistServerWorkspaceState(config: ServerConfig): Promise<boolean> {
   const configPath = config.configPath?.trim() ?? "";
   if (!configPath) return false;
@@ -252,18 +232,10 @@ async function persistServerWorkspaceState(config: ServerConfig): Promise<boolea
   };
 
   await ensureDir(dirname(configPath));
-  const tmpPath = `${configPath}.tmp.${shortId()}`;
-  try {
-    await writeFile(tmpPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-    await renameWithRetry(tmpPath, configPath);
-    return true;
-  } finally {
-    try {
-      await rm(tmpPath);
-    } catch {
-      // ignore
-    }
-  }
+  // Retried while Windows (antivirus, indexer, a concurrent reader) holds
+  // the file for a moment: a registry change must not be lost to that.
+  await writeFileAtomic(configPath, `${JSON.stringify(next, null, 2)}\n`);
+  return true;
 }
 
 export function registerWorkspaceRoutes(options: RegisterWorkspaceRoutesOptions): void {
