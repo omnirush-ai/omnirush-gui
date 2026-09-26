@@ -45,7 +45,7 @@ import {
 import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js";
 import { isOmniRushUiMcpRegistryEntry } from "./omnirush-ui-mcp-command.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
-import { OMNIRUSH_SUBAGENT_DEPTH, OMNIRUSH_SWARM_SKILL_NAME, omnirushSwarmSkillMarkdown } from "./omnirush-swarm.js";
+import { OMNIRUSH_SUBAGENT_DEPTH, OMNIRUSH_SWARM_SKILL_NAME, OMNIRUSH_SWARM_TOOL_NAME, omnirushSwarmSkillMarkdown } from "./omnirush-swarm.js";
 import {
   builtinOmniRushModelCatalog,
   engineModelsFromCatalog,
@@ -205,6 +205,10 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
             "agent-creator": "deny",
             "plugin-creator": "deny",
           },
+          // The swarm plugin's board tool is for sub-agents: the main agent
+          // writes and reads the board itself, and never pays for the tool
+          // definition on its requests.
+          [OMNIRUSH_SWARM_TOOL_NAME]: "deny",
         },
       },
       // The engine hides the task tool from a sub-agent unless the sub-agent's

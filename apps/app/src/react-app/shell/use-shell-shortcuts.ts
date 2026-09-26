@@ -22,6 +22,7 @@ import {
   type ThinkingModeShortcutDirection,
 } from "./thinking-mode-shortcut";
 import { isFavoriteModelShortcut } from "./favorite-model-shortcut";
+import { useTerminalTabsStore } from "../domains/session/terminal/terminal-tabs-store";
 
 export type UseShellShortcutsInput = {
   canCreateTask: boolean;
@@ -51,6 +52,11 @@ export function useCommandPaletteShortcut(enabled = true) {
   }, []);
 
   return { commandPaletteOpen, setCommandPaletteOpen };
+}
+
+/** Ctrl+Shift+` (the Backquote key, whatever the layout prints on it): a new terminal tab. */
+export function isNewTerminalShortcut(event: Pick<KeyboardEvent, "ctrlKey" | "shiftKey" | "altKey" | "metaKey" | "code">) {
+  return event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === "Backquote";
 }
 
 export function useShellShortcuts(input: UseShellShortcutsInput) {
@@ -109,6 +115,7 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
   //   Cmd/Ctrl+N        -> new task in selected workspace
   //   Cmd/Ctrl+K        -> toggle command palette
   //   Cmd/Ctrl+J        -> toggle terminal panel (matches VS Code)
+  //   Ctrl+Shift+`      -> new terminal tab (matches VS Code; Ctrl on macOS too)
   //   Cmd/Ctrl+F        -> find in current conversation (handled by session surface)
   //   Cmd/Ctrl+Shift+F  -> search every session (titles + messages)
   //   Cmd/Ctrl+T        -> next session tab
@@ -121,6 +128,13 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
     if (isFavoriteModelShortcut(event)) {
       event.preventDefault();
       if (!event.repeat) onCycleFavoriteModel?.();
+      return;
+    }
+    if (isNewTerminalShortcut(event) && platform.capabilities.terminal) {
+      event.preventDefault();
+      if (event.repeat) return;
+      useTerminalTabsStore.getState().requestNewTab();
+      setTerminalOpen(true);
       return;
     }
     const thinkingModeDirection = getThinkingModeShortcutDirection(event, thinkingModeShortcutOs);

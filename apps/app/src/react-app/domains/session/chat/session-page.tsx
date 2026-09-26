@@ -1959,6 +1959,7 @@ export function SessionPage(props: SessionPageProps) {
                 <ResizableHandle />
                 <ResizablePanel defaultSize="280px" minSize="160px" maxSize="55%" className="min-h-0">
                   <TerminalDock
+                    workspaceId={props.selectedWorkspaceId}
                     workspaceRoot={props.selectedWorkspaceRoot}
                     isRemoteWorkspace={props.selectedWorkspaceDisplay.workspaceType === "remote"}
                     onClose={() => props.onTerminalOpenChange?.(false)}
