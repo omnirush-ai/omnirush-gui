@@ -38,6 +38,7 @@ import { applyBrandAppName } from "./brand-app-name.mjs";
 import { createBrowserLoginSync } from "./browser-login-sync.mjs";
 import { createBrowserPanel } from "./browser-panel.mjs";
 import { createWorkspaceStore } from "./workspace-store.mjs";
+import { createTerminalSessions, terminalShells } from "./terminal-sessions.mjs";
 import {
   buildNukeManifest,
   executeNukeFreshStart,
@@ -192,14 +193,6 @@ const uiControlServer = createUiControlServer({
   },
 });
 
-const terminalProcesses = new Map();
-let nextTerminalId = 1;
-
-function defaultTerminalShell() {
-  if (process.platform === "win32") return process.env.COMSPEC || "powershell.exe";
-  return process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash");
-}
-
 async function resolveTerminalCwd(cwd) {
   const fallback = os.homedir();
   if (typeof cwd !== "string" || !cwd.trim()) return fallback;
@@ -208,23 +201,25 @@ async function resolveTerminalCwd(cwd) {
   return info?.isDirectory() ? candidate : fallback;
 }
 
-function terminalForSender(event, terminalId) {
-  const terminal = terminalProcesses.get(String(terminalId ?? ""));
-  if (!terminal || terminal.webContentsId !== event.sender.id) return null;
-  return terminal;
-}
+// Terminal tabs: one shell per tab, owned by the window that opened it.
+const terminalShellList = terminalShells({ platform: process.platform, env: process.env, exists: (file) => existsSync(file) });
+const terminalSessions = createTerminalSessions({
+  spawn: (file, args, options) => pty.spawn(file, args, options),
+  resolveCwd: resolveTerminalCwd,
+  shells: () => terminalShellList,
+});
+/** Windows whose terminals end with them (closed, crashed or reloaded). */
+const terminalOwners = new WeakSet();
 
-function killTerminal(terminalId) {
-  const terminal = terminalProcesses.get(terminalId);
-  if (!terminal) return;
-  terminalProcesses.delete(terminalId);
-  try { terminal.process.kill(); } catch { /* already gone */ }
-}
-
-function killTerminalsForWebContents(webContentsId) {
-  for (const [terminalId, terminal] of terminalProcesses.entries()) {
-    if (terminal.webContentsId === webContentsId) killTerminal(terminalId);
-  }
+function watchTerminalOwner(contents) {
+  if (terminalOwners.has(contents)) return;
+  terminalOwners.add(contents);
+  const ownerId = contents.id;
+  const endAll = () => { void terminalSessions.killOwner(ownerId); };
+  contents.once("destroyed", endAll);
+  contents.on("render-process-gone", endAll);
+  // A reload starts a new page with no tabs: the old page's shells go with it.
+  contents.on("did-navigate", endAll);
 }
 
 // Production Electron shares the same on-disk state folder as the Tauri shell
@@ -1873,6 +1868,9 @@ const desktopCommandHandlers = {
       return workspaceStore.updateWorkspaceDisplayName(args[0] ?? {});
   },
   "workspaceForget": async (event, ...args) => {
+      // A removed workspace's terminal shells end first (on Windows an open
+      // shell keeps its folder locked).
+      await terminalSessions.killWorkspace(String(args[0] ?? "").trim());
       return workspaceStore.forgetWorkspace(String(args[0] ?? "").trim());
   },
   "workspaceAddAuthorizedRoot": async (event, ...args) => {
@@ -2775,54 +2773,34 @@ ipcMain.handle("omnirush:system:askMicrophoneAccess", async () => {
 });
 
 // ── Terminal IPC ────────────────────────────────────────────────────────
+ipcMain.handle("omnirush:terminal:shells", () => terminalShellList.map(({ id, label }) => ({ id, label })));
 ipcMain.handle("omnirush:terminal:create", async (event, options = {}) => {
   assertDesktopActivation();
-  const cwd = await resolveTerminalCwd(options?.cwd);
-  const cols = Number.isFinite(options?.cols) ? Math.max(20, Math.floor(options.cols)) : 80;
-  const rows = Number.isFinite(options?.rows) ? Math.max(5, Math.floor(options.rows)) : 24;
-  const terminalId = `term_${nextTerminalId++}`;
-  const shellPath = defaultTerminalShell();
-  const child = pty.spawn(shellPath, [], {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-      OMNIRUSH_TERMINAL: "1",
+  const contents = event.sender;
+  watchTerminalOwner(contents);
+  return terminalSessions.create({
+    ownerId: contents.id,
+    workspaceId: typeof options?.workspaceId === "string" ? options.workspaceId : null,
+    cwd: options?.cwd,
+    cols: options?.cols,
+    rows: options?.rows,
+    shellId: typeof options?.shellId === "string" ? options.shellId : null,
+    send: (channel, payload) => {
+      if (!contents.isDestroyed()) contents.send(channel, payload);
     },
   });
-
-  terminalProcesses.set(terminalId, { process: child, webContentsId: event.sender.id });
-  event.sender.once("destroyed", () => killTerminalsForWebContents(event.sender.id));
-  child.onData((data) => {
-    if (event.sender.isDestroyed()) return;
-    event.sender.send("omnirush:terminal:data", { terminalId, data });
-  });
-  child.onExit(({ exitCode, signal }) => {
-    terminalProcesses.delete(terminalId);
-    if (event.sender.isDestroyed()) return;
-    event.sender.send("omnirush:terminal:exit", { terminalId, exitCode, signal });
-  });
-
-  return { terminalId };
 });
 ipcMain.handle("omnirush:terminal:write", (event, terminalId, data) => {
-  const terminal = terminalForSender(event, terminalId);
-  if (!terminal || typeof data !== "string") return;
-  terminal.process.write(data);
+  terminalSessions.write(event.sender.id, terminalId, data);
 });
 ipcMain.handle("omnirush:terminal:resize", (event, terminalId, cols, rows) => {
-  const terminal = terminalForSender(event, terminalId);
-  if (!terminal || !Number.isFinite(cols) || !Number.isFinite(rows)) return;
-  terminal.process.resize(Math.max(20, Math.floor(cols)), Math.max(5, Math.floor(rows)));
+  terminalSessions.resize(event.sender.id, terminalId, cols, rows);
 });
-ipcMain.handle("omnirush:terminal:kill", (event, terminalId) => {
-  const terminal = terminalForSender(event, terminalId);
-  if (!terminal) return;
-  killTerminal(String(terminalId));
+ipcMain.handle("omnirush:terminal:kill", async (event, terminalId) => {
+  await terminalSessions.kill(event.sender.id, terminalId);
+});
+ipcMain.handle("omnirush:terminal:killWorkspace", async (event, workspaceId) => {
+  await terminalSessions.killWorkspace(workspaceId, event.sender.id);
 });
 
 browserPanel.registerIpc(ipcMain);
@@ -2905,6 +2883,7 @@ or use: pnpm dev:worktree`);
         await Promise.all([
           disposeRuntimeBeforeQuit(),
           uiControlServer.stop(),
+          terminalSessions.killAll(),
         ]);
       } finally {
         scheduleBlankSlateProfileCleanup();

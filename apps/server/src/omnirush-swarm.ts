@@ -69,8 +69,33 @@ export const OMNIRUSH_SWARM_ARCHIVE_DIR = `${OMNIRUSH_WORKSPACE_DIR}/swarms`;
  */
 export const OMNIRUSH_SWARM_GITIGNORE_LINES = ["/.gitignore", "/swarm.md", "/swarms/"] as const;
 
+/**
+ * The `.omnirush/.ignore` entries: ripgrep, which the engine's grep and glob
+ * tools run with hidden files included, honours `.ignore` files in every
+ * folder, git repository or not (a `.gitignore` only counts inside one), so a
+ * search over the workspace never pulls a board into a model's context.
+ */
+export const OMNIRUSH_SWARM_IGNORE_LINES = ["/.ignore", "/swarm.md", "/swarms/"] as const;
+
+/** Finished boards kept in `.omnirush/swarms/`; older ones are deleted when a board is archived. */
+export const OMNIRUSH_SWARM_ARCHIVES_KEPT = 10;
+
 /** Fewest parallel sub-agents that make a swarm (fewer never get a board). */
 export const OMNIRUSH_SWARM_MIN_AGENTS = 3;
+
+/**
+ * Board size limits. Every agent's view of the board is re-sent to the model
+ * on each of its steps, so the board stays a status board: a task table with
+ * one-line cells, a few one-line findings per task and one-line decisions.
+ * Full reports travel in the task results, never on the board.
+ */
+export const OMNIRUSH_SWARM_CELL_MAX_CHARS = 160;
+export const OMNIRUSH_SWARM_LINE_MAX_CHARS = 240;
+export const OMNIRUSH_SWARM_FINDINGS_PER_TASK = 3;
+export const OMNIRUSH_SWARM_GOAL_MAX_CHARS = 600;
+
+/** The engine tool (from the swarm plugin) that sub-agents use to read their rows and update the board. */
+export const OMNIRUSH_SWARM_TOOL_NAME = "swarm_board";
 
 /** The on-demand skill that carries the swarm procedure. */
 export const OMNIRUSH_SWARM_SKILL_NAME = "omnirush-swarm";
@@ -90,15 +115,13 @@ export const OMNIRUSH_SWARM_SKILL = `# Sub-agent swarm
 
 Use this only for a real swarm: ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents working in parallel, or the user asked for a swarm or for several agents. For 1-2 sub-agents, stop here: call the task tool directly and do not create or touch a board.
 
-The board is \`${OMNIRUSH_SWARM_FILE}\` in the workspace, never a file in the project root. omnirush.ai keeps \`${OMNIRUSH_SWARM_FILE}\` and \`${OMNIRUSH_SWARM_ARCHIVE_DIR}/\` out of git. Ignore any \`swarm.md\` in the project root: it is not this swarm's board.
+The board is \`${OMNIRUSH_SWARM_FILE}\` in the workspace, never a file in the project root. It is a short status board, not a report: every agent re-reads it, so keep it small. omnirush.ai keeps it out of git and clears it when your turn ends. Ignore any \`swarm.md\` in the project root: it is not this swarm's board.
 
-1. If \`${OMNIRUSH_SWARM_FILE}\` already exists, it is left over from an earlier swarm: move it to \`${OMNIRUSH_SWARM_ARCHIVE_DIR}/<YYYYMMDD-HHMMSS>.md\` and start a fresh board.
-2. Before delegating, create \`${OMNIRUSH_SWARM_FILE}\` with: \`# Goal\` (one paragraph), \`## Tasks\` (a table: id, task, owner, status, result; ids like T1, T2, and T1.1 for a sub-task of T1; status is todo, running, done or blocked), \`## Findings\` (shared facts, one bullet each, with the task id), \`## Decisions\` (choices every agent must follow).
-3. Give each sub-agent one task id. Its task-tool prompt names the id, the task, and says: read \`${OMNIRUSH_SWARM_FILE}\` first; set your row to running; when done, set it to done with a one-line result and append your findings under your id; edit only your own rows and sections; report back briefly.
-4. Sub-agents may split their own task: they add sub-task rows (T1.1, T1.2) and give the same instructions to their own sub-agents. Sub-agents nest at most ${OMNIRUSH_SUBAGENT_DEPTH} layers deep. There is no limit on how many run at once or start per turn: start as many as the work needs, and no more.
-5. Launch independent tasks in parallel (several task calls in one message); give tasks that edit the same files to one agent.
-6. When every task is done, read \`${OMNIRUSH_SWARM_FILE}\`, check and merge the results, and answer the user.
-7. Then archive the board: move \`${OMNIRUSH_SWARM_FILE}\` to \`${OMNIRUSH_SWARM_ARCHIVE_DIR}/<YYYYMMDD-HHMMSS>.md\` (create the folder if needed), so no later request picks it up. If the user asked to keep the board, name the archived path in your answer.`;
+1. Before delegating, create \`${OMNIRUSH_SWARM_FILE}\` (replace it if one exists) with: \`# Goal\` (at most 3 sentences), \`## Tasks\` (a table: id, task, owner, status, result; ids like T1, T2, and T1.1 for a sub-task of T1; status is todo, running, done or blocked; every cell one short line), \`## Findings\` (empty) and \`## Decisions\` (choices every agent must follow, one line each).
+2. Give each sub-agent one task id. Its task-tool prompt names the id and the task, and says: use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool with your task id (it shows your row and the Decisions, and sets your status, one-line result and at most ${OMNIRUSH_SWARM_FINDINGS_PER_TASK} one-line findings); do not read or edit the board file; report back briefly.
+3. Sub-agents may split their own task: they add sub-task rows (T1.1, T1.2) with \`${OMNIRUSH_SWARM_TOOL_NAME}\` and give the same instructions to their own sub-agents. Sub-agents nest at most ${OMNIRUSH_SUBAGENT_DEPTH} layers deep. There is no limit on how many run at once or start per turn: start as many as the work needs, and no more.
+4. Launch independent tasks in parallel (several task calls in one message); give tasks that edit the same files to one agent.
+5. When every task is done, read \`${OMNIRUSH_SWARM_FILE}\` once, check the results against the task reports, and answer the user. Do not move, copy or archive the board: omnirush.ai does that when the turn ends. Board cells over ${OMNIRUSH_SWARM_CELL_MAX_CHARS} characters, lines over ${OMNIRUSH_SWARM_LINE_MAX_CHARS} and findings past ${OMNIRUSH_SWARM_FINDINGS_PER_TASK} per task are cut.`;
 
 /** The omnirush-swarm skill's SKILL.md. */
 export function omnirushSwarmSkillMarkdown(): string {
@@ -114,15 +137,235 @@ export function omnirushSwarmArchiveName(date: Date = new Date()): string {
 /**
  * System text for a sub-agent session of a running swarm (its main session
  * started one and the board exists): every layer follows the board even when
- * a prompt forgot to say so.
+ * a prompt forgot to say so. It never changes during a session, so it never
+ * invalidates the model's prompt cache; the board itself comes from the tool.
  */
 export function omnirushSwarmSubagentNote(depth: number): string {
   const canDelegate = depth < OMNIRUSH_SUBAGENT_DEPTH;
   return [
-    `You are a sub-agent (layer ${depth} of at most ${OMNIRUSH_SUBAGENT_DEPTH}) in a swarm coordinated through \`${OMNIRUSH_SWARM_FILE}\` in the workspace.`,
-    `Read \`${OMNIRUSH_SWARM_FILE}\` before you start. Find your task id in your prompt (or the row that matches your task), set its status to running, and when you finish set it to done with a one-line result and append your findings under your task id. Edit only your own rows and sections, and re-read the file right before each edit because other agents write to it too. Do not move or archive the board: the main agent does that.`,
+    `You are a sub-agent (layer ${depth} of at most ${OMNIRUSH_SUBAGENT_DEPTH}) in a swarm coordinated through the board \`${OMNIRUSH_SWARM_FILE}\`.`,
+    `Do not read, search or edit the board file: use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool with your task id (from your prompt); it answers with your rows and the Decisions. Call it once when you start (status running) and once when you finish (status done, a one-line result, at most ${OMNIRUSH_SWARM_FINDINGS_PER_TASK} one-line findings other agents need). Put details in your final report, not on the board. Do not move or archive the board: omnirush.ai does that.`,
     canDelegate
-      ? "If your task splits into independent parts that each take real effort, you may delegate them with the task tool: add sub-task rows (for example T1.1, T1.2) first and give each sub-agent the same instructions. Otherwise do the work yourself."
+      ? `If your task splits into independent parts that each take real effort, you may delegate them with the task tool: add sub-task rows (for example T1.1, T1.2) with \`${OMNIRUSH_SWARM_TOOL_NAME}\` first and give each sub-agent the same instructions. Otherwise do the work yourself.`
       : "You cannot delegate further: do the work yourself.",
   ].join("\n");
 }
+
+export const OMNIRUSH_SWARM_STATUSES = ["todo", "running", "done", "blocked"] as const;
+export type SwarmTaskStatus = (typeof OMNIRUSH_SWARM_STATUSES)[number];
+
+export type SwarmBoardUpdate = {
+  task: string;
+  status?: SwarmTaskStatus;
+  result?: string;
+  findings?: string[];
+  subtasks?: Array<{ id: string; task: string }>;
+};
+
+type Table = { header: number; separator: number; rows: number[]; columns: { id: number; task: number; owner: number; status: number; result: number; count: number } };
+
+/** One line, whitespace collapsed, at most `max` characters (cut with an ellipsis). */
+function oneLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+}
+
+const cellsOf = (line: string): string[] => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+const rowOf = (cells: string[]): string => `| ${cells.join(" | ")} |`;
+const isSeparator = (line: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
+const heading = (line: string) => /^(#{1,6})\s+(.*)$/.exec(line.trim());
+const sectionName = (line: string) => {
+  const match = heading(line);
+  return match && match[1].length === 2 ? match[2].trim().toLowerCase() : null;
+};
+/** A task id at the start of a table cell or finding: T1, T1.2, **T3**, [T2]. */
+const TASK_ID = /^[\s*_[(`]*(T\d+(?:\.\d+)*)\b/i;
+const normalId = (id: string) => id.trim().toUpperCase();
+
+/** The first task table in the board (a markdown table whose header names an id and a status column). */
+function findTable(lines: string[]): Table | null {
+  for (let i = 0; i + 1 < lines.length; i += 1) {
+    if (!lines[i].trim().startsWith("|") || !isSeparator(lines[i + 1])) continue;
+    const names = cellsOf(lines[i]).map((cell) => cell.toLowerCase().replace(/[^a-z]/g, ""));
+    const find = (...keys: string[]) => names.findIndex((name) => keys.includes(name));
+    const columns = {
+      id: Math.max(find("id", "task id", "taskid"), 0),
+      task: find("task", "description", "title"),
+      owner: find("owner", "agent", "assignee"),
+      status: find("status", "state"),
+      result: find("result", "results", "outcome", "summary"),
+      count: names.length,
+    };
+    if (columns.status < 0) continue;
+    const rows: number[] = [];
+    for (let j = i + 2; j < lines.length && lines[j].trim().startsWith("|"); j += 1) rows.push(j);
+    return { header: i, separator: i + 1, rows, columns };
+  }
+  return null;
+}
+
+/**
+ * The board cut to its limits: one-line table cells, one-line findings and
+ * decisions (at most OMNIRUSH_SWARM_FINDINGS_PER_TASK per task; code blocks,
+ * paragraphs and nested bullets under Findings dropped) and a short goal.
+ * Other sections are left as they are. Returns the text unchanged when it is
+ * already within the limits.
+ */
+export function compactSwarmBoard(text: string): string {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  const table = findTable(lines);
+  const tableRows = new Set(table?.rows ?? []);
+  let section: string | null = null;
+  let fence = false;
+  let goalChars = 0;
+  let findingTask: string | null = null;
+  const perTask = new Map<string, number>();
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const h = heading(line);
+    if (h && !fence) {
+      section = sectionName(line) ?? (h[1].length === 1 ? "goal" : section);
+      findingTask = section === "findings" && h[1].length > 2 ? (TASK_ID.exec(h[2])?.[1] ?? null) : section === "findings" ? findingTask : null;
+      if (h[1].length === 1) goalChars = 0;
+      out.push(line);
+      continue;
+    }
+    if (tableRows.has(i)) {
+      const cells = cellsOf(line);
+      out.push(cells.some((cell) => cell.length > OMNIRUSH_SWARM_CELL_MAX_CHARS)
+        ? rowOf(cells.map((cell) => oneLine(cell, OMNIRUSH_SWARM_CELL_MAX_CHARS)))
+        : line);
+      continue;
+    }
+    if (section === "findings") {
+      if (/^\s*```/.test(line)) { fence = !fence; continue; }
+      if (fence) continue;
+      const bullet = /^[-*+]\s+(.*)$/.exec(line);
+      if (!bullet) {
+        if (!line.trim()) out.push(line);
+        continue;
+      }
+      const task = normalId(TASK_ID.exec(bullet[1])?.[1] ?? findingTask ?? "?");
+      const count = (perTask.get(task) ?? 0) + 1;
+      perTask.set(task, count);
+      if (count > OMNIRUSH_SWARM_FINDINGS_PER_TASK) continue;
+      out.push(`- ${oneLine(bullet[1], OMNIRUSH_SWARM_LINE_MAX_CHARS)}`);
+      continue;
+    }
+    if (section === "decisions") {
+      const bullet = /^[-*+]\s+(.*)$/.exec(line);
+      out.push(bullet ? `- ${oneLine(bullet[1], OMNIRUSH_SWARM_LINE_MAX_CHARS)}` : line.length > OMNIRUSH_SWARM_LINE_MAX_CHARS ? oneLine(line, OMNIRUSH_SWARM_LINE_MAX_CHARS) : line);
+      continue;
+    }
+    if (section === "goal") {
+      if (goalChars >= OMNIRUSH_SWARM_GOAL_MAX_CHARS && line.trim()) continue;
+      const room = OMNIRUSH_SWARM_GOAL_MAX_CHARS - goalChars;
+      goalChars += line.length;
+      out.push(line.length > room ? oneLine(line, Math.max(room, 1)) : line);
+      continue;
+    }
+    out.push(line);
+  }
+  const next = out.join("\n").replace(/\n{3,}/g, "\n\n");
+  return next === text ? text : next;
+}
+
+/** The lines of one `## <name>` section, heading excluded; null when the board has none. */
+function sectionLines(lines: string[], name: string): { start: number; end: number } | null {
+  const start = lines.findIndex((line) => sectionName(line) === name);
+  if (start < 0) return null;
+  let end = start + 1;
+  while (end < lines.length && !(heading(lines[end]) && (heading(lines[end])?.[1].length ?? 3) <= 2)) end += 1;
+  return { start, end };
+}
+
+/**
+ * What one agent needs from the board: the task table's header with its own
+ * rows (its id and its sub-tasks) and the Decisions. Much smaller than the
+ * board, whose other rows and findings belong to other agents.
+ */
+export function swarmBoardView(text: string, taskId: string): string {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const id = normalId(taskId);
+  const parts: string[] = [];
+  const table = findTable(lines);
+  if (table) {
+    const mine = table.rows.filter((row) => {
+      const rowId = normalId(cellsOf(lines[row])[table.columns.id] ?? "");
+      return rowId === id || rowId.startsWith(`${id}.`);
+    });
+    parts.push(mine.length ? [lines[table.header], lines[table.separator], ...mine.map((row) => lines[row])].join("\n") : `(no row for ${id} yet)`);
+  }
+  const decisions = sectionLines(lines, "decisions");
+  const body = decisions ? lines.slice(decisions.start + 1, decisions.end).filter((line) => line.trim()) : [];
+  parts.push(`Decisions:\n${body.length ? body.join("\n") : "(none)"}`);
+  return parts.join("\n");
+}
+
+/**
+ * Applies one agent's update to the board: its row's status and result (a
+ * row is added when it has none), new sub-task rows, and findings appended
+ * under Findings as `- <id>: <text>`. The result is compacted.
+ */
+export function updateSwarmBoard(text: string, update: SwarmBoardUpdate): string {
+  const id = normalId(update.task);
+  let lines = text.replace(/\r\n/g, "\n").split("\n");
+  let table = findTable(lines);
+  if (!table) {
+    const tasks = ["## Tasks", "| id | task | owner | status | result |", "|---|---|---|---|---|"];
+    const at = sectionLines(lines, "tasks");
+    lines = at ? [...lines.slice(0, at.start), ...tasks, ...lines.slice(at.start + 1)] : [...lines, "", ...tasks];
+    table = findTable(lines);
+    if (!table) return text;
+  }
+  const { columns } = table;
+  const blank = () => Array.from({ length: columns.count }, () => "");
+  const rowIndex = (rowId: string) => table?.rows.find((row) => normalId(cellsOf(lines[row])[columns.id] ?? "") === rowId) ?? -1;
+  const insertRow = (cells: string[]) => {
+    const at = (table?.rows.at(-1) ?? table?.separator ?? lines.length - 1) + 1;
+    lines.splice(at, 0, rowOf(cells));
+    table = findTable(lines);
+  };
+  if (update.status || update.result !== undefined || rowIndex(id) < 0) {
+    let row = rowIndex(id);
+    if (row < 0) {
+      const cells = blank();
+      cells[columns.id] = id;
+      if (columns.status >= 0) cells[columns.status] = "todo";
+      insertRow(cells);
+      row = rowIndex(id);
+    }
+    const cells = cellsOf(lines[row]);
+    while (cells.length < columns.count) cells.push("");
+    if (update.status && columns.status >= 0) cells[columns.status] = update.status;
+    if (update.result !== undefined && columns.result >= 0) cells[columns.result] = oneLine(update.result.replace(/\|/g, "/"), OMNIRUSH_SWARM_CELL_MAX_CHARS);
+    lines[row] = rowOf(cells);
+  }
+  for (const sub of update.subtasks ?? []) {
+    const subId = normalId(sub.id);
+    if (!subId || rowIndex(subId) >= 0) continue;
+    const cells = blank();
+    cells[columns.id] = subId;
+    if (columns.task >= 0) cells[columns.task] = oneLine(sub.task.replace(/\|/g, "/"), OMNIRUSH_SWARM_CELL_MAX_CHARS);
+    if (columns.status >= 0) cells[columns.status] = "todo";
+    insertRow(cells);
+  }
+  const findings = (update.findings ?? []).map((finding) => finding.trim()).filter(Boolean);
+  if (findings.length) {
+    let at = sectionLines(lines, "findings");
+    if (!at) {
+      const decisions = sectionLines(lines, "decisions");
+      const insert = decisions ? decisions.start : lines.length;
+      lines.splice(insert, 0, "## Findings", "");
+      at = sectionLines(lines, "findings");
+    }
+    if (at) {
+      let end = at.end;
+      while (end > at.start + 1 && !lines[end - 1].trim()) end -= 1;
+      lines.splice(end, 0, ...findings.map((finding) => `- ${id}: ${oneLine(finding.replace(TASK_ID, "").replace(/^\s*[:\-–]\s*/, ""), OMNIRUSH_SWARM_LINE_MAX_CHARS)}`));
+    }
+  }
+  return compactSwarmBoard(lines.join("\n"));
+}
+
