@@ -31,6 +31,7 @@ export type {
   ExecResult,
   LocalSkillCard,
   LocalSkillContent,
+  SkillFolderRead,
   NukeManifestPreview,
   NukeOptions,
   NukeReceipt,

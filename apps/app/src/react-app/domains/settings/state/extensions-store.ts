@@ -1,3 +1,9 @@
+import type {
+  SkillBundleInstallResult,
+  SkillBundlePreview,
+  SkillFileTree,
+  SkillUploadFile,
+} from "../../../../app/lib/skill-upload";
 import * as React from "react";
 
 import { desktopRestrictionNotice, type DesktopAppRestrictionChecker } from "../../../../app/cloud/desktop-app-restrictions";
@@ -2179,6 +2185,77 @@ export function createExtensionsStore(options: {
     }
   }
 
+  /**
+   * The workspace's local server, waiting a little for it: right after launch
+   * (or a workspace switch) the Library is usable before the server is.
+   */
+  async function awaitWorkspaceServerTarget(timeoutMs = 20_000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const target = await resolveWorkspaceServerTarget();
+      if (target.hasOmniRushTarget && target.omnirushClient && target.omnirushWorkspaceId) {
+        return { ...target, omnirushClient: target.omnirushClient, omnirushWorkspaceId: target.omnirushWorkspaceId };
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("The local omnirush.ai server is not connected for this workspace yet. Try again in a moment.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  /**
+   * The local server client for skill-folder operations. These throw readable
+   * errors (instead of writing store status) so the upload modal and the skill
+   * files panel can show them in place.
+   */
+  async function skillFilesTarget() {
+    if (options.checkDesktopAppRestriction({ restriction: "allowManageExtensions" })) {
+      throw new Error(desktopRestrictionNotice("allowManageExtensions"));
+    }
+    const { omnirushSnapshot, omnirushClient, omnirushWorkspaceId } = await awaitWorkspaceServerTarget();
+    if (omnirushSnapshot.omnirushServerCapabilities?.skills?.write === false) {
+      throw new Error("omnirush.ai server cannot write skills for this workspace.");
+    }
+    return { client: omnirushClient, workspaceId: omnirushWorkspaceId };
+  }
+
+  async function previewSkillBundle(payload: { files: SkillUploadFile[]; name?: string }): Promise<SkillBundlePreview> {
+    const { client, workspaceId } = await skillFilesTarget();
+    return client.previewSkillBundle(workspaceId, payload);
+  }
+
+  async function installSkillBundle(payload: {
+    files: SkillUploadFile[];
+    name?: string;
+    onConflict?: "fail" | "replace";
+  }): Promise<SkillBundleInstallResult> {
+    const { client, workspaceId } = await skillFilesTarget();
+    const result = await client.installSkillBundle(workspaceId, payload);
+    options.markReloadRequired?.("skills", { type: "skill", name: result.name, action: result.action });
+    await refreshSkills({ force: true });
+    return result;
+  }
+
+  async function listSkillFiles(name: string): Promise<SkillFileTree> {
+    const { omnirushClient, omnirushWorkspaceId } = await awaitWorkspaceServerTarget();
+    return omnirushClient.listSkillFiles(omnirushWorkspaceId, name);
+  }
+
+  async function updateSkillFiles(name: string, payload: { add?: SkillUploadFile[]; remove?: string[] }): Promise<SkillFileTree> {
+    const { client, workspaceId } = await skillFilesTarget();
+    const result = await client.updateSkillFiles(workspaceId, name, payload);
+    options.markReloadRequired?.("skills", { type: "skill", name, action: "updated" });
+    return result;
+  }
+
+  /** Saves an edited SKILL.md (helper files are untouched), throwing on refusal. */
+  async function saveSkillContent(input: { name: string; content: string }): Promise<void> {
+    const { client, workspaceId } = await skillFilesTarget();
+    await client.upsertSkill(workspaceId, { name: input.name.trim(), content: input.content });
+    options.markReloadRequired?.("skills", { type: "skill", name: input.name.trim(), action: "updated" });
+    await refreshSkills({ force: true });
+  }
+
   async function saveSkill(input: { name: string; content: string; description?: string }) {
     if (extensionMutationDenied()) return;
     const trimmed = input.name.trim();
@@ -2443,6 +2520,11 @@ export function createExtensionsStore(options: {
     uninstallSkill,
     readSkill,
     saveSkill,
+    saveSkillContent,
+    previewSkillBundle,
+    installSkillBundle,
+    listSkillFiles,
+    updateSkillFiles,
     createLibraryItem,
     abortRefreshes,
     ensureSkillsFresh,
