@@ -141,7 +141,9 @@ describe("local workflow prompt dispatch", () => {
     expect(run.steps.map((step) => step.status)).toEqual(["failed", "cancelled"]);
     expect(dispatched).toHaveLength(1);
     expect(engine.sdkPrompts).toBe(0);
-    // The owned engine session is aborted when a step fails.
+    // The owned engine session is aborted when a step fails. The abort runs
+    // right after the failed status is saved, so wait for it briefly.
+    for (let waited = 0; engine.aborts.length === 0 && waited < 2_000; waited += 20) await new Promise((resolve) => setTimeout(resolve, 20));
     expect(engine.aborts).toEqual(["ses_workflow_1"]);
   });
 
