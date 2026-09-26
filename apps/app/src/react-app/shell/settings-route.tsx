@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "@/components/ui/sonner";
+import { closeWorkspaceTerminals } from "../domains/session/terminal/terminal-runtime";
 
 import {
   SUGGESTED_PLUGINS,
@@ -2195,6 +2196,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
         workspaceId,
         deleteFromServer: omnirushClient ? (id) => omnirushClient.deleteWorkspace(id) : null,
         forgetOnDesktop: isDesktopRuntime() ? workspaceForget : null,
+        closeTerminals: closeWorkspaceTerminals,
       });
     } catch (error) {
       console.error("[settings-route] remove workspace failed", error);

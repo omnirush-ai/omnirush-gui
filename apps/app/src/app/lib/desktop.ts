@@ -295,7 +295,9 @@ declare global {
       };
       browserLogins?: BrowserLoginSyncBridge;
       terminal?: {
-        create?: (options: { cwd: string; cols: number; rows: number }) => Promise<{ terminalId: string }>;
+        shells?: () => Promise<Array<{ id: string; label: string }>>;
+        create?: (options: { cwd: string; cols: number; rows: number; workspaceId?: string; shellId?: string | null }) => Promise<{ terminalId: string; shellId?: string; shellLabel?: string; cwd?: string }>;
+        killWorkspace?: (workspaceId: string) => Promise<void>;
         write?: (terminalId: string, data: string) => Promise<void>;
         resize?: (terminalId: string, cols: number, rows: number) => Promise<void>;
         kill?: (terminalId: string) => Promise<void>;
