@@ -181,6 +181,7 @@ import { startCaptureService, type CaptureService } from "./capture-client.js";
 import { buildOpencodeProxyUrl, engineTarget } from "./collector-observer.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { startOmniRushModelCatalogSync } from "./omnirush-model-catalog-sync.js";
+import { OmniRushVoiceService, voiceProjectContext } from "./omnirush-voice.js";
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
 import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
@@ -202,6 +203,8 @@ const agentDiagnosticsLastRunByServer = new WeakMap<ServerConfig, Map<string, nu
 const agentDiagnosticsInFlightByServer = new WeakMap<ServerConfig, Set<string>>();
 const commandAdmissionsByServer = new WeakMap<ServerConfig, Map<string, { fingerprint: string; admittedAt: number }>>();
 const captureServicesByServer = new WeakMap<ServerConfig, CaptureService>();
+/** Voice dictation's broker hop (omnirush-voice.ts), per server. */
+const voiceServicesByServer = new WeakMap<ServerConfig, OmniRushVoiceService>();
 
 /** Recent gateway fallbacks per sub-agent session, for the swarm plugin's task-result note. */
 const subagentGatewayFallbacks = new WeakMap<ServerConfig, Map<string, Array<Record<string, unknown>>>>();
@@ -927,6 +930,9 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       });
     },
   });
+  voiceServicesByServer.set(config, new OmniRushVoiceService(gatewayBroker, {
+    log: (level, message, attributes) => logger.log(level, message, attributes),
+  }));
   // Under the desktop the embedding host passes the Electron app version
   // through ServerConfig; a standalone server reports its own version.
   const appVersion = config.appVersion?.trim()
@@ -3611,6 +3617,26 @@ function createRoutes(
     return jsonResponse({
       fallbacks: events.map((event) => ({ ...event, requested_name: name(event.requested_model), used_name: name(event.used_model) })),
     });
+  });
+
+  // Voice dictation (omnirush-voice.ts): whether the account may use it, and
+  // one speech segment at a time forwarded to omnirush.ai. Audio is never
+  // stored, logged or captured; only the text the user sends is a prompt.
+  addRoute(routes, "GET", "/omnirush/voice/status", "client", async (ctx) => {
+    const voice = voiceServicesByServer.get(config);
+    const workspaceId = ctx.url.searchParams.get("workspace")?.trim();
+    const workspace = workspaceId ? config.workspaces.find((entry) => entry.id === workspaceId) : undefined;
+    const [availability, project] = await Promise.all([
+      voice ? voice.availability() : Promise.resolve({ available: false, reason: "voice_unavailable" }),
+      workspace && workspace.workspaceType !== "remote" ? voiceProjectContext(workspace.path) : Promise.resolve({ repo: null, branch: null }),
+    ]);
+    return jsonResponse({ signedIn: voice?.signedIn ?? false, ...availability, ...project });
+  });
+
+  addRoute(routes, "POST", "/omnirush/voice/transcribe", "client", async (ctx) => {
+    const voice = voiceServicesByServer.get(config);
+    if (!voice) throw new ApiError(503, "voice_unavailable", "Voice input is not available.");
+    return voice.transcribe(ctx.request);
   });
 
   addRoute(routes, "GET", "/managed-policy", "client", async () =>
