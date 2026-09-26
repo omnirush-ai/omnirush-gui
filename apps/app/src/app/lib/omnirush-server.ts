@@ -1482,15 +1482,24 @@ async function requestJson<T>(
   );
 
   const text = await response.text();
-  const json = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
+    // The server's readable message when it sent one; a non-JSON error page
+    // (a proxy, a crash) still rejects with the status, not a parse error.
+    let json: { code?: unknown; message?: unknown; details?: unknown } | null = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
     const code = typeof json?.code === "string" ? json.code : "request_failed";
-    const message = typeof json?.message === "string" ? json.message : response.statusText;
+    const message = typeof json?.message === "string" && json.message
+      ? json.message
+      : response.statusText || `Request failed (${response.status})`;
     throw new OmniRushServerError(response.status, code, message, json?.details);
   }
 
-  return json as T;
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 async function requestAgentContextDiagnosticsJson(

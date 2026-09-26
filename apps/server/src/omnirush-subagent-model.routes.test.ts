@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { atomicWriteFs } from "./atomic-write.js";
 import { managedDesktopPolicy } from "./managed-desktop-policy.js";
 import { policyRequestActions } from "./managed-policy-rules.js";
 import { readSubagentModelSetting } from "./omnirush-subagent-model.js";
@@ -104,6 +105,40 @@ describe("sub-agent model routes", () => {
       expect(anonymous.status).toBe(401);
       const fallbacks = await fetch(`${base}/omnirush/subagent-model/fallbacks?session=ses_child`, { headers: policy });
       expect(await fallbacks.json()).toEqual({ fallbacks: [] });
+    });
+  });
+
+  test("a save the disk keeps refusing answers a readable error and keeps the previous setting", async () => {
+    await withServer(async ({ base, config }) => {
+      const client = { authorization: "Bearer token", "content-type": "application/json" };
+      const put = (body: unknown) => fetch(`${base}/omnirush/subagent-model`, { method: "PUT", headers: client, body: JSON.stringify(body) });
+      expect((await put({ model: "gpt-6-astra", effort: "low" })).status).toBe(200);
+
+      const original = { ...atomicWriteFs };
+      let renames = 0;
+      // Windows: antivirus or the indexer holds the file for longer than the retries last.
+      atomicWriteFs.rename = async () => {
+        renames += 1;
+        throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+      };
+      atomicWriteFs.sleep = async () => undefined;
+      let failed: Response;
+      try {
+        failed = await put({ model: "gpt-6-sol", effort: "high" });
+      } finally {
+        Object.assign(atomicWriteFs, original);
+      }
+      expect(failed.status).toBe(500);
+      expect(await failed.json()).toEqual({
+        code: "settings_write_failed",
+        message: "The sub-agent setting could not be saved: EPERM",
+        details: { code: "EPERM" },
+      });
+      expect(renames).toBe(10);
+
+      const read = await fetch(`${base}/omnirush/subagent-model`, { headers: client });
+      expect(((await read.json()) as { setting: unknown }).setting).toEqual({ model: "gpt-6-astra", effort: "low" });
+      expect(await readSubagentModelSetting(config)).toEqual({ model: "gpt-6-astra", effort: "low" });
     });
   });
 
