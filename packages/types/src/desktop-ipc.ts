@@ -308,6 +308,14 @@ export type LocalSkillCard = {
   trigger?: string;
 };
 
+export type SkillFolderRead = {
+  root: string;
+  /** The folder's basename. */
+  name: string;
+  files: Array<{ path: string; contentBase64: string; executable: boolean }>;
+  skipped: string[];
+};
+
 export type LocalSkillContent = {
   path: string;
   content: string;
@@ -616,6 +624,8 @@ export type DesktopCommandMap = {
     args: [projectDir: string, sourceDir: string, options?: { overwrite?: boolean }];
     result: ExecResult;
   };
+  /** Reads a picked/dropped skill folder for upload (links refused, junk skipped, capped). */
+  readSkillFolder: { args: [sourceDir: string]; result: SkillFolderRead };
   installSkillTemplate: {
     args: [projectDir: string, name: string, content: string, options?: { overwrite?: boolean }];
     result: ExecResult;

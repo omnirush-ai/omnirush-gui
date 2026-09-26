@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { t } from "../../../../i18n";
 import { TextInput } from "../../../design-system/text-input";
+import type { SkillBundleInstallResult, SkillBundlePreview, SkillUploadFile } from "../../../../app/lib/skill-upload";
+import { SkillUploadPane } from "./skill-upload-pane";
 
 /**
  * Local workspace skill authoring.
@@ -25,6 +27,10 @@ import { TextInput } from "../../../design-system/text-input";
  * `.opencode/skills/<name>/SKILL.md` through the local server
  * (`POST /workspace/:id/skills`), which validates, audits, and emits the reload
  * event the engine needs.
+ *
+ * "Upload folder or .zip" installs a whole skill folder (SKILL.md plus its
+ * scripts/, references/, assets/ ...) through `POST /workspace/:id/skills/bundle`
+ * after a server-side preview; see skill-upload-pane.tsx.
  */
 
 /** Mirrors the server: kebab-case, 1-64 chars (validators.ts validateSkillName). */
@@ -124,7 +130,16 @@ export type LibraryAddWorkspaceSkillModalProps = {
   onCreate: (draft: WorkspaceSkillDraft) => Promise<void>;
   /** Called after a successful create with the final skill name. */
   onCreated?: (name: string) => void;
+  /** Folder/.zip upload; the Upload tab is offered only when both are given. */
+  onPreviewBundle?: (payload: { files: SkillUploadFile[]; name?: string }) => Promise<SkillBundlePreview>;
+  onInstallBundle?: (payload: {
+    files: SkillUploadFile[];
+    name?: string;
+    onConflict?: "fail" | "replace";
+  }) => Promise<SkillBundleInstallResult>;
 };
+
+export type WorkspaceSkillAddMode = "write" | "upload";
 
 export function LibraryAddWorkspaceSkillModal(props: LibraryAddWorkspaceSkillModalProps) {
   const [name, setName] = useState("");
@@ -133,9 +148,14 @@ export function LibraryAddWorkspaceSkillModal(props: LibraryAddWorkspaceSkillMod
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [mode, setMode] = useState<WorkspaceSkillAddMode>("write");
+  const [uploading, setUploading] = useState(false);
+  const uploadAvailable = Boolean(props.onPreviewBundle && props.onInstallBundle);
 
   useEffect(() => {
     if (!props.open) return;
+    setMode("write");
+    setUploading(false);
     setName("");
     setNameTouched(false);
     setDescription("");
@@ -145,7 +165,7 @@ export function LibraryAddWorkspaceSkillModal(props: LibraryAddWorkspaceSkillMod
   }, [props.open]);
 
   const handleClose = () => {
-    if (submitting) return;
+    if (submitting || uploading) return;
     props.onClose();
   };
 
@@ -200,6 +220,42 @@ export function LibraryAddWorkspaceSkillModal(props: LibraryAddWorkspaceSkillMod
             )}
           </DialogDescription>
         </DialogHeader>
+        {uploadAvailable ? (
+          <div role="group" aria-label={label("extensions.skill_add_mode", "How to add the skill")} className="flex gap-1.5" data-testid="workspace-skill-mode">
+            {([
+              ["write", label("extensions.skill_add_mode_write", "Write SKILL.md")],
+              ["upload", label("extensions.skill_add_mode_upload", "Upload folder or .zip")],
+            ] as const).map(([value, text]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={mode === value}
+                disabled={submitting || uploading}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                  mode === value ? "bg-foreground text-background" : "bg-dls-hover text-dls-secondary hover:text-dls-text"
+                }`}
+                onClick={() => {
+                  setError(null);
+                  setMode(value);
+                }}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {uploadAvailable && mode === "upload" ? (
+          <SkillUploadPane
+            disabled={props.busy}
+            onPreview={props.onPreviewBundle!}
+            onInstall={props.onInstallBundle!}
+            onBusyChange={setUploading}
+            onInstalled={(result) => {
+              props.onCreated?.(result.name);
+              props.onClose();
+            }}
+          />
+        ) : (
         <form
           className="flex flex-col gap-4"
           onSubmit={(event) => {
@@ -264,6 +320,7 @@ export function LibraryAddWorkspaceSkillModal(props: LibraryAddWorkspaceSkillMod
             </Button>
           </DialogFooter>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   );

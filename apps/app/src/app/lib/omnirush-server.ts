@@ -1,3 +1,9 @@
+import type {
+  SkillBundleInstallResult,
+  SkillBundlePreview,
+  SkillFileTree,
+  SkillUploadFile,
+} from "./skill-upload";
 import type { McpStatusMap } from "../types";
 import type { Message, Part, Session, Todo } from "@opencode-ai/sdk/v2/client";
 import {
@@ -2053,6 +2059,37 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         method: "POST",
         body: payload,
       }),
+    /** Validates a skill folder/zip upload without writing it (and reports a name collision). */
+    previewSkillBundle: (workspaceId: string, payload: { files: SkillUploadFile[]; name?: string }) =>
+      requestJson<SkillBundlePreview>(baseUrl, `/workspace/${workspaceId}/skills/bundle/preview`, {
+        token,
+        hostToken,
+        method: "POST",
+        body: payload,
+        timeoutMs: 120_000,
+      }),
+    installSkillBundle: (
+      workspaceId: string,
+      payload: { files: SkillUploadFile[]; name?: string; onConflict?: "fail" | "replace" },
+    ) =>
+      requestJson<SkillBundleInstallResult>(baseUrl, `/workspace/${workspaceId}/skills/bundle`, {
+        token,
+        hostToken,
+        method: "POST",
+        body: payload,
+        timeoutMs: 120_000,
+      }),
+    listSkillFiles: (workspaceId: string, name: string) =>
+      requestJson<SkillFileTree>(baseUrl, `/workspace/${workspaceId}/skills/${encodeURIComponent(name)}/files`, {
+        token,
+        hostToken,
+      }),
+    updateSkillFiles: (workspaceId: string, name: string, payload: { add?: SkillUploadFile[]; remove?: string[] }) =>
+      requestJson<SkillFileTree & { added: string[]; removed: string[] }>(
+        baseUrl,
+        `/workspace/${workspaceId}/skills/${encodeURIComponent(name)}/files`,
+        { token, hostToken, method: "POST", body: payload, timeoutMs: 120_000 },
+      ),
     deleteSkill: (workspaceId: string, name: string) =>
       requestJson<{ path: string }>(
         baseUrl,
