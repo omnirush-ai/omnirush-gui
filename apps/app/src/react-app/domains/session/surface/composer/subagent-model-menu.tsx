@@ -65,14 +65,17 @@ function SubagentModelPicker(props: { client: SubagentModelClient; policyLocked:
         data-testid="subagent-model-trigger"
         aria-label={`Sub-agents: ${summary}`}
         title={props.policyLocked ? SUBAGENT_MENU_POLICY_LOCK : `Sub-agents: ${summary}${unavailable ? " (not available, sub-agents use the main model)" : ""}`}
-        className={`flex h-9 max-h-9 min-w-0 max-w-56 shrink items-center gap-1.5 rounded-md px-2.5 text-sm transition-colors hover:bg-gray-3 ${
+        // An icon (the summary in its tooltip) until the composer is wide
+        // enough for the label, so it never squeezes the model selector.
+        className={`flex h-9 max-h-9 min-w-9 max-w-64 shrink-[4] items-center justify-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm transition-colors hover:bg-gray-3 @min-[720px]/composer:justify-start ${
           unavailable ? "text-orange-600 dark:text-orange-400" : custom ? "text-gray-12" : "text-gray-10 hover:text-gray-12"
         }`}
       >
         {saving ? <LoaderCircle className="size-4 shrink-0 animate-spin" /> : <Users className="size-4 shrink-0" />}
-        <span className="truncate whitespace-nowrap">{custom ? summary : "Sub-agents"}</span>
+        <span data-testid="subagent-model-label" className="hidden min-w-0 truncate whitespace-nowrap @min-[720px]/composer:inline">{custom ? summary : "Sub-agents"}</span>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" sideOffset={10} className="max-h-[min(560px,70vh)] w-[min(340px,calc(100vw-32px))] overflow-y-auto p-2">
+      {/* Capped to the room the positioner measured, so a long menu scrolls inside the viewport instead of running off it. */}
+      <DropdownMenuContent side="top" sideOffset={10} className="max-h-[min(560px,var(--available-height))] w-[min(340px,calc(100vw-32px))] overflow-y-auto p-2">
         <DropdownMenuGroup>
           <DropdownMenuLabel className="px-3 text-sm">Sub-agents: model</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={setting.model ?? SAME}>

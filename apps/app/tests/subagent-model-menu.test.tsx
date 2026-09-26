@@ -25,9 +25,10 @@ if (typeof globalThis.window === "undefined" || typeof globalThis.document === "
 }
 Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
 
-const [{ SubagentModelMenu }, { createOmniRushServerClient, OmniRushServerError }] = await Promise.all([
+const [{ SubagentModelMenu }, { createOmniRushServerClient, OmniRushServerError }, { Popover, PopoverContent, PopoverTrigger }] = await Promise.all([
   import("../src/react-app/domains/session/surface/composer/subagent-model-menu"),
   import("../src/app/lib/omnirush-server"),
+  import("../src/components/ui/popover"),
 ]);
 
 const codex = ["low", "high", "xhigh", "max"];
@@ -45,6 +46,7 @@ function fakeClient(initial: OmniRushSubagentModelSetting, signedIn = true) {
         { id: "gpt-6-sol", name: "GPT 6 Sol", family: "OpenAI", default: false, efforts: codex },
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", family: "OpenAI", default: false, efforts: codex },
         { id: "meta-muse-spark", name: "Meta Muse Spark", family: "Meta Muse", default: false, efforts: ["minimal", "low", "medium", "high", "xhigh"] },
+        { id: "muse-spark-1.1", name: "Muse Spark 1.1", family: "Meta Muse", default: false, efforts: ["minimal", "low", "medium", "high", "xhigh"] },
       ],
     }),
     setSubagentModel: async (next: OmniRushSubagentModelSetting) => {
@@ -171,4 +173,92 @@ test("the server client rejects a failed save with the server's readable message
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+async function settle() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+}
+
+function menu(): HTMLElement | null {
+  return document.querySelector('[data-slot="dropdown-menu-content"]');
+}
+
+function pressOutside(target: Element) {
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    const init = { bubbles: true, cancelable: true, composed: true, button: 0 };
+    target.dispatchEvent(type.startsWith("pointer") ? new PointerEvent(type, { ...init, pointerType: "mouse" }) : new MouseEvent(type, init));
+  }
+}
+
+test("in a narrow composer the chip is an icon that still names the setting, and never squeezes the model selector", async () => {
+  const { client } = fakeClient({ model: "meta-muse-spark", effort: "xhigh" });
+  await mount(<SubagentModelMenu client={client} />);
+  const chip = trigger()!;
+  // The label only shows once the composer container is wide enough; the
+  // icon-only chip keeps the full summary for screen readers and the tooltip.
+  const label = document.querySelector('[data-testid="subagent-model-label"]')!;
+  expect(label.textContent).toBe("Meta Muse Spark · Xhigh");
+  expect(label.className.split(" ")).toEqual(expect.arrayContaining(["hidden", "truncate", "@min-[720px]/composer:inline"]));
+  expect(chip.getAttribute("aria-label")).toBe("Sub-agents: Meta Muse Spark · Xhigh");
+  expect(chip.getAttribute("title")).toBe("Sub-agents: Meta Muse Spark · Xhigh");
+  // It gives up its width before the model selector does, down to the icon.
+  expect(chip.className.split(" ")).toEqual(expect.arrayContaining(["min-w-9", "shrink-[4]", "overflow-hidden"]));
+});
+
+test("the menu lists every model and stays inside the viewport, scrolling instead of running off the top", async () => {
+  const { client } = fakeClient({ model: "meta-muse-spark", effort: "xhigh" });
+  await mount(<SubagentModelMenu client={client} />);
+  await act(async () => { trigger()!.click(); });
+  await settle();
+  const content = menu()!;
+  // Portalled out of the composer, above the toolbar.
+  expect(content.closest("[data-composer-toolbar]")).toBeNull();
+  expect(content.className).toContain("max-h-[min(560px,var(--available-height))]");
+  expect(content.className).toContain("overflow-y-auto");
+  expect(content.className).not.toContain("70vh");
+  for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1"]) {
+    expect(document.querySelector(`[data-testid="subagent-model-${id}"]`)).not.toBeNull();
+  }
+});
+
+test("Escape and an outside click close the menu; opening the model picker leaves only one menu open", async () => {
+  const { client } = fakeClient({ model: null, effort: null });
+  const container = await mount(
+    <div data-composer-toolbar>
+      <Popover>
+        <PopoverTrigger data-testid="model-picker-stand-in">Change model</PopoverTrigger>
+        <PopoverContent data-testid="model-list">GPT 6 Astra</PopoverContent>
+      </Popover>
+      <SubagentModelMenu client={client} />
+      <p data-testid="outside">Describe your task</p>
+    </div>,
+  );
+
+  await act(async () => { trigger()!.click(); });
+  await settle();
+  expect(menu()).not.toBeNull();
+  await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  await settle();
+  expect(menu()).toBeNull();
+
+  await act(async () => { trigger()!.click(); });
+  await settle();
+  expect(menu()).not.toBeNull();
+  await act(async () => { pressOutside(container.querySelector('[data-testid="outside"]')!); });
+  await settle();
+  expect(menu()).toBeNull();
+
+  await act(async () => { trigger()!.click(); });
+  await settle();
+  expect(menu()).not.toBeNull();
+  const modelTrigger = container.querySelector<HTMLElement>('[data-testid="model-picker-stand-in"]')!;
+  await act(async () => { pressOutside(modelTrigger); });
+  await settle();
+  if (!document.querySelector('[data-testid="model-list"]')) {
+    await act(async () => { modelTrigger.click(); });
+    await settle();
+  }
+  expect(menu()).toBeNull();
+  expect(document.querySelector('[data-testid="model-list"]')).not.toBeNull();
+  expect(document.querySelectorAll('[data-slot="dropdown-menu-content"], [data-slot="popover-content"]').length).toBe(1);
 });
