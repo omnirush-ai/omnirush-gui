@@ -45,7 +45,7 @@ async function readCapped(file, size) {
 
 /**
  * @param {string} root absolute folder path
- * @param {{ limits?: typeof SKILL_FOLDER_LIMITS }} [options]
+ * @param {{ limits?: { [K in keyof typeof SKILL_FOLDER_LIMITS]: number } }} [options]
  * @returns {Promise<{ root: string; name: string; files: Array<{ path: string; contentBase64: string; executable: boolean }>; skipped: string[] }>}
  */
 export async function readSkillFolder(root, options = {}) {
