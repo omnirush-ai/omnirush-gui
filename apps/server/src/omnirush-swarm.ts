@@ -101,7 +101,7 @@ export const OMNIRUSH_SWARM_TOOL_NAME = "swarm_board";
 /** The on-demand skill that carries the swarm procedure. */
 export const OMNIRUSH_SWARM_SKILL_NAME = "omnirush-swarm";
 
-export const OMNIRUSH_SWARM_SKILL_DESCRIPTION = `Required before starting ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents for one request (a swarm, or the user asks for several agents): the shared-board procedure. Never for 1-2 sub-agents or a small request.`;
+export const OMNIRUSH_SWARM_SKILL_DESCRIPTION = `Required before starting ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents for one request (a swarm, or the user asks for ${OMNIRUSH_SWARM_MIN_AGENTS}+ agents): the shared-board procedure. Never for 1-2 sub-agents or a small request.`;
 
 /**
  * The main agent's always-on swarm text (part of OMNIRUSH_AGENT_PROMPT). The
@@ -109,18 +109,18 @@ export const OMNIRUSH_SWARM_SKILL_DESCRIPTION = `Required before starting ${OMNI
  */
 export const OMNIRUSH_SWARM_PROMPT = `## Sub-agent swarms
 
-Before you start ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents for one request (large work that splits into ${OMNIRUSH_SWARM_MIN_AGENTS}+ independent parts, or the user asks for a swarm or for several agents), load the \`${OMNIRUSH_SWARM_SKILL_NAME}\` skill first and follow it. Otherwise answer directly, or use at most 1-2 sub-agents with the task tool and no board or coordination file.`;
+Before you start ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents for one request (large work that splits into ${OMNIRUSH_SWARM_MIN_AGENTS}+ independent parts, or the user asks for a swarm or for ${OMNIRUSH_SWARM_MIN_AGENTS}+ agents), load the \`${OMNIRUSH_SWARM_SKILL_NAME}\` skill first and follow it. Otherwise do simple work yourself, or use the 1-2 sub-agents the work needs with the task tool and no board or coordination file.`;
 
 /** The body of the omnirush-swarm skill (without frontmatter). */
 export const OMNIRUSH_SWARM_SKILL = `# Sub-agent swarm
 
-Use this only for a real swarm: ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents working in parallel, or the user asked for a swarm or for several agents. For 1-2 sub-agents, stop here: call the task tool directly and do not create or touch a board.
+Use this only for a real swarm: ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents working in parallel, or the user asked for a swarm or for ${OMNIRUSH_SWARM_MIN_AGENTS}+ agents. For 1-2 sub-agents, stop here: call the task tool directly and do not create or touch a board.
 
 The board is \`${OMNIRUSH_SWARM_FILE}\` in the workspace, never a file in the project root. It is a short status board, not a report: every agent re-reads it, so keep it small. omnirush.ai keeps it out of git and clears it when your turn ends. Ignore any \`swarm.md\` in the project root: it is not this swarm's board.
 
 1. Before delegating, create \`${OMNIRUSH_SWARM_FILE}\` (replace it if one exists) with: \`# Goal\` (at most 3 sentences), \`## Tasks\` (a table: id, task, owner, status, result; ids like T1, T2, and T1.1 for a sub-task of T1; status is todo, running, done or blocked; every cell one short line), \`## Findings\` (empty) and \`## Decisions\` (choices every agent must follow, one line each).
-2. Give each sub-agent one task id. Its task-tool prompt names the id and the task, and says: use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool with your task id (it shows your row and the Decisions, and sets your status, one-line result and at most ${OMNIRUSH_SWARM_FINDINGS_PER_TASK} one-line findings); do not read or edit the board file; report back briefly.
-3. Sub-agents may split their own task: they add sub-task rows (T1.1, T1.2) with \`${OMNIRUSH_SWARM_TOOL_NAME}\` and give the same instructions to their own sub-agents. Sub-agents nest at most ${OMNIRUSH_SUBAGENT_DEPTH} layers deep. There is no limit on how many run at once or start per turn: start as many as the work needs, and no more.
+2. Give each sub-agent one task id. Its task-tool prompt names the id and only its own part of the work (never the user's whole message or instructions about sub-agents), and says: use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool with your task id (it shows your row and the Decisions, and sets your status, one-line result and at most ${OMNIRUSH_SWARM_FINDINGS_PER_TASK} one-line findings); do not read or edit the board file; report back briefly.
+3. Sub-agents do their own task themselves, even long ones. Split a task further only when the user explicitly asked for nested sub-agents: then its prompt tells that sub-agent to add sub-task rows (T1.1, T1.2) with \`${OMNIRUSH_SWARM_TOOL_NAME}\` and gives the same instructions to its own sub-agents. Sub-agents nest at most ${OMNIRUSH_SUBAGENT_DEPTH} layers deep. Start as many sub-agents as the work needs, and no more.
 4. Launch independent tasks in parallel (several task calls in one message); give tasks that edit the same files to one agent.
 5. When every task is done, read \`${OMNIRUSH_SWARM_FILE}\` once, check the results against the task reports, and answer the user. Do not move, copy or archive the board: omnirush.ai does that when the turn ends. Board cells over ${OMNIRUSH_SWARM_CELL_MAX_CHARS} characters, lines over ${OMNIRUSH_SWARM_LINE_MAX_CHARS} and findings past ${OMNIRUSH_SWARM_FINDINGS_PER_TASK} per task are cut.`;
 
@@ -136,21 +136,47 @@ export function omnirushSwarmArchiveName(date: Date = new Date()): string {
 }
 
 /**
- * System text for a sub-agent session of a running swarm (its main session
- * started one and the board exists): every layer follows the board even when
- * a prompt forgot to say so. It never changes during a session, so it never
- * invalidates the model's prompt cache; the board itself comes from the tool.
+ * System text for every sub-agent session (any layer, swarm or not): a
+ * sub-agent does its own task and delegates only when its task is large.
+ * Delegation instructions a main agent copied from the user's message into
+ * a task prompt were meant for the main agent; without this note a sub-agent
+ * obeys them again and the tree grows a layer each time. It depends only on
+ * the layer, so it never changes during a session (prompt cache).
+ */
+export function omnirushSubagentNote(depth: number): string {
+  return [
+    `You are a sub-agent (layer ${depth} of at most ${OMNIRUSH_SUBAGENT_DEPTH}). Do your task yourself.`,
+    "Instructions about sub-agents that the user wrote (how many agents to use, what to delegate) were meant for the main session, which already carried them out: do not repeat them.",
+    depth < OMNIRUSH_SUBAGENT_DEPTH
+      ? "Start sub-agents with the task tool only if your task explicitly tells you to; otherwise do the whole task yourself, even when it is long. Never re-delegate your whole task."
+      : "You cannot delegate further: do the work yourself.",
+  ].join("\n");
+}
+
+/**
+ * Extra system text for a sub-agent session of a running swarm (its main
+ * session started one and the board exists): every layer follows the board
+ * even when a prompt forgot to say so. It never changes during a session, so
+ * it never invalidates the model's prompt cache; the board itself comes from
+ * the tool.
  */
 export function omnirushSwarmSubagentNote(depth: number): string {
   const canDelegate = depth < OMNIRUSH_SUBAGENT_DEPTH;
   return [
-    `You are a sub-agent (layer ${depth} of at most ${OMNIRUSH_SUBAGENT_DEPTH}) in a swarm coordinated through the board \`${OMNIRUSH_SWARM_FILE}\`.`,
+    `You are part of a swarm coordinated through the board \`${OMNIRUSH_SWARM_FILE}\`.`,
     `Do not read, search or edit the board file: use the \`${OMNIRUSH_SWARM_TOOL_NAME}\` tool with your task id (from your prompt); it answers with your rows and the Decisions. Call it once when you start (status running) and once when you finish (status done, a one-line result, at most ${OMNIRUSH_SWARM_FINDINGS_PER_TASK} one-line findings other agents need). Put details in your final report, not on the board. Do not move or archive the board: omnirush.ai does that.`,
-    canDelegate
-      ? `If your task splits into independent parts that each take real effort, you may delegate them with the task tool: add sub-task rows (for example T1.1, T1.2) with \`${OMNIRUSH_SWARM_TOOL_NAME}\` first and give each sub-agent the same instructions. Otherwise do the work yourself.`
-      : "You cannot delegate further: do the work yourself.",
+    ...(canDelegate
+      ? [`If you do delegate part of your task, add sub-task rows (for example T1.1, T1.2) with \`${OMNIRUSH_SWARM_TOOL_NAME}\` first and give each sub-agent the same board instructions.`]
+      : []),
   ].join("\n");
 }
+
+/**
+ * Appended to the engine's task tool description (every agent that has the
+ * tool, main or sub-agent). The engine's own text asks for "highly detailed"
+ * prompts and to launch agents "whenever possible"; this bounds both.
+ */
+export const OMNIRUSH_TASK_TOOL_NOTE = "omnirush.ai: do simple work yourself; start sub-agents only when the user asks for them or the work clearly splits into independent parts. When the user names a number of agents, start exactly that many, all in one message. Each prompt covers only that agent's part and is self-contained: never paste the user's whole message or the user's instructions about sub-agents into it.";
 
 export const OMNIRUSH_SWARM_STATUSES = ["todo", "running", "done", "blocked"] as const;
 export type SwarmTaskStatus = (typeof OMNIRUSH_SWARM_STATUSES)[number];
