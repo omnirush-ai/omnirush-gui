@@ -25,8 +25,9 @@ if (typeof globalThis.window === "undefined" || typeof globalThis.document === "
 }
 Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
 
-const [{ SubagentModelMenu }] = await Promise.all([
+const [{ SubagentModelMenu }, { createOmniRushServerClient, OmniRushServerError }] = await Promise.all([
   import("../src/react-app/domains/session/surface/composer/subagent-model-menu"),
+  import("../src/app/lib/omnirush-server"),
 ]);
 
 const codex = ["low", "high", "xhigh", "max"];
@@ -117,4 +118,57 @@ test("hidden without an omnirush.ai account", async () => {
   expect(trigger()).toBeNull();
   await mount(<SubagentModelMenu client={null} />);
   expect(trigger()).toBeNull();
+});
+
+test("a save the server could not write shows its message and keeps the previous setting", async () => {
+  const { client } = fakeClient({ model: "gpt-6-astra", effort: null });
+  const attempts: OmniRushSubagentModelSetting[] = [];
+  client.setSubagentModel = async (next: OmniRushSubagentModelSetting) => {
+    attempts.push(next);
+    throw new OmniRushServerError(500, "settings_write_failed", "The sub-agent setting could not be saved: EPERM", { code: "EPERM" });
+  };
+  await mount(<SubagentModelMenu client={client} />);
+  expect(trigger()?.textContent).toBe("GPT 6 Astra");
+
+  await act(async () => { trigger()!.click(); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  await act(async () => { document.querySelector<HTMLElement>('[data-testid="subagent-model-gpt-6-sol"]')!.click(); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+
+  expect(attempts).toEqual([{ model: "gpt-6-sol", effort: null }]);
+  expect(toasts).toEqual(["error:The sub-agent setting could not be saved: EPERM"]);
+  // Not shown as saved: the trigger and the checked item stay on the previous model.
+  expect(trigger()?.textContent).toBe("GPT 6 Astra");
+  expect(document.querySelector('[data-testid="subagent-model-gpt-6-astra"]')?.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector('[data-testid="subagent-model-gpt-6-sol"]')?.getAttribute("aria-checked")).toBe("false");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe("The sub-agent setting could not be saved: EPERM");
+});
+
+test("the server client rejects a failed save with the server's readable message", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method: string }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), method: init?.method ?? "GET" });
+    return new Response(
+      JSON.stringify({ code: "settings_write_failed", message: "The sub-agent setting could not be saved: EBUSY", details: { code: "EBUSY" } }),
+      { status: 500, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const server = createOmniRushServerClient({ baseUrl: "http://127.0.0.1:1", token: "token" });
+    const error = await server.setSubagentModel({ model: "gpt-6-sol", effort: "high" }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(OmniRushServerError);
+    expect((error as InstanceType<typeof OmniRushServerError>).status).toBe(500);
+    expect((error as InstanceType<typeof OmniRushServerError>).code).toBe("settings_write_failed");
+    expect((error as Error).message).toBe("The sub-agent setting could not be saved: EBUSY");
+    expect(calls).toEqual([{ url: "http://127.0.0.1:1/omnirush/subagent-model", method: "PUT" }]);
+
+    // A non-JSON error page still rejects with the status, not a JSON parse error.
+    globalThis.fetch = (async () => new Response("<html>bad gateway</html>", { status: 502 })) as unknown as typeof fetch;
+    const proxied = await server.setSubagentModel({ model: null, effort: null }).catch((caught: unknown) => caught);
+    expect(proxied).toBeInstanceOf(OmniRushServerError);
+    expect((proxied as Error).message).toBe("Request failed (502)");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

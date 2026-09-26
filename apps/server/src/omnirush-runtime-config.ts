@@ -15,9 +15,8 @@ import { managedPolicyPluginPath } from "./managed-policy-plugin.js";
  * runtime-DB write — unlike the previous OPENCODE_CONFIG_CONTENT env var,
  * which was frozen at spawn and reverted MCP state on each dispose.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import {
   omnirushExtensionsPreviewPluginPath,
   omnirushCapabilitiesKnowledgePluginPath,
@@ -46,7 +45,7 @@ import {
 import { CONNECT_MCP_SERVER_NAME_PREFIX } from "./connect-mcp-server-catalog.js";
 import { isOmniRushUiMcpRegistryEntry } from "./omnirush-ui-mcp-command.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
-import { OMNIRUSH_SUBAGENT_DEPTH } from "./omnirush-swarm.js";
+import { OMNIRUSH_SUBAGENT_DEPTH, OMNIRUSH_SWARM_SKILL_NAME, omnirushSwarmSkillMarkdown } from "./omnirush-swarm.js";
 import {
   builtinOmniRushModelCatalog,
   engineModelsFromCatalog,
@@ -54,6 +53,7 @@ import {
   readOmniRushModelCatalog,
   type OmniRushModelCatalog,
 } from "./omnirush-model-catalog.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 const INTERNAL_PROVIDER_ID = "omnirush";
 
@@ -131,7 +131,27 @@ export async function buildOmniRushRuntimeConfigObject(
     internalGateway,
     process.env,
     internalGateway && config ? await readOmniRushModelCatalog(config) : undefined,
+    config ? omnirushRuntimeSkillsDir(config) : undefined,
   );
+}
+
+/**
+ * The folder of omnirush.ai's own on-demand skills (the omnirush-swarm skill),
+ * handed to the engine through `skills.paths`. It lives beside the runtime
+ * config file, outside every workspace, so it never shows up in a project.
+ */
+export function omnirushRuntimeSkillsDir(config: ServerConfig): string {
+  return join(runtimeStorageDir(config), "skills");
+}
+
+/** Writes the built-in skills the config points at; unchanged files are left alone. */
+async function writeOmniRushRuntimeSkills(config: ServerConfig): Promise<void> {
+  const directory = join(omnirushRuntimeSkillsDir(config), OMNIRUSH_SWARM_SKILL_NAME);
+  const path = join(directory, "SKILL.md");
+  const content = omnirushSwarmSkillMarkdown();
+  if ((await readFile(path, "utf8").catch(() => undefined)) === content) return;
+  await mkdir(directory, { recursive: true });
+  await writeFileAtomic(path, content);
 }
 
 export function buildOmniRushRuntimeConfigObjectFromSnapshot(
@@ -139,6 +159,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   internalGateway?: InternalGatewayRuntime,
   env: NodeJS.ProcessEnv = process.env,
   catalog: OmniRushModelCatalog = builtinOmniRushModelCatalog(),
+  skillsDir?: string,
 ): Record<string, unknown> {
   const disabledProviders = runtimeDisabledProviderList(runtimeConfig);
   // OMNIRUSH_APPROVALS in the server environment wins over the persisted setting.
@@ -160,6 +181,8 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       ...(runtimeConfig.managedPolicy.allowZenModel !== false ? ["opencode"] : []),
     ] } : {}),
     permission: { ...engineConfig.permission, ...permissions },
+    // omnirush.ai's own on-demand skills (the swarm procedure).
+    ...(skillsDir ? { skills: { paths: [skillsDir] } } : {}),
     default_agent: runtimeConfig.default_agent ?? "omnirush",
     // Sub-agent swarms: sub-agents may delegate again, up to this many layers
     // below the main session (the engine's default of 1 forbids nesting).
@@ -187,8 +210,11 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       // The engine hides the task tool from a sub-agent unless the sub-agent's
       // own permissions mention `task`. Only the general sub-agent gets it;
       // explore stays read-only (a global task rule would reach every agent).
+      // Sub-agents never start a swarm (a running swarm's sub-agents get the
+      // board note from the swarm plugin), so the swarm skill is not listed
+      // in their prompts.
       general: {
-        permission: { task: "allow" },
+        permission: { task: "allow", skill: { [OMNIRUSH_SWARM_SKILL_NAME]: "deny" } },
       },
     },
     plugin: [
@@ -266,13 +292,14 @@ export async function writeOmniRushRuntimeConfigFile(
 ): Promise<OmniRushRuntimeConfigWriteResult> {
   const path = omnirushRuntimeConfigFilePath(config);
   const job = async () => {
+    // The config names the skills folder: write it first, so the engine
+    // never loads a config whose built-in skill is missing.
+    await writeOmniRushRuntimeSkills(config);
     const content = await buildOmniRushRuntimeConfig(config);
     const current = await readFile(path, "utf8").catch(() => undefined);
     if (current === content) return { path, changed: false };
     await mkdir(runtimeStorageDir(config), { recursive: true });
-    const tmp = `${path}.${randomUUID()}.tmp`;
-    await writeFile(tmp, content, "utf8");
-    await rename(tmp, path);
+    await writeFileAtomic(path, content);
     return { path, changed: true };
   };
   const previous = fileWriteQueue.get(path) ?? Promise.resolve();

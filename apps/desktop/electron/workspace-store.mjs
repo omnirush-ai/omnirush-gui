@@ -79,13 +79,36 @@ function parseFirstJsonObject(raw) {
   return { ok: false, value: null };
 }
 
+const RENAME_RETRY_DELAYS_MS = [50, 150, 400, 1_000];
+
+// Windows refuses to replace a file another process holds open for a moment
+// (antivirus, indexer, a concurrent reader): EPERM, EACCES or EBUSY. Those
+// clear on their own, and a lost write here brings a removed workspace back.
+async function renameWithRetry(from, to) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !["EPERM", "EACCES", "EBUSY"].includes(error?.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function writeJsonFileAtomic(outputPath, value) {
   const content = `${JSON.stringify(value, null, 2)}\n`;
   JSON.parse(content);
   await mkdir(path.dirname(outputPath), { recursive: true });
   const tempPath = `${outputPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   await writeFile(tempPath, content, "utf8");
-  await rename(tempPath, outputPath);
+  try {
+    await renameWithRetry(tempPath, outputPath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function readJsonFile(targetPath, fallback) {
@@ -925,10 +948,18 @@ export function createWorkspaceStore({
     return nextState;
   }
 
-  async function mutateWorkspaceState(mutator) {
-    const current = await readWorkspaceState();
-    const next = await mutator({ ...current, workspaces: [...current.workspaces] });
-    return writeWorkspaceState(next);
+  // One read-modify-write at a time: two overlapping ones (a removal and a
+  // selection change) would let the later write put back what the earlier
+  // one removed.
+  let workspaceStateMutations = Promise.resolve();
+  function mutateWorkspaceState(mutator) {
+    const run = workspaceStateMutations.catch(() => undefined).then(async () => {
+      const current = await readWorkspaceState();
+      const next = await mutator({ ...current, workspaces: [...current.workspaces] });
+      return writeWorkspaceState(next);
+    });
+    workspaceStateMutations = run;
+    return run;
   }
 
   async function bootstrapFirstLaunchWorkspace() {

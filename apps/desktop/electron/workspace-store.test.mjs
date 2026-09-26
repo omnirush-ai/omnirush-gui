@@ -424,6 +424,31 @@ test("forgetting a local workspace removes its recovery token", async () => {
   assert.equal(tokens.workspaces[retainedWorkspace].token, "retained");
 });
 
+test("a removal overlapping another workspace change is never undone by it", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "omnirush-workspace-store-"));
+  const userData = path.join(root, "userData");
+  await mkdir(userData, { recursive: true });
+  const workspaces = ["alpha", "beta", "gamma"].map((name) => ({ id: `ws_${name}`, path: path.join(root, name), workspaceType: "local" }));
+  await writeFile(path.join(userData, "omnirush-workspaces.json"), JSON.stringify({ selectedId: "ws_alpha", workspaces }), "utf8");
+  const store = createWorkspaceStore({
+    app: { getPath: (name) => name === "userData" ? userData : root },
+    defaultDenBaseUrl: "https://example.test",
+    defaultRequireSignin: false,
+    forceRequireSignin: false,
+  });
+
+  // The UI selects a workspace while the removal of another is still saving.
+  await Promise.all([
+    store.setSelectedWorkspace("ws_beta"),
+    store.forgetWorkspace("ws_gamma"),
+    store.setRuntimeActiveWorkspace("ws_beta"),
+  ]);
+
+  const saved = JSON.parse(await readFile(path.join(userData, "omnirush-workspaces.json"), "utf8"));
+  assert.deepEqual(saved.workspaces.map((workspace) => workspace.id), ["ws_alpha", "ws_beta"]);
+  assert.equal(saved.selectedId, "ws_beta");
+});
+
 test("desktop bootstrap prefers a newer canonical writtenAt over stale legacy", async () => {
   await withIsolatedBootstrapStore(async ({ store, canonicalPath, legacyPath }) => {
     await writeBootstrapConfig(canonicalPath, {

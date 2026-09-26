@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -613,5 +613,134 @@ describe("workspace OpenCode proxy", () => {
       code: "opencode_unconfigured",
       message: "OpenCode base URL is missing for this workspace",
     });
+  });
+});
+
+// An engine holding a running session with a sub-agent in another folder, as
+// OpenCode answers the reads, aborts and delete the local server sends.
+function startSessionTreeEngine(input: { childDirectory: string; busy?: string[] }) {
+  const requests: Array<{ method: string; pathname: string; directory: string | null }> = [];
+  const running = new Set(input.busy ?? ["ses_parent", "ses_child"]);
+  const deleted = new Set<string>();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      const directory = request.headers.get("x-opencode-directory");
+      requests.push({ method: request.method, pathname: url.pathname, directory });
+      const sessions: Record<string, { directory: string | null; parentID?: string }> = {
+        ses_parent: { directory },
+        ses_child: { directory: input.childDirectory, parentID: "ses_parent" },
+      };
+      if (url.pathname === "/session/status") {
+        return Response.json(Object.fromEntries([...running].map((id) => [id, { type: "busy" }])));
+      }
+      const match = url.pathname.match(/^\/session\/([^/]+)(\/children|\/abort)?$/);
+      const id = match?.[1] ?? "";
+      if (!match || !sessions[id] || deleted.has(id)) return Response.json({ name: "NotFoundError" }, { status: 404 });
+      if (match[2] === "/abort") {
+        running.delete(id);
+        return Response.json(true);
+      }
+      if (match[2] === "/children") {
+        return Response.json(Object.entries(sessions).filter(([, s]) => s.parentID === id).map(([childId, s]) => ({ id: childId, ...s })));
+      }
+      if (request.method === "DELETE") {
+        deleted.add(id);
+        deleted.add("ses_child");
+        return Response.json(true);
+      }
+      return Response.json({ id, ...sessions[id] });
+    },
+  }) as Served;
+  stops.push(() => server.stop(true));
+  return { server, requests, running };
+}
+
+describe("deleting sessions and workspaces", () => {
+  test("a session delete stops the session and its sub-agents first, each in its own folder", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const childDirectory = await createWorkspaceRoot("elsewhere");
+    const engine = startSessionTreeEngine({ childDirectory });
+    const omnirush = await startOmniRushServer({ workspaceRoot, opencodeBaseUrl: `http://127.0.0.1:${engine.server.port}`, readOnly: false });
+
+    const response = await fetch(`http://127.0.0.1:${omnirush.server.port}/workspace/ws_1/opencode/session/ses_parent`, {
+      method: "DELETE",
+      headers: auth(omnirush.token),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toBe(true);
+    expect([...engine.running]).toEqual([]);
+    const aborts = engine.requests.filter((request) => request.pathname.endsWith("/abort"));
+    expect(aborts.map((request) => [request.pathname, request.directory])).toEqual(expect.arrayContaining([
+      ["/session/ses_parent/abort", workspaceRoot],
+      ["/session/ses_child/abort", childDirectory],
+    ]));
+    const deleteIndex = engine.requests.findIndex((request) => request.method === "DELETE");
+    expect(deleteIndex).toBeGreaterThan(Math.max(...aborts.map((request) => engine.requests.indexOf(request))));
+  });
+
+  test("a delete of a session that is already gone still answers the engine's not-found", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const engine = startSessionTreeEngine({ childDirectory: workspaceRoot });
+    const omnirush = await startOmniRushServer({ workspaceRoot, opencodeBaseUrl: `http://127.0.0.1:${engine.server.port}`, readOnly: false });
+
+    const response = await fetch(`http://127.0.0.1:${omnirush.server.port}/workspace/ws_1/opencode/session/ses_missing`, {
+      method: "DELETE",
+      headers: auth(omnirush.token),
+    });
+
+    expect(response.status).toBe(404);
+    expect(engine.requests.filter((request) => request.pathname.endsWith("/abort"))).toEqual([]);
+  });
+
+  test("reading or removing a workspace whose folder was deleted never recreates the folder", async () => {
+    const parent = await createWorkspaceRoot();
+    const workspaceRoot = join(parent, "project");
+    await mkdir(workspaceRoot, { recursive: true });
+    const engine = startSessionTreeEngine({ childDirectory: workspaceRoot, busy: ["ses_parent"] });
+    const omnirush = await startOmniRushServer({ workspaceRoot, opencodeBaseUrl: `http://127.0.0.1:${engine.server.port}`, readOnly: false });
+    omnirush.config.configPath = join(parent, "server.json");
+    const base = `http://127.0.0.1:${omnirush.server.port}`;
+    await rm(workspaceRoot, { recursive: true, force: true });
+
+    const read = await fetch(`${base}/workspace/ws_1/opencode-config?scope=project`, { headers: auth(omnirush.token) });
+    await read.body?.cancel();
+    expect(await stat(workspaceRoot).catch(() => null)).toBeNull();
+
+    const removed = await fetch(`${base}/workspaces/ws_1`, {
+      method: "DELETE",
+      headers: { ...auth(omnirush.token), "X-OmniRush-Host-Token": "owt_host_token" },
+    });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ deleted: true, persisted: true, items: [] });
+    expect(await stat(workspaceRoot).catch(() => null)).toBeNull();
+    // Its running session was stopped before the workspace went away.
+    expect(engine.requests.some((request) => request.pathname === "/session/ses_parent/abort" && request.directory === workspaceRoot)).toBe(true);
+    expect([...engine.running]).toEqual([]);
+    const saved: unknown = JSON.parse(await readFile(join(parent, "server.json"), "utf8"));
+    expect(saved).toMatchObject({ workspaces: [] });
+  });
+
+  test("a workspace removal that cannot be saved keeps the workspace and says so", async () => {
+    const parent = await createWorkspaceRoot();
+    const workspaceRoot = join(parent, "project");
+    await mkdir(workspaceRoot, { recursive: true });
+    const blocker = join(parent, "not-a-directory");
+    await writeFile(blocker, "x");
+    const omnirush = await startOmniRushServer({ workspaceRoot, readOnly: false });
+    omnirush.config.configPath = join(blocker, "server.json");
+    const base = `http://127.0.0.1:${omnirush.server.port}`;
+
+    const removed = await fetch(`${base}/workspaces/ws_1`, {
+      method: "DELETE",
+      headers: { ...auth(omnirush.token), "X-OmniRush-Host-Token": "owt_host_token" },
+    });
+
+    expect(removed.status).toBe(500);
+    expect(await removed.json()).toMatchObject({ code: "workspace_registry_write_failed" });
+    expect(omnirush.config.workspaces.map((workspace) => workspace.id)).toEqual(["ws_1"]);
   });
 });

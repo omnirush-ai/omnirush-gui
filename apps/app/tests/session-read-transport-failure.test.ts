@@ -281,8 +281,13 @@ describe("session read timeouts", () => {
     expect(resolveRequestTimeoutMs(new Request(`${base}/session/status`), 10_000)).toBe(10_000);
     expect(resolveRequestTimeoutMs(new Request(`${base}/session/ses_1/message?limit=140`), 10_000)).toBe(10_000);
     expect(resolveRequestTimeoutMs(new Request(`${base}/session`, { method: "POST" }), 10_000)).toBe(10_000);
-    expect(resolveRequestTimeoutMs(`${base}/session/ses_1`, 10_000, { method: "DELETE" })).toBe(10_000);
     expect(resolveRequestTimeoutMs(new Request(`${base}/session`), 0)).toBe(0);
+  });
+
+  test("a session delete outlasts the server stopping the session's run first", () => {
+    expect(resolveRequestTimeoutMs(`${base}/session/ses_1`, 10_000, { method: "DELETE" })).toBe(30_000);
+    expect(resolveRequestTimeoutMs(new Request(`${base}/session/ses_1`, { method: "DELETE" }), 10_000)).toBe(30_000);
+    expect(resolveRequestTimeoutMs(new Request(`${base}/session/ses_1/message/msg_1`, { method: "DELETE" }), 10_000)).toBe(10_000);
   });
 });
 

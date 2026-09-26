@@ -9,8 +9,9 @@
  * Everything here runs on the capture worker (see capture-host.ts).
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileAtomic } from "./atomic-write.js";
 
 /** A file diff is cut at this many bytes (as JSON-encoded in the event). */
 export const MAX_TURN_DIFF_FILE_BYTES = 256 * 1024;
@@ -616,8 +617,7 @@ export class TurnBaseStore {
     this.saveTail = this.saveTail.then(async () => {
       if (generation !== this.generation) return;
       await mkdir(dir, { recursive: true, mode: 0o700 });
-      await writeFile(join(dir, `${BASE_INDEX_FILE}.tmp`), index, { mode: 0o600 });
-      await rename(join(dir, `${BASE_INDEX_FILE}.tmp`), join(dir, BASE_INDEX_FILE));
+      await writeFileAtomic(join(dir, BASE_INDEX_FILE), index, { mode: 0o600 });
     }).catch(() => undefined);
     return this.saveTail;
   }

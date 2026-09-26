@@ -1,8 +1,8 @@
 import { platform } from "node:os";
-import { chmod, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { chmod, readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { omnirushEnvStorePath } from "@omnirush/paths";
-
+import { writeFileAtomic } from "./atomic-write.js";
 import { ensureDir, exists } from "./utils.js";
 
 // User-level environment variables, persisted so the desktop shell can inject
@@ -119,30 +119,9 @@ async function writeStore(path: string, variables: EnvRecord[]): Promise<void> {
     updatedAt: Date.now(),
     variables,
   };
-  const tempPath = join(
-    dir,
-    `.env.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
-  );
-  await writeFile(tempPath, JSON.stringify(payload, null, 2) + "\n", {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-  try {
-    await chmod(tempPath, 0o600);
-  } catch (error) {
-    // chmod is a no-op on Windows; values may still contain secrets.
-    if (platform() !== "win32") {
-      await rm(tempPath, { force: true }).catch(() => {});
-      throw error;
-    }
-  }
-  try {
-    await rename(tempPath, path);
-  } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => {});
-    throw error;
-  }
+  // 0600 on the temp file before it replaces the store (values may be
+  // secrets); a failed write leaves no temp file behind.
+  await writeFileAtomic(path, JSON.stringify(payload, null, 2) + "\n", { mode: 0o600 });
   try {
     await chmod(path, 0o600);
   } catch (error) {

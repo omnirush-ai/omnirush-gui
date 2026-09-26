@@ -255,7 +255,14 @@ export async function createTaskRecovery(
         observingSince.set(key(record), Date.now());
       }
       await persist();
-      const response = await serializedSend();
+      // Stop and delete never queue behind the session's in-flight mutations:
+      // a synchronous shell command or compaction holds its slot until it
+      // ends, which is exactly what the person is trying to stop or discard.
+      // The record above is already invalidated, so a queued recovery send
+      // for this session cancels itself instead of racing them.
+      const interrupts = (req.method === "DELETE" && suffix === "")
+        || (req.method === "POST" && /^\/(?:abort|interrupt)$/.test(suffix));
+      const response = await (interrupts ? send() : serializedSend());
       if (current(record) && !response.ok) { remove(record); await persist(); }
       return response;
     },

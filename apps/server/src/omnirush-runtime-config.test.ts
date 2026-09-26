@@ -8,13 +8,22 @@ import {
   buildOmniRushRuntimeConfigObjectFromSnapshot,
   keepOmniRushRuntimeConfigFileFresh,
   omnirushRuntimeConfigFilePath,
+  omnirushRuntimeSkillsDir,
   writeOmniRushRuntimeConfigFile,
 } from "./omnirush-runtime-config.js";
 import { writeGlobalRuntimeOpencodeConfig, writeRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
 import { rulesFromPermissionConfig, winningRule } from "./effective-permissions.js";
 import { backendCatalogBody } from "./__fixtures__/omnirush-model-catalog.js";
 import { MAX_COLLECTOR_CHILD_SESSION_DEPTH } from "./workspace-collector.js";
-import { OMNIRUSH_SUBAGENT_DEPTH, OMNIRUSH_SWARM_MAX_PER_TURN, OMNIRUSH_SWARM_MAX_RUNNING } from "./omnirush-swarm.js";
+import {
+  OMNIRUSH_SUBAGENT_DEPTH,
+  OMNIRUSH_SWARM_MAX_PER_TURN,
+  OMNIRUSH_SWARM_MAX_RUNNING,
+  OMNIRUSH_SWARM_SKILL,
+  OMNIRUSH_SWARM_SKILL_NAME,
+  omnirushSwarmSkillMarkdown,
+} from "./omnirush-swarm.js";
+import { parseFrontmatter } from "./frontmatter.js";
 import {
   sanitizeOmniRushModelCatalog,
   writeOmniRushModelCatalog,
@@ -341,7 +350,7 @@ describe("omnirush runtime config file", () => {
       const agents = parsed.agent as Record<string, { permission?: Record<string, unknown>; prompt?: string; mode?: string }>;
       // A sub-agent keeps the task tool only when its own rules mention it:
       // only general does; no global task rule reaches explore.
-      expect(agents.general).toEqual({ permission: { task: "allow" } });
+      expect(agents.general).toEqual({ permission: { task: "allow", skill: { [OMNIRUSH_SWARM_SKILL_NAME]: "deny" } } });
       expect(agents.explore).toBeUndefined();
       expect((parsed.permission as Record<string, unknown>).task).toBeUndefined();
       expect(agents.omnirush?.permission?.task).toBeUndefined();
@@ -349,12 +358,43 @@ describe("omnirush runtime config file", () => {
     }
     const prompt = (buildOmniRushRuntimeConfigObjectFromSnapshot({}).agent as Record<string, { prompt: string }>).omnirush!.prompt;
     expect(prompt).toContain("## Sub-agent swarms");
-    expect(prompt).toContain("Never start a swarm for a small or quick request.");
-    expect(prompt).toContain("`swarm.md` at the workspace root");
-    expect(prompt).toContain("There is no limit on how many run at once or start per turn");
     expect(OMNIRUSH_SWARM_MAX_RUNNING).toBe(Number.POSITIVE_INFINITY);
     expect(OMNIRUSH_SWARM_MAX_PER_TURN).toBe(Number.POSITIVE_INFINITY);
     expect(prompt.indexOf("## Sub-agent swarms")).toBeLessThan(prompt.indexOf("## Editing files"));
+  });
+
+  test("the always-on prompt only says when to load the swarm skill; the board procedure is the skill", () => {
+    const prompt = (buildOmniRushRuntimeConfigObjectFromSnapshot({}).agent as Record<string, { prompt: string }>).omnirush!.prompt;
+    const section = prompt.slice(prompt.indexOf("## Sub-agent swarms"), prompt.indexOf("## Editing files"));
+    expect(section).toContain(`load the \`${OMNIRUSH_SWARM_SKILL_NAME}\` skill first`);
+    expect(section).toContain("Before you start 3 or more sub-agents for one request");
+    expect(section).toContain("at most 1-2 sub-agents with the task tool and no board");
+    // No board mechanics on every request: no file name, no table, no layers.
+    expect(prompt).not.toContain("swarm.md");
+    expect(prompt).not.toContain("## Tasks");
+    expect(section.length).toBeLessThan(400);
+    // The skill carries the procedure, with the board under .omnirush/.
+    expect(OMNIRUSH_SWARM_SKILL).toContain("`.omnirush/swarm.md`");
+    expect(OMNIRUSH_SWARM_SKILL).toContain("never a file in the project root");
+    expect(OMNIRUSH_SWARM_SKILL).toContain("For 1-2 sub-agents, stop here");
+    expect(OMNIRUSH_SWARM_SKILL).toContain("`.omnirush/swarms/<YYYYMMDD-HHMMSS>.md`");
+    expect(OMNIRUSH_SWARM_SKILL).toContain("There is no limit on how many run at once or start per turn");
+    const { data, body } = parseFrontmatter(omnirushSwarmSkillMarkdown());
+    expect(data.name).toBe(OMNIRUSH_SWARM_SKILL_NAME);
+    expect(String(data.description)).toContain("Required before starting 3 or more sub-agents for one request");
+    expect(body.trim()).toBe(OMNIRUSH_SWARM_SKILL);
+  });
+
+  test("the engine loads the swarm skill from the runtime folder", async () => {
+    const { root, config } = await setup();
+    const { path } = await writeOmniRushRuntimeConfigFile(config);
+    const parsed = JSON.parse(await readFile(path, "utf8")) as { skills?: { paths?: string[] } };
+    const skillsDir = omnirushRuntimeSkillsDir(config);
+    expect(skillsDir.startsWith(root)).toBe(true);
+    expect(parsed.skills?.paths).toEqual([skillsDir]);
+    expect(await readFile(join(skillsDir, OMNIRUSH_SWARM_SKILL_NAME, "SKILL.md"), "utf8")).toBe(omnirushSwarmSkillMarkdown());
+    // Without a server config (specs, previews) nothing points at a folder.
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}).skills).toBeUndefined();
   });
 
   test("keepOmniRushRuntimeConfigFileFresh rewrites the file on ENGINE_GLOBAL writes", async () => {

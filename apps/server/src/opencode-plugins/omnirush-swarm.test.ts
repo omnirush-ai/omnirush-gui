@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OmniRushSwarm } from "./omnirush-swarm.js";
 import {
   OMNIRUSH_SUBAGENT_DEPTH,
+  OMNIRUSH_SWARM_FILE,
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
+  OMNIRUSH_SWARM_SKILL_NAME,
 } from "../omnirush-swarm.js";
 
 type Hooks = Awaited<ReturnType<typeof OmniRushSwarm>>;
@@ -37,6 +40,19 @@ const created = (hooks: Hooks, id: string, parentID?: string) =>
   hooks.event({ event: { type: "session.created", properties: { info: { id, ...(parentID ? { parentID } : {}) } } } });
 const task = (hooks: Hooks, sessionID: string, callID: string) =>
   hooks["tool.execute.before"]({ tool: "task", sessionID, callID });
+const loadSwarmSkill = (hooks: Hooks, sessionID: string) =>
+  hooks["tool.execute.before"]({ tool: "skill", sessionID, callID: `skill_${sessionID}` }, { args: { name: OMNIRUSH_SWARM_SKILL_NAME } });
+const idle = (hooks: Hooks, sessionID: string) =>
+  hooks.event({ event: { type: "session.status", properties: { sessionID, status: { type: "idle" } } } });
+const writeBoard = async (directory: string, text = "# Goal\n") => {
+  await mkdir(join(directory, ".omnirush"), { recursive: true });
+  await writeFile(join(directory, OMNIRUSH_SWARM_FILE), text);
+};
+const systemOf = (hooks: Hooks) => async (sessionID: string) => {
+  const output = { system: ["base"] };
+  await hooks["experimental.chat.system.transform"]({ sessionID }, output);
+  return output.system.slice(1).join("\n");
+};
 const partDone = (hooks: Hooks, callID: string, status = "completed") =>
   hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "tool", tool: "task", callID, state: { status } } } } });
 
@@ -64,28 +80,94 @@ describe("omnirush swarm plugin", () => {
     expect(reads.filter((id) => id === "ses_a")).toHaveLength(1);
   });
 
-  test("reminds sub-agents, not the main session, of swarm.md while it exists", async () => {
+  test("reminds sub-agents of a running swarm, not the main session, of the board while it exists", async () => {
     const { hooks, directory } = await setup();
     await created(hooks, "ses_main");
     await created(hooks, "ses_child", "ses_main");
     await created(hooks, "ses_grand", "ses_child");
     await created(hooks, "ses_great", "ses_grand");
-    const system = async (sessionID: string) => {
-      const output = { system: ["base"] };
-      await hooks["experimental.chat.system.transform"]({ sessionID }, output);
-      return output.system.slice(1).join("\n");
-    };
+    const system = systemOf(hooks);
+    await loadSwarmSkill(hooks, "ses_main");
     expect(await system("ses_child")).toBe("");
-    await writeFile(join(directory, "swarm.md"), "# Goal\n");
+    await writeBoard(directory);
     expect(await system("ses_main")).toBe("");
     const child = await system("ses_child");
     expect(child).toContain("layer 1 of at most 3");
-    expect(child).toContain("Read `swarm.md` before you start");
+    expect(child).toContain("Read `.omnirush/swarm.md` before you start");
     expect(child).toContain("you may delegate");
     expect(await system("ses_grand")).toContain("layer 2 of at most 3");
     const great = await system("ses_great");
     expect(great).toContain(`layer ${OMNIRUSH_SUBAGENT_DEPTH} of at most ${OMNIRUSH_SUBAGENT_DEPTH}`);
     expect(great).toContain("You cannot delegate further");
+  });
+
+  test("1-2 plain task calls get no board note, whatever board files exist", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await created(hooks, "ses_child", "ses_main");
+    await task(hooks, "ses_main", "c1");
+    // A root swarm.md from an older version and a board no swarm of this session started.
+    await writeFile(join(directory, "swarm.md"), "# Goal\nold\n");
+    await writeBoard(directory);
+    expect(await systemOf(hooks)("ses_child")).toBe("");
+  });
+
+  test("writing the board marks the swarm too, and keeps the board out of git", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await created(hooks, "ses_child", "ses_main");
+    await hooks["tool.execute.before"]({ tool: "write", sessionID: "ses_main", callID: "w1" }, { args: { filePath: join(directory, ".omnirush", "swarm.md"), content: "# Goal\n" } });
+    await writeBoard(directory);
+    expect(await systemOf(hooks)("ses_child")).toContain("`.omnirush/swarm.md`");
+    expect(await readFile(join(directory, ".omnirush", ".gitignore"), "utf8")).toContain("/swarm.md\n/swarms/\n");
+  });
+
+  test("a user's own .omnirush/.gitignore only gains the board lines", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await mkdir(join(directory, ".omnirush"), { recursive: true });
+    await writeFile(join(directory, ".omnirush", ".gitignore"), "cache/");
+    await loadSwarmSkill(hooks, "ses_main");
+    expect(await readFile(join(directory, ".omnirush", ".gitignore"), "utf8")).toBe("cache/\n/swarm.md\n/swarms/\n");
+    await created(hooks, "ses_other");
+    await loadSwarmSkill(hooks, "ses_other");
+    expect(await readFile(join(directory, ".omnirush", ".gitignore"), "utf8")).toBe("cache/\n/swarm.md\n/swarms/\n");
+  });
+
+  test("a stale board is archived when a swarm starts, and the board is archived when the swarm's main session goes idle", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_old");
+    await created(hooks, "ses_main");
+    await created(hooks, "ses_child", "ses_main");
+    await writeBoard(directory, "# Goal\nstale\n");
+    await loadSwarmSkill(hooks, "ses_main");
+    expect(existsSync(join(directory, OMNIRUSH_SWARM_FILE))).toBe(false);
+    const archived = await readdir(join(directory, ".omnirush", "swarms"));
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatch(/^\d{8}-\d{6}\.md$/);
+    await writeBoard(directory, "# Goal\nlive\n");
+    // Another session going idle leaves the running swarm's board alone.
+    await idle(hooks, "ses_old");
+    await idle(hooks, "ses_child");
+    expect(existsSync(join(directory, OMNIRUSH_SWARM_FILE))).toBe(true);
+    await idle(hooks, "ses_main");
+    expect(existsSync(join(directory, OMNIRUSH_SWARM_FILE))).toBe(false);
+    const after = await readdir(join(directory, ".omnirush", "swarms"));
+    expect(after).toHaveLength(2);
+    const contents = await Promise.all(after.map((name) => readFile(join(directory, ".omnirush", "swarms", name), "utf8")));
+    expect(contents.some((text) => text.includes("live"))).toBe(true);
+    // The swarm is over: its sub-agents hear of no board, and a later small request finds none.
+    await writeBoard(directory);
+    expect(await systemOf(hooks)("ses_child")).toBe("");
+  });
+
+  test("the root swarm.md of older versions is never moved", async () => {
+    const { hooks, directory } = await setup();
+    await created(hooks, "ses_main");
+    await writeFile(join(directory, "swarm.md"), "# Goal\nuser file\n");
+    await loadSwarmSkill(hooks, "ses_main");
+    await idle(hooks, "ses_main");
+    expect(await readFile(join(directory, "swarm.md"), "utf8")).toBe("# Goal\nuser file\n");
   });
 });
 

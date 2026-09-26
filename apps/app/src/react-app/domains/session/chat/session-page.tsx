@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ConfirmModal } from "../../../design-system/modals/confirm-modal";
+import { toast } from "@/components/ui/sonner";
 import { usePlatform } from "../../../kernel/platform";
 import { useDenAuth } from "../../cloud/den-auth-provider";
 import ProviderAuthModal, { type ProviderAuthModalProps } from "../../connections/provider-auth/provider-auth-modal";
@@ -1331,16 +1332,29 @@ export function SessionPage(props: SessionPageProps) {
     }
   };
 
-  const confirmDelete = async () => {
-    const sessionId = sessionActionId;
-    if (!sessionId || !props.onDeleteSession) return;
+  const deleteSession = async (sessionId: string) => {
+    if (!props.onDeleteSession) return;
     setDeleteBusy(true);
     try {
       await props.onDeleteSession(sessionId);
       setDeleteOpen(false);
+    } catch (error) {
+      // A delete never fails silently: say why and offer the same delete again.
+      toast.error(t("session.delete_failed"), {
+        id: `session-delete:${sessionId}`,
+        duration: 30_000,
+        description: error instanceof Error && error.message ? error.message : t("common.something_went_wrong"),
+        action: { label: t("common.retry"), onClick: () => void deleteSession(sessionId) },
+      });
     } finally {
       setDeleteBusy(false);
     }
+  };
+
+  const confirmDelete = async () => {
+    const sessionId = sessionActionId;
+    if (!sessionId) return;
+    await deleteSession(sessionId);
   };
 
   const sidePanelContent = activeSidePanel === "extensions" && props.settingsSlot ? (

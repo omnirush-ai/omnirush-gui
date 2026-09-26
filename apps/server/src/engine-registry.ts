@@ -14,13 +14,13 @@
  * prove the port now belongs to someone else.
  */
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { runtimeStorageDir } from "./runtime-db.js";
 import { loopbackFetch } from "./server-fetch.js";
 import type { ServerConfig } from "./types.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 export type EngineInstanceRole = "starting" | "primary" | "draining";
 
@@ -128,13 +128,9 @@ async function mutateRegistry(
     const entries = mutate(await readRegistryFile(path));
     const payload: EngineRegistryFile = { version: 1, entries };
     await mkdir(runtimeStorageDir(config), { recursive: true });
-    const tmp = `${path}.${randomUUID()}.tmp`;
     // 0600: the auth probe header embeds this spawn's engine credentials.
-    await writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    await rename(tmp, path).catch(async (error) => {
-      await rm(tmp, { force: true }).catch(() => undefined);
-      throw error;
-    });
+    // A failed write leaves no temp file behind and rejects this job only.
+    await writeFileAtomic(path, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
     return entries;
   };
   const previous = registryWriteQueue.get(path) ?? Promise.resolve();

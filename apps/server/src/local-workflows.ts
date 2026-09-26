@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { omnirushServerDataDir } from "@omnirush/paths";
 import type { LocalAvailableModel, LocalModelRef, LocalRouteCategory, LocalRouteDecision, LocalRoutingSettings, LocalWorkflow, LocalWorkflowInput, LocalWorkflowRun, LocalWorkflowRunStep, LocalWorkflowState, LocalWorkflowsSnapshot } from "@omnirush/types/local-workflows";
@@ -9,6 +9,7 @@ import { recordAudit } from "./audit.js";
 import type { Actor, ServerConfig, WorkspaceInfo } from "./types.js";
 import { managedDesktopPolicy } from "./managed-desktop-policy.js";
 import type { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { writeFileAtomic } from "./atomic-write.js";
 
 type Engine = ReturnType<typeof createOpencodeClient>;
 type EngineFactory = (config: ServerConfig, workspace: WorkspaceInfo, options?: { sessionId?: string }) => Engine;
@@ -114,8 +115,7 @@ export class LocalWorkflowService {
   }
   private async persist(workspace: WorkspaceInfo, state: LocalWorkflowState): Promise<void> {
     const path = this.path(workspace); await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(state), { encoding: "utf8", mode: 0o600 }); await rename(temporary, path);
+    await writeFileAtomic(path, JSON.stringify(state), { mode: 0o600 });
   }
   private async mutate<T>(workspace: WorkspaceInfo, fn: (state: LocalWorkflowState) => T): Promise<T> {
     const prior = this.queues.get(workspace.id) ?? Promise.resolve();

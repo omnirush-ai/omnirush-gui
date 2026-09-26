@@ -65,6 +65,7 @@ import {
 import { deleteSkill, listSkills, renderSkillContentForResponse, upsertSkill } from "./skills.js";
 import { deleteCommand, listCommands, repairCommands, upsertCommand } from "./commands.js";
 import { ApiError, formatError } from "./errors.js";
+import { errorCode } from "./atomic-write.js";
 import { readJsoncFile, updateJsoncTopLevel, writeJsoncFile } from "./jsonc.js";
 import { recordAudit, readAuditEntries, readLastAudit } from "./audit.js";
 import { ReloadEventStore } from "./events.js";
@@ -171,6 +172,7 @@ import {
   subagentModelRefusals,
   writeSubagentModelSetting,
   type EngineModelRef,
+  type SubagentModelSetting,
 } from "./omnirush-subagent-model.js";
 import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
@@ -181,6 +183,7 @@ import { startCaptureService, type CaptureService } from "./capture-client.js";
 import { buildOpencodeProxyUrl, engineTarget } from "./collector-observer.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { startOmniRushModelCatalogSync } from "./omnirush-model-catalog-sync.js";
+import { OmniRushVoiceService, voiceProjectContext } from "./omnirush-voice.js";
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
 import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
@@ -202,6 +205,8 @@ const agentDiagnosticsLastRunByServer = new WeakMap<ServerConfig, Map<string, nu
 const agentDiagnosticsInFlightByServer = new WeakMap<ServerConfig, Set<string>>();
 const commandAdmissionsByServer = new WeakMap<ServerConfig, Map<string, { fingerprint: string; admittedAt: number }>>();
 const captureServicesByServer = new WeakMap<ServerConfig, CaptureService>();
+/** Voice dictation's broker hop (omnirush-voice.ts), per server. */
+const voiceServicesByServer = new WeakMap<ServerConfig, OmniRushVoiceService>();
 
 /** Recent gateway fallbacks per sub-agent session, for the swarm plugin's task-result note. */
 const subagentGatewayFallbacks = new WeakMap<ServerConfig, Map<string, Array<Record<string, unknown>>>>();
@@ -874,6 +879,57 @@ function collectorDeletedSessionId(method: string, proxyPath: string): string | 
   return match?.[1] ? decodeEngineRouteParam(match[1]) : null;
 }
 
+type EngineRequestTarget = { baseUrl: string; headers: Headers };
+
+const SESSION_STOP_TIMEOUT_MS = 5_000;
+const SESSION_STOP_MAX_SESSIONS = 100;
+
+async function engineJson(target: EngineRequestTarget, path: string, directory: string | null, init?: { method: string }): Promise<unknown> {
+  const scoped = scopeWorkspaceOpencodeRequest(target.headers, "", directory);
+  const response = await loopbackFetch(buildOpencodeProxyUrl(target.baseUrl, path, scoped.search), {
+    method: init?.method ?? "GET",
+    headers: scoped.headers,
+    signal: AbortSignal.timeout(SESSION_STOP_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  return response.json().catch(() => null);
+}
+
+/**
+ * The engine's session delete removes the records and cancels background
+ * jobs, not the session's own run: a turn inside a long tool call goes on
+ * running (and writing into the folder) with its status stuck on busy, which
+ * also parks every engine restart that waits for running sessions. Abort the
+ * session and its sub-agent sessions first, each in its own folder's engine
+ * instance (the one its run lives in) and on every engine that may run it.
+ * Best effort and bounded: the delete goes ahead whatever this finds.
+ */
+async function stopSessionTreeBeforeDelete(targets: EngineRequestTarget[], sessionId: string, requestDirectory: string | null): Promise<void> {
+  await Promise.all(targets.map(async (target) => {
+    const sessions: Array<{ id: string; directory: string | null }> = [];
+    const queue = [sessionId];
+    const seen = new Set<string>();
+    while (queue.length > 0 && sessions.length < SESSION_STOP_MAX_SESSIONS) {
+      const id = queue.shift() ?? "";
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const info = await engineJson(target, `/session/${encodeURIComponent(id)}`, requestDirectory).catch(() => null);
+      if (!isRecord(info)) continue;
+      sessions.push({ id, directory: typeof info.directory === "string" && info.directory.trim() ? info.directory : null });
+      const children = await engineJson(target, `/session/${encodeURIComponent(id)}/children`, requestDirectory).catch(() => null);
+      if (Array.isArray(children)) {
+        for (const child of children) if (isRecord(child) && typeof child.id === "string") queue.push(child.id);
+      }
+    }
+    await Promise.all(sessions.map((session) =>
+      engineJson(target, `/session/${encodeURIComponent(session.id)}/abort`, session.directory, { method: "POST" }).catch(() => null),
+    ));
+  }));
+}
+
 export async function startServer(config: ServerConfig): Promise<ServeResult> {
   let taskRecovery: Awaited<ReturnType<typeof createTaskRecovery>> | undefined;
   const approvals = new ApprovalService(config.approval);
@@ -927,6 +983,9 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       });
     },
   });
+  voiceServicesByServer.set(config, new OmniRushVoiceService(gatewayBroker, {
+    log: (level, message, attributes) => logger.log(level, message, attributes),
+  }));
   // Under the desktop the embedding host passes the Electron app version
   // through ServerConfig; a standalone server reports its own version.
   const appVersion = config.appVersion?.trim()
@@ -2113,6 +2172,15 @@ export async function proxyOpencodeRequest(input: {
     return response;
   };
 
+  if (deletedCollectedSessionId && workspace && workspace.workspaceType !== "remote") {
+    await stopSessionTreeBeforeDelete(
+      pool
+        ? pool.connections().map((connection) => ({ baseUrl: connection.baseUrl, headers: headersForEngineConnection(headers, connection) }))
+        : [{ baseUrl, headers }],
+      deletedCollectedSessionId,
+      directory,
+    );
+  }
   if (workspace && workspace.workspaceType !== "remote" && isPromptAsyncProxyRequest(method, proxyPath)) {
     return withEngineDirectoryFence(input.config, workspace, forwardAndCollect);
   }
@@ -2867,6 +2935,7 @@ function createRoutes(
         serverState: activeEngineMcpServerState(routeConfig),
         trigger: "workspace_activate",
       }),
+    stopWorkspaceWork: stopWorkspaceEngineWork,
   });
 
   registerSessionGroupRoutes({
@@ -3571,7 +3640,15 @@ function createRoutes(
     if ((body.model && !setting.model) || (body.effort && !setting.effort)) {
       throw new ApiError(400, "invalid_payload", "unknown model id or effort");
     }
-    return jsonResponse({ ok: true, setting: await writeSubagentModelSetting(config, setting) });
+    let saved: SubagentModelSetting;
+    try {
+      saved = await writeSubagentModelSetting(config, setting);
+    } catch (error) {
+      // Never a silent success: the app shows this and keeps the previous setting.
+      const code = errorCode(error);
+      throw new ApiError(500, "settings_write_failed", `The sub-agent setting could not be saved: ${code}`, { code });
+    }
+    return jsonResponse({ ok: true, setting: saved });
   });
 
   addRoute(routes, "POST", "/omnirush/subagent-model/resolve", "policy", async (ctx) => {
@@ -3611,6 +3688,26 @@ function createRoutes(
     return jsonResponse({
       fallbacks: events.map((event) => ({ ...event, requested_name: name(event.requested_model), used_name: name(event.used_model) })),
     });
+  });
+
+  // Voice dictation (omnirush-voice.ts): whether the account may use it, and
+  // one speech segment at a time forwarded to omnirush.ai. Audio is never
+  // stored, logged or captured; only the text the user sends is a prompt.
+  addRoute(routes, "GET", "/omnirush/voice/status", "client", async (ctx) => {
+    const voice = voiceServicesByServer.get(config);
+    const workspaceId = ctx.url.searchParams.get("workspace")?.trim();
+    const workspace = workspaceId ? config.workspaces.find((entry) => entry.id === workspaceId) : undefined;
+    const [availability, project] = await Promise.all([
+      voice ? voice.availability() : Promise.resolve({ available: false, reason: "voice_unavailable" }),
+      workspace && workspace.workspaceType !== "remote" ? voiceProjectContext(workspace.path) : Promise.resolve({ repo: null, branch: null }),
+    ]);
+    return jsonResponse({ signedIn: voice?.signedIn ?? false, ...availability, ...project });
+  });
+
+  addRoute(routes, "POST", "/omnirush/voice/transcribe", "client", async (ctx) => {
+    const voice = voiceServicesByServer.get(config);
+    if (!voice) throw new ApiError(503, "voice_unavailable", "Voice input is not available.");
+    return voice.transcribe(ctx.request);
   });
 
   addRoute(routes, "GET", "/managed-policy", "client", async () =>
@@ -4685,7 +4782,7 @@ async function resolveWorkspace(config: ServerConfig, id: string): Promise<Works
   const workspace = await resolveWorkspaceWithoutBootstrap(config, id);
   const resolvedWorkspace = workspace.path;
   if (!config.readOnly) {
-    const ensured = await ensureWorkspaceFiles(resolvedWorkspace, workspace.preset ?? "starter");
+    const ensured = await ensureWorkspaceFiles(resolvedWorkspace, workspace.preset ?? "starter", { createMissing: false });
     const bootstrapReloadReasons = new Set<ReloadReason>(ensured.reloadReasons);
     if (await repairCommands(resolvedWorkspace)) {
       bootstrapReloadReasons.add("commands");
@@ -5237,6 +5334,50 @@ async function disposeIdleEngineInstance(
     signal: AbortSignal.timeout(opencodeDisposeTimeoutMs()),
   });
   if (!response.ok) throw new Error(`OpenCode instance dispose failed with status ${response.status}`);
+}
+
+/**
+ * Before a local workspace is removed: abort its running sessions and, on the
+ * engines this server manages, dispose its per-folder instance, so no agent
+ * run, tool process, file watcher or open handle keeps writing into the
+ * folder (and bringing it back after the person deletes it) or keeps it
+ * locked on Windows. Bounded; a failure never blocks the removal.
+ */
+async function stopWorkspaceEngineWork(config: ServerConfig, workspace: WorkspaceInfo): Promise<void> {
+  const directory = resolveOpencodeDirectory(workspace);
+  if (!directory) return;
+  const pool = enginePoolForConfig(config);
+  const connection = pool ? null : resolveWorkspaceOpencodeConnection(config, workspace);
+  const targets: EngineRequestTarget[] = pool
+    ? pool.connections().map((entry) => ({
+        baseUrl: entry.baseUrl,
+        headers: new Headers({ Authorization: buildEngineAuthProbeHeader(entry.username, entry.password) }),
+      }))
+    : connection?.baseUrl?.trim()
+      ? [{ baseUrl: connection.baseUrl.trim(), headers: new Headers(connection.authHeader ? { Authorization: connection.authHeader } : {}) }]
+      : [];
+  await Promise.all(targets.map(async (target) => {
+    const statuses = await engineJson(target, "/session/status", directory).catch(() => null);
+    const busy = isRecord(statuses)
+      ? Object.entries(statuses).flatMap(([id, status]) => isRecord(status) && status.type !== "idle" ? [id] : [])
+      : [];
+    await Promise.all(busy.map((id) =>
+      engineJson(target, `/session/${encodeURIComponent(id)}/abort`, directory, { method: "POST" }).catch(() => null),
+    ));
+    if (!pool) return;
+    await loopbackFetch(buildOpencodeReloadUrl(target.baseUrl, directory), {
+      method: "POST",
+      headers: target.headers,
+      signal: AbortSignal.timeout(Math.min(opencodeDisposeTimeoutMs(), 2 * SESSION_STOP_TIMEOUT_MS)),
+    }).then((response) => response.body?.cancel()).catch((error: unknown) => {
+      createServerLogger(config).log("warn", "Engine instance dispose for a removed workspace failed.", {
+        "workspace.id": workspace.id,
+        "error.message": error instanceof Error ? error.message : String(error),
+      });
+    });
+  }));
+  const mcpState = activeEngineMcpServerState(config);
+  if (mcpState) invalidateEngineMcpWorkspace(mcpState, workspace.id);
 }
 
 /**

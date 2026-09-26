@@ -7,7 +7,7 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
   OAuthError,
@@ -51,6 +51,7 @@ import {
   createLocalManagedMcpGuardedFetch,
   LocalManagedMcpPrivateUrlError,
 } from "./local-managed-mcp-url-guard.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 type LocalManagedMcpStatus = "needs_auth" | "connecting" | "connected" | "reconnect_required";
 
@@ -360,9 +361,7 @@ async function writeVault(
     ...(lastRecovery ? { lastRecovery } : {}),
   };
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(file)}\n`, { encoding: "utf8", mode: 0o600 });
-  await rename(temporary, path);
+  await writeFileAtomic(path, `${JSON.stringify(file)}\n`, { mode: 0o600 });
   await chmod(path, 0o600).catch(() => undefined);
 }
 

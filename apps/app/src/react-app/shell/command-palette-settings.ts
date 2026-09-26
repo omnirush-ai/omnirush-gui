@@ -21,6 +21,7 @@ const SETTINGS_KEYWORDS: Partial<Record<SettingsTab, string[]>> = {
   environment: ["env", "environment variables", "secrets", "tokens", "api keys"],
   advanced: ["advanced settings", "runtime", "developer", "connection", "server", "port", "reset", "fix", "repair", "clean up", "troubleshoot", "recovery"],
   appearance: ["theme", "dark mode", "light mode", "color", "font", "look"],
+  voice: ["voice", "dictation", "microphone", "mic", "speech", "talk", "hotkey"],
   updates: ["version", "upgrade", "check for updates", "release"],
   debug: ["logs", "diagnostics", "developer mode"],
   "cloud-account": ["sign in", "log in", "login", "account", "organization", "org", "den", "cloud", "omnirush cloud"],

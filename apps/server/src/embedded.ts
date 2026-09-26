@@ -198,7 +198,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   };
 
   if (!config.readOnly) {
-    await ensureLocalWorkspaceFiles(config.workspaces);
+    // The desktop creates a workspace's folder when it adds the workspace; a
+    // registered workspace whose folder is gone is never recreated at startup.
+    await ensureLocalWorkspaceFiles(config.workspaces, { createMissing: false });
     // First among the runtime-DB migrations: the store drops leftover
     // registry launches on any write, before this could rewrite them.
     await migrateLegacyOmniRushUiMcpCommand(config, options.omnirushUiMcp ?? null);

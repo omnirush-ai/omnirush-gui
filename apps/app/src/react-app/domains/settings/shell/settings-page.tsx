@@ -8,6 +8,7 @@ import {
   CloudCog,
   Cog,
   FolderLock,
+  Mic,
   Paintbrush,
   Puzzle,
   RefreshCcw,
@@ -86,6 +87,8 @@ export function getSettingsTabIcon(tab: SettingsTab) {
       return Wrench;
     case "appearance":
       return Paintbrush;
+    case "voice":
+      return Mic;
     case "updates":
       return RefreshCcw;
     case "recovery":
@@ -123,6 +126,8 @@ export function getSettingsTabLabel(tab: SettingsTab) {
       return t("settings.tab_advanced");
     case "appearance":
       return t("settings.tab_appearance");
+    case "voice":
+      return "Voice";
     case "updates":
       return t("settings.tab_updates");
     case "recovery":
@@ -162,6 +167,8 @@ export function getSettingsTabDescription(tab: SettingsTab) {
       return t("settings.tab_description_advanced");
     case "appearance":
       return t("settings.tab_description_appearance");
+    case "voice":
+      return "Dictation, microphone, and hotkey";
     case "updates":
       return t("settings.tab_description_updates");
     case "recovery":
@@ -183,7 +190,7 @@ export function getGlobalSettingsTabs(
   developerMode: boolean,
   capabilities: Pick<PlatformCapabilities, "autoUpdate">,
 ): SettingsTab[] {
-  const tabs: SettingsTab[] = ["ai", "appearance", "environment"];
+  const tabs: SettingsTab[] = ["ai", "appearance", "voice", "environment"];
   if (capabilities.autoUpdate) tabs.push("updates");
   if (developerMode) tabs.push("debug");
   return tabs;

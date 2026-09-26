@@ -427,6 +427,8 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       runModeControl={<WorkspaceRunModeMenu client={workspaceClient} workspaceId={workspaceId} busy={props.busy} />}
       fullPermissionsControl={<FullPermissionsToggle client={workspaceClient} workspaceId={workspaceId} />}
       subagentModelControl={<SubagentModelMenu client={workspaceClient} />}
+          voiceClient={workspaceClient}
+          voiceWorkspaceId={workspaceId}
       draft={props.draft}
       mentions={mentions}
       onDraftChange={handleDraftChange}

@@ -199,6 +199,7 @@ export const SETTINGS_TAB_VALUES = [
   "environment",
   "advanced",
   "appearance",
+  "voice",
   "updates",
   "recovery",
   "debug",

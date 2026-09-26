@@ -82,6 +82,7 @@ import {
   describeWorkspaceCreateError,
   createRouteSession,
   deleteRouteSession,
+  removeRouteWorkspace,
   downloadWorkspaceJson,
   folderNameFromPath,
   getSessionStatus,
@@ -508,6 +509,7 @@ export function SessionRoute() {
     handleRuntimeSessionCreated,
     handleRuntimeSessionUpdated,
     handleRuntimeSessionDeleted,
+    forgetDeletedSession,
     handleRemoteWorkspaceConnectionSaved,
     runRemoteWorkspaceConnectionCheck,
   } = useWorkspaceRouteState({
@@ -2109,21 +2111,26 @@ export function SessionRoute() {
     [endpointForWorkspace, workspaces],
   );
 
-  const handleForgetWorkspace = useCallback(
-    async (workspaceId: string) => {
-      if (typeof window !== "undefined") {
-        const message =
-          t("workspace_list.remove_confirm") ||
-          "Remove this workspace from the sidebar?";
-        if (!window.confirm(message)) return;
-      }
+  const removeWorkspaceConfirmed = useCallback(
+    async (workspaceId: string): Promise<void> => {
       // Remove from both stores so the next refresh can't resurrect the row
       // from whichever list wins the merge.
-      if (client) {
-        await client.deleteWorkspace(workspaceId).catch(() => undefined);
-      }
-      if (isDesktopRuntime()) {
-        await workspaceForget(workspaceId).catch(() => undefined);
+      try {
+        await removeRouteWorkspace({
+          workspaceId,
+          deleteFromServer: client ? (id) => client.deleteWorkspace(id) : null,
+          forgetOnDesktop: isDesktopRuntime() ? workspaceForget : null,
+        });
+      } catch (error) {
+        console.error("[session-route] remove workspace failed", error);
+        toast.error(t("workspace_list.remove_failed"), {
+          id: `workspace-remove:${workspaceId}`,
+          duration: 30_000,
+          description: describeRouteError(error),
+          action: { label: t("common.retry"), onClick: () => void removeWorkspaceConfirmed(workspaceId) },
+        });
+        await refreshRouteState();
+        return;
       }
       if (selectedWorkspaceId === workspaceId) {
         setLegacySelectedWorkspaceId("");
@@ -2135,6 +2142,19 @@ export function SessionRoute() {
       await refreshRouteState();
     },
     [client, navigate, refreshRouteState, selectedWorkspaceId],
+  );
+
+  const handleForgetWorkspace = useCallback(
+    async (workspaceId: string) => {
+      if (typeof window !== "undefined") {
+        const message =
+          t("workspace_list.remove_confirm") ||
+          "Remove this workspace from the sidebar?";
+        if (!window.confirm(message)) return;
+      }
+      await removeWorkspaceConfirmed(workspaceId);
+    },
+    [removeWorkspaceConfirmed],
   );
 
 
@@ -2455,6 +2475,7 @@ export function SessionRoute() {
     createTaskInWorkspace: handleCreateTaskInWorkspace,
     openModelPicker: openModelPickerForControl,
     refreshRouteState,
+    forgetDeletedSession,
   });
 
   const seedUnavailableModelControlAction = useMemo<OmniRushControlAction | null>(() => {
@@ -3663,13 +3684,21 @@ export function SessionRoute() {
       onDeleteSession={
         client && selectedWorkspaceId
           ? async (sessionId) => {
-              const endpoint = endpointForWorkspace(selectedWorkspace);
-              if (!endpoint) return;
+              // The sidebar lists sessions from every workspace: delete through
+              // the workspace that owns the session, whose engine runs it and
+              // whose list shows it.
+              const ownerId = workspaceSessionGroups.find((group) =>
+                group.sessions.some((session) => session?.id === sessionId),
+              )?.workspace.id;
+              const ownerWorkspace = workspaces.find((workspace) => workspace.id === ownerId) ?? selectedWorkspace;
+              const endpoint = endpointForWorkspace(ownerWorkspace);
+              if (!ownerWorkspace || !endpoint) throw new Error(t("session.delete_unavailable"));
               await deleteRouteSession(endpoint, sessionId);
+              forgetDeletedSession(sessionId);
               if (selectedSessionId === sessionId) {
                 navigateToWorkspaceSession(selectedWorkspaceId);
               }
-              await refreshRouteState();
+              void reloadWorkspaceSessions(ownerWorkspace.id);
             }
           : undefined
       }

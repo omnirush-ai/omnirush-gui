@@ -407,6 +407,20 @@ export type OmniRushSubagentModelSetting = {
   effort: string | null;
 };
 
+/** GET /omnirush/voice/status: whether dictation can be used, and hint words for the project. */
+export type OmniRushVoiceStatus = {
+  signedIn: boolean;
+  /** Null: the account's catalog does not say; the first upload decides. */
+  available: boolean | null;
+  reason: string | null;
+  /** Days the speech provider keeps uploaded audio, when the backend says (for the privacy note). */
+  providerRetentionDays?: number | null;
+  /** Seconds of dictation left today, when the account has a daily cap. */
+  remainingSecondsToday?: number | null;
+  repo: string | null;
+  branch: string | null;
+};
+
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
   /** Whether an omnirush.ai account is signed in (its models can run). */
@@ -1468,15 +1482,24 @@ async function requestJson<T>(
   );
 
   const text = await response.text();
-  const json = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
+    // The server's readable message when it sent one; a non-JSON error page
+    // (a proxy, a crash) still rejects with the status, not a parse error.
+    let json: { code?: unknown; message?: unknown; details?: unknown } | null = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
     const code = typeof json?.code === "string" ? json.code : "request_failed";
-    const message = typeof json?.message === "string" ? json.message : response.statusText;
+    const message = typeof json?.message === "string" && json.message
+      ? json.message
+      : response.statusText || `Request failed (${response.status})`;
     throw new OmniRushServerError(response.status, code, message, json?.details);
   }
 
-  return json as T;
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 async function requestAgentContextDiagnosticsJson(
@@ -1604,7 +1627,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
     capabilities: 6_000,
     listWorkspaces: 8_000,
     activateWorkspace: 10_000,
-    deleteWorkspace: 10_000,
+    // The server first stops the workspace's running sessions and releases its engine instance.
+    deleteWorkspace: 30_000,
     sessionRead: 12_000,
     status: 6_000,
     diagnostics: AGENT_CONTEXT_DIAGNOSTICS_REQUEST_TIMEOUT_MS,
@@ -1859,6 +1883,17 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         body: { mode },
         timeoutMs: timeouts.config,
       }),
+    getVoiceStatus: (workspaceId?: string | null) =>
+      requestJson<OmniRushVoiceStatus>(
+        baseUrl,
+        `/omnirush/voice/status${workspaceId ? `?workspace=${encodeURIComponent(workspaceId)}` : ""}`,
+        { token, hostToken, timeoutMs: timeouts.config },
+      ),
+    /** Where the renderer POSTs one voice segment (multipart), and its headers; the local server adds the device bearer. */
+    voiceTranscriptionEndpoint: () => ({
+      url: `${baseUrl}/omnirush/voice/transcribe`,
+      headers: buildAuthHeaders(token, hostToken),
+    }),
     getSubagentModel: () =>
       requestJson<OmniRushSubagentModelState>(baseUrl, "/omnirush/subagent-model", { token, hostToken, timeoutMs: timeouts.config }),
     setSubagentModel: (setting: OmniRushSubagentModelSetting) =>
