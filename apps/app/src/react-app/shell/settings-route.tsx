@@ -2440,6 +2440,11 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
                 disconnectOrgMcp={(connectionId) => { void orgMcpConnections.disconnect(connectionId); }}
                 readSkill={readLibrarySkill}
                 createWorkspaceSkill={async (input) => { await extensionsStore.saveSkill(input); }}
+                previewSkillBundle={extensionsStore.previewSkillBundle}
+                installSkillBundle={extensionsStore.installSkillBundle}
+                listSkillFiles={extensionsStore.listSkillFiles}
+                updateSkillFiles={extensionsStore.updateSkillFiles}
+                saveSkillContent={extensionsStore.saveSkillContent}
                 previewClaudePlugin={(url) => extensionsStore.previewClaudePlugin(url)}
                 installClaudePlugin={(url) => extensionsStore.installClaudePlugin(url)}
                 createLibraryItem={(kind, input) => extensionsStore.createLibraryItem(kind, input)}
