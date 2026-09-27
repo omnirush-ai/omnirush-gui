@@ -118,6 +118,9 @@ export async function createManagedOpencodeV2Server(
       OPENCODE_PASSWORD: password,
       OPENCODE_DB: join(options.rootDir, "opencode.db"),
       OPENCODE_CONFIG_DIR: configDir,
+      // The engine ships inside the app and is updated with it: it must never
+      // fetch and swap in a binary of its own.
+      OPENCODE_DISABLE_AUTOUPDATE: "1",
       ...(opencodeModelsUrl === undefined ? {} : { OPENCODE_MODELS_URL: opencodeModelsUrl }),
       ...(disableModelsFetch === undefined ? {} : { OPENCODE_DISABLE_MODELS_FETCH: disableModelsFetch }),
     },
