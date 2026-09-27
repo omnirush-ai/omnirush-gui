@@ -153,9 +153,40 @@ describe("OmniRush gateway broker", () => {
 
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.body).toEqual({ model: "gpt-6-astra", input: "test", reasoning: { effort: "max" } });
+    expect(calls[0]?.body).toEqual({ model: "gpt-6-astra", input: "test", reasoning: { effort: "max", summary: "auto" } });
     expect(calls[0]?.headers.has("x-omnirush-reasoning-effort")).toBe(false);
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer access-token");
+  });
+
+  test("requests GPT-6 summaries without an effort header and preserves explicit options", async () => {
+    const calls: UpstreamCall[] = [];
+    const broker = capturingBroker(calls);
+    const bodies = [
+      { model: "gpt-6-astra", input: "default" },
+      { model: "gpt-6-sol", input: "selected", reasoning: { effort: "high" } },
+      { model: "gpt-6-astra", input: "legacy", reasoning_effort: "xhigh" },
+      { model: "gpt-6-astra", input: "explicit", reasoning: { effort: "low", summary: "detailed" } },
+      { model: "gpt-6-sol", input: "disabled", reasoning: { summary: null } },
+      { model: "gpt-5.6-sol", input: "sol" },
+      { model: "meta-muse", input: "other" },
+    ];
+    for (const body of bodies) await broker.handle(gatewayRequest(body), "responses");
+    expect(calls.map((call) => call.body)).toEqual([
+      { ...bodies[0], reasoning: { summary: "auto" } },
+      { ...bodies[1], reasoning: { effort: "high", summary: "auto" } },
+      { ...bodies[2], reasoning: { summary: "auto" } },
+      ...bodies.slice(3),
+    ]);
+  });
+
+  test("leaves compaction and malformed request bodies without a summary default", async () => {
+    const calls: UpstreamCall[] = [];
+    const broker = capturingBroker(calls);
+    const compact = { model: "gpt-6-astra", input: "compact", reasoning: { effort: "high" } };
+    const malformed = { model: "gpt-6-astra", input: "invalid", reasoning: "invalid" };
+    await broker.handle(gatewayRequest(compact, {}, "responses/compact"), "responses/compact");
+    await broker.handle(gatewayRequest(malformed), "responses");
+    expect(calls.map((call) => call.body)).toEqual([compact, malformed]);
   });
 
   test("keeps an effort the engine already emitted and the legacy top-level field", async () => {
@@ -171,8 +202,8 @@ describe("OmniRush gateway broker", () => {
     expect(calls.map((call) => call.body)).toEqual([
       { model: "gpt-5.6-sol", input: "a", reasoning: { effort: "max", summary: "auto" } },
       { model: "gpt-5.6-sol", input: "b", reasoning_effort: "high" },
-      { model: "gpt-6-astra", input: "c" },
-      { model: "gpt-6-astra", input: "d" },
+      { model: "gpt-6-astra", input: "c", reasoning: { summary: "auto" } },
+      { model: "gpt-6-astra", input: "d", reasoning: { summary: "auto" } },
     ]);
   });
 });
@@ -1112,6 +1143,17 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     })]);
   });
 
+  test("adds the summary default when an unrelated model falls back to Astra", async () => {
+    const { broker, calls } = fallbackBroker((body) => body.model === "meta-muse-spark"
+      ? refuse(400, "model_unavailable")
+      : Response.json({ output: [] }));
+    await broker.handle(gatewayRequest({ model: "meta-muse-spark", input: "fallback" }, subagentHeaders), "responses");
+    expect(calls.map((call) => call.body)).toEqual([
+      { model: "meta-muse-spark", input: "fallback" },
+      { model: "gpt-6-astra", input: "fallback", reasoning: { effort: "max", summary: "auto" } },
+    ]);
+  });
+
   test("a busy picked model is tried once more, then moves; a second success stays on it", async () => {
     let busy = 2;
     const stays = fallbackBroker((body) => body.model === "gpt-6-sol" && busy-- > 1
@@ -1124,11 +1166,11 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     const moves = fallbackBroker((body) => body.model === "gpt-6-sol"
       ? new Response("upstream down", { status: 503 })
       : Response.json({ output: [] }));
-    expect((await moves.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b", reasoning_effort: "high" }, subagentHeaders), "responses")).status).toBe(200);
+    expect((await moves.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b", reasoning_effort: "high", reasoning: { summary: "auto" } }, subagentHeaders), "responses")).status).toBe(200);
     expect(moves.calls.map((call) => call.body)).toEqual([
-      { model: "gpt-6-sol", input: "b", reasoning_effort: "high" },
-      { model: "gpt-6-sol", input: "b", reasoning_effort: "high" },
-      { model: "gpt-6-astra", input: "b", reasoning: { effort: "max" } },
+      { model: "gpt-6-sol", input: "b", reasoning_effort: "high", reasoning: { summary: "auto" } },
+      { model: "gpt-6-sol", input: "b", reasoning_effort: "high", reasoning: { summary: "auto" } },
+      { model: "gpt-6-astra", input: "b", reasoning: { effort: "max", summary: "auto" } },
     ]);
     expect(moves.events.map((event) => event.reason)).toEqual(["http_503"]);
   });
@@ -1162,7 +1204,7 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
   test("a picked model in its refusal cooldown goes straight to the main model", async () => {
     const { broker, calls, events } = fallbackBroker(() => Response.json({ output: [] }), (model) => model === "gpt-6-sol");
     expect((await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "a" }, subagentHeaders), "responses")).status).toBe(200);
-    expect(calls.map((call) => call.body)).toEqual([{ model: "gpt-6-astra", input: "a", reasoning: { effort: "max" } }]);
+    expect(calls.map((call) => call.body)).toEqual([{ model: "gpt-6-astra", input: "a", reasoning: { effort: "max", summary: "auto" } }]);
     expect(events.map((event) => [event.requested, event.used, event.reason, event.ok])).toEqual([["gpt-6-sol", "gpt-6-astra", "refused_recently", true]]);
     // Without the fallback header (the main agent, or an untouched setting) nothing moves.
     expect((await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b" }), "responses")).status).toBe(200);

@@ -545,6 +545,26 @@ function withReasoningEffort(body: ArrayBuffer, effort: string): ArrayBuffer | s
 }
 
 /**
+ * OpenCode currently opts into OpenAI summaries only for GPT-5 model IDs.
+ * Ask for the summaries the transcript displays for our GPT-6 models too,
+ * preserving any explicit summary option. Apply this at the final forwarding
+ * boundary so sub-agent fallbacks use the destination model's options.
+ */
+function withReasoningSummary(body: ArrayBuffer | string): ArrayBuffer | string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(typeof body === "string" ? body : new TextDecoder().decode(body));
+  } catch {
+    return body;
+  }
+  if (!isRecord(parsed) || (parsed.model !== "gpt-6-astra" && parsed.model !== "gpt-6-sol")) return body;
+  if (parsed.reasoning != null && !isRecord(parsed.reasoning)) return body;
+  const reasoning = isRecord(parsed.reasoning) ? parsed.reasoning : {};
+  if ("summary" in reasoning) return body;
+  return JSON.stringify({ ...parsed, reasoning: { ...reasoning, summary: "auto" } });
+}
+
+/**
  * Gateway refusals of a sub-agent's picked model that move the request to
  * the main model at once: the model is not served to this account (or at
  * all), cannot take this request, or its route is not set up.
@@ -1028,6 +1048,7 @@ export class OmniRushGatewayBroker {
     body: ArrayBuffer | string | undefined,
     accessToken?: string,
   ): Promise<Response> {
+    const forwardedBody = path === "responses" && body !== undefined ? withReasoningSummary(body) : body;
     let failure: ReturnType<typeof fetchFailure> | null = null;
     for (let attempt = 0; attempt <= UNREACHABLE_RETRY_DELAYS_MS.length; attempt += 1) {
       if (attempt > 0) {
@@ -1036,7 +1057,7 @@ export class OmniRushGatewayBroker {
       }
       if (!this.state) break;
       try {
-        return await this.forward(request, path, body, attempt === 0 ? accessToken : this.state.accessToken);
+        return await this.forward(request, path, forwardedBody, attempt === 0 ? accessToken : this.state.accessToken);
       } catch (error) {
         if (request.signal.aborted) throw error;
         failure = fetchFailure(error);
