@@ -62,6 +62,30 @@ function resolveResourcesDir(context) {
   return path.join(context.appOutDir, "resources");
 }
 
+// better-sqlite3 publishes prebuilt addons for every platform in one folder
+// (darwin-*.node, linux-*.node, linuxmusl-*.node, win32-*.node). Only the
+// target platform's ever loads; the rest are dead weight and, worse, on Windows
+// signtool aborts the whole build when it is asked to sign a Mach-O/ELF .node.
+// Removing them here (afterPack runs before Windows signing) keeps every
+// remaining .node a signable Windows PE and shrinks the installer everywhere.
+function prunePrebuildsForTarget(context) {
+  const keepPrefixes = context.electronPlatformName === "win32"
+    ? ["win32-"]
+    : context.electronPlatformName === "darwin"
+      ? ["darwin-"]
+      : ["linux-", "linuxmusl-"];
+  const resourcesDir = resolveResourcesDir(context);
+  if (!resourcesDir) return;
+  const prebuildsDir = path.join(resourcesDir, "app.asar.unpacked", "node_modules", "better-sqlite3", "prebuilds");
+  if (!fs.existsSync(prebuildsDir)) return;
+  for (const entry of fs.readdirSync(prebuildsDir)) {
+    if (!entry.endsWith(".node")) continue;
+    if (!keepPrefixes.some((prefix) => entry.startsWith(prefix))) {
+      fs.rmSync(path.join(prebuildsDir, entry), { force: true });
+    }
+  }
+}
+
 // The UI-control extension launches <resources>/omnirush-ui-mcp/index.mjs with
 // the app's own binary; a package without it must not ship.
 function verifyUiControlMcpBundle(context) {
@@ -158,6 +182,7 @@ function copyExecutableTargetToAlias(sidecarsDir, targetName, aliasName) {
 async function afterPack(context) {
   verifyRuntimeDependencies(context);
   verifyUiControlMcpBundle(context);
+  prunePrebuildsForTarget(context);
   const triple = targetTriple(context.electronPlatformName, context.arch);
   if (!triple) return;
 
@@ -198,3 +223,4 @@ async function afterPack(context) {
 module.exports = afterPack;
 module.exports.default = afterPack;
 module.exports.normalizeAsarEntryPath = normalizeAsarEntryPath;
+module.exports.prunePrebuildsForTarget = prunePrebuildsForTarget;
