@@ -21,9 +21,23 @@ Every build is on the [latest release](https://github.com/omnirush-ai/omnirush-g
 
 Each release also has `SHA256SUMS.txt` for checking a download.
 
+From 3.0.0 on, the builds are signed:
+
+- **macOS:** the app and the DMG are signed with an Apple Developer ID and notarized by Apple, with the ticket stapled to both, so Gatekeeper opens them without a prompt.
+- **Windows:** the installer, the app, the uninstaller and every bundled executable and DLL carry an Authenticode signature with a timestamp. Windows shows the verified publisher.
+
+To check a download:
+
+- macOS: `spctl -a -vvv -t exec /Applications/OmniRush.ai.app` should report `source=Notarized Developer ID`.
+- Windows: right-click the installer, open **Properties > Digital Signatures**, or run `signtool verify /pa /v`.
+
+How signing works is described in [docs/release-signing.md](docs/release-signing.md).
+
 ## First launch
 
-Builds are not notarized (macOS) or code-signed (Windows) yet, so the operating system asks for one confirmation the first time.
+Signed builds (3.0.0 and later) open without a warning on macOS. On Windows, SmartScreen can still show "Windows protected your PC" for a new version until enough people have downloaded it; the dialog names the verified publisher. Choose **More info > Run anyway**.
+
+Versions before 3.0.0 are neither notarized (macOS) nor code-signed (Windows), so the operating system asks for one confirmation the first time:
 
 | OS | What to do |
 | --- | --- |
@@ -59,7 +73,7 @@ The exact rules are in [docs/session-data-privacy.md](docs/session-data-privacy.
 
 ## Updating
 
-From version 1.0.5 on, the app updates itself: **Settings > Updates** or the **Check for Updates...** menu item. On macOS the unsigned build downloads the new DMG and opens it; drag omnirush.ai to Applications to replace the old copy. Windows and the Linux AppImage install updates in place. The Linux tar.gz does not update itself; download the new release by hand.
+From version 1.0.5 on, the app updates itself: **Settings > Updates** or the **Check for Updates...** menu item. On macOS, signed builds (3.0.0 and later) install updates in place and restart. Unsigned builds before 3.0.0 download the new DMG and open it; drag omnirush.ai to Applications to replace the old copy. This is also how a 2.x install moves to 3.0.0. Windows and the Linux AppImage install updates in place. The Linux tar.gz does not update itself; download the new release by hand.
 
 Installs older than 1.0.5 cannot update in-app. Download the latest release once by hand; later versions then update in-app.
 
