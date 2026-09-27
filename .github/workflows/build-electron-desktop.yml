@@ -1,7 +1,27 @@
 name: Build Electron Desktop
 
+# Builds the same installers as release-desktop.yml, with the same signing
+# plan, notarization, verification and Defender steps, but publishes nothing:
+# the packages are uploaded as workflow artifacts. Without signing secrets
+# (forks, PRs) everything builds unsigned and the verify steps say they
+# skipped and why. The Windows signing rehearsal signs with a throwaway
+# self-signed certificate made on the runner, to exercise the signing path
+# (every PE file, the sidecar still running once signed, the uninstaller)
+# without any real secret.
+
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the build (release builds take it from the tag)"
+        required: false
+        default: "3.0.0"
+        type: string
+      rehearse_windows_signing:
+        description: "Also run the Windows signing rehearsal with a throwaway self-signed certificate"
+        required: false
+        default: true
+        type: boolean
   push:
     branches:
       - electron-notary-test
@@ -19,27 +39,55 @@ permissions:
 
 jobs:
   build-electron:
+    name: Build ${{ matrix.name }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - name: macOS Apple Silicon
+            os: macos-14
+            platform: macos
             artifact: macos
-          - os: ubuntu-latest
+            builder_args: --mac --arm64
+            update_manifest: latest-mac.yml
+            installer: true
+          - name: Linux x64
+            os: ubuntu-22.04
+            platform: linux
             artifact: linux
-          - os: windows-latest
+            builder_args: --linux --x64
+            update_manifest: latest-linux.yml
+            installer: true
+          - name: Windows x64
+            os: windows-2022
+            platform: windows
             artifact: windows
-          - os: windows-11-arm
+            builder_args: --win --x64
+            update_manifest: latest.yml
+            installer: true
+          - name: Windows arm64 (unpacked)
+            os: windows-11-arm
+            platform: windows
             artifact: windows-arm64
+            builder_args: --win --arm64 --dir
+            installer: false
     runs-on: ${{ matrix.os }}
+    env:
+      BUILD_VERSION: ${{ inputs.version || '3.0.0' }}
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Enable long paths on Windows
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+
       # pnpm must be installed BEFORE setup-node so setup-node can find the
-      # pnpm binary on PATH. Matches the pattern in build-desktop.yml so
-      # the two workflows share the same bootstrap story.
+      # pnpm binary on PATH.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -56,28 +104,158 @@ jobs:
           # Bun >= 1.3.10 is required by the server build and package-time helpers.
           bun-version: 1.3.10
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install Linux packaging tools
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libarchive-tools rpm
 
-      - name: Package Electron desktop (unpacked)
+      - name: Install dependencies
+        shell: bash
+        run: pnpm --filter @omnirush/desktop... --filter @omnirush/app... --filter omnirush-server... --filter omnirush-ui-mcp... install --frozen-lockfile --prefer-offline
+
+      - name: Stamp version
+        shell: bash
+        run: node scripts/release/stamp-version.mjs --version "$BUILD_VERSION"
+
+      - name: Plan code signing
+        id: signing
+        env:
+          MAC_CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          MAC_CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ matrix.platform == 'macos' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ matrix.platform == 'macos' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+          AZURE_TENANT_ID: ${{ matrix.platform == 'windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ matrix.platform == 'windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ matrix.platform == 'windows' && secrets.AZURE_CLIENT_SECRET || '' }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ matrix.platform == 'windows' && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT || '' }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ matrix.platform == 'windows' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT || '' }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ matrix.platform == 'windows' && secrets.AZURE_TRUSTED_SIGNING_PROFILE || '' }}
+          WIN_PUBLISHER_NAME: ${{ matrix.platform == 'windows' && secrets.WIN_PUBLISHER_NAME || '' }}
+          WIN_CSC_LINK: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+        shell: bash
+        run: node apps/desktop/scripts/signing-plan.mjs --platform "${{ matrix.platform }}" --version "$BUILD_VERSION"
+
+      - name: Build desktop application
         env:
           OMNIRUSH_DESKTOP_SENTRY_DSN: ${{ secrets.OMNIRUSH_DESKTOP_SENTRY_DSN || vars.OMNIRUSH_DESKTOP_SENTRY_DSN }}
           OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE: ${{ vars.OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE || '0.01' }}
-        run: pnpm --filter @omnirush/desktop package:electron:dir
+        shell: bash
+        run: pnpm --filter @omnirush/desktop build:electron
+
+      - name: Package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed == 'true' && matrix.platform == 'macos' && 'true' || 'false' }}
+          CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_API_KEY_PATH: ${{ steps.signing.outputs.apple_api_key_path }}
+          APPLE_API_KEY_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ matrix.platform == 'macos' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+          WIN_CSC_LINK: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          AZURE_TENANT_ID: ${{ matrix.platform == 'windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ matrix.platform == 'windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ matrix.platform == 'windows' && secrets.AZURE_CLIENT_SECRET || '' }}
+          SIGNING_ARGS_FILE: ${{ steps.signing.outputs.builder_args_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # electron-builder treats a defined-but-empty CSC_LINK/WIN_CSC_LINK as
+          # "a certificate is present" and then fails importing it. When a secret
+          # is absent it arrives here as an empty string, so drop the empties and
+          # let the unsigned path run.
+          for v in CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
+            [ -z "${!v:-}" ] && unset "$v" || true
+          done
+          signing_args=()
+          if [ -n "${SIGNING_ARGS_FILE:-}" ] && [ -f "$SIGNING_ARGS_FILE" ]; then
+            while IFS= read -r arg; do
+              [ -n "$arg" ] && signing_args+=("$arg")
+            done < <(node -e 'for (const a of JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))) console.log(a)' "$SIGNING_ARGS_FILE")
+          fi
+          pnpm --dir apps/desktop exec electron-builder \
+            --config electron-builder.yml \
+            ${{ matrix.builder_args }} \
+            ${signing_args[@]+"${signing_args[@]}"} \
+            --publish never
+
+      - name: Notarize and staple the DMG
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_API_KEY_PATH: ${{ steps.signing.outputs.apple_api_key_path }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: node apps/desktop/scripts/notarize-dmg.mjs
+
+      - name: Verify packaged server imports
+        shell: bash
+        run: node apps/desktop/scripts/verify-packaged-imports.mjs
+
+      - name: Verify update manifest
+        if: matrix.installer
+        shell: bash
+        run: |
+          node apps/desktop/scripts/verify-update-manifest.mjs \
+            --manifest "apps/desktop/dist-electron/${{ matrix.update_manifest }}" \
+            --version "$BUILD_VERSION"
+
+      - name: Verify macOS signing and notarization
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: bash apps/desktop/scripts/verify-macos-signing.sh apps/desktop/dist-electron "${{ steps.signing.outputs.signed }}"
+
+      - name: Verify Windows signatures
+        if: matrix.platform == 'windows' && matrix.installer
+        shell: pwsh
+        run: ./apps/desktop/scripts/verify-windows-signing.ps1 -Dist apps/desktop/dist-electron -Signed "${{ steps.signing.outputs.signed }}" -InstallCheck
+
+      - name: Microsoft Defender scan
+        if: matrix.platform == 'windows' && matrix.installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/dist-electron -Filter "omnirush-*.exe" -File | Select-Object -First 1
+          ./apps/desktop/scripts/defender-scan.ps1 -Paths $installer.FullName, apps/desktop/dist-electron/win-unpacked
+
+      - name: Remove notarization key
+        if: always() && steps.signing.outputs.apple_api_key_path != ''
+        shell: bash
+        run: rm -f "${{ steps.signing.outputs.apple_api_key_path }}"
 
       - name: Upload Electron artifacts
         uses: actions/upload-artifact@v4
         with:
           name: omnirush-electron-${{ matrix.artifact }}
           path: apps/desktop/dist-electron/**
+          if-no-files-found: error
 
-  electron-macos-notarization-smoke:
-    name: Electron macOS notarization smoke
-    runs-on: macos-14
-
+  windows-signing-rehearsal:
+    name: Windows signing rehearsal (throwaway certificate)
+    if: github.event_name != 'workflow_dispatch' || inputs.rehearse_windows_signing
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      BUILD_VERSION: ${{ inputs.version || '3.0.0' }}
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable long paths
+        shell: pwsh
+        run: git config --global core.longpaths true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -92,34 +270,75 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.9
+          bun-version: 1.3.10
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        shell: bash
+        run: pnpm --filter @omnirush/desktop... --filter @omnirush/app... --filter omnirush-server... --filter omnirush-ui-mcp... install --frozen-lockfile --prefer-offline
 
-      - name: Write notary API key
-        env:
-          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+      - name: Stamp version
+        shell: bash
+        run: node scripts/release/stamp-version.mjs --version "$BUILD_VERSION"
+
+      # A self-signed code-signing certificate that lives only on this runner.
+      # It is trusted in the runner's machine stores so `signtool verify /pa`
+      # can check the chain; it proves nothing to Windows elsewhere.
+      - name: Create a throwaway code-signing certificate
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $password = [guid]::NewGuid().ToString()
+          Write-Host "::add-mask::$password"
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=OmniRush.ai CI Rehearsal" `
+            -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(2)
+          $pfx = Join-Path $env:RUNNER_TEMP "rehearsal.pfx"
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
+          $cer = Join-Path $env:RUNNER_TEMP "rehearsal.cer"
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+          # Later steps (signing plan, electron-builder) read these.
+          "WIN_CSC_LINK=$pfx" >> $env:GITHUB_ENV
+          "WIN_CSC_KEY_PASSWORD=$password" >> $env:GITHUB_ENV
 
-          NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
-          printf '%s' "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY_PATH"
-          chmod 600 "$NOTARY_KEY_PATH"
+      - name: Plan code signing
+        id: signing
+        shell: bash
+        run: node apps/desktop/scripts/signing-plan.mjs --platform windows --version "$BUILD_VERSION"
 
-          echo "NOTARY_KEY_PATH=$NOTARY_KEY_PATH" >> "$GITHUB_ENV"
+      - name: Build desktop application
+        shell: bash
+        run: pnpm --filter @omnirush/desktop build:electron
 
-      - name: Package Electron desktop (signed + notarized, no publish)
-        env:
-          CSC_LINK: ${{ secrets.APPLE_CODESIGN_CERT_P12_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
-          MACOS_NOTARIZE: true
-          APPLE_API_KEY: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
-          APPLE_API_KEY_PATH: ${{ env.NOTARY_KEY_PATH }}
-          OMNIRUSH_DESKTOP_SENTRY_DSN: ${{ secrets.OMNIRUSH_DESKTOP_SENTRY_DSN || vars.OMNIRUSH_DESKTOP_SENTRY_DSN }}
-          OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE: ${{ vars.OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE || '0.01' }}
+      - name: Package (signed with the throwaway certificate)
+        shell: bash
+        run: pnpm --dir apps/desktop exec electron-builder --config electron-builder.yml --win --x64 --publish never
+
+      - name: Verify update manifest
+        shell: bash
+        run: node apps/desktop/scripts/verify-update-manifest.mjs --manifest apps/desktop/dist-electron/latest.yml --version "$BUILD_VERSION"
+
+      - name: Verify Windows signatures
+        shell: pwsh
+        run: ./apps/desktop/scripts/verify-windows-signing.ps1 -Dist apps/desktop/dist-electron -Signed "${{ steps.signing.outputs.signed }}" -InstallCheck
+
+      - name: Signed sidecar still runs
+        shell: pwsh
         run: |
-          set -euo pipefail
-          pnpm --filter @omnirush/desktop run build:electron
-          pnpm --dir apps/desktop exec electron-builder --config electron-builder.yml --mac dmg zip --publish never
+          $sidecar = "apps/desktop/dist-electron/win-unpacked/resources/sidecars/opencode.exe"
+          (Get-AuthenticodeSignature $sidecar) | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          & $sidecar --version
+          if ($LASTEXITCODE -ne 0) { throw "signed opencode.exe exited with $LASTEXITCODE" }
+
+      - name: Microsoft Defender scan
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/dist-electron -Filter "omnirush-*.exe" -File | Select-Object -First 1
+          ./apps/desktop/scripts/defender-scan.ps1 -Paths $installer.FullName, apps/desktop/dist-electron/win-unpacked
+
+      - name: Remove the throwaway certificate
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem Cert:\CurrentUser\My, Cert:\LocalMachine\Root, Cert:\LocalMachine\TrustedPublisher |
+            Where-Object Subject -eq "CN=OmniRush.ai CI Rehearsal" | Remove-Item -ErrorAction SilentlyContinue
+          Remove-Item "$env:RUNNER_TEMP\rehearsal.*" -ErrorAction SilentlyContinue
