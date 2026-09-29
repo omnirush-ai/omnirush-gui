@@ -126,14 +126,16 @@ test("shows the current mode on load and reads as active while full permissions 
   expect(off.textContent).toContain("Full permissions");
   expect(off.dataset.state).toBe("off");
   expect(off.dataset.lockReason).toBeUndefined();
-  expect(off.className).not.toContain("--dls-accent");
+  expect(off.className).not.toContain("text-orange-11");
 
   const full = fakeClient("http://full.test", { mode: "full", source: "settings", setting: "full" });
   const active = await mount(<FullPermissionsToggle client={full.client} workspaceId="ws_1" />);
   await waitFor(() => toggleIn(active).getAttribute("aria-checked") === "true", "the full mode to load");
   expect(toggleIn(active).dataset.state).toBe("on");
   expect(toggleIn(active).getAttribute("aria-disabled")).toBeNull();
-  expect(toggleIn(active).className).toContain("bg-[var(--dls-accent)]");
+  // On reads as a warning: orange, no accent fill.
+  expect(toggleIn(active).className).toContain("text-orange-11");
+  expect(toggleIn(active).className).not.toContain("--dls-accent");
 
   // Nothing renders without a server client.
   const none = await mount(<FullPermissionsToggle client={null} workspaceId="ws_1" />);

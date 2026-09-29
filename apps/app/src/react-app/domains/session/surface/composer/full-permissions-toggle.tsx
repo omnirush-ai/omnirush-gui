@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { LoaderCircle, ShieldCheck } from "lucide-react";
+import { LoaderCircle, ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { toast } from "@/components/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -75,16 +75,17 @@ function FullPermissionsSwitch(props: { client: ApprovalsClient; workspaceId: st
             onClick={() => void toggle()}
             // Same height, radius, padding and text size as the model selector
             // trigger. Kept focusable while disabled (aria-disabled, not
-            // disabled) so the tooltip can explain why.
+            // disabled) so the tooltip can explain why. On reads as a warning
+            // (orange, alert shield): nothing asks for approval.
             className={`flex h-9 max-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm transition-colors aria-disabled:cursor-not-allowed aria-disabled:opacity-60 ${
               full
-                ? "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)] aria-disabled:hover:bg-[var(--dls-accent)]"
+                ? "text-orange-11 hover:bg-orange-3 aria-disabled:hover:bg-transparent"
                 : "text-gray-10 hover:bg-gray-3 hover:text-gray-12 aria-disabled:hover:bg-transparent aria-disabled:hover:text-gray-10"
             }`}
           />
         }
       >
-        {busy ? <LoaderCircle className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+        {busy ? <LoaderCircle className="size-4 animate-spin" /> : full ? <ShieldAlert className="size-4" /> : <ShieldCheck className="size-4" />}
         <span className="whitespace-nowrap">Full permissions</span>
       </TooltipTrigger>
       <TooltipContent>{hint}</TooltipContent>
