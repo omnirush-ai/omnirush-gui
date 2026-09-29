@@ -1850,8 +1850,11 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const disabledProviderIdSet = new Set(
     disabledProviders.map((id) => id.trim().toLowerCase()).filter(Boolean),
   );
+  // Same list as the pickers: providers from the user's own engine config
+  // (source "config") are not omnirush.ai's to show or disconnect here.
   const connectedProviders = providers.flatMap((provider) =>
     providerConnectedIdSet.has(provider.id) &&
+    isSupportedModelProvider(provider.id) &&
     !disabledProviderIdSet.has(provider.id.trim().toLowerCase())
       ? [{
           id: provider.id,
