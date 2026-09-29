@@ -188,6 +188,21 @@ describe("omnirush runtime config file", () => {
     expect(JSON.stringify(parsed)).not.toContain("access-token");
   });
 
+  test("signed in, only omnirush.ai models are enabled unless other providers are allowed", () => {
+    const gateway = { baseUrl: "http://127.0.0.1:8090/omnirush/v1" };
+
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}, gateway, {}).enabled_providers).toEqual(["omnirush"]);
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}, gateway, { OMNIRUSH_ALLOW_OTHER_PROVIDERS: "1" }).enabled_providers)
+      .toBeUndefined();
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({ managedPolicy: { allowCustomProviders: true } }, gateway, {}).enabled_providers)
+      .toBeUndefined();
+    // An org policy that forbids custom providers keeps its own list (Zen included by default).
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({ managedPolicy: { allowCustomProviders: false } }, gateway, {}).enabled_providers)
+      .toEqual(["omnirush", "opencode"]);
+    // Signed out there is no omnirush.ai provider; prompts are refused by the sign-in gate.
+    expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}, undefined, {}).enabled_providers).toBeUndefined();
+  });
+
   test("exposes every omnirush.ai model with the shared effort levels, default first", () => {
     const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({}, {
       baseUrl: "http://127.0.0.1:8090/omnirush/v1",
