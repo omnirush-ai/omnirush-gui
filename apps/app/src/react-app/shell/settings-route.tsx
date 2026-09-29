@@ -1836,8 +1836,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     ? `${local.prefs.defaultModel.providerID}/${local.prefs.defaultModel.modelID}`
     : t("settings.default_label");
   const defaultModelVariantLabel = local.prefs.modelVariant ?? t("settings.default_label");
-  const visibleProviderConnectedIds = providerConnectedIds.filter(
-    isSupportedModelProvider,
+  const visibleProviderConnectedIds = providerConnectedIds.filter((id) =>
+    isSupportedModelProvider(id),
   );
   const providerStatusLabel = visibleProviderConnectedIds.length > 0 ? t("status.connected") : t("status.disconnected_label");
   const providerStatusStyle = visibleProviderConnectedIds.length > 0
@@ -1850,8 +1850,11 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const disabledProviderIdSet = new Set(
     disabledProviders.map((id) => id.trim().toLowerCase()).filter(Boolean),
   );
+  // Same list as the pickers: providers from the user's own engine config
+  // (source "config") are not omnirush.ai's to show or disconnect here.
   const connectedProviders = providers.flatMap((provider) =>
     providerConnectedIdSet.has(provider.id) &&
+    isSupportedModelProvider(provider.id) &&
     !disabledProviderIdSet.has(provider.id.trim().toLowerCase())
       ? [{
           id: provider.id,
