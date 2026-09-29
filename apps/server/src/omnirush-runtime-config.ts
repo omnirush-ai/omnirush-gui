@@ -171,15 +171,24 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       ? { [INTERNAL_PROVIDER_ID]: internalGatewayProvider(internalGateway, catalog) }
       : {}),
   };
+  const ownProviders = Object.keys(provider).filter((id) => /^(?:lpr_|omnirush$)/i.test(id));
+  // Signed in, the model picker lists only omnirush.ai (and org-assigned)
+  // models: the engine would otherwise also load providers from the user's
+  // own opencode config, whose models bypass the gateway and whose errors
+  // name upstream relays. OMNIRUSH_ALLOW_OTHER_PROVIDERS=1 or an org policy
+  // with allowCustomProviders: true lets them back in.
+  const onlyOwnProviders = ownProviders.length > 0
+    && env.OMNIRUSH_ALLOW_OTHER_PROVIDERS !== "1"
+    && runtimeConfig.managedPolicy?.allowCustomProviders !== true;
   return {
     ...engineConfig,
     ...(internalGateway
       ? { model: `${INTERNAL_PROVIDER_ID}/${omnirushDefaultModelId(catalog)}` }
       : {}),
     ...(runtimeConfig.managedPolicy?.allowCustomProviders === false ? { enabled_providers: [
-      ...Object.keys(provider).filter((id) => /^(?:lpr_|omnirush$)/i.test(id)),
+      ...ownProviders,
       ...(runtimeConfig.managedPolicy.allowZenModel !== false ? ["opencode"] : []),
-    ] } : {}),
+    ] } : onlyOwnProviders ? { enabled_providers: ownProviders } : {}),
     permission: { ...engineConfig.permission, ...permissions },
     // omnirush.ai's own on-demand skills (the swarm procedure).
     ...(skillsDir ? { skills: { paths: [skillsDir] } } : {}),
