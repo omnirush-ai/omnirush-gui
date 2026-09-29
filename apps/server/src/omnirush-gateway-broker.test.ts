@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { OmniRushGatewayBroker, guardEventStream } from "./omnirush-gateway-broker.js";
 import { OmniRushReasoningEffort } from "./opencode-plugins/omnirush-reasoning-effort.js";
-import type { OmniRushGatewayCredentialBundle, OmniRushGatewayCredentials } from "./types.js";
+import type { OmniRushGatewayCredentialBundle } from "./types.js";
 
 type UpstreamCall = { body: Record<string, unknown>; headers: Headers };
 
@@ -39,7 +39,6 @@ function gatewayRequest(body: Record<string, unknown>, headers: Record<string, s
 describe("OmniRush gateway broker", () => {
   test("refreshes one expired credential and retries concurrent requests with the rotated token", async () => {
     let refreshCalls = 0;
-    const persisted: Array<Omit<OmniRushGatewayCredentials, "persist">> = [];
     const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/device/refresh")) {
@@ -61,7 +60,6 @@ describe("OmniRush gateway broker", () => {
         gatewayUrl: "https://gateway.example/omnirush/v1",
         accessToken: "expired-access",
         refreshToken: "old-refresh",
-        persist: async (credentials) => { persisted.push(credentials); },
       },
       engineToken: "local-engine-token",
       fetch: fetcher,
@@ -75,8 +73,6 @@ describe("OmniRush gateway broker", () => {
     const responses = await Promise.all([request(), request()]);
     expect(responses.map((response) => response.status)).toEqual([200, 200]);
     expect(refreshCalls).toBe(1);
-    await Bun.sleep(1);
-    expect(persisted.at(-1)?.refreshToken).toBe("new-refresh");
     expect(responses[0]?.headers.get("x-omnirush-model")).toBe("gpt-6-astra");
   });
 
@@ -153,9 +149,40 @@ describe("OmniRush gateway broker", () => {
 
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.body).toEqual({ model: "gpt-6-astra", input: "test", reasoning: { effort: "max" } });
+    expect(calls[0]?.body).toEqual({ model: "gpt-6-astra", input: "test", reasoning: { effort: "max", summary: "auto" } });
     expect(calls[0]?.headers.has("x-omnirush-reasoning-effort")).toBe(false);
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer access-token");
+  });
+
+  test("requests GPT-6 summaries without an effort header and preserves explicit options", async () => {
+    const calls: UpstreamCall[] = [];
+    const broker = capturingBroker(calls);
+    const bodies = [
+      { model: "gpt-6-astra", input: "default" },
+      { model: "gpt-6-sol", input: "selected", reasoning: { effort: "high" } },
+      { model: "gpt-6-astra", input: "legacy", reasoning_effort: "xhigh" },
+      { model: "gpt-6-astra", input: "explicit", reasoning: { effort: "low", summary: "detailed" } },
+      { model: "gpt-6-sol", input: "disabled", reasoning: { summary: null } },
+      { model: "gpt-5.6-sol", input: "sol" },
+      { model: "meta-muse", input: "other" },
+    ];
+    for (const body of bodies) await broker.handle(gatewayRequest(body), "responses");
+    expect(calls.map((call) => call.body)).toEqual([
+      { ...bodies[0], reasoning: { summary: "auto" } },
+      { ...bodies[1], reasoning: { effort: "high", summary: "auto" } },
+      { ...bodies[2], reasoning: { summary: "auto" } },
+      ...bodies.slice(3),
+    ]);
+  });
+
+  test("leaves compaction and malformed request bodies without a summary default", async () => {
+    const calls: UpstreamCall[] = [];
+    const broker = capturingBroker(calls);
+    const compact = { model: "gpt-6-astra", input: "compact", reasoning: { effort: "high" } };
+    const malformed = { model: "gpt-6-astra", input: "invalid", reasoning: "invalid" };
+    await broker.handle(gatewayRequest(compact, {}, "responses/compact"), "responses/compact");
+    await broker.handle(gatewayRequest(malformed), "responses");
+    expect(calls.map((call) => call.body)).toEqual([compact, malformed]);
   });
 
   test("keeps an effort the engine already emitted and the legacy top-level field", async () => {
@@ -171,8 +198,8 @@ describe("OmniRush gateway broker", () => {
     expect(calls.map((call) => call.body)).toEqual([
       { model: "gpt-5.6-sol", input: "a", reasoning: { effort: "max", summary: "auto" } },
       { model: "gpt-5.6-sol", input: "b", reasoning_effort: "high" },
-      { model: "gpt-6-astra", input: "c" },
-      { model: "gpt-6-astra", input: "d" },
+      { model: "gpt-6-astra", input: "c", reasoning: { summary: "auto" } },
+      { model: "gpt-6-astra", input: "d", reasoning: { summary: "auto" } },
     ]);
   });
 });
@@ -275,163 +302,106 @@ describe("upstream stream guard with realistic frame sizes", () => {
   });
 });
 
-describe("OmniRush gateway broker credential adoption", () => {
+describe("OmniRush gateway broker with a refresh owner", () => {
   const gatewayUrl = "https://gateway.example/omnirush/v1";
   /** The pair after n-1 rotations of one device session. */
   const bundle = (n: number) => ({ gatewayUrl, accessToken: `access-${n}`, refreshToken: `refresh-${n}`, rotation: n - 1 });
 
-  /** Upstream accepts only `validAccess`; the refresh endpoint retires `deadRefresh` and rotates anything else to 3. */
-  function rotatingFetcher(validAccess: string, deadRefresh: string, refreshCalls: string[]) {
+  /** Upstream accepts only the access tokens in `valid`; a refresh request fails the test. */
+  function upstream(valid: Set<string>, bearers: string[]) {
     return async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(String(input));
-      if (url.pathname.endsWith("/device/refresh")) {
-        const body = JSON.parse(String(init?.body)) as { refresh_token: string };
-        refreshCalls.push(body.refresh_token);
-        return body.refresh_token === deadRefresh
-          ? Response.json({ detail: "refresh_token_invalid_or_expired" }, { status: 401 })
-          : Response.json({ access_token: "access-3", refresh_token: "refresh-3", gateway_url: gatewayUrl });
-      }
-      const authorization = new Headers(init?.headers).get("authorization");
-      return authorization === `Bearer ${validAccess}`
-        ? Response.json({ output: [] })
-        : Response.json({ error: "expired" }, { status: 401 });
+      if (new URL(String(input)).pathname.endsWith("/device/refresh")) throw new Error("the broker sent a refresh token");
+      const bearer = new Headers(init?.headers).get("authorization")?.slice(7) ?? "";
+      bearers.push(bearer);
+      return valid.has(bearer) ? Response.json({ output: [] }) : Response.json({ error: "expired" }, { status: 401 });
     };
   }
 
-  function adoptingBroker(latest: () => Promise<ReturnType<typeof bundle> | null>, refreshCalls: string[], onInvalidate: () => void) {
+  function ownedBroker(owner: (rejected: string) => Promise<ReturnType<typeof bundle> | null>, valid: Set<string>, bearers: string[], onInvalidate = () => {}) {
     return new OmniRushGatewayBroker({
-      credentials: { ...bundle(1), latest, invalidate: async () => onInvalidate() },
+      credentials: { ...bundle(1), refresh: owner, invalidate: async () => onInvalidate() },
       engineToken: "local-engine-token",
-      fetch: rotatingFetcher("access-2", "refresh-1", refreshCalls),
+      fetch: upstream(valid, bearers),
     });
   }
 
-  test("adopts credentials the desktop rotated instead of signing the device out", async () => {
-    const refreshCalls: string[] = [];
-    let invalidated = 0;
-    const broker = adoptingBroker(async () => bundle(2), refreshCalls, () => { invalidated += 1; });
+  test("asks the owner after a 401 and never sends a refresh token itself", async () => {
+    const asked: string[] = [];
+    const bearers: string[] = [];
+    const broker = ownedBroker(async (rejected) => {
+      asked.push(rejected);
+      return bundle(2);
+    }, new Set(["access-2"]), bearers);
     const response = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
     expect(response.status).toBe(200);
-    expect(refreshCalls).toEqual([]);
-    expect(invalidated).toBe(0);
-    // A later refresh spends the adopted token, not the retired one.
-    expect(await broker.refreshAccessToken()).toBe("access-3");
-    expect(refreshCalls).toEqual(["refresh-2"]);
+    expect(asked).toEqual(["access-1"]);
+    expect(bearers).toEqual(["access-1", "access-2"]);
   });
 
-  test("adopts a rotation that landed while its own refresh was in flight", async () => {
-    const refreshCalls: string[] = [];
-    let invalidated = 0;
-    let reads = 0;
-    const broker = adoptingBroker(async () => (reads++ === 0 ? bundle(1) : bundle(2)), refreshCalls, () => { invalidated += 1; });
-    const response = await broker.uploadSession("session-1234", new Uint8Array([1, 2, 3]));
-    expect(response.status).toBe(200);
-    expect(refreshCalls).toEqual(["refresh-1"]);
-    expect(invalidated).toBe(0);
+  test("a later 401 hands the owner the pair it gave last, so only the current pair is ever rotated", async () => {
+    const asked: string[] = [];
+    const valid = new Set(["access-2"]);
+    const broker = ownedBroker(async (rejected) => {
+      asked.push(rejected);
+      return bundle(Number(rejected.slice("access-".length)) + 1);
+    }, valid, []);
+    expect((await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses")).status).toBe(200);
+    valid.delete("access-2");
+    valid.add("access-3");
+    expect((await broker.modelCatalog()).status).toBe(200);
+    expect(await broker.refreshAccessToken()).toBe("access-4");
+    expect(asked).toEqual(["access-1", "access-2", "access-3"]);
   });
 
-  test("still signs the device out when the store agrees the session is gone", async () => {
-    const refreshCalls: string[] = [];
+  test("concurrent 401s ask the owner once", async () => {
+    let asked = 0;
+    const broker = ownedBroker(async () => {
+      asked += 1;
+      await Bun.sleep(10);
+      return bundle(2);
+    }, new Set(["access-2"]), []);
+    const responses = await Promise.all([
+      broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "one" }), "responses"),
+      broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "two" }), "responses"),
+      broker.uploadSession("session-1234", new Uint8Array([1, 2, 3])),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+    expect(asked).toBe(1);
+  });
+
+  test("signs the device out when the owner reports the session gone", async () => {
     let invalidated = 0;
-    const broker = adoptingBroker(async () => bundle(1), refreshCalls, () => { invalidated += 1; });
+    const broker = ownedBroker(async () => null, new Set(), [], () => { invalidated += 1; });
     const response = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
     expect(response.status).toBe(401);
     expect(await response.text()).toContain("omnirush_account_required");
-    expect(refreshCalls).toEqual(["refresh-1"]);
     await Bun.sleep(1);
     expect(invalidated).toBe(1);
   });
 
-  test("keeps its own pair when the store still holds the one it rotated away from", async () => {
-    // The broker rotated 1 -> 2 but its persist failed, so the store is behind, not ahead.
-    const refreshCalls: string[] = [];
+  test("an owner that cannot rotate right now keeps the session and answers a retryable 503", async () => {
     let invalidated = 0;
-    const broker = new OmniRushGatewayBroker({
-      credentials: { ...bundle(2), latest: async () => bundle(1), invalidate: async () => { invalidated += 1; } },
-      engineToken: "local-engine-token",
-      fetch: rotatingFetcher("access-3", "refresh-1", refreshCalls),
-    });
+    let offline = true;
+    const broker = ownedBroker(async () => {
+      if (offline) throw new Error("Account refresh unavailable (ENOTFOUND)");
+      return bundle(2);
+    }, new Set(["access-2"]), [], () => { invalidated += 1; });
     const response = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
-    expect(response.status).toBe(200);
-    expect(refreshCalls).toEqual(["refresh-2"]);
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("device_refresh_unavailable");
     expect(invalidated).toBe(0);
-  });
-
-  test("never signs out on a contended refresh (409) and adopts the rotation that won it", async () => {
-    const refreshCalls: string[] = [];
-    let invalidated = 0;
-    let stored = bundle(1);
-    const broker = new OmniRushGatewayBroker({
-      credentials: { ...bundle(1), latest: async () => stored, invalidate: async () => { invalidated += 1; } },
-      engineToken: "local-engine-token",
-      fetch: async (input, init) => {
-        if (new URL(String(input)).pathname.endsWith("/device/refresh")) {
-          refreshCalls.push((JSON.parse(String(init?.body)) as { refresh_token: string }).refresh_token);
-          return Response.json({ detail: "refresh_token_already_used" }, { status: 409 });
-        }
-        return new Headers(init?.headers).get("authorization") === "Bearer access-2"
-          ? Response.json({ output: [] })
-          : Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    // Nothing has landed in the store yet: the request fails without a sign-out.
-    const contended = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
-    // A retryable answer, not a sign-in error that would end the turn.
-    expect(contended.status).toBe(503);
-    expect(await contended.text()).not.toContain("omnirush_account_required");
-    expect(refreshCalls).toEqual(["refresh-1"]);
-    expect(invalidated).toBe(0);
-    // The other holder's rotation lands; the next request adopts it without spending anything.
-    stored = bundle(2);
-    const adopted = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
-    expect(adopted.status).toBe(200);
-    expect(refreshCalls).toEqual(["refresh-1"]);
-    expect(invalidated).toBe(0);
-  });
-
-  test("falls back to the pair it held before adopting when the adopted pair is dead too", async () => {
-    const refreshCalls: string[] = [];
-    let invalidated = 0;
-    // The store claims a newer pair the server does not know; the broker's own still rotates.
-    const broker = new OmniRushGatewayBroker({
-      credentials: { ...bundle(1), latest: async () => bundle(2), invalidate: async () => { invalidated += 1; } },
-      engineToken: "local-engine-token",
-      fetch: rotatingFetcher("access-3", "refresh-2", refreshCalls),
-    });
-    const response = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
-    expect(response.status).toBe(200);
-    expect(refreshCalls).toEqual(["refresh-2", "refresh-1"]);
-    expect(invalidated).toBe(0);
-  });
-
-  test("signs out promptly when the adopted pair and its own are both dead", async () => {
-    const refreshCalls: string[] = [];
-    let invalidated = 0;
-    const broker = new OmniRushGatewayBroker({
-      credentials: { ...bundle(1), latest: async () => bundle(2), invalidate: async () => { invalidated += 1; } },
-      engineToken: "local-engine-token",
-      fetch: async (input, init) => {
-        if (new URL(String(input)).pathname.endsWith("/device/refresh")) {
-          refreshCalls.push((JSON.parse(String(init?.body)) as { refresh_token: string }).refresh_token);
-          return Response.json({ detail: "refresh_token_invalid_or_expired" }, { status: 401 });
-        }
-        return Response.json({ error: "expired" }, { status: 401 });
-      },
-    });
-    const response = await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses");
-    expect(response.status).toBe(401);
-    expect(await response.text()).toContain("omnirush_account_required");
-    expect(refreshCalls).toEqual(["refresh-2", "refresh-1"]);
-    await Bun.sleep(1);
-    expect(invalidated).toBe(1);
+    offline = false;
+    expect((await broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }), "responses")).status).toBe(200);
   });
 });
 
 /**
  * The embedded broker and the desktop account store share one device
- * session: whichever holder gets a 401 first rotates the refresh token, and
- * the server retires the token it spent. These run the real store against
- * the real broker, wired as apps/desktop/electron/runtime.mjs wires them.
+ * session. The store is its one refresh owner: the broker asks it after a
+ * 401 and never refreshes on its own. These run the real store against the
+ * real broker, wired as apps/desktop/electron/runtime.mjs wires them. The
+ * account server accepts the refresh token its latest rotation replaced for
+ * 120 s; any other superseded token it receives reads as a copied sign-in.
  */
 describe("OmniRush gateway broker sharing a device session with the desktop account store", () => {
   const gatewayUrl = "https://gateway.example/omnirush/v1";
@@ -439,28 +409,29 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
   type AccountStore = {
     load: () => Promise<StoredBundle | null>;
     save: (credentials: OmniRushGatewayCredentialBundle) => Promise<void>;
+    refresh: (rejectedAccessToken: string) => Promise<StoredBundle | null>;
     status: () => Promise<{ connected: boolean; reauthorizationRequired?: boolean; email?: string | null }>;
     clear: (options?: { revokeRemote?: boolean }) => Promise<unknown>;
   };
   type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-  /** The account server: one live pair per session; a rotation retires the refresh token it spent. */
+  /** The account server: a rotation demotes the spent token to `previous` (120 s grace) and retires the one before. */
   function accountServer() {
     const server = {
       access: "access-1",
       refresh: "refresh-1",
+      previous: null as string | null,
       generation: 1,
       expired: new Set<string>(),
       refreshCalls: [] as string[],
-      holdProfile: null as Promise<void> | null,
-      contendNext: false,
-      onRotate: () => {},
+      /** Superseded refresh tokens presented outside the grace: the backend's copied-sign-in signal. */
+      superseded: [] as string[],
+      holdRefresh: null as Promise<void> | null,
     };
     const fetcher: Fetcher = async (input, init) => {
       const url = new URL(String(input));
       const bearer = new Headers(init?.headers).get("authorization")?.slice(7) ?? "";
       if (url.pathname.endsWith("/device/me")) {
-        if (server.holdProfile) await server.holdProfile;
         return bearer === server.access && !server.expired.has(bearer)
           ? Response.json({ email: "person@example.com", status: "active" })
           : Response.json({ detail: "device_token_invalid" }, { status: 401 });
@@ -468,15 +439,18 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
       if (url.pathname.endsWith("/device/refresh")) {
         const { refresh_token: token } = JSON.parse(String(init?.body)) as { refresh_token: string };
         server.refreshCalls.push(token);
-        if (server.contendNext) {
-          server.contendNext = false;
-          return Response.json({ detail: "refresh_token_already_used" }, { status: 409 });
+        const hold = server.holdRefresh;
+        server.holdRefresh = null;
+        if (hold) await hold;
+        // Every call here happens well inside the 120 s grace.
+        if (token !== server.refresh && token !== server.previous) {
+          if (/^refresh-\d+$/.test(token)) server.superseded.push(token);
+          return Response.json({ detail: "refresh_token_invalid_or_expired" }, { status: 401 });
         }
-        if (token !== server.refresh) return Response.json({ detail: "refresh_token_invalid_or_expired" }, { status: 401 });
+        server.previous = server.refresh;
         server.generation += 1;
         server.access = `access-${server.generation}`;
         server.refresh = `refresh-${server.generation}`;
-        server.onRotate();
         return Response.json({ access_token: server.access, refresh_token: server.refresh, gateway_url: gatewayUrl });
       }
       return bearer === server.access && !server.expired.has(bearer)
@@ -486,19 +460,27 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
     return { server, fetcher };
   }
 
+  /** The broker's own fetch: model and API calls only; it must never reach the refresh endpoint. */
+  function brokerFetch(fetcher: Fetcher): Fetcher {
+    return async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith("/device/refresh")) throw new Error("the broker sent a refresh token");
+      return fetcher(input, init);
+    };
+  }
+
   const storeModule = fileURLToPath(new URL("../../desktop/electron/omnirush-account.mjs", import.meta.url));
 
-  async function desktopStore(fetcher: Fetcher, options: { encryptDelayMs?: number; saveFails?: { value: boolean } } = {}): Promise<AccountStore> {
+  async function desktopStore(fetcher: Fetcher, options: { saveFails?: { value: boolean }; logs?: string[]; where?: { filePath: string } } = {}): Promise<AccountStore> {
     const { createDesktopOmniRushAccountStore } = await import(storeModule) as {
       createDesktopOmniRushAccountStore: (options: Record<string, unknown>) => AccountStore;
     };
     const directory = await mkdtemp(path.join(os.tmpdir(), "omnirush-shared-session-"));
+    if (options.where) options.where.filePath = path.join(directory, "account.bin");
     const storage = {
       isAsyncEncryptionAvailable: async () => true,
       getSelectedStorageBackend: () => "keychain",
       encryptStringAsync: async (value: string) => {
-        if (options.encryptDelayMs) await Bun.sleep(options.encryptDelayMs);
-        if (options.saveFails?.value) throw new Error("secure storage unavailable");
+        if (options.saveFails?.value) throw new Error("Secure desktop credential storage is unavailable");
         return Buffer.from(value, "utf8");
       },
       decryptStringAsync: async (value: Buffer) => ({ result: value.toString("utf8"), shouldReEncrypt: false }),
@@ -511,6 +493,8 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
       fetchImpl: fetcher,
       sleep: async () => undefined,
       execFileImpl: async () => { throw new Error("no keychain"); },
+      log: (line: string) => options.logs?.push(line),
+      persistRetryBaseMs: 5,
     });
     await store.save({ gatewayUrl, accessToken: "access-1", refreshToken: "refresh-1" });
     return store;
@@ -522,93 +506,71 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
     return new OmniRushGatewayBroker({
       credentials: {
         ...credentials,
-        persist: (rotated) => store.save(rotated),
+        refresh: (rejectedAccessToken) => store.refresh(rejectedAccessToken),
         invalidate: () => store.clear({ revokeRemote: false }).then(() => undefined),
         latest: () => store.load(),
       },
       engineToken: "local-engine-token",
-      fetch: fetcher,
+      fetch: brokerFetch(fetcher),
     });
   }
 
   const prompt = () => gatewayRequest({ model: "gpt-6-astra", input: "test" });
 
-  test("the desktop keeps the session the broker rotated while its profile check was in flight", async () => {
+  test("the store and the broker racing a refresh spend the token once and end on the same pair", async () => {
     const { server, fetcher } = accountServer();
     const store = await desktopStore(fetcher);
     const broker = await brokerFor(store, fetcher);
     server.expired.add("access-1");
-    let releaseProfile = () => {};
-    server.holdProfile = new Promise<void>((resolve) => { releaseProfile = resolve; });
-    const status = store.status(); // GET /device/me with the expired token is now in flight
-    await Bun.sleep(5);
-    expect((await broker.handle(prompt(), "responses")).status).toBe(200); // rotates 1 -> 2 and persists
-    await Bun.sleep(5);
-    expect((await store.load())?.refreshToken).toBe("refresh-2");
-    server.holdProfile = null;
-    releaseProfile();
-    const result = await status; // 401: the closure's refresh-1 is retired; the store's refresh-2 is used instead
-    expect(result.connected).toBe(true);
-    expect(result.email).toBe("person@example.com");
-    expect(result.reauthorizationRequired).toBeUndefined();
+    let release = () => {};
+    server.holdRefresh = new Promise<void>((resolve) => { release = resolve; });
+    // The profile check and two model requests all see access-1 refused at once.
+    const racing = Promise.all([store.status(), broker.handle(prompt(), "responses"), broker.handle(prompt(), "responses")]);
+    await Bun.sleep(10);
+    release();
+    const [status, first, second] = await racing;
+    expect(status.email).toBe("person@example.com");
+    expect([first.status, second.status]).toEqual([200, 200]);
     expect(server.refreshCalls).toEqual(["refresh-1"]);
-    expect(await store.load()).toMatchObject({ refreshToken: "refresh-2", rotation: 1 });
+    expect(await store.load()).toMatchObject({ accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+    expect(await broker.refreshAccessToken()).toBe("access-3"); // the broker holds the store's pair: it rotates refresh-2
+    expect(server.refreshCalls).toEqual(["refresh-1", "refresh-2"]);
+    expect(server.superseded).toEqual([]);
   });
 
-  test("the broker adopts the desktop's rotation while its save is still landing", async () => {
+  test("a broker 401 after the store rotated uses the store's pair; the old refresh token is never sent", async () => {
     const { server, fetcher } = accountServer();
-    const store = await desktopStore(fetcher, { encryptDelayMs: 30 });
+    const store = await desktopStore(fetcher);
     const broker = await brokerFor(store, fetcher);
     server.expired.add("access-1");
-    const rotated = new Promise<void>((resolve) => { server.onRotate = resolve; });
-    const status = store.status(); // 401 -> refresh -> (access-2, refresh-2) -> slow save()
-    await rotated;
-    const response = await broker.handle(prompt(), "responses"); // its own refresh-1 is retired by now
-    expect(response.status).toBe(200);
+    expect((await store.status()).email).toBe("person@example.com"); // the store rotates 1 -> 2
+    expect((await broker.handle(prompt(), "responses")).status).toBe(200); // access-1 refused, access-2 used
+    expect((await broker.modelCatalog()).status).toBe(200);
     expect(server.refreshCalls).toEqual(["refresh-1"]);
-    expect((await status).connected).toBe(true);
-    expect(await store.load()).toMatchObject({ refreshToken: "refresh-2", rotation: 1 });
+    expect(server.superseded).toEqual([]);
   });
 
-  test("the broker spends its own valid pair when its persist failed and the store is behind", async () => {
+  test("a failed save keeps the rotated pair in use by both and retries it; the pair it replaced is never sent", async () => {
     const { server, fetcher } = accountServer();
     const saveFails = { value: false };
-    const store = await desktopStore(fetcher, { saveFails });
+    const logs: string[] = [];
+    const where = { filePath: "" };
+    const store = await desktopStore(fetcher, { saveFails, logs, where });
     const broker = await brokerFor(store, fetcher);
     saveFails.value = true; // secure storage is unavailable from now on
     server.expired.add("access-1");
-    expect((await broker.handle(prompt(), "responses")).status).toBe(200); // 1 -> 2 in memory only
-    await Bun.sleep(5);
-    expect(await store.load()).toMatchObject({ refreshToken: "refresh-1", rotation: 0 });
+    expect((await broker.handle(prompt(), "responses")).status).toBe(200); // 1 -> 2, kept in memory
+    expect((await store.status()).email).toBe("person@example.com");
+    expect(logs.some((line) => line.includes("Could not save the renewed omnirush.ai sign-in"))).toBe(true);
     server.expired.add("access-2"); // an hour later
-    expect((await broker.handle(prompt(), "responses")).status).toBe(200); // spends refresh-2, not the store's retired refresh-1
-    expect((await broker.handle(prompt(), "responses")).status).toBe(200);
+    expect((await broker.handle(prompt(), "responses")).status).toBe(200); // spends refresh-2, not refresh-1
     expect(server.refreshCalls).toEqual(["refresh-1", "refresh-2"]);
-    expect(await store.load()).toMatchObject({ refreshToken: "refresh-1" });
-    // Once storage is back, the next rotation catches the store up.
+    // Once storage is back, the retry saves the current pair.
     saveFails.value = false;
-    server.expired.add("access-3");
-    expect((await broker.handle(prompt(), "responses")).status).toBe(200);
-    await Bun.sleep(5);
-    expect(await store.load()).toMatchObject({ refreshToken: "refresh-4", rotation: 3 });
-  });
-
-  test("a contended refresh (409) never signs the device out; the next request adopts the rotation that won", async () => {
-    const { server, fetcher } = accountServer();
-    const store = await desktopStore(fetcher);
-    const broker = await brokerFor(store, fetcher);
-    server.expired.add("access-1");
-    server.contendNext = true;
-    const contended = await broker.handle(prompt(), "responses");
-    expect(contended.status).toBe(503);
-    expect(await contended.text()).not.toContain("omnirush_account_required");
-    expect(await store.load()).toMatchObject({ refreshToken: "refresh-1" });
-    // The desktop's rotation lands in the store...
-    expect((await store.status()).connected).toBe(true);
-    expect(await store.load()).toMatchObject({ refreshToken: "refresh-2", rotation: 1 });
-    // ...and the broker adopts it without spending anything.
-    expect((await broker.handle(prompt(), "responses")).status).toBe(200);
-    expect(server.refreshCalls).toEqual(["refresh-1", "refresh-1"]);
+    for (let waited = 0; waited < 200 && !(await readFile(where.filePath, "utf8")).includes("refresh-3"); waited += 1) await Bun.sleep(5);
+    expect(JSON.parse(await readFile(where.filePath, "utf8"))).toMatchObject({ refreshToken: "refresh-3", rotation: 2 });
+    expect(server.superseded).toEqual([]);
+    expect(logs.some((line) => /(access|refresh)-\d/.test(line))).toBe(false);
   });
 
   test("a revoked session the store agrees on still signs the device out promptly", async () => {
@@ -623,7 +585,9 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
     expect(server.refreshCalls).toEqual(["refresh-1"]);
     await Bun.sleep(5);
     expect(await store.load()).toBeNull();
-    expect((await store.status()).connected).toBe(false);
+    const status = await store.status();
+    expect(status.connected).toBe(false);
+    expect(status.reauthorizationRequired).toBe(true);
   });
 });
 
@@ -1112,6 +1076,17 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     })]);
   });
 
+  test("adds the summary default when an unrelated model falls back to Astra", async () => {
+    const { broker, calls } = fallbackBroker((body) => body.model === "meta-muse-spark"
+      ? refuse(400, "model_unavailable")
+      : Response.json({ output: [] }));
+    await broker.handle(gatewayRequest({ model: "meta-muse-spark", input: "fallback" }, subagentHeaders), "responses");
+    expect(calls.map((call) => call.body)).toEqual([
+      { model: "meta-muse-spark", input: "fallback" },
+      { model: "gpt-6-astra", input: "fallback", reasoning: { effort: "max", summary: "auto" } },
+    ]);
+  });
+
   test("a busy picked model is tried once more, then moves; a second success stays on it", async () => {
     let busy = 2;
     const stays = fallbackBroker((body) => body.model === "gpt-6-sol" && busy-- > 1
@@ -1124,11 +1099,11 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     const moves = fallbackBroker((body) => body.model === "gpt-6-sol"
       ? new Response("upstream down", { status: 503 })
       : Response.json({ output: [] }));
-    expect((await moves.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b", reasoning_effort: "high" }, subagentHeaders), "responses")).status).toBe(200);
+    expect((await moves.broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b", reasoning_effort: "high", reasoning: { summary: "auto" } }, subagentHeaders), "responses")).status).toBe(200);
     expect(moves.calls.map((call) => call.body)).toEqual([
-      { model: "gpt-6-sol", input: "b", reasoning_effort: "high" },
-      { model: "gpt-6-sol", input: "b", reasoning_effort: "high" },
-      { model: "gpt-6-astra", input: "b", reasoning: { effort: "max" } },
+      { model: "gpt-6-sol", input: "b", reasoning_effort: "high", reasoning: { summary: "auto" } },
+      { model: "gpt-6-sol", input: "b", reasoning_effort: "high", reasoning: { summary: "auto" } },
+      { model: "gpt-6-astra", input: "b", reasoning: { effort: "max", summary: "auto" } },
     ]);
     expect(moves.events.map((event) => event.reason)).toEqual(["http_503"]);
   });
@@ -1162,7 +1137,7 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
   test("a picked model in its refusal cooldown goes straight to the main model", async () => {
     const { broker, calls, events } = fallbackBroker(() => Response.json({ output: [] }), (model) => model === "gpt-6-sol");
     expect((await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "a" }, subagentHeaders), "responses")).status).toBe(200);
-    expect(calls.map((call) => call.body)).toEqual([{ model: "gpt-6-astra", input: "a", reasoning: { effort: "max" } }]);
+    expect(calls.map((call) => call.body)).toEqual([{ model: "gpt-6-astra", input: "a", reasoning: { effort: "max", summary: "auto" } }]);
     expect(events.map((event) => [event.requested, event.used, event.reason, event.ok])).toEqual([["gpt-6-sol", "gpt-6-astra", "refused_recently", true]]);
     // Without the fallback header (the main agent, or an untouched setting) nothing moves.
     expect((await broker.handle(gatewayRequest({ model: "gpt-6-sol", input: "b" }), "responses")).status).toBe(200);

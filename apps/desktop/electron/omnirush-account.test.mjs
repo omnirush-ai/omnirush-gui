@@ -541,25 +541,55 @@ test("accountServerLabel marks loopback servers as the local API", () => {
   assert.equal(accountServerLabel(null), null);
 });
 
-// The embedded broker shares this store and rotates the same device session
-// (its persist() is store.save(), its latest() is store.load()). The server
-// retires a refresh token on rotation, so whichever holder spends a token
-// the other one already rotated is answered 401.
+// This store is the one owner of the device session's refresh token: the
+// embedded broker asks store.refresh() after a 401 instead of refreshing on
+// its own (runtime.mjs). The account server accepts the refresh token its
+// latest rotation replaced for 120 s; any other superseded token it receives
+// reads as a sign-in copied to another device, so the store never sends one.
 
 const SHARED_GATEWAY_URL = "https://gateway.example/omnirush/v1";
+const SERVER_GRACE_MS = 120_000;
 
-/** Fake account server: one live pair; a rotation retires the refresh token it spent. */
-function fakeAccountServer() {
+/** A test clock: the store's `now`, and a `sleep` that moves it forward. */
+function testClock(start = 1_700_000_000_000) {
+  const clock = {
+    t: start,
+    now: () => clock.t,
+    sleep: async (milliseconds) => { clock.t += milliseconds; },
+  };
+  return clock;
+}
+
+/**
+ * Fake account server with the backend's rotation rules: a rotation demotes
+ * the token it spent to `previous`, still accepted for 120 s (a grace
+ * rotation, from the current token), and retires the one before. A token
+ * past its grace (previous, or retired longer than 120 s ago) is refused and
+ * recorded in `superseded`: the backend's copied-sign-in signal.
+ */
+function fakeAccountServer(clock = testClock()) {
   const server = {
     access: "access-1",
     refresh: "refresh-1",
+    previous: null,
+    previousAt: 0,
+    retired: new Map(),
     generation: 1,
     expired: new Set(),
     refreshCalls: [],
+    refreshTimes: [],
+    superseded: [],
     holdProfile: null,
     holdRefresh: null,
     holdLogout: null,
-    contendNext: false,
+    /** Rotate, then lose the answer this many times (the request times out). */
+    loseNext: 0,
+    /** Time out this many times before the request is handled (nothing rotates). */
+    stallNext: 0,
+    /** Answer the next refresh with this status before looking at the token. */
+    answerNext: null,
+    /** Rotate, then never answer: the app is gone (crash, quit) before the answer. */
+    hangNext: false,
   };
   const fetchImpl = async (url, init = {}) => {
     const pathname = new URL(url).pathname;
@@ -573,18 +603,42 @@ function fakeAccountServer() {
     if (pathname.endsWith("/device/refresh")) {
       const token = JSON.parse(init.body).refresh_token;
       server.refreshCalls.push(token);
-      // Held before the check, so the other holder can retire the token meanwhile.
+      server.refreshTimes.push(clock.now());
+      // Held before the check, so a test can act while the request is in flight.
       const hold = server.holdRefresh;
       server.holdRefresh = null;
       if (hold) await hold;
-      if (server.contendNext) {
-        server.contendNext = false;
-        return Response.json({ detail: "refresh_token_already_used" }, { status: 409 });
+      if (server.stallNext > 0) {
+        server.stallNext -= 1;
+        clock.t += 20_000;
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
       }
-      if (token !== server.refresh) return Response.json({ detail: "refresh_token_invalid_or_expired" }, { status: 401 });
+      if (server.answerNext) {
+        const status = server.answerNext;
+        server.answerNext = null;
+        return Response.json({ detail: "unavailable" }, { status });
+      }
+      const inGrace = token === server.previous && clock.now() - server.previousAt <= SERVER_GRACE_MS;
+      if (token !== server.refresh && !inGrace) {
+        const supersededAt = token === server.previous ? server.previousAt : server.retired.get(token);
+        if (supersededAt !== undefined && clock.now() - supersededAt > SERVER_GRACE_MS) server.superseded.push(token);
+        return Response.json({ detail: "refresh_token_invalid_or_expired" }, { status: 401 });
+      }
+      if (server.previous) server.retired.set(server.previous, clock.now());
+      server.previous = server.refresh;
+      server.previousAt = clock.now();
       server.generation += 1;
       server.access = `access-${server.generation}`;
       server.refresh = `refresh-${server.generation}`;
+      if (server.hangNext) {
+        server.hangNext = false;
+        return new Promise(() => {});
+      }
+      if (server.loseNext > 0) {
+        server.loseNext -= 1;
+        clock.t += 20_000;
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
       return Response.json({ access_token: server.access, refresh_token: server.refresh });
     }
     if (pathname.endsWith("/device/logout")) {
@@ -612,24 +666,36 @@ async function connectedStore(fetchImpl, overrides = {}) {
   return { store, options };
 }
 
-/** What the embedded broker does on a 401: rotate through the same server and persist the result. */
-async function brokerRotates(store, fetchImpl, current) {
-  const response = await fetchImpl(`${SHARED_GATEWAY_URL.replace(/\/v1$/, "")}/device/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: current.refreshToken }),
-  });
-  assert.equal(response.status, 200);
-  const payload = await response.json();
-  await store.save({
-    gatewayUrl: SHARED_GATEWAY_URL,
-    accessToken: payload.access_token,
-    refreshToken: payload.refresh_token,
-    rotation: current.rotation + 1,
-  });
-}
+const refreshingFile = (options) => `${options.filePath}.refreshing`;
 
-test("profile check adopts the pair the embedded broker persisted while it was in flight", async () => {
+test("concurrent refreshes spend the refresh token once and all get the rotated pair", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const { store } = await connectedStore(fetchImpl);
+  server.expired.add("access-1");
+  const refresh = deferred();
+  server.holdRefresh = refresh.promise;
+  // The broker (twice) and the profile check all see access-1 refused at once.
+  const callers = [store.refresh("access-1"), store.refresh("access-1"), store.status()];
+  await tick();
+  refresh.resolve();
+  const [first, second, status] = await Promise.all(callers);
+  assert.deepEqual(server.refreshCalls, ["refresh-1"]);
+  assert.equal(first.accessToken, "access-2");
+  assert.deepEqual(second, first);
+  assert.equal(status.email, "person@example.com");
+  assert.deepEqual(await store.load(), { gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+});
+
+test("a caller refused with an access token that was already rotated gets the current pair without a request", async () => {
+  const { server, fetchImpl } = fakeAccountServer();
+  const { store } = await connectedStore(fetchImpl);
+  assert.equal((await store.refresh("access-1")).accessToken, "access-2");
+  // The broker still held access-1 when it was refused.
+  assert.equal((await store.refresh("access-1")).accessToken, "access-2");
+  assert.deepEqual(server.refreshCalls, ["refresh-1"]);
+});
+
+test("a profile check whose token the broker's refresh replaced meanwhile uses the new pair without a request", async () => {
   const { server, fetchImpl } = fakeAccountServer();
   const { store } = await connectedStore(fetchImpl);
   server.expired.add("access-1");
@@ -637,32 +703,13 @@ test("profile check adopts the pair the embedded broker persisted while it was i
   server.holdProfile = profile.promise;
   const status = store.status(); // GET /device/me with the expired token is now in flight
   await tick();
-  await brokerRotates(store, fetchImpl, { refreshToken: "refresh-1", rotation: 0 }); // 1 -> 2, persisted
+  assert.equal((await store.refresh("access-1")).accessToken, "access-2"); // the broker's 401
   server.holdProfile = null;
   profile.resolve();
-  const result = await status; // 401: the closure's refresh-1 is retired and is never spent
+  const result = await status;
   assert.equal(result.connected, true);
   assert.equal(result.email, "person@example.com");
-  assert.equal(result.reauthorizationRequired, undefined);
   assert.deepEqual(server.refreshCalls, ["refresh-1"]);
-  assert.deepEqual(await store.load(), { gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
-});
-
-test("a refresh rejected because the broker rotated first adopts the persisted pair instead of signing out", async () => {
-  const { server, fetchImpl } = fakeAccountServer();
-  const { store } = await connectedStore(fetchImpl);
-  server.expired.add("access-1");
-  const refresh = deferred();
-  server.holdRefresh = refresh.promise;
-  const status = store.status(); // 401 -> POST /device/refresh with refresh-1, held inside the handler
-  await tick();
-  await brokerRotates(store, fetchImpl, { refreshToken: "refresh-1", rotation: 0 }); // retires refresh-1
-  refresh.resolve();
-  const result = await status; // the held refresh is answered 401
-  assert.equal(result.connected, true);
-  assert.equal(result.email, "person@example.com");
-  assert.deepEqual(server.refreshCalls, ["refresh-1", "refresh-1"]);
-  assert.equal((await store.load()).refreshToken, "refresh-2");
 });
 
 test("load() waits for a rotation in flight so the broker reads the settled pair", async () => {
@@ -686,20 +733,241 @@ test("load() waits for a rotation in flight so the broker reads the settled pair
   assert.equal((await status).connected, true);
 });
 
-test("a contended refresh (409) leaves the account connected until the other holder's pair lands", async () => {
-  const { server, fetchImpl } = fakeAccountServer();
-  const { store } = await connectedStore(fetchImpl);
-  server.expired.add("access-1");
-  server.contendNext = true;
-  const unverified = await store.status();
-  assert.equal(unverified.connected, true);
-  assert.equal(unverified.reauthorizationRequired, undefined);
-  assert.equal(unverified.email, null);
-  assert.equal((await store.load()).refreshToken, "refresh-1");
-  await brokerRotates(store, fetchImpl, { refreshToken: "refresh-1", rotation: 0 });
-  const verified = await store.status();
-  assert.equal(verified.email, "person@example.com");
+test("a lost refresh answer is sent again with the same token inside the grace and converges", async () => {
+  const clock = testClock();
+  const { server, fetchImpl } = fakeAccountServer(clock);
+  const logs = [];
+  const { store, options } = await connectedStore(fetchImpl, { now: clock.now, sleep: clock.sleep, log: (line) => logs.push(line) });
+  server.loseNext = 1; // the server rotates, the answer times out
+  const rotated = await store.refresh("access-1");
+  // refresh-1 again, within the grace: the server rotates once more from the current token.
   assert.deepEqual(server.refreshCalls, ["refresh-1", "refresh-1"]);
+  assert.equal(server.refreshTimes[1] - server.refreshTimes[0] <= 100_000, true);
+  assert.deepEqual(server.superseded, []);
+  assert.equal(rotated.refreshToken, server.refresh);
+  assert.deepEqual(await createDesktopOmniRushAccountStore(options).load(), rotated);
+  assert.equal(await exists(refreshingFile(options)), false);
+  assert.equal(logs.some((line) => /same token again/.test(line)), true);
+  assert.equal(logs.some((line) => line.includes("refresh-") || line.includes("access-")), false);
+});
+
+test("a 409 while the token is being rotated is sent again inside the grace, never signed out", async () => {
+  const clock = testClock();
+  const { server, fetchImpl } = fakeAccountServer(clock);
+  const { store } = await connectedStore(fetchImpl, { now: clock.now, sleep: clock.sleep });
+  server.expired.add("access-1");
+  server.answerNext = 409;
+  const status = await store.status();
+  assert.equal(status.connected, true);
+  assert.equal(status.email, "person@example.com");
+  assert.deepEqual(server.refreshCalls, ["refresh-1", "refresh-1"]);
+  assert.deepEqual(server.superseded, []);
+});
+
+test("a refresh answer lost past the grace: the token is never sent again and the user signs in again", async () => {
+  const clock = testClock();
+  const { server, fetchImpl } = fakeAccountServer(clock);
+  const logs = [];
+  const { store, options } = await connectedStore(fetchImpl, { now: clock.now, sleep: clock.sleep, log: (line) => logs.push(line) });
+  server.stallNext = 100; // no answer ever arrives
+  assert.equal(await store.refresh("access-1"), null);
+  const first = server.refreshTimes[0];
+  assert.equal(server.refreshCalls.every((token) => token === "refresh-1"), true);
+  // Each attempt starts early enough to end (20 s timeout) inside the server's 120 s grace.
+  assert.equal(server.refreshTimes.every((time) => time - first <= 100_000), true);
+  assert.deepEqual(server.superseded, []);
+  const sent = server.refreshCalls.length;
+  const status = await store.status();
+  assert.equal(status.connected, false);
+  assert.equal(status.reauthorizationRequired, true);
+  assert.equal(await store.refresh("access-1"), null);
+  assert.equal(server.refreshCalls.length, sent);
+  // A restart does not bring it back.
+  assert.equal(await createDesktopOmniRushAccountStore(options).load(), null);
+  assert.equal(server.refreshCalls.length, sent);
+  assert.equal(logs.some((line) => /grace for sending it again ran out/.test(line)), true);
+});
+
+/** Starts a refresh whose answer never arrives: the app is gone before it lands. */
+async function crashMidRefresh(overrides = {}) {
+  const clock = testClock();
+  const { server, fetchImpl } = fakeAccountServer(clock);
+  const { store, options } = await connectedStore(fetchImpl, { now: clock.now, sleep: clock.sleep, ...overrides });
+  server.hangNext = true;
+  void store.refresh("access-1");
+  while (server.refreshCalls.length === 0) await tick(1);
+  // The record was on disk before the token was sent; the server rotated.
+  const record = JSON.parse(await readFile(refreshingFile(options), "utf8"));
+  assert.equal(record.firstSentAt, clock.t);
+  assert.equal(JSON.stringify(record).includes("refresh-1"), false);
+  return { clock, server, options };
+}
+
+test("a restart after the grace never presents the token a crash left in flight; the user signs in again", async () => {
+  const { clock, server, options } = await crashMidRefresh();
+  clock.t += SERVER_GRACE_MS + 30_000;
+  const restarted = createDesktopOmniRushAccountStore(options);
+  assert.equal(await restarted.load(), null);
+  const status = await restarted.status();
+  assert.equal(status.connected, false);
+  assert.equal(status.reauthorizationRequired, true);
+  assert.deepEqual(server.refreshCalls, ["refresh-1"]);
+  assert.deepEqual(server.superseded, []);
+  assert.equal(await exists(options.filePath), false);
+  assert.equal(await exists(refreshingFile(options)), false);
+});
+
+test("a restart inside the grace finishes the refresh a crash cut off, with the same token", async () => {
+  const { clock, server, options } = await crashMidRefresh();
+  clock.t += 30_000;
+  const restarted = createDesktopOmniRushAccountStore(options);
+  assert.equal((await restarted.load()).refreshToken, "refresh-1");
+  // Sent again at once, while the server still accepts it.
+  const current = await restarted.refresh("access-1");
+  assert.deepEqual(server.refreshCalls, ["refresh-1", "refresh-1"]);
+  assert.equal(current.refreshToken, server.refresh);
+  assert.deepEqual(server.superseded, []);
+  assert.equal(await exists(refreshingFile(options)), false);
+});
+
+/** A store whose secure storage fails once `broken.value` is set. */
+function breakableStorage(broken) {
+  return {
+    ...testStorage(),
+    encryptStringAsync: async (value) => {
+      if (broken.value) throw new Error("Secure desktop credential storage is unavailable");
+      return Buffer.from(value, "utf8");
+    },
+  };
+}
+
+test("a failed save keeps the rotated pair in use, retries and logs it, and never sends the pair it replaced", async () => {
+  const clock = testClock();
+  const { server, fetchImpl } = fakeAccountServer(clock);
+  const logs = [];
+  const broken = { value: false };
+  const { store, options } = await connectedStore(fetchImpl, {
+    now: clock.now,
+    sleep: clock.sleep,
+    loadSafeStorage: () => breakableStorage(broken),
+    log: (line) => logs.push(line),
+    persistRetryBaseMs: 5,
+  });
+  broken.value = true;
+  server.expired.add("access-1");
+  assert.equal((await store.status()).email, "person@example.com");
+  // The new pair is the truth in memory; the disk still has the old one.
+  assert.equal((await store.load()).refreshToken, "refresh-2");
+  assert.match(await readFile(options.filePath, "utf8"), /refresh-1/);
+  await tick(40);
+  assert.equal(logs.filter((line) => /Could not save the renewed omnirush\.ai sign-in/.test(line)).length > 1, true);
+
+  // An hour later the next rotation spends refresh-2, never refresh-1.
+  clock.t += 3_600_000;
+  server.expired.add("access-2");
+  assert.equal((await store.refresh("access-2")).refreshToken, "refresh-3");
+  assert.deepEqual(server.refreshCalls, ["refresh-1", "refresh-2"]);
+  assert.deepEqual(server.superseded, []);
+  // The pair on disk is two rotations behind now: no restart may send it.
+  assert.equal(JSON.parse(await readFile(refreshingFile(options), "utf8")).firstSentAt, 0);
+
+  // Storage comes back: the retry saves the current pair and drops the record.
+  broken.value = false;
+  for (let waited = 0; waited < 200 && await exists(refreshingFile(options)); waited += 1) await tick(5);
+  assert.match(await readFile(options.filePath, "utf8"), /refresh-3/);
+  assert.equal(await exists(refreshingFile(options)), false);
+  assert.equal((await createDesktopOmniRushAccountStore(options).load()).refreshToken, "refresh-3");
+});
+
+test("a quit or crash between a rotation and its save never presents the replaced token after the grace", async () => {
+  const clock = testClock();
+  const { server, fetchImpl } = fakeAccountServer(clock);
+  const broken = { value: false };
+  const { store, options } = await connectedStore(fetchImpl, { now: clock.now, sleep: clock.sleep, loadSafeStorage: () => breakableStorage(broken) });
+  broken.value = true;
+  server.expired.add("access-1");
+  assert.equal((await store.status()).connected, true); // rotated to refresh-2, saved nowhere
+  // The app is gone; it starts again later with working storage.
+  clock.t += SERVER_GRACE_MS + 1;
+  const restarted = createDesktopOmniRushAccountStore({ ...options, loadSafeStorage: () => testStorage() });
+  assert.equal(await restarted.load(), null);
+  const status = await restarted.status();
+  assert.equal(status.connected, false);
+  assert.equal(status.reauthorizationRequired, true);
+  assert.deepEqual(server.refreshCalls, ["refresh-1"]);
+  assert.deepEqual(server.superseded, []);
+});
+
+test("a refresh that never reached the server keeps the pair and leaves nothing to guard", async () => {
+  const clock = testClock();
+  const { server, fetchImpl } = fakeAccountServer(clock);
+  let offline = true;
+  const { store, options } = await connectedStore(async (url, init) => {
+    if (offline && new URL(url).pathname.endsWith("/device/refresh")) {
+      throw new TypeError("fetch failed", { cause: Object.assign(new Error("getaddrinfo ENOTFOUND gateway.example"), { code: "ENOTFOUND" }) });
+    }
+    return fetchImpl(url, init);
+  }, { now: clock.now, sleep: clock.sleep });
+  await assert.rejects(store.refresh("access-1"), /Account refresh unavailable \(ENOTFOUND\)/);
+  assert.equal((await store.load()).refreshToken, "refresh-1");
+  assert.equal(await exists(refreshingFile(options)), false);
+  // Back online much later: refresh-1 was never spent, so it is sent as usual.
+  offline = false;
+  clock.t += 3_600_000;
+  assert.equal((await store.refresh("access-1")).refreshToken, "refresh-2");
+  assert.deepEqual(server.refreshCalls, ["refresh-1"]);
+});
+
+test("save() never writes a pair rotated fewer times over the current one", async () => {
+  const { fetchImpl } = fakeAccountServer();
+  const logs = [];
+  const { store, options } = await connectedStore(fetchImpl, { log: (line) => logs.push(line) });
+  await store.refresh("access-1");
+  await store.refresh("access-2");
+  assert.equal((await store.load()).rotation, 2);
+  await store.save({ gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-2", refreshToken: "refresh-2", rotation: 1 });
+  assert.deepEqual(await store.load(), { gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-3", refreshToken: "refresh-3", rotation: 2 });
+  // A fresh process reading the file first refuses it as well.
+  const restarted = createDesktopOmniRushAccountStore(options);
+  await restarted.save({ gatewayUrl: SHARED_GATEWAY_URL, accessToken: "access-1", refreshToken: "refresh-1" });
+  assert.equal((await restarted.load()).refreshToken, "refresh-3");
+  assert.equal(logs.some((line) => /was not saved over it/.test(line)), true);
+});
+
+test("a saved sign-in this launch cannot read is never replaced by environment or keychain credentials", async () => {
+  const requests = [];
+  const options = await storeOptions({
+    env: LEGACY_ENV,
+    fetchImpl: async (url) => {
+      requests.push(new URL(url).pathname);
+      return Response.json({ email: "person@example.com", status: "active" });
+    },
+    // The keyring that sealed the file is not the one this launch has.
+    loadSafeStorage: () => ({ ...testStorage(), decryptStringAsync: async () => { throw new Error("cannot decrypt"); } }),
+  });
+  await writeFile(options.filePath, "sealed by another keyring");
+  const store = createDesktopOmniRushAccountStore(options);
+  assert.equal(await store.load(), null);
+  assert.equal((await store.status()).connected, false);
+  assert.deepEqual(requests, []);
+  assert.equal(await readFile(options.filePath, "utf8"), "sealed by another keyring");
+});
+
+test("the legacy keychain pair is imported once and removed, so it can never come back", async () => {
+  const keychain = fakeMacKeychain({
+    [KEYCHAIN_SERVICES.gatewayUrl]: "https://omnirush.ai/omnirush/v1",
+    [KEYCHAIN_SERVICES.accessToken]: "old-access",
+    [KEYCHAIN_SERVICES.refreshToken]: "old-refresh",
+  });
+  const options = await storeOptions({
+    platform: "darwin",
+    env: {},
+    legacyKeychain: true,
+    execFileImpl: keychain.execFileImpl,
+    fetchImpl: async () => Response.json({ email: "person@example.com", status: "active" }),
+  });
+  assert.equal((await createDesktopOmniRushAccountStore(options).load()).refreshToken, "old-refresh");
+  assert.deepEqual([...keychain.items.keys()], [KEYCHAIN_SERVICES.gatewayUrl]);
 });
 
 test("a reader that races the sign-out cannot resurrect the cleared account", async () => {
@@ -717,7 +985,7 @@ test("a reader that races the sign-out cannot resurrect the cleared account", as
   assert.equal((await createDesktopOmniRushAccountStore(options).status()).connected, false);
 });
 
-test("a broker persist during a user sign-out is dropped; during a server-driven sign-out it lands", async () => {
+test("a save during a user sign-out is dropped; during a server-driven sign-out it lands", async () => {
   const { server, fetchImpl } = fakeAccountServer();
   const { store } = await connectedStore(fetchImpl);
   const logout = deferred();

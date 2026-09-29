@@ -2227,11 +2227,11 @@ export function createRuntimeManager({
       omnirushGatewayCredentials: gatewayCredentials
         ? {
             ...gatewayCredentials,
-            persist: (credentials) => omnirushGatewayCredentials.save(credentials),
+            // The account store is the one owner of the refresh token: the
+            // broker asks it after a 401 and never refreshes on its own, so
+            // no superseded refresh token is ever sent.
+            refresh: (rejectedAccessToken) => omnirushGatewayCredentials.refresh(rejectedAccessToken),
             invalidate: () => omnirushGatewayCredentials.clear({ revokeRemote: false }),
-            // The account store rotates on its own when it checks the profile;
-            // the broker reads it back before treating a dead refresh token as
-            // a revoked device.
             latest: () => omnirushGatewayCredentials.load(),
             // Name and email for the git commit identity default; the account
             // store owns the profile lookup and its token refresh.

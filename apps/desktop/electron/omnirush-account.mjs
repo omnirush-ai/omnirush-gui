@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -34,11 +35,26 @@ const SECURITY_TOOL = "/usr/bin/security";
 /** Upper bound on duplicate keychain items removed per service during sign-out. */
 const MAX_KEYCHAIN_DELETES = 8;
 /**
- * How long a rejected refresh waits for the embedded broker's persist before
- * the store concludes the session is gone. The broker's rotation can reach
- * the server before this store's, while its persist is still on its way.
+ * The account server still accepts the refresh token its latest rotation
+ * replaced for this long (omnirush_device_rotation_grace_seconds). Any other
+ * superseded refresh token it receives reads as a sign-in copied to a second
+ * device, so this store never sends one.
  */
-const ROTATION_GRACE_MS = 250;
+const SERVER_ROTATION_GRACE_MS = 120_000;
+const REFRESH_TIMEOUT_MS = 20_000;
+/**
+ * A refresh token that may already have been rotated (the answer was lost)
+ * is sent again only while that attempt, timeout included, ends inside the
+ * server's grace, counted from the first time it was sent.
+ */
+const REFRESH_RETRY_WINDOW_MS = SERVER_ROTATION_GRACE_MS - REFRESH_TIMEOUT_MS;
+const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000];
+const PERSIST_RETRY_MAX_MS = 60_000;
+/**
+ * Connection failures that prove a request never reached the account server
+ * (Node fetch and Electron net spellings), so nothing was rotated.
+ */
+const NEVER_SENT = /\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED|ERR_INTERNET_DISCONNECTED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_TIMED_OUT|ERR_ADDRESS_UNREACHABLE|ERR_PROXY_CONNECTION_FAILED|ERR_CERT_\w+|ERR_TLS_CERT_\w+|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_\w+|CERT_HAS_EXPIRED)\b/;
 const PLAINTEXT_KIND = "omnirush.ai sign-in";
 const PLAINTEXT_NOTE = "Unencrypted at rest: this system has no keyring. Owner-only file; signing out deletes it.";
 
@@ -118,8 +134,8 @@ async function responseDetail(response) {
 
 /**
  * A credential bundle as persisted and handed to the embedded broker. The
- * `rotation` counter says how often the device session was refreshed, by
- * either holder; a bundle written before the counter existed loads as 0.
+ * `rotation` counter says how often this store refreshed the device session;
+ * a bundle written before the counter existed loads as 0.
  * @returns {{ gatewayUrl: string, accessToken: string, refreshToken: string, rotation: number } | null}
  */
 function validCredentials(value) {
@@ -130,6 +146,24 @@ function validCredentials(value) {
   if (!gatewayUrl || !accessToken || !refreshToken) return null;
   const rotation = Number.isSafeInteger(value.rotation) && value.rotation >= 0 ? value.rotation : 0;
   return { gatewayUrl, accessToken, refreshToken, rotation };
+}
+
+function tokenHash(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** Names a failure for the log: its code, name or message, never a URL, header or body. */
+function failureLabel(error) {
+  const code = error?.cause?.code ?? error?.code;
+  if (typeof code === "string") return code;
+  if (error?.name && error.name !== "Error" && error.name !== "TypeError") return String(error.name);
+  return String(error?.message ?? error).slice(0, 160);
+}
+
+function neverSent(error) {
+  const cause = error?.cause;
+  const text = [error?.code, error?.message, cause?.code, cause?.message].filter((value) => typeof value === "string").join(" ");
+  return NEVER_SENT.test(text);
 }
 
 function controlPlaneBase(gatewayUrl) {
@@ -238,21 +272,48 @@ export function createDesktopOmniRushAccountStore({
   // written and read back, so later launches keep that --password-store.
   onKeyringSealed = null,
   log = (message) => console.warn(message),
+  now = () => Date.now(),
+  // First pause before a failed save of a rotated pair is tried again; tests shrink it.
+  persistRetryBaseMs = 1_000,
 }) {
+  // This store is the one owner of the device session's refresh token: its
+  // own profile check and the embedded broker (runtime.mjs wires the
+  // broker's `refresh` to refresh() below) both come here, and only here is
+  // a refresh token sent. Both run in the Electron main process.
+  /** The current pair: the owner's truth, ahead of the disk while a save of it keeps failing. */
   let cached = null;
+  /** The pair a restart would load (the saved file, or the environment/keychain import). */
+  let persisted = null;
+  /**
+   * The current pair's refresh token was sent at `firstSentAt` and no answer
+   * settled it: the rotation may have happened with the answer lost.
+   * @type {{ hash: string, firstSentAt: number } | null}
+   */
+  let inFlight = null;
+  /** The store dropped a pair it may not present any more; the user signs in again. */
+  let signInRequired = false;
+  let persistRetry = null;
+  let persistRetryAttempt = 0;
+  let loading = null;
   const fileFallback = platform === "linux" && Boolean(fallbackFilePath);
   let keyringLossLogged = false;
   let sealedBackendRecorded = null;
-  // The embedded broker shares this store (persist/latest/invalidate) and
-  // rotates the same device session. Every writer is tracked so a reader,
-  // the broker's latest() in particular, observes a settled store rather
-  // than the pair a rotation is about to replace.
+  // Every writer is tracked so a reader, the broker's latest() in
+  // particular, observes a settled store rather than the pair a rotation is
+  // about to replace.
   let refreshInFlight = null;
   let saveInFlight = null;
   let clearInFlight = null;
   /** Whether the sign-out in flight revokes the session (see save()). */
   let clearRevokesRemote = false;
   const signedOutPath = `${filePath}.signed-out`;
+  /**
+   * Written before a refresh token is sent and removed once the rotated pair
+   * is saved: after a crash or quit mid-refresh, the next launch knows the
+   * token on disk may have been rotated already. It holds a hash of the
+   * token, never the token.
+   */
+  const refreshingPath = `${filePath}.refreshing`;
   const runSecurity = (args) => (legacyKeychain
     ? execFileImpl(SECURITY_TOOL, args, { timeout: 5_000, maxBuffer: 64 * 1024 })
     : Promise.reject(new Error("The legacy keychain entries belong to the default production profile")));
@@ -364,35 +425,138 @@ export function createDesktopOmniRushAccountStore({
 
   async function readCredentials() {
     if (cached) return cached;
+    loading ??= loadCredentials().finally(() => {
+      loading = null;
+    });
+    return loading;
+  }
+
+  async function exists(file) {
+    return access(file).then(() => true, () => false);
+  }
+
+  async function loadCredentials() {
     const stored = await loadFile();
-    if (stored) {
-      cached = stored;
-      return stored;
+    const imported = stored ? null : await legacyCredentials();
+    const credentials = stored ?? imported;
+    if (!credentials) return null;
+    if (!(await usableAfterRestart(credentials))) {
+      return forget("The saved omnirush.ai sign-in was being renewed when the app stopped, longer ago than the account server accepts that token again.");
     }
-    try {
-      await readFile(signedOutPath);
-      return null;
-    } catch {
-      // No sign-out sentinel: legacy credentials may be imported once.
+    cached = credentials;
+    persisted = credentials;
+    // A refresh the last exit cut off is finished now, while the server still
+    // accepts its token (its access token may keep working a little longer).
+    if (inFlight) void refresh(credentials.accessToken).catch(() => undefined);
+    if (imported) {
+      await enqueueWrite(imported);
+      // Imported once: an old keychain copy must never come back later.
+      if (!env.OMNIRUSH_REFRESH_TOKEN) {
+        await deleteMacKeychain(KEYCHAIN_SERVICES.accessToken, platform, runSecurity);
+        await deleteMacKeychain(KEYCHAIN_SERVICES.refreshToken, platform, runSecurity);
+      }
     }
-    const imported = validCredentials({
+    return credentials;
+  }
+
+  /**
+   * Environment or legacy keychain credentials, imported only while no
+   * sign-in is on disk at all: never over a saved sign-in this launch cannot
+   * read (a locked or replaced keyring), whose pair is newer, and never after
+   * a sign-out.
+   */
+  async function legacyCredentials() {
+    if (await exists(filePath) || (fileFallback && await exists(fallbackFilePath))) return null;
+    if (await exists(signedOutPath)) return null;
+    return validCredentials({
       gatewayUrl: env.OMNIRUSH_GATEWAY_URL ?? await readMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity),
       accessToken: env.OMNIRUSH_ACCESS_TOKEN ?? await readMacKeychain(KEYCHAIN_SERVICES.accessToken, platform, runSecurity),
       refreshToken: env.OMNIRUSH_REFRESH_TOKEN ?? await readMacKeychain(KEYCHAIN_SERVICES.refreshToken, platform, runSecurity),
     });
-    if (imported) {
-      cached = imported;
-      await enqueueWrite(imported);
+  }
+
+  /** @returns {Promise<{ hash: string, rotation: number, firstSentAt: number } | null>} */
+  async function readRefreshing() {
+    try {
+      const value = JSON.parse(await readFile(refreshingPath, "utf8"));
+      const valid = typeof value?.refreshTokenSha256 === "string"
+        && Number.isSafeInteger(value.rotation) && value.rotation >= 0
+        && Number.isSafeInteger(value.firstSentAt) && value.firstSentAt >= 0;
+      return valid ? { hash: value.refreshTokenSha256, rotation: value.rotation, firstSentAt: value.firstSentAt } : null;
+    } catch {
+      return null;
     }
-    return imported;
+  }
+
+  /** Atomic (temporary file, then rename). `firstSentAt: 0` marks a token never to be sent again. */
+  async function writeRefreshing({ hash, rotation, firstSentAt }) {
+    await mkdir(path.dirname(refreshingPath), { recursive: true });
+    const temporary = `${refreshingPath}.${process.pid}.tmp`;
+    const record = { note: "A device sign-in renewal was in flight. Hash only; no token.", refreshTokenSha256: hash, rotation, firstSentAt };
+    await writeFile(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    await rename(temporary, refreshingPath).catch(async (error) => {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    });
+  }
+
+  function withinRetryWindow(firstSentAt, delay = 0) {
+    return firstSentAt > 0 && now() + delay - firstSentAt <= REFRESH_RETRY_WINDOW_MS;
   }
 
   /**
-   * Persist a bundle: this store's own rotation, a sign-in, or the embedded
-   * broker's rotation (its `persist`). A save that arrives while the user is
-   * signing out is dropped, that session is being revoked; one that arrives
-   * during a server-driven sign-out lands afterwards, because a broker that
-   * just rotated successfully proves the session is alive.
+   * Whether a pair read at launch may be used. A refresh of it that was in
+   * flight when the app stopped (crash, quit, update) may have rotated it
+   * with the answer lost: it is sent again only inside the server's grace,
+   * and a pair behind a rotation that was recorded is never used.
+   */
+  async function usableAfterRestart(credentials) {
+    const record = await readRefreshing();
+    if (!record) return true;
+    const hash = tokenHash(credentials.refreshToken);
+    if (record.hash === hash) {
+      if (!withinRetryWindow(record.firstSentAt)) return false;
+      inFlight = { hash, firstSentAt: record.firstSentAt };
+      return true;
+    }
+    if (record.rotation > credentials.rotation) return false;
+    // Left behind by a pair that has since been saved.
+    await rm(refreshingPath, { force: true });
+    return true;
+  }
+
+  /**
+   * Ends the local sign-in without sending its refresh token anywhere, not
+   * even to /device/logout: it may be superseded, and a superseded token the
+   * server receives reads as a copied sign-in. The user signs in again.
+   */
+  async function forget(reason) {
+    log(`[omnirush] ${reason} Asking to sign in again.`);
+    await serialize(removeLocalSignIn);
+    signInRequired = true;
+    return null;
+  }
+
+  async function removeLocalSignIn() {
+    cached = null;
+    persisted = null;
+    inFlight = null;
+    stopPersistRetry();
+    // Sentinel first: a reader that slips in between never sees the file
+    // without the sentinel and resurrects the account from disk.
+    await mkdir(path.dirname(signedOutPath), { recursive: true });
+    await writeFile(signedOutPath, "signed-out\n", { mode: 0o600 });
+    await rm(filePath, { force: true });
+    if (fileFallback) await removePlaintextCredentialFile(fallbackFilePath);
+    await rm(refreshingPath, { force: true });
+  }
+
+  /**
+   * Persist a bundle (a sign-in; this store's own rotations save themselves).
+   * A bundle rotated fewer times than the current pair is older and is never
+   * written over it. A save that arrives while the user is signing out is
+   * dropped, that session is being revoked; one that arrives during a
+   * server-driven sign-out lands afterwards.
    */
   async function save(credentials) {
     const normalized = validCredentials(credentials);
@@ -402,24 +566,33 @@ export function createDesktopOmniRushAccountStore({
       await clearInFlight;
       if (revoked) return;
     }
+    const current = cached ?? await loadFile();
+    if (current && normalized.rotation < current.rotation) {
+      log(`[omnirush] Kept the current omnirush.ai sign-in (rotation ${current.rotation}); an older one (rotation ${normalized.rotation}) was not saved over it.`);
+      return;
+    }
     await enqueueWrite(normalized);
   }
 
   /**
-   * Serialized writer: the broker's persist and this store's own refresh
-   * share one temporary file. Internal writes (legacy import, re-encryption)
-   * use this directly since they can run inside a sign-out.
+   * Serialized disk writer: sign-ins, rotations and the refresh record share
+   * one queue (and temporary files). Internal writes (legacy import,
+   * re-encryption) use it directly since they can run inside a sign-out.
    */
-  function enqueueWrite(normalized) {
+  function serialize(task) {
     const previous = saveInFlight;
     const write = (async () => {
       if (previous) await previous.catch(() => undefined);
-      await writeCredentials(normalized);
+      return task();
     })();
     saveInFlight = write;
     return write.finally(() => {
       if (saveInFlight === write) saveInFlight = null;
     });
+  }
+
+  function enqueueWrite(normalized) {
+    return serialize(() => writeCredentials(normalized));
   }
 
   async function writeCredentials(normalized) {
@@ -462,6 +635,8 @@ export function createDesktopOmniRushAccountStore({
     }
     await rm(signedOutPath, { force: true });
     cached = normalized;
+    persisted = normalized;
+    signInRequired = false;
   }
 
   async function configuredGatewayUrl() {
@@ -475,68 +650,190 @@ export function createDesktopOmniRushAccountStore({
   }
 
   /**
-   * The pair the store holds now when it differs from the one a caller is
-   * about to spend: the embedded broker rotated the session and persisted
-   * the result while the caller's profile request was in flight. Spending
-   * the caller's pair would be answered 401 (the server retires a refresh
-   * token on rotation) and read as a revoked session. Waits for a persist
-   * that is still landing before answering.
-   * @returns {Promise<typeof cached>} null when the store still agrees with the caller.
+   * The only place a refresh token is sent. The embedded broker and this
+   * store's profile check both come here after a 401, with the access token
+   * that was refused. One refresh runs at a time; a caller that arrives
+   * during one waits for it, then decides against the pair it left, so a
+   * refresh token is never spent twice.
+   *
+   * Resolves the current pair: the one already past `rejectedAccessToken`
+   * (no request), or a new rotation, saved before it is handed out. Resolves
+   * null once the session is gone and the user has to sign in again. Rejects
+   * when no rotation happened right now (offline, refused); the pair is kept.
+   * @param {string} rejectedAccessToken
    */
-  async function rotatedElsewhere(credentials) {
-    await settle({ includeRefresh: false, includeClear: false });
-    return cached && cached.refreshToken !== credentials.refreshToken ? cached : null;
+  async function refresh(rejectedAccessToken) {
+    while (refreshInFlight) await refreshInFlight.catch(() => undefined);
+    refreshInFlight = (async () => {
+      await settle({ includeRefresh: false, includeClear: false });
+      const current = await readCredentials();
+      if (!current || current.accessToken !== rejectedAccessToken) return current;
+      return rotate(current);
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+    return refreshInFlight;
   }
 
   /**
-   * Rotate the device session, or return the pair another holder rotated to.
-   * Resolves null only when the server retired the token and the store
-   * agrees nobody rotated it, which is the sign-out signal.
+   * Sends the current pair's refresh token until an answer settles it. After
+   * an answer that was lost the same token is sent again, only while inside
+   * the server's grace; past it the token is never sent again.
    */
-  async function refresh(credentials) {
-    if (refreshInFlight) return refreshInFlight;
-    refreshInFlight = (async () => {
-      const adopted = await rotatedElsewhere(credentials);
-      if (adopted) return adopted;
-      const refreshUrl = controlPlaneBase(credentials.gatewayUrl);
-      refreshUrl.pathname += "/device/refresh";
-      const response = await fetchImpl(refreshUrl, {
+  async function rotate(current) {
+    const started = await beginRefresh(current);
+    if (!started) {
+      return forget("Renewing the omnirush.ai sign-in got no answer, longer ago than the account server accepts that token again.");
+    }
+    // Whether an earlier attempt may have rotated the token with its answer lost.
+    let unsettled = !started.fresh;
+    for (let attempt = 0; ; attempt += 1) {
+      const outcome = await sendRefresh(current);
+      if (outcome.kind === "rotated") {
+        inFlight = null;
+        cached = outcome.credentials;
+        await persistCurrent();
+        return outcome.credentials;
+      }
+      if (outcome.kind === "retired") {
+        return forget("The account server no longer accepts this device's omnirush.ai sign-in.");
+      }
+      if (outcome.kind === "unchanged" && !unsettled) {
+        await endRefresh(current);
+        throw new Error(`Account refresh unavailable (${outcome.detail})`);
+      }
+      // Lost, or refused after an earlier attempt that may have rotated the
+      // token: only another attempt inside the grace can settle it.
+      unsettled = true;
+      const delay = REFRESH_RETRY_DELAYS_MS[Math.min(attempt, REFRESH_RETRY_DELAYS_MS.length - 1)];
+      if (!withinRetryWindow(started.firstSentAt, delay)) {
+        return forget(`Renewing the omnirush.ai sign-in got no usable answer (${outcome.detail}) before the account server's grace for sending it again ran out.`);
+      }
+      log(`[omnirush] Renewing the omnirush.ai sign-in got no usable answer (${outcome.detail}); sending the same token again inside the server's grace.`);
+      await sleep(delay);
+      // A sign-out is waiting for this refresh; it revokes the pair as it is.
+      if (clearInFlight) throw new Error("Account refresh stopped for a sign-out");
+    }
+  }
+
+  /**
+   * Records, on disk before it is sent, that `current`'s refresh token is in
+   * flight. Resolves null when it may not be sent any more; `fresh` is false
+   * when it is being sent again after an attempt that settled nothing.
+   * @returns {Promise<{ fresh: boolean, firstSentAt: number } | null>}
+   */
+  async function beginRefresh(current) {
+    const hash = tokenHash(current.refreshToken);
+    if (inFlight?.hash === hash) {
+      return withinRetryWindow(inFlight.firstSentAt) ? { fresh: false, firstSentAt: inFlight.firstSentAt } : null;
+    }
+    const firstSentAt = now();
+    try {
+      await serialize(() => writeRefreshing(persisted.refreshToken === current.refreshToken
+        ? { hash, rotation: current.rotation, firstSentAt }
+        // The pair a restart would load is already behind this one (its save
+        // keeps failing); after this rotation it is two behind and must never
+        // be sent again.
+        : { hash: tokenHash(persisted.refreshToken), rotation: persisted.rotation, firstSentAt: 0 }));
+    } catch (error) {
+      log(`[omnirush] Could not record the omnirush.ai sign-in renewal before sending it (${failureLabel(error)}); not renewing now.`);
+      throw error;
+    }
+    inFlight = { hash, firstSentAt };
+    return { fresh: true, firstSentAt };
+  }
+
+  /** The token was answered without a rotation, or never reached the server: it stays current. */
+  async function endRefresh(current) {
+    inFlight = null;
+    // Otherwise the record guards an older pair on disk and stays.
+    if (persisted?.refreshToken === current.refreshToken) await serialize(() => rm(refreshingPath, { force: true }));
+  }
+
+  /**
+   * One POST /device/refresh. `rotated` carries the new pair; `retired`: the
+   * server does not know the token (401/403); `unchanged`: answered without
+   * a rotation, or never reached the server; `unknown`: the rotation may
+   * have happened with its answer lost (timeout, reset, 408, 409, 5xx other
+   * than 503, an unreadable success).
+   */
+  async function sendRefresh(credentials) {
+    const refreshUrl = controlPlaneBase(credentials.gatewayUrl);
+    refreshUrl.pathname += "/device/refresh";
+    let response;
+    try {
+      response = await fetchImpl(refreshUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: credentials.refreshToken }),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
       });
-      if (response.status === 401 || response.status === 403) {
-        // The broker's rotation may have reached the server first while its
-        // persist is still on its way here: give it a moment to land.
-        await sleep(ROTATION_GRACE_MS);
-        return rotatedElsewhere(credentials);
-      }
-      if (response.status === 409) {
-        // refresh_token_already_used: the broker is rotating this very token
-        // right now. Its persist lands shortly; until then the account is
-        // merely unverified, never signed out.
-        const rotated = await rotatedElsewhere(credentials);
-        if (rotated) return rotated;
-        throw new Error("Account refresh in progress elsewhere (409)");
-      }
-      if (!response.ok) throw new Error(`Account refresh unavailable (${response.status})`);
+    } catch (error) {
+      return { kind: neverSent(error) ? "unchanged" : "unknown", detail: failureLabel(error) };
+    }
+    if (response.status === 401 || response.status === 403) return { kind: "retired" };
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      const lost = (response.status >= 500 && response.status !== 503) || response.status === 408 || response.status === 409;
+      return { kind: lost ? "unknown" : "unchanged", detail: `HTTP ${response.status}` };
+    }
+    try {
       const payload = await response.json();
-      const refreshed = validCredentials({
+      const rotated = validCredentials({
         gatewayUrl: payload.gateway_url ?? credentials.gatewayUrl,
         accessToken: payload.access_token,
         refreshToken: payload.refresh_token,
         rotation: credentials.rotation + 1,
       });
-      if (!refreshed) throw new Error("Account service returned invalid credentials");
-      // Not save(): a sign-out waiting for this refresh must see the pair
-      // it has to revoke, so this write never queues behind the sign-out.
-      await enqueueWrite(refreshed);
-      return refreshed;
-    })().finally(() => {
-      refreshInFlight = null;
-    });
-    return refreshInFlight;
+      if (rotated) return { kind: "rotated", credentials: rotated };
+    } catch {
+      // An answer cut off or unreadable counts as lost.
+    }
+    return { kind: "unknown", detail: "unreadable answer" };
+  }
+
+  /**
+   * Saves the pair this store just rotated to. Until a save lands the pair
+   * stays the in-memory truth (never swapped back for the pair on disk, which
+   * it superseded), the refresh record keeps that older pair from being sent
+   * after a restart, and the save is retried.
+   */
+  async function persistCurrent() {
+    const pair = cached;
+    if (!pair || persisted === pair) return;
+    try {
+      await serialize(async () => {
+        if (cached !== pair) return;
+        // Sent already without an answer: its record moves to this pair before the pair lands on disk.
+        const unsettled = inFlight?.hash === tokenHash(pair.refreshToken) ? inFlight : null;
+        if (unsettled) await writeRefreshing({ hash: unsettled.hash, rotation: pair.rotation, firstSentAt: unsettled.firstSentAt });
+        await writeCredentials(pair);
+        if (!unsettled) await rm(refreshingPath, { force: true });
+      });
+      stopPersistRetry();
+    } catch (error) {
+      persistRetryAttempt += 1;
+      log(`[omnirush] Could not save the renewed omnirush.ai sign-in (${failureLabel(error)}, attempt ${persistRetryAttempt}); keeping it in memory and trying again.`);
+      schedulePersistRetry();
+    }
+  }
+
+  function schedulePersistRetry() {
+    if (persistRetry) return;
+    const delay = Math.min(PERSIST_RETRY_MAX_MS, persistRetryBaseMs * 2 ** Math.min(persistRetryAttempt - 1, 10));
+    persistRetry = setTimeout(() => {
+      persistRetry = null;
+      // A refresh in flight saves its own result; a sign-out drops the pair.
+      if (refreshInFlight || clearInFlight) schedulePersistRetry();
+      else void persistCurrent();
+    }, delay);
+    persistRetry.unref?.();
+  }
+
+  function stopPersistRetry() {
+    if (persistRetry) clearTimeout(persistRetry);
+    persistRetry = null;
+    persistRetryAttempt = 0;
   }
 
   /**
@@ -563,9 +860,10 @@ export function createDesktopOmniRushAccountStore({
   }
 
   /**
-   * @param {number} refreshesLeft Bounded: one refresh may only adopt the
-   * broker's pair, whose access token can itself have expired while the app
-   * was idle, so a second one is allowed before the session counts as gone.
+   * @param {number} refreshesLeft Bounded: one refresh may only hand back a
+   * pair rotated earlier (for the broker), whose access token can itself have
+   * expired while the app was idle, so a second one is allowed before the
+   * session counts as gone.
    */
   async function fetchProfile(credentials, refreshesLeft = 2) {
     const profileUrl = controlPlaneBase(credentials.gatewayUrl);
@@ -575,7 +873,7 @@ export function createDesktopOmniRushAccountStore({
       signal: AbortSignal.timeout(20_000),
     });
     if (response.status === 401 && refreshesLeft > 0) {
-      const refreshed = await refresh(credentials);
+      const refreshed = await refresh(credentials.accessToken);
       if (!refreshed) throw new InvalidAccountCredentialsError("Device session expired");
       return fetchProfile(refreshed, refreshesLeft - 1);
     }
@@ -626,7 +924,13 @@ export function createDesktopOmniRushAccountStore({
       });
       if (!credentials) throw new Error("Account service returned invalid credentials");
       // A brand-new session always lands, even next to a sign-out of the old one.
-      await enqueueWrite(credentials);
+      await serialize(async () => {
+        await writeCredentials(credentials);
+        // The refresh record belonged to the session this one replaces.
+        inFlight = null;
+        stopPersistRetry();
+        await rm(refreshingPath, { force: true }).catch(() => undefined);
+      });
       return /** @type {const} */ ({ connected: true, userCode: String(issued.user_code ?? "") });
     }
     throw new Error("Account link expired before it was approved");
@@ -666,6 +970,7 @@ export function createDesktopOmniRushAccountStore({
       if (fileBacked && await keyringCopyUnreadable()) {
         return { connected: false, gatewayConfigured, ...server, ...storage, reauthorizationRequired: true, keyringUnavailable: true };
       }
+      if (signInRequired) return { connected: false, gatewayConfigured, ...server, ...storage, reauthorizationRequired: true };
       return { connected: false, gatewayConfigured, ...server, ...storage };
     }
     try {
@@ -696,7 +1001,7 @@ export function createDesktopOmniRushAccountStore({
         };
       }
       // Offline profile lookup must not make a securely stored account look
-      // signed out. Model requests will still use the broker's refresh path.
+      // signed out. The next 401 (here or in the broker) refreshes again.
       return {
         connected: true,
         gatewayConfigured,
@@ -737,14 +1042,11 @@ export function createDesktopOmniRushAccountStore({
       const outcome = credentials && revokeRemote
         ? await remoteLogout(credentials)
         : { remoteRevoked: true, reason: "already_revoked" };
-      cached = null;
-      // Sentinel first: a reader that slips in between never sees the file
-      // without the sentinel and resurrects the account from disk.
-      await mkdir(path.dirname(signedOutPath), { recursive: true });
-      await writeFile(signedOutPath, "signed-out\n", { mode: 0o600 });
-      await rm(filePath, { force: true });
-      if (fileFallback) await removePlaintextCredentialFile(fallbackFilePath);
-      if (revokeRemote) await deleteMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity);
+      await serialize(removeLocalSignIn);
+      if (revokeRemote) {
+        signInRequired = false;
+        await deleteMacKeychain(KEYCHAIN_SERVICES.gatewayUrl, platform, runSecurity);
+      }
       return outcome;
     } finally {
       if (clearInFlight === signOut) clearInFlight = null;
@@ -752,5 +1054,5 @@ export function createDesktopOmniRushAccountStore({
     }
   }
 
-  return { load, save, authorize, status, clear };
+  return { load, save, refresh, authorize, status, clear };
 }

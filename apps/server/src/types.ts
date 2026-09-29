@@ -88,24 +88,28 @@ export type OmniRushGatewayCredentialBundle = {
   accessToken: string;
   refreshToken: string;
   /**
-   * How many times this device session has been rotated, counted by whichever
-   * holder performed the rotation. Two holders (the embedded broker and the
-   * desktop account store) share one session and only adopt a stored pair
-   * that is newer than their own; missing means 0 (bundles persisted before
-   * the counter existed, or read from the environment).
+   * How many times the desktop account store has rotated this device session;
+   * it never saves a bundle with a lower count over a higher one. Missing
+   * means 0 (bundles persisted before the counter existed, or read from the
+   * environment).
    */
   rotation?: number;
 };
 
 export type OmniRushGatewayCredentials = OmniRushGatewayCredentialBundle & {
-  persist?: (credentials: OmniRushGatewayCredentialBundle) => Promise<void>;
   invalidate?: () => Promise<void>;
   /**
-   * The credentials as currently stored. Another holder (the desktop account
-   * store checking the profile) may have rotated them since this bundle was
-   * read; the broker adopts that rotation instead of spending a refresh token
-   * the server already retired, which would look like a revoked device.
+   * The one owner of the device session's refresh token (the desktop account
+   * store). With it the broker never sends a refresh token: after a 401 it
+   * passes the refused access token here and uses the pair it gets back,
+   * either one the owner already rotated to or a new rotation (the owner runs
+   * one at a time and saves it before answering). Null means the session is
+   * gone; a rejection means no rotation was possible right now. The server
+   * treats a superseded refresh token as a sign-in copied to another device,
+   * so two holders must never both spend one.
    */
+  refresh?: (rejectedAccessToken: string) => Promise<OmniRushGatewayCredentialBundle | null>;
+  /** The credentials as currently stored; null after a sign-out. */
   latest?: () => Promise<OmniRushGatewayCredentialBundle | null>;
   /** Connected account's profile (name and email for the git commit identity default); null when signed out or offline. */
   profile?: () => Promise<{ email: string | null; displayName: string | null } | null>;
