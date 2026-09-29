@@ -1836,8 +1836,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     ? `${local.prefs.defaultModel.providerID}/${local.prefs.defaultModel.modelID}`
     : t("settings.default_label");
   const defaultModelVariantLabel = local.prefs.modelVariant ?? t("settings.default_label");
-  const visibleProviderConnectedIds = providerConnectedIds.filter(
-    isSupportedModelProvider,
+  const visibleProviderConnectedIds = providerConnectedIds.filter((id) =>
+    isSupportedModelProvider(id),
   );
   const providerStatusLabel = visibleProviderConnectedIds.length > 0 ? t("status.connected") : t("status.disconnected_label");
   const providerStatusStyle = visibleProviderConnectedIds.length > 0

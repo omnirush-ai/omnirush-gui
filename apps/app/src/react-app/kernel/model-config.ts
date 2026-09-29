@@ -160,11 +160,16 @@ export function readStoredDefaultModel(): ModelRef {
     // Keep external provider choices and every omnirush.ai catalog model
     // (the catalog is the server's, not a list compiled in here), but migrate
     // retired routes to the default model.
-    if (parsed?.providerID === "omnirush" && !isOmniRushModelID(parsed.modelID)) {
+    // A default on a provider the pickers no longer list (another provider,
+    // hidden unless VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS=1) migrates the same way.
+    if (
+      (parsed?.providerID === "omnirush" && !isOmniRushModelID(parsed.modelID))
+      || (parsed && !isSupportedModelProvider(parsed.providerID))
+    ) {
       writeStoredDefaultModel(DEFAULT_MODEL);
       return DEFAULT_MODEL;
     }
-    return parsed && isSupportedModelProvider(parsed.providerID) ? parsed : DEFAULT_MODEL;
+    return parsed ?? DEFAULT_MODEL;
   } catch {
     return DEFAULT_MODEL;
   }

@@ -211,15 +211,19 @@ describe("model behavior options", () => {
     ]);
   });
 
-  test("allows only internal and mainstream model providers", () => {
+  test("lists omnirush.ai models only, mainstream providers only behind the flag", () => {
     expect(isInternalModelProvider("omnirush")).toBe(true);
     expect(isInternalModelProvider("lpr_team")).toBe(true);
     expect(isDirectModelProvider("openai")).toBe(true);
     expect(isDirectModelProvider("anthropic")).toBe(true);
-    expect(isSupportedModelProvider("google")).toBe(true);
-    expect(isSupportedModelProvider("openrouter")).toBe(true);
-    expect(isSupportedModelProvider("opencode")).toBe(false);
-    expect(isSupportedModelProvider("ollama")).toBe(false);
+    expect(isSupportedModelProvider("omnirush")).toBe(true);
+    expect(isSupportedModelProvider("lpr_team")).toBe(true);
+    expect(isSupportedModelProvider("anthropic")).toBe(false);
+    expect(isSupportedModelProvider("google")).toBe(false);
+    expect(isSupportedModelProvider("google", true)).toBe(true);
+    expect(isSupportedModelProvider("openrouter", true)).toBe(true);
+    expect(isSupportedModelProvider("opencode", true)).toBe(false);
+    expect(isSupportedModelProvider("ollama", true)).toBe(false);
     expect(providerCatalogRank("omnirush")).toBeLessThan(providerCatalogRank("openai"));
   });
 

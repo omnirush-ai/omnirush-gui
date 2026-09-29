@@ -16,8 +16,14 @@ export function isDirectModelProvider(providerID: string) {
   return directProviderSet.has(providerID.trim().toLowerCase());
 }
 
-export function isSupportedModelProvider(providerID: string) {
-  return isInternalModelProvider(providerID) || isDirectModelProvider(providerID);
+// Model pickers list only omnirush.ai (and org-assigned) models, which come
+// from the account's catalog. Providers from the user's own engine config
+// (their OpenAI, Anthropic, … keys) come back with
+// VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS=1 at build time.
+const OTHER_PROVIDERS_ALLOWED = import.meta.env.VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS === "1";
+
+export function isSupportedModelProvider(providerID: string, allowOtherProviders = OTHER_PROVIDERS_ALLOWED) {
+  return isInternalModelProvider(providerID) || (allowOtherProviders && isDirectModelProvider(providerID));
 }
 
 export function providerCatalogRank(providerID: string) {
