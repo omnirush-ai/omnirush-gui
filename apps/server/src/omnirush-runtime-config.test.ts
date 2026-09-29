@@ -339,7 +339,8 @@ describe("omnirush runtime config file", () => {
     expect(prompt).toContain("## Memory\n");
     expect(prompt).toContain("## OmniRush.ai Artifacts");
     expect(prompt).toContain("## Connected work");
-    expect(prompt).toContain("Do simple work yourself: a question a few tool calls can answer needs no sub-agent.");
+    expect(prompt).toContain("Delegate real work to sub-agents. For any task that takes more than a few tool calls");
+    expect(prompt).toContain("Only a quick question that a few tool calls answer needs no sub-agent.");
     expect(prompt).toContain("make exactly that many subagent calls, no more and no fewer, and start them all in one message");
     expect(prompt).toContain("Never paste the user's whole message, or the user's instructions about sub-agents, into a sub-agent's prompt");
     expect(prompt).toContain("Never replace an explicit delegation request with a simulated multi-role answer");
