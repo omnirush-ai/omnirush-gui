@@ -1,4 +1,5 @@
 /** @jsxImportSource react */
+import { useLayoutEffect, useRef } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
 import {
   Card,
@@ -250,6 +251,18 @@ export function ExtensionDetailModal({
 }: ExtensionDetailModalProps) {
   "use memo";
   const resolvedIconSrc = resolveExtensionIconUrl({ iconSrc, iconSlug, serviceUrl: url });
+  // As a page the detail replaces the Library list inside the same scroll
+  // container, which kept the list's scroll offset: start at the top.
+  const pageRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open || presentation !== "page") return;
+    for (let node = pageRef.current?.parentElement; node; node = node.parentElement) {
+      if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) {
+        node.scrollTop = 0;
+        return;
+      }
+    }
+  }, [open, presentation, name]);
 
   if (!open) return null;
 
@@ -703,7 +716,7 @@ export function ExtensionDetailModal({
 
   if (presentation === "page") {
     return (
-      <div className="flex w-full max-w-3xl flex-col gap-6 animate-in fade-in duration-300">
+      <div ref={pageRef} className="flex w-full max-w-3xl flex-col gap-6 animate-in fade-in duration-300">
         <Button
           variant="ghost"
           size="sm"
