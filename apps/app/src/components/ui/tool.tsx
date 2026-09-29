@@ -33,7 +33,7 @@ import {
   SquareCode,
   Wrench,
 } from "lucide-react"
-import { useCallback, useState } from "react"
+import { useCallback, useState, type ReactNode } from "react"
 import type { DynamicToolUIPart, ToolUIPart } from "ai"
 
 function toolIcon(part: ToolPart) {
@@ -71,6 +71,8 @@ export type ToolProps = {
   toolPart: ToolPart
   defaultOpen?: boolean
   className?: string
+  /** Replaces the raw input/output dump with a tool-specific view. */
+  children?: ReactNode
   onReconnect?: (
     action: ChatToolReconnectAction,
     onProgress: (progress: ChatToolReconnectProgress) => void,
@@ -119,7 +121,7 @@ function diffLineClass(line: string) {
 
 function DiffLines({ diff }: { diff: string }) {
   return (
-    <div className="max-h-60 overflow-auto rounded-md font-mono leading-relaxed">
+    <div className="max-h-60 overflow-auto rounded-md pr-8 font-mono leading-relaxed">
       {diff.split("\n").map((line, index) => (
         <div
           key={`${index}:${line}`}
@@ -150,6 +152,7 @@ const Tool = ({
   toolPart,
   defaultOpen = false,
   className,
+  children,
   onReconnect,
   onReopenAuthorization,
   onRetry,
@@ -263,7 +266,9 @@ const Tool = ({
         <p className="mt-1 text-xs text-destructive" role="alert">{reconnectError}</p>
       ) : null}
       <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden text-sm transition-[height] duration-150 ease-out data-starting-style:h-0 data-ending-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden">
-        <div className="bg-muted relative mt-2 flex flex-col gap-2 rounded-lg p-2 pr-10 text-xs">
+        {/* Each block keeps pr-8 clear of the copy button itself, so a
+            scrolling block's scrollbar sits at the card's right edge. */}
+        <div className="bg-muted relative mt-2 flex flex-col gap-2 rounded-lg p-2 text-xs">
           {resultText !== null ? (
             <Button
               type="button"
@@ -278,26 +283,30 @@ const Tool = ({
               {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
             </Button>
           ) : null}
-          {hasInput ? (
-            inputDiff !== null ? (
-              <DiffLines diff={inputDiff} />
-            ) : (
-              <pre className="whitespace-pre-wrap wrap-break-word">
-                {formatValue(input)}
-              </pre>
-            )
-          ) : null}
-          {hasOutput ? (
-            isDiffText(toolPart.output) ? (
-              <DiffLines diff={toolPart.output} />
-            ) : (
-              <pre className="max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word opacity-80">
-                {formatValue(toolPart.output)}
-              </pre>
-            )
-          ) : null}
+          {children ?? (
+            <>
+              {hasInput ? (
+                inputDiff !== null ? (
+                  <DiffLines diff={inputDiff} />
+                ) : (
+                  <pre className="pr-8 whitespace-pre-wrap wrap-break-word">
+                    {formatValue(input)}
+                  </pre>
+                )
+              ) : null}
+              {hasOutput ? (
+                isDiffText(toolPart.output) ? (
+                  <DiffLines diff={toolPart.output} />
+                ) : (
+                  <pre className="max-h-60 overflow-auto pr-8 whitespace-pre-wrap wrap-break-word opacity-80">
+                    {formatValue(toolPart.output)}
+                  </pre>
+                )
+              ) : null}
+            </>
+          )}
           {isError && toolPart.errorText ? (
-            <pre className="text-destructive max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word">
+            <pre className="text-destructive max-h-60 overflow-auto pr-8 whitespace-pre-wrap wrap-break-word">
               {toolPart.errorText}
             </pre>
           ) : null}
