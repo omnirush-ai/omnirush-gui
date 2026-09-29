@@ -177,7 +177,7 @@ export function omnirushSwarmSubagentNote(depth: number): string {
  * (every agent that has the tool, main or sub-agent). The engine's own text
  * asks for detailed prompts and parallel launches; this bounds both.
  */
-export const OMNIRUSH_TASK_TOOL_NOTE = "omnirush.ai: do simple work yourself; start sub-agents only when the user asks for them or the work clearly splits into independent parts. When the user names a number of agents, start exactly that many, all in one message. Each prompt covers only that agent's part and is self-contained: never paste the user's whole message or the user's instructions about sub-agents into it. A sub-agent starts its own sub-agents only when its task explicitly tells it to.";
+export const OMNIRUSH_TASK_TOOL_NOTE = "omnirush.ai: in the main session, for any task beyond a few tool calls, split it into independent parts and start 2-4 sub-agents in one message so they run in parallel; answer only a quick question yourself. When the user names a number of agents, start exactly that many, all in one message. Each prompt covers only that agent's part and is self-contained: never paste the user's whole message or the user's instructions about sub-agents into it. A sub-agent starts its own sub-agents only when its task explicitly tells it to.";
 
 export const OMNIRUSH_SWARM_STATUSES = ["todo", "running", "done", "blocked"] as const;
 export type SwarmTaskStatus = (typeof OMNIRUSH_SWARM_STATUSES)[number];

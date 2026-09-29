@@ -152,7 +152,8 @@ describeMaybe("delegation rules on the 2.x engine (mock provider)", () => {
 
     const main = await waitFor(() => seen.find((body) => !isChild(body)), "the main session's request");
     const mainSystem = systemOf(main);
-    expect(mainSystem).toContain("Do simple work yourself: a question a few tool calls can answer needs no sub-agent.");
+    expect(mainSystem).toContain("For any task that takes more than a few tool calls");
+    expect(mainSystem).toContain("start 2-4 sub-agents in one message so they run in parallel");
     expect(mainSystem).toContain("make exactly that many subagent calls, no more and no fewer, and start them all in one message");
     expect(mainSystem).toContain("Tell a sub-agent to start its own sub-agents only when the user explicitly asked for nested sub-agents.");
     expect(mainSystem).not.toContain(SUB_NOTE_MARK);
