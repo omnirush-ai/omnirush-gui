@@ -35,7 +35,7 @@ import {
 } from "./omnirush-model-catalog.js";
 import { gitWorkflowPermissionRules } from "./git-command-policy.js";
 import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
-import { BestPracticesEngineReloads, OMNIRUSH_BEST_PRACTICES, omnirushBestPracticesSkillsDir } from "./best-practices.js";
+import { BestPracticesEngineReloads, OMNIRUSH_BEST_PRACTICES, omnirushBestPracticesSkillsDir, waitForBestPracticesReady } from "./best-practices.js";
 import { buildEngine2Config } from "./engine2/config.js";
 import type { ServerConfig } from "./types.js";
 
@@ -497,6 +497,31 @@ describe("omnirush runtime config file", () => {
     await writeOmniRushRuntimeConfigFile(config);
     expect(await readFile(bestDir, "utf8")).toBe("leave this path alone while off\n");
     expect(await readConfigFile(config)).toMatchObject({ skills: { paths: [omnirushRuntimeSkillsDir(config)] } });
+  });
+
+  test("live apply waits for both native prompt and owned skill readiness, and times out honestly", async () => {
+    const { root, config } = await setup();
+    const owned = OMNIRUSH_BEST_PRACTICES.skills.map((skill) => ({ name: skill.name, location: join(omnirushBestPracticesSkillsDir(config), skill.name, "SKILL.md") }));
+    const user = { name: "omnirush-feature", location: join(root, ".opencode", "skills", "omnirush-feature", "SKILL.md") };
+    const stale = { agents: [{ name: "omnirush", prompt: `${OMNIRUSH_AGENT_PROMPT}\n\n${OMNIRUSH_BEST_PRACTICES.systemPrompt}` }], skills: [...owned, user] };
+    const promptReady = { agents: [{ name: "omnirush", prompt: OMNIRUSH_AGENT_PROMPT }], skills: [...owned, user] };
+    const allReady = { agents: promptReady.agents, skills: [user] };
+    let probes = 0;
+    await waitForBestPracticesReady({
+      config, enabled: false, timeoutMs: 1_000, intervalMs: 1,
+      read: async () => { probes += 1; return [probes === 1 ? stale : probes === 2 ? promptReady : allReady]; },
+    });
+    expect(probes).toBe(3);
+    await expect(waitForBestPracticesReady({
+      config, enabled: false, timeoutMs: 20, intervalMs: 1,
+      read: async () => [promptReady],
+    })).rejects.toThrow("Best practices engine readiness was not observed");
+    const overrides = OMNIRUSH_BEST_PRACTICES.skills.map((skill) => ({ name: skill.name, location: join(root, ".opencode", "skills", skill.name, "SKILL.md") }));
+    await waitForBestPracticesReady({ config, enabled: true, timeoutMs: 1_000, read: async () => [{ agents: stale.agents, skills: overrides }] });
+    await expect(waitForBestPracticesReady({
+      config, enabled: false, timeoutMs: 20, intervalMs: 1,
+      read: async () => [{ agents: allReady.agents, skills: [{ name: user.name, location: "" }] }],
+    })).rejects.toThrow("Best practices engine readiness was not observed");
   });
 
   test("keepOmniRushRuntimeConfigFileFresh rewrites the file on ENGINE_GLOBAL writes", async () => {

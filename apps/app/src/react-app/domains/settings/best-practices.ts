@@ -14,7 +14,7 @@ export function bestPracticesChangeMessage(result: OmniRushBestPracticesChange):
     case "deferred":
       return `Best practices ${choice} saved. This change waits until the engine is idle.`;
     case "failed":
-      return `Best practices ${choice} saved. Engine reload failed. Use Reload in Settings to apply it.`;
+      return `Best practices ${choice} saved. The engine change could not be confirmed. Use Reload in Settings to apply it.`;
     case "unconfigured":
       return `Best practices ${choice} saved. The choice will apply when the engine starts.`;
   }

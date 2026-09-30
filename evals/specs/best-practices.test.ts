@@ -44,11 +44,11 @@ test("Best practices default on, toggle only the bundled guides, and survive a r
     expect(replyText(await world.send("Reply with a short acknowledgement. Do not use tools."))).toBe(MOCK_REPLY);
     expect(world.requests.slice(before)).toHaveLength(1);
     const request = world.requests.at(-1);
-    expect(request?.body).toContain(BEST_PRACTICES_HEADING);
-    expect(request?.body).toContain(USER_SKILL);
-    expect(request?.body).toContain("omnirush-swarm");
-    for (const name of BUNDLED_SKILLS) expect(request?.body).toContain(name);
-    expect(request?.body).not.toContain(PRIVATE_CANARY);
+    expect(request?.body.includes(BEST_PRACTICES_HEADING)).toBe(true);
+    expect(request?.body.includes(USER_SKILL)).toBe(true);
+    expect(request?.body.includes("omnirush-swarm")).toBe(true);
+    for (const name of BUNDLED_SKILLS) expect(request?.body.includes(name)).toBe(true);
+    expect(request?.body.includes(PRIVATE_CANARY)).toBe(false);
     evidence.recordAssertionEvidence("The real engine's outgoing request includes the short guide prompt and native catalog", "The engine listed all nine bundled skills plus the user-owned guide and omnirush-swarm. One requested model turn carried the Best practices heading and skill names, and returned the deterministic reply without private canary content.", true);
   });
 
@@ -68,10 +68,10 @@ test("Best practices default on, toggle only the bundled guides, and survive a r
     expect(replyText(await world.send("Reply with another short acknowledgement. Do not use tools."))).toBe(MOCK_REPLY);
     expect(world.requests.slice(before)).toHaveLength(1);
     const request = world.requests.at(-1);
-    expect(request?.body).not.toContain(BEST_PRACTICES_HEADING);
-    for (const name of BUNDLED_SKILLS) expect(request?.body).not.toContain(name);
-    expect(request?.body).toContain(USER_SKILL);
-    expect(request?.body).toContain("omnirush-swarm");
+    expect(request?.body.includes(BEST_PRACTICES_HEADING)).toBe(false);
+    for (const name of BUNDLED_SKILLS) expect(request?.body.includes(name)).toBe(false);
+    expect(request?.body.includes(USER_SKILL)).toBe(true);
+    expect(request?.body.includes("omnirush-swarm")).toBe(true);
     evidence.recordAssertionEvidence("Off removes only the bundled guidance for subsequent engine requests", "PUT returned applied. All nine bundled names and the Best practices heading disappeared from the next real-engine model request while user and swarm skills remained. The toggle made zero model calls and changed no project files.", true);
   });
 
@@ -96,8 +96,8 @@ test("Best practices default on, toggle only the bundled guides, and survive a r
     expect(world.requests).toHaveLength(before);
     expect(replyText(await world.send("Reply with a final short acknowledgement. Do not use tools."))).toBe(MOCK_REPLY);
     expect(world.requests.slice(before)).toHaveLength(1);
-    expect(world.requests.at(-1)?.body).toContain(BEST_PRACTICES_HEADING);
-    for (const name of BUNDLED_SKILLS) expect(world.requests.at(-1)?.body).toContain(name);
+    expect(world.requests.at(-1)?.body.includes(BEST_PRACTICES_HEADING)).toBe(true);
+    for (const name of BUNDLED_SKILLS) expect(world.requests.at(-1)?.body.includes(name)).toBe(true);
     expect(await world.snapshot()).toEqual(originalFiles);
     expect(world.requests.some((request) => request.body.includes(PRIVATE_CANARY))).toBe(false);
     evidence.recordAssertionEvidence("The saved choice survives restart and on restores guidance without leaking fixture inputs", "After a cold process restart, GET still reported off and the real engine kept only user and swarm skills. On restored all nine names and the short prompt. Toggling and restarting made no model calls; all original project bytes, including the private canary, stayed unchanged and the canary never reached the mock provider.", true);
@@ -129,7 +129,7 @@ test("changing Best practices keeps an active real engine reply intact", { timeo
     ]), { within: 30_000, intervalMs: 100, label: "in-flight real model request", until: (value) => value !== undefined });
     if (!held) throw new Error("The model request did not reach the witness.");
     try {
-      expect(held.request.body).toContain(BEST_PRACTICES_HEADING);
+      expect(held.request.body.includes(BEST_PRACTICES_HEADING)).toBe(true);
       const before = world.requests.length;
       expect(await world.config("PUT", { enabled: false })).toEqual({ status: 200, body: {
         ok: true, enabled: false, changed: true, engine: { status: "applied" },
@@ -143,7 +143,10 @@ test("changing Best practices keeps an active real engine reply intact", { timeo
       expect(world.requests).toHaveLength(before);
       expect(replyText(await world.send("Acknowledge the next request. Do not use tools."))).toBe(MOCK_REPLY);
       expect(world.requests).toHaveLength(before + 1);
-      expect(world.requests.at(-1)?.body).not.toContain(BEST_PRACTICES_HEADING);
+      expect(world.requests.at(-1)?.body.includes(BEST_PRACTICES_HEADING)).toBe(false);
+      for (const name of BUNDLED_SKILLS) expect(world.requests.at(-1)?.body.includes(name)).toBe(false);
+      expect(world.requests.at(-1)?.body.includes(USER_SKILL)).toBe(true);
+      expect(world.requests.at(-1)?.body.includes("omnirush-swarm")).toBe(true);
       expect(await world.snapshot()).toEqual(originalFiles);
       expect(world.requests.some((request) => request.body.includes(PRIVATE_CANARY))).toBe(false);
       evidence.recordAssertionEvidence("Toggling does not cancel active work or trigger an extra model request", "A real-engine reply was held at the loopback provider. Turning off returned applied while its connection stayed open; it then completed with the expected reply. Only the next user-requested turn omitted the guidance. No project bytes changed and no canary content reached the provider.", true);
@@ -158,6 +161,8 @@ test("changing Best practices keeps an active real engine reply intact", { timeo
       requests: world.requests.map((request) => ({
         path: request.path, completed: request.completed, closedBeforeReply: request.closedBeforeReply,
         guidancePresent: request.body.includes(BEST_PRACTICES_HEADING), privateCanaryPresent: request.body.includes(PRIVATE_CANARY),
+        bundledSkills: BUNDLED_SKILLS.filter((name) => request.body.includes(name)),
+        userSkillPresent: request.body.includes(USER_SKILL), swarmPresent: request.body.includes("omnirush-swarm"),
       })),
     });
   }

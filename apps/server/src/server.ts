@@ -200,7 +200,7 @@ import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
-import { BestPracticesEngineReloads } from "./best-practices.js";
+import { BestPracticesEngineReloads, waitForBestPracticesReady } from "./best-practices.js";
 
 export {
   isSupportedWorkspaceTextFilePath,
@@ -3604,6 +3604,27 @@ function createRoutes(
       const pool = enginePoolForConfig(config);
       const write = async () => { await writeOmniRushRuntimeConfigFile(config); };
       if (pool && await pool.applyConfigLive(write)) {
+        const primary = primaryManagedEngineConnection(config);
+        if (!primary) throw new Error("Managed engine is unavailable");
+        const authorization = buildEngineAuthProbeHeader(primary.username, primary.password);
+        const baseUrl = primary.baseUrl.replace(/\/+$/, "");
+        const directories = [...new Set(config.workspaces
+          .filter((workspace) => resolveWorkspaceOpencodeConnection(config, workspace).baseUrl?.trim().replace(/\/+$/, "") === baseUrl)
+          .map(resolveOpencodeDirectory).filter((directory): directory is string => directory !== null))];
+        await waitForBestPracticesReady({
+          config, enabled,
+          read: async (signal) => await Promise.all(directories.map(async (directory) => {
+            const read = async (path: string): Promise<unknown> => {
+              const url = new URL(path, primary.baseUrl);
+              url.searchParams.set("directory", directory);
+              const response = await loopbackFetch(url, { headers: authorization ? { Authorization: authorization } : {}, signal });
+              if (!response.ok) throw new Error("Managed engine metadata is unavailable");
+              return await response.json();
+            };
+            const [agents, skills] = await Promise.all([read("/agent"), read("/skill")]);
+            return { agents, skills };
+          })),
+        });
         return jsonResponse({ ok: true, enabled, changed: result.changed, engine: { status: "applied" } });
       }
       if (!pool) await write();

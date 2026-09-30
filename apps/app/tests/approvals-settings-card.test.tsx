@@ -118,7 +118,7 @@ describe("best practices settings card", () => {
     const result = { ok: true, changed: true, enabled: false };
     expect(bestPracticesChangeMessage({ ...result, engine: { status: "applied" } })).toBe("Best practices off. Ready for your next request.");
     expect(bestPracticesChangeMessage({ ...result, engine: { status: "deferred" } })).toBe("Best practices off saved. This change waits until the engine is idle.");
-    expect(bestPracticesChangeMessage({ ...result, engine: { status: "failed" } })).toBe("Best practices off saved. Engine reload failed. Use Reload in Settings to apply it.");
+    expect(bestPracticesChangeMessage({ ...result, engine: { status: "failed" } })).toBe("Best practices off saved. The engine change could not be confirmed. Use Reload in Settings to apply it.");
     expect(bestPracticesChangeMessage({ ...result, engine: { status: "unconfigured" } })).toBe("Best practices off saved. The choice will apply when the engine starts.");
   });
 });
