@@ -49,7 +49,13 @@ test("slash goals remain visible after reload and their controls work while a ch
     await status("paused");
     await user.screenshot();
     expect(calls()).toHaveLength(1);
-    evidence.recordAssertionEvidence("The slash goal control bypasses the busy chat queue", "The built-in menu exposed goal, the real provider was held during an active turn, and Enter on /goal PAUSE immediately saved paused without another model request.", true);
+    world.release();
+    await user.see({ text: "One checkpoint is done. The goal still needs work." }, { timeoutMs: 30_000 });
+    await probe.eventually(goal, { within: 30_000,
+      until: (value) => value !== null && record(value).status === "paused" && record(value).tokensUsed === 50,
+      label: "the current reply finishes and is charged while future goal turns stay paused" });
+    expect(calls()).toHaveLength(1);
+    evidence.recordAssertionEvidence("The slash goal control bypasses the busy chat queue", "The built-in menu exposed goal, the real provider was held during an active turn, and Enter on /goal PAUSE immediately saved paused. The current reply then finished and charged 50 tokens without another model request.", true);
   });
 
   const saved = record(await goal());
@@ -85,8 +91,6 @@ test("slash goals remain visible after reload and their controls work while a ch
   });
 
   await step("other chats have their own goal state and resume reaches completion", async () => {
-    world.release();
-    await user.see({ text: "One checkpoint is done. The goal still needs work." }, { timeoutMs: 30_000 });
     const other = await agent.createSession("Other goal chat");
     await user.notSee({ testId: "session-goal" });
     const otherResult = await probe.desktopApi(`/workspace/${encodeURIComponent(world.workspace.workspaceId)}/session-goals/${other}`);
