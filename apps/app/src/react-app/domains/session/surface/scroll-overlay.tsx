@@ -1,36 +1,60 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
 
 import {
   selectSessionIsStickyBottom,
-  selectSessionTopClippedMessageId,
   useSessionScrollStore,
 } from "./scroll-store";
 
+/** Past this many pixels from the top, the chat offers the up arrow. */
+const AWAY_FROM_TOP_PX = 48;
+
 function useSessionScrollOverlayState(sessionId: string) {
   const isAtBottom = useSessionScrollStore((state) => selectSessionIsStickyBottom(state.sessions, sessionId));
-  const topClippedMessageId = useSessionScrollStore((state) => selectSessionTopClippedMessageId(state.sessions, sessionId));
 
-  return { isAtBottom, topClippedMessageId };
+  return { isAtBottom };
+}
+
+/**
+ * Whether the transcript is scrolled away from its top, from its own scroll
+ * position. Scroll events do not bubble, so they are caught on the way down
+ * (capture) and matched against whichever element the ref holds now: the
+ * scroller can be replaced (a session switch) while this overlay stays.
+ */
+function useAwayFromTop(sessionId: string, scrollRef: RefObject<HTMLElement | null>) {
+  const [awayFromTop, setAwayFromTop] = useState(false);
+  useEffect(() => {
+    const read = () => {
+      const container = scrollRef.current;
+      setAwayFromTop(Boolean(container && container.scrollTop > AWAY_FROM_TOP_PX));
+    };
+    const onScroll = (event: Event) => {
+      if (event.target === scrollRef.current) read();
+    };
+    read();
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", onScroll, { capture: true });
+  }, [sessionId, scrollRef]);
+  return awayFromTop;
 }
 
 /** A round arrow button, as Codex's "jump to latest": the label is its tooltip and accessible name. */
 const JUMP_BUTTON_CLASS =
   "pointer-events-auto flex size-8 items-center justify-center rounded-full border border-dls-border bg-dls-surface/95 text-dls-text shadow-(--dls-card-shadow) backdrop-blur-md transition-colors hover:bg-dls-hover";
 
-type JumpToStartButtonProps = {
-  onJumpToStartOfMessage: (behavior?: ScrollBehavior) => void;
+type JumpToTopButtonProps = {
+  onJumpToTop: (behavior?: ScrollBehavior) => void;
 };
 
-const JumpToStartButton = memo(function JumpToStartButton({
-  onJumpToStartOfMessage,
-}: JumpToStartButtonProps) {
+const JumpToTopButton = memo(function JumpToTopButton({
+  onJumpToTop,
+}: JumpToTopButtonProps) {
   const handleClick = useCallback(() => {
-    onJumpToStartOfMessage("smooth");
-  }, [onJumpToStartOfMessage]);
+    onJumpToTop("smooth");
+  }, [onJumpToTop]);
 
   return (
-    <button type="button" className={JUMP_BUTTON_CLASS} aria-label="Jump to start" title="Jump to start" onClick={handleClick}>
+    <button type="button" className={JUMP_BUTTON_CLASS} aria-label="Jump to top" title="Jump to top" onClick={handleClick}>
       <ArrowUp aria-hidden="true" className="size-4" />
     </button>
   );
@@ -56,30 +80,30 @@ const JumpToLatestButton = memo(function JumpToLatestButton({
 
 type SessionScrollOverlayProps = {
   sessionId: string;
-  isStreaming: boolean;
+  scrollRef: RefObject<HTMLElement | null>;
   onJumpToLatest: (behavior?: ScrollBehavior) => void;
-  onJumpToStartOfMessage: (behavior?: ScrollBehavior) => void;
+  onJumpToTop: (behavior?: ScrollBehavior) => void;
 };
 
 export const SessionScrollOverlay = memo(function SessionScrollOverlay({
   sessionId,
-  isStreaming,
+  scrollRef,
   onJumpToLatest,
-  onJumpToStartOfMessage,
+  onJumpToTop,
 }: SessionScrollOverlayProps) {
-  const { isAtBottom, topClippedMessageId } = useSessionScrollOverlayState(sessionId);
-  const showJumpToStart = !isStreaming && Boolean(topClippedMessageId);
+  const { isAtBottom } = useSessionScrollOverlayState(sessionId);
+  const showJumpToTop = useAwayFromTop(sessionId, scrollRef);
   const showJumpToLatest = !isAtBottom;
 
-  if (!showJumpToStart && !showJumpToLatest) {
+  if (!showJumpToTop && !showJumpToLatest) {
     return null;
   }
 
   return (
     <div className="pointer-events-none absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 justify-center">
       <div className="flex items-center gap-2">
-        {showJumpToStart ? (
-          <JumpToStartButton onJumpToStartOfMessage={onJumpToStartOfMessage} />
+        {showJumpToTop ? (
+          <JumpToTopButton onJumpToTop={onJumpToTop} />
         ) : null}
         {showJumpToLatest ? (
           <JumpToLatestButton onJumpToLatest={onJumpToLatest} />

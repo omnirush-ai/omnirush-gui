@@ -3227,9 +3227,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
         </div>
         <SessionScrollOverlay
           sessionId={props.sessionId}
-          isStreaming={chatStreaming}
+          scrollRef={scrollRef}
           onJumpToLatest={sessionScroll.jumpToLatest}
-          onJumpToStartOfMessage={sessionScroll.jumpToStartOfMessage}
+          onJumpToTop={sessionScroll.jumpToTop}
         />
         <SessionFindBar
           sessionId={props.sessionId}
