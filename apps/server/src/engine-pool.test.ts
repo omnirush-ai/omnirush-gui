@@ -1068,6 +1068,23 @@ describe("engine pool", () => {
 
     const roles = pool.snapshot().generations.map((entry) => entry.role).sort();
     expect(roles).toEqual(["draining", "primary"]);
+
+    // The settings API must not report a parked change as already applied.
+    // It preserves the streaming generation while the saved choice waits.
+    const server = await startServer(fixture.config);
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/runtime-config/best-practices`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${fixture.config.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, changed: true, enabled: false, engine: { status: "deferred" } });
+      expect(primary.isAlive()).toBe(true);
+      expect((await fixture.logLines()).some((line) => line.includes("/abort"))).toBe(false);
+    } finally {
+      await server.stop();
+    }
   });
 
   test("leaves the live engine serving when the standby cannot start", async () => {

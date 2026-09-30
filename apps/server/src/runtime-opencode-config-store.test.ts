@@ -381,4 +381,29 @@ describe("runtime OpenCode config store", () => {
       }
     });
   });
+
+  test("best practices is a narrow authenticated local setting, independent of workspace rows", async () => {
+    await withWorkspace(async ({ config }) => {
+      const server = await startServer(config) as Served;
+      const base = `http://127.0.0.1:${server.port}`;
+      const headers = { authorization: `Bearer ${config.token}`, "content-type": "application/json" };
+      try {
+        expect((await fetch(`${base}/runtime-config/best-practices`)).status).toBe(401);
+        expect(await (await fetch(`${base}/runtime-config/best-practices`, { headers })).json()).toEqual({ enabled: true });
+        for (const payload of [{ enabled: "false" }, {}, { enabled: false, projectPath: "private-notes" }]) {
+          expect((await fetch(`${base}/runtime-config/best-practices`, { method: "PUT", headers, body: JSON.stringify(payload) })).status).toBe(400);
+        }
+        const off = await fetch(`${base}/runtime-config/best-practices`, { method: "PUT", headers, body: JSON.stringify({ enabled: false }) });
+        expect(off.status).toBe(200);
+        expect(await off.json()).toEqual({ ok: true, enabled: false, changed: true, engine: { status: "unconfigured" } });
+        expect((await readGlobalRuntimeOpencodeConfig(config)).bestPractices).toBe(false);
+        await writeRuntimeOpencodeConfig(config, WORKSPACE_ID, (current) => ({ ...current, bestPractices: true }));
+        expect((await readEffectiveRuntimeOpencodeConfig(config, WORKSPACE_ID)).bestPractices).toBe(false);
+        expect(policyRequestActions("PUT", "/runtime-config/best-practices")).toEqual(["settings"]);
+        expect(await (await fetch(`${base}/runtime-config/best-practices`, { headers })).json()).toEqual({ enabled: false });
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
 });

@@ -405,6 +405,15 @@ export type OmniRushRuntimeApprovals = {
   setting: OmniRushApprovalMode | null;
 };
 
+/** Saved only on this server/device, independent of account and workspace. */
+export type OmniRushBestPractices = { enabled: boolean };
+export type OmniRushBestPracticesChange = OmniRushBestPractices & {
+  ok: boolean;
+  changed: boolean;
+  /** Applying a choice must not interrupt a live reply. */
+  engine: { status: "applied" | "deferred" | "failed" | "unconfigured" };
+};
+
 /** The sub-agent model and effort (Settings > Preferences and the composer's Sub-agents menu). */
 export type OmniRushSubagentModelSetting = {
   /** An omnirush.ai catalog model id; null runs sub-agents on the main agent's model. */
@@ -1888,6 +1897,16 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         method: "PUT",
         body: { mode },
         timeoutMs: timeouts.config,
+      }),
+    getBestPractices: () =>
+      requestJson<OmniRushBestPractices>(baseUrl, "/runtime-config/best-practices", { token, hostToken, timeoutMs: timeouts.config }),
+    setBestPractices: (enabled: boolean) =>
+      requestJson<OmniRushBestPracticesChange>(baseUrl, "/runtime-config/best-practices", {
+        token,
+        hostToken,
+        method: "PUT",
+        body: { enabled },
+        timeoutMs: ENGINE_RELOAD_TIMEOUT_MS,
       }),
     getVoiceStatus: (workspaceId?: string | null) =>
       requestJson<OmniRushVoiceStatus>(

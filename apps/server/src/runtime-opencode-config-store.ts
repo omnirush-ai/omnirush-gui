@@ -17,6 +17,8 @@ export type RuntimeOpencodeConfig = {
   managedPolicy?: DesktopConfig;
   /** User setting for the engine approval mode; global row only, OMNIRUSH_APPROVALS overrides it. */
   approvals?: { mode: ApprovalMode };
+  /** Bundled development guidance; local engine-global setting, enabled when absent. */
+  bestPractices?: boolean;
   default_agent?: string;
   plugin?: string[];
   disabled_providers?: string[];
@@ -52,6 +54,7 @@ function normalizeRuntimeOpencodeConfig(value: unknown): RuntimeOpencodeConfig {
     ...(defaultAgent ? { default_agent: defaultAgent } : {}),
     ...(value.managedPolicy !== undefined ? { managedPolicy: desktopConfigSchema.parse(value.managedPolicy) } : {}),
     ...(approvalMode ? { approvals: { mode: approvalMode } } : {}),
+    ...(typeof value.bestPractices === "boolean" ? { bestPractices: value.bestPractices } : {}),
     ...(plugin ? { plugin } : {}),
     ...(disabledProviders ? { disabled_providers: disabledProviders } : {}),
     ...(mcp ? { mcp } : {}),
@@ -272,6 +275,7 @@ export function mergeRuntimeOpencodeConfigLayers(
     ...(base.managedPolicy ? { managedPolicy: base.managedPolicy } : {}),
     // The approval mode is engine-global like the managed policy.
     ...(base.approvals ? { approvals: base.approvals } : {}),
+    ...(typeof base.bestPractices === "boolean" ? { bestPractices: base.bestPractices } : {}),
     ...(base.default_agent || overlay.default_agent ? { default_agent: overlay.default_agent ?? base.default_agent } : {}),
     ...(plugin.length ? { plugin } : {}),
     ...(disabledProviders.length ? { disabled_providers: disabledProviders } : {}),

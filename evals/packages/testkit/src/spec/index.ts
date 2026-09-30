@@ -156,7 +156,7 @@ function world<W>(worldFn: WorldFn<W>, options: SpecWorldOptions = {}) {
     step: [async (
       { specRuntimeContext }: { specRuntimeContext: RuntimeContext<W> },
       use: (value: Step) => Promise<void>,
-    ) => use(specRuntimeContext.step), {}],
+    ) => use(specRuntimeContext.step), { auto: false }],
   });
   return wrapTestApi(api);
 }

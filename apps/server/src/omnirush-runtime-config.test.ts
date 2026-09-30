@@ -34,6 +34,9 @@ import {
   type OmniRushModelCatalog,
 } from "./omnirush-model-catalog.js";
 import { gitWorkflowPermissionRules } from "./git-command-policy.js";
+import { OMNIRUSH_AGENT_PROMPT } from "./omnirush-agent-prompt.js";
+import { BestPracticesEngineReloads, OMNIRUSH_BEST_PRACTICES, omnirushBestPracticesSkillsDir } from "./best-practices.js";
+import { buildEngine2Config } from "./engine2/config.js";
 import type { ServerConfig } from "./types.js";
 
 const roots: string[] = [];
@@ -412,10 +415,88 @@ describe("omnirush runtime config file", () => {
     const parsed = JSON.parse(await readFile(path, "utf8")) as { skills?: { paths?: string[] } };
     const skillsDir = omnirushRuntimeSkillsDir(config);
     expect(skillsDir.startsWith(root)).toBe(true);
-    expect(parsed.skills?.paths).toEqual([skillsDir]);
+    expect(parsed.skills?.paths).toEqual([skillsDir, omnirushBestPracticesSkillsDir(config)]);
     expect(await readFile(join(skillsDir, OMNIRUSH_SWARM_SKILL_NAME, "SKILL.md"), "utf8")).toBe(omnirushSwarmSkillMarkdown());
     // Without a server config (specs, previews) nothing points at a folder.
     expect(buildOmniRushRuntimeConfigObjectFromSnapshot({}).skills).toBeUndefined();
+  });
+
+  test("best practices default on, opt out without removing swarm skills, and restore after restart", async () => {
+    const { config } = await setup();
+    const swarmDir = omnirushRuntimeSkillsDir(config);
+    const bestDir = omnirushBestPracticesSkillsDir(config);
+    expect(dirname(bestDir)).toBe(dirname(swarmDir));
+    expect(bestDir.startsWith(`${swarmDir}/`)).toBe(false);
+    const prompt = `${OMNIRUSH_AGENT_PROMPT}\n\n${OMNIRUSH_BEST_PRACTICES.systemPrompt}`;
+    await writeOmniRushRuntimeConfigFile(config);
+    const on = await readConfigFile(config);
+    expect(on).toMatchObject({ skills: { paths: [swarmDir, bestDir] }, agent: { omnirush: { prompt } } });
+    expect(on.bestPractices).toBeUndefined();
+    expect(OMNIRUSH_BEST_PRACTICES.skills).toHaveLength(9);
+    expect(OMNIRUSH_BEST_PRACTICES.source.commit).toBe("4cd6fcedc62f604522db3621e5c509475ada6a0f");
+    expect(OMNIRUSH_BEST_PRACTICES.license).toContain("MIT License");
+    for (const skill of OMNIRUSH_BEST_PRACTICES.skills) {
+      expect(await readFile(join(bestDir, skill.name, "SKILL.md"), "utf8")).toBe(skill.content);
+    }
+    expect(buildEngine2Config({ v1: on })).toMatchObject({ skills: [swarmDir, bestDir], agents: { omnirush: { system: prompt } } });
+
+    await writeGlobalRuntimeOpencodeConfig(config, (current) => ({ ...current, bestPractices: false }));
+    await writeOmniRushRuntimeConfigFile(config);
+    const off = await readConfigFile(config);
+    expect(off).toMatchObject({ skills: { paths: [swarmDir] }, agent: { omnirush: { prompt: OMNIRUSH_AGENT_PROMPT } } });
+    expect(off.bestPractices).toBeUndefined();
+    expect(buildEngine2Config({ v1: off })).toMatchObject({ skills: [swarmDir], agents: { omnirush: { system: OMNIRUSH_AGENT_PROMPT } } });
+    // A fresh config object, as on startup, still reads the local persisted choice.
+    expect(JSON.parse(await buildOmniRushRuntimeConfig({ ...config }))).toEqual(off);
+    expect(await readFile(join(swarmDir, OMNIRUSH_SWARM_SKILL_NAME, "SKILL.md"), "utf8")).toBe(omnirushSwarmSkillMarkdown());
+
+    await writeGlobalRuntimeOpencodeConfig(config, (current) => ({ ...current, bestPractices: true }));
+    await writeOmniRushRuntimeConfigFile(config);
+    expect(await readConfigFile(config)).toEqual(on);
+  });
+
+  test("attached-engine changes wait for busy folders, apply idle folders, and stop retrying at shutdown", async () => {
+    const { config } = await setup();
+    const first = config.workspaces[0];
+    const second = { ...first, id: "ws_second", path: join(first.path, "second") };
+    let busy = true;
+    const reloaded: string[] = [];
+    const reloads = new BestPracticesEngineReloads({
+      isBusy: async (workspace) => workspace.id === first.id && busy,
+      reload: async (workspace) => { reloaded.push(workspace.id); },
+      isPresent: () => true,
+      retryMs: 10,
+    });
+    try {
+      expect(await reloads.apply([first, second])).toBe("deferred");
+      expect(reloaded).toEqual([second.id]);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(reloaded).toEqual([second.id]);
+      busy = false;
+      const deadline = Date.now() + 3_000;
+      while (reloaded.length === 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(reloaded).toEqual([second.id, first.id]);
+      busy = true;
+      expect(await reloads.apply([first])).toBe("deferred");
+      reloads.stop();
+      busy = false;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(reloaded).toEqual([second.id, first.id]);
+      await expect(reloads.apply([first])).rejects.toThrow("Best practices reloads stopped");
+    } finally {
+      reloads.stop();
+    }
+  });
+
+  test("a saved off choice neither materializes nor repairs the bundled guide folder", async () => {
+    const { config } = await setup();
+    await writeGlobalRuntimeOpencodeConfig(config, (current) => ({ ...current, bestPractices: false }));
+    const bestDir = omnirushBestPracticesSkillsDir(config);
+    await mkdir(dirname(bestDir), { recursive: true });
+    await writeFile(bestDir, "leave this path alone while off\n", "utf8");
+    await writeOmniRushRuntimeConfigFile(config);
+    expect(await readFile(bestDir, "utf8")).toBe("leave this path alone while off\n");
+    expect(await readConfigFile(config)).toMatchObject({ skills: { paths: [omnirushRuntimeSkillsDir(config)] } });
   });
 
   test("keepOmniRushRuntimeConfigFileFresh rewrites the file on ENGINE_GLOBAL writes", async () => {

@@ -34,12 +34,13 @@ import {
   type ApprovalsClient,
 } from "../approval-mode";
 import { DiagnosticsSection } from "./diagnostics-section";
+import { BEST_PRACTICES_HELP, useBestPractices, type BestPracticesClient } from "../best-practices";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
   developerMode: boolean;
   /** Server client for the Approvals card; the card is hidden without one. */
-  omnirushClient?: ApprovalsClient | null;
+  omnirushClient?: (ApprovalsClient & Partial<BestPracticesClient>) | null;
   /** Workspace whose engine is reloaded after the approval mode changes. */
   runtimeWorkspaceId?: string | null;
   /** Builds the sanitized diagnostics bundle with the route's context. */
@@ -176,12 +177,50 @@ export function ApprovalsCard(props: {
   );
 }
 
+export function BestPracticesCard(props: {
+  enabled: boolean | null;
+  busy: boolean;
+  status: string;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">Best practices</div>
+      <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
+          <Sparkles size={17} className="text-dls-secondary" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-dls-text">Best practices</div>
+          <div id="best-practices-help" className="text-[11px] text-dls-secondary">{BEST_PRACTICES_HELP}</div>
+          {props.status ? (
+            <div className="mt-0.5 text-[11px] text-dls-secondary" role="status" data-testid="best-practices-status">{props.status}</div>
+          ) : null}
+        </div>
+        <Switch
+          aria-label="Best practices"
+          aria-describedby="best-practices-help"
+          checked={props.enabled === true}
+          disabled={props.busy || props.enabled === null}
+          onCheckedChange={props.onToggle}
+        />
+      </div>
+    </div>
+  );
+}
+
+function hasBestPractices(client: GeneralSettingsViewProps["omnirushClient"]): client is ApprovalsClient & BestPracticesClient {
+  return !!client && typeof client.getBestPractices === "function" && typeof client.setBestPractices === "function";
+}
+
 export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   const [account, setAccount] = useState<NativeAccountStatus | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
   const approvalsClient = props.omnirushClient ?? null;
   const approvalMode = useApprovalMode(approvalsClient, props.runtimeWorkspaceId ?? null);
+  const bestPracticesClient = hasBestPractices(props.omnirushClient) ? props.omnirushClient : null;
+  const bestPractices = useBestPractices(bestPracticesClient);
 
   useEffect(() => {
     if (!isElectronRuntime()) return;
@@ -326,6 +365,15 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
           busy={approvalMode.busy}
           status={approvalMode.status}
           onToggle={(enabled) => void approvalMode.setFullPermissions(enabled)}
+        />
+      ) : null}
+
+      {bestPracticesClient ? (
+        <BestPracticesCard
+          enabled={bestPractices.setting?.enabled ?? null}
+          busy={bestPractices.busy}
+          status={bestPractices.status}
+          onToggle={(enabled) => void bestPractices.setEnabled(enabled)}
         />
       ) : null}
 

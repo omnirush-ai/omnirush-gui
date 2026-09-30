@@ -175,6 +175,32 @@ OpenCode proxy:
 
 All writes are gated by host approval.
 
+## Best practices
+
+Settings > General has a **Best practices** switch. It starts on. The local
+runtime database keeps the choice for this server across restarts. The setting
+is independent of account sign-in and workspace files.
+
+The bundled pack adds a short development prompt and nine guides the agent can
+load when needed. Off removes the pack's prompt and skill path. It preserves
+the swarm and user-installed skills. The pack is stored beside the runtime
+skills folder, outside all projects. It has no runtime download, private-note
+reader, or account-sync path.
+
+- `GET /runtime-config/best-practices` returns `{ "enabled": true }` or false.
+- `PUT /runtime-config/best-practices` accepts only `{ "enabled": boolean }`.
+  It requires client authentication and collaborator scope. Organization
+  settings restrictions still apply.
+- A write returns the saved `enabled`, `changed`, and `engine.status`:
+  `applied`, `deferred`, `failed`, or `unconfigured`. A deferred change lets
+  the current reply finish. A failed apply keeps the saved choice and the UI
+  asks for Reload. It does not claim that the engine changed.
+
+The server statically imports [the MIT pack](src/bundled-best-practices.json)
+so Node builds and compiled Bun binaries carry the same pinned source and
+license. See its `source` and per-skill `sourceSha256` fields when updating it.
+This feature does not change the app's existing account or data settings.
+
 Host APIs accept either:
 
 - `X-OmniRush-Host-Token: <token>` (legacy host token), or

@@ -153,7 +153,7 @@ export function policyRequestActions(method: string, path: string): ManagedPolic
   const actions: ManagedPolicyAction[] = [];
   if (/^\/workspaces\/(local|remote)$/.test(path)) actions.push("workspace");
   if (/^\/runtime-config\/providers$/.test(path)) actions.push("provider");
-  if (/^\/runtime-config\/approvals$/.test(path)) actions.push("settings");
+  if (/^\/runtime-config\/(?:approvals|best-practices)$/.test(path)) actions.push("settings");
   if (path === "/omnirush/subagent-model") actions.push("settings");
   if (/^\/workspace\/[^/]+\/(?:cloud-plugins|claude-plugins|plugins|skills|commands|mcp)(?:\/|$)/.test(path)
     && !/\/mcp\/[^/]+\/(?:auth|managed\/connect)$/.test(path)) actions.push("extensions");

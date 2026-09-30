@@ -54,6 +54,12 @@ import {
   type OmniRushModelCatalog,
 } from "./omnirush-model-catalog.js";
 import { writeFileAtomic } from "./atomic-write.js";
+import {
+  OMNIRUSH_BEST_PRACTICES,
+  bestPracticesEnabled,
+  omnirushBestPracticesSkillsDir,
+  writeBestPracticesSkills,
+} from "./best-practices.js";
 
 const INTERNAL_PROVIDER_ID = "omnirush";
 
@@ -132,6 +138,7 @@ export async function buildOmniRushRuntimeConfigObject(
     process.env,
     internalGateway && config ? await readOmniRushModelCatalog(config) : undefined,
     config ? omnirushRuntimeSkillsDir(config) : undefined,
+    config ? omnirushBestPracticesSkillsDir(config) : undefined,
   );
 }
 
@@ -160,11 +167,17 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   env: NodeJS.ProcessEnv = process.env,
   catalog: OmniRushModelCatalog = builtinOmniRushModelCatalog(),
   skillsDir?: string,
+  bestPracticesDir?: string,
 ): Record<string, unknown> {
   const disabledProviders = runtimeDisabledProviderList(runtimeConfig);
   // OMNIRUSH_APPROVALS in the server environment wins over the persisted setting.
   const permissions = legacyExecutionPermissions(runtimeConfig.managedPolicy?.execution, resolveApprovalMode(runtimeConfig, env).mode);
-  const { managedPolicy: _managedPolicy, approvals: _approvals, ...engineConfig } = runtimeConfig;
+  const { managedPolicy: _managedPolicy, approvals: _approvals, bestPractices: _bestPractices, ...engineConfig } = runtimeConfig;
+  const enabled = bestPracticesEnabled(runtimeConfig);
+  const skillPaths = [
+    ...(skillsDir ? [skillsDir] : []),
+    ...(enabled && bestPracticesDir ? [bestPracticesDir] : []),
+  ];
   const provider = {
     ...runtimeProviderMap(runtimeConfig),
     ...(internalGateway
@@ -191,7 +204,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
     ] } : onlyOwnProviders ? { enabled_providers: ownProviders } : {}),
     permission: { ...engineConfig.permission, ...permissions },
     // omnirush.ai's own on-demand skills (the swarm procedure).
-    ...(skillsDir ? { skills: { paths: [skillsDir] } } : {}),
+    ...(skillPaths.length ? { skills: { paths: skillPaths } } : {}),
     default_agent: runtimeConfig.default_agent ?? "omnirush",
     // Sub-agent swarms: sub-agents may delegate again, up to this many layers
     // below the main session (the engine's default of 1 forbids nesting).
@@ -202,7 +215,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
         description: "omnirush.ai default agent",
         mode: "primary",
         temperature: 0.2,
-        prompt: OMNIRUSH_AGENT_PROMPT,
+        prompt: enabled ? `${OMNIRUSH_AGENT_PROMPT}\n\n${OMNIRUSH_BEST_PRACTICES.systemPrompt}` : OMNIRUSH_AGENT_PROMPT,
         permission: {
           ...permissions,
           skill: {
@@ -308,6 +321,9 @@ export async function writeOmniRushRuntimeConfigFile(
     // The config names the skills folder: write it first, so the engine
     // never loads a config whose built-in skill is missing.
     await writeOmniRushRuntimeSkills(config);
+    if (bestPracticesEnabled(await readGlobalRuntimeOpencodeConfig(config))) {
+      await writeBestPracticesSkills(config);
+    }
     const content = await buildOmniRushRuntimeConfig(config);
     const current = await readFile(path, "utf8").catch(() => undefined);
     if (current === content) return { path, changed: false };

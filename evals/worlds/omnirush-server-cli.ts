@@ -74,7 +74,7 @@ export function stopChild(child: ChildProcess): Promise<void> {
  * chunk goes to `sink`; `listening` resolves with the base URL once the server
  * reports its port, or rejects when the process exits first.
  */
-export function bootServer(env: NodeJS.ProcessEnv, token: string, workspace: string, sink: (chunk: string) => void): { child: ChildProcess; listening: Promise<string> } {
+export function bootServer(env: NodeJS.ProcessEnv, token: string, workspace: string, sink: (chunk: string) => void, extraArguments: string[] = []): { child: ChildProcess; listening: Promise<string> } {
   const child = spawn("bun", [
     "--conditions=development",
     "src/cli.ts",
@@ -85,6 +85,7 @@ export function bootServer(env: NodeJS.ProcessEnv, token: string, workspace: str
     "--approval", "auto",
     "--cors", "*",
     "--workspace", workspace,
+    ...extraArguments,
   ], { cwd: serverRoot, env, stdio: ["ignore", "pipe", "pipe"] });
   let seen = "";
   const listening = new Promise<string>((resolveBase, reject) => {
@@ -125,12 +126,22 @@ function firstWorkspaceId(value: unknown): string | null {
   return isRecord(first) && typeof first.id === "string" ? first.id : null;
 }
 
+/** Process lookup and locale only; fixture children must not inherit credentials. */
+export function isolatedFixtureEnv(): NodeJS.ProcessEnv {
+  const allowed = new Set(["PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "SystemRoot", "WINDIR"]);
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => allowed.has(key)));
+}
+
 export async function bootManagedOmniRushServer(options: {
   scratch: string;
   workspace: string;
   token: string;
   sink: (chunk: string) => void;
   binary?: string;
+  /** Limit inheritance to process lookup and locale for local-only witnesses. */
+  isolatedEnv?: boolean;
+  /** Explicit fixture-only overrides. */
+  env?: Record<string, string>;
 }): Promise<ManagedOmniRushServer> {
   const binary = options.binary ?? engineBinary();
   if (!binary) throw new SkipError("set OMNIRUSH_OPENCODE_BIN or install opencode");
@@ -140,7 +151,8 @@ export async function bootManagedOmniRushServer(options: {
   // The spec may itself run under an OmniRush.ai or OpenCode session. The parent's
   // OPENCODE_* and OMNIRUSH_* variables (config path, models URL, credentials,
   // workspaces) must not reach the isolated server and engine under test.
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OPENCODE") && !key.startsWith("OMNIRUSH_")));
+  const inherited = options.isolatedEnv ? isolatedFixtureEnv()
+    : Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OPENCODE") && !key.startsWith("OMNIRUSH_")));
   const env = {
     ...inherited,
     HOME: home,
@@ -150,6 +162,7 @@ export async function bootManagedOmniRushServer(options: {
     XDG_STATE_HOME: join(home, ".local", "state"),
     OMNIRUSH_MANAGE_OPENCODE: "1",
     OMNIRUSH_OPENCODE_BIN: binary,
+    ...options.env,
   };
 
   let output = "";
