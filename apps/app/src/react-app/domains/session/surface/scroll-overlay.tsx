@@ -1,4 +1,5 @@
 import { memo, useCallback } from "react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 
 import {
   selectSessionIsStickyBottom,
@@ -13,6 +14,10 @@ function useSessionScrollOverlayState(sessionId: string) {
   return { isAtBottom, topClippedMessageId };
 }
 
+/** A round arrow button, as Codex's "jump to latest": the label is its tooltip and accessible name. */
+const JUMP_BUTTON_CLASS =
+  "pointer-events-auto flex size-8 items-center justify-center rounded-full border border-dls-border bg-dls-surface/95 text-dls-text shadow-(--dls-card-shadow) backdrop-blur-md transition-colors hover:bg-dls-hover";
+
 type JumpToStartButtonProps = {
   onJumpToStartOfMessage: (behavior?: ScrollBehavior) => void;
 };
@@ -25,12 +30,8 @@ const JumpToStartButton = memo(function JumpToStartButton({
   }, [onJumpToStartOfMessage]);
 
   return (
-    <button
-      type="button"
-      className="rounded-full px-3 py-1.5 text-xs text-dls-text transition-colors hover:bg-dls-hover"
-      onClick={handleClick}
-    >
-      Jump to start
+    <button type="button" className={JUMP_BUTTON_CLASS} aria-label="Jump to start" title="Jump to start" onClick={handleClick}>
+      <ArrowUp aria-hidden="true" className="size-4" />
     </button>
   );
 });
@@ -47,12 +48,8 @@ const JumpToLatestButton = memo(function JumpToLatestButton({
   }, [onJumpToLatest]);
 
   return (
-    <button
-      type="button"
-      className="rounded-full px-3 py-1.5 text-xs text-dls-text transition-colors hover:bg-dls-hover"
-      onClick={handleClick}
-    >
-      Jump to latest
+    <button type="button" className={JUMP_BUTTON_CLASS} aria-label="Jump to latest" title="Jump to latest" onClick={handleClick}>
+      <ArrowDown aria-hidden="true" className="size-4" />
     </button>
   );
 });
@@ -80,7 +77,7 @@ export const SessionScrollOverlay = memo(function SessionScrollOverlay({
 
   return (
     <div className="pointer-events-none absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 justify-center">
-      <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-dls-border bg-dls-surface/95 p-1 shadow-(--dls-card-shadow) backdrop-blur-md">
+      <div className="flex items-center gap-2">
         {showJumpToStart ? (
           <JumpToStartButton onJumpToStartOfMessage={onJumpToStartOfMessage} />
         ) : null}
