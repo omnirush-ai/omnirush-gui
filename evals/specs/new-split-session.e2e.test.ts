@@ -6,6 +6,74 @@ import { newSplitPrimary } from "../worlds/chat.ts";
 const test = spec.world(newSplitPrimary, { timeout: 600_000 });
 const paletteInput = { placeholder: "Search actions, settings, and sessions…" };
 
+test("keyboard question options wrap and Enter answers only the selected chat pane", async ({ world, user, probe, step, evidence }) => {
+  const pane = (which: "primary" | "secondary") => probe.eval(browserScript((which) => {
+    const root = document.querySelector<HTMLElement>('[data-workbench-pane="' + which + '"]');
+    const messages = [...(root?.querySelectorAll<HTMLElement>('[data-message-role="assistant"]') ?? [])];
+    return { text: root?.textContent ?? "", answer: messages.at(-1)?.innerText ?? "" };
+  }, [which]));
+  const focus = () => probe.eval(() => ({ tag: document.activeElement?.tagName, text: document.activeElement?.textContent?.trim() }));
+  const send = async (which: "primary" | "secondary", prompt: string) => {
+    await user.type({ placeholder: "Describe your task...", nth: which === "primary" ? 0 : 1 }, prompt, { verify: true });
+    await user.press("Enter");
+  };
+  const answer = (which: "primary" | "secondary", selected: string, excluded: string) => probe.eventually(() => pane(which), {
+    within: 45_000, label: `${which} receives its selected keyboard answer`,
+    until: value => value.answer.includes(selected) && !value.answer.includes(excluded),
+  });
+
+  await step("open a side chat and ask a real question in each pane", async () => {
+    const shortcut = await probe.eval(() => /Mac|iPhone|iPad|iPod/.test(navigator.platform)) ? "Meta+K" : "Control+K";
+    await user.press(shortcut);
+    await user.see(paletteInput);
+    await user.type(paletteInput, "new split", { replace: true });
+    await user.click({ role: "option", label: /^Open side chat/ });
+    await user.notSee(paletteInput);
+    await user.see({ placeholder: "Describe your task...", nth: 1 }, { editable: true });
+    await send("primary", world.primaryQuestionPrompt);
+    await user.see({ text: "Which format should the main task use?" }, { timeoutMs: 45_000 });
+    await send("secondary", world.secondaryQuestionPrompt);
+    await user.see({ text: "Which format should the side task use?" }, { timeoutMs: 45_000 });
+    await user.see({ placeholder: "Type your answer here...", nth: 1 });
+  });
+
+  await step("Up and Down wrap option focus and Enter settles only the side question", async () => {
+    await user.click({ placeholder: "Type your answer here...", nth: 1 });
+    await user.press("Shift+Tab");
+    const last = await focus();
+    expect(last).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Side checklist") });
+    await user.press("ArrowDown");
+    const wrappedDown = await focus();
+    expect(wrappedDown).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Side outline") });
+    await user.press("ArrowUp");
+    const wrappedUp = await focus();
+    expect(wrappedUp).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Side checklist") });
+    await user.press("Enter");
+    const sideReply = await answer("secondary", "Side checklist", "Side outline");
+    const mainPending = await pane("primary");
+    expect(mainPending.text).toContain("Which format should the main task use?");
+    expect(mainPending.answer).not.toContain("Side checklist");
+    await user.see({ placeholder: "Type your answer here..." });
+    evidence.recordAssertionEvidence("ArrowDown and ArrowUp wrap native option focus; Enter answers only the side chat",
+      JSON.stringify({ last, wrappedDown, wrappedUp, sideReply, mainPending }), true);
+  });
+
+  await step("Enter also submits the focused main-chat option", async () => {
+    await user.click({ placeholder: "Type your answer here..." });
+    await user.press("Shift+Tab");
+    await user.press("ArrowUp");
+    const mainFocus = await focus();
+    expect(mainFocus).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Main outline") });
+    await user.press("Enter");
+    const mainReply = await answer("primary", "Main outline", "Main checklist");
+    const sideReply = await pane("secondary");
+    expect(sideReply.answer).toContain("Side checklist");
+    expect(sideReply.answer).not.toContain("Main outline");
+    evidence.recordAssertionEvidence("Enter submits the focused main-chat option and preserves the side answer",
+      JSON.stringify({ mainFocus, mainReply, sideReply }), true);
+  });
+});
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -113,7 +181,7 @@ test("side chats keep questions, replies, and saved splits attached to their own
       until: value => value.sessionId === primary && value.starters && value.messages === 0,
     });
   });
-  await user.rightClick({ text: world.session.title });
+  await user.rightClick(await rowTarget(primary));
   await using initialCreation = await world.continuity.observeCreation();
   await using emptySide = await world.continuity.observeSurface({ pane: "secondary" });
   await user.click({ role: "menuitem", label: /^Open (a second|side) chat$/ });
