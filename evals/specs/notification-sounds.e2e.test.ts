@@ -57,6 +57,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
     await user.click({ text: "Preferences" });
     await user.see({ role: "switch", label: "Soft notification sounds" });
   };
+  let controlledModelVerified = false;
   const open = async () => {
     await foreground();
     if ((await probe.hash()).includes("/settings")) {
@@ -65,11 +66,17 @@ test("soft chimes tell a background user that a task finished or needs input, an
     await probe.eventually(() => probe.hash(), { within: 15_000, label: "the sound conversation opens",
       until: (hash) => hash.includes(`/session/${world.session.sessionId}`) });
     await user.see("composer", { editable: true });
-    await user.see({ text: "Split send model" });
-    const selectedModel = await probe.eval(() => [...document.querySelectorAll("button")]
-      .map((node) => node.textContent?.trim()).find((text) => text?.startsWith("Split send model")));
-    expect(selectedModel).toBe("Split send model· Split send mock");
-    prove("The conversation uses the real selected controlled-provider model", { selectedModel, sessionId: world.session.sessionId });
+    if (!controlledModelVerified) {
+      await user.see({ text: "Split send model" });
+      const selectedModel = await probe.eventually(() => probe.eval(() => [...document.querySelectorAll("button")]
+        .map((node) => node.textContent?.trim()).find((text) => text?.startsWith("Split send model"))), {
+        within: 15_000, label: "the controlled model is selected for the initial trial",
+        until: (text) => text === "Split send model· Split send mock",
+      });
+      expect(selectedModel).toBe("Split send model· Split send mock");
+      prove("The conversation uses the real selected controlled-provider model", { selectedModel, sessionId: world.session.sessionId });
+      controlledModelVerified = true;
+    }
   };
   const send = async (prompt: string, background: boolean) => {
     if (!background) await foreground();
