@@ -90,7 +90,7 @@ import { CapabilityCallLine } from "@/components/chat/capability-call-line"
 import { CodeModeTool } from "@/components/chat/code-mode-tool"
 import { codeModeToolCalls } from "@/lib/code-mode-tools"
 import { hasPreservedMcpAppResult, McpAppFrame } from "@/components/chat/mcp-app-frame"
-import { ReasoningBlock } from "@/components/chat/reasoning-block"
+import { ReasoningBlock, reasoningIsShown } from "@/components/chat/reasoning-block"
 import { SubagentRunLine } from "@/components/chat/subagent-run-line"
 import { ToolAggregateGroup } from "@/components/chat/tool-aggregate-group"
 import {
@@ -134,7 +134,6 @@ import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/co
 const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
 
 /** Above this many step rows a finished turn folds into one summary line. */
-const COLLAPSED_STEP_RUN_MIN_ROWS = 4
 
 const ParentRunContext = React.createContext({ active: true, lastProgressAt: 0 })
 
@@ -1181,10 +1180,10 @@ function getRenderableMessage(message: UIMessage) {
 }
 
 /**
- * A finished turn's steps collapse to a single "Worked for 1m 19s" line
- * that expands back into the full run. Only live turns show their steps
- * unprompted; once the answer is in, the reasoning is available but out
- * of the way.
+ * A finished turn's work collapses to a single "Worked for 1m 19s" line
+ * that expands back into the full run, as in Codex: everything before the
+ * final answer (steps, reasoning, and the agent's progress notes) folds, and
+ * only the answer stays in view. Live turns show their steps unprompted.
  */
 function CompletedStepRun({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false)
@@ -1257,12 +1256,23 @@ function MessageGroup({
   const lastTextMessage = getLastTextPart(lastItem.message)
   const mcpAppParts = collectMcpAppParts(items)
 
-  // Leading messages without prose (tool/reasoning steps) render inline and
-  // rely on the transcript's one scroll container. Tool activity must never
-  // create a nested scrollbar while it grows.
+  // Steps render inline and rely on the transcript's one scroll container.
+  // Tool activity must never create a nested scrollbar while it grows.
+  // The 2.x engine records each step as its own assistant message, and the
+  // agent writes progress notes between them, so the turn's answer is its
+  // LAST assistant message with prose: every message before it is work.
+  // Without one (a turn cut short), the leading messages without prose are.
+  const answerIndex = items.findLastIndex((item) =>
+    item.message.role === "assistant"
+    && !isSessionErrorMessage(item.message)
+    && getRenderableMessage(item.message) !== null)
   let stepCount = 0
-  while (stepCount < items.length && !getRenderableMessage(items[stepCount].message)) {
-    stepCount += 1
+  if (answerIndex > 0) {
+    stepCount = answerIndex
+  } else {
+    while (stepCount < items.length && !getRenderableMessage(items[stepCount].message)) {
+      stepCount += 1
+    }
   }
   let stepItems = items.slice(0, stepCount)
   let proseItems = items.slice(stepCount)
@@ -1314,11 +1324,10 @@ function MessageGroup({
       : stepRowCount === 1
         ? "1 step"
         : `${stepRowCount} steps`
-  // A short finished run reads fine as a list, so only long ones fold away.
-  const collapseSteps =
-    !isLiveGroup && stepItems.length > 0 && stepRowCount > COLLAPSED_STEP_RUN_MIN_ROWS
+  // Every finished turn with work folds, however short, as in Codex.
+  const collapseSteps = !isLiveGroup && stepItems.length > 0 && stepRowCount > 0
   const foldedReasoning = collapseSteps
-    ? proseReasoning.map((reasoning) => (
+    ? proseReasoning.filter((reasoning) => reasoningIsShown(reasoning.text, reasoning.isStreaming)).map((reasoning) => (
       <Message
         key={`folded-reasoning-${reasoning.key}`}
         className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10"

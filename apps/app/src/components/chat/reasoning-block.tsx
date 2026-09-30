@@ -17,13 +17,51 @@ type ReasoningBlockProps = {
   className?: string
 }
 
+const HEADING_LINE = /^\*\*(.+?)\*\*\s*(?:<!--\s*-->)?$/
+
 /**
- * Thinking is collapsed by default — a single "Thinking… / Thought"
- * line with a chevron; the full reasoning renders as markdown only
- * when the user opens it.
+ * A reasoning summary split into its bold status headings (whole lines like
+ * "**Planning the fix**") and its prose. The ChatGPT/Codex backend sends
+ * heading-only summaries for its models (openai/codex#34873), sometimes with
+ * an empty `<!-- -->` placeholder after the heading, so `body` is often "".
+ */
+export function reasoningSummaryParts(text: string): { headings: string[]; body: string } {
+  const headings: string[] = []
+  const body: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    const heading = HEADING_LINE.exec(trimmed)
+    if (heading) headings.push(heading[1]!.trim())
+    else if (trimmed !== "<!-- -->") body.push(line)
+  }
+  return { headings, body: body.join("\n").trim() }
+}
+
+/** Whether a reasoning part renders anything: prose, or a heading while it streams. */
+export function reasoningIsShown(text: string, isStreaming: boolean): boolean {
+  return isStreaming || reasoningSummaryParts(text).body !== ""
+}
+
+/**
+ * Reasoning with prose is collapsed by default: a single "Reasoning trace"
+ * line with a chevron; the full reasoning renders as markdown only when the
+ * user opens it. Heading-only reasoning works like Codex's status row: while
+ * the model thinks, its latest heading is a live "Thinking · …" line, and
+ * once it is done nothing is left to open, so it renders nothing.
  */
 export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockProps) {
   const [open, setOpen] = useState(false)
+  const { headings, body } = reasoningSummaryParts(text)
+
+  if (!body) {
+    if (!isStreaming) return null
+    const latest = headings.at(-1)
+    return (
+      <div role="status" data-reasoning-status="" className={cn("w-full text-sm text-muted-foreground", className)}>
+        <span className="animate-pulse">{latest ? `Thinking · ${latest}` : "Thinking…"}</span>
+      </div>
+    )
+  }
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={cn("w-full", className)} data-reasoning-block="">

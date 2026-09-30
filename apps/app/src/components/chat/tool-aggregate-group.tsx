@@ -5,7 +5,7 @@ import { AlertTriangle, Check, ChevronUp, CircleHelp, CirclePause, Copy, MoreHor
 
 import { FileChip } from "@/components/chat/file-chip"
 import { ShellCommandText } from "@/components/chat/shell-command-text"
-import { ReasoningBlock } from "@/components/chat/reasoning-block"
+import { ReasoningBlock, reasoningIsShown } from "@/components/chat/reasoning-block"
 import { useCurrentToolLifecycleResolver } from "@/components/chat/current-tool-lifecycle-context"
 import { Button } from "@/components/ui/button"
 import {
@@ -263,8 +263,10 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
   const hiddenCount = rows.length - visibleRows.length
   // Expanded rows interleave the run's thoughts at their chronological
   // slots; thoughts belonging to capped rows stay behind "Show N more".
-  const thoughtsAt = (index: number) => thoughts.filter((thought) => thought.afterIndex === index)
-  const trailingThoughts = hiddenCount > 0 ? [] : thoughts.filter((thought) => thought.afterIndex >= parts.length)
+  // A finished heading-only thought renders nothing, so it gets no row.
+  const shownThoughts = thoughts.filter((thought) => reasoningIsShown(thought.text, thought.isStreaming))
+  const thoughtsAt = (index: number) => shownThoughts.filter((thought) => thought.afterIndex === index)
+  const trailingThoughts = hiddenCount > 0 ? [] : shownThoughts.filter((thought) => thought.afterIndex >= parts.length)
 
   // "Edited 1 file" above "Edited file-chip.tsx" says nothing twice.
   // A group that is exactly one file action (and no thoughts) renders
