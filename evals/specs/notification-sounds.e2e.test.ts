@@ -128,10 +128,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       const defaults = await probe.eval(() => {
         const toggle = document.querySelector<HTMLElement>('[role="switch"][aria-label="Soft notification sounds"]');
         const mode = document.querySelector<HTMLElement>('[aria-label="Notify me"]');
-        return { sounds: toggle?.getAttribute("aria-checked"), desktop: mode?.textContent?.trim() };
+        return { sounds: toggle?.getAttribute("aria-checked"), desktop: mode?.querySelector('[data-slot="select-value"]')?.textContent?.trim() };
       });
-      expect(defaults).toEqual({ sounds: "true", desktop: "Off" });
       await user.screenshot();
+      expect(defaults).toEqual({ sounds: "true", desktop: "Off" });
     });
 
     await step("a finished background task plays one short soft chime", async () => {
