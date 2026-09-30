@@ -1130,7 +1130,7 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
           <div className="flex items-start gap-2">
             <LoaderCircle size={16} className="mt-0.5 shrink-0 animate-spin text-warning" />
             <div className="min-w-0 space-y-1">
-              <p className="whitespace-pre-wrap text-amber-12">
+              <p className="whitespace-pre-wrap text-sm font-medium text-amber-12">
                 {freeModelLimit ? "The free starter model is busy right now" : status.message}
               </p>
               <p className="text-xs text-amber-12/80">{info}</p>
