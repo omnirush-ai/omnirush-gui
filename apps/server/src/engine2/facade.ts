@@ -361,6 +361,8 @@ export async function startEngineFacade(options: EngineFacadeOptions): Promise<E
       agent: info ? str(info, "agent") : undefined,
       model,
       child: Boolean(info && str(info, "parentID")),
+      // A running sub-agent call keeps the child session its progress named (the read leaves it out).
+      childSessionOf: (callID) => translator.childSessionOf(sessionID, callID),
     });
     await attachTurnDiffs(sessionID, mapped);
     return mapped;

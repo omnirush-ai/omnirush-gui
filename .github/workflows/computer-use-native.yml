@@ -1,0 +1,64 @@
+name: Native Computer Use
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/electron/computer-use*"
+      - "apps/desktop/electron-builder.base.yml"
+      - "apps/desktop/package.json"
+      - "apps/desktop/scripts/prepare-runtime-node-modules.mjs"
+      - "apps/app/src/**/computer-use*"
+      - "evals/worlds/computer-use.ts"
+      - "evals/packages/labs/fixtures/portable-computer-use*"
+      - "evals/specs/computer-use-portable-window.e2e.test.ts"
+      - ".github/workflows/computer-use-native.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-window-journey:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Install app and journey dependencies
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir evals install --frozen-lockfile
+      - name: Prepare an isolated Linux desktop
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb openbox libxi6 libxtst6
+      - name: Run Windows native journey
+        if: runner.os == 'Windows'
+        shell: bash
+        run: pnpm evals:e2e computer-use-portable-window
+      - name: Run Linux X11 native journey
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a sh -c 'openbox --sm-disable >/tmp/omnirush-test-openbox.log 2>&1 & export XDG_SESSION_TYPE=x11; unset WAYLAND_DISPLAY; pnpm evals:e2e computer-use-portable-window'
+      - name: Preserve journey evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-use-${{ runner.os }}-${{ github.sha }}
+          path: |
+            evals/results/test-runs/**
+            evals/results/.testkit/**
+          retention-days: 14

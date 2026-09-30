@@ -43,7 +43,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - name: Install review and testkit dependencies
         run: |
-          pnpm --filter @omnirush/review-app... --filter @omnirush/world... --filter @omnirush/types... install --frozen-lockfile --ignore-scripts
+          pnpm --filter @omnirush/review-app... --filter @omnirush/world... --filter @omnirush/types... --filter omnirush-server... install --frozen-lockfile --ignore-scripts
           pnpm --dir evals install --frozen-lockfile --ignore-scripts
       - name: Build and verify the review app
         env:

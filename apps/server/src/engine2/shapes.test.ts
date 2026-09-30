@@ -385,6 +385,72 @@ describe("live events and read-back agree", () => {
     }
   });
 
+  test("a read of running sub-agent calls names their child sessions, as their progress did", async () => {
+    // The 2.x engine's read of a running subagent call leaves out the child session; only the
+    // call's progress events name it. A re-read (the app reloads the session's messages) used to
+    // drop the child from the task card until the call ended.
+    const tree = fixture("v2-sub");
+    const parent = (tree.session as { id: string }).id;
+    const running = JSON.parse(JSON.stringify(tree.messages)) as Array<Record<string, unknown>>;
+    for (const message of running) {
+      for (const entry of (Array.isArray(message.content) ? message.content : []) as Array<Record<string, any>>) {
+        if (entry.type === "tool" && entry.name === "subagent") entry.state = { status: "running", input: entry.state.input, metadata: {} };
+      }
+    }
+    const translator = new EventTranslator({ version: "2.0.18" });
+    const events = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "v2-sub-events.json"), "utf8")) as Array<{ type: string; data: Record<string, any> }>;
+    const progressed = new Map<string, string>();
+    for (const event of events) {
+      await translator.translate(event);
+      if (event.type === "session.tool.progress" && event.data.sessionID === parent && typeof event.data.metadata?.sessionID === "string") {
+        progressed.set(String(event.data.id), event.data.metadata.sessionID);
+      }
+      if (event.type === "session.tool.success") break;
+    }
+    expect(progressed.size).toBe(2);
+    const read = (childSessionOf?: (callID: string) => string | undefined) =>
+      (v1Messages(running, { sessionID: parent, directory: "/work/proj", root: "/", model: { providerID: "mock", modelID: "mock-model" }, childSessionOf })
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "tool") as Array<{ callID: string; tool: string; state: { status: string; metadata: Record<string, unknown> } }>);
+
+    const tasks = read((callID) => translator.childSessionOf(parent, callID));
+    expect(tasks.map((task) => [task.tool, task.state.status])).toEqual([["task", "running"], ["task", "running"]]);
+    for (const task of tasks) expect(task.state.metadata.sessionId).toBe(progressed.get(task.callID));
+    // Without the progress it was read with no child (the bug), and a stored child is never replaced.
+    expect(read().map((task) => task.state.metadata.sessionId)).toEqual([undefined, undefined]);
+    const stored = JSON.parse(JSON.stringify(running)) as Array<Record<string, any>>;
+    for (const message of stored) for (const entry of message.content ?? []) if (entry.type === "tool") entry.state.metadata = { sessionID: "ses_stored" };
+    const kept = v1Messages(stored, { sessionID: parent, childSessionOf: () => "ses_from_progress" }).flatMap((message) => message.parts).filter((part) => part.type === "tool") as Array<{ state: { metadata: Record<string, unknown> } }>;
+    expect(kept.map((task) => task.state.metadata.sessionId)).toEqual(["ses_stored", "ses_stored"]);
+    // Only this session's calls: another session's call of the same id names no child.
+    expect(translator.childSessionOf("ses_other", tasks[0]!.callID)).toBeUndefined();
+  });
+
+  test("a sub-agent call's child is remembered only until the engine's own record names it", async () => {
+    const translator = new EventTranslator({ version: "2.0.18" });
+    const progress = (sessionID: string, id: string, child: string) =>
+      translator.translate({ type: "session.tool.progress", data: { sessionID, id, metadata: { sessionID: child, status: "running" } } });
+    await progress("ses_p", "call_ok", "ses_c1");
+    await progress("ses_p", "call_bad", "ses_c2");
+    await progress("ses_p", "call_bad_named", "ses_c3");
+    await progress("ses_q", "call_other", "ses_c4");
+
+    // Success names the child (the engine stores it from then on): forgotten.
+    await translator.translate({ type: "session.tool.success", data: { sessionID: "ses_p", id: "call_ok", metadata: { sessionID: "ses_c1", status: "completed" } } });
+    expect(translator.childSessionOf("ses_p", "call_ok")).toBeUndefined();
+    // A failure that does not name the child keeps it, so its card stays linked.
+    await translator.translate({ type: "session.tool.failed", data: { sessionID: "ses_p", id: "call_bad", error: "aborted" } });
+    expect(translator.childSessionOf("ses_p", "call_bad")).toBe("ses_c2");
+    // A failure that names it is forgotten like a success.
+    await translator.translate({ type: "session.tool.failed", data: { sessionID: "ses_p", id: "call_bad_named", error: "boom", metadata: { sessionID: "ses_c3" } } });
+    expect(translator.childSessionOf("ses_p", "call_bad_named")).toBeUndefined();
+
+    // Deleting the parent session forgets its calls, and only its calls.
+    await translator.translate({ type: "session.deleted", data: { sessionID: "ses_p" } });
+    expect(translator.childSessionOf("ses_p", "call_bad")).toBeUndefined();
+    expect(translator.childSessionOf("ses_q", "call_other")).toBe("ses_c4");
+  });
+
   test("busy and idle come from the execution lifecycle", async () => {
     const translator = new EventTranslator({ version: "2.0.18" });
     const started = await translator.translate({ type: "session.execution.started", data: { sessionID: "ses_a" } });

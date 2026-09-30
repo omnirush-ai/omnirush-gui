@@ -46,8 +46,9 @@ describe("omnirush.ai extension catalog platform filter", () => {
     expect(filteredIds("web")).toEqual(["ollama"]);
   });
 
-  test("keeps omnirush.ai Browser desktop-only and Computer Use mac-only", () => {
+  test("keeps Browser and Computer Use on desktop platforms", () => {
     expect(filteredIds("darwin")).toEqual(["omnirush-browser", "computer-use", "ollama"]);
-    expect(filteredIds("linux")).toEqual(["omnirush-browser", "ollama"]);
+    expect(filteredIds("linux")).toEqual(["omnirush-browser", "computer-use", "ollama"]);
+    expect(filteredIds("windows")).toEqual(["omnirush-browser", "computer-use", "ollama"]);
   });
 });

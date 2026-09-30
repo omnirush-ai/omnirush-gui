@@ -641,6 +641,19 @@ export function resolveChromeBinary(env: NodeJS.ProcessEnv = process.env, platfo
 export async function killLocalPid(pid: number, options: KillLocalPidOptions = {}): Promise<boolean> {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   const rootWasAlive = pidIsAlive(pid);
+  if (process.platform === "win32") {
+    // Node cannot send console Ctrl-C to a detached Windows pnpm tree.
+    // Stop this host-owned tree, including Electron and its database workers.
+    if (!rootWasAlive) return false;
+    await new Promise<void>((resolveKill, reject) => {
+      execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { encoding: "utf8", timeout: 10_000 }, (error, _stdout, stderr) => {
+        if (error && pidIsAlive(pid)) { reject(new Error("Could not stop owned Windows process tree " + pid + ": " + (stderr || error.message))); return; }
+        resolveKill();
+      });
+    });
+    await waitUntilGone(pid, KILL_GRACE_MS);
+    return true;
+  }
   const graceMs = options.graceMs ?? KILL_GRACE_MS;
   const sentGroup = signalProcessGroup(pid, "SIGINT");
   const sentDirect = !sentGroup && rootWasAlive ? signalPid(pid, "SIGINT") : false;
@@ -880,7 +893,21 @@ async function ensureDisplay(repoRoot: string, env: NodeJS.ProcessEnv, log: (mes
         spawned = spawnDetached(packagedBinary, [], { cwd: profileRoot, env, logPath });
       } else {
         log(`Starting local Electron surface ${name} (Vite :${port}, CDP :${cdpPort})...`);
-        spawned = spawnDetached(pnpmCommand(), [opts.devCommand ?? "dev:electron"], { cwd: options.repoRoot, env, logPath });
+        // Launch pnpm's JS entry on Windows: a detached .cmd shell can exit
+        // without starting the app or forwarding its diagnostics.
+        const pnpmEntry = process.env.npm_execpath;
+        if (process.platform === "win32") {
+          // Workspace dev scripts use POSIX environment assignments.
+          // Keep the emulator scoped to this isolated eval process.
+          env.pnpm_config_shell_emulator = "true";
+          env.npm_config_shell_emulator = "true";
+          if (!pnpmEntry || !/pnpm\.(?:c|m)?js$/i.test(pnpmEntry) || !existsSync(pnpmEntry)) {
+            throw new Error("Run Windows Electron journeys through pnpm so npm_execpath names its JS entry.");
+          }
+          spawned = spawnDetached(process.execPath, [pnpmEntry, opts.devCommand ?? "dev:electron"], { cwd: options.repoRoot, env, logPath });
+        } else {
+          spawned = spawnDetached(pnpmCommand(), [opts.devCommand ?? "dev:electron"], { cwd: options.repoRoot, env, logPath });
+        }
       }
       const cdpUrl = `http://127.0.0.1:${cdpPort}`;
       try {

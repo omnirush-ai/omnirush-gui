@@ -31,7 +31,10 @@ export function ComputerUseControls() {
       const selectedWindow = windows[session.id] ?? session.windows?.[0]?.id;
       const send = (command: string) => action.mutate({ connectionId: session.connectionId, id: session.id, action: command, windowId: selectedWindow });
       if (!approval && !blocked) {
-        return session.previewVisible ? null : <Button key={session.connectionId} variant="outline" onClick={() => send("show")}>Show {session.appName} preview</Button>;
+        return session.previewVisible ? null : <div key={session.connectionId} className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => send("show")}>Show {session.appName} preview</Button>
+          <Button variant="destructive" disabled={action.isPending} onClick={() => send("stop")}>Stop</Button>
+        </div>;
       }
       return <section key={session.connectionId} className="rounded-2xl border border-border bg-background p-4 shadow-lg">
         <p className="text-sm font-semibold">{approval ? `Use ${session.appName}?` : `Computer Use · ${session.appName}`}</p>
@@ -42,7 +45,7 @@ export function ComputerUseControls() {
               {session.windows?.map((window) => <option key={window.id} value={window.id}>{window.title}</option>)}
             </select>
           </label>
-          <p className="my-3 text-xs text-muted-foreground">{session.mode === "observe" ? "Read this window. No clicks or typing." : session.mode === "assist" ? "Read and use this window’s app controls." : "Use this window’s mouse and keyboard. omnirush.ai yields to your input, then refreshes the window before continuing. Stop ends access."} Access lasts up to 15 minutes. Window content goes to your selected model provider.</p>
+          <p className="my-3 text-xs text-muted-foreground">{session.mode === "observe" ? "Read this window. No clicks or typing." : session.mode === "assist" ? "Read and use this window’s app controls." : "Use this window’s mouse and keyboard. Your input interrupts control. Stop ends access."} Access lasts up to 15 minutes. Window content goes to your selected model provider.</p>
           <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => send("deny")}>Cancel</Button><Button disabled={selectedWindow === undefined || action.isPending} onClick={() => send("approve")}>Allow and start</Button></div>
         </> : <>
           <p className="mt-2 truncate text-xs text-muted-foreground">{session.windowTitle} · {session.mode === "observe" ? "Read only" : session.mode === "assist" ? "App controls" : "Mouse and keyboard"}</p>

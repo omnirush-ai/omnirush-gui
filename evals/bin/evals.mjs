@@ -334,7 +334,7 @@ function run(options) {
   mkdirSync(outputDir, { recursive: true });
   const outputFile = join(outputDir, `cli-run-${Date.now()}.json`);
   const vitestArgs = [
-    "exec", "vitest", "run",
+    "run",
     "--config", "vitest.config.ts",
     "--project", "e2e",
     "--reporter=default",
@@ -343,7 +343,7 @@ function run(options) {
     ...resolved.map((file) => relative(evalsDir, file).split(sep).join("/")),
   ];
   process.stderr.write(`placement: ${placement} (${reason})\n`);
-  const child = spawnSync("pnpm", vitestArgs, { cwd: evalsDir, env: childEnv, stdio: "inherit" });
+  const child = spawnSync(process.execPath, [join(evalsDir, "node_modules/vitest/vitest.mjs"), ...vitestArgs], { cwd: evalsDir, env: childEnv, stdio: "inherit" });
   const status = childStatus(child);
   let report;
   try {

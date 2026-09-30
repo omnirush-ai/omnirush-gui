@@ -3196,6 +3196,34 @@ export function SessionRoute() {
     }
   }, [baseUrl, client, local, navigateToWorkspaceSession, refreshRouteState, rememberPendingCreatedSession, token]);
 
+  // The new task's folder, picked above its composer: switch to another
+  // workspace, or open a folder as a new one (the sidebar's "+" in one step).
+  const openProjectFolder = useCallback(async () => {
+    if (workspaces.length > 0 && checkDesktopRestriction({ restriction: "allowMultipleWorkspaces" })) {
+      restrictionNotice.show({
+        title: "Additional workspaces are restricted",
+        message: "Your organization administrator has restricted access to adding additional workspaces.",
+      });
+      return;
+    }
+    const folder = singlePickedDirectory(await pickDirectory({ title: t("onboarding.authorize_folder") }));
+    await handleCreateWorkspace("starter", folder);
+  }, [checkDesktopRestriction, handleCreateWorkspace, restrictionNotice, workspaces.length]);
+  const newTaskComposerWithProjects = useMemo<NewTaskComposerContext | null>(() => newTaskComposerContext && {
+    ...newTaskComposerContext,
+    projectPicker: {
+      workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.displayNameResolved, path: workspace.path || null })),
+      selectedId: selectedWorkspaceId || null,
+      onSelect: (workspaceId: string) => {
+        setLegacySelectedWorkspaceId(workspaceId);
+        writeActiveWorkspaceId(workspaceId);
+        navigateToWorkspaceSession(workspaceId);
+        focusPromptSoon();
+      },
+      onOpenFolder: platform.capabilities.nativeFilePicker && canCreateWorkspaces() ? openProjectFolder : null,
+    },
+  }, [navigateToWorkspaceSession, newTaskComposerContext, openProjectFolder, platform.capabilities.nativeFilePicker, selectedWorkspaceId, setLegacySelectedWorkspaceId, workspaces]);
+
   /**
    * Chat-first onboarding: the empty-state composer creates a default chat
    * workspace under the user's home folder instead of asking where to put
@@ -3390,7 +3418,7 @@ export function SessionRoute() {
       onOpenProviderAuth={handleOpenProviderAuth}
       onChatFirstTask={handleChatFirstTask}
       chatFirstBusy={createWorkspaceBusy}
-      newTaskComposer={newTaskComposerContext}
+      newTaskComposer={newTaskComposerWithProjects}
       providerAuthModal={sessionProviderAuthSnapshot.providerAuthModalOpen ? {
         open: true,
         loading: false,

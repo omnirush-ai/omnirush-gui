@@ -468,6 +468,9 @@ export type UiControlBridgeInfo = {
 };
 
 export type ComputerUsePermissions = {
+  platform?: string;
+  modes?: string[];
+  backgroundControl?: boolean;
   ok: boolean;
   accessibility: boolean;
   screenRecording: boolean;
@@ -564,6 +567,7 @@ export type DesktopCommandMap = {
   getUiControlBridgeInfo: { args: []; result: UiControlBridgeInfo | null };
   getOmniRushUiMcpCommand: { args: []; result: string[] };
   getComputerUseMcpCommand: { args: []; result: string[] };
+  getComputerUseMcpEnvironment: { args: []; result: Record<string, string> };
   getComputerUseState: { args: []; result: unknown };
   computerUseAction: { args: [value: { connectionId: string; id: string; action: string; windowId?: number }]; result: void };
   getOmniRushUiMcpEnvironment: { args: []; result: Record<string, string> };

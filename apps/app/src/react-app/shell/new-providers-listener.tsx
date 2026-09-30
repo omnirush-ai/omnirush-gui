@@ -10,12 +10,11 @@ import {
   type NewProvidersEventDetail,
 } from "@/app/lib/provider-events";
 import { t } from "@/i18n";
-import { useNotificationStore } from "@/react-app/kernel/notification-store";
+import { NEW_PROVIDERS_DEDUPE_KEY, useNotificationStore } from "@/react-app/kernel/notification-store";
 import { notifyEvent } from "./notifications";
 import { orgOnboardingVisibilityEvent } from "./reload-coordinator";
 
 const PENDING_MODEL_PICKER_KEY = "omnirush.pendingModelPickerProviderIds";
-const NEW_PROVIDERS_DEDUPE_KEY = "new-providers";
 
 /** Custom event to request the model picker to open. */
 export const openModelPickerEvent = "omnirush-open-model-picker";

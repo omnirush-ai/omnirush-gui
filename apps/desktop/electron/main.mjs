@@ -26,6 +26,7 @@ import { registerUpdaterIpc } from "./updater.mjs";
 import {
   checkComputerUsePermissions,
   getComputerUseMcpCommand,
+  getComputerUseMcpEnvironment,
   getComputerUseState,
   computerUseAction,
   listRunningApps,
@@ -2004,6 +2005,7 @@ const desktopCommandHandlers = {
   "getComputerUseMcpCommand": async (event, ...args) => {
       return getComputerUseMcpCommand();
   },
+  "getComputerUseMcpEnvironment": async () => getComputerUseMcpEnvironment(),
   "checkComputerUsePermissions": async (event, ...args) => {
       // Read permissions in the same child-process context as setup.
       return checkComputerUsePermissions();

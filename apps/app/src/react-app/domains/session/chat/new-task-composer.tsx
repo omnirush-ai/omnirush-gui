@@ -30,6 +30,7 @@ import {
 } from "@/react-app/domains/connections/cloud-inventory-cache";
 import { connectPluginsForComposer, EMPTY_CONNECT_CAPABILITY_INVENTORY } from "@/react-app/domains/session/surface/connect-capability-inventory";
 import { resolveAttachmentFileMetadata } from "@/react-app/domains/session/sync/attachment-file-part";
+import { ProjectPicker, type ProjectPickerProps } from "@/react-app/domains/session/chat/project-picker";
 
 /**
  * Workspace-scoped wiring for the new-task composer. Everything here is
@@ -66,6 +67,8 @@ export type NewTaskComposerContext = {
   isRemoteWorkspace: boolean;
   isSandboxWorkspace: boolean;
   onOpenSettingsSection?: (section: ComposerSettingsSection) => void;
+  /** The folder the new task works in, picked above the composer. */
+  projectPicker?: ProjectPickerProps;
 };
 
 export type NewTaskComposerProps = {
@@ -423,6 +426,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       restoreComposer(failedSubmission);
       setFailedSubmission(null);
     }}>Clear the current draft to restore the unsent message</button> : null}
+    {context?.projectPicker ? <ProjectPicker {...context.projectPicker} /> : null}
     <ReactSessionComposer
       runModeControl={<WorkspaceRunModeMenu client={workspaceClient} workspaceId={workspaceId} busy={props.busy} />}
       fullPermissionsControl={<FullPermissionsToggle client={workspaceClient} workspaceId={workspaceId} />}

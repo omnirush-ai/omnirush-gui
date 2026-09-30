@@ -464,7 +464,7 @@ export function createConnectionsStore(options: {
     const mcpResource = extensionResource(entry.extensionManifest, "mcp");
     if (mcpResource?.localCommandRef === "omnirush.computerUseMcp") {
       const command = await resolveDesktopCommand("getComputerUseMcpCommand", COMPUTER_USE_HELPER_UNAVAILABLE);
-      if (!command) throw new Error("Computer Use requires the bundled omnirush.ai helper on macOS.");
+      if (!command) throw new Error("Computer Use is unavailable on this desktop. Check its setup page.");
       return command;
     }
     if (isOmniRushUiMcpEntry(entry)) {
@@ -476,6 +476,11 @@ export function createConnectionsStore(options: {
   };
 
   const resolveLocalMcpEnvironment = async (entry: McpDirectoryInfo) => {
+    if (extensionResource(entry.extensionManifest, "mcp")?.localCommandRef === "omnirush.computerUseMcp") {
+      const environment = await window.__OMNIRUSH_ELECTRON__?.invokeDesktop?.("getComputerUseMcpEnvironment");
+      if (!environment) throw new Error(COMPUTER_USE_HELPER_UNAVAILABLE);
+      return environment;
+    }
     if (!isOmniRushUiMcpEntry(entry)) return undefined;
     // Required, not best-effort: packaged launches run the app's own binary and
     // need ELECTRON_RUN_AS_NODE=1 from this environment to act as Node.

@@ -21,7 +21,9 @@ Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
 });
 
-const { useNotificationStore } = await import("../src/react-app/kernel/notification-store");
+const { NOTIFICATION_STORE_VERSION, PERSISTED_NOTIFICATION_STORE_KEY, useNotificationStore } = await import(
+  "../src/react-app/kernel/notification-store"
+);
 
 function reset() {
   useNotificationStore.setState({ notifications: [] });
@@ -116,5 +118,60 @@ describe("notification store", () => {
     const notifications = useNotificationStore.getState().notifications;
     expect(notifications).toHaveLength(100);
     expect(notifications[0].title).toBe("Entry 109");
+  });
+});
+
+describe("loading a save from an older version", () => {
+  beforeEach(reset);
+
+  const now = Date.now();
+  const staleSummary = {
+    id: "ntf_old_providers",
+    kind: "providers",
+    severity: "info",
+    title: "2 new providers & 10 new models available",
+    count: 1,
+    createdAt: now - 60_000,
+    updatedAt: now - 60_000,
+    readAt: null,
+    dedupeKey: "new-providers",
+    action: { type: "open-model-picker", providerIds: ["omnirush", "opencode"] },
+  };
+  const otherEntry = {
+    id: "ntf_old_system",
+    kind: "system",
+    severity: "info",
+    title: "Something else",
+    count: 1,
+    createdAt: now - 30_000,
+    updatedAt: now - 30_000,
+    readAt: null,
+  };
+
+  async function load(saved: Record<string, unknown>) {
+    storage.set(PERSISTED_NOTIFICATION_STORE_KEY, JSON.stringify(saved));
+    await useNotificationStore.persist.rehydrate();
+    return useNotificationStore.getState().notifications;
+  }
+
+  test("drops the provider summary an older version saved and keeps everything else", async () => {
+    const notifications = await load({ state: { notifications: [staleSummary, otherEntry] }, version: 0 });
+    expect(notifications.map((entry) => entry.id)).toEqual(["ntf_old_system"]);
+  });
+
+
+  test("the migrated save is written back at the current version, so the summary does not return", async () => {
+    await load({ state: { notifications: [staleSummary, otherEntry] }, version: 0 });
+    const saved = JSON.parse(storage.get(PERSISTED_NOTIFICATION_STORE_KEY) ?? "{}");
+    expect(saved.version).toBe(NOTIFICATION_STORE_VERSION);
+    expect(saved.state.notifications.map((entry: { id: string }) => entry.id)).toEqual(["ntf_old_system"]);
+  });
+
+  test("a provider summary saved by the current version is kept", async () => {
+    const notifications = await load({
+      state: { notifications: [staleSummary, otherEntry] },
+      version: NOTIFICATION_STORE_VERSION,
+    });
+    expect(notifications.map((entry) => entry.id)).toEqual(["ntf_old_providers", "ntf_old_system"]);
   });
 });

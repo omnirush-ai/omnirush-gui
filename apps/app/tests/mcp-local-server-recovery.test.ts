@@ -79,7 +79,7 @@ describe("bundled Computer Use setup", () => {
   async function connectWithHelper(command: string[] | null) {
     Object.defineProperty(globalThis, "window", {
       configurable: true,
-      value: { __OMNIRUSH_ELECTRON__: { invokeDesktop: async (name: string) => name === "getComputerUseMcpCommand" ? command : null } },
+      value: { __OMNIRUSH_ELECTRON__: { invokeDesktop: async (name: string) => name === "getComputerUseMcpCommand" ? command : name === "getComputerUseMcpEnvironment" ? {} : null } },
     });
     const server = createOmniRushServerStore({
       startupPreference: () => "server", documentVisible: () => true, developerMode: () => false,
@@ -110,12 +110,12 @@ describe("bundled Computer Use setup", () => {
     const command = ["/Applications/omnirush.ai.app/Contents/Resources/helpers/omnirush.ai Computer Use.app/Contents/MacOS/ComputerUse", "mcp"];
     const { result, saved } = await connectWithHelper(command);
     expect(result).toEqual({ ok: true });
-    expect(saved).toEqual([{ name: "computer-use", config: { type: "local", enabled: true, command } }]);
+    expect(saved).toEqual([{ name: "computer-use", config: { type: "local", enabled: true, command, environment: {} } }]);
   });
 
   test("missing helper returns an actionable error without saving a connection", async () => {
     const { result, saved } = await connectWithHelper(null);
-    expect(result).toEqual({ ok: false, error: "Computer Use requires the bundled omnirush.ai helper on macOS." });
+    expect(result).toEqual({ ok: false, error: "Computer Use is unavailable on this desktop. Check its setup page." });
     expect(saved).toEqual([]);
   });
 });

@@ -135,7 +135,14 @@ function v1TaskOutput(text: string): string {
   return `<task id="${match[1]}" state="${match[2]}">\n<task_result>\n${match[3]}\n</task_result>\n</task>`;
 }
 
-type ToolContext = { sessionID: string; directory?: string; root?: string; parentModel?: { providerID: string; modelID: string } };
+type ToolContext = {
+  sessionID: string;
+  directory?: string;
+  root?: string;
+  parentModel?: { providerID: string; modelID: string };
+  /** The child session a sub-agent call's progress named (MessageContext.childSessionOf). */
+  childSessionOf?: (callID: string) => string | undefined;
+};
 
 function v1ToolTitle(name: string, input: JsonRecord, ctx: ToolContext): string {
   switch (name) {
@@ -341,7 +348,11 @@ export function v1ToolPart(
   if (status === "streaming" || status === "pending") {
     return { ...base, state: { status: "pending", input, raw: typeof state.input === "string" ? state.input : JSON.stringify(state.input ?? {}) } };
   }
-  const { __title: pluginTitle, ...metadata } = record(state, "metadata") ?? {};
+  const { __title: pluginTitle, ...stored } = record(state, "metadata") ?? {};
+  // The engine's read of a running sub-agent call leaves out its child session (only the
+  // call's progress events name it): the child the progress named, so the card can open it.
+  const child = name === "subagent" && typeof stored.sessionID !== "string" ? ctx.childSessionOf?.(callID) : undefined;
+  const metadata: JsonRecord = child ? { ...stored, sessionID: child } : stored;
   const title = (fallback: string) => (typeof pluginTitle === "string" && pluginTitle ? pluginTitle : fallback);
   if (status === "running") {
     const runningTitle = title(v1ToolTitle(name, rawInput, ctx));
@@ -460,6 +471,11 @@ export type MessageContext = {
   model?: { providerID: string; modelID: string; variant?: string };
   /** Whether the session is a sub-agent's (its first user message then has the 2.x task preamble). */
   child?: boolean;
+  /**
+   * The child session of one of this session's sub-agent calls, as its progress events named it
+   * (EventTranslator.childSessionOf): a read of a running call does not carry it.
+   */
+  childSessionOf?: (callID: string) => string | undefined;
 };
 
 type ModelRef = { providerID: string; modelID: string; variant?: string };
@@ -483,7 +499,7 @@ export function v1AssistantMessage(message: JsonRecord, ctx: MessageContext, par
   const model = modelRef(message.model) ?? ctx.model;
   const agent = str(message, "agent") ?? ctx.agent ?? "build";
   const ids = { messageID: id, sessionID: ctx.sessionID };
-  const toolCtx: ToolContext = { sessionID: ctx.sessionID, directory: ctx.directory, root: ctx.root, parentModel: model };
+  const toolCtx: ToolContext = { sessionID: ctx.sessionID, directory: ctx.directory, root: ctx.root, parentModel: model, childSessionOf: ctx.childSessionOf };
   const tokens = v1Tokens(message.tokens);
   const cost = num(message, "cost") ?? 0;
   const finish = str(message, "finish");

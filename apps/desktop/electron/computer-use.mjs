@@ -9,10 +9,16 @@ import { fileURLToPath } from "node:url";
 
 import { app } from "electron";
 import { createComputerUseHost } from "./computer-use-host.mjs";
+import { createPortableComputerUseHost } from "./computer-use-portable-host.mjs";
+import { captureComputerWindow, createComputerPreview } from "./computer-use-preview.mjs";
 
 let hostPromise;
 async function computerUseHost() {
   if (!hostPromise) {
+    if (process.platform === "win32" || process.platform === "linux") {
+      hostPromise = createPortableComputerUseHost({ profile: app.getPath("userData"), capture: captureComputerWindow, preview: createComputerPreview() }).catch((error) => { hostPromise = null; throw error; });
+      return hostPromise;
+    }
     const executable = resolveComputerUseExecutable();
     if (!executable) throw new Error("Computer Use helper unavailable.");
     hostPromise = createComputerUseHost({ profile: app.getPath("userData"), executable }).catch((error) => { hostPromise = null; throw error; });
@@ -20,7 +26,8 @@ async function computerUseHost() {
   return hostPromise;
 }
 async function getComputerUseState() { return hostPromise ? (await hostPromise).state() : []; }
-async function computerUseAction(value) { (await computerUseHost()).action(value); }
+async function computerUseAction(value) { await (await computerUseHost()).action(value); }
+function getComputerUseMcpEnvironment() { return process.platform === "darwin" ? {} : { ELECTRON_RUN_AS_NODE: "1" }; }
 app.on("before-quit", () => { hostPromise?.then((host) => host.close()).catch(() => {}); });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +48,11 @@ function computerUseHelperAppPath() {
 
 async function getComputerUseMcpCommand() {
   if (process.platform !== "darwin") {
-    throw new Error("Desktop Computer Use requires macOS 14 or later. Use the built-in browser for website tasks.");
+    const host = await computerUseHost();
+    if (!host.availability.supported) throw new Error(host.availability.error);
+    const relay = app.isPackaged ? path.join(process.resourcesPath, "computer-use", "relay.mjs") : path.join(__dirname, "computer-use-relay.mjs");
+    if (!existsSync(relay)) throw new Error("Computer Use is missing from this build. Reinstall OmniRush.ai.");
+    return [process.execPath, relay, host.discoveryPath];
   }
   const helperExecutable = resolveComputerUseExecutable();
   if (helperExecutable) return [helperExecutable, "relay", (await computerUseHost()).socketPath];
@@ -90,7 +101,9 @@ function resolveComputerUseExecutable() {
 
 async function checkComputerUsePermissions() {
   if (process.platform !== "darwin") {
-    return { ok: false, accessibility: false, screenRecording: false, supported: false, error: "Desktop Computer Use is available on macOS 14 or later. Use the built-in browser for website tasks." };
+    const host = await computerUseHost();
+    const available = host.availability;
+    return { ok: available.supported, accessibility: available.supported, screenRecording: available.supported, supported: available.supported, protocolVersion: "omnirush.computer-use/1", platform: process.platform, modes: ["observe", "control"], backgroundControl: false, ...(available.error ? { error: available.error } : {}) };
   }
   // Spawn binary --check → read JSON from stdout → exit. Always fresh.
   const bin = resolveComputerUseExecutable();
@@ -128,7 +141,7 @@ function spawnCheckPermissions(bin) {
 async function listRunningApps() {
   // Spawn binary --list-apps → read JSON from stdout → exit. Needs no TCC
   // permissions, so this works before Computer Use setup is complete.
-  if (process.platform !== "darwin") return { ok: false, apps: [] };
+  if (process.platform !== "darwin") return (await computerUseHost()).apps();
   const bin = resolveComputerUseExecutable();
   if (!bin) return { ok: false, apps: [] };
   return new Promise((resolve) => {
@@ -152,7 +165,7 @@ async function listRunningApps() {
 let setupProcess = null;
 
 async function openComputerUseSetupApp() {
-  if (process.platform !== "darwin") throw new Error("Desktop Computer Use requires macOS 14 or later.");
+  if (process.platform !== "darwin") { await computerUseHost(); return; }
   const bin = resolveComputerUseExecutable();
   if (!bin) throw new Error("The Computer Use helper is unavailable. Rebuild or reinstall OmniRush.ai.");
   // Keep the responsible application consistent with --check and the MCP
@@ -176,6 +189,7 @@ async function openComputerUseSetupApp() {
 
 export {
   getComputerUseState,
+  getComputerUseMcpEnvironment,
   computerUseAction,
   checkComputerUsePermissions,
   getComputerUseMcpCommand,

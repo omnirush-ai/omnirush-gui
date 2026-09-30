@@ -188,15 +188,15 @@ export const BUILT_IN_OMNIRUSH_EXTENSION_MANIFESTS: OmniRushExtensionManifest[] 
     schemaVersion: 1,
     id: "computer-use",
     name: "Computer Use",
-    description: "Work in the Mac app and window you approve. Read, use accessible controls, or allow mouse and keyboard control with a small window preview.",
+    description: "Work in the app and window you approve. Read, use accessible controls, or allow mouse and keyboard control with a small window preview.",
     preview: true,
     source: { format: "omnirush-builtin", origin: "builtin", trusted: true },
     icon: { src: "/omnirush-mark.png" },
     composer: { prompt: "Use Computer Use to " },
     setup: {
-      instructions: "Computer Use is available on macOS 14 or later. Grant Accessibility and Screen Recording in the helper. For each session, choose an app window and allow reading, app controls, or mouse and keyboard. Choose Allow and start in omnirush.ai. Your input interrupts control; Stop in the preview ends access.",
+      instructions: "Computer Use supports macOS 14+, Windows, and Linux X11. On macOS, grant Accessibility and Screen Recording. Windows and Linux control require the app in front; your input pauses control. Wayland requires a separate desktop portal integration. For each session, choose an app window and allow reading, app controls, or mouse and keyboard. Choose Allow and start in omnirush.ai. Your input interrupts control; Stop in the preview ends access.",
       primaryCta: "Enable Computer Use",
-      secondaryCta: "Check macOS permissions",
+      secondaryCta: "Check desktop access",
       testActionRef: "omnirush.computerUse.healthCheck",
     },
     resources: [
@@ -230,7 +230,7 @@ export const BUILT_IN_OMNIRUSH_EXTENSION_MANIFESTS: OmniRushExtensionManifest[] 
     ],
     lifecycle: { reload: ["mcp"], detection: ["mcp:computer-use"] },
     defaultEnabled: true,
-    platform: ["darwin"],
+    platform: ["darwin", "windows", "linux"],
   },
   {
     schemaVersion: 1,

@@ -8,6 +8,16 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export const PERSISTED_NOTIFICATION_STORE_KEY = "omnirush:notifications:v1";
+/** Dedupe key of the "N new providers & M new models available" summary. */
+export const NEW_PROVIDERS_DEDUPE_KEY = "new-providers";
+/**
+ * Version of the persisted store. 1: provider summaries saved before it were
+ * counted by the old rules (hidden providers, the empty startup catalog and
+ * changed models all counted as new), so loading an older save drops them;
+ * otherwise a stale "2 new providers & 10 new models" stays in the list after
+ * the update.
+ */
+export const NOTIFICATION_STORE_VERSION = 1;
 
 const MAX_NOTIFICATIONS = 100;
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -135,6 +145,27 @@ function sanitizeNotifications(value: unknown): AppNotification[] {
   return notifications;
 }
 
+/** Upgrade a persisted store written by an older version (see NOTIFICATION_STORE_VERSION). */
+export function migrateNotificationStore(persistedState: unknown, version: number): unknown {
+  if (version >= 1 || typeof persistedState !== "object" || persistedState === null) {
+    return persistedState;
+  }
+  const notifications = Reflect.get(persistedState, "notifications");
+  if (!Array.isArray(notifications)) return persistedState;
+  return {
+    ...persistedState,
+    notifications: notifications.filter(
+      (entry) =>
+        !(
+          typeof entry === "object" &&
+          entry !== null &&
+          Reflect.get(entry, "kind") === "providers" &&
+          Reflect.get(entry, "dedupeKey") === NEW_PROVIDERS_DEDUPE_KEY
+        ),
+    ),
+  };
+}
+
 export const useNotificationStore = create<NotificationStore>()(
   persist(
     (set) => ({
@@ -199,6 +230,8 @@ export const useNotificationStore = create<NotificationStore>()(
     {
       name: PERSISTED_NOTIFICATION_STORE_KEY,
       storage: createJSONStorage(() => localStorage),
+      version: NOTIFICATION_STORE_VERSION,
+      migrate: migrateNotificationStore,
       partialize: (state) => ({ notifications: state.notifications }),
       merge: (persistedState, currentState) => ({
         ...currentState,

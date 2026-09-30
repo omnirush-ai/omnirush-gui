@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { needs, SkipError } from "@omnirush/env";
 import type { Place, Seed } from "@omnirush/env";
@@ -13,8 +15,8 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function pipeClient(executable: string, args: string[]) {
-  const child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] });
+function pipeClient(executable: string, args: string[], environment: Record<string, string> = {}) {
+  const child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...environment } });
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-2000); });
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
@@ -59,6 +61,64 @@ function pipeClient(executable: string, args: string[]) {
   };
 }
 
+// Electron's Windows GUI executable does not provide a reliable stdio channel.
+// Use an authenticated loopback socket for the disposable witness only.
+async function nativeFixtureClient(executable: string, args: string[]) {
+  const token = randomBytes(32).toString("hex");
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No fixture endpoint.");
+  const child = spawn(executable, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, OMNIRUSH_FIXTURE_PORT: String(address.port), OMNIRUSH_FIXTURE_TOKEN: token } });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-2000); });
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
+  let nextId = 0;
+  const socket = await new Promise<import("node:net").Socket>((resolve, reject) => {
+    const timer = setTimeout(() => { server.close(); child.kill(); reject(new Error("Fixture connection timed out: " + stderr)); }, 15_000);
+    child.once("error", (error) => { clearTimeout(timer); server.close(); reject(error); });
+    child.once("exit", () => { clearTimeout(timer); server.close(); reject(new Error("Fixture exited: " + stderr)); });
+    server.on("connection", (connected) => {
+      const lines = createInterface({ input: connected });
+      let authenticated = false;
+      lines.on("line", (line) => {
+        let message: unknown;
+        try { message = JSON.parse(line); } catch { connected.destroy(); return; }
+        if (!record(message)) { connected.destroy(); return; }
+        if (!authenticated) {
+          if (message.token !== token) { connected.destroy(); return; }
+          authenticated = true; clearTimeout(timer); server.close(); resolve(connected); return;
+        }
+        if (typeof message.id !== "number") return;
+        const request = pending.get(message.id); if (!request) return;
+        pending.delete(message.id); clearTimeout(request.timer);
+        if (message.error) request.reject(new Error(JSON.stringify(message.error))); else request.resolve(message.result);
+      });
+      connected.on("error", () => connected.destroy());
+      connected.once("close", () => { lines.close(); for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error("Fixture connection closed: " + stderr)); } pending.clear(); });
+    });
+  });
+  return {
+    pid: child.pid,
+    request(method: string, params: Record<string, unknown> = {}, timeoutMs = 15_000) {
+      const id = ++nextId;
+      return new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error("Fixture operation timed out: " + method + "; " + stderr)); }, timeoutMs);
+        pending.set(id, { resolve, reject, timer }); socket.write(JSON.stringify({ id, method, params }) + "\n");
+      });
+    },
+    async close() {
+      socket.end();
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+        const timer = setTimeout(() => { child.kill(); resolve(); }, 2000);
+        child.once("exit", () => { clearTimeout(timer); resolve(); });
+      });
+      socket.destroy();
+    },
+  };
+}
+
 export function toolState(value: unknown): Record<string, unknown> {
   if (!record(value) || !Array.isArray(value.content)) throw new Error("No tool content");
   const text = value.content.find((item: unknown) => record(item) && item.type === "text");
@@ -90,7 +150,7 @@ export async function computerUseWorld(_seed: Seed, { place }: { place: Place })
   const fixture = pipeClient(fixtureExecutable, []);
   const helper = pipeClient(executable, ["mcp"]);
   const peer = pipeClient(executable, ["mcp"]);
-  const close = async () => { await Promise.all([helper.close(), peer.close(), fixture.close()]); await rm(directory, { recursive: true, force: true }); };
+  const close = async () => { await Promise.all([helper.close(), peer.close(), fixture.close()]); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); };
   try {
     await fixture.request("state");
     const fixturePermissions = await fixture.request("permissions");
@@ -241,4 +301,106 @@ export async function computerUseWorld(_seed: Seed, { place }: { place: Place })
       [Symbol.asyncDispose]: close,
     };
   } catch (error) { await close(); throw error; }
+}
+
+/** Desktop-native Windows/X11 journey with disposable Electron windows. */
+export async function portableComputerUseWorld(_seed: Seed, { place }: { place: Place }) {
+  if (place.kind !== "local" || !["win32", "linux"].includes(process.platform)) throw new SkipError("Windows or Linux X11 graphical desktop placement");
+  if (process.platform === "linux") {
+    if (process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === "wayland") throw new SkipError("Linux X11; Wayland portal control is not implemented");
+    if (!process.env.DISPLAY) throw new SkipError("Linux graphical display");
+  }
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const requireDesktop = createRequire(join(root, "apps/desktop/package.json"));
+  const executable = requireDesktop("electron");
+  if (typeof executable !== "string") throw new Error("Electron executable unavailable.");
+  const directory = await mkdtemp(join(tmpdir(), "omnirush-native-journey-"));
+  const launchFlags = process.platform === "linux" ? ["--no-sandbox"] : [];
+  const fixture = await nativeFixtureClient(executable, [...launchFlags, join(root, "evals/packages/labs/fixtures/portable-computer-use-app.mjs"), join(directory, "fixture")]);
+  const controller = await nativeFixtureClient(executable, [...launchFlags, join(root, "evals/packages/labs/fixtures/portable-computer-use-host.mjs"), join(directory, "host")]).catch(async (error) => { await fixture.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); throw error; });
+  let client: ReturnType<typeof pipeClient> | undefined;
+  let peer: ReturnType<typeof pipeClient> | undefined;
+  try {
+    await fixture.request("state");
+    const permissions = await controller.request("permissions", {}, 20_000);
+    if (!record(permissions) || permissions.ok !== true) throw new Error("Desktop readiness failed: " + JSON.stringify(permissions));
+    const launch = await controller.request("command");
+    if (!record(launch) || !Array.isArray(launch.command) || !launch.command.every((v): v is string => typeof v === "string") || !record(launch.environment)) throw new Error("Missing desktop MCP command.");
+    const environment: Record<string, string> = {};
+    for (const [key, value] of Object.entries(launch.environment)) { if (typeof value !== "string") throw new Error("Invalid MCP environment."); environment[key] = value; }
+    const command = launch.command;
+    client = pipeClient(command[0], command.slice(1), environment);
+    peer = pipeClient(command[0], command.slice(1), environment);
+    await client.request("initialize", { protocolVersion: "2025-11-25", clientInfo: { name: "native-journey", version: "1" }, capabilities: {} });
+    await peer.request("initialize", { protocolVersion: "2025-11-25", clientInfo: { name: "native-peer", version: "1" }, capabilities: {} });
+    const discovery = toolState(await client.request("tools/call", { name: "computer_discover", arguments: {} }));
+    if (!Array.isArray(discovery.apps)) throw new Error("No app discovery.");
+    const appInfo = discovery.apps.find((value: unknown) => record(value) && value.pid === fixture.pid);
+    if (!record(appInfo) || typeof appInfo.app_id !== "string") throw new Error("Fixture was not discoverable: " + JSON.stringify(discovery));
+    const main = client, other = peer;
+    return {
+      desktop: () => desktop({ name: "native-computer-use-setup", host: place.host(), profileDir: join(directory, "desktop-profile"), env: { OPENCODE_DB: join(directory, "desktop.db"), OMNIRUSH_GATEWAY_URL: "http://127.0.0.1:1", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0", ELECTRON_DISABLE_SANDBOX: "1", OMNIRUSH_ELECTRON_USE_MOCK_KEYCHAIN: "1" } }),
+      workspacePath: join(directory, "workspace"),
+      async hostedClient(command: unknown, environment: unknown) {
+        if (!Array.isArray(command) || !command.every((part): part is string => typeof part === "string") || !record(environment)) throw new Error("Missing hosted MCP command.");
+        const env: Record<string, string> = {};
+        for (const [key, value] of Object.entries(environment)) { if (typeof value !== "string") throw new Error("Invalid hosted environment."); env[key] = value; }
+        const hosted = pipeClient(command[0], command.slice(1), env);
+        await hosted.request("initialize", { protocolVersion: "2025-11-25", clientInfo: { name: "desktop-native-journey", version: "1" }, capabilities: {} });
+        return { call: (name: string, args: Record<string, unknown> = {}) => hosted.request("tools/call", { name, arguments: args }, 70_000), [Symbol.asyncDispose]: hosted.close };
+      },
+      permissions,
+      appId: appInfo.app_id, pid: fixture.pid,
+      call: (name: string, args: Record<string, unknown> = {}) => main.request("tools/call", { name, arguments: args }, 70_000),
+      peerCall: (name: string, args: Record<string, unknown> = {}) => other.request("tools/call", { name, arguments: args }),
+      raw: (method: string, params: Record<string, unknown> = {}) => main.request(method, params),
+      hostState: () => controller.request("state"),
+      state: () => fixture.request("state"),
+      change: () => fixture.request("change"),
+      focusOther: () => fixture.request("focus_other"),
+      cover: () => fixture.request("cover"),
+      outsideInput: () => fixture.request("outside_input"),
+      pointerState: () => fixture.request("pointer_state"),
+      inputEvents: () => fixture.request("input_events"),
+      imagePixel(reply: unknown) {
+        if (!record(reply) || !Array.isArray(reply.content)) throw new Error("Missing image content.");
+        const image = reply.content.find((item: unknown) => record(item) && item.type === "image");
+        if (!record(image) || typeof image.data !== "string") throw new Error("Missing image data.");
+        return fixture.request("image_pixel", { data: image.data });
+      },
+      minimize: () => fixture.request("minimize"),
+      restore: () => fixture.request("restore"),
+      cancel: () => main.cancelPending(),
+      previewAction: (action: string) => controller.request("preview_action", { action }),
+      async approve(action = "approve") {
+        const deadline = Date.now() + 15_000;
+        for (;;) {
+          const states = await controller.request("state");
+          if (Array.isArray(states)) {
+            const state = states.find((value: unknown) => record(value) && (action === "approve" ? value.phase === "approval" : true));
+            if (record(state) && Array.isArray(state.windows)) {
+              const window = state.windows.find((value: unknown) => record(value) && value.title === "Workspace window");
+              if (!record(window) || typeof window.id !== "number") throw new Error("No workspace window in approval.");
+              await controller.request("action", { connectionId: state.connectionId, id: state.id, action, windowId: window.id });
+              return;
+            }
+          }
+          if (Date.now() >= deadline) throw new Error("Timed out waiting for native consent.");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      },
+      async point(observation: Record<string, unknown>, x: number, y: number) {
+        const bounds = await fixture.request("bounds");
+        if (!Array.isArray(bounds) || !record(bounds[0]) || !record(bounds[0].contentBounds) || typeof bounds[0].scale !== "number") throw new Error("Missing fixture bounds.");
+        const native = observation.window_bounds, image = observation.image_size, contentBounds = bounds[0].contentBounds;
+        if (!record(native) || !record(image) || typeof native.x !== "number" || typeof native.y !== "number" || typeof native.width !== "number" || typeof native.height !== "number" || typeof image.width !== "number" || typeof image.height !== "number" || typeof contentBounds.x !== "number" || typeof contentBounds.y !== "number") throw new Error("Missing image bounds.");
+        return { x: ((contentBounds.x + x) * bounds[0].scale - native.x) * image.width / native.width, y: ((contentBounds.y + y) * bounds[0].scale - native.y) * image.height / native.height };
+      },
+      async closeClient() { await main.close(); },
+      async [Symbol.asyncDispose]() { await Promise.all([main.close(), other.close(), controller.close(), fixture.close()]); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); },
+    };
+  } catch (error) {
+    await Promise.all([client?.close(), peer?.close(), controller.close(), fixture.close()]);
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); throw error;
+  }
 }
