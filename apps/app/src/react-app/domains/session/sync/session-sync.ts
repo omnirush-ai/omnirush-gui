@@ -1022,11 +1022,13 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const permission = event.properties as PermissionRequest;
     if (!permission?.id || !permission.sessionID) return;
     if (queryClient.getQueryData<string[]>(settledPermissionsKey(workspaceId, permission.sessionID))?.includes(permission.id)) return;
-    notifyDesktopEvent({
-      type: "permission.asked",
-      sessionId: permission.sessionID,
-      detail: permissionNotificationDetail(permission),
-    });
+    if (!queryClient.getQueryData<PendingPermission[]>(permissionKey(workspaceId, permission.sessionID))?.some((item) => item.id === permission.id)) {
+      notifyDesktopEvent({
+        type: "permission.asked",
+        sessionId: permission.sessionID,
+        detail: permissionNotificationDetail(permission),
+      });
+    }
     useSessionActivityStore.getState().setWaitingRequest(workspaceId, permission.sessionID, "permission", permission.id, true);
     const receivedAt = Date.now();
     queryClient.setQueryData<PendingPermission[]>(permissionKey(workspaceId, permission.sessionID), (current = []) => {
@@ -1044,11 +1046,13 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const permission = event.properties as PermissionV2Request;
     if (!permission?.id || !permission.sessionID) return;
     if (queryClient.getQueryData<string[]>(settledPermissionsKey(workspaceId, permission.sessionID))?.includes(permission.id)) return;
-    notifyDesktopEvent({
-      type: "permission.asked",
-      sessionId: permission.sessionID,
-      detail: permissionNotificationDetail(permission),
-    });
+    if (!queryClient.getQueryData<PendingPermission[]>(permissionKey(workspaceId, permission.sessionID))?.some((item) => item.id === permission.id)) {
+      notifyDesktopEvent({
+        type: "permission.asked",
+        sessionId: permission.sessionID,
+        detail: permissionNotificationDetail(permission),
+      });
+    }
     useSessionActivityStore.getState().setWaitingRequest(workspaceId, permission.sessionID, "permission", permission.id, true);
     const receivedAt = Date.now();
     queryClient.setQueryData<PendingPermission[]>(permissionKey(workspaceId, permission.sessionID), (current = []) => {
@@ -1073,11 +1077,13 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const question = event.properties as QuestionRequest;
     if (!question?.id || !question.sessionID) return;
     if (queryClient.getQueryData<string[]>(settledQuestionsKey(workspaceId, question.sessionID))?.includes(question.id)) return;
-    notifyDesktopEvent({
-      type: "question.asked",
-      sessionId: question.sessionID,
-      question: questionNotificationText(question),
-    });
+    if (!queryClient.getQueryData<PendingQuestion[]>(questionKey(workspaceId, question.sessionID))?.some((item) => item.id === question.id)) {
+      notifyDesktopEvent({
+        type: "question.asked",
+        sessionId: question.sessionID,
+        question: questionNotificationText(question),
+      });
+    }
     useSessionActivityStore.getState().setWaitingRequest(workspaceId, question.sessionID, "question", question.id, true);
     const receivedAt = Date.now();
     queryClient.setQueryData<PendingQuestion[]>(questionKey(workspaceId, question.sessionID), (current = []) => {

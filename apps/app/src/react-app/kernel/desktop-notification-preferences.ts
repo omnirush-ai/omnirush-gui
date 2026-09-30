@@ -4,6 +4,7 @@ export type DesktopNotificationPreference =
   (typeof DESKTOP_NOTIFICATION_PREFERENCE_VALUES)[number];
 
 export const DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE: DesktopNotificationPreference = "off";
+export const DEFAULT_NOTIFICATION_SOUNDS_ENABLED = true;
 
 export function isDesktopNotificationPreference(
   value: unknown,
