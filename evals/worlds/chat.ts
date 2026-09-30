@@ -276,26 +276,34 @@ async function splitPaneQuestions(
   // Arrange the identical signed-in identity through its supported host-only API.
   // This awaits real Den policy verification before any workspace mutation.
   await seed.evalIn(app, browserScript(async (apiBaseUrl) => {
-    const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
-    const token = localStorage.getItem("omnirush.den.authToken");
-    const orgId = localStorage.getItem("omnirush.den.activeOrgId");
-    if (!info.running || !info.baseUrl || !info.hostToken || !token || !orgId) {
-      throw new Error("The signed-in desktop policy identity is not ready.");
+    const deadline = Date.now() + 15_000;
+    let missing: string[] = [];
+    while (Date.now() < deadline) {
+      const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
+      const token = localStorage.getItem("omnirush.den.authToken");
+      const orgId = localStorage.getItem("omnirush.den.activeOrgId");
+      missing = Object.entries({ server: info.running, endpoint: Boolean(info.baseUrl),
+        hostIdentity: Boolean(info.hostToken), signedIn: Boolean(token), organization: Boolean(orgId) })
+        .filter(([, present]) => !present).map(([name]) => name);
+      if (info.running && info.baseUrl && info.hostToken && token && orgId) {
+        const response = await fetch(info.baseUrl.replace(/\/+$/, "") + "/den-session", {
+          method: "PUT",
+          headers: { Authorization: "Bearer " + (info.ownerToken ?? info.clientToken ?? ""),
+            "x-omnirush-host-token": info.hostToken, "Content-Type": "application/json" },
+          body: JSON.stringify({ baseUrl: apiBaseUrl, token, orgId }),
+          redirect: "error", signal: AbortSignal.timeout(20_000),
+        });
+        if (response.status !== 204) {
+          const body: unknown = await response.json();
+          const code = body && typeof body === "object" ? Reflect.get(body, "code") : "unknown";
+          throw new Error(`Desktop policy identity sync failed: HTTP ${response.status} (${String(code)}).`);
+        }
+        return true;
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
-    const response = await fetch(info.baseUrl.replace(/\/+$/, "") + "/den-session", {
-      method: "PUT",
-      headers: { Authorization: "Bearer " + (info.ownerToken ?? info.clientToken ?? ""),
-        "x-omnirush-host-token": info.hostToken, "Content-Type": "application/json" },
-      body: JSON.stringify({ baseUrl: apiBaseUrl, token, orgId }),
-      redirect: "error", signal: AbortSignal.timeout(20_000),
-    });
-    if (response.status !== 204) {
-      const body: unknown = await response.json();
-      const code = body && typeof body === "object" ? Reflect.get(body, "code") : "unknown";
-      throw new Error(`Desktop policy identity sync failed: HTTP ${response.status} (${String(code)}).`);
-    }
-    return true;
-  }, [den.ref.apiUrl]), { awaitPromise: true, timeoutMs: 25_000 });
+    throw new Error(`Desktop policy identity is not ready; missing: ${missing.join(", ")}.`);
+  }, [den.ref.apiUrl]), { awaitPromise: true, timeoutMs: 40_000 });
   // Arrange an allowed native question tool independently of custom-agent defaults.
   // TODO(primitive): write workspace fixture files through a first-class seed API.
   const questionPolicyWritten = await seed.evalIn(app, browserScript(async (workspaceId, content) => {
