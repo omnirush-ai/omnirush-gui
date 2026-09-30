@@ -40,7 +40,9 @@ export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
   developerMode: boolean;
   /** Server client for the Approvals card; the card is hidden without one. */
-  omnirushClient?: (ApprovalsClient & Partial<BestPracticesClient>) | null;
+  omnirushClient?: ApprovalsClient | null;
+  /** Global guides do not depend on workspace selection or history loading. */
+  bestPracticesClient?: BestPracticesClient | null;
   /** Workspace whose engine is reloaded after the approval mode changes. */
   runtimeWorkspaceId?: string | null;
   /** Builds the sanitized diagnostics bundle with the route's context. */
@@ -209,17 +211,13 @@ export function BestPracticesCard(props: {
   );
 }
 
-function hasBestPractices(client: GeneralSettingsViewProps["omnirushClient"]): client is ApprovalsClient & BestPracticesClient {
-  return !!client && typeof client.getBestPractices === "function" && typeof client.setBestPractices === "function";
-}
-
 export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   const [account, setAccount] = useState<NativeAccountStatus | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
   const approvalsClient = props.omnirushClient ?? null;
   const approvalMode = useApprovalMode(approvalsClient, props.runtimeWorkspaceId ?? null);
-  const bestPracticesClient = hasBestPractices(props.omnirushClient) ? props.omnirushClient : null;
+  const bestPracticesClient = props.bestPracticesClient ?? null;
   const bestPractices = useBestPractices(bestPracticesClient);
 
   useEffect(() => {

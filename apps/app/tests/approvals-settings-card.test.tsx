@@ -7,8 +7,8 @@ import {
   applyFullPermissions,
   type ApprovalsClient,
 } from "../src/react-app/domains/settings/approval-mode";
-import { ApprovalsCard, BestPracticesCard } from "../src/react-app/domains/settings/pages/general-view";
-import { BEST_PRACTICES_HELP, bestPracticesChangeMessage } from "../src/react-app/domains/settings/best-practices";
+import { ApprovalsCard, BestPracticesCard, GeneralSettingsView } from "../src/react-app/domains/settings/pages/general-view";
+import { BEST_PRACTICES_HELP, bestPracticesChangeMessage, type BestPracticesClient } from "../src/react-app/domains/settings/best-practices";
 
 function fakeClient(options: { reloadError?: Error } = {}) {
   const calls: string[] = [];
@@ -99,6 +99,24 @@ describe("approvals settings card", () => {
 });
 
 describe("best practices settings card", () => {
+  test("shows the global guide switch while the workspace client is still loading", () => {
+    const bestPracticesClient: BestPracticesClient = {
+      getBestPractices: async () => ({ enabled: true }),
+      setBestPractices: async (enabled) => ({ ok: true, changed: true, enabled, engine: { status: "applied" } }),
+    };
+    const markup = renderToStaticMarkup(
+      <GeneralSettingsView
+        developerMode={false}
+        onNavigateTab={() => {}}
+        omnirushClient={null}
+        bestPracticesClient={bestPracticesClient}
+      />,
+    );
+    expect(switchMarkup(markup)).toContain('aria-label="Best practices"');
+    expect(switchMarkup(markup)).toContain('aria-disabled="true"');
+    expect(markup).not.toContain('aria-label="Full permissions"');
+  });
+
   test("labels the switch, describes only guides, and waits for the server choice", () => {
     const on = renderToStaticMarkup(<BestPracticesCard enabled={true} busy={false} status="" onToggle={() => {}} />);
     expect(on).toContain(BEST_PRACTICES_HELP);

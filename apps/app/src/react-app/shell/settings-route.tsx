@@ -85,6 +85,7 @@ import { buildExtensionItems } from "@/react-app/domains/settings/extension-item
 import { isOmniRushExtensionEnabled, OMNIRUSH_EXTENSION_STATE_CHANGED } from "@/react-app/domains/settings/extension-state";
 import { PreferencesView } from "@/react-app/domains/settings/pages/preferences-view";
 import { GeneralSettingsView } from "@/react-app/domains/settings/pages/general-view";
+import type { BestPracticesClient } from "@/react-app/domains/settings/best-practices";
 import { AuthorizedFoldersPanel } from "@/react-app/domains/settings/panels/authorized-folders-panel";
 import { BrowserLoginsPanel } from "../domains/browser-logins/browser-logins-panel";
 import { EffectivePermissionsPanel } from "@/react-app/domains/settings/panels/effective-permissions-panel";
@@ -513,6 +514,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
   const [omnirushClient, setOmniRushClient] = useState<OmniRushServerClient | null>(null);
+  const [bestPracticesClient, setBestPracticesClient] = useState<BestPracticesClient | null>(null);
   const [activeClient, setActiveClient] = useState<Client | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -1289,6 +1291,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const refreshRouteState = useMemo(() => async (options?: { supersede?: boolean }) => {
     const attempt = refreshLifecycleRef.current.begin(options);
     if (!attempt) return;
+    setBestPracticesClient(null);
     setLoading(true);
     let desktopList: WorkspaceList | null = null;
     let desktopWorkspaces = workspacesRef.current;
@@ -1315,6 +1318,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
 
       if (!normalizedBaseUrl || !resolvedToken) {
         setOmniRushClient(null);
+        setBestPracticesClient(null);
         setBaseUrl("");
         setToken("");
         setWorkspaces(desktopWorkspaces);
@@ -1335,6 +1339,9 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
       });
       const list = await client.listWorkspaces();
       if (!attempt.isCurrent()) return;
+      // Global guides can load once this server confirms access. Workspace
+      // selection and task history retain their existing readiness boundary.
+      setBestPracticesClient(client);
       serverActiveWorkspaceIdRef.current = list.activeId ?? "";
       const serverWorkspaceIds = new Set(list.items.map((workspace) => workspace.id));
       const nextWorkspaces = mergeRouteWorkspaces(list.items, desktopWorkspaces);
@@ -2275,6 +2282,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             onNavigateTab={(tab) => navigateSettingsPath(tab)}
             developerMode={developerMode}
             omnirushClient={omnirushClient}
+            bestPracticesClient={bestPracticesClient}
             runtimeWorkspaceId={runtimeWorkspaceId}
             buildDiagnosticsBundle={() => buildDiagnosticsBundleJson({
               developerMode,

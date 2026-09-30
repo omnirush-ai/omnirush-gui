@@ -71,6 +71,63 @@ test("locate reports visible button and link names when no target matches", asyn
   );
 });
 
+test("locate finds an accessible switch rendered as a span and keeps its click hit test", async () => {
+  class ElementFixture {
+    tagName = "SPAN";
+    children: ElementFixture[] = [];
+    parentElement = null;
+    innerText = "";
+    textContent = "";
+    scrolled = false;
+    attributes: Record<string, string> = { role: "switch", "aria-label": "Best practices" };
+    getAttribute(name: string) { return this.attributes[name] ?? null; }
+    hasAttribute(name: string) { return name in this.attributes; }
+    closest() { return null; }
+    getBoundingClientRect() { return { left: 10, top: 20, x: 10, y: 20, width: 44, height: 20 }; }
+    scrollIntoView() { this.scrolled = true; }
+    contains(element: unknown) { return element === this; }
+  }
+  const control = new ElementFixture();
+  const surface = surfaceReturning(null);
+  surface.client.send = async (method, params) => {
+    if (method === "Runtime.evaluate") return { result: { objectId: "global" } };
+    assert.equal(method, "Runtime.callFunctionOn");
+    assert.ok(params && typeof params.functionDeclaration === "string" && Array.isArray(params.arguments));
+    const serialized = params.arguments[0].value;
+    const value = runInNewContext(`(${params.functionDeclaration})(${JSON.stringify(serialized)})`, {
+      Element: ElementFixture,
+      HTMLElement: ElementFixture,
+      HTMLInputElement: class extends ElementFixture {},
+      HTMLTextAreaElement: class extends ElementFixture {},
+      HTMLSelectElement: class extends ElementFixture {},
+      HTMLButtonElement: class extends ElementFixture {},
+      innerWidth: 1280,
+      innerHeight: 900,
+      getComputedStyle: () => ({ display: "inline-flex", visibility: "visible", opacity: "1" }),
+      document: {
+        getElementById: () => null,
+        elementFromPoint: () => control,
+        querySelectorAll(selector: string) {
+          const matches = selector.split(",").some(part => {
+            const token = part.trim();
+            if (token === control.tagName.toLowerCase()) return true;
+            const attribute = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(token);
+            return attribute ? control.hasAttribute(attribute[1]) && (attribute[2] === undefined || control.getAttribute(attribute[1]) === attribute[2]) : false;
+          });
+          return matches ? [control] : [];
+        },
+      },
+    });
+    return { result: { value } };
+  };
+  const located = await locate(surface, { role: "switch", label: "Best practices" });
+  assert.equal(located.tag, "span");
+  assert.equal(located.name, "Best practices");
+  assert.equal(located.visible, true);
+  assert.equal(located.hitTestOk, true);
+  assert.equal(control.scrolled, true);
+});
+
 test("waitForLocated identifies the element covering a visible target", async () => {
   const surface = surfaceReturning({
     center: { x: 50, y: 25 },

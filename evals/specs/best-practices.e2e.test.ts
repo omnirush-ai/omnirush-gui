@@ -9,7 +9,7 @@ const test = spec.world(bestPracticesDesktop, {
 
 test("Settings > General lets a user turn Best practices off and on and keeps the choice across restart", { timeout: 600_000 }, async ({ world, user, probe, step, evidence }) => {
   await step("the setting starts on and uses plain guide-only help", async () => {
-    await user.see({ label: "Best practices" });
+    await user.see({ role: "switch", label: "Best practices" });
     const state = await probe.eventually(() => world.state(), {
       within: 30_000, intervalMs: 250, label: "default enabled Best practices switch",
       until: (value) => value.exists && !value.disabled,
@@ -24,7 +24,7 @@ test("Settings > General lets a user turn Best practices off and on and keeps th
   });
 
   await step("turning off saves the choice and shows the actual apply result", async () => {
-    await user.click({ label: "Best practices" });
+    await user.click({ role: "switch", label: "Best practices" });
     const state = await probe.eventually(() => world.state(), {
       within: 30_000, intervalMs: 250, label: "saved disabled Best practices switch",
       until: (value) => !value.enabled && !value.disabled && value.status.includes("Best practices off"),
@@ -40,14 +40,14 @@ test("Settings > General lets a user turn Best practices off and on and keeps th
     await world.restart();
     const nextUser = user.on(world.app);
     const nextProbe = probe.on(world.app);
-    await nextUser.see({ label: "Best practices" });
+    await nextUser.see({ role: "switch", label: "Best practices" });
     const restarted = await nextProbe.eventually(() => world.state(), {
       within: 30_000, intervalMs: 250, label: "persisted off switch after desktop restart",
       until: (value) => value.exists && !value.disabled,
     });
     expect(restarted.enabled).toBe(false);
     expect(await nextProbe.desktopApi("/runtime-config/best-practices")).toEqual({ status: 200, body: { enabled: false } });
-    await nextUser.click({ label: "Best practices" });
+    await nextUser.click({ role: "switch", label: "Best practices" });
     const enabled = await nextProbe.eventually(() => world.state(), {
       within: 30_000, intervalMs: 250, label: "restored enabled Best practices switch",
       until: (value) => value.enabled && !value.disabled && value.status.includes("Best practices on"),

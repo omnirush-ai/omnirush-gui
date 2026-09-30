@@ -32,7 +32,8 @@ export async function bestPracticesDesktop(seed: Seed, { place }: { place: Place
         return {
           exists: control !== null,
           enabled: control?.getAttribute("aria-checked") === "true",
-          disabled: control?.hasAttribute("disabled") ?? true,
+          disabled: control === null || control.hasAttribute("disabled")
+            || control.getAttribute("aria-disabled") === "true" || control.hasAttribute("data-disabled"),
           help: document.getElementById("best-practices-help")?.textContent ?? "",
           status: document.querySelector('[data-testid="best-practices-status"]')?.textContent ?? "",
         };
