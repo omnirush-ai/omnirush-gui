@@ -361,7 +361,9 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
         </div>
       ) : null}
 
-      {nowPart && nowCommandShown ? (
+      {/* With the rows open, the running call is already a row there: showing
+          its "now" line too would print the same command twice. */}
+      {expanded ? null : nowPart && nowCommandShown ? (
         <div data-tool-aggregate-now className="mt-1.5 min-w-0">
           {detailBox("command", nowPart.toolCallId, nowCommand)}
         </div>

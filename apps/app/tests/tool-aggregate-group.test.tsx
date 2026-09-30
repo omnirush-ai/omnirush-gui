@@ -275,6 +275,42 @@ describe("tool aggregate long details", () => {
     expect(collapsed).not.toContain("data-tool-aggregate-copy");
   });
 
+  test("a running command shows once: opening the rows hides its now line, double-clicked or not", async () => {
+    const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
+    if (registeredDom) GlobalRegistrator.register();
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    const running: DynamicToolUIPart = { ...runningCommand, toolCallId: "running-once", input: { command: "sleep 40 && echo waited", description: "Wait" } };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const shown = () => (container.textContent?.match(/sleep 40 && echo waited/g) ?? []).length;
+    try {
+      await act(async () => root.render(
+        <CurrentToolLifecycleProvider activityStatus="responding" currentToolCallIds={new Set([running.toolCallId])}>
+          <ToolAggregateGroup parts={[running]} />
+        </CurrentToolLifecycleProvider>,
+      ));
+      expect(shown()).toBe(1);
+
+      // Double-clicking the running line swaps it for the full command box: still once.
+      const now = container.querySelector<HTMLElement>("[data-tool-aggregate-now]");
+      if (!now) throw new Error("Expected the running command's now line");
+      await act(async () => { now.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
+      expect(shown()).toBe(1);
+
+      // Opening the rows lists the running call; its now line must not repeat it.
+      const summary = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!summary) throw new Error("Expected the aggregate summary button");
+      await act(async () => summary.click());
+      expect(summary.getAttribute("aria-expanded")).toBe("true");
+      expect(container.querySelector("[data-tool-aggregate-now]")).toBeNull();
+      expect(shown()).toBe(1);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
   test("clicking a clipped command reveals every line and copies the full command", async () => {
     const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
     if (registeredDom) GlobalRegistrator.register();
