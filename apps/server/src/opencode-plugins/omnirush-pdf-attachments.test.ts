@@ -461,6 +461,30 @@ describe("OmniRush.ai PDF attachments plugin", () => {
     });
   }, 30_000);
 
+  test("the page tool renders pages of a workspace PDF no chat message attached, for an image-capable session", async () => {
+    // Production 2026-09-30: agents open PDFs they find in the project with the
+    // page tool; with no PDF in the chat the session's model was never
+    // recorded, so image models got the text-only answer and no pages.
+    await withWorkspace(async (root) => {
+      await mkdir(join(root, "docs"), { recursive: true });
+      await writeFile(join(root, "docs", "spec.pdf"), buildTestPdf(["Spec page one", "Spec page two"]));
+      const plugin = await OmniRushPdfAttachments({ directory: root, client: { provider: { list: async () => catalog } } });
+      const tool = plugin.tool.omnirush_pdf_pages;
+
+      await plugin["experimental.chat.messages.transform"]({}, { messages: [userMessage(VISION, [question])] });
+      const visionResult = await tool.execute({ pdf_path: "docs/spec.pdf", pages: [1, 2] }, { sessionID: "ses" });
+      if (typeof visionResult === "string") throw new Error(`Expected page images, got: ${visionResult}`);
+      expect(visionResult.attachments.map((attachment) => attachment.mime)).toEqual(["image/png", "image/png"]);
+      expect(visionResult.output).toContain("page_images_attached: pages 1-2, in order");
+
+      const textStep = { messages: [userMessage(TEXT, [question], "m9")] };
+      textStep.messages[0].info.sessionID = "ses-text";
+      await plugin["experimental.chat.messages.transform"]({}, textStep);
+      const textResult = await tool.execute({ pdf_path: "docs/spec.pdf", pages: [1] }, { sessionID: "ses-text" });
+      expect(String(textResult)).toContain("page_images_attached: none (this model cannot view images; text is provided instead)");
+    });
+  }, 30_000);
+
   test("is registered in runtime config, bundled with its wasm runtime, and packaged by the desktop app", async () => {
     const runtime = await buildOmniRushRuntimeConfigObject();
     const plugin = runtime.plugin;

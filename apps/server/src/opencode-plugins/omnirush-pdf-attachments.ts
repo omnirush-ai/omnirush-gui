@@ -364,8 +364,13 @@ const digestByKey = new Map<string, string>();
 function scopedMemoKey(root: string | null, key: string): string {
   return `${root ?? ""}\n${key}`;
 }
-/** What the current model of each session can take, recorded by the last transform for the page tool. */
-const supportBySession = new Map<string, ModelInputSupport>();
+/**
+ * The model each session's latest step used, recorded on every step (no
+ * catalog read) for the page tool. The agent also calls that tool on PDFs it
+ * finds in the workspace, where no attached PDF ever brings the session
+ * through the PDF path; those calls got the text-only answer on image models.
+ */
+const modelBySession = new Map<string, { providerID: string; modelID: string }>();
 
 function rememberDigest(root: string | null, source: PdfSource, digest: string): void {
   if (!source.key) return;
@@ -617,14 +622,14 @@ export const OmniRushPdfAttachments = async (factoryInput?: unknown) => {
   return {
     "experimental.chat.messages.transform": async (input: unknown, output: { messages: unknown[] }) => {
       void input;
+      const model = stepModel(output.messages);
+      if (model?.sessionID) {
+        if (modelBySession.size > 256) modelBySession.clear();
+        modelBySession.set(model.sessionID, { providerID: model.providerID, modelID: model.modelID });
+      }
       if (!hasPdf(output.messages)) return;
       const root = workspaceRoot(factoryContext);
-      const model = stepModel(output.messages);
       const support = model ? await resolver.resolve(model.providerID, model.modelID) : TEXT_ONLY;
-      if (model?.sessionID) {
-        if (supportBySession.size > 256) supportBySession.clear();
-        supportBySession.set(model.sessionID, support);
-      }
       const policy = support.pdf ? nativePdfPolicy(support.npm, support.contextTokens) : null;
       const nativeBudget: NativeBudget | null = policy
         ? {
@@ -649,7 +654,8 @@ export const OmniRushPdfAttachments = async (factoryInput?: unknown) => {
         async execute(args: { pdf_path: string; pages: number[] }, context: unknown) {
           const root = workspaceRoot(factoryContext);
           const sessionID = optionalStringProperty(context, "sessionID");
-          const support = (sessionID ? supportBySession.get(sessionID) : undefined) ?? TEXT_ONLY;
+          const model = sessionID ? modelBySession.get(sessionID) : undefined;
+          const support = model ? await resolver.resolve(model.providerID, model.modelID) : TEXT_ONLY;
           const bytes = await readWorkspacePdf(root, args.pdf_path);
           const derived = await derivePdf(root, basename(args.pdf_path), bytes, { renderPages: false });
           if (derived.loadError) return `PDF could not be prepared: ${derived.loadError}`;
