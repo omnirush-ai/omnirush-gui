@@ -237,6 +237,7 @@ export async function createPortableComputerUseHost({ profile, capture, preview 
         native.grantForeground?.();
         await native.call("focus", { window: current });
       }
+      await native.call("start");
       if (entry.session !== value) throw new Error("The request ended.");
       value.window = current; value.phase = "working"; value.status = ""; value.lastOperation = Date.now(); value.observation = null;
       if (input.action === "approve") value.expiresAt = Date.now() + 900_000;

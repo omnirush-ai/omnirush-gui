@@ -78,16 +78,38 @@ function windows() {
   const nextHook = f(u, "intptr_t __stdcall CallNextHookEx(uintptr_t hook, int code, uintptr_t wParam, void *lParam)");
   const installHook = f(u, "uintptr_t __stdcall SetWindowsHookExW(int type, CU_HOOKPROC *callback, uintptr_t module, uint32_t thread)");
   const uninstall = f(u, "int __stdcall UnhookWindowsHookEx(uintptr_t hook)");
-  const callbacks = [hookKey, hookMouse].map((type) => koffi.register((code, wParam, lParam) => {
-    if (code >= 0) {
-      const value = koffi.decode(lParam, type);
-      if (Number(value.dwExtraInfo) !== marker) { changed(); release(); }
+  let callbacks = [], hooks = [];
+  // Global hooks are needed only while an approved Computer Use session is active.
+  // Keeping the worker alive for discovery and capture must not intercept all user input.
+  const startMonitoring = () => {
+    if (hooks.length) return;
+    callbacks = [hookKey, hookMouse].map((type) => koffi.register((code, wParam, lParam) => {
+      if (code >= 0) {
+        const value = koffi.decode(lParam, type);
+        if (Number(value.dwExtraInfo) !== marker) { changed(); release(); }
+      }
+      return nextHook(0, code, wParam, lParam);
+    }, koffi.pointer(hookProto)));
+    hooks = [installHook(13, callbacks[0], 0, 0), installHook(14, callbacks[1], 0, 0)];
+    if (hooks.some((v) => !v)) {
+      hooks.forEach((h) => { if (h) uninstall(h); });
+      callbacks.forEach((c) => koffi.unregister(c));
+      hooks = [];
+      callbacks = [];
+      fail("input_unavailable", "Windows input monitoring is unavailable. Restart OmniRush.ai on your normal desktop.");
     }
-    return nextHook(0, code, wParam, lParam);
-  }, koffi.pointer(hookProto)));
-  const hooks = [installHook(13, callbacks[0], 0, 0), installHook(14, callbacks[1], 0, 0)];
-  if (hooks.some((v) => !v)) { hooks.forEach((h) => { if (h) uninstall(h); }); callbacks.forEach((c) => koffi.unregister(c)); fail("input_unavailable", "Windows input monitoring is unavailable. Restart OmniRush.ai on your normal desktop."); }
-  const poll = () => { const value = {}; while (peek(value, 0, 0, 0, 1)) {} };
+  };
+  const stopMonitoring = () => {
+    hooks.forEach((hook) => uninstall(hook));
+    callbacks.forEach((callback) => koffi.unregister(callback));
+    hooks = [];
+    callbacks = [];
+  };
+  const poll = () => {
+    if (!hooks.length) return;
+    const value = {};
+    while (peek(value, 0, 0, 0, 1)) {}
+  };
   const available = () => {
     const handle = openDesktop(0, 0, 1);
     if (!handle) return false;
@@ -129,7 +151,7 @@ function windows() {
     mouseEvent(0x8000 | 0x4000 | 1, 0, Math.round((x - left) * 65535 / (width - 1)), Math.round((y - top) * 65535 / (height - 1)));
   };
   return {
-    poll, window, available, release, check: guard,
+    poll, window, available, release, startMonitoring, stopMonitoring, check: guard,
     list() { const result = []; enumWindows((id) => { try { const item = window(id); if (item.title) result.push(item); } catch {} return 1; }, 0); return result; },
     focus(expected) { if (window(expected.id).identity !== expected.identity || !focus(expected.id)) fail("focus_changed", "Bring the approved app to the front, then choose Continue."); poll(); },
     async act(expected, expectedGeneration, action, deadline) {
@@ -165,7 +187,7 @@ function windows() {
         } else fail("unsupported_action", "Use click, double_click, drag, scroll, type, or key.");
       } finally { release(); }
     },
-    close() { release(); hooks.forEach((hook) => uninstall(hook)); callbacks.forEach((c) => koffi.unregister(c)); },
+    close() { release(); stopMonitoring(); },
   };
 }
 
@@ -405,9 +427,18 @@ function x11() {
   };
 }
 let timer;
+const startPolling = () => {
+  if (timer) return;
+  timer = setInterval(() => { try { backend?.poll(); } catch { changed(); } }, 10);
+};
+const stopPolling = () => {
+  if (!timer) return;
+  clearInterval(timer);
+  timer = undefined;
+};
 try {
   backend = process.platform === "win32" ? windows() : x11();
-  timer = setInterval(() => { try { backend.poll(); } catch { changed(); } }, 10);
+  if (process.platform !== "win32") startPolling();
   parentPort.postMessage({ event: "ready", supported: true });
 } catch (error) {
   parentPort.postMessage({ event: "ready", supported: false, code: error.code ?? "native_unavailable", error: error.message });
@@ -417,13 +448,28 @@ parentPort.on("message", async ({ id, method, params }) => {
   let ownsBusy = false;
   try {
     if (method === "shutdown") {
-      generation++; backend?.release(); clearInterval(timer);
+      generation++; backend?.release(); backend?.stopMonitoring?.(); stopPolling();
       while (busy) await new Promise((resolve) => setTimeout(resolve, 10));
       backend?.close(); backend = null;
       parentPort.postMessage({ id, result: {} }); parentPort.close(); return;
     }
     if (!backend) fail("native_unavailable", "Desktop access is unavailable.");
-    if (method === "stop") { generation++; backend.release(); backend.clearCapture?.(); parentPort.postMessage({ id, result: {} }); return; }
+    if (method === "start") {
+      if (busy) fail("busy", "Desktop operations must be sequential.");
+      backend.startMonitoring?.();
+      if (process.platform === "win32") startPolling();
+      parentPort.postMessage({ id, result: {} });
+      return;
+    }
+    if (method === "stop") {
+      generation++;
+      backend.release();
+      backend.stopMonitoring?.();
+      if (process.platform === "win32") stopPolling();
+      backend.clearCapture?.();
+      parentPort.postMessage({ id, result: {} });
+      return;
+    }
     if (busy) fail("busy", "Desktop operations must be sequential.");
     busy = true; ownsBusy = true;
     backend.poll();
@@ -441,4 +487,4 @@ parentPort.on("message", async ({ id, method, params }) => {
     parentPort.postMessage({ id, error: { code: error.code ?? "native_error", message: error.message } });
   } finally { if (ownsBusy) busy = false; }
 });
-parentPort.on("close", () => { clearInterval(timer); backend?.close(); });
+parentPort.on("close", () => { stopPolling(); backend?.close(); });
