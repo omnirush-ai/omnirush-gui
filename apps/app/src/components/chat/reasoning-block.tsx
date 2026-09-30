@@ -23,7 +23,7 @@ type ReasoningBlockProps = {
  * when the user opens it.
  */
 export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockProps) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={cn("w-full", className)} data-reasoning-block="">
