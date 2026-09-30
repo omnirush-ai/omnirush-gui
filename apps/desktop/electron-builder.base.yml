@@ -1,5 +1,8 @@
 directories:
   output: dist-electron
+# Windows version-info resources (CompanyName comes from package.json author,
+# ProductName and the app exe's FileDescription from productName).
+copyright: Copyright © OmniRush.ai
 toolsets:
   appimage: "1.0.3"
 files:
@@ -52,8 +55,15 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   notarize: false
+  # Signing needs a Developer ID Application certificate (MAC_CSC_LINK) and
+  # notarization credentials; scripts/signing-plan.mjs wires them up in CI and
+  # scripts/electron-after-sign.cjs notarizes. Without them the app is ad-hoc
+  # signed. Every Mach-O file in the bundle (the opencode sidecar, node-pty's
+  # spawn-helper, the .node addons, the Computer Use helper) is signed with the
+  # same identity and the hardened runtime. docs/release-signing.md explains
+  # each entitlement.
   entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
   extendInfo:
     NSMicrophoneUsageDescription: OmniRush.ai uses the microphone when you allow a page to access audio input.
   extraResources:
@@ -113,6 +123,28 @@ pacman:
     - hicolor-icon-theme
 win:
   icon: resources/icons/icon.ico
+  # Signing is configured by scripts/signing-plan.mjs from the GitHub secrets:
+  # Azure Trusted Signing (-c.win.azureSignOptions.*) or a PFX (WIN_CSC_LINK).
+  # Without either, nothing is signed. Besides the app exe, the installer, the
+  # uninstaller, elevate.exe and every bundled .exe (the opencode sidecar,
+  # node-pty's helpers), also sign the DLLs and native addons (.node are PE DLLs
+  # on Windows: better-sqlite3, node-pty's conpty.node/conpty_console_list.node).
+  # better-sqlite3's cross-platform prebuilds (darwin/linux .node) are pruned in
+  # scripts/electron-after-pack.cjs before signing, so every .node left is a
+  # Windows PE. The negative patterns drop the sidecar's per-triple JSON
+  # metadata, which is named `versions.json-<triple>.exe` but is not a PE.
+  signExts:
+    - .dll
+    - .node
+    - "!versions.json-x86_64-pc-windows-msvc.exe"
+    - "!versions.json-aarch64-pc-windows-msvc.exe"
+  signtoolOptions:
+    signingHashAlgorithms:
+      - sha256
+    rfc3161TimeStampServer: http://timestamp.digicert.com
+  # electron-updater checks that an update installer is signed by the same
+  # publisher as the running app (once the app itself is signed).
+  verifyUpdateCodeSignature: true
   extraResources:
     - from: resources/icons/icon.png
       to: icons/icon.png
@@ -128,3 +160,6 @@ win:
     - nsis
 nsis:
   include: build/installer.nsh
+  # Standard per-user install: %LOCALAPPDATA%\Programs\<app>, no elevation.
+  oneClick: true
+  perMachine: false

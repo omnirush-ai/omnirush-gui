@@ -71,14 +71,14 @@ describe("managed OpenCode startup", () => {
     const bin = await writeExecutable(root, "dump-npm-audit-env.mjs", [
       "import { writeFileSync } from 'node:fs';",
       "const port = Number(process.argv[process.argv.indexOf('--port') + 1]);",
-      "writeFileSync(process.env.ENV_DUMP_PATH, process.env.npm_config_audit ?? '<unset>');",
+      "writeFileSync(process.env.ENV_DUMP_PATH, `${process.env.npm_config_audit ?? '<unset>'} ${process.env.OPENCODE_DISABLE_AUTOUPDATE ?? '<unset>'}`);",
       "const server = Bun.serve({ hostname: '127.0.0.1', port, fetch: () => Response.json({ ok: true }) });",
       "console.log(`opencode server listening on http://127.0.0.1:${server.port}`);",
       "process.on('SIGTERM', () => { server.stop(true); process.exit(0); });",
     ]);
 
     const managedDefault = await createManagedOpencodeServer({ bin, cwd: root, env: { ENV_DUMP_PATH: defaultDumpPath } });
-    expect(await readFile(defaultDumpPath, "utf8")).toBe("false");
+    expect(await readFile(defaultDumpPath, "utf8")).toBe("false 1");
     await managedDefault.close();
 
     const managedOverride = await createManagedOpencodeServer({
@@ -86,7 +86,7 @@ describe("managed OpenCode startup", () => {
       cwd: root,
       env: { ENV_DUMP_PATH: overrideDumpPath, npm_config_audit: "true" },
     });
-    expect(await readFile(overrideDumpPath, "utf8")).toBe("true");
+    expect(await readFile(overrideDumpPath, "utf8")).toBe("true 1");
     await managedOverride.close();
   });
 

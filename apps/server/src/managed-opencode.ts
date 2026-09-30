@@ -188,7 +188,9 @@ async function startManagedEngine2Server(
   const args = ["serve", "--hostname", "127.0.0.1", "--port", "0"];
   const adapterUrl = `http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${port}`;
   const adapterAuthorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
-  const engineEnvDefaults = { npm_config_audit: "false" };
+  // The engine ships inside the app and is updated with it: it must never
+  // fetch and swap in a new binary of its own.
+  const engineEnvDefaults = { npm_config_audit: "false", OPENCODE_DISABLE_AUTOUPDATE: "1" };
   const launch = await prepareEngine2Launch({
     env: { ...process.env, ...engineEnvDefaults, ...options.env },
     cwd: options.cwd,
@@ -297,7 +299,9 @@ async function startManagedOpencodeServer(
   // That audit POST depends on npm's advisories endpoint, which has been observed
   // to hang for the full five-minute registry timeout, so first-run must not wait.
   // @npmcli/config reads npm_config_* settings from the environment.
-  const engineEnvDefaults = { npm_config_audit: "false" };
+  // The engine ships inside the app and is updated with it: it must never
+  // fetch and swap in a new binary of its own.
+  const engineEnvDefaults = { npm_config_audit: "false", OPENCODE_DISABLE_AUTOUPDATE: "1" };
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...engineEnvDefaults,

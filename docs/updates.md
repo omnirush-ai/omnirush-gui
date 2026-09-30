@@ -44,14 +44,14 @@ node apps/desktop/scripts/verify-update-manifest.mjs --manifest apps/desktop/dis
 
 ## macOS: why the DMG opens instead of an in-place install
 
-Squirrel.Mac, which electron-updater uses to swap the app bundle on macOS, only installs an update whose code signature validates against the running app. Community builds are ad-hoc signed (no Apple Developer ID; see `apps/desktop/scripts/electron-after-sign.cjs`), so that validation always fails and an in-place install would silently do nothing.
+Squirrel.Mac, which electron-updater uses to swap the app bundle on macOS, only installs an update whose code signature validates against the running app. Releases before 3.0.0, and any build made without the signing secrets (forks, PR CI), are ad-hoc signed (no Apple Developer ID; see `apps/desktop/scripts/electron-after-sign.cjs`), so that validation always fails and an in-place install would silently do nothing.
 
 The app therefore checks its own signature once at startup (`codesign -dv --verbose=2` on the bundle). When the bundle is not Developer ID signed the Updates page reports install mode `manual-dmg`:
 
 - "Download" fetches `omnirush-mac-arm64-<version>.dmg` from the same feed directory and verifies the `sha512` listed in `latest-mac.yml`.
 - "Open installer" opens the verified DMG, shows "Installer opened. Drag omnirush.ai to Applications, replace the old copy, then reopen it." and quits the app after a short delay.
 
-Once releases are signed with a Developer ID (and notarized), the same code path detects the signature and uses the normal Squirrel in-place install and restart. Windows and Linux installs are in place regardless of signing.
+From 3.0.0 on, releases are signed with a Developer ID and notarized ([release-signing.md](release-signing.md)); the same code path detects the signature and uses the normal Squirrel in-place install and restart. A 2.x install, being ad-hoc signed, still moves to 3.0.0 through the DMG. Windows and Linux installs are in place regardless of signing; on Windows a signed app also checks that each update installer is signed by the same publisher (`verifyUpdateCodeSignature`).
 
 ## Publishing a release
 

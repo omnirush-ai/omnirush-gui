@@ -501,20 +501,29 @@ async function readWindowsBrandShortcutMarker() {
   return (await readFile(windowsBrandShortcutMarkerPath(), "utf8").catch(() => "")).trim();
 }
 
+// Values reach the script through the environment, never spliced into the
+// command text, so the command is a fixed string with no encoded payload.
 function repairWindowsShortcutTarget(shortcutPath, details) {
-  const payload = Buffer.from(JSON.stringify({ shortcutPath, ...details }), "utf8").toString("base64");
   const script = [
-    `$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}')) | ConvertFrom-Json`,
     "$shell = New-Object -ComObject WScript.Shell",
-    "$link = $shell.CreateShortcut($value.shortcutPath)",
-    "$link.TargetPath = $value.target",
-    "$link.WorkingDirectory = $value.cwd",
-    "$link.Description = $value.description",
-    "$link.IconLocation = \"$($value.icon),$($value.iconIndex)\"",
+    "$link = $shell.CreateShortcut($env:OMNIRUSH_SHORTCUT_PATH)",
+    "$link.TargetPath = $env:OMNIRUSH_SHORTCUT_TARGET",
+    "$link.WorkingDirectory = $env:OMNIRUSH_SHORTCUT_CWD",
+    "$link.Description = $env:OMNIRUSH_SHORTCUT_DESCRIPTION",
+    "$link.IconLocation = \"$($env:OMNIRUSH_SHORTCUT_ICON),$($env:OMNIRUSH_SHORTCUT_ICON_INDEX)\"",
     "$link.Save()",
-  ].join("\n");
-  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+  ].join("; ");
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     windowsHide: true,
+    env: {
+      ...process.env,
+      OMNIRUSH_SHORTCUT_PATH: shortcutPath,
+      OMNIRUSH_SHORTCUT_TARGET: String(details.target ?? ""),
+      OMNIRUSH_SHORTCUT_CWD: String(details.cwd ?? ""),
+      OMNIRUSH_SHORTCUT_DESCRIPTION: String(details.description ?? ""),
+      OMNIRUSH_SHORTCUT_ICON: String(details.icon ?? ""),
+      OMNIRUSH_SHORTCUT_ICON_INDEX: String(details.iconIndex ?? 0),
+    },
   });
 }
 

@@ -87,4 +87,41 @@ describe("Electron distribution configs", () => {
       "omnirush-cloud-${os}-${arch}-${version}.${ext}",
     );
   });
+
+  it("signs with the hardened runtime and keeps the main app's entitlements minimal", async () => {
+    const config = await readConfig("electron-builder.base.yml");
+    assert.equal(config.mac.hardenedRuntime, true);
+    assert.equal(config.mac.notarize, false, "notarization runs in scripts/electron-after-sign.cjs");
+    assert.equal(config.mac.entitlements, "build/entitlements.mac.plist");
+    assert.equal(config.mac.entitlementsInherit, "build/entitlements.mac.inherit.plist");
+    const keys = (text) => [...text.matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1]).sort();
+    const main = await readFile(path.resolve(dirname, "..", config.mac.entitlements), "utf8");
+    const inherit = await readFile(path.resolve(dirname, "..", config.mac.entitlementsInherit), "utf8");
+    // codesign's entitlements parser (AMFIUnserializeXML) rejects XML comments.
+    assert.doesNotMatch(main, /<!--/);
+    assert.doesNotMatch(inherit, /<!--/);
+    assert.deepEqual(keys(main), ["com.apple.security.cs.allow-jit", "com.apple.security.device.audio-input"]);
+    assert.deepEqual(keys(inherit), [
+      "com.apple.security.cs.allow-jit",
+      "com.apple.security.cs.allow-unsigned-executable-memory",
+      "com.apple.security.cs.disable-library-validation",
+      "com.apple.security.device.audio-input",
+    ]);
+  });
+
+  it("signs every Windows binary with SHA-256 and an RFC 3161 timestamp", async () => {
+    const config = await readConfig("electron-builder.base.yml");
+    assert.deepEqual(config.win.signExts, [
+      ".dll",
+      ".node",
+      "!versions.json-x86_64-pc-windows-msvc.exe",
+      "!versions.json-aarch64-pc-windows-msvc.exe",
+    ]);
+    assert.deepEqual(config.win.signtoolOptions.signingHashAlgorithms, ["sha256"]);
+    assert.match(config.win.signtoolOptions.rfc3161TimeStampServer, /^http:\/\/timestamp\./);
+    assert.equal(config.win.verifyUpdateCodeSignature, true);
+    assert.equal(config.nsis.perMachine, false);
+    assert.equal(config.copyright, "Copyright © OmniRush.ai");
+  });
 });
+
