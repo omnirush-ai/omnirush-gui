@@ -134,10 +134,19 @@ export async function configureProvider(
     return "ok";
   }, [workspaceId, providerId, modelId, `${providerId}/${modelId}`, JSON.stringify(opencode)]), { awaitPromise: true, timeoutMs: 120_000 });
   if (result !== "ok") throw new Error(`Provider configuration failed: ${String(result)}`);
-  await seed.evalIn(app, () => { location.reload(); return true; });
-  const readiness = browserScript(async (workspaceId, engine, providerId, modelId) => {
+  const previousPage = await seed.evalIn(app, () => {
+    const epoch = performance.timeOrigin;
+    location.reload();
+    return epoch;
+  });
+  if (typeof previousPage !== "number") throw new Error("Desktop reload did not return its page identity.");
+  const readiness = browserScript(async (workspaceId, engine, providerId, modelId, previousPage) => {
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
+      if (String(performance.timeOrigin) === previousPage) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        continue;
+      }
       const base = "http://127.0.0.1:" + localStorage.getItem("omnirush.server.port");
       const headers = { Authorization: "Bearer " + localStorage.getItem("omnirush.server.token") };
       try {
@@ -159,7 +168,7 @@ export async function configureProvider(
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     return false;
-  }, [workspaceId, engine, providerId, modelId]);
+  }, [workspaceId, engine, providerId, modelId, String(previousPage)]);
   // Page reload replaces the CDP execution context. Retry this read-only
   // readiness probe if it races that replacement; catalog assertions still run.
   const deadline = Date.now() + 120_000;

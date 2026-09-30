@@ -25,6 +25,41 @@ const auth = { authorization: `Basic ${Buffer.from("user:secret").toString("base
 const get = (path: string) => fetch(`${facade.url}${path}`, { headers: auth });
 const post = (path: string, body: unknown) => fetch(`${facade.url}${path}`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(body) });
 
+test("native preview goal admission uses the beta permission and question routes", async () => {
+  const paths: string[] = [];
+  const native = await startEngineFacade({
+    upstreamUrl: "http://native.invalid", upstreamPassword: "engine-pw", username: "user", password: "secret",
+    version: "beta", defaultDirectory: DIRECTORY, nativePreview: true,
+    fetch: Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      paths.push(url.pathname);
+      if (url.pathname === "/api/event") return new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } });
+      if (url.pathname === "/api/session") {
+        expect(url.searchParams.get("location[directory]")).toBe(DIRECTORY);
+        return Response.json({ data: [tree.session] });
+      }
+      if (url.pathname === `/api/session/${SESSION}/permission`) return Response.json({ data: [{
+        id: "per_native", sessionID: SESSION, action: "shell", resources: ["build"], metadata: {},
+      }] });
+      if (url.pathname === "/api/form/request") return Response.json({ data: [] });
+      if (url.pathname === "/api/session/active") return Response.json({ data: { ses_busy: { type: "running" }, ses_idle: { type: "idle" } } });
+      return Response.json({ error: "unexpected_route" }, { status: 404 });
+    }, { preconnect: globalThis.fetch.preconnect }),
+  });
+  try {
+    const permission = await fetch(`${native.url}/permission`, { headers: auth });
+    expect(permission.status).toBe(200);
+    expect(await permission.json()).toMatchObject([{ id: "per_native", sessionID: SESSION }]);
+    const question = await fetch(`${native.url}/question`, { headers: auth });
+    expect(question.status).toBe(200);
+    expect(await question.json()).toEqual([]);
+    const status = await fetch(`${native.url}/session/status`, { headers: auth });
+    expect(await status.json()).toEqual({ ses_busy: { type: "busy" } });
+    expect(paths).not.toContain("/api/permission/request");
+    expect(paths).not.toContain("/api/form");
+  } finally { await native.close(); }
+});
+
 beforeAll(async () => {
   configDir = mkdtempSync(join(tmpdir(), "facade-test-"));
   const v1Config = join(configDir, "runtime.json");

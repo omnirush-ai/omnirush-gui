@@ -6,6 +6,9 @@ import { shellInSession } from "@/app/lib/opencode-session";
 import { submitAfterInterruption } from "@/app/lib/opencode-interruption";
 import { createClientV2, isOpencodeV2BaseUrl } from "@/app/lib/opencode-v2-adapter";
 import { composeNativeSessionSnapshot } from "@/app/lib/opencode-session-native";
+import { parseGoalInvocation } from "@/app/lib/session-goal";
+import { getReactQueryClient } from "@/react-app/infra/query-client";
+import { OmniRushServerError } from "@/app/lib/omnirush-server";
 import type { ComposerDraft, ModelRef } from "@/app/types";
 import { readStoredDefaultModel } from "@/react-app/kernel/model-config";
 import { useSessionActivityStore } from "../status/session-activity-store";
@@ -29,6 +32,7 @@ import { buildOmniRushSessionSystemContext } from "./env-context";
 import {
   clearQueuedSendContext,
   getQueuedSendContext,
+  getQueuedSendContextSessionIds,
   subscribeQueuedSendContext,
   type QueuedSendContext,
 } from "./queued-send-context";
@@ -47,12 +51,50 @@ type WatchedSession = {
   lastProbeAt: number | null;
   probeInFlight: boolean;
   sendInFlight: boolean;
+  holdActive: boolean;
+  holdTimer: ReturnType<typeof setInterval> | null;
+  holdWrite: Promise<void>;
+  holdGeneration: number;
 };
 
 const watchedSessions = new Map<string, WatchedSession>();
+const holdWrites = new Map<string, Promise<void>>();
 let startRefs = 0;
 let unsubscribeComposerStore: (() => void) | null = null;
 let unsubscribeContexts: (() => void) | null = null;
+
+function sessionNeedsGoalHold(sessionId: string, sendInFlight = false) {
+  const phase = getQueuedDrainState(sessionId).phase.kind;
+  return getComposerQueuedDrafts(useComposerStateStore.getState(), sessionId).length > 0
+    || sendInFlight || phase === "sending" || phase === "admission_unknown";
+}
+
+function writeGoalHold(watched: WatchedSession, holding: boolean) {
+  const { context, sessionId } = watched;
+  const key = JSON.stringify([context.client.baseUrl, context.workspaceId, sessionId]);
+  const previous = holdWrites.get(key) ?? Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    await context.client.commandSessionGoal(context.workspaceId, sessionId, { action: "hold", holding });
+  }).catch((error: unknown) => {
+    // An older remote server cannot run goals and has no hold endpoint.
+    if (error instanceof OmniRushServerError && error.status === 404) return;
+    throw error;
+  });
+  holdWrites.set(key, task);
+  void task.catch(() => {}).finally(() => {
+    if (holdWrites.get(key) === task) holdWrites.delete(key);
+  });
+  return task;
+}
+
+export async function waitForQueuedGoalHold(sessionId: string) {
+  let watched = watchedSessions.get(sessionId);
+  while (watched?.holdActive) {
+    await watched.holdWrite;
+    if (watchedSessions.get(sessionId) === watched) return;
+    watched = watchedSessions.get(sessionId);
+  }
+}
 
 function sameContext(left: QueuedSendContext, right: QueuedSendContext) {
   return left.workspaceId === right.workspaceId
@@ -103,6 +145,29 @@ async function performQueuedDraftSend(
   const sessionModelSelection = getSessionModelSelection(sessionId);
   const sendModel = sessionModelSelection?.model ?? readStoredDefaultModelSafely() ?? context.model;
   const sendVariant = sessionModelSelection ? sessionModelSelection.variant : context.variant;
+  const goalInvocation = draft.mode === "prompt" ? parseGoalInvocation(text) : null;
+  if (goalInvocation) {
+    if (goalInvocation.action === "edit") {
+      throw new Error("Open this conversation to edit its goal.");
+    }
+    if (goalInvocation.action === "status") {
+      await context.client.getSessionGoal(context.workspaceId, sessionId);
+    } else {
+      if (goalInvocation.action === "set") {
+        const { goal } = await context.client.getSessionGoal(context.workspaceId, sessionId);
+        if (goal && goal.status !== "complete") throw new Error("Open this conversation to confirm replacing its goal.");
+      }
+      await context.client.commandSessionGoal(context.workspaceId, sessionId, {
+        action: goalInvocation.action,
+        ...(goalInvocation.action === "set" ? { objective: goalInvocation.objective } : {}),
+        model: sendModel ?? undefined,
+        agent: context.agent ?? undefined,
+        variant: sendVariant ?? undefined,
+      });
+    }
+    await getReactQueryClient().invalidateQueries({ queryKey: ["session-goal", context.client.baseUrl, context.workspaceId, sessionId] });
+    return;
+  }
   const createEngineClient = isOpencodeV2BaseUrl(context.opencodeBaseUrl) ? createClientV2 : createClient;
   const opencodeClient = createEngineClient(
     context.opencodeBaseUrl,
@@ -255,6 +320,11 @@ function releaseWatchedSession(watched: WatchedSession, clearContext: boolean) {
     watchedSessions.delete(watched.sessionId);
   }
   if (watched.probeTimer !== null) clearTimeout(watched.probeTimer);
+  if (watched.holdTimer !== null) clearInterval(watched.holdTimer);
+  if (watched.holdActive) {
+    watched.holdActive = false;
+    void writeGoalHold(watched, false).catch(() => {});
+  }
   watched.initialStatusController.abort();
   watched.probeController?.abort();
   watched.unsubscribeDrain();
@@ -278,6 +348,10 @@ function watchSession(sessionId: string, context: QueuedSendContext) {
     lastProbeAt: null,
     probeInFlight: false,
     sendInFlight: false,
+    holdActive: true,
+    holdTimer: null,
+    holdWrite: Promise.resolve(),
+    holdGeneration: getQueuedSendGeneration(sessionId),
   };
   const input = {
     workspaceId: context.workspaceId,
@@ -290,7 +364,20 @@ function watchSession(sessionId: string, context: QueuedSendContext) {
   watched.releaseWorkspaceSync = ensureWorkspaceSessionSync(input);
   watched.releaseSessionSync = trackWorkspaceSessionSync(input, sessionId);
   watchedSessions.set(sessionId, watched);
+  watched.holdWrite = writeGoalHold(watched, true);
+  void watched.holdWrite.catch(() => {});
+  watched.holdTimer = setInterval(() => {
+    if (watchedSessions.get(sessionId) !== watched || !sessionNeedsGoalHold(sessionId, watched.sendInFlight)) return;
+    watched.holdWrite = writeGoalHold(watched, true);
+    void watched.holdWrite.catch(() => {});
+  }, 5_000);
   watched.unsubscribeDrain = subscribeQueuedDrain(sessionId, () => {
+    if (getQueuedSendGeneration(sessionId) !== watched.holdGeneration) {
+      releaseWatchedSession(watched, true);
+      return;
+    }
+    reconcileWatchedSessions();
+    if (watchedSessions.get(sessionId) !== watched) return;
     armObservationProbe(watched);
     if (watched.lastObservedStatus?.type === "idle") void attemptDrain(sessionId);
   });
@@ -314,9 +401,7 @@ function reconcileWatchedSessions() {
   for (const [sessionId, watched] of [...watchedSessions]) {
     const queuedItems = queuedDrafts[sessionId] ?? [];
     const context = getQueuedSendContext(sessionId);
-    if (watched.sendInFlight) continue;
-    const unknown = getQueuedDrainState(sessionId).phase.kind === "admission_unknown";
-    if ((queuedItems.length === 0 && !unknown) || !context) {
+    if (!sessionNeedsGoalHold(sessionId, watched.sendInFlight) || !context) {
       releaseWatchedSession(watched, queuedItems.length === 0);
       continue;
     }
@@ -326,8 +411,8 @@ function reconcileWatchedSessions() {
     }
   }
 
-  for (const [sessionId, queuedItems] of Object.entries(queuedDrafts)) {
-    if (queuedItems.length === 0 || watchedSessions.has(sessionId)) continue;
+  for (const sessionId of getQueuedSendContextSessionIds()) {
+    if (!sessionNeedsGoalHold(sessionId) || watchedSessions.has(sessionId)) continue;
     const context = getQueuedSendContext(sessionId);
     if (context) watchSession(sessionId, context);
   }
@@ -352,17 +437,24 @@ async function attemptDrain(sessionId: string) {
   useComposerStateStore.getState().removeQueuedDraft(sessionId, nextItem.id);
 
   try {
+    await waitForQueuedGoalHold(sessionId);
     await submitAfterInterruption(context.opencodeBaseUrl, sessionId,
       () => performQueuedDraftSend(context, sessionId, draft, generation), draft.messageId);
-    dispatchQueuedDrain(sessionId, {
-      type: "send_result",
-      itemId: nextItem.id,
-      outcome: "sent",
-      at: Date.now(),
-    });
+    const goalInvocation = draft.mode === "prompt" ? parseGoalInvocation(draft.text) : null;
+    if (goalInvocation && goalInvocation.action !== "set" && goalInvocation.action !== "resume") {
+      dispatchQueuedDrain(sessionId, { type: "control_completed", itemId: nextItem.id });
+    } else {
+      dispatchQueuedDrain(sessionId, {
+        type: "send_result",
+        itemId: nextItem.id,
+        outcome: "sent",
+        at: Date.now(),
+      });
+    }
     draft.attachments.forEach(revokeAttachmentPreview);
     if (getQueuedSendGeneration(sessionId) !== generation) return;
     useComposerStateStore.getState().appendHistory(sessionId, draft.text);
+    if (goalInvocation && goalInvocation.action !== "set" && goalInvocation.action !== "resume") return;
     useSessionActivityStore.getState().setRunStatus(
       context.workspaceId,
       sessionId,

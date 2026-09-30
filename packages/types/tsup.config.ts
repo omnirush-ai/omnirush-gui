@@ -10,6 +10,7 @@ export default defineConfig({
     "automations": "src/automations.ts",
     workflows: "src/workflows.ts",
     "local-workflows": "src/local-workflows.ts",
+    "session-goal": "src/session-goal.ts",
     workspace: "src/workspace.ts",
     "desktop-ipc": "src/desktop-ipc.ts",
     "connect-link": "src/connect-link.ts",

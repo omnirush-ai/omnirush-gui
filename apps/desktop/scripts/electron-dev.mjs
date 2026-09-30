@@ -235,9 +235,14 @@ if (process.env.OMNIRUSH_ELECTRON_SKIP_SHARED_PREPARE !== "1") {
 }
 
 // Build workspace packages that Electron imports from their dist output.
-console.log("[electron-dev] Building Electron workspace dependencies...");
-runSync(pnpmCmd, ["--filter", "@omnirush/headless-threads", "build"], { cwd: repoRoot });
-runSync(pnpmCmd, ["--filter", "omnirush-server", "build"], { cwd: repoRoot });
+// A prepared local eval can reuse these outputs when their source is unchanged.
+if (process.env.OMNIRUSH_ELECTRON_SKIP_WORKSPACE_BUILD === "1") {
+  console.log("[electron-dev] Using prebuilt Electron workspace dependencies.");
+} else {
+  console.log("[electron-dev] Building Electron workspace dependencies...");
+  runSync(pnpmCmd, ["--filter", "@omnirush/headless-threads", "build"], { cwd: repoRoot });
+  runSync(pnpmCmd, ["--filter", "omnirush-server", "build"], { cwd: repoRoot });
+}
 
 const initialProbeUrls = [startUrl, ...viteProbeUrls].filter(Boolean);
 let viteReady = false;

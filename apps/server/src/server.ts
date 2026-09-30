@@ -120,6 +120,8 @@ import { registerFileRoutes } from "./routes/files.js";
 import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
 import { registerSessionGroupRoutes } from "./routes/session-groups.js";
+import { registerSessionGoalRoutes } from "./routes/session-goals.js";
+import { resolveNativeGoalClient, type SessionGoalService } from "./session-goals.js";
 import { registerUiControlRoutes } from "./routes/ui-control.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { registerCloudMcpRoutes } from "./routes/cloud-mcp.js";
@@ -210,6 +212,7 @@ export {
 const SERVER_VERSION = pkg.version;
 const OPENCODE_VERSION = constants.opencodeVersion.trim().replace(/^v/, "");
 const localWorkflowServices = new WeakMap<ServerConfig, LocalWorkflowService>();
+const sessionGoalServices = new WeakMap<ServerConfig, SessionGoalService>();
 
 let desktopCloudSyncQueue: Promise<void> = Promise.resolve();
 const agentDiagnosticsLastRunByServer = new WeakMap<ServerConfig, Map<string, number>>();
@@ -1400,6 +1403,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     // First, and synchronously: archive part uploads in flight are aborted now, not after the other shutdown steps.
     const captureStopped = capture.stop();
     await taskRecovery?.stop().catch(() => undefined);
+    await sessionGoalServices.get(config)?.stop().catch(() => undefined);
     await captureStopped;
     captureServicesByServer.delete(config);
     captureServerException(error, { method: "START", route: "startServer" });
@@ -1498,6 +1502,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       await captureStopped;
       captureServicesByServer.delete(config);
       await localWorkflowServices.get(config)?.stop();
+      await sessionGoalServices.get(config)?.stop();
       managedDesktopPolicy(config).onChange = undefined;
       cloudProviderSync.stop();
       modelCatalogSync.stop();
@@ -1528,6 +1533,7 @@ export async function proxyOpencodeV2Request(input: {
   proxyPath: string;
   connection: { url: string; username: string; password: string };
   recoverySignal?: AbortSignal;
+  goalDispatch?: boolean;
 }): Promise<Response> {
   const method = input.request.method.toUpperCase();
   if (method !== "GET" && method !== "HEAD") ensureWritable(input.config);
@@ -1650,6 +1656,15 @@ export async function proxyOpencodeV2Request(input: {
   const requestBody = method === "GET" || method === "HEAD"
     ? undefined
     : await input.request.arrayBuffer().then((buffer) => buffer.byteLength > 0 ? buffer : undefined);
+  if (sessionId && method === "POST") {
+    if (/^\/api\/session\/[^/]+\/(?:abort|interrupt)$/.test(routePath)) {
+      await sessionGoalServices.get(input.config)?.interrupt(input.workspace, sessionId);
+    } else if (promptDispatch && !input.goalDispatch) {
+      let promptBody: unknown;
+      if (requestBody) { try { promptBody = JSON.parse(new TextDecoder().decode(requestBody)); } catch { promptBody = undefined; } }
+      await sessionGoalServices.get(input.config)?.userPrompt(input.workspace, sessionId, promptBody);
+    }
+  }
   let body: string | ArrayBuffer | undefined = requestBody;
   if (method === "POST" && forwardedPath === "/api/session") {
     let sessionInput: unknown = {};
@@ -1956,6 +1971,7 @@ export async function proxyOpencodeRequest(input: {
   workspace?: WorkspaceInfo;
   proxyPath?: string;
   recoverySignal?: AbortSignal;
+  goalDispatch?: boolean;
 }) {
   const workspace = input.workspace;
   const proxyPath = input.proxyPath ?? input.url.pathname;
@@ -2020,6 +2036,17 @@ export async function proxyOpencodeRequest(input: {
   const body = method === "GET" || method === "HEAD"
     ? undefined
     : await input.request.arrayBuffer().then((buf) => (buf.byteLength > 0 ? buf : undefined));
+  const goalSessionId = uploadSessionId(proxyPath);
+  if (workspace && goalSessionId && method === "POST") {
+    if (/^\/session\/[^/]+\/(?:abort|interrupt)$/.test(normalizeOpencodeProxyPath(proxyPath))) {
+      await assertWorkspaceOwnsProxiedSessionRead(input.config, workspace, "GET", `/session/${encodeURIComponent(goalSessionId)}`);
+      await sessionGoalServices.get(input.config)?.interrupt(workspace, goalSessionId);
+    } else if (!input.goalDispatch && isUploadPromptDispatch(method, proxyPath)) {
+      let promptBody: unknown;
+      if (body) { try { promptBody = JSON.parse(new TextDecoder().decode(body)); } catch { promptBody = undefined; } }
+      await sessionGoalServices.get(input.config)?.userPrompt(workspace, goalSessionId, promptBody);
+    }
+  }
   const capture = workspace ? captureServicesByServer.get(input.config) : undefined;
   const uploadedSessionId = uploadSessionId(proxyPath);
   const deletedUploadedSessionId = uploadDeletedSessionId(method, proxyPath);
@@ -2981,6 +3008,77 @@ function createRoutes(
     resolveWorkspace,
     resolveWorkspaceWithoutBootstrap,
   });
+
+  const nativeGoalClient = async (workspace: WorkspaceInfo, sessionId: string) => {
+    const connection = workspace.workspaceType === "remote" ? undefined : engineV2Preview.compatibilityConnection();
+    if (!connection) return null;
+    const boundedFetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const request = new Request(input, init);
+      return loopbackFetch(new Request(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(5_000)]) }));
+    }, { preconnect: globalThis.fetch.preconnect });
+    const client = createOpencodeClient({
+      baseUrl: connection.url, directory: workspace.path, fetch: createOpencodeDirectoryFetch(workspace.path, boundedFetch),
+      headers: { authorization: `Basic ${Buffer.from(`${connection.username}:${connection.password}`).toString("base64")}` },
+    });
+    return resolveNativeGoalClient(client, sessionId, () =>
+      assertWorkspaceOwnsProxiedSessionRead(config, workspace, "GET", `/session/${encodeURIComponent(sessionId)}`));
+  };
+  const goalClient = async (routeConfig: ServerConfig, workspace: WorkspaceInfo, options: { sessionId: string }) =>
+    await nativeGoalClient(workspace, options.sessionId) ?? createWorkspaceOpencodeClient(routeConfig, workspace, options);
+  const nativeGoalRequest = (workspace: WorkspaceInfo, sessionId: string, action: string, body: unknown, signal?: AbortSignal) => {
+    const connection = engineV2Preview.connection();
+    if (!connection) throw new ApiError(503, "engine_v2_preview_not_running", "The native engine is not running");
+    const proxyPath = `/opencode2/api/session/${encodeURIComponent(sessionId)}${action ? `/${action}` : ""}`;
+    const url = new URL(`http://127.0.0.1${proxyPath}`);
+    const request = new Request(url, body === undefined ? undefined : {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal,
+    });
+    return proxyOpencodeV2Request({ config, request, url, workspace, proxyPath, connection, recoverySignal: signal, goalDispatch: true });
+  };
+
+  sessionGoalServices.set(config, registerSessionGoalRoutes({
+    routes, config, jsonResponse, readJsonBody, ensureWritable, requireClientScope,
+    resolveWorkspace, resolveWorkspaceWithoutBootstrap, createWorkspaceOpencodeClient: goalClient,
+    sameDirectory: isSameSessionFolder,
+    assertSessionOwned: async (routeConfig, workspace, sessionId) => {
+      if (!await nativeGoalClient(workspace, sessionId)) {
+        await assertWorkspaceOwnsProxiedSessionRead(routeConfig, workspace, "GET", `/session/${encodeURIComponent(sessionId)}`);
+        return;
+      }
+      // Keep native location ownership strict, including malformed engine records.
+      const response = await nativeGoalRequest(workspace, sessionId, "", undefined);
+      if (!response.ok) throw new ApiError(response.status, "session_not_found", "Session not found");
+      await response.body?.cancel();
+    },
+    assertPromptAllowed: (workspace) => assertUploadDispatchAllowed(config, workspace),
+    promptDispatcher: async (workspace, sessionId, body, signal) => {
+      if (await nativeGoalClient(workspace, sessionId)) {
+        await engineV2Preview.ensureWorkspaceReady(workspace.path);
+        await engineV2Preview.syncWorkspaceMcp(workspace.id, workspace.path);
+        if (body.model) {
+          const response = await nativeGoalRequest(workspace, sessionId, "model", {
+            model: { providerID: body.model.providerID, id: body.model.modelID, ...(body.variant ? { variant: body.variant } : {}) },
+          }, signal);
+          if (!response.ok) return response;
+          await response.body?.cancel();
+        }
+        if (body.agent) {
+          const response = await nativeGoalRequest(workspace, sessionId, "agent", { agent: body.agent }, signal);
+          if (!response.ok) return response;
+          await response.body?.cancel();
+        }
+        return nativeGoalRequest(workspace, sessionId, "prompt", {
+          id: body.messageID, text: body.parts.map((part) => part.text).join("\n\n"),
+          metadata: { omnirush: { model: body.model, agent: body.agent, variant: body.variant,
+            textParts: body.parts.map((part) => ({ length: part.text.length, synthetic: part.synthetic })) } },
+        }, signal);
+      }
+      const proxyPath = `/opencode/session/${encodeURIComponent(sessionId)}/prompt_async`;
+      const url = new URL(`http://127.0.0.1${proxyPath}`);
+      const request = new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal });
+      return proxyOpencodeRequest({ config, request, url, workspace, proxyPath, recoverySignal: signal, goalDispatch: true });
+    },
+  }));
 
   registerCloudMcpRoutes({
     routes,

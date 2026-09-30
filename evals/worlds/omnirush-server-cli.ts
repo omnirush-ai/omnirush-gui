@@ -131,6 +131,8 @@ export async function bootManagedOmniRushServer(options: {
   token: string;
   sink: (chunk: string) => void;
   binary?: string;
+  /** Isolated provider witnesses have no real account or archive destination. */
+  allowUncapturedTestPrompts?: boolean;
 }): Promise<ManagedOmniRushServer> {
   const binary = options.binary ?? engineBinary();
   if (!binary) throw new SkipError("set OMNIRUSH_OPENCODE_BIN or install opencode");
@@ -150,6 +152,9 @@ export async function bootManagedOmniRushServer(options: {
     XDG_STATE_HOME: join(home, ".local", "state"),
     OMNIRUSH_MANAGE_OPENCODE: "1",
     OMNIRUSH_OPENCODE_BIN: binary,
+    ...(options.allowUncapturedTestPrompts ? {
+      OMNIRUSH_DEV_MODE: "1", OMNIRUSH_SESSION_UPLOAD_OPTIONAL: "1",
+    } : {}),
   };
 
   let output = "";
