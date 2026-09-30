@@ -23,7 +23,8 @@ function nativeFacts(value: unknown) {
     }) };
 }
 
-test("soft chimes tell a background user that a task finished or needs input, and respect mute", async ({ world, user, probe, step }) => {
+test("soft chimes tell a background user that a task finished or needs input, and respect mute", async ({ world, user, probe, step, evidence }) => {
+  const prove = (claim: string, facts: unknown) => evidence.recordAssertionEvidence(claim, JSON.stringify(facts), true);
   const output = async () => {
     const state = record(await probe.eval(() => window.__omnirushAudioOutputWitness?.read()));
     return { positiveSamples: Number(state.positiveSamples), backgroundSamples: Number(state.backgroundSamples),
@@ -59,6 +60,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
     await probe.eventually(() => probe.hash(), { within: 15_000, label: "the sound conversation opens",
       until: (hash) => hash.includes(`/session/${world.session.sessionId}`) });
     await user.see("composer", { editable: true });
+    await user.see({ role: "button", label: /^Split send model/ });
   };
   const send = async (prompt: string, background: boolean) => {
     await user.type("composer", prompt, { verify: true });
@@ -69,7 +71,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
     await settle();
     return { native: (await native()).samples.length, output: await output() };
   };
-  const expectSound = async (before: Awaited<ReturnType<typeof baseline>>) => {
+  const expectSound = async (before: Awaited<ReturnType<typeof baseline>>, claim: string) => {
     await probe.eventually(native, { within: 15_000, label: "Chromium reports real audible output while minimized",
       until: (state) => state.samples.length > before.native });
     const state = await native();
@@ -81,14 +83,21 @@ test("soft chimes tell a background user that a task finished or needs input, an
     expect(measured.peak).toBeGreaterThan(0.0001);
     expect(measured.peak).toBeLessThanOrEqual(0.05);
     await settle();
+    prove(claim, { nativeRisingEdges: state.samples.slice(before.native), output: measured,
+      positiveSampleDelta: measured.positiveSamples - before.output.positiveSamples,
+      backgroundSampleDelta: measured.backgroundSamples - before.output.backgroundSamples,
+      peakScope: "per note forwarding tap", silentAfterward: !(await native()).audible });
   };
-  const quiet = async (before: Awaited<ReturnType<typeof baseline>>, duration = 2_000) => {
+  const quiet = async (before: Awaited<ReturnType<typeof baseline>>, claim: string, duration = 2_000) => {
     const started = Date.now();
     await probe.eventually(async () => {
       expect((await native()).samples).toHaveLength(before.native);
       expect((await output()).bursts).toBe(before.output.bursts);
       return Date.now() - started;
     }, { within: duration + 3_000, label: "the task or pending request produces no extra audio", until: (elapsed) => elapsed >= duration });
+    const after = { native: await native(), output: await output() };
+    prove(claim, { durationMs: Date.now() - started, nativeRisingEdgeDelta: after.native.samples.length - before.native,
+      outputBurstDelta: after.output.bursts - before.output.bursts, minimized: after.native.minimized, focused: after.native.focused });
   };
   const mount = `/workspace/${encodeURIComponent(world.workspace.workspaceId)}/${world.engine === "v2" ? "opencode2/api" : "opencode"}`;
   const pending = async (kind: "question" | "permission", sessionId: string) => {
@@ -111,6 +120,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       label: "answering settles the native question", until: (requests) => requests.length === 0 });
     await probe.eventually(() => world.mock.agentRequests({ promptMarker: world.question.prompt }), { within: 30_000,
       label: "the answered question task finishes", until: (requests) => requests.filter((call) => call.kind === "final").length > completedBefore });
+    prove("The real question remains answerable and settles after choosing Sound checklist", {
+      pending: await pending("question", world.session.sessionId),
+      completedDelta: (await world.mock.agentRequests({ promptMarker: world.question.prompt })).filter((call) => call.kind === "final").length - completedBefore,
+    });
   };
   const allowPermission = async () => {
     await foreground();
@@ -121,6 +134,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       label: "the approved request is settled", until: (requests) => requests.length === 0 });
     await probe.eventually(() => world.mock.agentRequests({ promptMarker: world.permission.prompt }), { within: 30_000,
       label: "the approved task finishes", until: (requests) => requests.filter((call) => call.kind === "final").length > completedBefore });
+    prove("The real permission remains answerable and settles after Allow once", {
+      pending: await pending("permission", world.session.sessionId),
+      completedDelta: (await world.mock.agentRequests({ promptMarker: world.permission.prompt })).filter((call) => call.kind === "final").length - completedBefore,
+    });
   };
 
   try {
@@ -133,6 +150,9 @@ test("soft chimes tell a background user that a task finished or needs input, an
       });
       await user.screenshot();
       expect(defaults).toEqual({ sounds: "true", desktop: "Off" });
+      prove("Soft sounds default on while desktop popups default Off", { ...defaults, engine: world.engine,
+        fixtureEnv: { OMNIRUSH_DEV_MODE: "1", OMNIRUSH_SESSION_UPLOAD_OPTIONAL: "1", VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS: "1" },
+        scope: "Session collection is optional for these controlled-provider fixtures; Den login and policy remain active." });
     });
 
     await step("a finished background task plays one short soft chime", async () => {
@@ -142,10 +162,12 @@ test("soft chimes tell a background user that a task finished or needs input, an
       const before = await baseline();
       await send(task.prompt, true);
       await user.see({ text: task.reply }, { timeoutMs: 45_000 });
-      await expectSound(before);
+      await expectSound(before, "A real background completion plays one mild native chime");
       const after = await baseline();
-      await quiet(after);
-      expect((await world.mock.agentRequests({ promptMarker: task.prompt })).filter((call) => call.kind === "final")).toHaveLength(1);
+      await quiet(after, "The completed background task does not repeat its chime");
+      const finals = (await world.mock.agentRequests({ promptMarker: task.prompt })).filter((call) => call.kind === "final");
+      expect(finals).toHaveLength(1);
+      prove("The background completion came from one real mocked provider final response", { finalResponses: finals.length, sessionId: world.session.sessionId });
     });
 
     await step("a visible completed task stays silent", async () => {
@@ -156,7 +178,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await send(task.prompt, false);
       await user.see({ text: task.reply }, { timeoutMs: 45_000 });
       expect((await native()).focused).toBe(true);
-      await quiet(before);
+      await quiet(before, "A visible real completion stays silent");
     });
 
     await step("a real question chimes once and reload does not repeat it", async () => {
@@ -166,10 +188,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
       const requests = await waitPending("question", world.session.sessionId);
       expect(requests).toHaveLength(1);
-      await expectSound(before);
+      await expectSound(before, "A real background question plays one mild native attention chime");
       const after = await baseline();
       // Native sync/poll reads keep the identical request pending without new sound.
-      await quiet(after, 3_000);
+      await quiet(after, "The same pending background question does not repeat its chime", 3_000);
       expect(await pending("question", world.session.sessionId)).toEqual(requests);
       await user.reload();
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
@@ -178,7 +200,11 @@ test("soft chimes tell a background user that a task finished or needs input, an
       const restored = await baseline();
       expect(restored.native).toBe(after.native);
       expect(restored.output.bursts).toBe(0);
-      await quiet(restored, 3_000);
+      prove("Reload preserves the same native pending question without replaying audio", {
+        requestIdsBefore: requests, requestIdsAfter: await pending("question", world.session.sessionId),
+        nativeRisingEdgesBefore: after.native, nativeRisingEdgesAfter: restored.native, rendererBurstsAfterReload: restored.output.bursts,
+      });
+      await quiet(restored, "The restored pending background question stays silent", 3_000);
       await answerQuestion();
     });
 
@@ -189,9 +215,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await user.see({ text: world.permission.command }, { timeoutMs: 45_000 });
       const requests = await waitPending("permission", world.session.sessionId);
       expect(requests).toHaveLength(1);
-      await expectSound(before);
-      await quiet(await baseline(), 3_000);
+      await expectSound(before, "A real background permission plays one mild native attention chime");
+      await quiet(await baseline(), "The same pending background permission does not repeat its chime", 3_000);
       expect(await pending("permission", world.session.sessionId)).toEqual(requests);
+      prove("The permission stays pending with the identical native request ID", { requestIds: requests });
       await allowPermission();
       await user.screenshot();
     });
@@ -203,7 +230,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
       expect(await waitPending("question", world.session.sessionId)).toHaveLength(1);
       expect((await native()).focused).toBe(true);
-      await quiet(before);
+      await quiet(before, "A visible real question stays silent");
       await answerQuestion();
       await open();
       before = await baseline();
@@ -211,7 +238,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await user.see("Allow once", { timeoutMs: 45_000 });
       expect(await waitPending("permission", world.session.sessionId)).toHaveLength(1);
       expect((await native()).focused).toBe(true);
-      await quiet(before);
+      await quiet(before, "A visible real permission stays silent");
       await allowPermission();
     });
 
@@ -221,7 +248,9 @@ test("soft chimes tell a background user that a task finished or needs input, an
       expect(await probe.eval(() => document.querySelector('[role="switch"][aria-label="Soft notification sounds"]')?.getAttribute("aria-checked"))).toBe("false");
       await user.reload();
       await user.see({ role: "switch", label: "Soft notification sounds" }, { timeoutMs: 45_000 });
-      expect(await probe.eval(() => document.querySelector('[role="switch"][aria-label="Soft notification sounds"]')?.getAttribute("aria-checked"))).toBe("false");
+      const sounds = await probe.eval(() => document.querySelector('[role="switch"][aria-label="Soft notification sounds"]')?.getAttribute("aria-checked"));
+      expect(sounds).toBe("false");
+      prove("Muting in Preferences survives a real renderer reload", { sounds });
       await open();
       const task = world.completed[2];
       if (!task) throw new Error("Missing muted completion workload.");
@@ -229,8 +258,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await send(task.prompt, true);
       await user.see({ text: task.reply }, { timeoutMs: 45_000 });
       expect((await native()).minimized).toBe(true);
-      await quiet(before);
-      expect((await world.mock.agentRequests({ promptMarker: task.prompt })).filter((call) => call.kind === "final")).toHaveLength(1);
+      await quiet(before, "A muted real background completion stays silent");
+      const finals = (await world.mock.agentRequests({ promptMarker: task.prompt })).filter((call) => call.kind === "final");
+      expect(finals).toHaveLength(1);
+      prove("The muted completion still finishes through the real provider path", { finalResponses: finals.length, sessionId: world.session.sessionId });
     });
 
     await step("muted background questions and approvals stay silent and remain answerable", async () => {
@@ -240,7 +271,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
       expect(await waitPending("question", world.session.sessionId)).toHaveLength(1);
       expect((await native()).minimized).toBe(true);
-      await quiet(before);
+      await quiet(before, "A muted real background question stays silent");
       await answerQuestion();
       await open();
       before = await baseline();
@@ -248,9 +279,12 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await user.see("Allow once", { timeoutMs: 45_000 });
       expect(await waitPending("permission", world.session.sessionId)).toHaveLength(1);
       expect((await native()).minimized).toBe(true);
-      await quiet(before);
+      await quiet(before, "A muted real background permission stays silent");
       await allowPermission();
     });
+  } catch (error) {
+    await user.screenshot().catch(() => undefined);
+    throw error;
   } finally {
     await world.nativeWindow("foreground");
     world.closeWitness();

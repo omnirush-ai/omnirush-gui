@@ -497,7 +497,14 @@ export async function newSplitPrimary(seed: Seed) {
     { latestUserTurn: true, promptMarker: primaryPrompt, finalReply: "Primary split received", steps: [] },
     { latestUserTurn: true, promptMarker: secondaryPrompt, finalReply: "Secondary split received", steps: [] },
     { latestUserTurn: true, promptMarker: switchPrompt, finalReply: "Switched session received", steps: [] },
-  ]);
+  ], { permission: { question: "allow" } }, {
+    // Controlled-provider journeys do not claim production session collection.
+    // Keep real Den identity and managed permissions while using the supported
+    // development/test collection opt-out and custom-provider catalog.
+    OMNIRUSH_DEV_MODE: "1",
+    OMNIRUSH_SESSION_UPLOAD_OPTIONAL: "1",
+    VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS: "1",
+  });
   const switchSession = await seedSessionRetry(seed, app, { title: "Split switch target" });
   const session = await seedSessionRetry(seed, app, { title: "New split primary" });
   const splitFacts = () => evalIn(app, () => {
@@ -526,10 +533,12 @@ export async function newSplitPrimary(seed: Seed) {
     };
   });
   const agentContextViaServer = () => evalIn(app, async () => {
-    const response = await fetch("http://127.0.0.1:" + localStorage.getItem("omnirush.server.port") + "/experimental/ui-control/request", {
+    const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
+    if (!info.running || !info.baseUrl) throw new Error("Local server is unavailable for the agent context witness.");
+    const response = await fetch(info.baseUrl.replace(/\/+$/, "") + "/experimental/ui-control/request", {
       method: "POST",
       headers: {
-        Authorization: "Bearer " + localStorage.getItem("omnirush.server.token"),
+        Authorization: "Bearer " + (info.ownerToken ?? info.clientToken ?? ""),
         "content-type": "application/json",
       },
       body: JSON.stringify({ kind: "context" }),
@@ -605,6 +614,10 @@ if (process.versions.electron && process.type === 'browser') {
         description: "Inspect the sound report workspace", timeout: 30_000 } }] },
   ], { permission: { question: "allow", bash: { "*": "ask", "sleep *": "allow" } } }, {
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`.trim(),
+    // Same controlled-provider scope as newSplitPrimary; no Den/policy bypass.
+    OMNIRUSH_DEV_MODE: "1",
+    OMNIRUSH_SESSION_UPLOAD_OPTIONAL: "1",
+    VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS: "1",
   });
   const inspectorDeadline = Date.now() + 15_000;
   let endpoint = "";
