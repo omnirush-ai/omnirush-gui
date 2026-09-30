@@ -79,13 +79,31 @@ test("soft chimes tell a background user that a task finished or needs input, an
     }
   };
   const send = async (prompt: string, background: boolean) => {
-    if (!background) await foreground();
-    await user.type("composer", prompt, { verify: true });
-    const focusedStart = await native();
-    expect(focusedStart.focused).toBe(true);
-    await user.press("Enter");
-    if (background) await minimize();
-    return focusedStart.focusEvents.length;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await foreground();
+      const focusedStart = await native();
+      try {
+        await user.type("composer", prompt, { replace: true, verify: true });
+        const typed = await native();
+        expect(typed.focused).toBe(true);
+        expect(typed.focusEvents.slice(focusedStart.focusEvents.length)
+          .filter((event) => event.event === "blur" || event.event === "minimize")).toEqual([]);
+      } catch (error) {
+        const interrupted = await native();
+        const focusEvents = interrupted.focusEvents.slice(focusedStart.focusEvents.length);
+        if (attempt === 2 || !focusEvents.some((event) => event.event === "blur" || event.event === "minimize")) throw error;
+        prove("Typing interrupted by actual native focus loss is restarted before sending any request", {
+          attempt, dispatched: false, error: error instanceof Error ? error.message : String(error), focusEvents,
+          minimized: interrupted.minimized, focused: interrupted.focused,
+          nativeRisingEdges: interrupted.samples.slice(focusedStart.samples.length), output: await output(),
+        });
+        continue;
+      }
+      await user.press("Enter");
+      if (background) await minimize();
+      return focusedStart.focusEvents.length;
+    }
+    throw new Error("The app did not retain focus while typing the prompt.");
   };
   const baseline = async () => {
     await settle();
