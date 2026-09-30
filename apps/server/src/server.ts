@@ -179,13 +179,14 @@ import {
   SUBAGENT_MODEL_FALLBACK_TRACE,
   readSubagentModelSetting,
   resolveSubagentModel,
-  subagentSettingFor,
   sanitizeSubagentModelSetting,
   subagentModelRefusals,
+  subagentSettingFor,
   writeSubagentModelSetting,
   type EngineModelRef,
   type SubagentModelSetting,
 } from "./omnirush-subagent-model.js";
+import { modelsNamedIn } from "./omnirush-swarm.js";
 import { findManagedEngineWorkspace } from "./workspaces.js";
 import { startThreadApprovalReplayer, type ThreadApprovalReplayer } from "./thread-approvals.js";
 import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provider-sync.js";
@@ -3686,6 +3687,18 @@ function createRoutes(
       throw new ApiError(500, "settings_write_failed", `The sub-agent setting could not be saved: ${code}`, { code });
     }
     return jsonResponse({ ok: true, setting: saved });
+  });
+
+  // Whether the user's message names a model a task asked for, by id or by its catalog name
+  // (the swarm plugin keeps the task's model only then).
+  addRoute(routes, "POST", "/omnirush/subagent-model/named", "policy", async (ctx) => {
+    const body = await readJsonBody(ctx.request);
+    const model = typeof body.model === "string" ? body.model.trim() : "";
+    const text = typeof body.text === "string" ? body.text.slice(0, 100_000) : "";
+    if (!model) throw new ApiError(400, "invalid_payload", "model is required");
+    const catalog = await readOmniRushModelCatalog(config);
+    const models = [...catalog.map((entry) => ({ id: entry.id, name: entry.display_name })), { id: model }];
+    return jsonResponse({ named: modelsNamedIn(text, models).has(model) });
   });
 
   addRoute(routes, "POST", "/omnirush/subagent-model/resolve", "policy", async (ctx) => {

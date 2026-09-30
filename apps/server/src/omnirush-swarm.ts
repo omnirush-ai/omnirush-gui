@@ -46,16 +46,40 @@ export const SUBAGENT_ROOT_SESSION_HEADER = "x-omnirush-subagent-root";
 /** The session upload trace event recording that a sub-agent ran on the main model instead of the picked one. */
 export const SUBAGENT_MODEL_FALLBACK_TRACE = "subagent.model_fallback";
 
+/** A model the user's text can name: its id and, from the catalog, its display name. */
+export type NameableModel = { id: string; name?: string | null };
+
 /**
- * Whether the user's text names the model id `id` as a word of its own
- * (any case): "use gpt-6-astra" names gpt-6-astra, "gpt-6-astra-mini" and
- * "gpt-6" do not. A task's own model runs over the sub-agent setting only
- * when the user's latest message names it (the CLI's rule).
+ * The models the user's text names, by id or display name, as words of their
+ * own. Case and separators (space, "-", "_") do not matter, so "GPT 6 Sol",
+ * "gpt-6-sol" and "gpt 6 sol" all name gpt-6-sol. A mention inside a longer
+ * model's mention names only the longer model ("GPT 6 Sol Mini" is not
+ * GPT 6 Sol), and "gpt-6" alone names neither. A task's own model runs over
+ * the sub-agent setting only when the user's latest message names it.
  */
+export function modelsNamedIn(text: string | null | undefined, models: readonly NameableModel[]): Set<string> {
+  const named = new Set<string>();
+  if (typeof text !== "string" || !text) return named;
+  const spans: Array<{ id: string; start: number; end: number }> = [];
+  for (const model of models) {
+    for (const label of [model.id, model.name]) {
+      const words = typeof label === "string" ? label.split(/[\s_-]+/).filter(Boolean) : [];
+      if (!words.length) continue;
+      const body = words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s_-]*");
+      const pattern = new RegExp(`(?<![A-Za-z0-9._-])${body}(?![A-Za-z0-9_]|[-.][A-Za-z0-9])`, "gi");
+      for (const match of text.matchAll(pattern)) spans.push({ id: model.id, start: match.index, end: match.index + match[0].length });
+    }
+  }
+  for (const span of spans) {
+    const inside = spans.some((other) => other.id !== span.id && other.start <= span.start && other.end >= span.end && other.end - other.start > span.end - span.start);
+    if (!inside) named.add(span.id);
+  }
+  return named;
+}
+
+/** Whether the user's text names the model id `id` (no catalog: its id only). */
 export function textNamesModel(text: string | null | undefined, id: string): boolean {
-  if (typeof text !== "string" || !text || !id) return false;
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![A-Za-z0-9._-])${escaped}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`, "i").test(text);
+  return Boolean(id) && modelsNamedIn(text, [{ id }]).has(id);
 }
 
 /**

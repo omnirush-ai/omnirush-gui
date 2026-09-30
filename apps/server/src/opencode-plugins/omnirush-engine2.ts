@@ -178,8 +178,9 @@ type ModelInfo = Rec & { id: string; providerID: string };
 /** The subagent tool's `model` parameter as offered: the swarm plugin keeps it only when the user named it. */
 const SUBAGENT_MODEL_DESCRIPTION = [
   "Leave this out unless the user's own message asks for a particular model for the sub-agent.",
-  'Then write the model id the user named, as "omnirush/<model id>", or "omnirush/<model id>#<effort>" when they also named an effort.',
-  "It is used only when the user's latest message names that model id; otherwise the sub-agent runs on the user's sub-agent model setting.",
+  'Then pass the model the user named, as "omnirush/<model id>", or "omnirush/<model id>#<effort>" when they also named an effort.',
+  "A model id is its display name in lowercase with dashes for spaces (a model shown as \"Some Model 2\" has the id some-model-2).",
+  "It is used only when the user's latest message names that model, by id or display name; otherwise the sub-agent runs on the user's sub-agent model setting.",
 ].join(" ");
 
 export default {

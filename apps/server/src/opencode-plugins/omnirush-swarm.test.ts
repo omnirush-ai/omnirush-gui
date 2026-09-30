@@ -18,6 +18,7 @@ import {
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
   OMNIRUSH_SWARM_SKILL_NAME,
+  modelsNamedIn,
   textNamesModel,
   OMNIRUSH_TASK_TOOL_NOTE,
   omnirushSubagentNote,
@@ -432,6 +433,13 @@ describe("omnirush swarm plugin: sub-agent model and effort", () => {
     else process.env.OMNIRUSH_POLICY_TOKEN = saved.token;
   });
 
+  /** The account's catalog as the server knows it: ids and display names. */
+  const testCatalog = [
+    { id: "gpt-6-astra", name: "GPT 6 Astra" },
+    { id: "gpt-6-luna", name: "GPT 6 Luna" },
+    { id: "gpt-6-luna-mini", name: "GPT 6 Luna Mini" },
+    { id: "omni-fast", name: "Omni Turbo" },
+  ];
   async function withServer(answer: (body: Record<string, unknown>) => unknown, fallbacks: unknown[] = []) {
     const resolves: Resolve[] = [];
     const server = Bun.serve({
@@ -443,6 +451,10 @@ describe("omnirush swarm plugin: sub-agent model and effort", () => {
           const body = (await request.json()) as Record<string, unknown>;
           resolves.push({ body });
           return Response.json(answer(body));
+        }
+        if (url.pathname === "/omnirush/subagent-model/named") {
+          const body = (await request.json()) as { text: string; model: string };
+          return Response.json({ named: modelsNamedIn(body.text, [...testCatalog, { id: body.model }]).has(body.model) });
         }
         if (url.pathname === "/omnirush/subagent-model/fallbacks") return Response.json({ fallbacks });
         return new Response("not found", { status: 404 });
@@ -608,6 +620,29 @@ describe("omnirush swarm plugin: sub-agent model and effort", () => {
     expect(resolves.at(-1)!.body.requested).toEqual(luna);
     expect(await prompt(hooks, "ses_child", main)).toEqual({ providerID: "omnirush", modelID: "gpt-6-sol", variant: "high" });
 
+    // The display name the app shows counts too; a longer model's name names only that model.
+    user.text = "Launch two reviewers: one on GPT 6 Astra and the other on gpt 6 luna";
+    await prompt(hooks, "ses_main", main);
+    expect(await task("ses_main", "omnirush/gpt-6-astra")).toBe("omnirush/gpt-6-astra");
+    expect(await task("ses_main", "omnirush/gpt-6-luna")).toBe("omnirush/gpt-6-luna");
+    user.text = "one reviewer on GPT 6 Luna Mini";
+    await prompt(hooks, "ses_main", main);
+    expect(await task("ses_main", "omnirush/gpt-6-luna")).toBeUndefined();
+    expect(await task("ses_main", "omnirush/gpt-6-luna-mini")).toBe("omnirush/gpt-6-luna-mini");
+    // A display name unlike its id counts through the account's catalog.
+    user.text = "one reviewer on Omni Turbo";
+    await prompt(hooks, "ses_main", main);
+    expect(await task("ses_main", "omnirush/omni-fast")).toBe("omnirush/omni-fast");
+    // Without the server (no catalog) only the id counts, in any spacing: "GPT 6 Astra" still names
+    // gpt-6-astra, but "Omni Turbo" no longer names omni-fast.
+    const url = process.env.OMNIRUSH_SERVER_URL;
+    process.env.OMNIRUSH_SERVER_URL = "http://127.0.0.1:9";
+    user.text = "one on GPT 6 Astra, one on Omni Turbo";
+    await prompt(hooks, "ses_main", main);
+    expect(await task("ses_main", "omnirush/gpt-6-astra")).toBe("omnirush/gpt-6-astra");
+    expect(await task("ses_main", "omnirush/omni-fast")).toBeUndefined();
+    process.env.OMNIRUSH_SERVER_URL = url;
+
     // A sub-agent's own task call never keeps a model (it has no user), nor does a malformed one.
     expect(await task("ses_child", "omnirush/gpt-6-luna")).toBeUndefined();
     expect(await task("ses_main", "not a model id")).toBeUndefined();
@@ -628,6 +663,25 @@ describe("omnirush swarm plugin: sub-agent model and effort", () => {
     const output = { output: "<task>done</task>", metadata: { sessionId: "ses_child", model: { providerID: "omnirush", modelID: "gpt-6-sol" } } as Record<string, unknown> };
     await hooks["tool.execute.after"]({ tool: "task", callID: "call_x" }, output);
     expect(output.metadata.model).toEqual({ providerID: "omnirush", modelID: "gpt-6-astra" });
+  });
+
+  test("a message names catalog models by id or display name, as whole words", () => {
+    const catalog = [
+      { id: "gpt-6-sol", name: "GPT 6 Sol" },
+      { id: "gpt-6-sol-mini", name: "GPT 6 Sol Mini" },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+      { id: "gpt-6-astra", name: "GPT 6 Astra" },
+    ];
+    const named = (text: string) => [...modelsNamedIn(text, catalog)].sort();
+    expect(named("one reviewer on GPT 6 Astra and the other on GPT 6 Sol")).toEqual(["gpt-6-astra", "gpt-6-sol"]);
+    expect(named("use gpt 6 sol")).toEqual(["gpt-6-sol"]);
+    expect(named("use GPT_6_SOL please")).toEqual(["gpt-6-sol"]);
+    expect(named("use GPT 6 Sol Mini")).toEqual(["gpt-6-sol-mini"]);
+    expect(named("use gpt-6-sol-mini")).toEqual(["gpt-6-sol-mini"]);
+    expect(named("try GPT-5.6 Sol, then gpt-5.6-sol")).toEqual(["gpt-5.6-sol"]);
+    expect(named("use gpt-6 for this")).toEqual([]);
+    expect(named("the solution uses astra-like ideas")).toEqual([]);
+    expect(named("")).toEqual([]);
   });
 
   test("a model id is named only as a word of its own", () => {

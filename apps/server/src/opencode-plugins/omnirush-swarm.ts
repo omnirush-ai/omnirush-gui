@@ -455,7 +455,7 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
 
   /**
    * A task's own `model` runs only when the user's latest message in the main
-   * session names that model id; otherwise it is dropped and the sub-agent
+   * session names that model (by id or catalog name); otherwise it is dropped and the sub-agent
    * setting decides, as when the tool offered no model. Sub-agents have no
    * user, so their own task calls never keep one. Kept models are written as
    * "provider/model[#variant]" (a bare id is an omnirush.ai model).
@@ -473,7 +473,11 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
     } catch {
       return;
     }
-    if (!textNamesModel(text, wanted.modelID)) return;
+    // The server knows the account's catalog, so "GPT 6 Sol" names gpt-6-sol there;
+    // without it, only the id itself counts.
+    const answer = text ? await serverJson("/omnirush/subagent-model/named", { text, model: wanted.modelID }) : null;
+    const userNamed = record(answer) && typeof answer.named === "boolean" ? answer.named : textNamesModel(text, wanted.modelID);
+    if (!userNamed) return;
     args.model = `${wanted.providerID}/${wanted.modelID}${wanted.variant ? `#${wanted.variant}` : ""}`;
     const models = named.get(root) ?? new Set<string>();
     models.add(`${wanted.providerID}/${wanted.modelID}`);
