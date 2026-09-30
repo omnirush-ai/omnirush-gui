@@ -266,7 +266,9 @@ async function splitPaneQuestions(
   policy: Record<string, unknown> = { permission: { question: "allow" } },
   env?: Record<string, string>,
 ) {
-  const providerId = "split-send-mock";
+  // Public pickers accept configured direct providers only when enabled. The
+  // two feature journeys opt in and use an isolated OpenAI-compatible mock.
+  const providerId = env?.VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS === "1" ? "openai" : "split-send-mock";
   const modelId = "split-send-model";
   const mock = seed.mock({ agentWorkloads });
   const den = await seed.den({ mocks: { agent: mock } });
