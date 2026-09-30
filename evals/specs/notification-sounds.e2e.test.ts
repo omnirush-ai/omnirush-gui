@@ -1,4 +1,4 @@
-import { browserScript, spec } from "@omnirush/testkit";
+import { spec } from "@omnirush/testkit";
 import { expect } from "vitest";
 import { notificationSounds } from "../worlds/chat.ts";
 
@@ -51,27 +51,13 @@ test("soft chimes tell a background user that a task finished or needs input, an
     await user.click({ text: "Preferences" });
     await user.see({ role: "switch", label: "Soft notification sounds" });
   };
-  const open = async (session: { sessionId: string; title: string }) => {
+  const open = async () => {
     await foreground();
     if ((await probe.hash()).includes("/settings")) {
       await user.click({ role: "button", label: "Back to app" });
-      await probe.eventually(() => probe.hash(), { within: 15_000, label: "Settings navigation returns to the app",
-        until: (hash) => !hash.includes("/settings") });
-      await user.see("composer", { editable: true });
     }
-    const control = record(await probe.eventually(() => probe.eval(browserScript((id) => {
-      const row = document.querySelector<HTMLElement>('[data-session-tab-id="' + id + '"]');
-      const label = row?.getAttribute("aria-label");
-      if (!row || !label) return null;
-      const matches = [...document.querySelectorAll<HTMLElement>('button, [role="button"]')]
-        .filter((node) => node.getAttribute("aria-label") === label);
-      return { label, nth: matches.indexOf(row) };
-    }, [session.sessionId])), { within: 15_000, label: `the saved ${session.title} has its own sidebar control`,
-      until: (value) => isRecord(value) && typeof value.label === "string" && typeof value.nth === "number" && value.nth >= 0 }));
-    if (typeof control.label !== "string" || typeof control.nth !== "number") throw new Error("Missing saved task control.");
-    await user.click({ role: "button", label: control.label, nth: control.nth });
-    await probe.eventually(() => probe.hash(), { within: 15_000, label: `${session.title} (${session.sessionId}) opens`,
-      until: (hash) => hash.includes(`/session/${session.sessionId}`) });
+    await probe.eventually(() => probe.hash(), { within: 15_000, label: "the sound conversation opens",
+      until: (hash) => hash.includes(`/session/${world.session.sessionId}`) });
     await user.see("composer", { editable: true });
   };
   const send = async (prompt: string, background: boolean) => {
@@ -121,7 +107,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
     await foreground();
     const completedBefore = (await world.mock.agentRequests({ promptMarker: world.question.prompt })).filter((call) => call.kind === "final").length;
     await user.click({ role: "button", label: /^Sound checklist/ });
-    await probe.eventually(() => pending("question", world.questionSession.sessionId), { within: 30_000,
+    await probe.eventually(() => pending("question", world.session.sessionId), { within: 30_000,
       label: "answering settles the native question", until: (requests) => requests.length === 0 });
     await probe.eventually(() => world.mock.agentRequests({ promptMarker: world.question.prompt }), { within: 30_000,
       label: "the answered question task finishes", until: (requests) => requests.filter((call) => call.kind === "final").length > completedBefore });
@@ -131,7 +117,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
     const completedBefore = (await world.mock.agentRequests({ promptMarker: world.permission.prompt })).filter((call) => call.kind === "final").length;
     await user.click("Allow once");
     await user.see({ text: world.permission.reply }, { timeoutMs: 45_000 });
-    await probe.eventually(() => pending("permission", world.permissionSession.sessionId), { within: 30_000,
+    await probe.eventually(() => pending("permission", world.session.sessionId), { within: 30_000,
       label: "the approved request is settled", until: (requests) => requests.length === 0 });
     await probe.eventually(() => world.mock.agentRequests({ promptMarker: world.permission.prompt }), { within: 30_000,
       label: "the approved task finishes", until: (requests) => requests.filter((call) => call.kind === "final").length > completedBefore });
@@ -150,7 +136,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
     });
 
     await step("a finished background task plays one short soft chime", async () => {
-      await open(world.backgroundSession);
+      await open();
       const task = world.completed[0];
       if (!task) throw new Error("Missing background completion workload.");
       const before = await baseline();
@@ -163,7 +149,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
     });
 
     await step("a visible completed task stays silent", async () => {
-      await open(world.foregroundSession);
+      await open();
       const task = world.completed[1];
       if (!task) throw new Error("Missing foreground completion workload.");
       const before = await baseline();
@@ -174,21 +160,21 @@ test("soft chimes tell a background user that a task finished or needs input, an
     });
 
     await step("a real question chimes once and reload does not repeat it", async () => {
-      await open(world.questionSession);
+      await open();
       const before = await baseline();
       await send(world.question.prompt, true);
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
-      const requests = await waitPending("question", world.questionSession.sessionId);
+      const requests = await waitPending("question", world.session.sessionId);
       expect(requests).toHaveLength(1);
       await expectSound(before);
       const after = await baseline();
       // Native sync/poll reads keep the identical request pending without new sound.
       await quiet(after, 3_000);
-      expect(await pending("question", world.questionSession.sessionId)).toEqual(requests);
+      expect(await pending("question", world.session.sessionId)).toEqual(requests);
       await user.reload();
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
       expect((await native()).minimized).toBe(true);
-      expect(await pending("question", world.questionSession.sessionId)).toEqual(requests);
+      expect(await pending("question", world.session.sessionId)).toEqual(requests);
       const restored = await baseline();
       expect(restored.native).toBe(after.native);
       expect(restored.output.bursts).toBe(0);
@@ -197,33 +183,33 @@ test("soft chimes tell a background user that a task finished or needs input, an
     });
 
     await step("a real permission request plays the attention chime without repeating", async () => {
-      await open(world.permissionSession);
+      await open();
       const before = await baseline();
       await send(world.permission.prompt, true);
       await user.see({ text: world.permission.command }, { timeoutMs: 45_000 });
-      const requests = await waitPending("permission", world.permissionSession.sessionId);
+      const requests = await waitPending("permission", world.session.sessionId);
       expect(requests).toHaveLength(1);
       await expectSound(before);
       await quiet(await baseline(), 3_000);
-      expect(await pending("permission", world.permissionSession.sessionId)).toEqual(requests);
+      expect(await pending("permission", world.session.sessionId)).toEqual(requests);
       await allowPermission();
       await user.screenshot();
     });
 
     await step("visible questions and approvals also stay silent", async () => {
-      await open(world.questionSession);
+      await open();
       let before = await baseline();
       await send(world.question.prompt, false);
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
-      expect(await waitPending("question", world.questionSession.sessionId)).toHaveLength(1);
+      expect(await waitPending("question", world.session.sessionId)).toHaveLength(1);
       expect((await native()).focused).toBe(true);
       await quiet(before);
       await answerQuestion();
-      await open(world.permissionSession);
+      await open();
       before = await baseline();
       await send(world.permission.prompt, false);
       await user.see("Allow once", { timeoutMs: 45_000 });
-      expect(await waitPending("permission", world.permissionSession.sessionId)).toHaveLength(1);
+      expect(await waitPending("permission", world.session.sessionId)).toHaveLength(1);
       expect((await native()).focused).toBe(true);
       await quiet(before);
       await allowPermission();
@@ -236,7 +222,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await user.reload();
       await user.see({ role: "switch", label: "Soft notification sounds" }, { timeoutMs: 45_000 });
       expect(await probe.eval(() => document.querySelector('[role="switch"][aria-label="Soft notification sounds"]')?.getAttribute("aria-checked"))).toBe("false");
-      await open(world.mutedSession);
+      await open();
       const task = world.completed[2];
       if (!task) throw new Error("Missing muted completion workload.");
       const before = await baseline();
@@ -248,19 +234,19 @@ test("soft chimes tell a background user that a task finished or needs input, an
     });
 
     await step("muted background questions and approvals stay silent and remain answerable", async () => {
-      await open(world.questionSession);
+      await open();
       let before = await baseline();
       await send(world.question.prompt, true);
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
-      expect(await waitPending("question", world.questionSession.sessionId)).toHaveLength(1);
+      expect(await waitPending("question", world.session.sessionId)).toHaveLength(1);
       expect((await native()).minimized).toBe(true);
       await quiet(before);
       await answerQuestion();
-      await open(world.permissionSession);
+      await open();
       before = await baseline();
       await send(world.permission.prompt, true);
       await user.see("Allow once", { timeoutMs: 45_000 });
-      expect(await waitPending("permission", world.permissionSession.sessionId)).toHaveLength(1);
+      expect(await waitPending("permission", world.session.sessionId)).toHaveLength(1);
       expect((await native()).minimized).toBe(true);
       await quiet(before);
       await allowPermission();

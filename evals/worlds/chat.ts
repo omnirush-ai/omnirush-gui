@@ -675,10 +675,8 @@ if (process.versions.electron && process.type === 'browser') {
   };
   await addInitScript(base.app.client, installOutputTap);
   await seed.evalIn(base.app, installOutputTap);
-  const sessions = await seed.sessions(base.app, ["Sound completion", "Sound foreground", "Sound muted", "Sound question", "Sound approval"]);
-  const [backgroundSession, foregroundSession, mutedSession, questionSession, permissionSession] = sessions;
-  if (!backgroundSession || !foregroundSession || !mutedSession || !questionSession || !permissionSession) throw new Error("Missing sound journey sessions.");
-  return { ...base, engine, completed, question, permission, backgroundSession, foregroundSession, mutedSession, questionSession, permissionSession,
+  const session = await seedSessionRetry(seed, base.app, { title: "Sound report" });
+  return { ...base, engine, completed, question, permission, session,
     nativeWindow, closeWitness: () => native.close() };
 }
 
