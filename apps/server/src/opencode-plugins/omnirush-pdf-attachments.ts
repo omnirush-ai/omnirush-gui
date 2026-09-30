@@ -2,7 +2,7 @@ import { realpath } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { createInputSupportResolver, encodedSize, nativePdfPolicy, TEXT_ONLY } from "../pdf-attachments/capabilities.js";
+import { createInputSupportResolver, encodedSize, nativePdfPolicy, TEXT_ONLY, withinImageBudget } from "../pdf-attachments/capabilities.js";
 import type { InputSupportResolver, ModelInputSupport, NativePdfPolicy } from "../pdf-attachments/capabilities.js";
 import {
   cachedDerivedPdf,
@@ -45,6 +45,19 @@ const MAX_PDF_BYTES = 64 * MIB;
 const MAX_INLINE_PAGES = EAGER_RENDERED_PAGES;
 /** Total inline image bytes per PDF; keeps requests under provider payload limits. */
 const INLINE_IMAGE_BUDGET_BYTES = 12 * MIB;
+/** The omnirush.ai models (omnirush-runtime-config's internal provider). */
+const OMNIRUSH_PROVIDER_ID = "omnirush";
+/**
+ * Page-image bytes per PDF (and per page-tool call) for an omnirush.ai model.
+ * The omnirush.ai gateway refuses a request body over 8 MiB
+ * (`model_request_too_large`) and images ride base64-encoded in every later
+ * step too, so 2 MiB (about 2.7 MiB encoded) leaves room for the rest.
+ */
+const OMNIRUSH_IMAGE_BUDGET_BYTES = 2 * MIB;
+/** Sessions whose model the plugin remembers; the least recently used goes first. */
+const MAX_REMEMBERED_SESSIONS = 256;
+/** Side requests that may run on another (small) model; their model is not the session's. */
+const SIDE_AGENTS = new Set(["title", "compaction", "summary"]);
 /** Extracted text inlined in the note; the full text stays on disk. */
 const MAX_INLINE_TEXT_CHARS = 60_000;
 const PAGE_TOOL_NAME = "omnirush_pdf_pages";
@@ -372,6 +385,17 @@ function scopedMemoKey(root: string | null, key: string): string {
  */
 const modelBySession = new Map<string, { providerID: string; modelID: string }>();
 
+function rememberModel(sessionID: string, providerID: string, modelID: string): void {
+  // Re-inserting moves the session to the end: eviction takes the least
+  // recently used, never a session that is still stepping.
+  modelBySession.delete(sessionID);
+  modelBySession.set(sessionID, { providerID, modelID });
+  if (modelBySession.size > MAX_REMEMBERED_SESSIONS) {
+    const oldest = modelBySession.keys().next().value;
+    if (oldest !== undefined) modelBySession.delete(oldest);
+  }
+}
+
 function rememberDigest(root: string | null, source: PdfSource, digest: string): void {
   if (!source.key) return;
   if (digestByKey.size > 512) digestByKey.clear();
@@ -461,7 +485,7 @@ async function inlineImages(root: string | null, derived: DerivedPdf, support: M
   if (!support.image) return [];
   const stem = derived.filename.slice(0, -".pdf".length);
   const images: ImagePart[] = [];
-  let budget = INLINE_IMAGE_BUDGET_BYTES;
+  let budget = support.imageBytes ?? INLINE_IMAGE_BUDGET_BYTES;
   for (const page of derived.renderedPages.slice(0, MAX_INLINE_PAGES)) {
     if (page.bytes > budget) break;
     const bytes = pageImageOf(derived, page);
@@ -579,6 +603,31 @@ function stepModel(messages: unknown[]): StepModel | null {
   return null;
 }
 
+/**
+ * The step's model from the hook input. The 2.x engine bridge
+ * (omnirush-engine2.ts) passes `{sessionID, model}` there and hands the hook
+ * messages whose `info` is only `{id, role}`, so `stepModel` finds nothing in
+ * them; the 1.x engine passes an empty input and full message infos.
+ */
+function hookModel(input: unknown): StepModel | null {
+  if (!isRecord(input) || !isRecord(input.model)) return null;
+  const providerID = optionalStringProperty(input.model, "providerID");
+  const modelID = optionalStringProperty(input.model, "id") ?? optionalStringProperty(input.model, "modelID");
+  if (!providerID || !modelID) return null;
+  return { providerID, modelID, sessionID: optionalStringProperty(input, "sessionID") ?? null };
+}
+
+/**
+ * What this route can take, beside what the model can: an omnirush.ai model
+ * gets a PDF as its text and page images, never the file itself (native PDF
+ * input is not verified through the gateway, and a PDF's base64 counts
+ * against its request limit in every step), within the gateway's budget.
+ */
+function supportForRoute(providerID: string, support: ModelInputSupport): ModelInputSupport {
+  if (providerID !== OMNIRUSH_PROVIDER_ID) return support;
+  return { ...support, pdf: false, imageBytes: OMNIRUSH_IMAGE_BUDGET_BYTES };
+}
+
 function hasPdf(messages: unknown[]): boolean {
   return messages.some((message) => {
     if (!isRecord(message)) return false;
@@ -621,15 +670,16 @@ export const OmniRushPdfAttachments = async (factoryInput?: unknown) => {
     : { resolve: async () => TEXT_ONLY };
   return {
     "experimental.chat.messages.transform": async (input: unknown, output: { messages: unknown[] }) => {
-      void input;
-      const model = stepModel(output.messages);
-      if (model?.sessionID) {
-        if (modelBySession.size > 256) modelBySession.clear();
-        modelBySession.set(model.sessionID, { providerID: model.providerID, modelID: model.modelID });
-      }
+      const model = hookModel(input) ?? stepModel(output.messages);
+      // Every agent step records its model, PDF or not (no catalog read): the
+      // page tool needs it for PDFs the agent finds in the workspace itself.
+      const agent = isRecord(input) ? optionalStringProperty(input, "agent") : undefined;
+      if (model?.sessionID && !(agent && SIDE_AGENTS.has(agent))) rememberModel(model.sessionID, model.providerID, model.modelID);
       if (!hasPdf(output.messages)) return;
       const root = workspaceRoot(factoryContext);
-      const support = model ? await resolver.resolve(model.providerID, model.modelID) : TEXT_ONLY;
+      const support = model
+        ? supportForRoute(model.providerID, await resolver.resolve(model.providerID, model.modelID))
+        : TEXT_ONLY;
       const policy = support.pdf ? nativePdfPolicy(support.npm, support.contextTokens) : null;
       const nativeBudget: NativeBudget | null = policy
         ? {
@@ -655,14 +705,19 @@ export const OmniRushPdfAttachments = async (factoryInput?: unknown) => {
           const root = workspaceRoot(factoryContext);
           const sessionID = optionalStringProperty(context, "sessionID");
           const model = sessionID ? modelBySession.get(sessionID) : undefined;
-          const support = model ? await resolver.resolve(model.providerID, model.modelID) : TEXT_ONLY;
+          const support = model
+            ? supportForRoute(model.providerID, await resolver.resolve(model.providerID, model.modelID))
+            : TEXT_ONLY;
           const bytes = await readWorkspacePdf(root, args.pdf_path);
           const derived = await derivePdf(root, basename(args.pdf_path), bytes, { renderPages: false });
           if (derived.loadError) return `PDF could not be prepared: ${derived.loadError}`;
           if (!support.image) return pageToolOutput(derived, args.pages, [], support);
           const updated = await renderPdfPages(root, derived, bytes, args.pages);
           const wanted = new Set(args.pages);
-          const served = updated.renderedPages.filter((image) => wanted.has(image.page)).slice(0, MAX_PAGES_PER_REQUEST);
+          const served = withinImageBudget(
+            updated.renderedPages.filter((image) => wanted.has(image.page)).slice(0, MAX_PAGES_PER_REQUEST),
+            support.imageBytes,
+          );
           const attachments: Array<{ type: "file"; mime: string; url: string; filename?: string }> = [];
           for (const image of served) {
             const data = pageImageOf(updated, image);

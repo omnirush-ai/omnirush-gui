@@ -369,7 +369,8 @@ export default {
         if (messageHooks.length && Array.isArray(event.messages)) {
           const { v1, restore } = messagesForV1(event.messages);
           const output = { messages: v1 };
-          for (const hook of messageHooks) await hook({ sessionID: input.sessionID, model: input.model }, output);
+          // `agent` names title and compaction requests, which may run on another model.
+          for (const hook of messageHooks) await hook({ sessionID: input.sessionID, model: input.model, agent: input.agent }, output);
           event.messages = restore(output.messages as Rec[]);
         }
         if (paramHooks.length && isRec(event.options)) {

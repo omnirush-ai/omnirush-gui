@@ -16,6 +16,12 @@ export type ModelInputSupport = {
   npm: string | null;
   /** Context window in tokens, when the catalog says. */
   contextTokens: number | null;
+  /**
+   * Page-image bytes (raw, before base64) one PDF or one page-tool call may
+   * attach, when the route caps request bodies below the provider's own
+   * limits; unset: the plugin's default budget.
+   */
+  imageBytes?: number;
 };
 
 /**
@@ -77,6 +83,19 @@ export function nativePdfPolicy(npm: string | null, contextTokens: number | null
     return { ...base, tokensPerPage: 2_300, maxPages: contextTokens !== null && contextTokens >= 1_000_000 ? 600 : 100 };
   }
   return base;
+}
+
+/** The page images in order while their raw bytes fit `limit` (all of them without one). */
+export function withinImageBudget<T extends { bytes: number }>(images: T[], limit: number | undefined): T[] {
+  if (limit === undefined) return images;
+  const kept: T[] = [];
+  let left = limit;
+  for (const image of images) {
+    if (image.bytes > left) break;
+    left -= image.bytes;
+    kept.push(image);
+  }
+  return kept;
 }
 
 /** Bytes a binary occupies once base64-encoded into a request body. */

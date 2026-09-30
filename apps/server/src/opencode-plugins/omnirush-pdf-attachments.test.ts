@@ -8,6 +8,7 @@ import { buildOmniRushRuntimeConfigObject } from "../omnirush-runtime-config.js"
 import { omnirushPdfAttachmentsPluginPath } from "../omnirush-extensions-plugin-path.js";
 import { resetDerivedPdfMemory } from "../pdf-attachments/derive.js";
 import { buildTestPdf, corruptTestPdf, pdfDataUrl } from "../pdf-attachments/pdf-fixture.test-helper.js";
+import { withinImageBudget } from "../pdf-attachments/capabilities.js";
 import { OmniRushPdfAttachments } from "./omnirush-pdf-attachments.js";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -23,6 +24,7 @@ const catalog = {
       { id: "openrouter", npm: "@ai-sdk/openai-compatible", models: { vision: { id: "vision", attachment: true, modalities: { input: ["text", "image"], output: ["text"] } } } },
       { id: "ollama", npm: "@ai-sdk/openai-compatible", models: { text: { id: "text", attachment: false, modalities: { input: ["text"], output: ["text"] } } } },
       { id: "odd", npm: "@ai-sdk/openai-compatible", models: { "pdf-no-vision": { id: "pdf-no-vision", attachment: true, modalities: { input: ["text", "pdf"], output: ["text"] } } } },
+      { id: "omnirush", models: { "gpt-6-astra": { id: "gpt-6-astra", providerID: "omnirush", api: { id: "gpt-6-astra", url: "", npm: "@ai-sdk/openai" }, limit: { context: 400000, output: 128000 }, capabilities: { attachment: true, toolcall: true, input: { text: true, audio: false, image: true, video: false, pdf: true }, output: { text: true, audio: false, image: false, video: false, pdf: false } } } } },
     ],
     default: {},
     connected: [],
@@ -35,6 +37,7 @@ const NATIVE_100_PAGES: Model = { providerID: "openai", modelID: "gpt-native" };
 const VISION: Model = { providerID: "openrouter", modelID: "vision" };
 const TEXT: Model = { providerID: "ollama", modelID: "text" };
 const UNLISTED: Model = { providerID: "custom", modelID: "mystery" };
+const ASTRA: Model = { providerID: "omnirush", modelID: "gpt-6-astra" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -471,19 +474,80 @@ describe("OmniRush.ai PDF attachments plugin", () => {
       const plugin = await OmniRushPdfAttachments({ directory: root, client: { provider: { list: async () => catalog } } });
       const tool = plugin.tool.omnirush_pdf_pages;
 
-      await plugin["experimental.chat.messages.transform"]({}, { messages: [userMessage(VISION, [question])] });
-      const visionResult = await tool.execute({ pdf_path: "docs/spec.pdf", pages: [1, 2] }, { sessionID: "ses" });
+      // Session ids no other test uses: the plugin's session memory is module-wide.
+      const visionStep = { messages: [userMessage(VISION, [question], "mw1")] };
+      visionStep.messages[0].info.sessionID = "ses-ws-vision";
+      await plugin["experimental.chat.messages.transform"]({}, visionStep);
+      const visionResult = await tool.execute({ pdf_path: "docs/spec.pdf", pages: [1, 2] }, { sessionID: "ses-ws-vision" });
       if (typeof visionResult === "string") throw new Error(`Expected page images, got: ${visionResult}`);
       expect(visionResult.attachments.map((attachment) => attachment.mime)).toEqual(["image/png", "image/png"]);
       expect(visionResult.output).toContain("page_images_attached: pages 1-2, in order");
 
-      const textStep = { messages: [userMessage(TEXT, [question], "m9")] };
-      textStep.messages[0].info.sessionID = "ses-text";
+      const textStep = { messages: [userMessage(TEXT, [question], "mw2")] };
+      textStep.messages[0].info.sessionID = "ses-ws-text";
       await plugin["experimental.chat.messages.transform"]({}, textStep);
-      const textResult = await tool.execute({ pdf_path: "docs/spec.pdf", pages: [1] }, { sessionID: "ses-text" });
+      const textResult = await tool.execute({ pdf_path: "docs/spec.pdf", pages: [1] }, { sessionID: "ses-ws-text" });
       expect(String(textResult)).toContain("page_images_attached: none (this model cannot view images; text is provided instead)");
     });
   }, 30_000);
+
+  test("on the 2.x engine the step's model comes from the hook input, since the bridge's messages carry no model", async () => {
+    // omnirush-engine2.ts messagesForV1 gives each message only {id, role} and
+    // passes {sessionID, model} as the hook input.
+    await withWorkspace(async (root) => {
+      await mkdir(join(root, "docs"), { recursive: true });
+      await writeFile(join(root, "docs", "spec.pdf"), buildTestPdf(["Spec page one", "Spec page two"]));
+      const plugin = await OmniRushPdfAttachments({ directory: root, client: { provider: { list: async () => catalog } } });
+      const bridged = { messages: [{ info: { id: "m0", role: "user" }, content: [{ type: "text", text: "Read docs/spec.pdf" }] }] };
+      await plugin["experimental.chat.messages.transform"]({ sessionID: "ses-v2", model: { id: "vision", providerID: "openrouter" }, agent: "build" }, bridged);
+      // A title request on a small text-only model must not replace the session's model.
+      await plugin["experimental.chat.messages.transform"]({ sessionID: "ses-v2", model: { id: "text", providerID: "ollama" }, agent: "title" }, structuredClone(bridged));
+      const result = await plugin.tool.omnirush_pdf_pages.execute({ pdf_path: "docs/spec.pdf", pages: [1, 2] }, { sessionID: "ses-v2" });
+      if (typeof result === "string") throw new Error(`Expected page images, got: ${result}`);
+      expect(result.attachments.map((attachment) => attachment.mime)).toEqual(["image/png", "image/png"]);
+      expect(result.output).toContain("page_images_attached: pages 1-2, in order");
+    });
+  }, 30_000);
+
+  test("an omnirush.ai model gets a PDF as page images and text, never the PDF file itself", async () => {
+    await withWorkspace(async (root) => {
+      const pdf = buildTestPdf(["Quarterly revenue report", "Appendix: totals"]);
+      const step = { messages: [userMessage(ASTRA, [pdfPart(pdfDataUrl(pdf)), question], "ma1")] };
+      step.messages[0].info.sessionID = "ses-astra";
+      const [message] = await transform(root, step.messages);
+      const parts = partsOf(message);
+      expect(parts.some((part) => part.mime === "application/pdf")).toBe(false);
+      expect(parts.filter((part) => part.type === "file" && part.mime === "image/png").length).toBe(2);
+      expect(noteOf(message)).toContain("page_images_in_this_message: pages 1-2, in order");
+    });
+  }, 30_000);
+
+  test("a session that keeps stepping is never evicted from the plugin's session memory", async () => {
+    await withWorkspace(async (root) => {
+      await mkdir(join(root, "docs"), { recursive: true });
+      await writeFile(join(root, "docs", "spec.pdf"), buildTestPdf(["Spec page one"]));
+      const plugin = await OmniRushPdfAttachments({ directory: root, client: { provider: { list: async () => catalog } } });
+      const step = async (sessionID: string) => {
+        const output = { messages: [userMessage(VISION, [question], `m-${sessionID}`)] };
+        output.messages[0].info.sessionID = sessionID;
+        await plugin["experimental.chat.messages.transform"]({}, output);
+      };
+      await step("ses-busy");
+      for (let index = 0; index < 200; index += 1) await step(`ses-other-${index}`);
+      await step("ses-busy");
+      for (let index = 200; index < 300; index += 1) await step(`ses-other-${index}`);
+      const result = await plugin.tool.omnirush_pdf_pages.execute({ pdf_path: "docs/spec.pdf", pages: [1] }, { sessionID: "ses-busy" });
+      if (typeof result === "string") throw new Error(`Expected page images, got: ${result}`);
+      expect(result.output).toContain("page_images_attached: pages 1, in order");
+    });
+  }, 30_000);
+
+  test("page images stop at the route's byte budget, in page order", () => {
+    const pages = [{ page: 1, bytes: 800 }, { page: 2, bytes: 700 }, { page: 3, bytes: 900 }];
+    expect(withinImageBudget(pages, undefined).map((image) => image.page)).toEqual([1, 2, 3]);
+    expect(withinImageBudget(pages, 1_600).map((image) => image.page)).toEqual([1, 2]);
+    expect(withinImageBudget(pages, 500)).toEqual([]);
+  });
 
   test("is registered in runtime config, bundled with its wasm runtime, and packaged by the desktop app", async () => {
     const runtime = await buildOmniRushRuntimeConfigObject();
