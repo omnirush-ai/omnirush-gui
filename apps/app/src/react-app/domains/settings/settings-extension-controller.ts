@@ -56,7 +56,7 @@ export function useSettingsExtensionController(input: SettingsExtensionControlle
     restartLocalServer: input.restartLocalServer,
     computerUse: {
       connected: input.enablementContext.mcpStatuses?.["computer-use"]?.status === "connected",
-      connecting: input.mcpConnectingName === entry.name,
+      connecting: input.mcpConnectingName === entry.name || input.mcpConnectingName === entry.serverName,
       onConnect: () => input.connectMcp(entry),
       onRefresh: input.refreshMcpServers,
       onPermissionsChange: input.onComputerUsePermissionsChange,

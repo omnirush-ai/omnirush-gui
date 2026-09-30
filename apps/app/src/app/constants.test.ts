@@ -9,6 +9,7 @@ import {
   DEFAULT_MODEL,
   isOmniRushModelID,
   OMNIRUSH_EXTENSION_CATALOG,
+  MCP_QUICK_CONNECT,
   filterOmniRushExtensionCatalogForPlatform,
   resolveOmniRushExtensionCatalogPlatform,
 } from "./constants";
@@ -50,5 +51,10 @@ describe("omnirush.ai extension catalog platform filter", () => {
     expect(filteredIds("darwin")).toEqual(["omnirush-browser", "computer-use", "ollama"]);
     expect(filteredIds("linux")).toEqual(["omnirush-browser", "computer-use", "ollama"]);
     expect(filteredIds("windows")).toEqual(["omnirush-browser", "computer-use", "ollama"]);
+  });
+
+  test("ships Computer Use without the preview catalog badge", () => {
+    const computerUse = MCP_QUICK_CONNECT.find((entry) => entry.id === "computer-use");
+    expect(computerUse?.extensionManifest?.preview).toEqual(undefined);
   });
 });

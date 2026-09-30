@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleAlert, Copy, Eye, Hand, Loader2, MousePointer2, RefreshCw, ShieldCheck } from "lucide-react";
 
@@ -64,6 +64,12 @@ const modes = [
 
 export function ComputerUseConfig({ connected, connecting, onConnect, onRefresh, onPermissionsChange }: ComputerUseConfigProps) {
   const queryClient = useQueryClient();
+  const [waitingForConnection, setWaitingForConnection] = useState(false);
+  const connectedRef = useRef(connected);
+  useEffect(() => {
+    connectedRef.current = connected;
+    if (connected) setWaitingForConnection(false);
+  }, [connected]);
   const { data: result, isFetching, error: checkError, refetch } = useQuery({
     queryKey: PERMISSIONS_QUERY_KEY,
     queryFn: async () => {
@@ -80,7 +86,20 @@ export function ComputerUseConfig({ connected, connecting, onConnect, onRefresh,
     refetchIntervalInBackground: true,
   });
   const connect = useMutation({
-    mutationFn: async () => { await onConnect?.(); await onRefresh?.(); },
+    mutationFn: async () => {
+      setWaitingForConnection(true);
+      await onConnect?.();
+      const deadline = Date.now() + 15_000;
+      while (!connectedRef.current && Date.now() < deadline) {
+        await onRefresh?.();
+        if (connectedRef.current) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (!connectedRef.current) {
+        throw new Error("Computer Use is still starting. Refresh the status and try again if it does not connect.");
+      }
+    },
+    onSettled: () => setWaitingForConnection(false),
   });
   const setup = useMutation({
     mutationFn: async () => parsePermissionResult(await desktopBridge.openComputerUsePermissionSetup()),
@@ -103,7 +122,7 @@ export function ComputerUseConfig({ connected, connecting, onConnect, onRefresh,
   const supported = hasDesktopBridge() && result?.supported !== false;
   const permissionsReady = result?.ok === true;
   const ready = connected && permissionsReady;
-  const busy = isFetching || setup.isPending;
+  const busy = isFetching || waitingForConnection || setup.isPending;
   const refresh = async () => { setup.reset(); connect.reset(); await refetch(); await onRefresh?.(); };
 
   return (
@@ -125,9 +144,9 @@ export function ComputerUseConfig({ connected, connecting, onConnect, onRefresh,
           <span>{ready ? "Ready · app access is approved when a session starts" : !supported ? "Desktop access is unavailable on this session" : !connected ? permissionsReady ? "Permissions are ready. Enable Computer Use for this workspace." : "Set up Computer Use for this workspace" : mac ? "Connected · finish macOS permissions below" : "Connected · check desktop access below"}</span>
         </div>
         {!ready ? (
-          <Button className="w-full" onClick={() => { if (!connected) connect.mutate(); else setup.mutate(); }} disabled={!supported || connecting || connect.isPending || setup.isPending || (!connected && !onConnect)}>
-            {connecting || connect.isPending || setup.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-            {connecting || connect.isPending ? "Enabling…" : !connected ? "Enable Computer Use" : mac ? "Allow macOS access" : "Check desktop access"}
+          <Button className="w-full" onClick={() => { if (!connected) connect.mutate(); else setup.mutate(); }} disabled={!supported || connecting || waitingForConnection || connect.isPending || setup.isPending || (!connected && !onConnect)}>
+            {connecting || waitingForConnection || connect.isPending || setup.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+            {connecting || waitingForConnection || connect.isPending ? "Enabling…" : !connected ? "Enable Computer Use" : mac ? "Allow macOS access" : "Check desktop access"}
           </Button>
         ) : null}
         {error ? <Alert variant="destructive"><CircleAlert /><AlertDescription className="break-words">{error}</AlertDescription></Alert> : null}

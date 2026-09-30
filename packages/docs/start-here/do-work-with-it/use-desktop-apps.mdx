@@ -1,19 +1,21 @@
 ---
 title: "Work in desktop apps"
-description: "Approve a Mac app window and choose how OmniRush.ai can help"
+description: "Approve an app window and choose how OmniRush.ai can help"
 ---
 
-Computer Use is a preview for macOS 14 or later. It can read a window, use
-accessible app controls, or work with mouse and keyboard in the foreground.
-Use the built-in browser for websites and a dedicated connection when an app
-provides one.
+Computer Use can read a window, use accessible app controls, or work with mouse
+and keyboard in the foreground. It is available on macOS 14+, Windows, and
+Linux X11. Use the built-in browser for websites and a dedicated connection
+when an app provides one.
 
 ## Set up
 
-1. Open **Settings → Library → Computer Use** and enable it.
+1. Open **Settings → Library → Computer Use** and enable it. OmniRush remembers
+   this for the workspace and reconnects it when the desktop app starts.
 2. Open **Permissions and session controls**.
-3. Grant **Accessibility** and **Screen Recording** to **OmniRush.ai Computer Use**
-   in macOS settings. OmniRush.ai cannot grant these permissions for you.
+3. On macOS, grant **Accessibility** and **Screen Recording** to **OmniRush.ai
+   Computer Use** in macOS settings. OmniRush.ai cannot grant these permissions
+   for you. Windows and Linux require the target app to remain in the foreground.
 4. Return to OmniRush.ai and check readiness. Reconnect Computer Use if macOS asks
    you to restart the helper or if you are upgrading from the previous version.
 5. Open the app you want to use and mention it in your message.
@@ -65,7 +67,8 @@ OmniRush.ai itself. App access can still allow meaningful changes within that
 app, including saved files or sent messages, so describe your intended task
 clearly and remain present for sensitive work.
 
-Desktop control on Windows and Linux, locked-desktop use, background mouse and
-keyboard input, arbitrary keyboard shortcuts, and persistent app approvals are
-not available in this preview. The OmniRush.ai Browser remains available for
-website tasks on supported desktop platforms.
+Desktop control on Windows and Linux requires the target app to remain in the
+foreground. Locked-desktop use, background mouse and keyboard input, arbitrary
+keyboard shortcuts, and persistent app approvals are not available. The
+OmniRush.ai Browser remains available for website tasks on supported desktop
+platforms.

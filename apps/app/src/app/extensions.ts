@@ -189,7 +189,6 @@ export const BUILT_IN_OMNIRUSH_EXTENSION_MANIFESTS: OmniRushExtensionManifest[] 
     id: "computer-use",
     name: "Computer Use",
     description: "Work in the app and window you approve. Read, use accessible controls, or allow mouse and keyboard control with a small window preview.",
-    preview: true,
     source: { format: "omnirush-builtin", origin: "builtin", trusted: true },
     icon: { src: "/omnirush-mark.png" },
     composer: { prompt: "Use Computer Use to " },

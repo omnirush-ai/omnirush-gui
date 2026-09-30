@@ -75,6 +75,8 @@ const CLOUD_MCP_REFRESH_MARGIN_MS = 24 * 60 * 60 * 1000;
 const LOCAL_OMNIRUSH_SERVER_RECOVERY_TIMEOUT_MS = 30_000;
 const OMNIRUSH_UI_MCP_UNAVAILABLE = "UI control requires the omnirush.ai desktop app. Restart omnirush.ai or reinstall the app.";
 const COMPUTER_USE_HELPER_UNAVAILABLE = "Computer Use helper app is unavailable. Restart omnirush.ai or reinstall the app.";
+const COMPUTER_USE_CONNECT_TIMEOUT_MS = 15_000;
+const COMPUTER_USE_RECONNECT_COOLDOWN_MS = 30_000;
 
 async function withLocalOmniRushServerRecoveryTimeout<T>(
   task: Promise<T>,
@@ -89,6 +91,34 @@ async function withLocalOmniRushServerRecoveryTimeout<T>(
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
+}
+
+function observedMcpStatus(value: unknown): string | null {
+  if (!value || typeof value !== "object" || !("status" in value)) return null;
+  const status = value.status;
+  return typeof status === "string" ? status : null;
+}
+
+async function waitForMcpConnected(
+  client: Client,
+  name: string,
+  directory: string,
+): Promise<boolean> {
+  const deadline = Date.now() + COMPUTER_USE_CONNECT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const response = unwrap(await client.mcp.status({ directory })) as Record<string, unknown>;
+      const status = observedMcpStatus(response[name]);
+      if (status === "connected") return true;
+      if (status === "failed" || status === "needs_auth" || status === "needs_client_registration" || status === "disabled") {
+        return false;
+      }
+    } catch {
+      // The engine may not expose status until the helper transport starts.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
 }
 
 export type ConnectionsStoreSnapshot = {
@@ -138,6 +168,8 @@ export function createConnectionsStore(options: {
   let snapshot: ConnectionsStoreSnapshot;
   const mcpStatusSynchronizer = createMcpStatusSynchronizer();
   const authStatusPolls = new Set<string>();
+  const computerUseReconnectAt = new Map<string, number>();
+  const computerUseReconnectInFlight = new Set<string>();
 
   let state: MutableState = {
     mcpServers: [],
@@ -180,6 +212,43 @@ export function createConnectionsStore(options: {
   const setStateField = <K extends keyof MutableState>(key: K, value: MutableState[K]) => {
     if (Object.is(state[key], value)) return;
     mutateState((current) => ({ ...current, [key]: value }));
+  };
+
+  const reconnectConfiguredComputerUse = (
+    client: Client,
+    directory: string,
+    entries: McpServerEntry[],
+    observedStatuses: Record<string, unknown>,
+  ) => {
+    if (!isDesktopRuntime() || options.workspaceType() !== "local" || !directory) return;
+    const entry = entries.find((candidate) => candidate.name === "computer-use" || candidate.id === "computer-use");
+    if (!entry || entry.config.type !== "local" || entry.config.enabled === false) return;
+    if (state.mcpConnectingName) return;
+
+    const status = observedMcpStatus(observedStatuses[entry.name] ?? observedStatuses[entry.id ?? ""]);
+    if (status && status !== "disconnected" && status !== "failed") return;
+    const key = `${directory}\u0000${entry.name}`;
+    if (computerUseReconnectInFlight.has(key)) return;
+    const lastAttemptAt = computerUseReconnectAt.get(key) ?? 0;
+    if (Date.now() - lastAttemptAt < COMPUTER_USE_RECONNECT_COOLDOWN_MS) return;
+    computerUseReconnectAt.set(key, Date.now());
+    computerUseReconnectInFlight.add(key);
+    const displayName = MCP_QUICK_CONNECT.find((candidate) => candidate.id === "computer-use")?.name ?? "Computer Use";
+    mutateState((current) => ({ ...current, mcpConnectingName: displayName, mcpStatus: null }));
+
+    void (async () => {
+      try {
+        await client.mcp.connect({ name: entry.name, directory });
+        const connected = await waitForMcpConnected(client, entry.name, directory);
+        if (!connected) setStateField("mcpStatus", "Computer Use is still starting. Refresh the status if it does not connect.");
+      } catch (error) {
+        setStateField("mcpStatus", error instanceof Error ? error.message : "Computer Use could not reconnect.");
+      } finally {
+        computerUseReconnectInFlight.delete(key);
+        setStateField("mcpConnectingName", null);
+        await refreshMcpServers();
+      }
+    })();
   };
 
   const applyStateAction = <T,>(current: T, next: SetStateAction<T>) =>
@@ -402,10 +471,12 @@ export function createConnectionsStore(options: {
     const engineSync = response.engineSync ?? null;
 
     let nextStatuses: McpStatusMap = {};
+    let observedStatuses: Record<string, unknown> = {};
     // Read through the same workspace mount as configuration. The chat client
     // can still point at the previous/default workspace during restoration.
     try {
-      nextStatuses = filterConfiguredStatuses(await omnirushClient.getMcpStatus(omnirushWorkspaceId), next);
+      observedStatuses = await omnirushClient.getMcpStatus(omnirushWorkspaceId);
+      nextStatuses = filterConfiguredStatuses(observedStatuses as McpStatusMap, next);
     } catch {
       nextStatuses = {};
     }
@@ -434,6 +505,7 @@ export function createConnectionsStore(options: {
     return {
       next,
       nextStatuses,
+      observedStatuses,
       engineSync,
       managedOAuthAvailable: response.managedOAuthState?.available ?? true,
     };
@@ -562,6 +634,10 @@ export function createConnectionsStore(options: {
             ? `Some MCPs could not be registered with the engine: ${failedNames}. They may appear disconnected — try reloading the engine.`
             : serverResult.next.length ? null : "No MCP servers configured yet.",
         }));
+        const activeClient = options.client();
+        if (activeClient && projectDir) {
+          reconnectConfiguredComputerUse(activeClient, projectDir, serverResult.next, serverResult.observedStatuses);
+        }
         void healUnhealthyMcpEntries(serverResult.next, projectedStatuses, refreshToken);
         return;
       }
@@ -668,11 +744,12 @@ export function createConnectionsStore(options: {
       }
 
       let nextStatuses = state.mcpStatuses;
+      let observedStatuses: Record<string, unknown> = {};
       const activeClient = options.client();
       if (activeClient) {
         try {
-          const status = unwrap(await activeClient.mcp.status({ directory: projectDir }));
-          nextStatuses = filterConfiguredStatuses(status as McpStatusMap, next);
+          observedStatuses = unwrap(await activeClient.mcp.status({ directory: projectDir })) as Record<string, unknown>;
+          nextStatuses = filterConfiguredStatuses(observedStatuses as McpStatusMap, next);
         } catch {
           nextStatuses = {};
         }
@@ -687,6 +764,7 @@ export function createConnectionsStore(options: {
         mcpStatuses: projectedStatuses,
         mcpStatus: next.length ? null : "No MCP servers configured yet.",
       }));
+      if (activeClient) reconnectConfiguredComputerUse(activeClient, projectDir, next, observedStatuses);
       void healUnhealthyMcpEntries(next, projectedStatuses, refreshToken);
     } catch (error) {
       if (!isCurrentRefresh()) return;
@@ -1038,6 +1116,12 @@ export function createConnectionsStore(options: {
             config: mcpAddConfig,
           }),
         );
+        if (entryType === "local" && slug === "computer-use") {
+          await activeClient.mcp.connect({ name: slug, directory: resolvedProjectDir });
+          if (!(await waitForMcpConnected(activeClient, slug, resolvedProjectDir))) {
+            throw new Error("Computer Use is still starting. Refresh the status if it does not connect.");
+          }
+        }
       }
       options.markReloadRequired?.("mcp", { type: "mcp", name: slug, action });
       await refreshMcpServers();
