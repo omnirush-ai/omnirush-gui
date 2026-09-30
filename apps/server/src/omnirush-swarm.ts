@@ -47,6 +47,18 @@ export const SUBAGENT_ROOT_SESSION_HEADER = "x-omnirush-subagent-root";
 export const SUBAGENT_MODEL_FALLBACK_TRACE = "subagent.model_fallback";
 
 /**
+ * Whether the user's text names the model id `id` as a word of its own
+ * (any case): "use gpt-6-astra" names gpt-6-astra, "gpt-6-astra-mini" and
+ * "gpt-6" do not. A task's own model runs over the sub-agent setting only
+ * when the user's latest message names it (the CLI's rule).
+ */
+export function textNamesModel(text: string | null | undefined, id: string): boolean {
+  if (typeof text !== "string" || !text || !id) return false;
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![A-Za-z0-9._-])${escaped}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`, "i").test(text);
+}
+
+/**
  * The folder omnirush.ai keeps its own workspace files in, relative to the
  * workspace root. Only the board and its archive are kept out of git there
  * (OMNIRUSH_SWARM_GITIGNORE_LINES); anything else a user puts in it is theirs.

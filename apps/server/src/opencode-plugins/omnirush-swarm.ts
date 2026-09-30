@@ -78,6 +78,7 @@ import {
   omnirushSubagentNote,
   omnirushSwarmSubagentNote,
   OMNIRUSH_TASK_TOOL_NOTE,
+  textNamesModel,
 } from "../omnirush-swarm.js";
 
 type SessionInfo = { id?: unknown; parentID?: unknown; title?: unknown };
@@ -86,6 +87,7 @@ type SwarmClient = {
   session?: {
     get?: (input: { path: { id: string } }) => Promise<{ data?: SessionInfo } | undefined>;
     update?: (input: { path: { id: string }; body: { title: string } }) => Promise<unknown>;
+    messages?: (input: { path: { id: string } }) => Promise<{ data?: unknown } | undefined>;
   };
 };
 type ModelChoice = { providerID: string; modelID: string; variant?: string | null };
@@ -150,6 +152,29 @@ function modelChoice(value: unknown): ModelChoice | null {
   const modelID = typeof value.modelID === "string" ? value.modelID : "";
   if (!providerID || !modelID) return null;
   return { providerID, modelID, variant: typeof value.variant === "string" && value.variant ? value.variant : null };
+}
+
+/** A task's `model` argument: "providerID/modelID", "providerID/modelID#variant", or a bare omnirush.ai model id. */
+function modelArgument(value: unknown): ModelChoice | null {
+  if (typeof value !== "string") return null;
+  const match = /^(?:([A-Za-z0-9._-]{1,128})\/)?([A-Za-z0-9][A-Za-z0-9._:-]{0,127})(?:#([A-Za-z0-9._-]{1,32}))?$/.exec(value.trim());
+  if (!match) return null;
+  return { providerID: match[1] ?? "omnirush", modelID: match[2]!, variant: match[3] ?? null };
+}
+
+/** The text the user typed in the session's latest user message (synthetic parts left out). */
+function latestUserText(messages: unknown): string | null {
+  if (!Array.isArray(messages)) return null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!record(message) || !record(message.info) || message.info.role !== "user") continue;
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    return parts
+      .filter((part): part is Record<string, unknown> => record(part) && part.type === "text" && part.synthetic !== true && typeof part.text === "string")
+      .map((part) => part.text as string)
+      .join("\n");
+  }
+  return null;
 }
 
 function resolution(value: unknown): Resolution | null {
@@ -296,6 +321,10 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
   const notes = new Map<string, { model: ModelChoice; fallback: Resolution["fallback"] | null; at: number }>();
   /** Sub-agent sessions whose title already carries the fallback note. */
   const titled = new Set<string>();
+  /** Main session id -> the task models ("provider/model") its user's latest message named this turn. */
+  const named = new Map<string, Set<string>>();
+  /** Sub-agent session id -> the model the user named for it, resolved in place of the setting. */
+  const requestedModels = new Map<string, ModelChoice>();
   /** Main sessions running a swarm: their tree loaded the swarm skill or wrote the board. */
   const swarms = new Set<string>();
   /** Sessions the engine reports busy (any layer). */
@@ -371,12 +400,20 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
     if (!message || !serverBase() || !serverToken()) return;
     const inherited = modelChoice(message.model) ?? fallbackModel;
     if (!inherited) return;
-    const { root } = await locate(sessionId);
+    const { root, depth } = await locate(sessionId);
+    // A first-layer sub-agent the engine started on a model the user named (vetTaskModel) runs on it,
+    // resolved in place of the setting; it keeps it for its later prompts.
+    let requested = requestedModels.get(sessionId);
+    if (!requested && depth === 1 && named.get(root)?.has(`${inherited.providerID}/${inherited.modelID}`)) {
+      requested = inherited;
+      remember(requestedModels, sessionId, requested, MAX_TRACKED_SESSIONS);
+    }
     const answer = resolution(await serverJson("/omnirush/subagent-model/resolve", {
       sessionId,
       rootSessionId: root,
       inherited,
       main: mainModels.get(root) ?? null,
+      ...(requested ? { requested } : {}),
     }));
     if (!answer?.model) {
       overrides.delete(sessionId);
@@ -400,6 +437,47 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
       overrides.delete(sessionId);
     }
     if (answer.fallback) await noteOnTitle(sessionId, fallbackNote(answer.fallback));
+  };
+
+  /** The model a session runs on, as its session record names it; null when unknown. */
+  const sessionModel = async (sessionId: string): Promise<{ providerID: string; modelID: string } | null> => {
+    try {
+      const info: unknown = (await input?.client?.session?.get?.({ path: { id: sessionId } }))?.data;
+      const model = record(info) && record(info.model) ? info.model : null;
+      if (!model) return null;
+      const modelID = typeof model.id === "string" ? model.id : typeof model.modelID === "string" ? model.modelID : "";
+      const providerID = typeof model.providerID === "string" ? model.providerID : "";
+      return modelID && providerID ? { providerID, modelID } : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * A task's own `model` runs only when the user's latest message in the main
+   * session names that model id; otherwise it is dropped and the sub-agent
+   * setting decides, as when the tool offered no model. Sub-agents have no
+   * user, so their own task calls never keep one. Kept models are written as
+   * "provider/model[#variant]" (a bare id is an omnirush.ai model).
+   */
+  const vetTaskModel = async (sessionId: string, args: Record<string, unknown>) => {
+    if (!("model" in args)) return;
+    const wanted = modelArgument(args.model);
+    delete args.model;
+    if (!wanted) return;
+    const { root, depth } = await locate(sessionId);
+    if (depth > 0) return;
+    let text: string | null = null;
+    try {
+      text = latestUserText((await input?.client?.session?.messages?.({ path: { id: root } }))?.data);
+    } catch {
+      return;
+    }
+    if (!textNamesModel(text, wanted.modelID)) return;
+    args.model = `${wanted.providerID}/${wanted.modelID}${wanted.variant ? `#${wanted.variant}` : ""}`;
+    const models = named.get(root) ?? new Set<string>();
+    models.add(`${wanted.providerID}/${wanted.modelID}`);
+    remember(named, root, models, MAX_TRACKED_TREES);
   };
 
   const finish = (callId: unknown) => {
@@ -567,6 +645,8 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
       }
       const tree = trees.get(message.sessionID);
       if (tree) tree.started = 0;
+      // A new user message decides afresh which task models it names.
+      named.delete(message.sessionID);
       const main = modelChoice(output?.message?.model) ?? inputModel;
       if (main) remember(mainModels, message.sessionID, main, MAX_TRACKED_TREES);
     },
@@ -596,6 +676,8 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
         return;
       }
       if (call.tool !== "task") return;
+      const taskArgs = output?.args;
+      if (record(taskArgs)) await vetTaskModel(call.sessionID, taskArgs);
       const { root } = await locate(call.sessionID);
       const tree = treeOf(root);
       const now = Date.now();
@@ -637,7 +719,13 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
       const child = metadata && typeof metadata.sessionId === "string" ? metadata.sessionId : null;
       if (!child || !metadata) return;
       const note = notes.get(child);
-      if (!note) return;
+      if (!note) {
+        // No pick changed its model: name the one the child session really ran on. The call's
+        // own `model` is no guide, since vetTaskModel may have dropped it.
+        const ran = await sessionModel(child);
+        if (ran) metadata.model = ran;
+        return;
+      }
       metadata.model = { providerID: note.model.providerID, modelID: note.model.modelID };
       if (note.model.variant) metadata.variant = note.model.variant;
       let fallback: { requested: string; requestedName: string; used: string; usedName: string; reason: string } | null = note.fallback ?? null;

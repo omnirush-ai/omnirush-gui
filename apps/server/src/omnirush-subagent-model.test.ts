@@ -13,6 +13,7 @@ import {
   sanitizeSubagentModelSetting,
   subagentFallbackNote,
   subagentModelSettingPath,
+  subagentSettingFor,
   writeSubagentModelSetting,
 } from "./omnirush-subagent-model.js";
 import type { ServerConfig } from "./types.js";
@@ -67,6 +68,26 @@ describe("nearest effort", () => {
 });
 
 describe("resolve a sub-agent prompt", () => {
+  test("a model the user named for a sub-agent replaces the pick and is checked like one", () => {
+    const stored = { model: "gpt-6-sol", effort: "high" } as const;
+    expect(subagentSettingFor(stored, null)).toEqual(stored);
+    // Its own effort wins; without one the setting's effort applies.
+    expect(subagentSettingFor(stored, { providerID: "omnirush", modelID: "meta-muse-spark", variant: "low" })).toEqual({ model: "meta-muse-spark", effort: "low" });
+    expect(subagentSettingFor(stored, { providerID: "omnirush", modelID: "meta-muse-spark", variant: null })).toEqual({ model: "meta-muse-spark", effort: "high" });
+    expect(subagentSettingFor({ model: null, effort: null }, { providerID: "omnirush", modelID: "gpt-6-sol" })).toEqual({ model: "gpt-6-sol", effort: null });
+    // Another provider's model needs no omnirush.ai checks: kept as the engine started it.
+    expect(subagentSettingFor(stored, { providerID: "anthropic", modelID: "claude-x" })).toBeNull();
+
+    // Resolved like a pick: served, it runs; not in the account's catalog, the main model runs instead.
+    const named = subagentSettingFor(stored, { providerID: "omnirush", modelID: "meta-muse-spark", variant: "low" })!;
+    expect(resolveSubagentModel({ setting: named, catalog, gateway: true, inherited: { ...astra, variant: "max" }, main: { ...astra, variant: "max" } }).model)
+      .toEqual({ providerID: "omnirush", modelID: "meta-muse-spark" });
+    const unknown = subagentSettingFor(stored, { providerID: "omnirush", modelID: "not-served-model" })!;
+    const resolved = resolveSubagentModel({ setting: unknown, catalog, gateway: true, inherited: astra, main: astra });
+    expect(resolved.model).toEqual({ providerID: "omnirush", modelID: "gpt-6-astra" });
+    expect(resolved.fallback?.reason).toBe("not_in_catalog");
+  });
+
   test("untouched setting changes nothing", () => {
     expect(resolveSubagentModel({
       setting: { model: null, effort: null },

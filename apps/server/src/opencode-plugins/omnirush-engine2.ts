@@ -175,6 +175,13 @@ function messagesForV1(messages: unknown[]): { v1: Rec[]; restore: (edited: Rec[
 
 type ModelInfo = Rec & { id: string; providerID: string };
 
+/** The subagent tool's `model` parameter as offered: the swarm plugin keeps it only when the user named it. */
+const SUBAGENT_MODEL_DESCRIPTION = [
+  "Leave this out unless the user's own message asks for a particular model for the sub-agent.",
+  'Then write the model id the user named, as "omnirush/<model id>", or "omnirush/<model id>#<effort>" when they also named an effort.',
+  "It is used only when the user's latest message names that model id; otherwise the sub-agent runs on the user's sub-agent model setting.",
+].join(" ");
+
 export default {
   id: "omnirush",
   async setup(ctx: any) {
@@ -296,22 +303,24 @@ export default {
     // ---- tool calls --------------------------------------------------------
     // Sub-agents run in the foreground, as the 1.x task tool did (the swarm counts running
     // sub-agents and the task result carries the sub-agent's answer).
+    // A call's own `model` is kept here: the swarm plugin's tool.execute.before (below) keeps it only
+    // when the user's own message names that model, and drops it otherwise, so the sub-agent runs on
+    // the app's sub-agent setting (or the caller's model), as with the 1.x task tool.
     await ctx.tool.hook("execute.before", async (event: any) => {
       if (event.tool !== "subagent" || !isRec(event.input)) return;
-      // The sub-agent's model comes from the app's sub-agent setting (or the caller's), as with
-      // the 1.x task tool, never from the model's own pick.
-      const { model: _model, background: _background, ...input } = event.input;
+      const { background: _background, ...input } = event.input;
       event.input = input;
     });
-    // …so the subagent tool is offered without its `model` and `background` parameters.
+    // …so the subagent tool is offered without `background`, and with `model` for a model the user asks for.
     await ctx.session.hook("context", async (event: any) => {
       const input = event?.tools?.subagent?.input;
       if (!isRec(input) || !isRec(input.properties)) return;
-      const { model: _model, background: _background, ...properties } = input.properties as Rec;
+      const { background: _background, ...properties } = input.properties as Rec;
+      if (isRec(properties.model)) properties.model = { ...properties.model, description: SUBAGENT_MODEL_DESCRIPTION };
       event.tools.subagent.input = {
         ...input,
         properties,
-        ...(Array.isArray(input.required) ? { required: input.required.filter((key: unknown) => key !== "model" && key !== "background") } : {}),
+        ...(Array.isArray(input.required) ? { required: input.required.filter((key: unknown) => key !== "background") } : {}),
       };
     });
     const before = hooks("tool.execute.before");

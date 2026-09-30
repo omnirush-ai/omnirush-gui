@@ -18,6 +18,7 @@ import {
   OMNIRUSH_SWARM_MAX_PER_TURN,
   OMNIRUSH_SWARM_MAX_RUNNING,
   OMNIRUSH_SWARM_SKILL_NAME,
+  textNamesModel,
   OMNIRUSH_TASK_TOOL_NOTE,
   omnirushSubagentNote,
 } from "../omnirush-swarm.js";
@@ -453,18 +454,31 @@ describe("omnirush swarm plugin: sub-agent model and effort", () => {
     const titles: Record<string, string> = { ses_child: "Research (@general subagent)" };
     const directory = await mkdtemp(join(tmpdir(), "omnirush-swarm-model-"));
     dirs.push(directory);
-    const parents: Record<string, string | null> = { ses_main: null, ses_child: "ses_main", ses_grand: "ses_child" };
+    const parents: Record<string, string | null> = { ses_main: null, ses_child: "ses_main", ses_grand: "ses_child", ses_other: "ses_main" };
+    /** What the user typed last in the main session (the only session with a user). */
+    const user = { text: "" };
+    /** The model each session's record names (the 2.x engine's `{ id, providerID }`). */
+    const sessionModels: Record<string, unknown> = {};
     const client = {
       session: {
-        get: async ({ path }: { path: { id: string } }) => ({ data: { id: path.id, parentID: parents[path.id] ?? undefined, title: titles[path.id] } }),
+        get: async ({ path }: { path: { id: string } }) => ({ data: { id: path.id, parentID: parents[path.id] ?? undefined, title: titles[path.id], model: sessionModels[path.id] } }),
         update: async ({ path, body }: { path: { id: string }; body: { title: string } }) => {
           titles[path.id] = body.title;
           return { data: {} };
         },
+        messages: async ({ path }: { path: { id: string } }) => ({
+          data: path.id === "ses_main"
+            ? [
+              { info: { role: "user" }, parts: [{ type: "text", text: "earlier: use gpt-6-luna" }] },
+              { info: { role: "assistant" }, parts: [{ type: "text", text: "gpt-6-astra is the one" }] },
+              { info: { role: "user" }, parts: [{ type: "text", text: user.text }, { type: "text", text: "gpt-6-nova", synthetic: true }] },
+            ]
+            : [],
+        }),
       },
     };
     const hooks = await OmniRushSwarm({ client, directory });
-    return { hooks, resolves, titles };
+    return { hooks, resolves, titles, user, sessionModels };
   }
   const cleanupServers: Array<() => void> = [];
   afterEach(() => {
@@ -557,6 +571,75 @@ describe("omnirush swarm plugin: sub-agent model and effort", () => {
     expect(output.metadata.omnirushModelFallback).toEqual({ requested: "gpt-6-sol", used: "gpt-6-astra", reason: "refused" });
     expect(output.output).toContain("ran on GPT 6 Astra: GPT 6 Sol was refused by omnirush.ai");
     expect(titles.ses_child).toContain("· ran on GPT 6 Astra: GPT 6 Sol was refused by omnirush.ai");
+  });
+
+  test("a task's own model runs only when the user's latest message names it, and resolves in place of the setting", async () => {
+    // The server echoes a requested model, else answers with the setting's pick (GPT 6 Sol).
+    const { hooks, resolves, user } = await withServer((body) => {
+      const requested = body.requested as { modelID: string; variant?: string | null } | undefined;
+      return requested
+        ? { model: { providerID: "omnirush", modelID: requested.modelID }, variant: requested.variant ?? "high" }
+        : { model: { providerID: "omnirush", modelID: "gpt-6-sol" }, variant: "high" };
+    });
+    const task = async (sessionID: string, model: unknown) => {
+      const output = { args: { description: "Research", prompt: "look", subagent_type: "general", ...(model === undefined ? {} : { model }) } as Record<string, unknown> };
+      await hooks["tool.execute.before"]({ tool: "task", sessionID, callID: `call_${Math.random()}` }, output);
+      return output.args.model;
+    };
+    const main = { providerID: "omnirush", modelID: "gpt-6-astra", variant: "max" };
+
+    // Not named in the latest user message (an earlier message, the agent's text and synthetic parts do not count): dropped.
+    user.text = "please research this with a sub-agent";
+    await prompt(hooks, "ses_main", main);
+    expect(await task("ses_main", "omnirush/gpt-6-luna")).toBeUndefined();
+    expect(await task("ses_main", "omnirush/gpt-6-nova")).toBeUndefined();
+    expect(await prompt(hooks, "ses_child", main)).toEqual({ providerID: "omnirush", modelID: "gpt-6-sol", variant: "high" });
+    expect(resolves.at(-1)!.body.requested).toBeUndefined();
+
+    // Named: kept (a bare id is an omnirush.ai model), and the sub-agent it starts resolves that model.
+    user.text = "Use a sub-agent on GPT-6-Luna#low for this";
+    await prompt(hooks, "ses_main", main);
+    expect(await task("ses_main", "gpt-6-luna#low")).toBe("omnirush/gpt-6-luna#low");
+    const luna = { providerID: "omnirush", modelID: "gpt-6-luna", variant: "low" };
+    expect(await prompt(hooks, "ses_other", luna)).toEqual(luna);
+    expect(resolves.at(-1)!.body.requested).toEqual(luna);
+    // Its later prompts keep it; a sibling that inherited the main model still gets the setting.
+    expect(await prompt(hooks, "ses_other", luna)).toEqual(luna);
+    expect(resolves.at(-1)!.body.requested).toEqual(luna);
+    expect(await prompt(hooks, "ses_child", main)).toEqual({ providerID: "omnirush", modelID: "gpt-6-sol", variant: "high" });
+
+    // A sub-agent's own task call never keeps a model (it has no user), nor does a malformed one.
+    expect(await task("ses_child", "omnirush/gpt-6-luna")).toBeUndefined();
+    expect(await task("ses_main", "not a model id")).toBeUndefined();
+    expect(await task("ses_main", 42)).toBeUndefined();
+    expect(await task("ses_main", undefined)).toBeUndefined();
+  });
+
+  test("a finished task names the model its sub-agent really ran on, not the call's dropped model", async () => {
+    const { hooks, user, sessionModels } = await withServer(() => ({}));
+    user.text = "research this with a sub-agent";
+    await prompt(hooks, "ses_main", { providerID: "omnirush", modelID: "gpt-6-astra" });
+    const args: Record<string, unknown> = { description: "Research", prompt: "look", subagent_type: "general", model: "omnirush/gpt-6-sol" };
+    await hooks["tool.execute.before"]({ tool: "task", sessionID: "ses_main", callID: "call_x" }, { args });
+    expect(args.model).toBeUndefined();
+    sessionModels.ses_child = { id: "gpt-6-astra", providerID: "omnirush", variant: "default" };
+    await prompt(hooks, "ses_child", { providerID: "omnirush", modelID: "gpt-6-astra" });
+    // The adapter's guess (the call's own model) is replaced by the session's model.
+    const output = { output: "<task>done</task>", metadata: { sessionId: "ses_child", model: { providerID: "omnirush", modelID: "gpt-6-sol" } } as Record<string, unknown> };
+    await hooks["tool.execute.after"]({ tool: "task", callID: "call_x" }, output);
+    expect(output.metadata.model).toEqual({ providerID: "omnirush", modelID: "gpt-6-astra" });
+  });
+
+  test("a model id is named only as a word of its own", () => {
+    expect(textNamesModel("use gpt-6-astra please", "gpt-6-astra")).toBe(true);
+    expect(textNamesModel("Use GPT-6-Astra.", "gpt-6-astra")).toBe(true);
+    expect(textNamesModel("(gpt-6-astra)", "gpt-6-astra")).toBe(true);
+    expect(textNamesModel("use gpt-6-astra-mini", "gpt-6-astra")).toBe(false);
+    expect(textNamesModel("use gpt-6", "gpt-6-astra")).toBe(false);
+    expect(textNamesModel("use my-gpt-6-astra", "gpt-6-astra")).toBe(false);
+    expect(textNamesModel("use gpt-6-astra.2", "gpt-6-astra")).toBe(false);
+    expect(textNamesModel("", "gpt-6-astra")).toBe(false);
+    expect(textNamesModel(null, "gpt-6-astra")).toBe(false);
   });
 
   test("with the setting untouched or no server, sub-agent prompts stay exactly as the engine made them", async () => {

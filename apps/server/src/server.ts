@@ -179,6 +179,7 @@ import {
   SUBAGENT_MODEL_FALLBACK_TRACE,
   readSubagentModelSetting,
   resolveSubagentModel,
+  subagentSettingFor,
   sanitizeSubagentModelSetting,
   subagentModelRefusals,
   writeSubagentModelSetting,
@@ -3691,8 +3692,8 @@ function createRoutes(
     const body = await readJsonBody(ctx.request);
     const inherited = engineModelRef(body.inherited);
     if (!inherited) throw new ApiError(400, "invalid_payload", "inherited model is required");
-    const setting = await readSubagentModelSetting(config);
-    if (!setting.model && !setting.effort) return jsonResponse({});
+    const setting = subagentSettingFor(await readSubagentModelSetting(config), engineModelRef(body.requested));
+    if (!setting || (!setting.model && !setting.effort)) return jsonResponse({});
     const refusals = subagentModelRefusals(config);
     const resolution = resolveSubagentModel({
       setting,

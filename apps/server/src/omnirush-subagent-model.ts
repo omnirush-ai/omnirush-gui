@@ -289,6 +289,22 @@ export function resolveSubagentModel(input: {
   return resolution;
 }
 
+/**
+ * The setting a sub-agent resolves with. A model the user's own message named
+ * for this sub-agent (`requested`, vetted by the swarm plugin) replaces the
+ * stored pick, and is checked exactly like one: catalog, refusals, fallback.
+ * Its effort is the one the user named with it, else the setting's. A named
+ * model of another provider needs no omnirush.ai checks: null keeps it.
+ */
+export function subagentSettingFor(
+  stored: SubagentModelSetting,
+  requested: (EngineModelRef & { variant?: string | null }) | null,
+): SubagentModelSetting | null {
+  if (!requested) return stored;
+  if (requested.providerID !== OMNIRUSH_PROVIDER_ID || !MODEL_ID.test(requested.modelID)) return null;
+  return { model: requested.modelID, effort: parseSubagentEffort(requested.variant) ?? stored.effort };
+}
+
 /** A readable note for a sub-agent session that runs on the main model instead of the picked one. */
 export function subagentFallbackNote(fallback: NonNullable<SubagentModelResolution["fallback"]> | { requestedName: string; usedName: string; reason: string }): string {
   const why = fallback.reason === "not_in_catalog"
