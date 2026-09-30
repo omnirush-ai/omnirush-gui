@@ -1,0 +1,519 @@
+{
+  "name": "saved chat goals continue, charge uncached tokens, obey controls, and stay in their own chat",
+  "dir": "/Users/skndsh/Desktop/projects/parsewave/omnirush/wt-session-goals-pr/evals/results/test-runs/2026-09-30T20-13-02-751Z-saved-chat-goals-continue-charge-uncached-tokens-obey-controls-and-stay-in-their",
+  "createdAt": "2026-09-30T20:13:02.751Z",
+  "closedAt": "2026-09-30T20:13:28.394Z",
+  "gitSha": "a7477840d22aad6d691cfa90099410486f79ef3c",
+  "engine": "v2",
+  "branch": "feat/codex-session-goals",
+  "summary": {
+    "ok": true,
+    "totalArtifacts": 12,
+    "passedArtifacts": 12,
+    "failedArtifacts": 0,
+    "unvalidatedArtifacts": 0,
+    "pendingArtifacts": 0,
+    "passedExpectations": 12,
+    "failedExpectations": 0,
+    "pendingJudgments": 0
+  },
+  "artifacts": [
+    {
+      "caption": "Goals continue at an idle boundary and finish with their own proof",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:07.416Z",
+      "description": "A real managed engine wrote both checkpoint files across two turns, then called update_goal to complete. The unrelated chat has no goal.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Goals continue at an idle boundary and finish with their own proof",
+          "evidence": "A real managed engine wrote both checkpoint files across two turns, then called update_goal to complete. The unrelated chat has no goal.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Goals continue at an idle boundary and finish with their own proof",
+          "state": "passed",
+          "reasoning": "A real managed engine wrote both checkpoint files across two turns, then called update_goal to complete. The unrelated chat has no goal."
+        }
+      ]
+    },
+    {
+      "caption": "A saved token limit uses uncached input and all output exactly once",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:08.955Z",
+      "description": "Each real provider reply reported 130 input tokens with 100 cached, and 20 output tokens including 5 reasoning. The 60-token goal stopped after two 50-token replies at 100 used. Resume did not reset the limit or usage. Editing the limit to 120 preserved the same goal id and stopped at 150 used.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "A saved token limit uses uncached input and all output exactly once",
+          "evidence": "Each real provider reply reported 130 input tokens with 100 cached, and 20 output tokens including 5 reasoning. The 60-token goal stopped after two 50-token replies at 100 used. Resume did not reset the limit or usage. Editing the limit to 120 preserved the same goal id and stopped at 150 used.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "A saved token limit uses uncached input and all output exactly once",
+          "state": "passed",
+          "reasoning": "Each real provider reply reported 130 input tokens with 100 cached, and 20 output tokens including 5 reasoning. The 60-token goal stopped after two 50-token replies at 100 used. Resume did not reset the limit or usage. Editing the limit to 120 preserved the same goal id and stopped at 150 used."
+        }
+      ]
+    },
+    {
+      "caption": "Pause and clear are saved controls for one chat",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:12.339Z",
+      "description": "Pause took effect while a provider reply was held. The current turn finished without another automatic request. Restart preserved the paused goal and its identity. Resume completed it with the same identity, and clear removed it. The other chat remained unchanged.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Pause and clear are saved controls for one chat",
+          "evidence": "Pause took effect while a provider reply was held. The current turn finished without another automatic request. Restart preserved the paused goal and its identity. Resume completed it with the same identity, and clear removed it. The other chat remained unchanged.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Pause and clear are saved controls for one chat",
+          "state": "passed",
+          "reasoning": "Pause took effect while a provider reply was held. The current turn finished without another automatic request. Restart preserved the paused goal and its identity. Resume completed it with the same identity, and clear removed it. The other chat remained unchanged."
+        }
+      ]
+    },
+    {
+      "caption": "Stopping one goal does not restart it or stop another chat",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:13.174Z",
+      "description": "The native abort route saved paused before forwarding Stop. After the held reply was released, the goal sent no new request. The other chat produced a normal reply and did not acquire the stopped goal.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Stopping one goal does not restart it or stop another chat",
+          "evidence": "The native abort route saved paused before forwarding Stop. After the held reply was released, the goal sent no new request. The other chat produced a normal reply and did not acquire the stopped goal.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Stopping one goal does not restart it or stop another chat",
+          "state": "passed",
+          "reasoning": "The native abort route saved paused before forwarding Stop. After the held reply was released, the goal sent no new request. The other chat produced a normal reply and did not acquire the stopped goal."
+        }
+      ]
+    },
+    {
+      "caption": "Plan mode, Build selection, and request authentication are honored",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:14.506Z",
+      "description": "Saving in Plan launched no work. An unauthenticated resume was rejected. A real manual Plan reply spent no goal tokens or work time. Selecting Build resumed the same active goal and stopped after two charged replies at the saved budget.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Plan mode, Build selection, and request authentication are honored",
+          "evidence": "Saving in Plan launched no work. An unauthenticated resume was rejected. A real manual Plan reply spent no goal tokens or work time. Selecting Build resumed the same active goal and stopped after two charged replies at the saved budget.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Plan mode, Build selection, and request authentication are honored",
+          "state": "passed",
+          "reasoning": "Saving in Plan launched no work. An unauthenticated resume was rejected. A real manual Plan reply spent no goal tokens or work time. Selecting Build resumed the same active goal and stopped after two charged replies at the saved budget."
+        }
+      ]
+    },
+    {
+      "caption": "Active goal recovery uses the saved identity",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:18.000Z",
+      "description": "The managed server restarted while the first reply was held. Reading the saved active goal reconciled engine state and admitted one continuation. The same goal completed, and the unrelated chat stayed unchanged.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Active goal recovery uses the saved identity",
+          "evidence": "The managed server restarted while the first reply was held. Reading the saved active goal reconciled engine state and admitted one continuation. The same goal completed, and the unrelated chat stayed unchanged.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Active goal recovery uses the saved identity",
+          "state": "passed",
+          "reasoning": "The managed server restarted while the first reply was held. Reading the saved active goal reconciled engine state and admitted one continuation. The same goal completed, and the unrelated chat stayed unchanged."
+        }
+      ]
+    },
+    {
+      "caption": "Old turn events cannot charge a replacement goal",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:19.545Z",
+      "description": "The old provider reply arrived after a new objective was saved. The replacement used exactly its two 50-token replies and stopped at 100, with a new identity. The old reply did not spend its budget.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Old turn events cannot charge a replacement goal",
+          "evidence": "The old provider reply arrived after a new objective was saved. The replacement used exactly its two 50-token replies and stopped at 100, with a new identity. The old reply did not spend its budget.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Old turn events cannot charge a replacement goal",
+          "state": "passed",
+          "reasoning": "The old provider reply arrived after a new objective was saved. The replacement used exactly its two 50-token replies and stopped at 100, with a new identity. The old reply did not spend its budget."
+        }
+      ]
+    },
+    {
+      "caption": "Same-goal user input preserves earlier token use",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:20.606Z",
+      "description": "A new user prompt arrived while the first goal reply was held. Both replies counted toward the same saved goal, so its 60-token limit stopped at 100 after two requests.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Same-goal user input preserves earlier token use",
+          "evidence": "A new user prompt arrived while the first goal reply was held. Both replies counted toward the same saved goal, so its 60-token limit stopped at 100 after two requests.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Same-goal user input preserves earlier token use",
+          "state": "passed",
+          "reasoning": "A new user prompt arrived while the first goal reply was held. Both replies counted toward the same saved goal, so its 60-token limit stopped at 100 after two requests."
+        }
+      ]
+    },
+    {
+      "caption": "Queued input has a server-visible admission hold",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:22.618Z",
+      "description": "A hold was registered before saving the goal. Across four observations spanning the continuation timer, the goal stayed active at zero tokens with no provider calls. Releasing the hold admitted work and preserved the saved goal identity and limit.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Queued input has a server-visible admission hold",
+          "evidence": "A hold was registered before saving the goal. Across four observations spanning the continuation timer, the goal stayed active at zero tokens with no provider calls. Releasing the hold admitted work and preserved the saved goal identity and limit.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Queued input has a server-visible admission hold",
+          "state": "passed",
+          "reasoning": "A hold was registered before saving the goal. Across four observations spanning the continuation timer, the goal stayed active at zero tokens with no provider calls. Releasing the hold admitted work and preserved the saved goal identity and limit."
+        }
+      ]
+    },
+    {
+      "caption": "Empty continuations stop after three turns",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:25.675Z",
+      "description": "Three real empty replies stopped automatic work. Explicit resume retained the saved goal and allowed a fresh three-turn audit before stopping again.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Empty continuations stop after three turns",
+          "evidence": "Three real empty replies stopped automatic work. Explicit resume retained the saved goal and allowed a fresh three-turn audit before stopping again.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Empty continuations stop after three turns",
+          "state": "passed",
+          "reasoning": "Three real empty replies stopped automatic work. Explicit resume retained the saved goal and allowed a fresh three-turn audit before stopping again."
+        }
+      ]
+    },
+    {
+      "caption": "Child work belongs to its parent goal budget",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:26.758Z",
+      "description": "A real engine child read no inherited goal and wrote its assigned file. Its three provider replies and the parent's three replies counted once, for 300 tokens. The child and unrelated chat had no saved goal.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Child work belongs to its parent goal budget",
+          "evidence": "A real engine child read no inherited goal and wrote its assigned file. Its three provider replies and the parent's three replies counted once, for 300 tokens. The child and unrelated chat had no saved goal.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Child work belongs to its parent goal budget",
+          "state": "passed",
+          "reasoning": "A real engine child read no inherited goal and wrote its assigned file. Its three provider replies and the parent's three replies counted once, for 300 tokens. The child and unrelated chat had no saved goal."
+        }
+      ]
+    },
+    {
+      "caption": "Goal tools work through the real agent engine",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:13:28.306Z",
+      "description": "On an explicit user request the engine executed create_goal with a 500-token limit, get_goal, and update_goal complete. Only the three replies after goal creation were charged, for 150 tokens. The stored result matches the requested objective, and the unrelated chat stayed unchanged.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "Goal tools work through the real agent engine",
+          "evidence": "On an explicit user request the engine executed create_goal with a 500-token limit, get_goal, and update_goal complete. Only the three replies after goal creation were charged, for 150 tokens. The stored result matches the requested objective, and the unrelated chat stayed unchanged.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "Goal tools work through the real agent engine",
+          "state": "passed",
+          "reasoning": "On an explicit user request the engine executed create_goal with a 500-token limit, get_goal, and update_goal complete. Only the three replies after goal creation were charged, for 150 tokens. The stored result matches the requested objective, and the unrelated chat stayed unchanged."
+        }
+      ]
+    }
+  ],
+  "trace": [
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "one incomplete turn continues and the goal completes after real file work",
+      "ok": true,
+      "ms": 3535,
+      "seq": 1,
+      "at": "2026-09-30T20:13:07.416Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "the token limit excludes cached input and counts reasoning once",
+      "ok": true,
+      "ms": 1539,
+      "seq": 2,
+      "at": "2026-09-30T20:13:08.955Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "pause stops future turns, survives restart, and resumes without replacing the goal",
+      "ok": true,
+      "ms": 3384,
+      "seq": 3,
+      "at": "2026-09-30T20:13:12.339Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "Stop pauses a goal before interrupting and other chat work still runs",
+      "ok": true,
+      "ms": 835,
+      "seq": 4,
+      "at": "2026-09-30T20:13:13.174Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "Plan turns do not spend the goal budget and Build selection enables continuation",
+      "ok": true,
+      "ms": 1332,
+      "seq": 5,
+      "at": "2026-09-30T20:13:14.506Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "restart reconnects a saved active goal without creating a second goal",
+      "ok": true,
+      "ms": 3494,
+      "seq": 6,
+      "at": "2026-09-30T20:13:18.000Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "late work from a replaced goal cannot spend the new goal budget",
+      "ok": true,
+      "ms": 1545,
+      "seq": 7,
+      "at": "2026-09-30T20:13:19.545Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "a new user turn keeps already running work charged to the same goal",
+      "ok": true,
+      "ms": 1061,
+      "seq": 8,
+      "at": "2026-09-30T20:13:20.606Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "queued input holds automatic admission until its preparation is finished",
+      "ok": true,
+      "ms": 2012,
+      "seq": 9,
+      "at": "2026-09-30T20:13:22.618Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "three empty automatic turns stop work and resume starts a fresh audit",
+      "ok": true,
+      "ms": 3057,
+      "seq": 10,
+      "at": "2026-09-30T20:13:25.675Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "child work spends the parent budget without adopting the parent objective",
+      "ok": true,
+      "ms": 1083,
+      "seq": 11,
+      "at": "2026-09-30T20:13:26.758Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "an explicit model request can use the three goal tools",
+      "ok": true,
+      "ms": 1548,
+      "seq": 12,
+      "at": "2026-09-30T20:13:28.306Z"
+    }
+  ],
+  "steps": [
+    {
+      "name": "one incomplete turn continues and the goal completes after real file work",
+      "depth": 0,
+      "ok": true,
+      "ms": 3535,
+      "seq": 1
+    },
+    {
+      "name": "the token limit excludes cached input and counts reasoning once",
+      "depth": 0,
+      "ok": true,
+      "ms": 1539,
+      "seq": 2
+    },
+    {
+      "name": "pause stops future turns, survives restart, and resumes without replacing the goal",
+      "depth": 0,
+      "ok": true,
+      "ms": 3384,
+      "seq": 3
+    },
+    {
+      "name": "Stop pauses a goal before interrupting and other chat work still runs",
+      "depth": 0,
+      "ok": true,
+      "ms": 835,
+      "seq": 4
+    },
+    {
+      "name": "Plan turns do not spend the goal budget and Build selection enables continuation",
+      "depth": 0,
+      "ok": true,
+      "ms": 1332,
+      "seq": 5
+    },
+    {
+      "name": "restart reconnects a saved active goal without creating a second goal",
+      "depth": 0,
+      "ok": true,
+      "ms": 3494,
+      "seq": 6
+    },
+    {
+      "name": "late work from a replaced goal cannot spend the new goal budget",
+      "depth": 0,
+      "ok": true,
+      "ms": 1545,
+      "seq": 7
+    },
+    {
+      "name": "a new user turn keeps already running work charged to the same goal",
+      "depth": 0,
+      "ok": true,
+      "ms": 1061,
+      "seq": 8
+    },
+    {
+      "name": "queued input holds automatic admission until its preparation is finished",
+      "depth": 0,
+      "ok": true,
+      "ms": 2012,
+      "seq": 9
+    },
+    {
+      "name": "three empty automatic turns stop work and resume starts a fresh audit",
+      "depth": 0,
+      "ok": true,
+      "ms": 3057,
+      "seq": 10
+    },
+    {
+      "name": "child work spends the parent budget without adopting the parent objective",
+      "depth": 0,
+      "ok": true,
+      "ms": 1083,
+      "seq": 11
+    },
+    {
+      "name": "an explicit model request can use the three goal tools",
+      "depth": 0,
+      "ok": true,
+      "ms": 1548,
+      "seq": 12
+    }
+  ],
+  "outcome": "passed"
+}

@@ -1,0 +1,590 @@
+{
+  "name": "slash goals remain visible after reload and their controls work while a chat is busy",
+  "dir": "/Users/skndsh/Desktop/projects/parsewave/omnirush/wt-session-goals-pr/evals/results/test-runs/2026-09-30T20-09-41-168Z-slash-goals-remain-visible-after-reload-and-their-controls-work-while-a-chat-is-",
+  "createdAt": "2026-09-30T20:09:41.169Z",
+  "closedAt": "2026-09-30T20:10:16.990Z",
+  "gitSha": "a7477840d22aad6d691cfa90099410486f79ef3c",
+  "engine": "v2",
+  "branch": "feat/codex-session-goals",
+  "summary": {
+    "ok": false,
+    "totalArtifacts": 5,
+    "passedArtifacts": 1,
+    "failedArtifacts": 0,
+    "unvalidatedArtifacts": 4,
+    "pendingArtifacts": 0,
+    "passedExpectations": 1,
+    "failedExpectations": 0,
+    "pendingJudgments": 0
+  },
+  "artifacts": [
+    {
+      "caption": "The slash goal control bypasses the busy chat queue",
+      "fileName": "",
+      "hash": "",
+      "route": "",
+      "at": "2026-09-30T20:10:01.111Z",
+      "description": "The built-in menu exposed goal, the real provider was held during an active turn, and Enter on /goal PAUSE immediately saved paused. The current reply then finished and charged 50 tokens without another model request.",
+      "model": "",
+      "ok": true,
+      "results": [
+        {
+          "expectation": "The slash goal control bypasses the busy chat queue",
+          "evidence": "The built-in menu exposed goal, the real provider was held during an active turn, and Enter on /goal PAUSE immediately saved paused. The current reply then finished and charged 50 tokens without another model request.",
+          "passed": true
+        }
+      ],
+      "judgments": [
+        {
+          "expectation": "The slash goal control bypasses the busy chat queue",
+          "state": "passed",
+          "reasoning": "The built-in menu exposed goal, the real provider was held during an active turn, and Enter on /goal PAUSE immediately saved paused. The current reply then finished and charged 50 tokens without another model request."
+        }
+      ]
+    },
+    {
+      "caption": "slash goals remain visible after reload and their controls work while a chat is busy artifact 1",
+      "fileName": "01-slash-goals-remain-visible-after-reload-and-their-controls-work-while-a-chat-is-.png",
+      "hash": "098951063e3fb9efaa62d34379ac3ae5af56b52995a32673523d74ae512f0aac",
+      "route": "#/workspace/ws_a8780817e791/session/ses_f0c0fe48bffeDxZNqe9YLplznE",
+      "at": "2026-09-30T20:09:55.840Z",
+      "description": "",
+      "model": "",
+      "ok": null,
+      "results": [],
+      "judgments": []
+    },
+    {
+      "caption": "slash goals remain visible after reload and their controls work while a chat is busy artifact 2",
+      "fileName": "02-slash-goals-remain-visible-after-reload-and-their-controls-work-while-a-chat-is-.png",
+      "hash": "fd187054c03dd71d6451f1d4a369a77b8ef63353eeb4f637411a8e2f7eda482c",
+      "route": "#/workspace/ws_a8780817e791/session/ses_f0c0fe48bffeDxZNqe9YLplznE",
+      "at": "2026-09-30T20:09:56.074Z",
+      "description": "",
+      "model": "",
+      "ok": null,
+      "results": [],
+      "judgments": []
+    },
+    {
+      "caption": "slash goals remain visible after reload and their controls work while a chat is busy artifact 3",
+      "fileName": "03-slash-goals-remain-visible-after-reload-and-their-controls-work-while-a-chat-is-.png",
+      "hash": "08829bd78a04c456039e3ec037995dcc050c37c3eb993f3473bc1531cf957ee4",
+      "route": "#/workspace/ws_a8780817e791/session/ses_f0c0fe48bffeDxZNqe9YLplznE",
+      "at": "2026-09-30T20:10:00.827Z",
+      "description": "",
+      "model": "",
+      "ok": null,
+      "results": [],
+      "judgments": []
+    },
+    {
+      "caption": "slash goals remain visible after reload and their controls work while a chat is busy artifact 5",
+      "fileName": "05-slash-goals-remain-visible-after-reload-and-their-controls-work-while-a-chat-is-.png",
+      "hash": "b8e472ae13eb2018ae8cd9d611b196e9bebcd706ab9ac09ff72286538d8db52c",
+      "route": "#/workspace/ws_a8780817e791/session/ses_f0c0fe48bffeDxZNqe9YLplznE",
+      "at": "2026-09-30T20:10:15.777Z",
+      "description": "",
+      "model": "",
+      "ok": null,
+      "results": [],
+      "judgments": []
+    }
+  ],
+  "trace": [
+    {
+      "stage": "world",
+      "channel": "seed",
+      "verb": "desktop",
+      "detail": "desktop(local)",
+      "ok": true,
+      "ms": 11344,
+      "at": "2026-09-30T20:09:52.593Z",
+      "seq": 1
+    },
+    {
+      "stage": "world",
+      "channel": "seed",
+      "verb": "workspace",
+      "detail": "workspace(/tmp/omnirush-session-goals-ui-1790798992593)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 93,
+      "at": "2026-09-30T20:09:52.687Z",
+      "seq": 2
+    },
+    {
+      "stage": "world",
+      "channel": "seed:raw",
+      "verb": "evalIn",
+      "detail": "[seed:raw] evalIn(<callback>)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 125,
+      "at": "2026-09-30T20:09:52.813Z",
+      "seq": 3
+    },
+    {
+      "stage": "world",
+      "channel": "seed:raw",
+      "verb": "evalIn",
+      "detail": "[seed:raw] evalIn(<callback>)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 5,
+      "at": "2026-09-30T20:09:52.818Z",
+      "seq": 4
+    },
+    {
+      "stage": "world",
+      "channel": "seed:raw",
+      "verb": "evalIn",
+      "detail": "[seed:raw] evalIn(<callback>)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 1321,
+      "at": "2026-09-30T20:09:54.139Z",
+      "seq": 5
+    },
+    {
+      "stage": "world",
+      "channel": "seed",
+      "verb": "session",
+      "detail": "session(\"Goal controls\")",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 978,
+      "at": "2026-09-30T20:09:55.118Z",
+      "seq": 6
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "screenshot",
+      "detail": "screenshot",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 40,
+      "seq": 7,
+      "at": "2026-09-30T20:09:55.880Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "type",
+      "detail": "type(composer, \"/go\", replace)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 120,
+      "seq": 8,
+      "at": "2026-09-30T20:09:56.001Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "see",
+      "detail": "see(text=Set a goal and keep working until it is complete.)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 15,
+      "seq": 9,
+      "at": "2026-09-30T20:09:56.016Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "type",
+      "detail": "type(composer, \"/goal Finish the held checkpoint\", replace)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 48,
+      "seq": 10,
+      "at": "2026-09-30T20:09:56.064Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "press",
+      "detail": "press(Enter)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 10,
+      "seq": 11,
+      "at": "2026-09-30T20:09:56.074Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "screenshot",
+      "detail": "screenshot",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 66,
+      "seq": 12,
+      "at": "2026-09-30T20:09:56.140Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "desktopApi",
+      "detail": "desktopApi(GET /workspace/ws_a8780817e791/session-goals/ses_f0c0fe48bffeDxZNqe9YLplznE)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 46,
+      "seq": 13,
+      "at": "2026-09-30T20:09:56.186Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(goal API and visible panel reach active)",
+      "ok": true,
+      "ms": 47,
+      "seq": 14,
+      "at": "2026-09-30T20:09:56.187Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "see",
+      "detail": "see(testId=session-goal)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 4,
+      "seq": 15,
+      "at": "2026-09-30T20:09:56.191Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe:raw",
+      "verb": "eval",
+      "detail": "[probe:raw] eval(<callback>)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 0,
+      "seq": 16,
+      "at": "2026-09-30T20:09:56.192Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(visible goal status is active)",
+      "ok": true,
+      "ms": 0,
+      "seq": 17,
+      "at": "2026-09-30T20:09:56.192Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "notSee",
+      "detail": "notSee(text=/Continue working toward the active session goal/)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 3001,
+      "seq": 18,
+      "at": "2026-09-30T20:09:59.193Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "see",
+      "detail": "see(testId=goal-objective)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 2,
+      "seq": 19,
+      "at": "2026-09-30T20:09:59.195Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(real provider turn is held)",
+      "ok": true,
+      "ms": 1503,
+      "seq": 20,
+      "at": "2026-09-30T20:10:00.698Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "type",
+      "detail": "type(composer, \"/goal PAUSE\", replace)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 62,
+      "seq": 21,
+      "at": "2026-09-30T20:10:00.760Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "press",
+      "detail": "press(Enter)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 14,
+      "seq": 22,
+      "at": "2026-09-30T20:10:00.774Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "desktopApi",
+      "detail": "desktopApi(GET /workspace/ws_a8780817e791/session-goals/ses_f0c0fe48bffeDxZNqe9YLplznE)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 48,
+      "seq": 23,
+      "at": "2026-09-30T20:10:00.822Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(goal API and visible panel reach paused)",
+      "ok": true,
+      "ms": 50,
+      "seq": 24,
+      "at": "2026-09-30T20:10:00.824Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "see",
+      "detail": "see(testId=session-goal)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 3,
+      "seq": 25,
+      "at": "2026-09-30T20:10:00.827Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe:raw",
+      "verb": "eval",
+      "detail": "[probe:raw] eval(<callback>)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 0,
+      "seq": 26,
+      "at": "2026-09-30T20:10:00.827Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(visible goal status is paused)",
+      "ok": true,
+      "ms": 0,
+      "seq": 27,
+      "at": "2026-09-30T20:10:00.827Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "screenshot",
+      "detail": "screenshot",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 44,
+      "seq": 28,
+      "at": "2026-09-30T20:10:00.871Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "see",
+      "detail": "see(text=One checkpoint is done. The goal still needs work., timeoutMs=30000)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 178,
+      "seq": 29,
+      "at": "2026-09-30T20:10:01.053Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "desktopApi",
+      "detail": "desktopApi(GET /workspace/ws_a8780817e791/session-goals/ses_f0c0fe48bffeDxZNqe9YLplznE)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 58,
+      "seq": 30,
+      "at": "2026-09-30T20:10:01.111Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(the current reply finishes and is charged while future goal turns stay paused)",
+      "ok": true,
+      "ms": 58,
+      "seq": 31,
+      "at": "2026-09-30T20:10:01.111Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "the built-in slash menu starts a goal and busy Enter can pause it",
+      "ok": true,
+      "ms": 5271,
+      "seq": 32,
+      "at": "2026-09-30T20:10:01.111Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "desktopApi",
+      "detail": "desktopApi(GET /workspace/ws_a8780817e791/session-goals/ses_f0c0fe48bffeDxZNqe9YLplznE)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 42,
+      "seq": 33,
+      "at": "2026-09-30T20:10:01.153Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "reload",
+      "detail": "reload",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 8,
+      "seq": 34,
+      "at": "2026-09-30T20:10:01.162Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "desktopApi",
+      "detail": "desktopApi(GET /workspace/ws_a8780817e791/session-goals/ses_f0c0fe48bffeDxZNqe9YLplznE)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 128,
+      "seq": 35,
+      "at": "2026-09-30T20:10:01.290Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(goal API and visible panel reach paused)",
+      "ok": true,
+      "ms": 128,
+      "seq": 36,
+      "at": "2026-09-30T20:10:01.290Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "see",
+      "detail": "see(testId=session-goal)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 1314,
+      "seq": 37,
+      "at": "2026-09-30T20:10:02.604Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe:raw",
+      "verb": "eval",
+      "detail": "[probe:raw] eval(<callback>)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 88,
+      "seq": 38,
+      "at": "2026-09-30T20:10:02.692Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "eventually",
+      "detail": "eventually(visible goal status is paused)",
+      "ok": true,
+      "ms": 88,
+      "seq": 39,
+      "at": "2026-09-30T20:10:02.692Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "notSee",
+      "detail": "notSee(text=/Continue working toward the active session goal/)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 3000,
+      "seq": 40,
+      "at": "2026-09-30T20:10:05.692Z"
+    },
+    {
+      "stage": "body",
+      "channel": "probe",
+      "verb": "desktopApi",
+      "detail": "desktopApi(GET /workspace/ws_a8780817e791/session-goals/ses_f0c0fe48bffeDxZNqe9YLplznE)",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 31,
+      "seq": 41,
+      "at": "2026-09-30T20:10:05.723Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "type",
+      "detail": "type(composer, \"/goal edit\", replace)",
+      "surface": "session-goals-ui",
+      "ok": false,
+      "ms": 10052,
+      "error": "Typed field did not retain the expected value",
+      "seq": 42,
+      "at": "2026-09-30T20:10:15.776Z"
+    },
+    {
+      "stage": "body",
+      "channel": "user",
+      "verb": "screenshot",
+      "detail": "screenshot",
+      "surface": "session-goals-ui",
+      "ok": true,
+      "ms": 183,
+      "seq": 43,
+      "at": "2026-09-30T20:10:15.960Z"
+    },
+    {
+      "stage": "body",
+      "channel": "step",
+      "verb": "step",
+      "detail": "reload and edit preserve the goal identity and usage",
+      "ok": false,
+      "ms": 14807,
+      "error": "Typed field did not retain the expected value",
+      "seq": 44,
+      "at": "2026-09-30T20:10:15.960Z"
+    }
+  ],
+  "steps": [
+    {
+      "name": "the built-in slash menu starts a goal and busy Enter can pause it",
+      "depth": 0,
+      "ok": true,
+      "ms": 5271,
+      "seq": 1
+    },
+    {
+      "name": "reload and edit preserve the goal identity and usage",
+      "depth": 0,
+      "ok": false,
+      "ms": 14807,
+      "error": "Typed field did not retain the expected value",
+      "seq": 2
+    }
+  ],
+  "outcome": "failed",
+  "failure": "Typed field did not retain the expected value"
+}

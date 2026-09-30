@@ -1,0 +1,38 @@
+$ node evals/bin/evals.mjs session-goals
+placement: local (daytona CLI missing or not authenticated)
+
+ RUN  v3.2.7 /Users/skndsh/Desktop/projects/parsewave/omnirush/wt-session-goals-pr/evals
+
+ ❯ |e2e| specs/session-goals.e2e.test.ts (1 test | 1 failed) 35825ms
+   × slash goals remain visible after reload and their controls work while a chat is busy 35824ms
+     → Typed field did not retain the expected value
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |e2e| specs/session-goals.e2e.test.ts > slash goals remain visible after reload and their controls work while a chat is busy
+Error: Typed field did not retain the expected value
+ ❯ packages/testkit/src/spec/runtime.ts:685:15
+    683|           await new Promise((resolve) => setTimeout(resolve, 100));
+    684|         }
+    685|         throw new Error("Typed field did not retain the expected value…
+       |               ^
+    686|       }
+    687|     });
+ ❯ SpecRuntime.call packages/testkit/src/spec/runtime.ts:314:22
+ ❯ send specs/session-goals.e2e.test.ts:21:7
+ ❯ specs/session-goals.e2e.test.ts:67:5
+ ❯ step packages/testkit/src/spec/runtime.ts:384:22
+ ❯ specs/session-goals.e2e.test.ts:62:3
+ ❯ args.<computed> packages/testkit/src/fixture.ts:45:28
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  01:39:39
+   Duration  37.95s (transform 931ms, setup 15ms, collect 1.28s, tests 35.82s, environment 0ms, prepare 150ms)
+
+JSON report written to /Users/skndsh/Desktop/projects/parsewave/omnirush/wt-session-goals-pr/evals/results/.testkit/cli-run-1790798978509.json
+{"command":"evals:e2e","lane":"e2e","daytona":false,"placement":"local","vision":"defer","files":["session-goals"],"passed":0,"failed":1,"skipped":0,"skips":[],"consented":["OMNIRUSH_EVAL_E2E_TESTS"],"verdict":"failed"}
+[ELIFECYCLE] Command failed with exit code 1.

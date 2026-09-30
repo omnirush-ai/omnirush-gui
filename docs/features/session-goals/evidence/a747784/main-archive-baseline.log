@@ -1,0 +1,51 @@
+bun test v1.4.2 (744846f84)
+
+tests/opencode-v2-adapter.test.ts:
+672 |       for (const title of [undefined, "Do not partially rename"]) {
+673 |         const parameters = { sessionID: "ses_archive", title, time: { archived } };
+674 |         const result = await client.session.update(parameters);
+675 |         expect(result.response.status).toBe(501);
+676 |         expect(result.data).toBeUndefined();
+677 |         expect(result.error).toMatchObject({
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "message": "Archiving and unarchiving are not available in the OpenCode v2 preview.",
++   "message": "Archiving and unarchiving are not available in the OmniRush v2 preview.",
+    "name": "UnsupportedInV2Preview",
+    "operation": "session.archive",
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/private/tmp/omnirush-goal-main-proof/apps/app/tests/opencode-v2-adapter.test.ts:677:30)
+(fail) OpenCode v2 client compatibility > rejects archived=0 without reading, renaming, or deleting the session [11.88ms]
+672 |       for (const title of [undefined, "Do not partially rename"]) {
+673 |         const parameters = { sessionID: "ses_archive", title, time: { archived } };
+674 |         const result = await client.session.update(parameters);
+675 |         expect(result.response.status).toBe(501);
+676 |         expect(result.data).toBeUndefined();
+677 |         expect(result.error).toMatchObject({
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "message": "Archiving and unarchiving are not available in the OpenCode v2 preview.",
++   "message": "Archiving and unarchiving are not available in the OmniRush v2 preview.",
+    "name": "UnsupportedInV2Preview",
+    "operation": "session.archive",
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/private/tmp/omnirush-goal-main-proof/apps/app/tests/opencode-v2-adapter.test.ts:677:30)
+(fail) OpenCode v2 client compatibility > rejects archived=1788548737221 without reading, renaming, or deleting the session [0.20ms]
+
+ 0 pass
+ 66 filtered out
+ 2 fail
+ 6 expect() calls
+Ran 2 tests across 1 file. [133.00ms]

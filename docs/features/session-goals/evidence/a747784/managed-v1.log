@@ -1,0 +1,12 @@
+$ pnpm --dir evals run test:pr specs/session-goals.test.ts
+$ vitest run --config vitest.config.ts --project pr specs/session-goals.test.ts
+
+ RUN  v3.2.7 /Users/skndsh/Desktop/projects/parsewave/omnirush/wt-session-goals-pr/evals
+
+ ✓ |pr| specs/session-goals.test.ts (1 test) 37766ms
+   ✓ saved chat goals continue, charge uncached tokens, obey controls, and stay in their own chat  37765ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  01:44:50
+   Duration  39.75s (transform 871ms, setup 0ms, collect 1.26s, tests 37.77s, environment 0ms, prepare 135ms)

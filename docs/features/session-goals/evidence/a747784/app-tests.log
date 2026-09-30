@@ -1,0 +1,165 @@
+bun test v1.4.2 (744846f84)
+
+tests/queued-drain-admission-wedge.test.ts:
+(pass) a goal control releases its queue claim without waiting for a run [10.41ms]
+(pass) an immediate follow-up cannot inherit its interrupted predecessor's busy observation [0.41ms]
+(pass) a dropped busy event after a successful admission cannot wedge the drain [0.43ms]
+(pass) a message accepted by admission whose upstream dispatch fails still releases the queue [0.09ms]
+(pass) unknown admission survives idle, busy, retry, Stop, and remount until the exact message is observed [4.59ms]
+(pass) send now shares the current claim with the idle drain and every split pane [0.12ms]
+(pass) Stop invalidates preflight and late requeue without erasing a possibly admitted POST [4.08ms]
+(pass) an event-stream disconnect and reconnect during admission is healed by level reconciliation [0.08ms]
+(pass) three queued items are admitted exactly once each and in order [0.56ms]
+(pass) an active admission survives navigating away and back [0.07ms]
+(pass) blocked and cancelled sends classify as needs_input and rejected without wedging [0.07ms]
+(pass) the global watcher holds queued input and preflight, refreshes it, and orders release after slow writes [5286.82ms]
+
+tests/prompt-file-parts.test.ts:
+(pass) first-line local file parts > detects tilde paths in the first line [2.45ms]
+(pass) first-line local file parts > only detects paths from the first line [0.02ms]
+(pass) first-line local file parts > does not treat URL paths as local files [0.01ms]
+(pass) first-line local file parts > detects Windows absolute paths in the first line [0.13ms]
+(pass) first-line local file parts > leaves binary media paths as plain text instead of a Read-expanded file part [0.03ms]
+(pass) first-line local file parts > keeps text, image, and PDF paths as file parts [0.04ms]
+(pass) read-inlineable paths > classifies by extension only [0.05ms]
+(pass) draft file mentions > binary @file mentions become the absolute path as text [0.70ms]
+(pass) slash-command parsing > goal controls match the whole argument and preserve the objective [0.30ms]
+(pass) slash-command parsing > parses command invocations [0.04ms]
+(pass) slash-command parsing > does not parse absolute file paths as commands [0.02ms]
+(pass) Connect skill slash commands > uses the skill trigger and preserves the remote capability identity [0.41ms]
+(pass) Connect skill slash commands > falls back to a slash-safe slug when a skill has no trigger [0.03ms]
+(pass) Connect skill slash commands > does not normalize local skill labels [0.02ms]
+(pass) Connect skill slash commands > excludes local skills and Connect skills missing a capability identity [0.02ms]
+(pass) Connect skill slash commands > falls back to a slug when the trigger contains slash-unsafe characters [0.02ms]
+(pass) Connect skill slash commands > keeps the provenance line usable when the skill has no description [0.04ms]
+(pass) computer task mentions > cloud routing is hidden from the visible prompt and survives inline attachment parsing [1.47ms]
+(pass) computer task mentions > desktop routing is hidden from the visible prompt and survives inline attachment parsing [0.04ms]
+(pass) generated mention instructions > app preserves its label and hides instructions in both send branches [0.23ms]
+(pass) generated mention instructions > skill preserves its label and hides instructions in both send branches [0.02ms]
+(pass) generated mention instructions > connect-skill preserves its label and hides instructions in both send branches [0.22ms]
+
+tests/opencode-v2-adapter.test.ts:
+(pass) OpenCode v2 event translation > preserves native retry detail and sequenced interruption reasons without claiming success [0.84ms]
+(pass) OpenCode v2 event translation > renders an admitted user message before execution using its persisted identity [0.38ms]
+(pass) OpenCode v2 event translation > uses the created envelope timestamp for an untitled session [0.13ms]
+(pass) OpenCode v2 event translation > translates rename "Named session" as a title-only patch [0.03ms]
+(pass) OpenCode v2 event translation > translates rename "Untitled session" as a title-only patch [0.01ms]
+(pass) OpenCode v2 event translation > translates rename "" as a title-only patch
+(pass) OpenCode v2 event translation > does not turn an incomplete rename into a generated title [0.01ms]
+(pass) OpenCode v2 event translation > uses one stable text part id from start through the cumulative end update [0.39ms]
+(pass) OpenCode v2 event translation > uses event-provided ordinals to keep same-message text parts distinct [0.33ms]
+(pass) OpenCode v2 event translation > translates captured v2 text lifecycle events through explicit execution success [0.17ms]
+(pass) OpenCode v2 event translation > translates the captured v2 shell lifecycle using the bash presentation [0.40ms]
+(pass) OpenCode v2 event translation > isolates text streams by session, message, kind, and ordinal [0.35ms]
+(pass) OpenCode v2 event translation > isolates reasoning streams by session, message, kind, and ordinal [0.15ms]
+(pass) OpenCode v2 event translation > keeps legacy aliases and kind-local counters without letting tools consume text ordinals [0.24ms]
+(pass) OpenCode v2 event translation > preserves execution failure for sequenced terminal handling [0.03ms]
+(pass) OpenCode v2 event translation > translates captured permission events for the child session while preserving busy and idle [0.17ms]
+673 |       for (const title of [undefined, "Do not partially rename"]) {
+674 |         const parameters = { sessionID: "ses_archive", title, time: { archived } };
+675 |         const result = await client.session.update(parameters);
+676 |         expect(result.response.status).toBe(501);
+677 |         expect(result.data).toBeUndefined();
+678 |         expect(result.error).toMatchObject({
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "message": "Archiving and unarchiving are not available in the OpenCode v2 preview.",
++   "message": "Archiving and unarchiving are not available in the OmniRush v2 preview.",
+    "name": "UnsupportedInV2Preview",
+    "operation": "session.archive",
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/Users/skndsh/Desktop/projects/parsewave/omnirush/wt-session-goals-pr/apps/app/tests/opencode-v2-adapter.test.ts:678:30)
+(fail) OpenCode v2 client compatibility > rejects archived=0 without reading, renaming, or deleting the session [19.13ms]
+673 |       for (const title of [undefined, "Do not partially rename"]) {
+674 |         const parameters = { sessionID: "ses_archive", title, time: { archived } };
+675 |         const result = await client.session.update(parameters);
+676 |         expect(result.response.status).toBe(501);
+677 |         expect(result.data).toBeUndefined();
+678 |         expect(result.error).toMatchObject({
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "message": "Archiving and unarchiving are not available in the OpenCode v2 preview.",
++   "message": "Archiving and unarchiving are not available in the OmniRush v2 preview.",
+    "name": "UnsupportedInV2Preview",
+    "operation": "session.archive",
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/Users/skndsh/Desktop/projects/parsewave/omnirush/wt-session-goals-pr/apps/app/tests/opencode-v2-adapter.test.ts:678:30)
+(fail) OpenCode v2 client compatibility > rejects archived=1788548737221 without reading, renaming, or deleting the session [0.76ms]
+(pass) OpenCode v2 client compatibility > returns the actual native interrupt acknowledgement %s [1.26ms]
+(pass) OpenCode v2 client compatibility > returns the actual native interrupt acknowledgement %s [0.11ms]
+(pass) OpenCode v2 client compatibility > rejects a malformed native interrupt acknowledgement [0.14ms]
+(pass) OpenCode v2 client compatibility > saved native instruction updates stay out of the visible conversation [2.02ms]
+(pass) OpenCode v2 client compatibility > preserves hidden goal text and real user text in live and saved textParts [2.85ms]
+(pass) OpenCode v2 client compatibility > preserves hidden goal text and real user text in live and saved parts [0.18ms]
+(pass) OpenCode v2 client compatibility > keeps user text visible when its recorded hidden-text layout is invalid [0.35ms]
+(pass) OpenCode v2 client compatibility > Code Mode keeps the same child identities through progress, replay, and saved history [0.94ms]
+(pass) OpenCode v2 client compatibility > hydrates mixed native content with the same text and reasoning IDs as streaming [0.67ms]
+(pass) OpenCode v2 client compatibility > maps native file results to stable per-call attachments in live and hydrated completed tools [1.12ms]
+(pass) OpenCode v2 client compatibility > normalizes only native subagent fields, not subagent lookalikes [0.67ms]
+(pass) OpenCode v2 client compatibility > normalizes only native subagent fields, not task lookalikes [0.17ms]
+(pass) OpenCode v2 client compatibility > normalizes only native subagent fields, not custom_subagent lookalikes [0.14ms]
+(pass) OpenCode v2 client compatibility > preserves existing compatibility fields on native subagent inputs and metadata [0.23ms]
+(pass) OpenCode v2 client compatibility > maps only missing and empty native titles to stable read-time placeholders [0.52ms]
+(pass) OpenCode v2 client compatibility > forwards only the provided title  when creating a session [0.53ms]
+(pass) OpenCode v2 client compatibility > forwards only the provided title "" when creating a session [0.06ms]
+(pass) OpenCode v2 client compatibility > forwards only the provided title "Named session" when creating a session [0.05ms]
+(pass) OpenCode v2 client compatibility > forwards only the provided title "Untitled session" when creating a session [0.04ms]
+(pass) OpenCode v2 client compatibility > retains native assistant errors even when a failed turn has text and a completion time [0.16ms]
+(pass) OpenCode v2 client compatibility > maps active v2 sessions to busy compatibility statuses [0.29ms]
+(pass) OpenCode v2 client compatibility > maps captured v2 message content and presents shell tool parts as bash [0.17ms]
+(pass) OpenCode v2 client compatibility > waits for native prompt admission and returns its actual response without waiting for execution [11.99ms]
+(pass) OpenCode v2 client compatibility > workspace streams reject foreign and unscoped permission events [3.12ms]
+(pass) OpenCode v2 client compatibility > discovers external forks from authoritative sessions once, without fetching foreign events or the source [0.91ms]
+(pass) OpenCode v2 client compatibility > held fork discovery does not block permission or text, wakes a waiting reader, and deduplicates replays [3.18ms]
+(pass) OpenCode v2 client compatibility > deletion discards pending fork discovery without affecting another lookup [0.84ms]
+(pass) OpenCode v2 client compatibility > deletion discards queued fork discovery without affecting another lookup [1.40ms]
+(pass) OpenCode v2 client compatibility > skips a deleted fork lookup, continues the stream, and allows recovery on replay [1.63ms]
+(pass) OpenCode v2 client compatibility > skips a unavailable fork lookup, continues the stream, and allows recovery on replay [1.34ms]
+(pass) OpenCode v2 client compatibility > skips a network fork lookup, continues the stream, and allows recovery on replay [1.25ms]
+(pass) OpenCode v2 client compatibility > skips a missing fork lookup, continues the stream, and allows recovery on replay [1.63ms]
+(pass) OpenCode v2 client compatibility > skips a wrong-id fork lookup, continues the stream, and allows recovery on replay [1.35ms]
+(pass) OpenCode v2 client compatibility > skips a foreign fork lookup, continues the stream, and allows recovery on replay [1.38ms]
+(pass) OpenCode v2 client compatibility > skips a unscoped fork lookup, continues the stream, and allows recovery on replay [1.42ms]
+(pass) OpenCode v2 client compatibility > skips a timeout fork lookup, continues the stream, and allows recovery on replay [2004.32ms]
+(pass) OpenCode v2 client compatibility > abort cleans up a waiting subscription and its fork lookup without emitting a session [1.82ms]
+(pass) OpenCode v2 client compatibility > return cleans up a waiting subscription and its fork lookup without emitting a session [1.27ms]
+(pass) OpenCode v2 client compatibility > read error cleans up a waiting subscription and its fork lookup without emitting a session [1.30ms]
+(pass) OpenCode v2 client compatibility > returns native prompt admission failure 400 to a separate send client [0.33ms]
+(pass) OpenCode v2 client compatibility > returns native prompt admission failure 409 to a separate send client [0.09ms]
+(pass) OpenCode v2 client compatibility > returns native prompt admission failure 500 to a separate send client [0.08ms]
+(pass) OpenCode v2 client compatibility > propagates network rejection from model without fabricating success [0.16ms]
+(pass) OpenCode v2 client compatibility > propagates network rejection from prompt without fabricating success [0.05ms]
+(pass) OpenCode v2 client compatibility > preserves model admission failure and does not dispatch a prompt [0.13ms]
+(pass) OpenCode v2 client compatibility > propagates abort while waiting for model admission [0.26ms]
+(pass) OpenCode v2 client compatibility > propagates abort while waiting for prompt admission [0.06ms]
+(pass) OpenCode v2 client compatibility > lists and replies to captured v2 permission requests [0.78ms]
+(pass) v2 provider catalog retains display names without exposing request settings [0.64ms]
+(pass) v2 question forms > maps pending, answered, and cancelled forms to the existing question UI protocol [0.25ms]
+(pass) v2 question forms > an interaction client can answer a live form it never listed, preserving values and custom text [0.84ms]
+(pass) v2 question forms > failed list and reply requests remain failures and do not settle another question [0.36ms]
+(pass) v2 question forms > writes session context before prompting and fails closed if it cannot be written [0.34ms]
+
+tests/composer-clears-after-send.test.tsx:
+(pass) a new-session send clears the handed-off text and attachment chips, later sends clear, and a failed send keeps the draft [696.76ms]
+(pass) active goals follow picker changes without restarting paused goals or reviving a cleared goal [185.72ms]
+
+2 tests failed:
+(fail) OpenCode v2 client compatibility > rejects archived=0 without reading, renaming, or deleting the session [19.13ms]
+(fail) OpenCode v2 client compatibility > rejects archived=1788548737221 without reading, renaming, or deleting the session [0.76ms]
+
+ 105 pass
+ 2 fail
+ 730 expect() calls
+Ran 107 tests across 4 files. [8.57s]

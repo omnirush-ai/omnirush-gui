@@ -1,0 +1,38 @@
+bun test v1.4.2 (744846f84)
+
+src/session-goals.test.ts:
+(pass) a failed native daemon falls back only to a verified owned managed session [10.36ms]
+(pass) two hung native probes leave time for a managed goal command's ten-second deadline [3003.16ms]
+(pass) goal usage excludes cached reads and includes visible output, reasoning and cache writes once [0.24ms]
+(pass) each provider step counts once even in one assistant message; a summary never doubles it [44.89ms]
+(pass) creating a goal starts at the next provider step, including later steps of the same message [19.25ms]
+(pass) pause leaves the current turn running; replacement ignores late accounting and clear removes it [8.85ms]
+(pass) explicit Plan work uses no goal tokens or active work time [7.10ms]
+(pass) a held old turn still charges the same goal after steering into Plan [6.06ms]
+(pass) a queue hold changes no goal state and release admits pending work once [1157.42ms]
+(pass) an expired queue hold permits pending admission without an explicit release [606.52ms]
+(pass) blocked needs three different consecutive turns and resume starts a fresh audit [10.52ms]
+(pass) an active goal recovers once after restart, while a paused goal stays paused [1197.78ms]
+
+src/engine2/facade.test.ts:
+(pass) native preview goal admission uses the beta permission and question routes [22.37ms]
+(pass) 1.x engine adapter over the 2.x engine > requires the per-boot Basic credentials [0.88ms]
+(pass) 1.x engine adapter over the 2.x engine > renders the engine config from the 1.x runtime file at start [0.05ms]
+(pass) 1.x engine adapter over the 2.x engine > message pages read newest first with the 1.x cursor [6.34ms]
+(pass) 1.x engine adapter over the 2.x engine > a history longer than one engine page loads without naming order next to the cursor [30.89ms]
+(pass) 1.x engine adapter over the 2.x engine > a session reads with the agent and model of its latest step [1.36ms]
+(pass) 1.x engine adapter over the 2.x engine > prompt_async applies model, variant, agent and system, then sends text and files [5.35ms]
+(pass) 1.x engine adapter over the 2.x engine > a synthetic attachment note reaches the model and its text-part layout is kept [0.73ms]
+(pass) 1.x engine adapter over the 2.x engine > permissions list and reply in 1.x form [1.35ms]
+(pass) 1.x engine adapter over the 2.x engine > MCP status and agents in 1.x form [403.56ms]
+(pass) 1.x engine adapter over the 2.x engine > provider keys delivered at runtime reach the engine config [0.85ms]
+(pass) 1.x engine adapter over the 2.x engine > revert stages a reversible revert and unrevert clears it; neither commits [1.82ms]
+(pass) 1.x engine adapter over the 2.x engine > a shell command or slash command makes a staged revert final first [2.42ms]
+(pass) 1.x engine adapter over the 2.x engine > the event stream speaks 1.x and keeps to the request's directory [303.23ms]
+(pass) revert events > staged, cleared and committed reach the app as session.updated and message.removed [1.98ms]
+(pass) revert events > a revert committed without a staged one seen removes the boundary message [0.08ms]
+
+ 28 pass
+ 0 fail
+ 83 expect() calls
+Ran 28 tests across 2 files. [7.08s]
