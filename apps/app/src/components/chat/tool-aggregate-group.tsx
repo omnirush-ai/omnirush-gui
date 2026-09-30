@@ -264,7 +264,7 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
   // Expanded rows interleave the run's thoughts at their chronological
   // slots; thoughts belonging to capped rows stay behind "Show N more".
   // A finished heading-only thought renders nothing, so it gets no row.
-  const shownThoughts = thoughts.filter((thought) => reasoningIsShown(thought.text, thought.isStreaming))
+  const shownThoughts = thoughts.filter((thought) => reasoningIsShown(thought.text))
   const thoughtsAt = (index: number) => shownThoughts.filter((thought) => thought.afterIndex === index)
   const trailingThoughts = hiddenCount > 0 ? [] : shownThoughts.filter((thought) => thought.afterIndex >= parts.length)
 

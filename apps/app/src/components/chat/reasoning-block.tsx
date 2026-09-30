@@ -37,31 +37,37 @@ export function reasoningSummaryParts(text: string): { headings: string[]; body:
   return { headings, body: body.join("\n").trim() }
 }
 
-/** Whether a reasoning part renders anything: prose, or a heading while it streams. */
-export function reasoningIsShown(text: string, isStreaming: boolean): boolean {
-  return isStreaming || reasoningSummaryParts(text).body !== ""
+/** Whether a reasoning part renders anything: only reasoning with prose does. */
+export function reasoningIsShown(text: string): boolean {
+  return reasoningSummaryParts(text).body !== ""
+}
+
+/** The latest reasoning heading of the run since the last user message, for the live "Working" row. */
+export function latestReasoningHeading(messages: readonly { role: string; parts: readonly { type: string; text?: string }[] }[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.role === "user") return null
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = message.parts[partIndex]!
+      if (part.type !== "reasoning" || typeof part.text !== "string") continue
+      const heading = reasoningSummaryParts(part.text).headings.at(-1)
+      if (heading) return heading
+    }
+  }
+  return null
 }
 
 /**
  * Reasoning with prose is collapsed by default: a single "Reasoning trace"
  * line with a chevron; the full reasoning renders as markdown only when the
- * user opens it. Heading-only reasoning works like Codex's status row: while
- * the model thinks, its latest heading is a live "Thinking · …" line, and
- * once it is done nothing is left to open, so it renders nothing.
+ * user opens it. Heading-only reasoning renders nothing here: as in Codex's
+ * status row, its latest heading rides on the live "Working" row instead
+ * (latestReasoningHeading), and a finished one has nothing to open.
  */
 export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockProps) {
   const [open, setOpen] = useState(false)
-  const { headings, body } = reasoningSummaryParts(text)
 
-  if (!body) {
-    if (!isStreaming) return null
-    const latest = headings.at(-1)
-    return (
-      <div role="status" data-reasoning-status="" className={cn("w-full text-sm text-muted-foreground", className)}>
-        <span className="animate-pulse">{latest ? `Thinking · ${latest}` : "Thinking…"}</span>
-      </div>
-    )
-  }
+  if (!reasoningIsShown(text)) return null
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={cn("w-full", className)} data-reasoning-block="">

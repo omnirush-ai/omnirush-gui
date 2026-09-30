@@ -90,7 +90,7 @@ import { CapabilityCallLine } from "@/components/chat/capability-call-line"
 import { CodeModeTool } from "@/components/chat/code-mode-tool"
 import { codeModeToolCalls } from "@/lib/code-mode-tools"
 import { hasPreservedMcpAppResult, McpAppFrame } from "@/components/chat/mcp-app-frame"
-import { ReasoningBlock, reasoningIsShown } from "@/components/chat/reasoning-block"
+import { latestReasoningHeading, ReasoningBlock, reasoningIsShown } from "@/components/chat/reasoning-block"
 import { SubagentRunLine } from "@/components/chat/subagent-run-line"
 import { ToolAggregateGroup } from "@/components/chat/tool-aggregate-group"
 import {
@@ -134,6 +134,7 @@ import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/co
 const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
 
 /** Above this many step rows a finished turn folds into one summary line. */
+const COLLAPSED_STEP_RUN_MIN_ROWS = 4
 
 const ParentRunContext = React.createContext({ active: true, lastProgressAt: 0 })
 
@@ -880,10 +881,13 @@ const MessageComponent = React.memo(
 
 MessageComponent.displayName = "MessageComponent"
 
-const LoadingMessage = React.memo(({ elapsedSeconds }: { elapsedSeconds: number }) => (
+/** The live "Working 12s" row; with the run's latest reasoning heading, as Codex's status row shows it. */
+const LoadingMessage = React.memo(({ elapsedSeconds, heading }: { elapsedSeconds: number; heading?: string | null }) => (
     <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
       <div data-loading-message="working" className="py-1 text-sm text-muted-foreground">
-        <span className="ow-text-shimmer tabular-nums">Working {formatElapsedSeconds(elapsedSeconds)}</span>
+        <span className="ow-text-shimmer tabular-nums">
+          Working {formatElapsedSeconds(elapsedSeconds)}{heading ? ` · ${heading}` : ""}
+        </span>
       </div>
     </Message>
 ))
@@ -1183,7 +1187,8 @@ function getRenderableMessage(message: UIMessage) {
  * A finished turn's work collapses to a single "Worked for 1m 19s" line
  * that expands back into the full run, as in Codex: everything before the
  * final answer (steps, reasoning, and the agent's progress notes) folds, and
- * only the answer stays in view. Live turns show their steps unprompted.
+ * only the answer stays in view. Live turns, and short finished ones, show
+ * their steps unprompted.
  */
 function CompletedStepRun({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false)
@@ -1306,28 +1311,36 @@ function MessageGroup({
   )
   // An aggregate line counts each call it absorbed: it reads as one row but
   // stands for that much work, and folding should key off the work done.
+  // Reasoning that renders nothing (a finished heading-only summary) is no row.
+  const shownReasoning = proseReasoning.filter((reasoning) => reasoningIsShown(reasoning.text))
   const stepRowCount =
     stepItems.reduce(
       (total, item) =>
         total +
         (item.message.role === "assistant" && !isSessionErrorMessage(item.message)
           ? getAssistantRenderGroups(item.message.parts, showThinking).reduce(
-            (rows, group) => rows + (group.kind === "tool-aggregate" ? group.parts.length + group.thoughts.length : 1),
+            (rows, group) =>
+              rows + (group.kind === "tool-aggregate"
+                ? group.parts.length + group.thoughts.filter((thought) => reasoningIsShown(thought.text)).length
+                : group.kind === "reasoning"
+                  ? (reasoningIsShown(group.text) ? 1 : 0)
+                  : 1),
             0
           )
           : 1),
       0
-    ) + proseReasoning.length
+    ) + shownReasoning.length
   const stepRunLabel =
     stepsStartedAt !== null && stepsEndedAt !== null && stepsEndedAt > stepsStartedAt
       ? `Worked for ${formatToolCallDuration(stepsEndedAt - stepsStartedAt)}`
       : stepRowCount === 1
         ? "1 step"
         : `${stepRowCount} steps`
-  // Every finished turn with work folds, however short, as in Codex.
-  const collapseSteps = !isLiveGroup && stepItems.length > 0 && stepRowCount > 0
+  // A short finished run reads fine as a list, so only long ones fold away.
+  const collapseSteps =
+    !isLiveGroup && stepItems.length > 0 && stepRowCount > COLLAPSED_STEP_RUN_MIN_ROWS
   const foldedReasoning = collapseSteps
-    ? proseReasoning.filter((reasoning) => reasoningIsShown(reasoning.text, reasoning.isStreaming)).map((reasoning) => (
+    ? shownReasoning.map((reasoning) => (
       <Message
         key={`folded-reasoning-${reasoning.key}`}
         className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10"
@@ -1580,6 +1593,7 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
   })
   const showLoading = !waiting && !noNewActivity && !showReconnecting && tasks.length === 0
     && shouldShowMessageListLoading(status, messages.length, hasVisibleToolActivity)
+  const liveHeading = React.useMemo(() => (showLoading ? latestReasoningHeading(messages) : null), [showLoading, messages])
   const baseUrl = workspace?.opencodeBaseUrl
   React.useEffect(() => {
     if (!noNewActivity || !baseUrl) return
@@ -1627,7 +1641,7 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
         )
         })}
 
-        {showLoading && <LoadingMessage elapsedSeconds={runElapsedSeconds} />}
+        {showLoading && <LoadingMessage elapsedSeconds={runElapsedSeconds} heading={liveHeading} />}
         {showReconnecting && <ReconnectingMessage lastConfirmedAt={syncHealth?.lastConfirmedAt ?? null} />}
         {retryStatus ? <RetryMessage status={retryStatus} /> : null}
         {error && !hasSessionErrorMessage ? <ErrorMessage error={error} /> : null}
