@@ -753,10 +753,15 @@ const UserMessage = React.memo(
                     })}
                   </MessageContent>
                 ) : null}
-                {!isStreaming && (
+                {/* Always laid out, so the turn below never shifts when its first
+                    message arrives; while the run starts it is hidden and inert. */}
+                {(
                   <MessageActions
+                    inert={isStreaming || undefined}
+                    aria-hidden={isStreaming || undefined}
                     className={cn(
-                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100"
+                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100",
+                      isStreaming && "invisible"
                     )}
                   >
                     <MessageTimestamp message={message} className="mr-1.5" />
