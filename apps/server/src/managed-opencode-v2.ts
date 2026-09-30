@@ -6,6 +6,9 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { startEngineFacade } from "./engine2/facade.js";
+import { omnirushPluginPath } from "./omnirush-extensions-plugin-path.js";
 
 export { installOpencodeV2Binary } from "./opencode-v2-binary.js";
 
@@ -47,6 +50,7 @@ export interface OpencodeV2Health {
 
 export interface ManagedOpencodeV2Server {
   url: string;
+  compatibilityUrl?: string;
   username: string;
   password: string;
   childPid: number | undefined;
@@ -112,12 +116,35 @@ export async function createManagedOpencodeV2Server(
   await chmod(configDir, 0o700);
   // Load enforcement on the first boot, before any session can run.
   await writeProviders();
+  // Native desktop sessions use a different daemon from the managed engine.
+  // Reuse its dialect adapter for goal reads and immutable step events.
+  let announceUpstream = (_url: string) => {};
+  const upstreamReady = new Promise<string>((resolve) => { announceUpstream = resolve; });
+  const facade = options.env?.OMNIRUSH_SERVER_URL ? await startEngineFacade({
+    upstreamUrl: "http://native-engine.invalid", upstreamPassword: password,
+    username, password, defaultDirectory: options.rootDir, version: "2", nativePreview: true,
+    fetch: Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const upstream = await upstreamReady;
+      if (!upstream) throw new Error("The native engine is stopping");
+      const request = new Request(input, init);
+      const source = new URL(request.url);
+      return loopbackFetch(`${upstream}${source.pathname}${source.search}`, {
+        method: request.method, headers: request.headers, signal: request.signal,
+        body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+      });
+    }, { preconnect: globalThis.fetch.preconnect }),
+  }) : undefined;
   const child = spawn(options.bin, ["serve", "--hostname", hostname, "--port", String(port)], {
     env: {
       ...inherited,
       OPENCODE_PASSWORD: password,
       OPENCODE_DB: join(options.rootDir, "opencode.db"),
       OPENCODE_CONFIG_DIR: configDir,
+      ...(facade ? {
+        OMNIRUSH_ENGINE_ADAPTER_URL: facade.url,
+        OMNIRUSH_ENGINE_ADAPTER_AUTHORIZATION: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+        OMNIRUSH_ENGINE_GOALS_ONLY: "1",
+      } : {}),
       ...(opencodeModelsUrl === undefined ? {} : { OPENCODE_MODELS_URL: opencodeModelsUrl }),
       ...(disableModelsFetch === undefined ? {} : { OPENCODE_DISABLE_MODELS_FETCH: disableModelsFetch }),
     },
@@ -216,15 +243,22 @@ export async function createManagedOpencodeV2Server(
       };
     }
     const target = join(configDir, "opencode.json");
+    const goalPlugin = join(configDir, "omnirush-session-goals");
+    if (options.env?.OMNIRUSH_SERVER_URL) {
+      await mkdir(goalPlugin, { recursive: true });
+      await writeFileAtomic(join(goalPlugin, "index.js"), `export { default } from ${JSON.stringify(pathToFileURL(omnirushPluginPath("omnirush-engine2")).href)};\n`, { mode: 0o600 });
+    }
     await writeFileAtomic(target, `${JSON.stringify({
       $schema: "https://opencode.ai/config.json",
       providers: providerConfig,
       ...(options.permissions ? { permissions: await options.permissions() } : {}),
-      ...(options.env?.OMNIRUSH_SERVER_URL ? { plugins: [managedPolicyPluginPath(true)] } : {}),
+      ...(options.env?.OMNIRUSH_SERVER_URL ? { plugins: [managedPolicyPluginPath(true), goalPlugin] } : {}),
     }, null, 2)}\n`, { mode: 0o600 });
   }
 
   async function close(): Promise<void> {
+    announceUpstream("");
+    await facade?.close();
     if (child.exitCode !== null || child.signalCode !== null) return;
     const exit = new Promise<void>((resolve) => child.once("exit", () => resolve()));
     child.kill("SIGTERM");
@@ -240,6 +274,7 @@ export async function createManagedOpencodeV2Server(
 
   const managed: ManagedOpencodeV2Server = {
     get url() { return url; },
+    compatibilityUrl: facade?.url,
     username,
     password,
     childPid: child.pid,
@@ -274,7 +309,10 @@ export async function createManagedOpencodeV2Server(
       await close();
       throw new Error(`Failed to start OmniRush v2 server: ${spawnError.message}`);
     }
-    if (child.exitCode !== null || child.signalCode !== null) throw diagnostics(child.exitCode, stdout, stderr);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      await close();
+      throw diagnostics(child.exitCode, stdout, stderr);
+    }
     // Only the child can write its stdout pipe. Do not send the generated
     // credential to a probed port before that child confirms it has bound.
     if (!url) {
@@ -289,6 +327,7 @@ export async function createManagedOpencodeV2Server(
           throw new Error("OmniRush v2 announced an unexpected listener");
         }
         url = endpoint.origin;
+        announceUpstream(url);
       }
     }
     try {

@@ -402,6 +402,50 @@ function mapV2ToolPart(
   return null;
 }
 
+function textPartFlags(value: Record<string, unknown>) {
+  const metadata = readRecord(value, "metadata");
+  return {
+    ...(value.synthetic === true ? { synthetic: true } : {}),
+    ...(value.ignored === true ? { ignored: true } : {}),
+    ...(metadata ? { metadata } : {}),
+  };
+}
+
+function mapV2UserTextParts(
+  value: Record<string, unknown>,
+  messageID: string,
+  sessionID: string,
+  text: string,
+): TextPart[] {
+  const base: Pick<TextPart, "messageID" | "sessionID" | "type"> = { messageID, sessionID, type: "text" };
+  const single: TextPart[] = [{ ...base, id: textPartID(messageID, "text", 0), text, ...textPartFlags(value) }];
+  const sent = readRecord(value.metadata, "omnirush");
+  const layout = Array.isArray(sent?.textParts) ? sent.textParts
+    : Array.isArray(sent?.parts) ? sent.parts.filter((part) => readString(part, "type") === "text") : [];
+  if (layout.length === 0) return single;
+
+  // Native prompts join text parts with two newlines. Restore their flags
+  // only when the saved layout still matches, so real user text stays visible.
+  const parts: TextPart[] = [];
+  let offset = 0;
+  for (const [ordinal, entry] of layout.entries()) {
+    if (!isRecord(entry)) return single;
+    const originalText = readString(entry, "text");
+    const length = readNumber(entry, "length") ?? originalText?.length;
+    if (length === undefined || !Number.isInteger(length) || length < 0) return single;
+    if (ordinal > 0) {
+      if (text.slice(offset, offset + 2) !== "\n\n") return single;
+      offset += 2;
+    }
+    if (offset + length > text.length) return single;
+    const partText = text.slice(offset, offset + length);
+    if (originalText !== undefined && originalText !== partText) return single;
+    parts.push({ ...base, id: textPartID(messageID, "text", ordinal), text: partText, ...textPartFlags(entry) });
+    offset += length;
+  }
+  return offset === text.length ? parts : single;
+}
+
 function mapV2MessageParts(
   value: Record<string, unknown>,
   messageID: string,
@@ -429,7 +473,7 @@ function mapV2MessageParts(
               start: readNumber(time, "created") ?? messageCreated,
               ...(end === undefined ? {} : { end }),
             },
-          } : { type: kind }),
+          } : { type: kind, ...textPartFlags(entry) }),
         }];
       }
       if (readString(entry, "type") === "tool") {
@@ -440,12 +484,14 @@ function mapV2MessageParts(
     });
   }
   const text = readString(value, "text");
+  if (text !== undefined && messageRole(value) === "user") return mapV2UserTextParts(value, messageID, sessionID, text);
   return text === undefined ? [] : [{
     id: `${messageID}:0`,
     messageID,
     sessionID,
     type: "text",
     text,
+    ...textPartFlags(value),
   }];
 }
 

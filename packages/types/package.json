@@ -52,6 +52,12 @@
       "bun": "./src/local-workflows.ts",
       "default": "./dist/local-workflows.js"
     },
+    "./session-goal": {
+      "types": "./src/session-goal.ts",
+      "development": "./src/session-goal.ts",
+      "bun": "./src/session-goal.ts",
+      "default": "./dist/session-goal.js"
+    },
     "./skill-created-app": {
       "types": "./src/skill-created-app.ts",
       "development": "./src/skill-created-app.ts",

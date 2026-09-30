@@ -67,6 +67,7 @@ export type QueuedDrainState = {
 
 export type QueuedDrainEvent =
   | { type: "send_started"; itemId: string; steer?: boolean }
+  | { type: "control_completed"; itemId: string }
   | { type: "stop_confirmed" }
   | { type: "send_result"; itemId: string; outcome: "sent" | "accepted" | "blocked" | "cancelled"; at: number }
   | { type: "send_error"; itemId: string }
@@ -104,6 +105,9 @@ function resolved(
 export function reduceQueuedDrain(state: QueuedDrainState, event: QueuedDrainEvent): QueuedDrainState {
   const { phase } = state;
   switch (event.type) {
+    case "control_completed":
+      if (phase.kind !== "sending" || phase.itemId !== event.itemId) return state;
+      return resolved(state, { kind: "ready" }, event.itemId, "completed", dropAttempt(state, event.itemId));
     case "stop_confirmed":
       // A replacement may already hold the send slot while awaiting Stop.
       // Keep that claim, but discard activity belonging to its predecessor.
@@ -261,7 +265,15 @@ export function dispatchQueuedDrain(sessionId: string, event: QueuedDrainEvent):
   }
   const current = getQueuedDrainState(sessionId);
   const next = reduceQueuedDrain(current, event);
-  if (next === current) return current;
+  if (next === current) {
+    // Stop changes the send generation even while an uncertain POST keeps
+    // its admission slot. Lease watchers still need that stop notification.
+    if (event.type === "queue_cleared") {
+      const listeners = drainListenersBySession.get(sessionId);
+      if (listeners) for (const listener of listeners) listener();
+    }
+    return current;
+  }
   if (next.phase.kind === "ready" && Object.keys(next.attemptsByItemId).length === 0 && next.lastResolution === null) {
     drainStateBySession.delete(sessionId);
   } else {

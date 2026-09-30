@@ -7,6 +7,7 @@ import fuzzysort from "fuzzysort";
 import { toast } from "@/components/ui/sonner";
 import type { CloudImportedPlugin, CloudImportedPluginFile } from "@/app/cloud/import-state";
 import type { ComposerAttachment, McpServerEntry, McpStatus, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
+import { parseGoalInvocation } from "@/app/lib/session-goal";
 import { t } from "@/i18n";
 import { useComposerStateStore } from "../composer-state-store";
 import {
@@ -1153,6 +1154,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       }
     }
 
+    if (event.key === "Enter" && !event.shiftKey && activeMenu === "slash"
+      && parseGoalInvocation(props.draft)?.action === "status") {
+      event.preventDefault();
+      event.stopPropagation();
+      setSlashOpen(false);
+      void props.onSend();
+      return;
+    }
     if (!activeMenu || !activeItems.length) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();

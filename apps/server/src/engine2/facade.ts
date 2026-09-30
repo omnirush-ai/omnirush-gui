@@ -64,6 +64,8 @@ export type EngineFacadeOptions = {
   fetch?: typeof globalThis.fetch;
   /** How long a prompt waits for the engine to serve its model (see ensureModelServed). */
   modelWaitMs?: number;
+  /** The separate desktop preview uses the pinned beta's request-list routes. */
+  nativePreview?: boolean;
 };
 
 export type EngineFacade = {
@@ -406,9 +408,10 @@ export async function startEngineFacade(options: EngineFacadeOptions): Promise<E
     const includeArchived = query.get("archived") === "true";
     for (let page = 0; page < 200 && out.length < limit; page++) {
       const payload = await call("GET", "/api/session", {
+        directory: options.nativePreview ? directory : undefined,
         query: {
           limit: String(Math.min(200, limit - out.length + 10)),
-          directory: directory,
+          directory: options.nativePreview ? undefined : directory,
           parentID: rootsOnly ? "null" : undefined,
           search: query.get("search") ?? undefined,
           cursor,
@@ -579,7 +582,12 @@ export async function startEngineFacade(options: EngineFacadeOptions): Promise<E
 
   const permissionSessions = new Map<string, string>();
   const pendingPermissions = async (directory?: string): Promise<JsonRecord[]> => {
-    const payload = await call("GET", "/api/permission/request", { directory });
+    const payload = options.nativePreview ? {
+      data: (await Promise.all((await listSessions(directory, new URLSearchParams(), false)).map((session) =>
+        call("GET", `/api/session/${encodeURIComponent(String(session.id))}/permission`, { directory })
+          .then((payload) => arr(payload, "data")),
+      ))).flat(),
+    } : await call("GET", "/api/permission/request", { directory });
     const out: JsonRecord[] = [];
     for (const item of arr(payload, "data").length ? arr(payload, "data") : Array.isArray(unwrap(payload)) ? (unwrap(payload) as unknown[]) : []) {
       const mapped = v1PermissionRequest(item);
@@ -591,7 +599,7 @@ export async function startEngineFacade(options: EngineFacadeOptions): Promise<E
   };
 
   const pendingQuestions = async (directory?: string): Promise<JsonRecord[]> => {
-    const payload = await call("GET", "/api/form", { directory });
+    const payload = await call("GET", options.nativePreview ? "/api/form/request" : "/api/form", { directory });
     const list = unwrap(payload);
     const out: JsonRecord[] = [];
     for (const item of Array.isArray(list) ? list : []) {
@@ -808,7 +816,10 @@ export async function startEngineFacade(options: EngineFacadeOptions): Promise<E
       if (segments[1] === "status" && segments.length === 2 && method === "GET") {
         const active = unwrap(await call("GET", "/api/session/active", { directory }));
         const out: Record<string, JsonRecord> = {};
-        if (isRecord(active)) for (const id of Object.keys(active)) out[id] = translator.statusOf(id)?.type === "retry" ? translator.statusOf(id)! : { type: "busy" };
+        if (isRecord(active)) for (const id of Object.keys(active)) {
+          if (options.nativePreview && str(active[id], "type") !== "running") continue;
+          out[id] = translator.statusOf(id)?.type === "retry" ? translator.statusOf(id)! : { type: "busy" };
+        }
         if (directory) {
           for (const id of Object.keys(out)) {
             const known = translator.directoryOf(id);

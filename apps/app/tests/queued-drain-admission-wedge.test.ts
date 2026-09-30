@@ -1,4 +1,6 @@
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
+import type { SessionGoalCommand } from "@omnirush/types";
+import type { ComposerDraft } from "../src/app/types";
 
 import {
   canAdmitNextQueuedItem,
@@ -24,6 +26,17 @@ import {
 // the next queued item to be sent.
 
 const t0 = 1_000_000;
+
+test("a goal control releases its queue claim without waiting for a run", () => {
+  let state = reduceQueuedDrain(INITIAL_QUEUED_DRAIN_STATE, { type: "send_started", itemId: "goal-pause" });
+  expect(canAdmitNextQueuedItem(state)).toBe(false);
+  expect(reduceQueuedDrain(state, { type: "control_completed", itemId: "other" })).toBe(state);
+  state = reduceQueuedDrain(state, { type: "control_completed", itemId: "goal-pause" });
+  expect(canAdmitNextQueuedItem(state)).toBe(true);
+  expect(nextObservationProbeAt(state, null)).toBeNull();
+  expect(state.attemptsByItemId).toEqual({});
+  expect(state.lastResolution).toEqual({ itemId: "goal-pause", resolution: "completed" });
+});
 
 test("an immediate follow-up cannot inherit its interrupted predecessor's busy observation", () => {
   let state = reduceQueuedDrain(INITIAL_QUEUED_DRAIN_STATE, { type: "send_started", itemId: "old" });
@@ -300,3 +313,112 @@ test("blocked and cancelled sends classify as needs_input and rejected without w
   const running = reduceQueuedDrain(live, { type: "busy_observed" });
   expect(reduceQueuedDrain(running, { type: "queue_cleared" })).toBe(running);
 });
+
+test("the global watcher holds queued input and preflight, refreshes it, and orders release after slow writes", async () => {
+  mock.module("@/react-app/domains/session/sync/session-sync", () => ({
+    ensureWorkspaceSessionSync: () => () => {},
+    trackWorkspaceSessionSync: () => () => {},
+  }));
+  mock.module("@/app/lib/opencode-session-native", () => ({
+    composeNativeSessionSnapshot: async () => ({ status: { type: "busy" } }),
+  }));
+  const { createOmniRushServerClient } = await import("../src/app/lib/omnirush-server");
+  const { startGlobalQueueDrainer, waitForQueuedGoalHold } = await import("../src/react-app/domains/session/sync/global-queue-drainer");
+  const { useComposerStateStore } = await import("../src/react-app/domains/session/surface/composer-state-store");
+  const { setQueuedSendContext, clearQueuedSendContext } = await import("../src/react-app/domains/session/sync/queued-send-context");
+  const writes: { sessionId: string; holding: boolean; at: number }[] = [];
+  let slowNext = false;
+  let releaseSlow: (() => void) | null = null;
+  const client = {
+    ...createOmniRushServerClient({ baseUrl: "http://queue-goal-hold.test" }),
+    getSessionGoal: async () => { throw new Error("Holds must not read a goal"); },
+    commandSessionGoal: async (_workspaceId: string, sessionId: string, command: SessionGoalCommand) => {
+      expect(command.action).toBe("hold");
+      expect(typeof command.holding).toBe("boolean");
+      writes.push({ sessionId, holding: command.holding === true, at: Date.now() });
+      if (slowNext && command.holding) {
+        slowNext = false;
+        await new Promise<void>((resolve) => { releaseSlow = resolve; });
+      }
+      return { goal: null };
+    },
+  };
+  const context = {
+    workspaceId: "workspace-hold", workspaceRoot: "/tmp/queue-hold", opencodeBaseUrl: "http://queue-goal-hold.test/opencode",
+    omnirushToken: "test-token", client, agent: null, variant: null, model: null, environmentRuntimeKey: null,
+  };
+  const draft: ComposerDraft = { mode: "prompt", parts: [{ type: "text", text: "User work goes first" }], text: "User work goes first", attachments: [] };
+  const waitForHold = async (predicate: () => boolean, timeoutMs = 1_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error("Timed out waiting for the goal hold");
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  const forSession = (sessionId: string) => writes.filter((write) => write.sessionId === sessionId);
+  resetQueuedDrainForTests();
+  useComposerStateStore.setState({ queuedDrafts: {} });
+  const stop = startGlobalQueueDrainer();
+  try {
+    const queued = "hold-queued";
+    useComposerStateStore.getState().appendQueuedDraft(queued, draft);
+    setQueuedSendContext(queued, context);
+    await waitForHold(() => forSession(queued).length === 1);
+    expect(forSession(queued)[0]?.holding).toBe(true);
+    await waitForHold(() => forSession(queued).length === 2, 6_000);
+    expect(forSession(queued).every((write) => write.holding)).toBe(true);
+    expect(forSession(queued)[1].at - forSession(queued)[0].at).toBeGreaterThanOrEqual(4_500);
+    useComposerStateStore.getState().clearQueuedDrafts(queued);
+    await waitForHold(() => forSession(queued).at(-1)?.holding === false);
+
+    const preflight = "hold-preflight";
+    expect(claimQueuedSend(preflight, "preflight-message")).toBe(true);
+    setQueuedSendContext(preflight, context);
+    await waitForQueuedGoalHold(preflight);
+    expect(forSession(preflight).map((write) => write.holding)).toEqual([true]);
+    dispatchQueuedDrain(preflight, { type: "send_unknown", itemId: "preflight-message", messageID: "unknown-message", at: Date.now() });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(forSession(preflight).map((write) => write.holding)).toEqual([true]);
+    dispatchQueuedDrain(preflight, { type: "admission_observed", itemId: "preflight-message", messageID: "unknown-message", at: Date.now() });
+    await waitForHold(() => forSession(preflight).at(-1)?.holding === false);
+
+    const slow = "hold-slow";
+    slowNext = true;
+    useComposerStateStore.getState().appendQueuedDraft(slow, draft);
+    setQueuedSendContext(slow, context);
+    await waitForHold(() => forSession(slow).length === 1);
+    setQueuedSendContext(slow, { ...context, agent: "build" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(forSession(slow).map((write) => write.holding)).toEqual([true]);
+    releaseSlow?.();
+    await waitForHold(() => forSession(slow).length === 3);
+    expect(forSession(slow).map((write) => write.holding)).toEqual([true, false, true]);
+    useComposerStateStore.getState().clearQueuedDrafts(slow);
+    dispatchQueuedDrain(slow, { type: "queue_cleared" });
+    await waitForHold(() => forSession(slow).at(-1)?.holding === false);
+    expect(forSession(slow).map((write) => write.holding)).toEqual([true, false, true, false]);
+
+    const stopped = "hold-stopped";
+    expect(claimQueuedSend(stopped, "stopped-message")).toBe(true);
+    setQueuedSendContext(stopped, context);
+    await waitForQueuedGoalHold(stopped);
+    dispatchQueuedDrain(stopped, { type: "queue_cleared" });
+    await waitForHold(() => forSession(stopped).at(-1)?.holding === false);
+    expect(getQueuedDrainState(stopped).phase.kind).toBe("sending");
+
+    const unmounted = "hold-watcher-end";
+    useComposerStateStore.getState().appendQueuedDraft(unmounted, draft);
+    setQueuedSendContext(unmounted, context);
+    await waitForQueuedGoalHold(unmounted);
+    stop();
+    await waitForHold(() => forSession(unmounted).at(-1)?.holding === false);
+    expect(forSession(unmounted).map((write) => write.holding)).toEqual([true, false]);
+  } finally {
+    releaseSlow?.();
+    stop();
+    for (const sessionId of ["hold-queued", "hold-preflight", "hold-slow", "hold-stopped", "hold-watcher-end"]) clearQueuedSendContext(sessionId);
+    useComposerStateStore.setState({ queuedDrafts: {} });
+    resetQueuedDrainForTests();
+    mock.restore();
+  }
+}, 10_000);

@@ -62,6 +62,7 @@ export interface EngineV2Preview {
   setEnabled(enabled: boolean): Promise<EngineV2PreviewStatus>;
   setChatRouting(chatRouting: boolean): Promise<EngineV2PreviewStatus>;
   connection(): { url: string; username: string; password: string } | undefined;
+  compatibilityConnection(): { url: string; username: string; password: string } | undefined;
   ensureWorkspaceReady(directory: string): Promise<void>;
   syncWorkspaceMcp(workspaceId: string, directory: string): Promise<void>;
   stop(): Promise<void>;
@@ -590,6 +591,11 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
     return { url: sidecar.url, username: sidecar.username, password: sidecar.password };
   }
 
+  function compatibilityConnection(): { url: string; username: string; password: string } | undefined {
+    if (!running || !sidecar?.compatibilityUrl) return undefined;
+    return { url: sidecar.compatibilityUrl, username: sidecar.username, password: sidecar.password };
+  }
+
   async function ensureWorkspaceReady(directory: string): Promise<void> {
     if (mirrorInFlight) await mirrorInFlight;
     const active = sidecar;
@@ -626,5 +632,5 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
     if (enabled) void start().catch(recordStartError);
   }
   if (!options.deferStart) startWhenReady();
-  return { start: startWhenReady, status, setEnabled, setChatRouting, connection, ensureWorkspaceReady, syncWorkspaceMcp, stop };
+  return { start: startWhenReady, status, setEnabled, setChatRouting, connection, compatibilityConnection, ensureWorkspaceReady, syncWorkspaceMcp, stop };
 }

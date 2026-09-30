@@ -6,6 +6,7 @@ import type {
 } from "./skill-upload";
 import type { McpStatusMap } from "../types";
 import type { Message, Part, Session, Todo } from "@opencode-ai/sdk/v2/client";
+import type { SessionGoal, SessionGoalCommand } from "@omnirush/types";
 import {
   agentContextDiagnosticsReportSchema,
   agentContextDiagnosticsRequestSchema,
@@ -1757,6 +1758,18 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         baseUrl,
         `/workspaces/${encodeURIComponent(workspaceId)}`,
         { token, hostToken, method: "DELETE", timeoutMs: timeouts.deleteWorkspace },
+      ),
+    getSessionGoal: (workspaceId: string, sessionId: string, options?: { signal?: AbortSignal }) =>
+      requestJson<{ goal: SessionGoal | null }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-goals/${encodeURIComponent(sessionId)}`,
+        { token, hostToken, timeoutMs: timeouts.sessionRead, signal: options?.signal },
+      ),
+    commandSessionGoal: (workspaceId: string, sessionId: string, body: SessionGoalCommand) =>
+      requestJson<{ goal: SessionGoal | null }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-goals/${encodeURIComponent(sessionId)}`,
+        { token, hostToken, method: "POST", body, timeoutMs: timeouts.config },
       ),
     getSessionGroups: (workspaceId: string) =>
       requestJson<{ state: OmniRushSessionGroupState; updatedAt: number | null }>(

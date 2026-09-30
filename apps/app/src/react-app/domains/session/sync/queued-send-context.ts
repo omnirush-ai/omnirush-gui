@@ -27,6 +27,10 @@ export function getQueuedSendContext(sessionId: string) {
   return queuedSendContexts.get(sessionId);
 }
 
+export function getQueuedSendContextSessionIds() {
+  return [...queuedSendContexts.keys()];
+}
+
 export function clearQueuedSendContext(sessionId: string) {
   if (!queuedSendContexts.delete(sessionId)) return;
   for (const listener of listeners) listener();

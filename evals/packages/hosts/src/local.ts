@@ -330,7 +330,7 @@ function chromeArgs(cdpPort: number, profileDir: string, startUrl: string, headl
   return headless ? ["--headless=new", ...args] : args;
 }
 
-async function waitForCdpOrExit(label: string, cdpUrl: string, spawned: SpawnedDetached, logPath: string, requirePageTarget = false): Promise<void> {
+async function waitForCdpOrExit(label: string, cdpUrl: string, spawned: SpawnedDetached, logPath: string, requirePageTarget = false, timeoutMs = CDP_WAIT_TIMEOUT_MS): Promise<void> {
   let exitDetail: string | null = null;
   const exitPromise = new Promise<void>((_resolve, reject) => {
     spawned.child.once("exit", async (code, signal) => {
@@ -350,7 +350,7 @@ async function waitForCdpOrExit(label: string, cdpUrl: string, spawned: SpawnedD
     timer.unref();
   });
   await Promise.race([
-    (requirePageTarget ? waitForPageTarget(cdpUrl, CDP_WAIT_TIMEOUT_MS) : waitForCdp(cdpUrl, { timeoutMs: CDP_WAIT_TIMEOUT_MS })).catch(async (error) => {
+    (requirePageTarget ? waitForPageTarget(cdpUrl, timeoutMs) : waitForCdp(cdpUrl, { timeoutMs })).catch(async (error) => {
       const tail = await tailLines(logPath, 40);
       throw new Error(`${messageText(error)}. Last 40 lines of ${logPath}:\n${tail}`);
     }),
@@ -910,8 +910,12 @@ async function ensureDisplay(repoRoot: string, env: NodeJS.ProcessEnv, log: (mes
         }
       }
       const cdpUrl = `http://127.0.0.1:${cdpPort}`;
+      const requestedBootTimeout = Number(env.OMNIRUSH_EVAL_DESKTOP_BOOT_TIMEOUT_MS);
+      const bootTimeout = Number.isSafeInteger(requestedBootTimeout) && requestedBootTimeout > 0
+        ? Math.min(requestedBootTimeout, 600_000)
+        : CDP_WAIT_TIMEOUT_MS;
       try {
-        await waitForCdpOrExit("Electron", cdpUrl, spawned, logPath, true);
+        await waitForCdpOrExit("Electron", cdpUrl, spawned, logPath, true, bootTimeout);
       } catch (error) {
         await killLocalPid(spawned.pid, { log });
         await Promise.all([

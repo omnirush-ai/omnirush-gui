@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ComposerPart } from "../src/app/types";
+import { parseGoalInvocation } from "../src/app/lib/session-goal";
 import { encodeConnectSkillToken } from "../src/react-app/domains/session/surface/composer/connect-skill-token";
 import { draftToParts } from "../src/react-app/domains/session/sync/draft-parts";
 import { firstLineLocalFileParts, isReadInlineablePath } from "../src/react-app/domains/session/sync/prompt-file-parts";
@@ -126,6 +127,20 @@ describe("draft file mentions", () => {
 });
 
 describe("slash-command parsing", () => {
+  test("goal controls match the whole argument and preserve the objective", () => {
+    expect(parseGoalInvocation(" /GOAL ")).toEqual({ action: "status" });
+    for (const action of ["pause", "resume", "clear", "edit"] as const) {
+      expect(parseGoalInvocation(`/goal ${action.toUpperCase()}`)).toEqual({ action });
+    }
+    expect(parseGoalInvocation("/goal status")).toEqual({ action: "set", objective: "status" });
+    expect(parseGoalInvocation("/goal pause the nightly job")).toEqual({ action: "set", objective: "pause the nightly job" });
+    expect(parseGoalInvocation("/goal Finish the report\nand check every total.")).toEqual({ action: "set", objective: "Finish the report\nand check every total." });
+    expect(parseGoalInvocation("/goal --budget 500 Finish the report")).toEqual({ action: "set", objective: "--budget 500 Finish the report" });
+    expect(parseGoalInvocation("/goals Finish the report")).toBeNull();
+    expect(parseGoalInvocation("/goal/report.txt")).toBeNull();
+    expect(parseGoalInvocation("Please use /goal pause")).toBeNull();
+  });
+
   test("parses command invocations", () => {
     expect(parseSlashCommandInvocation("/compact")).toEqual({ name: "compact", arguments: "" });
     expect(parseSlashCommandInvocation("/review this diff")).toEqual({ name: "review", arguments: "this diff" });

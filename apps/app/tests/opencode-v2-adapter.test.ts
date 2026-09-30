@@ -7,6 +7,7 @@ import {
 } from "../src/app/lib/opencode-v2-adapter";
 import { parseDynamicToolUIPart } from "../src/react-app/domains/session/sync/parse-tool-parts";
 import { codeModeToolCalls } from "../src/lib/code-mode-tools";
+import { isVisibleTextPart } from "../src/app/utils";
 
 const capturedPermissionAsked = {
   id: "evt_permission_asked",
@@ -722,6 +723,72 @@ describe("OpenCode v2 client compatibility", () => {
       const result = await client.session.messages({ sessionID: "ses_skills" });
       expect(result.data?.map(message => message.info.id)).toEqual(["msg_user", "msg_answer"]);
       expect(result.data?.[0]?.parts).toMatchObject([{ type: "text", text: notice }]);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test.each(["textParts", "parts"])("preserves hidden goal text and real user text in live and saved %s", async (layout) => {
+    const originalFetch = globalThis.fetch;
+    const instruction = "Continue working toward the active session goal. Check it with get_goal.";
+    const typed = "Keep my report visible 🙂";
+    const promptMetadata = (parts: { text: string; synthetic?: boolean; ignored?: boolean; metadata?: Record<string, unknown> }[]) => ({
+      omnirush: {
+        [layout]: layout === "parts" ? parts.map((part) => ({ type: "text", ...part }))
+          : parts.map(({ text, ...flags }) => ({ length: text.length, ...flags })),
+      },
+    });
+    const messages = [
+      { id: "msg_goal", type: "user", text: instruction, time: { created: 1 },
+        metadata: promptMetadata([{ text: instruction, synthetic: true }]) },
+      { id: "msg_real", type: "user", text: instruction, time: { created: 2 } },
+      { id: "msg_mixed", type: "user", text: `${instruction}\n\n${typed}`, time: { created: 3 },
+        metadata: promptMetadata([{ text: instruction, synthetic: true, metadata: { source: "goal" } }, { text: typed }]) },
+    ];
+    globalThis.fetch = async () => jsonResponse({ data: messages });
+    try {
+      const client = createClientV2("http://opencode.test/opencode2", "/workspace", {});
+      const result = await client.session.messages({ sessionID: "ses_goal" });
+      if (!result.data) throw new Error("Missing saved messages");
+      expect(result.data.map((message) => message.parts.flatMap((part) =>
+        part.type === "text" && isVisibleTextPart(part) ? [part.text] : []))).toEqual([[], [instruction], [typed]]);
+      expect(result.data[0]?.parts).toMatchObject([{ type: "text", text: instruction, synthetic: true }]);
+      expect(result.data[2]?.parts[0]).toMatchObject({ metadata: { source: "goal" } });
+      const state = createV2EventTranslationState();
+      for (const [index, message] of messages.entries()) {
+        const saved = result.data[index];
+        if (!saved) throw new Error("Missing saved message");
+        const admitted = { type: "session.inbox.enqueued", created: message.time.created, data: {
+          sessionID: "ses_goal", inboxID: message.id, item: { type: "user", payload: message },
+        } };
+        const expected = [
+          { type: "message.updated", properties: { info: saved.info } },
+          ...saved.parts.map((part) => ({ type: "message.part.updated", properties: { part } })),
+        ];
+        expect(translateV2Event(admitted, state)).toEqual(expected);
+        expect(translateV2Event(admitted, state)).toEqual(expected);
+      }
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("keeps user text visible when its recorded hidden-text layout is invalid", async () => {
+    const originalFetch = globalThis.fetch;
+    const typed = "Keep this user message visible";
+    const layouts = [
+      { textParts: [{ length: typed.length - 1, synthetic: true }] },
+      { textParts: [{ length: -1, synthetic: true }] },
+      { textParts: [{ length: 1.5, synthetic: true }] },
+      { textParts: [{ length: 4, synthetic: true }, { length: typed.length - 6 }] },
+      { parts: [{ type: "text", text: "A different saved prompt", synthetic: true }] },
+    ];
+    globalThis.fetch = async () => jsonResponse({ data: layouts.map((layout, index) => ({
+      id: `msg_layout_${index}`, type: "user", text: typed, time: { created: index }, metadata: { omnirush: layout },
+    })) });
+    try {
+      const result = await createClientV2("http://opencode.test/opencode2", "/workspace", {}).session.messages({ sessionID: "ses_goal" });
+      expect(result.data?.map((message) => message.parts)).toEqual(layouts.map((_, index) => [{
+        id: `msg_layout_${index}:0`, messageID: `msg_layout_${index}`, sessionID: "ses_goal", type: "text", text: typed,
+        metadata: { omnirush: layouts[index] },
+      }]));
+      expect(result.data?.every((message) => message.parts.every(isVisibleTextPart))).toBe(true);
     } finally { globalThis.fetch = originalFetch; }
   });
 

@@ -45,6 +45,7 @@ import * as AnthropicToolSchema from "./omnirush-anthropic-tool-schema.js";
 import * as ReasoningEffort from "./omnirush-reasoning-effort.js";
 import * as TitleRecovery from "./omnirush-title-recovery.js";
 import * as Swarm from "./omnirush-swarm.js";
+import * as SessionGoals from "./omnirush-session-goals.js";
 
 type Rec = Record<string, unknown>;
 type Hook = (input: any, output: any) => Promise<void> | void;
@@ -65,6 +66,7 @@ export const OMNIRUSH_V1_PLUGIN_MODULES: ReadonlyArray<Record<string, unknown>> 
   ReasoningEffort,
   TitleRecovery,
   Swarm,
+  SessionGoals,
 ];
 
 function isRec(value: unknown): value is Rec {
@@ -176,13 +178,14 @@ function messagesForV1(messages: unknown[]): { v1: Rec[]; restore: (edited: Rec[
 type ModelInfo = Rec & { id: string; providerID: string };
 
 export default {
-  id: "omnirush",
+  id: process.env.OMNIRUSH_ENGINE_GOALS_ONLY === "1" ? "omnirush.session-goals" : "omnirush",
   async setup(ctx: any) {
-    const directory: string = ctx?.location?.directory ?? process.cwd();
+    const goalsOnly = process.env.OMNIRUSH_ENGINE_GOALS_ONLY === "1";
+    const directory: string = ctx?.location?.directory ?? ctx?.directory ?? process.cwd();
     const client = adapterClient();
     const factoryInput = { client, directory, worktree: directory, project: { id: "omnirush", worktree: directory } };
     const plugins: V1Hooks[] = [];
-    for (const module of OMNIRUSH_V1_PLUGIN_MODULES) {
+    for (const module of goalsOnly ? [SessionGoals] : OMNIRUSH_V1_PLUGIN_MODULES) {
       for (const factory of Object.values(module)) {
         if (typeof factory !== "function") continue;
         try {
@@ -234,7 +237,7 @@ export default {
       id: z.string().optional().describe("Unique identifier for the todo item"),
     });
     const todoArgs = { todos: z.array(todoItem).describe("The updated todo list") };
-    tools.push(["todowrite", {
+    if (!goalsOnly) tools.push(["todowrite", {
       description: "Use this tool to create and manage a structured task list for your current session. It helps you track progress on complex, multi-step work and shows the user what you are doing. Send the whole updated list every time; mark exactly one task in_progress while you work on it and mark tasks completed as soon as they are done.",
       args: todoArgs,
       async execute(raw: unknown, context: { sessionID?: string }) {
@@ -282,10 +285,10 @@ export default {
     }
     // The code-mode tool is never offered: tools are called directly, as with the 1.x engine.
     // MCP servers (also ones from a project's own opencode.json) default to direct tools.
-    await ctx.tool.transform((editor: any) => {
+    if (!goalsOnly) await ctx.tool.transform((editor: any) => {
       if (editor.get?.("execute")) editor.remove("execute");
     });
-    if (typeof ctx.mcp?.transform === "function") {
+    if (!goalsOnly && typeof ctx.mcp?.transform === "function") {
       await ctx.mcp.transform((editor: any) => {
         for (const [, server] of editor.list() as Array<[string, Rec]>) {
           if (server.codemode === undefined) server.codemode = false;
@@ -296,7 +299,7 @@ export default {
     // ---- tool calls --------------------------------------------------------
     // Sub-agents run in the foreground, as the 1.x task tool did (the swarm counts running
     // sub-agents and the task result carries the sub-agent's answer).
-    await ctx.tool.hook("execute.before", async (event: any) => {
+    if (!goalsOnly) await ctx.tool.hook("execute.before", async (event: any) => {
       if (event.tool !== "subagent" || !isRec(event.input)) return;
       // The sub-agent's model comes from the app's sub-agent setting (or the caller's), as with
       // the 1.x task tool, never from the model's own pick.
@@ -304,7 +307,7 @@ export default {
       event.input = input;
     });
     // …so the subagent tool is offered without its `model` and `background` parameters.
-    await ctx.session.hook("context", async (event: any) => {
+    if (!goalsOnly) await ctx.session.hook("context", async (event: any) => {
       const input = event?.tools?.subagent?.input;
       if (!isRec(input) || !isRec(input.properties)) return;
       const { model: _model, background: _background, ...properties } = input.properties as Rec;
@@ -494,9 +497,9 @@ export default {
         // Reported again on the next tick.
       }
     };
-    await reportTools();
-    const toolTimer = setInterval(() => void reportTools(), 3_000);
-    toolTimer.unref?.();
+    if (!goalsOnly) await reportTools();
+    const toolTimer = goalsOnly ? undefined : setInterval(() => void reportTools(), 3_000);
+    toolTimer?.unref?.();
 
     // ---- events: the 1.x stream of the engine adapter ---------------------
     const eventHooks = plugins.flatMap((plugin) => (typeof plugin.event === "function" ? [plugin.event] : []));
@@ -549,7 +552,7 @@ export default {
     }
 
     return async () => {
-      clearInterval(toolTimer);
+      if (toolTimer) clearInterval(toolTimer);
       controller.abort();
       for (const plugin of plugins) {
         const dispose = plugin.dispose;

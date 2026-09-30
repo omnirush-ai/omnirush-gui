@@ -217,6 +217,13 @@ export type CommandListItem = {
   subtask?: boolean;
 };
 
+const BUILTIN_GOAL_COMMAND: CommandListItem = {
+  id: "builtin:goal",
+  name: "goal",
+  description: "Set a goal and keep working until it is complete.",
+  source: "command",
+};
+
 /**
  * List available slash commands for a workspace.
  */
@@ -227,8 +234,8 @@ export async function listCommands(
   try {
     const result = await client.command.list({ directory });
     const list = result?.data ?? [];
-    if (!Array.isArray(list)) return [];
-    return list.map((cmd: Record<string, unknown>) => ({
+    if (!Array.isArray(list)) return [BUILTIN_GOAL_COMMAND];
+    const commands = list.map((cmd: Record<string, unknown>) => ({
       id: `cmd:${cmd.name}`,
       name: String(cmd.name ?? ""),
       description: cmd.description ? String(cmd.description) : undefined,
@@ -241,8 +248,9 @@ export async function listCommands(
       model: typeof cmd.model === "string" ? cmd.model : undefined,
       subtask: cmd.subtask === true,
     }));
+    return [BUILTIN_GOAL_COMMAND, ...commands.filter((command) => command.name.toLowerCase() !== "goal")];
   } catch {
-    return [];
+    return [BUILTIN_GOAL_COMMAND];
   }
 }
 
