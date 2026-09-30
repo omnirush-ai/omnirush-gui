@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import { MessageList } from "../src/components/chat/message-list";
+import { ReasoningBlock } from "../src/components/chat/reasoning-block";
 import { MessageListProvider } from "../src/components/chat/message-list-provider";
 
 function bashPart(id: string): DynamicToolUIPart {
@@ -104,7 +105,7 @@ describe("finished turn step fold (single OpenCode message per turn)", () => {
     expect(markup).toContain("Everything passed — the change is in.");
   });
 
-  test("a short turn stays inline with one aggregate line", () => {
+  test("a short finished turn folds too, as in Codex", () => {
     const assistant: UIMessage = {
       id: "assistant-2",
       role: "assistant",
@@ -119,13 +120,13 @@ describe("finished turn step fold (single OpenCode message per turn)", () => {
 
     const markup = renderList([userMessage, assistant]);
 
-    expect(markup).not.toContain("Worked for");
-    // Both calls merge into one aggregate summary line.
-    expect(markup).toContain("Edited 1 file, ran command");
+    expect(markup).toContain("Worked for 4s");
+    // Its calls are folded away; the answer stays.
+    expect(markup).not.toContain("Edited 1 file, ran command");
     expect(markup).toContain("Done.");
   });
 
-  test("reasoning between calls stays one aggregate line that advertises its thought", () => {
+  test("the turn-opening thought and the calls after it fold with the turn", () => {
     const assistant: UIMessage = {
       id: "assistant-3",
       role: "assistant",
@@ -142,16 +143,12 @@ describe("finished turn step fold (single OpenCode message per turn)", () => {
 
     const markup = renderList([userMessage, assistant]);
 
-    // No thought/command ladder: the run is ONE aggregate line…
-    expect(markup).toContain("Ran 2 commands");
-    // …that counts the thought it carries.
-    expect(markup).toContain("1 thought");
-
-    // The turn-opening thought still renders as its own line above the run.
-    const openingThought = markup.indexOf("Reasoning trace");
-    const run = markup.indexOf("Ran 2 commands");
-    expect(openingThought).toBeGreaterThan(-1);
-    expect(run).toBeGreaterThan(openingThought);
+    // The aggregate line itself (one line, its thought counted) is covered in
+    // tool-aggregate-group.test.tsx; here it folds with the rest of the work.
+    expect(markup).toContain("Worked for 3s");
+    expect(markup).not.toContain("Ran 2 commands");
+    expect(markup).not.toContain("Reasoning trace");
+    expect(markup).toContain("Done.");
   });
 });
 
@@ -183,6 +180,10 @@ describe("finished turn fold (the 2.x engine: one assistant message per step)", 
   });
 
   test("finished heading-only reasoning leaves nothing; reasoning with prose keeps its trace", () => {
+    const block = (text: string) => withoutWindow(() => renderToStaticMarkup(<ReasoningBlock text={text} isStreaming={false} />));
+    expect(block("**Planning the fix**")).toBe("");
+    expect(block("**Planning the fix**\n\nThe cache key misses the tenant id.")).toContain("Reasoning trace");
+
     const headingOnly = renderList([
       userMessage,
       at("b1", 1_000, [
@@ -195,20 +196,9 @@ describe("finished turn fold (the 2.x engine: one assistant message per step)", 
     expect(headingOnly).not.toContain("Planning the fix");
     expect(headingOnly).not.toContain("Reasoning trace");
     expect(headingOnly).toContain("Done.");
-
-    const withProse = renderList([
-      userMessage,
-      at("b2", 1_000, [
-        { type: "step-start" },
-        { type: "reasoning", text: "**Planning the fix**\n\nThe cache key misses the tenant id, so two tenants share entries.", state: "done" },
-        bashPart("c1"),
-        { type: "text", text: "Done.", state: "done" },
-      ], 4_000),
-    ]);
-    expect(withProse).toContain("Reasoning trace");
   });
 
-  test("live heading-only reasoning rides on the Working row, not a trace", () => {
+  test("live heading-only reasoning rides on the turn's Working header, not a trace", () => {
     const markup = renderList([
       userMessage,
       at("c1", 1_000, [

@@ -198,6 +198,21 @@ describe("tool aggregate row merging", () => {
     expect(rows.every((row) => row.repeat === 1)).toBe(true);
   });
 
+  test("counts the thoughts it shows; a heading-only one is not a thought", () => {
+    const markup = renderToStaticMarkup(
+      <ToolAggregateGroup
+        parts={[completedCommand, { ...completedCommand, toolCallId: "completed-command-2" }]}
+        thoughts={[
+          { afterIndex: 1, text: "The cache key misses the tenant id.", isStreaming: false },
+          { afterIndex: 2, text: "**Checking the cache**", isStreaming: false },
+        ]}
+      />,
+    );
+    expect(markup).toContain("Ran 2 commands");
+    expect(markup).toContain("1 thought");
+    expect(markup).not.toContain("2 thoughts");
+  });
+
   test("a thought anchored between two identical reads keeps them apart", () => {
     const rows = buildAggregateRows(
       [readOf("read-1", "/repo/a.tsx"), readOf("read-2", "/repo/a.tsx")],

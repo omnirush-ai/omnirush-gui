@@ -133,8 +133,6 @@ import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/co
 
 const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
 
-/** Above this many step rows a finished turn folds into one summary line. */
-const COLLAPSED_STEP_RUN_MIN_ROWS = 4
 
 const ParentRunContext = React.createContext({ active: true, lastProgressAt: 0 })
 
@@ -881,13 +879,16 @@ const MessageComponent = React.memo(
 
 MessageComponent.displayName = "MessageComponent"
 
-/** The live "Working 12s" row; with the run's latest reasoning heading, as Codex's status row shows it. */
-const LoadingMessage = React.memo(({ elapsedSeconds, heading }: { elapsedSeconds: number; heading?: string | null }) => (
+/** "Working 12s", with the run's latest reasoning heading as Codex's status row shows it. */
+function workingLabel(elapsedSeconds: number, heading: string | null): string {
+  return `Working ${formatElapsedSeconds(elapsedSeconds)}${heading ? ` · ${heading}` : ""}`
+}
+
+/** The live Working row, before the turn has anything to fold under it. */
+const LoadingMessage = React.memo(({ label }: { label: string }) => (
     <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
       <div data-loading-message="working" className="py-1 text-sm text-muted-foreground">
-        <span className="ow-text-shimmer tabular-nums">
-          Working {formatElapsedSeconds(elapsedSeconds)}{heading ? ` · ${heading}` : ""}
-        </span>
+        <span className="ow-text-shimmer tabular-nums">{label}</span>
       </div>
     </Message>
 ))
@@ -1184,13 +1185,14 @@ function getRenderableMessage(message: UIMessage) {
 }
 
 /**
- * A finished turn's work collapses to a single "Worked for 1m 19s" line
- * that expands back into the full run, as in Codex: everything before the
- * final answer (steps, reasoning, and the agent's progress notes) folds, and
- * only the answer stays in view. Live turns, and short finished ones, show
- * their steps unprompted.
+ * A turn's work folds under one line at the top of the turn, as in Codex:
+ * while it runs, the live "Working 12s · <latest heading>" status; once it is
+ * done, "Worked for 1m 19s". Everything before the answer (steps, reasoning,
+ * and the agent's progress notes) is inside, and the line never moves while
+ * the work grows under it. It is the same element live and finished, so an
+ * opened run stays open when the turn ends.
  */
-function CompletedStepRun({ label, children }: { label: string; children: React.ReactNode }) {
+function CompletedStepRun({ label, live = false, children }: { label: string; live?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false)
 
   return (
@@ -1200,7 +1202,7 @@ function CompletedStepRun({ label, children }: { label: string; children: React.
           className="group flex cursor-pointer items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
           aria-label={open ? `${label}. Hide steps` : `${label}. Show steps`}
         >
-          <span>{label}</span>
+          <span className={cn(live && "ow-text-shimmer tabular-nums")} data-step-run-live={live ? "" : undefined}>{label}</span>
           <ChevronRight
             aria-hidden="true"
             className={cn(
@@ -1216,6 +1218,14 @@ function CompletedStepRun({ label, children }: { label: string; children: React.
     </Collapsible>
   )
 }
+
+/**
+ * The live run's status line ("Working 12s · heading") when the latest turn
+ * shows it as its own header; null while the list shows it (before the turn
+ * has any message) or while something needs attention (waiting on approval,
+ * a delegated task, reconnecting), when the work stays open instead.
+ */
+const LiveRunLabelContext = React.createContext<string | null>(null)
 
 interface AssistantMessageGroupProps {
   items: UIMessageWithIndex[]
@@ -1252,6 +1262,8 @@ function MessageGroup({
   // silently corrupt fork/revert boundaries.
   const lastRealItem = items.findLast((item) => !isSessionErrorMessage(item.message))
   const isLiveGroup = isStreaming && isLastGroup
+  const liveRunLabel = React.useContext(LiveRunLabelContext)
+  const liveLabel = isLiveGroup ? liveRunLabel : null
 
   if (!lastItem || isMessageEmptyGroup(items)) {
     return null;
@@ -1336,9 +1348,16 @@ function MessageGroup({
       : stepRowCount === 1
         ? "1 step"
         : `${stepRowCount} steps`
-  // A short finished run reads fine as a list, so only long ones fold away.
-  const collapseSteps =
-    !isLiveGroup && stepItems.length > 0 && stepRowCount > COLLAPSED_STEP_RUN_MIN_ROWS
+  // Every finished turn folds its work above its answer, as in Codex, and a
+  // live one folds under its status header. Work that still needs to be seen
+  // stays open: a live turn waiting on the user or a delegated task (no
+  // header); a finished turn with a call still in flight (a sub-agent awaiting
+  // its result), or with no answer to fold it above (cut short by the user).
+  const stepsInFlight = stepItems.some((item) =>
+    item.message.parts.some((part) => "toolCallId" in part && isToolPartInFlight(part as AnyToolPart)))
+  const hasAnswer = proseItems.some((item) => getRenderableMessage(item.message) !== null)
+  const collapseSteps = stepItems.length > 0 && stepRowCount > 0
+    && (isLiveGroup ? liveLabel !== null : hasAnswer && !stepsInFlight)
   const foldedReasoning = collapseSteps
     ? shownReasoning.map((reasoning) => (
       <Message
@@ -1406,9 +1425,12 @@ function MessageGroup({
       {/* The scroll area keeps the same 8px rhythm the parts inside a single
           message use, so a step row is spaced identically whether or not a
           message boundary happens to fall between it and the previous row. */}
+      {liveLabel !== null && !collapseSteps ? (
+        <LoadingMessage label={liveLabel} />
+      ) : null}
       {stepItems.length > 0 ? (
         collapseSteps ? (
-          <CompletedStepRun label={stepRunLabel}>
+          <CompletedStepRun label={liveLabel ?? stepRunLabel} live={liveLabel !== null}>
             <div className="flex flex-col gap-2">
               {renderItems(stepItems, 0)}
               {foldedReasoning}
@@ -1508,12 +1530,7 @@ interface MessageListProps {
   syncHealth?: RunSyncHealth
 }
 
-export function shouldShowMessageListLoading(
-  status: ThreadStatus,
-  messageCount: number,
-  hasVisibleToolActivity = false,
-) {
-  if (hasVisibleToolActivity) return false
+export function shouldShowMessageListLoading(status: ThreadStatus, messageCount: number) {
   return status === "streaming" || (status === "submitted" && messageCount > 0)
 }
 
@@ -1584,7 +1601,6 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
     () => collectLatestAssistantToolParts(messages),
     [messages],
   )
-  const hasVisibleToolActivity = latestAssistantToolParts.some(isToolPartInFlight)
   const waiting = activityStatus === "waiting" || activityStatus === "compacting" || childBlocked
   const showReconnecting = !waiting && !retryStatus && shouldShowRunReconnecting(status, syncDegraded)
   const noNewActivity = hasNoNewActivity({
@@ -1592,8 +1608,15 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
     disconnected: syncDegraded, lastProgressAt, now: Date.now(),
   })
   const showLoading = !waiting && !noNewActivity && !showReconnecting && tasks.length === 0
-    && shouldShowMessageListLoading(status, messages.length, hasVisibleToolActivity)
+    // The Working row is the run's status line, as Codex's status row: it stays
+    // under running tool rows instead of vanishing and coming back each call.
+    && shouldShowMessageListLoading(status, messages.length)
   const liveHeading = React.useMemo(() => (showLoading ? latestReasoningHeading(messages) : null), [showLoading, messages])
+  const lastListItem = items.at(-1)
+  // Once the run has an assistant turn, the Working row is that turn's header
+  // (at its top, the work folded under it) instead of a row below everything.
+  const turnOwnsStatus = showLoading && lastListItem !== undefined && isMessageGroup(lastListItem)
+  const liveLabel = showLoading ? workingLabel(runElapsedSeconds, liveHeading) : null
   const baseUrl = workspace?.opencodeBaseUrl
   React.useEffect(() => {
     if (!noNewActivity || !baseUrl) return
@@ -1607,6 +1630,7 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
 
   return (
     <ParentRunContext.Provider value={{ active: runActive, lastProgressAt }}>
+    <LiveRunLabelContext.Provider value={turnOwnsStatus ? liveLabel : null}>
     <CurrentToolLifecycleProvider
       activityStatus={activityStatus}
       currentToolCallIds={currentToolCallIds}
@@ -1641,12 +1665,13 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
         )
         })}
 
-        {showLoading && <LoadingMessage elapsedSeconds={runElapsedSeconds} heading={liveHeading} />}
+        {liveLabel !== null && !turnOwnsStatus && <LoadingMessage label={liveLabel} />}
         {showReconnecting && <ReconnectingMessage lastConfirmedAt={syncHealth?.lastConfirmedAt ?? null} />}
         {retryStatus ? <RetryMessage status={retryStatus} /> : null}
         {error && !hasSessionErrorMessage ? <ErrorMessage error={error} /> : null}
       </div>
     </CurrentToolLifecycleProvider>
+    </LiveRunLabelContext.Provider>
     </ParentRunContext.Provider>
   )
 }

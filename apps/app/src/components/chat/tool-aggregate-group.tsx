@@ -271,7 +271,7 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
   // "Edited 1 file" above "Edited file-chip.tsx" says nothing twice.
   // A group that is exactly one file action (and no thoughts) renders
   // as the row itself — verb, chip, duration — with nothing to expand.
-  const soloRow = rows.length === 1 && thoughts.length === 0 ? rows[0] : undefined
+  const soloRow = rows.length === 1 && shownThoughts.length === 0 ? rows[0] : undefined
   const soloFile = soloRow ? getAggregateRowFile(soloRow.part) : null
   if (soloRow && soloFile) {
     const status = currentLifecycle ?? persistedRowStatus(soloRow.part)
@@ -330,9 +330,9 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
         className="group flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 text-start text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <span className="min-w-0 truncate">{displayRuntimeBrand(summary)}</span>
-        {thoughts.length > 0 ? (
+        {shownThoughts.length > 0 ? (
           <span data-tool-aggregate-thought-count className="shrink-0 text-xs text-muted-foreground/70">
-            · {thoughts.length === 1 ? "1 thought" : `${thoughts.length} thoughts`}
+            · {shownThoughts.length === 1 ? "1 thought" : `${shownThoughts.length} thoughts`}
           </span>
         ) : null}
         {singleCommandDuration ? (
