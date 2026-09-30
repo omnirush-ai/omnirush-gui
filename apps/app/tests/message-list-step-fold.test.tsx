@@ -179,6 +179,51 @@ describe("finished turn fold (the 2.x engine: one assistant message per step)", 
     expect(note === -1 || note < answer).toBe(true);
   });
 
+  test("a live turn keeps only its latest note under the header; the calls after it fold", () => {
+    const runningPytest: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "bash",
+      toolCallId: "c9",
+      state: "input-available",
+      input: { command: "python -m pytest -q", description: "run tests" },
+    };
+    const markup = renderList([
+      userMessage,
+      at("l1", 1_000, [{ type: "step-start" }, bashPart("c1")]),
+      at("l2", 5_000, [{ type: "text", text: "Progress 6/7: the project declares Python 3.10+.", state: "done" }]),
+      at("l3", 6_000, [{ type: "step-start" }, runningPytest]),
+    ], "streaming");
+    const header = markup.indexOf("Working 0s");
+    const note = markup.indexOf("Progress 6/7");
+    expect(header).toBeGreaterThan(-1);
+    expect(note).toBeGreaterThan(header);
+    // The running command is work: folded under the header, so no tool row follows the note.
+    expect(markup.slice(note)).not.toContain("data-tool-aggregate");
+    expect(markup).not.toContain("python -m pytest -q");
+  });
+
+  test("a live note's own calls after its text fold too (one message: note, then a call)", () => {
+    const runningGrep: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "bash",
+      toolCallId: "c10",
+      state: "input-available",
+      input: { command: "grep -rn TODO tinydb", description: "find todos" },
+    };
+    const markup = renderList([
+      userMessage,
+      at("m1", 1_000, [{ type: "step-start" }, bashPart("c1")]),
+      at("m2", 5_000, [
+        { type: "step-start" },
+        { type: "text", text: "Progress 3/7: scanning for TODO comments next.", state: "done" },
+        runningGrep,
+      ]),
+    ], "streaming");
+    const note = markup.indexOf("Progress 3/7");
+    expect(note).toBeGreaterThan(markup.indexOf("Working 0s"));
+    expect(markup.slice(note)).not.toContain("data-tool-aggregate");
+  });
+
   test("finished heading-only reasoning leaves nothing; reasoning with prose keeps its trace", () => {
     const block = (text: string) => withoutWindow(() => renderToStaticMarkup(<ReasoningBlock text={text} isStreaming={false} />));
     expect(block("**Planning the fix**")).toBe("");

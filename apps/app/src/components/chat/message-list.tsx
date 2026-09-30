@@ -1309,6 +1309,28 @@ function MessageGroup({
       proseItems = [{ index: firstProse.index, message: split.answer }, ...proseItems.slice(1)]
     }
   }
+  // While the turn runs under its header, only the agent's latest note stays
+  // below it; the calls it made after that note fold with the rest of the
+  // work instead of showing below the note until the next one arrives.
+  if (isLiveGroup && liveLabel !== null) {
+    if (proseItems.length > 1) {
+      stepItems = [...stepItems, ...proseItems.slice(1)]
+      proseItems = proseItems.slice(0, 1)
+    }
+    // A step can hold the note and then a call in one message: the note
+    // keeps its text, and the call folds with the work.
+    const note = proseItems[0]
+    if (note && note.message.role === "assistant" && !isSessionErrorMessage(note.message)) {
+      const work = note.message.parts.filter((part) => part.type !== "text" && part.type !== "file")
+      if (work.some((part) => "toolCallId" in part)) {
+        stepItems = [...stepItems, { index: note.index, message: { ...note.message, id: `${note.message.id}:work`, parts: work } }]
+        proseItems = [{
+          index: note.index,
+          message: { ...note.message, parts: note.message.parts.filter((part) => part.type === "text" || part.type === "file") },
+        }]
+      }
+    }
+  }
   // How long the turn spent working, from the first step to when the answer
   // finished (or started, for older history without a completed timestamp).
   // Server timestamps, so this survives a reload.
