@@ -1,4 +1,4 @@
-import { spec } from "@omnirush/testkit";
+import { browserScript, spec } from "@omnirush/testkit";
 import { expect } from "vitest";
 import { notificationSounds } from "../worlds/chat.ts";
 
@@ -53,9 +53,24 @@ test("soft chimes tell a background user that a task finished or needs input, an
   };
   const open = async (session: { sessionId: string; title: string }) => {
     await foreground();
-    if ((await probe.hash()).includes("/settings")) await user.click({ role: "button", label: "Back to app" });
-    await user.click({ text: session.title });
-    await probe.eventually(() => probe.hash(), { within: 15_000, label: "the sound task conversation opens",
+    if ((await probe.hash()).includes("/settings")) {
+      await user.click({ role: "button", label: "Back to app" });
+      await probe.eventually(() => probe.hash(), { within: 15_000, label: "Settings navigation returns to the app",
+        until: (hash) => !hash.includes("/settings") });
+      await user.see("composer", { editable: true });
+    }
+    const control = record(await probe.eventually(() => probe.eval(browserScript((id) => {
+      const row = document.querySelector<HTMLElement>('[data-session-tab-id="' + id + '"]');
+      const label = row?.getAttribute("aria-label");
+      if (!row || !label) return null;
+      const matches = [...document.querySelectorAll<HTMLElement>('button, [role="button"]')]
+        .filter((node) => node.getAttribute("aria-label") === label);
+      return { label, nth: matches.indexOf(row) };
+    }, [session.sessionId])), { within: 15_000, label: `the saved ${session.title} has its own sidebar control`,
+      until: (value) => isRecord(value) && typeof value.label === "string" && typeof value.nth === "number" && value.nth >= 0 }));
+    if (typeof control.label !== "string" || typeof control.nth !== "number") throw new Error("Missing saved task control.");
+    await user.click({ role: "button", label: control.label, nth: control.nth });
+    await probe.eventually(() => probe.hash(), { within: 15_000, label: `${session.title} (${session.sessionId}) opens`,
       until: (hash) => hash.includes(`/session/${session.sessionId}`) });
     await user.see("composer", { editable: true });
   };
