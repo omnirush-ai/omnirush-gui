@@ -19,7 +19,7 @@ function splitFacts(value: unknown) {
   };
 }
 
-test("side chats keep questions, replies, and saved splits attached to their own conversation", async ({ world, user, probe, agent, step }) => {
+test("side chats keep questions, replies, and saved splits attached to their own conversation", async ({ world, user, probe, agent, step, evidence }) => {
   const primary = world.session.sessionId;
   const workspaceId = world.workspace.workspaceId;
   const shortcut = await probe.eval(() => (/Mac|iPhone|iPad|iPod/.test(navigator.platform))) ? "Meta+K" : "Control+K";
@@ -162,9 +162,11 @@ test("side chats keep questions, replies, and saved splits attached to their own
     await user.click({ placeholder: "Type your answer here...", nth: 1 });
     await user.press("Shift+Tab");
     await user.press("ArrowUp");
-    expect(await probe.eval(() => document.activeElement?.textContent)).toContain("Side outline");
+    const sideUp = await probe.eval(() => document.activeElement?.textContent);
+    expect(sideUp).toContain("Side outline");
     await user.press("ArrowDown");
-    expect(await probe.eval(() => document.activeElement?.textContent)).toContain("Side checklist");
+    const sideDown = await probe.eval(() => document.activeElement?.textContent);
+    expect(sideDown).toContain("Side checklist");
     await user.press("Enter");
     await answer("secondary", "Side checklist", "Side outline");
     await user.see({ text: "Which format should the main task use?" });
@@ -172,10 +174,16 @@ test("side chats keep questions, replies, and saved splits attached to their own
     await user.click({ placeholder: "Type your answer here..." });
     await user.press("Shift+Tab");
     await user.press("ArrowUp");
-    expect(await probe.eval(() => document.activeElement?.textContent)).toContain("Main outline");
+    const mainUp = await probe.eval(() => document.activeElement?.textContent);
+    expect(mainUp).toContain("Main outline");
     await user.press("Enter");
     await answer("primary", "Main outline", "Main checklist");
     expect(await pane("secondary")).not.toHaveProperty("answer", expect.stringContaining("Main outline"));
+    evidence.recordAssertionEvidence(
+      "Arrow keys focus question options and Enter answers only the selected split pane",
+      JSON.stringify({ sideUp, sideDown, mainUp, primary: await pane("primary"), secondary: await pane("secondary") }),
+      true,
+    );
     await user.screenshot();
   });
 
