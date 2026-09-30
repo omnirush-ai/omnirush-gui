@@ -16,10 +16,15 @@ function record(value: unknown): Record<string, unknown> {
 function nativeFacts(value: unknown) {
   const state = record(value);
   if (!Array.isArray(state.samples)) throw new Error("Missing native audio samples.");
-  return { minimized: state.minimized === true, focused: state.focused === true, audible: state.audible === true,
+  if (!Array.isArray(state.focusEvents)) throw new Error("Missing native focus events.");
+  return { at: Number(state.at), minimized: state.minimized === true, focused: state.focused === true, audible: state.audible === true,
     samples: state.samples.map((value: unknown) => {
       const sample = record(value);
-      return { minimized: sample.minimized === true, focused: sample.focused === true };
+      return { at: Number(sample.at), minimized: sample.minimized === true, focused: sample.focused === true };
+    }),
+    focusEvents: state.focusEvents.map((value: unknown) => {
+      const event = record(value);
+      return { at: Number(event.at), event: String(event.event), minimized: event.minimized === true, focused: event.focused === true };
     }) };
 }
 
@@ -67,19 +72,25 @@ test("soft chimes tell a background user that a task finished or needs input, an
     prove("The conversation uses the real selected controlled-provider model", { selectedModel, sessionId: world.session.sessionId });
   };
   const send = async (prompt: string, background: boolean) => {
+    if (!background) await foreground();
     await user.type("composer", prompt, { verify: true });
+    const focusedStart = await native();
+    expect(focusedStart.focused).toBe(true);
     await user.press("Enter");
     if (background) await minimize();
+    return focusedStart.focusEvents.length;
   };
   const baseline = async () => {
     await settle();
-    return { native: (await native()).samples.length, output: await output() };
+    const state = await native();
+    return { native: state.samples.length, focusEventCount: state.focusEvents.length, output: await output() };
   };
   const expectSound = async (before: Awaited<ReturnType<typeof baseline>>, claim: string) => {
     await probe.eventually(native, { within: 15_000, label: "Chromium reports real audible output while minimized",
       until: (state) => state.samples.length > before.native });
     const state = await native();
-    expect(state.samples.slice(before.native)).toEqual([{ minimized: true, focused: false }]);
+    expect(state.samples.slice(before.native).map(({ minimized, focused }) => ({ minimized, focused })))
+      .toEqual([{ minimized: true, focused: false }]);
     await probe.eventually(output, { within: 10_000, label: "the native destination receives a mild nonzero audio signal",
       until: (state) => state.positiveSamples > before.output.positiveSamples && state.backgroundSamples > before.output.backgroundSamples });
     const measured = await output();
@@ -92,7 +103,7 @@ test("soft chimes tell a background user that a task finished or needs input, an
       backgroundSampleDelta: measured.backgroundSamples - before.output.backgroundSamples,
       peakScope: "per note forwarding tap", silentAfterward: !(await native()).audible });
   };
-  const quiet = async (before: Awaited<ReturnType<typeof baseline>>, claim: string, duration = 2_000) => {
+  const quiet = async (before: Awaited<ReturnType<typeof baseline>>, claim: string, duration = 2_000, foregroundTrial = false) => {
     const started = Date.now();
     await probe.eventually(async () => {
       expect((await native()).samples).toHaveLength(before.native);
@@ -100,8 +111,16 @@ test("soft chimes tell a background user that a task finished or needs input, an
       return Date.now() - started;
     }, { within: duration + 3_000, label: "the task or pending request produces no extra audio", until: (elapsed) => elapsed >= duration });
     const after = { native: await native(), output: await output() };
+    const focusEvents = after.native.focusEvents.slice(before.focusEventCount);
+    if (foregroundTrial) {
+      expect(after.native.focused).toBe(true);
+      expect(after.native.minimized).toBe(false);
+      expect(focusEvents.filter((event) => event.event === "blur" || event.event === "minimize")).toEqual([]);
+      expect(await probe.eval(() => document.visibilityState === "visible" && document.hasFocus())).toBe(true);
+    }
     prove(claim, { durationMs: Date.now() - started, nativeRisingEdgeDelta: after.native.samples.length - before.native,
-      outputBurstDelta: after.output.bursts - before.output.bursts, minimized: after.native.minimized, focused: after.native.focused });
+      outputBurstDelta: after.output.bursts - before.output.bursts, minimized: after.native.minimized, focused: after.native.focused,
+      foregroundTrial, focusEvents });
   };
   const mount = `/workspace/${encodeURIComponent(world.workspace.workspaceId)}/${world.engine === "v2" ? "opencode2/api" : "opencode"}`;
   const pending = async (kind: "question" | "permission", sessionId: string) => {
@@ -179,10 +198,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       const task = world.completed[1];
       if (!task) throw new Error("Missing foreground completion workload.");
       const before = await baseline();
-      await send(task.prompt, false);
+      before.focusEventCount = await send(task.prompt, false);
       await user.see({ text: task.reply }, { timeoutMs: 45_000 });
       expect((await native()).focused).toBe(true);
-      await quiet(before, "A visible real completion stays silent");
+      await quiet(before, "A visible real completion stays silent", 2_000, true);
     });
 
     await step("a real question chimes once and reload does not repeat it", async () => {
@@ -230,19 +249,19 @@ test("soft chimes tell a background user that a task finished or needs input, an
     await step("visible questions and approvals also stay silent", async () => {
       await open();
       let before = await baseline();
-      await send(world.question.prompt, false);
+      before.focusEventCount = await send(world.question.prompt, false);
       await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
       expect(await waitPending("question", world.session.sessionId)).toHaveLength(1);
       expect((await native()).focused).toBe(true);
-      await quiet(before, "A visible real question stays silent");
+      await quiet(before, "A visible real question stays silent", 2_000, true);
       await answerQuestion();
       await open();
       before = await baseline();
-      await send(world.permission.prompt, false);
+      before.focusEventCount = await send(world.permission.prompt, false);
       await user.see("Allow once", { timeoutMs: 45_000 });
       expect(await waitPending("permission", world.session.sessionId)).toHaveLength(1);
       expect((await native()).focused).toBe(true);
-      await quiet(before, "A visible real permission stays silent");
+      await quiet(before, "A visible real permission stays silent", 2_000, true);
       await allowPermission();
     });
 
@@ -287,6 +306,10 @@ test("soft chimes tell a background user that a task finished or needs input, an
       await allowPermission();
     });
   } catch (error) {
+    const state = await Promise.all([native(), output()]).catch(() => null);
+    if (state) evidence.recordAssertionEvidence("The sound journey stopped before all claims passed", JSON.stringify({
+      error: error instanceof Error ? error.message : String(error), native: state[0], output: state[1],
+    }), false);
     await user.screenshot().catch(() => undefined);
     throw error;
   } finally {

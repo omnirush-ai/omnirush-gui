@@ -573,15 +573,25 @@ export async function notificationSounds(seed: Seed) {
 if (process.versions.electron && process.type === 'browser') {
   require('node:inspector').open(${inspectorPort}, '127.0.0.1');
   const samples = [];
+  const focusEvents = [];
+  const observedWindows = new Set();
   let audible = false;
   let BrowserWindow;
+  let app;
   const window = () => {
     // NODE_OPTIONS runs before Electron registers its built-in module.
     if (!BrowserWindow) {
-      try { ({ BrowserWindow } = require('electron')); } catch { return; }
+      try { ({ BrowserWindow, app } = require('electron')); } catch { return; }
     }
-    return BrowserWindow.getAllWindows().find(win =>
+    const win = BrowserWindow.getAllWindows().find(win =>
       !win.isDestroyed() && /^https?:/.test(win.webContents.getURL()));
+    if (win && !observedWindows.has(win.id)) {
+      observedWindows.add(win.id);
+      const observe = event => focusEvents.push({ at: Date.now(), event, focused: win.isFocused(), minimized: win.isMinimized() });
+      observe('observed');
+      for (const event of ['focus', 'blur', 'minimize', 'restore']) win.on(event, () => observe(event));
+    }
+    return win;
   };
   const timer = setInterval(() => {
     const win = window();
@@ -594,8 +604,8 @@ if (process.versions.electron && process.type === 'browser') {
     const win = window();
     if (!win) throw new Error('The native app window is unavailable.');
     if (command === 'minimize') win.minimize();
-    if (command === 'foreground') { win.restore(); win.show(); win.focus(); }
-    return { focused: win.isFocused(), minimized: win.isMinimized(), audible: win.webContents.isCurrentlyAudible(), samples: [...samples] };
+    if (command === 'foreground') { win.restore(); win.show(); app.focus({ steal: true }); win.focus(); }
+    return { at: Date.now(), focused: win.isFocused(), minimized: win.isMinimized(), audible: win.webContents.isCurrentlyAudible(), samples: [...samples], focusEvents: [...focusEvents] };
   };
 }
 `, "utf8");
