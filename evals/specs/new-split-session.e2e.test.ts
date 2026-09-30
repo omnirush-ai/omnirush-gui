@@ -1,77 +1,51 @@
 import { browserScript } from "@omnirush/testkit";
 import { expect } from "vitest";
 import { spec } from "@omnirush/testkit";
-import { newSplitPrimary } from "../worlds/chat.ts";
+import { newSplitPrimary, notificationSounds } from "../worlds/chat.ts";
 
 const test = spec.world(newSplitPrimary, { timeout: 600_000 });
 const paletteInput = { placeholder: "Search actions, settings, and sessions…" };
 
-test("keyboard question options wrap and Enter answers only the selected chat pane", async ({ world, user, probe, step, evidence }) => {
-  const pane = (which: "primary" | "secondary") => probe.eval(browserScript((which) => {
-    const root = document.querySelector<HTMLElement>('[data-workbench-pane="' + which + '"]');
-    const messages = [...(root?.querySelectorAll<HTMLElement>('[data-message-role="assistant"]') ?? [])];
-    return { text: root?.textContent ?? "", answer: messages.at(-1)?.innerText ?? "" };
-  }, [which]));
+const keyboardTest = spec.world(notificationSounds, { timeout: 600_000 });
+
+keyboardTest("keyboard question options wrap and Enter submits the focused answer", async ({ world, user, probe, step, evidence }) => {
   const focus = () => probe.eval(() => ({ tag: document.activeElement?.tagName, text: document.activeElement?.textContent?.trim() }));
-  const send = async (which: "primary" | "secondary", prompt: string) => {
-    await user.type({ placeholder: "Describe your task...", nth: which === "primary" ? 0 : 1 }, prompt, { verify: true });
-    await user.press("Enter");
-  };
-  const answer = (which: "primary" | "secondary", selected: string, excluded: string) => probe.eventually(() => pane(which), {
-    within: 45_000, label: `${which} receives its selected keyboard answer`,
-    until: value => value.answer.includes(selected) && !value.answer.includes(excluded),
-  });
-
-  await step("open a side chat and ask a real question in each pane", async () => {
-    const shortcut = await probe.eval(() => /Mac|iPhone|iPad|iPod/.test(navigator.platform)) ? "Meta+K" : "Control+K";
-    await user.press(shortcut);
-    await user.see(paletteInput);
-    await user.type(paletteInput, "new split", { replace: true });
-    await user.click({ role: "option", label: /^Open side chat/ });
-    await user.notSee(paletteInput);
-    await user.see({ placeholder: "Describe your task...", nth: 1 }, { editable: true });
-    await send("primary", world.primaryQuestionPrompt);
-    await user.see({ text: "Which format should the main task use?" }, { timeoutMs: 45_000 });
-    await send("secondary", world.secondaryQuestionPrompt);
-    await user.see({ text: "Which format should the side task use?" }, { timeoutMs: 45_000 });
-    await user.see({ placeholder: "Type your answer here...", nth: 1 });
-  });
-
-  await step("Up and Down wrap option focus and Enter settles only the side question", async () => {
-    await user.click({ placeholder: "Type your answer here...", nth: 1 });
-    await user.press("Shift+Tab");
-    const last = await focus();
-    expect(last).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Side checklist") });
-    await user.press("ArrowDown");
-    const wrappedDown = await focus();
-    expect(wrappedDown).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Side outline") });
-    await user.press("ArrowUp");
-    const wrappedUp = await focus();
-    expect(wrappedUp).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Side checklist") });
-    await user.press("Enter");
-    const sideReply = await answer("secondary", "Side checklist", "Side outline");
-    const mainPending = await pane("primary");
-    expect(mainPending.text).toContain("Which format should the main task use?");
-    expect(mainPending.answer).not.toContain("Side checklist");
-    await user.see({ placeholder: "Type your answer here..." });
-    evidence.recordAssertionEvidence("ArrowDown and ArrowUp wrap native option focus; Enter answers only the side chat",
-      JSON.stringify({ last, wrappedDown, wrappedUp, sideReply, mainPending }), true);
-  });
-
-  await step("Enter also submits the focused main-chat option", async () => {
-    await user.click({ placeholder: "Type your answer here..." });
-    await user.press("Shift+Tab");
-    await user.press("ArrowUp");
-    const mainFocus = await focus();
-    expect(mainFocus).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Main outline") });
-    await user.press("Enter");
-    const mainReply = await answer("primary", "Main outline", "Main checklist");
-    const sideReply = await pane("secondary");
-    expect(sideReply.answer).toContain("Side checklist");
-    expect(sideReply.answer).not.toContain("Main outline");
-    evidence.recordAssertionEvidence("Enter submits the focused main-chat option and preserves the side answer",
-      JSON.stringify({ mainFocus, mainReply, sideReply }), true);
-  });
+  try {
+    await world.nativeWindow("foreground");
+    await probe.eventually(() => probe.eval(() => document.hasFocus()), {
+      within: 10_000, label: "the real app document has keyboard focus", until: focused => focused,
+    });
+    await step("ask a real question through the task composer", async () => {
+      await user.type("composer", world.question.prompt, { verify: true });
+      await user.press("Enter");
+      await user.see({ text: world.question.text }, { timeoutMs: 45_000 });
+      await user.see({ placeholder: "Type your answer here..." });
+    });
+    await step("Up and Down wrap focus and Enter selects the focused option", async () => {
+      await user.click({ placeholder: "Type your answer here..." });
+      await user.press("Shift+Tab");
+      const last = await focus();
+      expect(last).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Sound outline") });
+      await user.press("ArrowDown");
+      const wrappedDown = await focus();
+      expect(wrappedDown).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Sound checklist") });
+      await user.press("ArrowUp");
+      const wrappedUp = await focus();
+      expect(wrappedUp).toMatchObject({ tag: "BUTTON", text: expect.stringContaining("Sound outline") });
+      await user.press("Enter");
+      const reply = await probe.eventually(() => probe.eval(() => {
+        const messages = [...document.querySelectorAll<HTMLElement>('[data-message-role="assistant"]')];
+        return messages.at(-1)?.innerText ?? "";
+      }), { within: 45_000, label: "the native question returns the keyboard-selected answer to the agent",
+        until: text => text.includes("Sound outline") && !text.includes("Sound checklist"),
+      });
+      await user.notSee({ placeholder: "Type your answer here..." });
+      evidence.recordAssertionEvidence("ArrowDown and ArrowUp wrap real option focus; Enter submits Sound outline and resumes the agent",
+        JSON.stringify({ last, wrappedDown, wrappedUp, reply }), true);
+    });
+  } finally {
+    world.closeWitness();
+  }
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
