@@ -1,7 +1,7 @@
 "use client"
 
 import { Fragment, useState } from "react"
-import { AlertTriangle, Check, ChevronUp, CircleHelp, CirclePause, Copy, MoreHorizontal } from "lucide-react"
+import { AlertTriangle, Check, CircleHelp, CirclePause, Copy, MoreHorizontal } from "lucide-react"
 
 import { FileChip } from "@/components/chat/file-chip"
 import { ShellCommandText } from "@/components/chat/shell-command-text"
@@ -128,9 +128,8 @@ export function DetailBox({ kind, text, expanded, onToggle }: DetailBoxProps) {
         ) : (
           <code className={textClassName}>{displayRuntimeBrand(text)}</code>
         )}
-        {expanded ? (
-          <ChevronUp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
-        ) : (
+        {/* The whole box toggles, so an open one needs no collapse arrow. */}
+        {expanded ? null : (
           <MoreHorizontal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
         )}
       </button>
