@@ -1092,7 +1092,7 @@ function RetryActionButton(props: { label: string; onClick: () => void }) {
     <Button
       variant="outline"
       size="sm"
-      className="h-7 border-amber-7 bg-amber-3 text-xs text-amber-12 hover:bg-amber-4"
+      className="mt-1 h-7 w-fit text-xs"
       onClick={props.onClick}
     >
       {props.label}
@@ -1126,22 +1126,22 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
   return (
     <Message className="not-prose mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-0 md:px-10">
       <div className="group flex w-full flex-col items-start gap-0">
-        <div className="flex min-w-0 flex-1 flex-col gap-2 rounded-lg border-2 border-amber-7 bg-amber-1 px-3 py-2 text-amber-12">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-amber-12">
           <div className="flex items-start gap-2">
-            <LoaderCircle size={16} className="mt-0.5 shrink-0 animate-spin text-amber-11" />
+            <LoaderCircle size={16} className="mt-0.5 shrink-0 animate-spin text-warning" />
             <div className="min-w-0 space-y-1">
-              <p className="whitespace-pre-wrap text-sm font-medium text-amber-12">
+              <p className="whitespace-pre-wrap text-amber-12">
                 {freeModelLimit ? "The free starter model is busy right now" : status.message}
               </p>
-              <p className="text-xs text-amber-11">{info}</p>
+              <p className="text-xs text-amber-12/80">{info}</p>
             </div>
           </div>
           {action ? (
-            <div className="ml-6 space-y-1 border-t border-amber-6 pt-2">
+            <div className="ml-6 space-y-1 border-t border-warning/20 pt-2">
               <p className="text-xs font-medium text-amber-12">
                 {freeModelLimit ? "Free model limit reached" : action.title}
               </p>
-              <p className="text-xs text-amber-11">
+              <p className="text-xs text-amber-12/80">
                 {freeModelLimit
                   ? "omnirush.ai will keep retrying. To keep working now, connect your own model provider."
                   : action.message}
