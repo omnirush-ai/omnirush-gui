@@ -126,6 +126,8 @@ import {
   useComposerStateStore,
 } from "./composer-state-store";
 import { MessageList } from "@/components/chat/message-list";
+import { SessionFeedbackCard } from "@/components/chat/session-feedback-card";
+import { Button } from "@/components/ui/button";
 import { MessageListProvider, type DispatchAction } from "@/components/chat/message-list-provider";
 import type {
   ChatToolReconnectAction,
@@ -1035,6 +1037,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   // True while a send with attachments is in flight (compression + inbox
   // upload + prompt POST); drives the uploading overlay on composer chips.
   const [attachmentsUploading, setAttachmentsUploading] = useState(false);
+  const [sessionFinished, setSessionFinished] = useState(false);
   const mentions = useComposerStateStore((state) => getComposerMentions(state, props.sessionId));
   const pasteParts = useComposerStateStore((state) => getComposerPasteParts(state, props.sessionId));
   const setComposerDraft = useComposerStateStore((state) => state.setDraft);
@@ -1322,6 +1325,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     setRestoringRevertedMessages(false);
     setAwaitingAssistantBaseline(null);
     setAdmissionOutcomeUnresolved(false);
+    setSessionFinished(false);
     // Composer draft state lives in the shared store keyed by session id, so
     // switching sessions preserves each session's own in-progress composer.
     autoOpenedTargetRef.current = null;
@@ -1518,6 +1522,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
     }
     return [...baseRenderedMessages, ...pending, ...evalMarkdownMessages];
   }, [attachments.length, autoSendPayload, autoSending, baseRenderedMessages, draft, evalMarkdownMessages, pasteParts, props.sessionId, unmatchedPendingMessages]);
+  const canFinishSession = !sessionFinished
+    && renderedMessages.some((message) => message.role === "assistant")
+    && !chatStreaming
+    && liveStatus.type === "idle"
+    && !sending
+    && !props.activeQuestion
+    && !props.activePermission
+    && queuedItems.length === 0;
   const renderedMessagesRef = useRef(renderedMessages);
   useEffect(() => {
     renderedMessagesRef.current = renderedMessages;
@@ -3239,6 +3251,25 @@ export function SessionSurface(props: SessionSurfaceProps) {
       </div>
 
       <div ref={composerShellRef} className="shrink-0 px-0 pb-2 pt-2">
+        {sessionFinished ? (
+          <SessionFeedbackCard
+            sessionId={props.sessionId}
+            turnCount={renderedMessages.filter((message) => message.role === "user").length}
+          />
+        ) : canFinishSession ? (
+          <div className="mx-3 mb-2 flex justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-xs text-dls-secondary"
+              data-testid="finish-session"
+              onClick={() => setSessionFinished(true)}
+            >
+              Finish session
+            </Button>
+          </div>
+        ) : null}
         {(props.providerConnectedCount ?? 0) === 0 ? (
           <button
             type="button"
