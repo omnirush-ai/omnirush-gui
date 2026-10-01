@@ -138,7 +138,7 @@ export const OMNIRUSH_SWARM_TOOL_NAME = "swarm_board";
 /** The on-demand skill that carries the swarm procedure. */
 export const OMNIRUSH_SWARM_SKILL_NAME = "omnirush-swarm";
 
-export const OMNIRUSH_SWARM_SKILL_DESCRIPTION = `Required before starting ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents for implementation work (a swarm, or the user asks for a swarm or for ${OMNIRUSH_SWARM_MIN_AGENTS}+ agents): the shared-board procedure. Never for 1-2 sub-agents or a small request.`;
+export const OMNIRUSH_SWARM_SKILL_DESCRIPTION = `Required when the user asks for ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents: the shared-board procedure. Never for 1-2 requested sub-agents or a small request.`;
 
 /**
  * The main agent's always-on swarm text (part of OMNIRUSH_AGENT_PROMPT). The
@@ -146,12 +146,12 @@ export const OMNIRUSH_SWARM_SKILL_DESCRIPTION = `Required before starting ${OMNI
  */
 export const OMNIRUSH_SWARM_PROMPT = `## Sub-agent swarms
 
-Before you start ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents for implementation work (large work that splits into ${OMNIRUSH_SWARM_MIN_AGENTS}+ independent parts, or the user asks for a swarm or for ${OMNIRUSH_SWARM_MIN_AGENTS}+ agents), load the \`${OMNIRUSH_SWARM_SKILL_NAME}\` skill first and follow it. Handle questions, investigations, reviews, tests, docs and explanations yourself unless the user explicitly asks for sub-agents. For smaller implementation work, use 1-2 sub-agents directly when they help.`;
+Use sub-agents only when the user explicitly asks for them. If the user asks for ${OMNIRUSH_SWARM_MIN_AGENTS} or more, load the \`${OMNIRUSH_SWARM_SKILL_NAME}\` skill first and follow it; for 1-2 requested sub-agents, use the task tool directly without a board.`;
 
 /** The body of the omnirush-swarm skill (without frontmatter). */
 export const OMNIRUSH_SWARM_SKILL = `# Sub-agent swarm
 
-Use this only for a real implementation swarm: ${OMNIRUSH_SWARM_MIN_AGENTS} or more sub-agents working in parallel, or the user asked for a swarm or for ${OMNIRUSH_SWARM_MIN_AGENTS}+ agents. For 1-2 sub-agents, stop here: call the subagent tool directly and do not create or touch a board.
+Use this only when the user asks for a swarm or for ${OMNIRUSH_SWARM_MIN_AGENTS}+ sub-agents. For 1-2 requested sub-agents, call the subagent tool directly and do not create or touch a board.
 
 The board is \`${OMNIRUSH_SWARM_FILE}\` in the workspace, never a file in the project root. It is a short status board, not a report: every agent re-reads it, so keep it small. omnirush.ai keeps it out of git and clears it when your turn ends. Ignore any \`swarm.md\` in the project root: it is not this swarm's board.
 
@@ -213,7 +213,7 @@ export function omnirushSwarmSubagentNote(depth: number): string {
  * (every agent that has the tool, main or sub-agent). The engine's own text
  * asks for detailed prompts and parallel launches; this bounds both.
  */
-export const OMNIRUSH_TASK_TOOL_NOTE = "omnirush.ai: in the main session, delegate only implementation work. For a feature, bug fix, refactor or other code change beyond a few tool calls, split the implementation into independent parts and start 2-4 sub-agents in one message so they run in parallel. Do investigations, reviews, tests, docs, explanations and quick questions yourself unless the user explicitly asks for sub-agents. When the user names a number of agents, start exactly that many, all in one message. Each prompt covers only its own part and is self-contained: never paste the user's whole message or the user's instructions about sub-agents into it. A sub-agent starts its own sub-agents only when its task explicitly tells it to implement a part.";
+export const OMNIRUSH_TASK_TOOL_NOTE = "omnirush.ai: use the task tool only when the user explicitly asks for sub-agents. When the user names a number of agents, start exactly that many, all in one message. Each prompt covers only its own part and is self-contained: never paste the user's whole message or the user's instructions about sub-agents into it. A sub-agent starts its own sub-agents only when its task explicitly tells it to implement a part.";
 
 export const OMNIRUSH_SWARM_STATUSES = ["todo", "running", "done", "blocked"] as const;
 export type SwarmTaskStatus = (typeof OMNIRUSH_SWARM_STATUSES)[number];
@@ -432,4 +432,3 @@ export function updateSwarmBoard(text: string, update: SwarmBoardUpdate): string
   }
   return compactSwarmBoard(lines.join("\n"));
 }
-

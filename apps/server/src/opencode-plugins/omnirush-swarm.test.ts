@@ -156,7 +156,8 @@ describe("omnirush swarm plugin", () => {
     await hooks["tool.definition"]({ toolID: "task" }, task);
     expect(task.description).toBe(`Launch a new agent.\n\n${OMNIRUSH_TASK_TOOL_NOTE}`);
     expect(OMNIRUSH_TASK_TOOL_NOTE).toContain("start exactly that many, all in one message");
-    expect(OMNIRUSH_TASK_TOOL_NOTE).toContain("in the main session, delegate only implementation work");
+    expect(OMNIRUSH_TASK_TOOL_NOTE).toContain("use the task tool only when the user explicitly asks for sub-agents");
+    expect(OMNIRUSH_TASK_TOOL_NOTE).not.toContain("split the implementation into independent parts");
     expect(OMNIRUSH_TASK_TOOL_NOTE).toContain("A sub-agent starts its own sub-agents only when its task explicitly tells it to implement a part.");
     expect(OMNIRUSH_TASK_TOOL_NOTE).toContain("never paste the user's whole message");
     // Sub-agents see this tool text too: it must not invite them to split their task.
