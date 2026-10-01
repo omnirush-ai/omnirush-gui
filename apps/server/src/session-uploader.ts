@@ -21,6 +21,7 @@ import {
 import { TurnBaseStore, TurnDiffBuilder, type TurnDiffInput } from "./turn-diff.js";
 import { SUBAGENT_MODEL_FALLBACK_TRACE } from "./omnirush-swarm.js";
 import { writeFileAtomic } from "./atomic-write.js";
+import { collectReproducibility, type ReproducibilityManifest } from "./session-reproducibility.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -3422,6 +3423,7 @@ export class SessionUploader {
   private readonly spoolMaxBytes: number;
   private readonly snapshotMaxBytes: number;
   private environmentCache: Promise<UploadEnvironment> | null = null;
+  private readonly reproducibilityCache = new Map<string, Promise<ReproducibilityManifest>>();
   private spoolCounter = 0;
   private spoolTail: Promise<void> = Promise.resolve();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3651,6 +3653,26 @@ export class SessionUploader {
       return uploadEnvironment(this.appVersion, this.engineVersion, gitVersion);
     })();
     return this.environmentCache;
+  }
+
+  private reproducibility(root: string): Promise<ReproducibilityManifest> {
+    const cached = this.reproducibilityCache.get(root);
+    if (cached) return cached;
+    const collected = collectReproducibility(root).catch(() => ({
+      schema_version: 1 as const,
+      platform: { os: process.platform, release: osRelease(), arch: process.arch, distro: null, distro_version: null, wsl: false },
+      project_manifests: [],
+      runtimes: [],
+      package_managers: [],
+      lockfiles: [],
+      environment_variable_names: [],
+      system_packages: [],
+      services: [],
+      package_inventory: [],
+      limitations: ["Reproducibility metadata was unavailable on this capture."],
+    } satisfies ReproducibilityManifest));
+    this.reproducibilityCache.set(root, collected);
+    return collected;
   }
 
   private negotiatedTraceSchema(force = false): Promise<2 | 3> {
@@ -4904,6 +4926,7 @@ export class SessionUploader {
       ]);
       const candidates = candidatesFor(scan, state.relevance, gitPaths);
       const environment = await this.environment();
+      const reproducibility = await this.reproducibility(state.root);
       const rootName = workspaceRootName(state.root);
       const touchedPaths = this.touchedPathsForUpload(state);
       const metadata = JSON.stringify({
@@ -4918,6 +4941,7 @@ export class SessionUploader {
         denied_file_count: scan.deniedCount,
         root_name: rootName,
         git: { commit: git?.commit ?? null, branch: git?.branch ?? null, dirty: git ? String(git.dirty) : "false" },
+        reproducibility,
       });
       const leading: UploadFile[] = [{ path: "__omnirush__/workspace.json", content: metadata, sha256: sha256Hex(metadata) }];
       if (journal.length > 0) {
@@ -4931,7 +4955,7 @@ export class SessionUploader {
       const filesScope: "full" | "changed" = type === "start" ? "full" : "changed";
       const extras: Record<string, unknown> = {
         workspace: { root_name: rootName, git },
-        environment,
+        environment: { ...environment, reproducibility },
         touched_paths: touchedPaths,
         files_scope: filesScope,
         ...(filesScope === "changed" ? { changed_paths: candidates.map((candidate) => candidate.uploadPath) } : {}),
