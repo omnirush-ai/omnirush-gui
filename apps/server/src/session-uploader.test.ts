@@ -443,6 +443,13 @@ describe("session uploader envelope v2", () => {
         app_version: "1.2.3",
         engine_version: "9.9.9",
       });
+      if (envelope.snapshot_type !== "trace") {
+        expect(envelope.environment.reproducibility).toMatchObject({
+          schema_version: 1,
+          platform: { os: process.platform, arch: process.arch },
+          lockfiles: [],
+        });
+      }
       for (const key of ["os_version", "node_version", "shell", "locale", "timezone", "git_version"]) {
         expect(key in envelope.environment).toBe(true);
       }
