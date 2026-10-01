@@ -6,6 +6,7 @@ import { newSplitPrimary } from "../worlds/chat.ts";
 const test = spec.world(newSplitPrimary, { timeout: 600_000 });
 const paletteInput = { placeholder: "Search actions, settings, and sessions…" };
 
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -19,7 +20,7 @@ function splitFacts(value: unknown) {
   };
 }
 
-test("side chats keep questions, replies, and saved splits attached to their own conversation", async ({ world, user, probe, agent, step }) => {
+test("side chats keep questions, replies, and saved splits attached to their own conversation", async ({ world, user, probe, agent, step, evidence }) => {
   const primary = world.session.sessionId;
   const workspaceId = world.workspace.workspaceId;
   const shortcut = await probe.eval(() => (/Mac|iPhone|iPad|iPod/.test(navigator.platform))) ? "Meta+K" : "Control+K";
@@ -113,7 +114,7 @@ test("side chats keep questions, replies, and saved splits attached to their own
       until: value => value.sessionId === primary && value.starters && value.messages === 0,
     });
   });
-  await user.rightClick({ text: world.session.title });
+  await user.rightClick(await rowTarget(primary));
   await using initialCreation = await world.continuity.observeCreation();
   await using emptySide = await world.continuity.observeSurface({ pane: "secondary" });
   await user.click({ role: "menuitem", label: /^Open (a second|side) chat$/ });
@@ -159,13 +160,31 @@ test("side chats keep questions, replies, and saved splits attached to their own
     await waitSplit(primary, first.secondary);
     await user.see({ text: "Which format should the side task use?" }, { timeoutMs: 30_000 });
     await user.see({ text: "Which format should the main task use?" });
-    await user.click({ role: "button", label: /^Side checklist/ });
+    await user.click({ placeholder: "Type your answer here...", nth: 1 });
+    await user.press("Shift+Tab");
+    await user.press("ArrowUp");
+    const sideUp = await probe.eval(() => document.activeElement?.textContent);
+    expect(sideUp).toContain("Side outline");
+    await user.press("ArrowDown");
+    const sideDown = await probe.eval(() => document.activeElement?.textContent);
+    expect(sideDown).toContain("Side checklist");
+    await user.press("Enter");
     await answer("secondary", "Side checklist", "Side outline");
     await user.see({ text: "Which format should the main task use?" });
     expect(await pane("primary")).not.toHaveProperty("answer", expect.stringContaining("Side checklist"));
-    await user.click({ role: "button", label: /^Main outline/ });
+    await user.click({ placeholder: "Type your answer here..." });
+    await user.press("Shift+Tab");
+    await user.press("ArrowUp");
+    const mainUp = await probe.eval(() => document.activeElement?.textContent);
+    expect(mainUp).toContain("Main outline");
+    await user.press("Enter");
     await answer("primary", "Main outline", "Main checklist");
     expect(await pane("secondary")).not.toHaveProperty("answer", expect.stringContaining("Main outline"));
+    evidence.recordAssertionEvidence(
+      "Arrow keys focus question options and Enter answers only the selected split pane",
+      JSON.stringify({ sideUp, sideDown, mainUp, primary: await pane("primary"), secondary: await pane("secondary") }),
+      true,
+    );
     await user.screenshot();
   });
 

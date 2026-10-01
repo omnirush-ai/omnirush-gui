@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import type { QuestionInfo } from "@opencode-ai/sdk/v2/client";
 import { Check, ChevronRight, HelpCircle } from "lucide-react";
 
@@ -9,6 +9,7 @@ import { t } from "@/i18n";
 export type QuestionPanelProps = {
   questions: QuestionInfo[];
   busy: boolean;
+  autoFocus?: boolean;
   onReply: (answers: string[][]) => void;
 };
 
@@ -91,12 +92,31 @@ function questionReducer(state: QuestionState, action: QuestionAction): Question
 
 export function QuestionPanel(props: QuestionPanelProps) {
   const [state, dispatch] = useReducer(questionReducer, initialQuestionState);
+  const optionButtons = useRef<Array<HTMLButtonElement | null>>([]);
+  const lastQuestionShown = useRef<QuestionInfo | undefined>(undefined);
+  const selectionPending = useRef(false);
+  const selectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    selectionPending.current = false;
     dispatch({ type: "reset", questionCount: props.questions.length });
+    return () => {
+      if (selectionTimer.current !== null) clearTimeout(selectionTimer.current);
+      selectionTimer.current = null;
+      selectionPending.current = false;
+    };
   }, [props.questions]);
 
+  useEffect(() => {
+    if (!props.busy && selectionTimer.current === null) selectionPending.current = false;
+  }, [props.busy]);
+
   const currentQuestion = props.questions[state.currentIndex];
+  useEffect(() => {
+    if (props.busy || lastQuestionShown.current === currentQuestion) return;
+    lastQuestionShown.current = currentQuestion;
+    if (props.autoFocus !== false) optionButtons.current[0]?.focus();
+  }, [currentQuestion, props.busy, props.autoFocus]);
   const options = currentQuestion?.options ?? [];
   const isLastQuestion = state.currentIndex === props.questions.length - 1;
   const customAnswerEnabled = currentQuestion?.custom !== false;
@@ -110,7 +130,7 @@ export function QuestionPanel(props: QuestionPanelProps) {
   })();
 
   const handleNext = () => {
-    if (!canProceed || !currentQuestion) return;
+    if (!canProceed || !currentQuestion || props.busy || selectionPending.current) return;
     const nextAnswer = [...state.currentSelection];
     if (customAnswerEnabled && state.customInput.trim()) {
       nextAnswer.push(state.customInput.trim());
@@ -126,19 +146,22 @@ export function QuestionPanel(props: QuestionPanelProps) {
   };
 
   const toggleOption = (option: string) => {
-    if (!currentQuestion || props.busy) return;
+    if (!currentQuestion || props.busy || selectionPending.current) return;
     if (currentQuestion.multiple) {
       dispatch({ type: "toggleMultipleOption", option });
       return;
     }
+    selectionPending.current = true;
     dispatch({ type: "selectOption", option });
-    setTimeout(() => {
+    selectionTimer.current = setTimeout(() => {
+      selectionTimer.current = null;
       const newAnswers = [...state.answers];
       newAnswers[state.currentIndex] = [option];
       if (isLastQuestion) {
         dispatch({ type: "setAnswers", answers: newAnswers });
         props.onReply(newAnswers);
       } else {
+        selectionPending.current = false;
         dispatch({ type: "advance", answers: newAnswers });
       }
     }, 150);
@@ -182,7 +205,22 @@ export function QuestionPanel(props: QuestionPanelProps) {
                 <button
                   key={`${opt.label}:${idx}`}
                   type="button"
+                  ref={(button) => { optionButtons.current[idx] = button; }}
                   disabled={props.busy}
+                  onFocus={() => dispatch({ type: "setFocusedOptionIndex", value: idx })}
+                  onKeyDown={(event) => {
+                    if (props.busy || event.nativeEvent.isComposing || event.keyCode === 229) return;
+                    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const direction = event.key === "ArrowDown" ? 1 : -1;
+                      optionButtons.current[(idx + direction + options.length) % options.length]?.focus();
+                    } else if (event.key === "Enter") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (!event.repeat) toggleOption(opt.label);
+                    }
+                  }}
                   className={`flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-2.5 text-left text-sm transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60
                         ${
                           isSelected
