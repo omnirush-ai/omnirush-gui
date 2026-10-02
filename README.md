@@ -22,16 +22,18 @@ exchange for contributing your session traces (see
 
 Download the latest build from the
 [releases page](https://github.com/omnirush-ai/omnirush-gui/releases/latest).
-File names include the version, for example `omnirush-mac-arm64-3.0.0.dmg`.
+File names include the version, for example `omnirush-mac-arm64-3.0.1.dmg`.
 
 | Platform | File |
 | --- | --- |
 | macOS, Apple Silicon | `omnirush-mac-arm64-<version>.dmg` (a `.zip` is also attached) |
 | Linux x64, Debian/Ubuntu | `omnirush-linux-amd64-<version>.deb` |
 | Linux x64, Arch | `omnirush-linux-x64-<version>.pacman` |
+| Linux x64, Fedora/RHEL | `omnirush-linux-x86_64-<version>.rpm` |
 | Linux x64, other | `omnirush-linux-x86_64-<version>.AppImage` or `omnirush-linux-x64-<version>.tar.gz` |
 | Linux arm64, Debian/Ubuntu | `omnirush-linux-arm64-<version>.deb` |
 | Linux arm64, Arch | `omnirush-linux-aarch64-<version>.pacman` |
+| Linux arm64, Fedora/RHEL | `omnirush-linux-aarch64-<version>.rpm` |
 | Linux arm64, other | `omnirush-linux-arm64-<version>.AppImage` or `omnirush-linux-arm64-<version>.tar.gz` |
 
 Each release includes `SHA256SUMS.txt` for verifying downloads. There is no
@@ -52,7 +54,7 @@ When asked to use "omnirush.ai Safe Storage", enter your login password and
 choose **Always Allow**. This keychain item only holds the key that encrypts
 your sign-in on this Mac.
 
-**Linux.** The `.deb` and `.pacman` packages install their dependencies. For
+**Linux.** The `.deb`, `.rpm` and `.pacman` packages install their dependencies. For
 the AppImage or tar.gz, install the GTK runtime first:
 
 ```bash
@@ -117,7 +119,7 @@ The app updates itself on macOS and Linux: use **Settings > Updates** or the
 
 - **macOS:** the app downloads the new DMG and opens it; drag the app to
   Applications to replace the old copy.
-- **Linux:** the AppImage, `.deb` and `.pacman` installs update in place. The
+- **Linux:** the AppImage, `.deb`, `.rpm` and `.pacman` installs update in place. The
   tar.gz does not update itself; download new releases manually.
 
 Installs older than 1.0.5 cannot update in-app; download the latest release
