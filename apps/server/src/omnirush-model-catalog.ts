@@ -10,7 +10,7 @@
  *
  * The last good catalog is kept at <runtimeStorageDir>/omnirush-model-catalog.json.
  * Without one (first run, offline, or a backend that fails) the engine gets
- * the built-in Astra, GPT 6 Sol and GPT-5.6 Sol (the v1.0.9 metadata).
+ * the built-in Astra, GPT 6.1 Sol, GPT 6 Sol and GPT-5.6 Sol.
  */
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -79,12 +79,13 @@ function catalogModel(
 }
 
 /**
- * The Codex-route models before the first sync: Astra (the default), GPT 6
- * Sol and GPT-5.6 Sol, with the v1.0.9 metadata (same efforts as Astra).
+ * The Codex-route models before the first sync: Astra (the default), GPT 6.1
+ * Sol, GPT 6 Sol and GPT-5.6 Sol, with the same efforts as Astra.
  */
 export function builtinOmniRushModelCatalog(): OmniRushModelCatalog {
   return [
     catalogModel("gpt-6-astra", "GPT 6 Astra", PROVIDER_FAMILY, true),
+    catalogModel("gpt-6.1-sol", "GPT 6.1 Sol", PROVIDER_FAMILY, false),
     catalogModel("gpt-6-sol", "GPT 6 Sol", PROVIDER_FAMILY, false),
     catalogModel("gpt-5.6-sol", "GPT-5.6 Sol", PROVIDER_FAMILY, false),
   ];

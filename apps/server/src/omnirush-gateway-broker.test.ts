@@ -237,6 +237,7 @@ describe("OmniRush gateway broker", () => {
     const broker = capturingBroker(calls);
     const bodies = [
       { model: "gpt-6-astra", input: "default" },
+      { model: "gpt-6.1-sol", input: "new sol", reasoning: { effort: "high" } },
       { model: "gpt-6-sol", input: "selected", reasoning: { effort: "high" } },
       { model: "gpt-6-astra", input: "legacy", reasoning_effort: "xhigh" },
       { model: "gpt-6-astra", input: "explicit", reasoning: { effort: "low", summary: "detailed" } },
@@ -248,8 +249,9 @@ describe("OmniRush gateway broker", () => {
     expect(calls.map((call) => call.body)).toEqual([
       { ...bodies[0], reasoning: { summary: "auto" } },
       { ...bodies[1], reasoning: { effort: "high", summary: "auto" } },
-      { ...bodies[2], reasoning: { summary: "auto" } },
-      ...bodies.slice(3),
+      { ...bodies[2], reasoning: { effort: "high", summary: "auto" } },
+      { ...bodies[3], reasoning: { summary: "auto" } },
+      ...bodies.slice(4),
     ]);
   });
 

@@ -18,6 +18,7 @@ const state: OmniRushSubagentModelState = {
   signedIn: true,
   models: [
     { id: "gpt-6-astra", name: "GPT 6 Astra", family: "OpenAI", default: true, efforts: codex },
+    { id: "gpt-6.1-sol", name: "GPT 6.1 Sol", family: "OpenAI", default: false, efforts: codex },
     { id: "gpt-6-sol", name: "GPT 6 Sol", family: "OpenAI", default: false, efforts: codex },
     { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", family: "OpenAI", default: false, efforts: codex },
     { id: "meta-muse-spark", name: "Meta Muse Spark", family: "Meta Muse", default: false, efforts: ["minimal", "low", "medium", "high", "xhigh"] },
@@ -28,8 +29,9 @@ describe("sub-agent model setting (app)", () => {
   test("defaults new sessions to GPT-5.6 Sol", () => {
     expect(DEFAULT_SUBAGENT_SETTING).toEqual({ model: "gpt-5.6-sol", effort: null });
   });
-  test("GPT 6 Sol is built in between Astra and GPT-5.6 Sol, with its display name", () => {
-    expect([...BUILTIN_OMNIRUSH_MODEL_IDS]).toEqual(["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"]);
+  test("GPT 6.1 Sol and GPT 6 Sol are built in before GPT-5.6 Sol, with their display names", () => {
+    expect([...BUILTIN_OMNIRUSH_MODEL_IDS]).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]);
+    expect(resolveModelDisplayName("gpt-6.1-sol")).toBe("GPT 6.1 Sol");
     expect(resolveModelDisplayName("gpt-6-sol")).toBe("GPT 6 Sol");
     expect(resolveModelDisplayName("gpt-6-astra")).toBe("GPT 6 Astra");
     expect(resolveModelDisplayName("gpt-5.6-sol")).toBe("GPT-5.6 Sol");
@@ -39,6 +41,7 @@ describe("sub-agent model setting (app)", () => {
 
   test("effort choices are the picked model's levels; same-as-main offers every catalog level", () => {
     expect(subagentEffortOptions(state, "gpt-6-sol")).toEqual(codex);
+    expect(subagentEffortOptions(state, "gpt-6.1-sol")).toEqual(codex);
     expect(subagentEffortOptions(state, "meta-muse-spark")).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
     expect(subagentEffortOptions(state, null)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     expect(subagentEffortOptions(undefined, "gpt-6-sol")).toEqual([]);
@@ -54,6 +57,7 @@ describe("sub-agent model setting (app)", () => {
   test("summaries and availability", () => {
     expect(subagentSummary(state, { model: null, effort: null })).toBe(SAME_AS_MAIN_LABEL);
     expect(subagentSummary(state, { model: "gpt-6-sol", effort: null })).toBe("GPT 6 Sol");
+    expect(subagentSummary(state, { model: "gpt-6.1-sol", effort: null })).toBe("GPT 6.1 Sol");
     expect(subagentSummary(state, { model: "meta-muse-spark", effort: "xhigh" })).toBe("Meta Muse Spark · Xhigh");
     expect(subagentSummary(state, { model: null, effort: "low" })).toBe("Main model · Low");
     expect(subagentModelUnavailable(state, { model: "muse-spark-1.3", effort: null })).toBe(true);

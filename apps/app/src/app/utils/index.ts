@@ -59,6 +59,7 @@ export const FRIENDLY_PROVIDER_LABELS: Record<string, string> = {
 export const FRIENDLY_MODEL_LABELS: [pattern: string, label: string][] = [
   // OpenAI. Keep display names faithful to the provider and runtime model.
   ["gpt-6-astra", "GPT 6 Astra"],
+  ["gpt-6.1-sol", "GPT 6.1 Sol"],
   ["gpt-6-sol", "GPT 6 Sol"],
   // Meta Muse (omnirush.ai catalog models of the "Meta Muse" family).
   ["muse-spark-1.3", "Meta Muse Spark 1.3"],

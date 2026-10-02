@@ -43,6 +43,7 @@ function fakeClient(initial: OmniRushSubagentModelSetting, signedIn = true) {
       signedIn,
       models: [
         { id: "gpt-6-astra", name: "GPT 6 Astra", family: "OpenAI", default: true, efforts: codex },
+        { id: "gpt-6.1-sol", name: "GPT 6.1 Sol", family: "OpenAI", default: false, efforts: codex },
         { id: "gpt-6-sol", name: "GPT 6 Sol", family: "OpenAI", default: false, efforts: codex },
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", family: "OpenAI", default: false, efforts: codex },
         { id: "meta-muse-spark", name: "Meta Muse Spark", family: "Meta Muse", default: false, efforts: ["minimal", "low", "medium", "high", "xhigh"] },
@@ -216,7 +217,7 @@ test("the menu lists every model and stays inside the viewport, scrolling instea
   expect(content.className).toContain("max-h-[min(560px,var(--available-height))]");
   expect(content.className).toContain("overflow-y-auto");
   expect(content.className).not.toContain("70vh");
-  for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1"]) {
+  for (const id of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1"]) {
     expect(document.querySelector(`[data-testid="subagent-model-${id}"]`)).not.toBeNull();
   }
 });
