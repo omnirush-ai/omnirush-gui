@@ -97,6 +97,8 @@ const omnirushModel = (id: string, name: string): ProviderModel => ({
 
 const OMNIRUSH_MODELS = [
   omnirushModel("gpt-6-astra", "GPT 6 Astra"),
+  omnirushModel("gpt-6.1-sol", "GPT 6.1 Sol"),
+  omnirushModel("gpt-6-sol", "GPT 6 Sol"),
   omnirushModel("gpt-5.6-sol", "GPT-5.6 Sol"),
 ];
 
@@ -146,7 +148,7 @@ describe("model behavior options", () => {
     expect(getModelBehaviorSummary("omnirush", museSpark, "max", "omnirush.ai").value).toBe("medium");
     expect(getModelBehaviorSummary("omnirush", museSpark, "ultra", "omnirush.ai").value).toBe("medium");
 
-    // Astra and Sol keep their v1.0.9 levels and default.
+    // The Codex-route models share these levels and default effort.
     for (const internal of OMNIRUSH_MODELS) {
       expect(getModelBehaviorOptions("omnirush", internal, "omnirush.ai").map((option) => option.value)).toEqual(["low", "high", "xhigh", "max"]);
       expect(getModelBehaviorSummary("omnirush", internal, null, "omnirush.ai").value).toBe("high");
@@ -165,9 +167,9 @@ describe("model behavior options", () => {
     expect(resolveModelProviderDisplayName("omnirush", "muse-spark-1.3", "omnirush.ai")).toBe("omnirush.ai");
   });
 
-  test("shows both omnirush.ai models under the omnirush.ai provider with their display names", () => {
+  test("shows omnirush.ai models under the omnirush.ai provider with their display names", () => {
     expect(OMNIRUSH_MODELS.map((internal) => resolveModelDisplayName(internal.id, internal.name)))
-      .toEqual(["GPT 6 Astra", "GPT-5.6 Sol"]);
+      .toEqual(["GPT 6 Astra", "GPT 6.1 Sol", "GPT 6 Sol", "GPT-5.6 Sol"]);
     for (const internal of OMNIRUSH_MODELS) {
       expect(resolveModelProviderDisplayName("omnirush", internal.id, "omnirush.ai", internal.name)).toBe("omnirush.ai");
       expect(resolveModelProviderIconId("omnirush", internal.id, internal.name)).toBe("omnirush");
