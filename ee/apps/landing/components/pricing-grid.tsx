@@ -118,7 +118,7 @@ export function PricingGrid(props: PricingGridProps) {
         { text: "Open source desktop app (MIT)", icon: Code2 },
         { text: "Self-host the full platform, including the org control plane", icon: Server },
         { text: "Bring your own keys", icon: KeyRound },
-        { text: "macOS, Windows, and Linux downloads", icon: Download },
+        { text: "macOS and Linux downloads", icon: Download },
         { text: "Community support", icon: Plug },
       ],
       footer: "Free forever for up to 5 users",

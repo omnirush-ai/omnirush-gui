@@ -60,7 +60,7 @@ const deployments = [
     tag: "FREE FOREVER",
     tagClass: "text-[#059669]",
     title: "Desktop",
-    body: "The local-first app for macOS, Windows, and Linux. Files stay on employee machines.",
+    body: "The local-first app for macOS and Linux. Files stay on employee machines.",
     icon: Monitor
   },
   {

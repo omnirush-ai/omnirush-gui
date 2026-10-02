@@ -4,7 +4,7 @@ const home = `# OmniRush.ai
 
 ## What it is
 
-- Free, open-source desktop app for macOS, Windows, and Linux
+- Free, open-source desktop app for macOS and Linux
 - Any model or provider: Claude, GPT, Gemini, Mistral, local models, and 50+ providers
 - Chat on files, browser automation, scheduled tasks, skills, and Anthropic-compatible plugins
 - OmniRush.ai Connect: one MCP gateway URL for org-wide skills, servers, roles, and policies
@@ -30,7 +30,7 @@ const home = `# OmniRush.ai
 ## FAQ
 
 ### What is OmniRush.ai?
-A free, open-source desktop app (macOS, Windows, Linux) for doing work with AI agents on your own files. Built on OpenCode; an open-source alternative to Claude Cowork and Codex.
+A free, open-source desktop app (macOS, Linux) for doing work with AI agents on your own files. Built on OpenCode; an open-source alternative to Claude Cowork and Codex.
 
 ### Is OmniRush.ai free?
 Yes — the desktop app is free and open source with bring-your-own keys. Team Starter includes your first 5 seats free, then \\$10 per seat/mo; Enterprise is custom.
@@ -190,8 +190,9 @@ const download = `# Get Started with OmniRush.ai
 ## Supported platforms
 
 - macOS
-- Windows
 - Linux
+
+On Windows? OmniRush runs in WSL. [Install WSL](https://learn.microsoft.com/windows/wsl/install)
 
 ## After signing up
 

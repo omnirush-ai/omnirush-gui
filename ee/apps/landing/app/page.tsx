@@ -2,6 +2,7 @@ import { LandingHome } from "../components/landing-home";
 import { getGithubData } from "../lib/github";
 import { headers } from "next/headers";
 import { StructuredData } from "../components/structured-data";
+import { isWindowsUserAgent } from "../components/wsl-line";
 import { homeFaq } from "../lib/faq";
 import { baseOpenGraph } from "../lib/seo";
 
@@ -23,7 +24,7 @@ const softwareApplicationSchema = {
     "Open source Claude Cowork alternative. Desktop app that lets teams use 50+ LLMs, bring their own provider keys, and ship reusable agent setups with guardrails.",
   url: "https://omnirushlabs.com",
   applicationCategory: "BusinessApplication",
-  operatingSystem: "macOS, Windows, Linux",
+  operatingSystem: "macOS, Linux",
   offers: {
     "@type": "Offer",
     price: "0",
@@ -55,6 +56,7 @@ export default async function Home() {
   const cal = process.env.NEXT_PUBLIC_CAL_URL || "/enterprise#book";
   const userAgent = (await headers()).get("user-agent")?.toLowerCase() || "";
   const isMobileVisitor = /android|iphone|ipad|ipod|mobile/.test(userAgent);
+  const isWindowsVisitor = !isMobileVisitor && isWindowsUserAgent(userAgent);
 
   return (
     <>
@@ -63,10 +65,10 @@ export default async function Home() {
       <LandingHome
         stars={github.stars}
         downloadHref={github.downloads.macos}
-        windowsDownloadHref={github.downloads.windows}
         linuxDownloadHref={github.downloads.linux}
         callHref={cal}
         isMobileVisitor={isMobileVisitor}
+        isWindowsVisitor={isWindowsVisitor}
       />
     </>
   );

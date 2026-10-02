@@ -19,7 +19,7 @@ const glmSchema = {
     "GLM 5.2 is available through OmniRush.ai Models with 2x usage. Run real agent work on an open model at a fraction of the cost.",
   url: "https://omnirushlabs.com/glm-5.2",
   applicationCategory: "BusinessApplication",
-  operatingSystem: "macOS, Windows, Linux",
+  operatingSystem: "macOS, Linux",
   offers: {
     "@type": "Offer",
     price: "10",
@@ -192,8 +192,8 @@ export default async function GlmLanding() {
                 </span>
                 <p className="text-[14px] text-gray-700">
                   Launch the desktop app, sign in, and switch to GLM 5.2 from the
-                  model picker. Don&apos;t have the app? Download it for macOS,
-                  Windows, or Linux.
+                  model picker. Don&apos;t have the app? Download it for macOS
+                  or Linux.
                 </p>
               </div>
             </div>

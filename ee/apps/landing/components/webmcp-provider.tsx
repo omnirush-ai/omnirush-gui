@@ -78,15 +78,12 @@ const downloadLinks = {
       page: "https://app.omnirushlabs.com?mode=sign-up",
       note: "Sign up for OmniRush.ai Cloud first, then use the guided desktop app access flow.",
     },
-    windows: {
-      page: "https://app.omnirushlabs.com?mode=sign-up",
-      note: "Sign up for OmniRush.ai Cloud first, then use the guided desktop app access flow.",
-    },
     linux: {
       page: "https://app.omnirushlabs.com?mode=sign-up",
       note: "Sign up for OmniRush.ai Cloud first, then use the guided desktop app access flow.",
     },
   },
+  windows: "On Windows? OmniRush runs in WSL. Install WSL: https://learn.microsoft.com/windows/wsl/install",
 }
 
 const tools: Tool[] = [

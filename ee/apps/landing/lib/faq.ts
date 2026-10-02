@@ -7,7 +7,7 @@ export const homeFaq: FaqEntry[] = [
   {
     question: "What is OmniRush.ai?",
     answer:
-      "OmniRush.ai is a free, open-source desktop app for macOS, Windows, and Linux that lets you do work with AI agents on your own files. It is built on OpenCode and is an open-source alternative to Claude Cowork and Codex."
+      "OmniRush.ai is a free, open-source desktop app for macOS and Linux that lets you do work with AI agents on your own files. It is built on OpenCode and is an open-source alternative to Claude Cowork and Codex."
   },
   {
     question: "Is OmniRush.ai free?",

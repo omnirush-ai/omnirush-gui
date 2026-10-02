@@ -15,21 +15,21 @@ Every build is on the [latest release](https://github.com/omnirush-ai/omnirush-g
 | Platform | File to download | Notes |
 | --- | --- | --- |
 | macOS, Apple Silicon | [`omnirush-mac-arm64-<version>.dmg`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) | A `.zip` of the same app is also attached. No Intel build. |
-| Windows x64 | [`omnirush-win-x64-<version>.exe`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) | NSIS installer. |
 | Linux x64 (Debian, Ubuntu) | [`omnirush-linux-amd64-<version>.deb`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) | Installs the GTK runtime it needs. |
 | Linux x64 (other) | [`omnirush-linux-x86_64-<version>.AppImage`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) or [`omnirush-linux-x64-<version>.tar.gz`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) | Needs the GTK runtime installed first (see below). |
+
+On Windows? OmniRush runs in WSL. [Install WSL](https://learn.microsoft.com/windows/wsl/install), open Ubuntu, and use the [command-line tool](https://omnirush.ai/docs#cli) there.
 
 Each release also has `SHA256SUMS.txt` for checking a download.
 
 ## First launch
 
-Builds are not notarized (macOS) or code-signed (Windows) yet, so the operating system asks for one confirmation the first time.
+macOS builds are not notarized yet, so macOS asks for one confirmation the first time.
 
 | OS | What to do |
 | --- | --- |
 | macOS 15 and later | The first open says "Apple could not verify OmniRush.ai.app is free of malware". Click **Done**, open **System Settings > Privacy & Security**, scroll to **Security**, click **Open Anyway** next to OmniRush.ai.app, then **Open**. Or run `xattr -dr com.apple.quarantine /Applications/OmniRush.ai.app` in Terminal. |
 | macOS keychain | When the app asks to use "omnirush.ai Safe Storage", enter your Mac login password and choose **Always Allow**. That item only holds the key that encrypts your omnirush.ai sign-in on this Mac; macOS asks again after the app binary changes. |
-| Windows | On the SmartScreen dialog choose **More info > Run anyway**. If setup reports "Extract: error writing to file", the download is incomplete or blocked: download it again, compare its hash with `SHA256SUMS.txt`, free some disk space, and retry. |
 | Linux | Prefer the `.deb` on Debian and Ubuntu. For the AppImage or tar.gz, install the runtime first: `sudo apt install libgtk-3-0 libnss3 libatk-bridge2.0-0 libasound2` (on Ubuntu 24.04 use `libasound2t64`), then `chmod +x` the AppImage or unpack the tar.gz. An error about `libatk-1.0.so.0` means those packages are missing. |
 | Linux keyring | Optional. With a keyring the app encrypts your sign-in with it; without one (common on Hyprland, sway, i3 and other window managers) sign-in still works, and **Settings** notes that the sign-in is kept in a private file (owner-only permissions) in the app's data folder, unencrypted. To use a keyring, run a Secret Service provider in your session, such as gnome-keyring (`sudo pacman -S gnome-keyring libsecret` on Arch, then start it with your session or `gnome-keyring-daemon --start --components=secrets`) or KeePassXC with **Secret Service Integration** enabled, or KWallet on KDE. The app finds it on the next launch and moves the sign-in into it. To pick a store yourself, start the app with `--password-store=gnome-libsecret`, `kwallet5` or `kwallet6`. |
 
@@ -59,7 +59,7 @@ The exact rules are in [docs/session-data-privacy.md](docs/session-data-privacy.
 
 ## Updating
 
-From version 1.0.5 on, the app updates itself: **Settings > Updates** or the **Check for Updates...** menu item. On macOS the unsigned build downloads the new DMG and opens it; drag omnirush.ai to Applications to replace the old copy. Windows and the Linux AppImage install updates in place. The Linux tar.gz does not update itself; download the new release by hand.
+From version 1.0.5 on, the app updates itself: **Settings > Updates** or the **Check for Updates...** menu item. On macOS the unsigned build downloads the new DMG and opens it; drag omnirush.ai to Applications to replace the old copy. The Linux AppImage installs updates in place. The Linux tar.gz does not update itself; download the new release by hand.
 
 Installs older than 1.0.5 cannot update in-app. Download the latest release once by hand; later versions then update in-app.
 

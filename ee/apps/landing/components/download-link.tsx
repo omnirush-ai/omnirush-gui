@@ -1,16 +1,17 @@
 "use client";
 
-import { detectPlatform, type DownloadCardInstallers } from "@omnirush/ui/react";
+import { detectPlatform } from "@omnirush/ui/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { automaticDownloadHref } from "../lib/automatic-download";
+import type { DesktopInstallers } from "../lib/github";
 import { capturePosthogEvent } from "../lib/posthog-client";
 
 const DownloadContext = createContext<(sourcePath: string) => void>(() => {});
 
 export function DownloadProvider({ installers, children }: {
-  installers: DownloadCardInstallers;
+  installers: DesktopInstallers;
   children: ReactNode;
 }) {
   const detection = useRef<ReturnType<typeof detectPlatform> | null>(null);

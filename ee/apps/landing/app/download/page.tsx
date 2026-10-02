@@ -1,7 +1,9 @@
-import { DownloadOmniRushCard } from "@omnirush/ui/react";
+import { headers } from "next/headers";
+import { DesktopDownloadCard } from "../../components/desktop-download-card";
 import { SiteFooter } from "../../components/site-footer";
 import { SiteNav } from "../../components/site-nav";
 import { StructuredData } from "../../components/structured-data";
+import { isWindowsUserAgent } from "../../components/wsl-line";
 import { getGithubData } from "../../lib/github";
 import { baseOpenGraph } from "../../lib/seo";
 
@@ -10,10 +12,10 @@ const downloadSchema = {
   "@type": "SoftwareApplication",
   name: "OmniRush.ai",
   description:
-    "Open source Claude Cowork alternative. Download the OmniRush.ai desktop app for macOS, Windows, or Linux. No account required.",
+    "Open source Claude Cowork alternative. Download the OmniRush.ai desktop app for macOS or Linux. No account required.",
   url: "https://omnirushlabs.com/download",
   applicationCategory: "BusinessApplication",
-  operatingSystem: "macOS, Windows, Linux",
+  operatingSystem: "macOS, Linux",
   offers: {
     "@type": "Offer",
     price: "0",
@@ -27,9 +29,9 @@ const downloadSchema = {
 };
 
 export const metadata = {
-  title: "Download OmniRush.ai — macOS, Windows, Linux",
+  title: "Download OmniRush.ai — macOS, Linux",
   description:
-    "Download the OmniRush.ai desktop app for macOS, Windows, or Linux. Free, open source, no account required.",
+    "Download the OmniRush.ai desktop app for macOS or Linux. Free, open source, no account required.",
   alternates: {
     canonical: "/download"
   },
@@ -42,6 +44,7 @@ export const metadata = {
 export default async function Download() {
   const github = await getGithubData();
   const releaseTag = github.releaseTag || undefined;
+  const windowsVisitor = isWindowsUserAgent((await headers()).get("user-agent") ?? "");
 
   return (
     <div className="min-h-screen">
@@ -65,7 +68,11 @@ export default async function Download() {
           </div>
 
           <section className="my-8">
-            <DownloadOmniRushCard installers={github.installers} releaseTag={releaseTag} />
+            <DesktopDownloadCard
+              installers={github.installers}
+              releaseTag={releaseTag}
+              windowsVisitor={windowsVisitor}
+            />
           </section>
 
           <p className="max-w-md text-[13px] text-gray-500">

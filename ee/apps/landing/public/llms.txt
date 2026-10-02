@@ -20,14 +20,14 @@ Under the hood, OmniRush.ai is a GUI for OpenCode — anything OpenCode supports
 
 ## Pricing summary
 
-- **Solo — $0**: open-source desktop app (macOS, Windows, Linux), bring your own provider keys, free forever.
+- **Solo — $0**: open-source desktop app (macOS, Linux), bring your own provider keys, free forever.
 - **Team — $10 per seat/month**: up to 100 users, Extension Marketplace, distribute your own LLM keys to the team, standard support.
 - **Enterprise — $40 per user/month**: SSO/SAML and SCIM, desktop policies, OmniRush.ai Web, spend observability, standard SLA support. Same price cloud or self-hosted; volume pricing above 100 users. See [Enterprise](https://omnirush.ai).
 
 ## FAQ
 
 ### What is OmniRush.ai?
-OmniRush.ai is a free, open-source desktop app for macOS, Windows, and Linux that lets people do work with AI agents on their own files. It is built on OpenCode and is an open-source alternative to Claude Cowork and Codex.
+OmniRush.ai is a free, open-source desktop app for macOS and Linux that lets people do work with AI agents on their own files. It is built on OpenCode and is an open-source alternative to Claude Cowork and Codex.
 
 ### Is OmniRush.ai free?
 Yes. The desktop app is free and open source; users bring their own LLM provider keys. Paid plans add hosted/team features (see Pricing summary above).

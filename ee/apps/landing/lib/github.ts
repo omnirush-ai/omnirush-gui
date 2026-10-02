@@ -15,6 +15,13 @@ type Repo = {
   stargazers_count?: number;
 };
 
+// OmniRush has no native Windows app: on Windows it runs in WSL. Releases may
+// still carry an old Windows .exe, but the website only offers macOS and Linux.
+export type DesktopInstallers = {
+  macos: { appleSilicon: string; intel: string };
+  linux: { appImageX64: string; appImageArm64: string; tarX64: string; tarArm64: string };
+};
+
 const FALLBACK_RELEASE = "https://github.com/omnirush-ai/omnirush-gui/releases";
 
 const formatCompact = (value: number) => {
@@ -92,7 +99,6 @@ export const getGithubData = async () => {
   const releaseList = Array.isArray(releases) ? releases : [];
   const isElectronDesktopAsset = (name: string) =>
     name.startsWith("omnirush-mac-") ||
-    name.startsWith("omnirush-win-") ||
     name.startsWith("omnirush-linux-");
 
   const hasElectronDesktopAsset = (release: Release) => {
@@ -100,14 +106,6 @@ export const getGithubData = async () => {
     return assets.some((asset) => {
       const name = String(asset?.name || "").toLowerCase();
       return isElectronDesktopAsset(name);
-    });
-  };
-
-  const hasWindowsDesktopAsset = (release: Release) => {
-    const assets = Array.isArray(release?.assets) ? release.assets : [];
-    return assets.some((asset) => {
-      const name = String(asset?.name || "").toLowerCase();
-      return name.startsWith("omnirush-win-x64-") && name.endsWith(".exe");
     });
   };
 
@@ -125,10 +123,6 @@ export const getGithubData = async () => {
     releaseList.find((release) => isStableDesktopRelease(release)) ||
     (latestRelease ?? null);
 
-  const windowsPick =
-    (latestRelease && hasWindowsDesktopAsset(latestRelease) ? latestRelease : null) ||
-    releaseList.find((release) => isStableDesktopRelease(release) && hasWindowsDesktopAsset(release));
-
   // The public website and Den intentionally expose different builds from the
   // same release. Exclude both the retired helper installer and the parallel
   // Cloud and enterprise flavors here so loose per-architecture matching never
@@ -144,15 +138,10 @@ export const getGithubData = async () => {
 
   const assets = publicAssets(pick?.assets);
   const releaseUrl = pick?.html_url || FALLBACK_RELEASE;
-  const windowsAssets = windowsPick ? publicAssets(windowsPick.assets) : assets;
-  const windowsReleaseUrl = windowsPick?.html_url || releaseUrl;
   const dmg = selectAsset(assets, [".dmg"], ["omnirush-mac-"]);
-  const exe = selectAsset(windowsAssets, [".exe"], ["omnirush-win-"]);
   const macosApple = selectAsset(assets, [".dmg"], ["mac-arm64"]);
   const macosIntel = selectAsset(assets, [".dmg"], ["mac-x64"]);
   const macosUniversal = selectAsset(assets, [".dmg"], ["mac-universal"]);
-  const windowsX64 = selectAsset(windowsAssets, [".exe"], ["win-x64"]);
-  const windowsArm64 = selectAsset(windowsAssets, [".exe"], ["win-arm64"]);
 
   const linuxAppImageX64 =
     selectAsset(assets, [".appimage"], ["linux-x86_64"]) ||
@@ -161,33 +150,30 @@ export const getGithubData = async () => {
   const linuxTarX64 = selectAsset(assets, [".tar.gz"], ["linux-x64"]);
   const linuxTarArm64 = selectAsset(assets, [".tar.gz"], ["linux-arm64"]);
 
+  const installers: DesktopInstallers = {
+    macos: {
+      appleSilicon: macosApple?.browser_download_url || macosUniversal?.browser_download_url || releaseUrl,
+      intel: macosIntel?.browser_download_url || macosUniversal?.browser_download_url || releaseUrl
+    },
+    linux: {
+      appImageX64: linuxAppImageX64?.browser_download_url || releaseUrl,
+      appImageArm64: linuxAppImageArm64?.browser_download_url || releaseUrl,
+      tarX64: linuxTarX64?.browser_download_url || releaseUrl,
+      tarArm64: linuxTarArm64?.browser_download_url || releaseUrl
+    }
+  };
+
   return {
     stars,
     releaseUrl,
     releaseTag: pick?.tag_name || "",
     downloads: {
       macos: dmg?.browser_download_url || FALLBACK_RELEASE,
-      windows: exe?.browser_download_url || FALLBACK_RELEASE,
       linux:
         linuxAppImageX64?.browser_download_url ||
         linuxTarX64?.browser_download_url ||
         FALLBACK_RELEASE
     },
-    installers: {
-      macos: {
-        appleSilicon: macosApple?.browser_download_url || macosUniversal?.browser_download_url || releaseUrl,
-        intel: macosIntel?.browser_download_url || macosUniversal?.browser_download_url || releaseUrl
-      },
-      windows: {
-        x64: windowsX64?.browser_download_url || windowsReleaseUrl,
-        arm64: windowsArm64?.browser_download_url || windowsReleaseUrl
-      },
-      linux: {
-        appImageX64: linuxAppImageX64?.browser_download_url || releaseUrl,
-        appImageArm64: linuxAppImageArm64?.browser_download_url || releaseUrl,
-        tarX64: linuxTarX64?.browser_download_url || releaseUrl,
-        tarArm64: linuxTarArm64?.browser_download_url || releaseUrl
-      }
-    }
+    installers
   };
 };

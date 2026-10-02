@@ -6,7 +6,9 @@
 //   { version, artifacts: { <platform>: { <arch>: { type, url, appName } } } }
 //
 // Platforms/arches are only included when a matching release asset exists, so
-// the manifest is always current without manual maintenance.
+// the manifest is always current without manual maintenance. Only macOS and
+// Linux are offered: OmniRush has no native Windows app (it runs in WSL, which
+// is Linux), so Windows .exe/.msi release assets are never listed.
 
 const GITHUB_REPO = "omnirush-ai/omnirush-gui";
 const RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`;
@@ -21,7 +23,7 @@ type GithubRelease = {
 };
 
 type ManifestArtifact = {
-  type: "dmg" | "zip" | "tar.gz" | "appimage" | "exe" | "msi";
+  type: "dmg" | "zip" | "tar.gz" | "appimage";
   url: string;
   appName?: string;
 };
@@ -29,7 +31,7 @@ type ManifestArtifact = {
 // Only treat OmniRush.ai desktop-app installers as artifacts. Historical sidecar
 // and CLI release assets must NOT be treated as the desktop app, so we
 // positively require the desktop app's OS-tagged naming (omnirush-mac /
-// omnirush-linux / omnirush-win + an installer extension).
+// omnirush-linux + an installer extension).
 const SIDECAR_HINTS = ["orchestrator", "server", "bun-", "sidecar", "opencode"];
 
 function isDesktopAppAsset(name: string): boolean {
@@ -40,7 +42,7 @@ function isDesktopAppAsset(name: string): boolean {
   // exclude any sidecar/CLI binary that also happens to start with "omnirush".
   if (SIDECAR_HINTS.some((hint) => lower.includes(hint))) return false;
   // require a desktop OS tag so we never pick up a stray asset.
-  return /(mac|darwin|osx|linux|win)/.test(lower);
+  return /(mac|darwin|osx|linux)/.test(lower);
 }
 
 function artifactTypeFor(name: string): ManifestArtifact["type"] | null {
@@ -48,8 +50,6 @@ function artifactTypeFor(name: string): ManifestArtifact["type"] | null {
   if (lower.endsWith(".dmg")) return "dmg";
   if (lower.endsWith(".appimage")) return "appimage";
   if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) return "tar.gz";
-  if (lower.endsWith(".msi")) return "msi";
-  if (lower.endsWith(".exe")) return "exe";
   // .zip is only treated as a desktop artifact for non-dmg platforms; on macOS
   // we prefer the .dmg, so skip zip there (handled by ordering below).
   if (lower.endsWith(".zip")) return "zip";
@@ -71,24 +71,17 @@ function platformArchFor(name: string): { platform: string; arch: string } | nul
   if (lower.endsWith(".appimage") || lower.includes("linux")) {
     return { platform: "linux", arch: arch ?? "x64" };
   }
-  if (lower.endsWith(".exe") || lower.endsWith(".msi") || lower.includes("win")) {
-    return { platform: "win32", arch: arch ?? "x64" };
-  }
   return null;
 }
 
-// Prefer real installers per platform: dmg on macOS, AppImage on Linux, exe/msi
-// on Windows. Higher number wins when multiple assets map to the same slot.
+// Prefer real installers per platform: dmg on macOS, AppImage on Linux.
+// Higher number wins when multiple assets map to the same slot.
 function preferenceFor(type: ManifestArtifact["type"]): number {
   switch (type) {
     case "dmg":
       return 5;
     case "appimage":
       return 5;
-    case "msi":
-      return 4;
-    case "exe":
-      return 3;
     case "tar.gz":
       return 2;
     case "zip":

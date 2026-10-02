@@ -89,7 +89,6 @@ describe("getGithubData", () => {
     installGithubFetch({ latestRelease: release, releases: [release] });
     const data = await getGithubData();
     expect(data.installers.macos.intel).toBe(releasePageUrl);
-    expect(data.installers.windows.x64).toBe(releasePageUrl);
     expect(automaticDownloadHref(data.installers, { os: "macos", arch: "x64", osVersion: null, source: "ua-ch" }, "Macintosh", 0)).toBeNull();
 
     const universal = asset("omnirush-mac-universal-0.17.38.dmg");
@@ -113,7 +112,6 @@ describe("getGithubData", () => {
     const { installers } = await getGithubData();
     const devices: { os: DetectedPlatform["os"]; ua: string; hrefs: string[] }[] = [
       { os: "macos", ua: "Macintosh", hrefs: [installers.macos.appleSilicon, installers.macos.intel] },
-      { os: "windows", ua: "Windows NT 10.0; Win64; x64", hrefs: [installers.windows.arm64, installers.windows.x64] },
       { os: "linux", ua: "X11; Linux x86_64", hrefs: [installers.linux.tarArm64, installers.linux.appImageX64] }
     ];
     const architectures: DetectedPlatform["arch"][] = ["arm64", "x64"];
@@ -130,6 +128,10 @@ describe("getGithubData", () => {
     }
     expect(automaticDownloadHref(installers, mac, "Macintosh", 5)).toBeNull();
     expect(automaticDownloadHref(installers, mac, "Windows NT 10.0", 0)).toBeNull();
+    for (const arch of architectures) {
+      const windows: DetectedPlatform = { os: "windows", arch, osVersion: null, source: "ua-ch" };
+      expect(automaticDownloadHref(installers, windows, "Windows NT 10.0; Win64; x64", 0)).toBeNull();
+    }
     expect(automaticDownloadHref(installers, null, "Macintosh", 0)).toBeNull();
   });
 
@@ -163,12 +165,9 @@ describe("getGithubData", () => {
     const data = await getGithubData();
 
     expectNoInstallerUrl(data.downloads.macos);
-    expectNoInstallerUrl(data.downloads.windows);
     expectNoInstallerUrl(data.downloads.linux);
     expect(data.installers.macos.appleSilicon).toBe(macArm64.browser_download_url);
     expect(data.installers.macos.intel).toBe(macX64.browser_download_url);
-    expect(data.installers.windows.x64).toBe(winX64.browser_download_url);
-    expect(data.installers.windows.arm64).toBe(winArm64.browser_download_url);
     expect(data.releaseTag).toBe(releaseTag);
   });
 
@@ -184,12 +183,9 @@ describe("getGithubData", () => {
     const data = await getGithubData();
     const returnedUrls = [
       data.downloads.macos,
-      data.downloads.windows,
       data.downloads.linux,
       data.installers.macos.appleSilicon,
       data.installers.macos.intel,
-      data.installers.windows.x64,
-      data.installers.windows.arm64,
       data.installers.linux.appImageX64,
       data.installers.linux.appImageArm64,
       data.installers.linux.tarX64,
@@ -202,18 +198,30 @@ describe("getGithubData", () => {
 
     expect(data.downloads).toEqual({
       macos: fallbackReleaseUrl,
-      windows: fallbackReleaseUrl,
       linux: fallbackReleaseUrl
     });
     expect(data.installers.macos.appleSilicon).toBe(releasePageUrl);
     expect(data.installers.macos.intel).toBe(releasePageUrl);
-    expect(data.installers.windows.x64).toBe(releasePageUrl);
-    expect(data.installers.windows.arm64).toBe(releasePageUrl);
     expect(data.installers.linux.appImageX64).toBe(releasePageUrl);
     expect(data.installers.linux.appImageArm64).toBe(releasePageUrl);
     expect(data.installers.linux.tarX64).toBe(releasePageUrl);
     expect(data.installers.linux.tarArm64).toBe(releasePageUrl);
     expect(data.releaseUrl).toBe(releasePageUrl);
     expect(data.releaseTag).toBe(releaseTag);
+  });
+
+  test("never offers a Windows build, even when the release still has one", async () => {
+    const release = releaseWithAssets([
+      asset("omnirush-mac-arm64-0.17.38.dmg"),
+      asset("omnirush-win-x64-0.17.38.exe"),
+      asset("omnirush-win-arm64-0.17.38.exe"),
+      asset("omnirush-linux-x86_64-0.17.38.AppImage")
+    ]);
+    installGithubFetch({ latestRelease: release, releases: [release] });
+
+    const data = await getGithubData();
+    expect(Object.keys(data.downloads).sort()).toEqual(["linux", "macos"]);
+    expect(Object.keys(data.installers).sort()).toEqual(["linux", "macos"]);
+    expect(JSON.stringify(data)).not.toMatch(/\.(exe|msi)"/i);
   });
 });
