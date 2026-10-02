@@ -15,10 +15,9 @@ Every build is on the [latest release](https://github.com/omnirush-ai/omnirush-g
 | Platform | File to download | Notes |
 | --- | --- | --- |
 | macOS, Apple Silicon | [`omnirush-mac-arm64-<version>.dmg`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) | A `.zip` of the same app is also attached. No Intel build. |
+| Using Windows? Switch to WSL | No file: [set up WSL](https://omnirush.ai/docs#windows) | OmniRush runs in WSL on Windows, with the command-line tool in Ubuntu. Microsoft's [install guide](https://learn.microsoft.com/windows/wsl/install). |
 | Linux x64 (Debian, Ubuntu) | [`omnirush-linux-amd64-<version>.deb`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) | Installs the GTK runtime it needs. |
 | Linux x64 (other) | [`omnirush-linux-x86_64-<version>.AppImage`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) or [`omnirush-linux-x64-<version>.tar.gz`](https://github.com/omnirush-ai/omnirush-gui/releases/latest) | Needs the GTK runtime installed first (see below). |
-
-On Windows? OmniRush runs in WSL. [Install WSL](https://learn.microsoft.com/windows/wsl/install), open Ubuntu, and use the [command-line tool](https://omnirush.ai/docs#cli) there.
 
 Each release also has `SHA256SUMS.txt` for checking a download.
 

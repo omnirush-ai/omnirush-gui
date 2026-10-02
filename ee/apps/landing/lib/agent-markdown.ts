@@ -4,7 +4,7 @@ const home = `# OmniRush.ai
 
 ## What it is
 
-- Free, open-source desktop app for macOS and Linux
+- Free, open-source desktop app for macOS and Linux; on Windows, use WSL
 - Any model or provider: Claude, GPT, Gemini, Mistral, local models, and 50+ providers
 - Chat on files, browser automation, scheduled tasks, skills, and Anthropic-compatible plugins
 - OmniRush.ai Connect: one MCP gateway URL for org-wide skills, servers, roles, and policies
@@ -190,9 +190,8 @@ const download = `# Get Started with OmniRush.ai
 ## Supported platforms
 
 - macOS
+- WSL: Using Windows? Switch to WSL. OmniRush runs in WSL on Windows, with the command-line tool in Ubuntu. [Set up WSL](https://omnirush.ai/docs#windows) · [Microsoft's install guide](https://learn.microsoft.com/windows/wsl/install)
 - Linux
-
-On Windows? OmniRush runs in WSL. [Install WSL](https://learn.microsoft.com/windows/wsl/install)
 
 ## After signing up
 

@@ -27,7 +27,7 @@ import {
 import { SiteFooter } from "./site-footer";
 import { SiteNav } from "./site-nav";
 import { DownloadLink } from "./download-link";
-import { WslLine } from "./wsl-line";
+import { WSL_STEPS_URL } from "../lib/wsl";
 
 type Props = {
   stars: string;
@@ -35,7 +35,6 @@ type Props = {
   linuxDownloadHref: string;
   callHref: string;
   isMobileVisitor: boolean;
-  isWindowsVisitor: boolean;
 };
 
 const CLOUD_SIGNUP_URL = "https://app.omnirushlabs.com";
@@ -140,19 +139,24 @@ export function LandingHome(props: Props) {
               </div>
             </div>
 
-            {props.isWindowsVisitor ? (
-              <WslLine className="mt-4 text-[13px] text-gray-500" />
-            ) : (
-              <div className="mt-4 flex flex-wrap items-center gap-x-1.5 gap-y-2 text-[13px] text-gray-500">
-                <span>Also available:</span>
-                <a
-                  href={props.linuxDownloadHref}
-                  className="text-[var(--lp-ink)] underline decoration-transparent underline-offset-4 transition-colors hover:decoration-current"
-                >
-                  Linux
-                </a>
-              </div>
-            )}
+            <div className="mt-4 flex flex-wrap items-center gap-x-1.5 gap-y-2 text-[13px] text-gray-500">
+              <span>Also available:</span>
+              <a
+                href={props.linuxDownloadHref}
+                className="text-[var(--lp-ink)] underline decoration-transparent underline-offset-4 transition-colors hover:decoration-current"
+              >
+                Linux
+              </a>
+              <span>·</span>
+              {/* WSL sits where Windows used to be: there is no Windows app. */}
+              <a
+                href={WSL_STEPS_URL}
+                title="Using Windows? Switch to WSL"
+                className="text-[var(--lp-ink)] underline decoration-transparent underline-offset-4 transition-colors hover:decoration-current"
+              >
+                WSL
+              </a>
+            </div>
 
             {props.isMobileVisitor ? null : (
               <LandingHeroPrompt className="mt-10 hidden md:block" />
@@ -387,7 +391,7 @@ export function LandingHome(props: Props) {
                   </span>
                   <h3 className="mt-4 text-[17px] font-medium">On your desktop</h3>
                   <p className="mt-2 max-w-[280px] text-[14px] leading-[22px] text-[var(--lp-body)] md:min-h-[66px]">
-                    For macOS and Linux. Local-first, no account needed.
+                    For macOS and Linux · on Windows, use WSL. Local-first, no account needed.
                   </p>
                   <a
                     href={props.downloadHref}

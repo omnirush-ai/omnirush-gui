@@ -2,7 +2,6 @@ import { LandingHome } from "../components/landing-home";
 import { getGithubData } from "../lib/github";
 import { headers } from "next/headers";
 import { StructuredData } from "../components/structured-data";
-import { isWindowsUserAgent } from "../components/wsl-line";
 import { homeFaq } from "../lib/faq";
 import { baseOpenGraph } from "../lib/seo";
 
@@ -56,7 +55,6 @@ export default async function Home() {
   const cal = process.env.NEXT_PUBLIC_CAL_URL || "/enterprise#book";
   const userAgent = (await headers()).get("user-agent")?.toLowerCase() || "";
   const isMobileVisitor = /android|iphone|ipad|ipod|mobile/.test(userAgent);
-  const isWindowsVisitor = !isMobileVisitor && isWindowsUserAgent(userAgent);
 
   return (
     <>
@@ -68,7 +66,6 @@ export default async function Home() {
         linuxDownloadHref={github.downloads.linux}
         callHref={cal}
         isMobileVisitor={isMobileVisitor}
-        isWindowsVisitor={isWindowsVisitor}
       />
     </>
   );

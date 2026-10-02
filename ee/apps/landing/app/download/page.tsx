@@ -3,16 +3,16 @@ import { DesktopDownloadCard } from "../../components/desktop-download-card";
 import { SiteFooter } from "../../components/site-footer";
 import { SiteNav } from "../../components/site-nav";
 import { StructuredData } from "../../components/structured-data";
-import { isWindowsUserAgent } from "../../components/wsl-line";
 import { getGithubData } from "../../lib/github";
 import { baseOpenGraph } from "../../lib/seo";
+import { isWindowsUserAgent } from "../../lib/wsl";
 
 const downloadSchema = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   name: "OmniRush.ai",
   description:
-    "Open source Claude Cowork alternative. Download the OmniRush.ai desktop app for macOS or Linux. No account required.",
+    "Open source Claude Cowork alternative. Download the OmniRush.ai desktop app for macOS or Linux, or switch to WSL on Windows. No account required.",
   url: "https://omnirushlabs.com/download",
   applicationCategory: "BusinessApplication",
   operatingSystem: "macOS, Linux",
@@ -31,7 +31,7 @@ const downloadSchema = {
 export const metadata = {
   title: "Download OmniRush.ai — macOS, Linux",
   description:
-    "Download the OmniRush.ai desktop app for macOS or Linux. Free, open source, no account required.",
+    "Download the OmniRush.ai desktop app for macOS or Linux, or switch to WSL on Windows. Free, open source, no account required.",
   alternates: {
     canonical: "/download"
   },

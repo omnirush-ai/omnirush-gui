@@ -78,12 +78,16 @@ const downloadLinks = {
       page: "https://app.omnirushlabs.com?mode=sign-up",
       note: "Sign up for OmniRush.ai Cloud first, then use the guided desktop app access flow.",
     },
+    // WSL sits where Windows used to be: there is no Windows app.
+    wsl: {
+      page: "https://omnirush.ai/docs#windows",
+      note: "Using Windows? Switch to WSL. OmniRush runs in WSL on Windows, with the command-line tool in Ubuntu.",
+    },
     linux: {
       page: "https://app.omnirushlabs.com?mode=sign-up",
       note: "Sign up for OmniRush.ai Cloud first, then use the guided desktop app access flow.",
     },
   },
-  windows: "On Windows? OmniRush runs in WSL. Install WSL: https://learn.microsoft.com/windows/wsl/install",
 }
 
 const tools: Tool[] = [
