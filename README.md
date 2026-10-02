@@ -4,7 +4,7 @@
     <source media="(prefers-color-scheme: light)" srcset="./omnirush-logo.png" />
     <img src="./omnirush-logo.png" alt="omnirush.ai" width="128" height="128" />
   </picture>
-  <h1>OmniRush.ai</h1>
+  <h1>omnirush.ai</h1>
   <p>A desktop coding agent with free access to frontier models.</p>
   <p>
     <a href="https://github.com/omnirush-ai/omnirush-gui/releases/latest"><img src="https://img.shields.io/github/v/release/omnirush-ai/omnirush-gui?label=release" alt="Latest release" /></a>
@@ -12,7 +12,7 @@
   <p><a href="https://omnirush.ai">omnirush.ai</a></p>
 </div>
 
-OmniRush.ai is a desktop app for working with a coding agent on your own
+omnirush.ai is a desktop app for working with a coding agent on your own
 projects. GPT 6 Astra is the default model; GPT 6.1 Sol and the other models in
 your account's catalog are available from the model picker. Access is free in
 exchange for contributing your session traces (see
@@ -115,7 +115,7 @@ You can opt out of data collection on the account page of the
 The app updates itself on macOS and Linux: use **Settings > Updates** or the
 **Check for Updates...** menu item.
 
-- **macOS:** the app downloads the new DMG and opens it; drag OmniRush.ai to
+- **macOS:** the app downloads the new DMG and opens it; drag the app to
   Applications to replace the old copy.
 - **Linux:** the AppImage, `.deb` and `.pacman` installs update in place. The
   tar.gz does not update itself; download new releases manually.
