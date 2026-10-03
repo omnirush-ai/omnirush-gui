@@ -3101,7 +3101,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           onScroll={sessionScroll.handleScroll}
           // Extra top padding while the find bar is open so it never covers
           // the first message (short transcripts cannot scroll it clear).
-          className={`absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y px-3 pb-4 sm:px-5 ${findOwned ? "pt-16" : "pt-4"}`}
+          className={`chat-scrollbar absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y px-3 pb-4 sm:px-5 ${findOwned ? "pt-16" : "pt-4"}`}
         >
           {/* Chat column: tighter than the composer (800px) so messages
                keep a comfortable reading width and don't feel "too big". */}
@@ -3227,9 +3227,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
         </div>
         <SessionScrollOverlay
           sessionId={props.sessionId}
-          isStreaming={chatStreaming}
+          scrollRef={scrollRef}
           onJumpToLatest={sessionScroll.jumpToLatest}
-          onJumpToStartOfMessage={sessionScroll.jumpToStartOfMessage}
+          onJumpToTop={sessionScroll.jumpToTop}
         />
         <SessionFindBar
           sessionId={props.sessionId}
