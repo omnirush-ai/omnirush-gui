@@ -60,10 +60,10 @@ function keyPaths(value: unknown, prefix = ""): string[] {
 describe("omnirush model catalog sanitizer", () => {
   test("reads the backend catalog: Astra first and default, Muse under its family with its own efforts", () => {
     const catalog = sanitizeOmniRushModelCatalog(backendCatalogBody());
-    expect(catalog?.map((model) => model.id)).toEqual(["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1", "muse-spark-1.3"]);
+    expect(catalog?.map((model) => model.id)).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1", "muse-spark-1.3"]);
     expect(catalog && omnirushDefaultModelId(catalog)).toBe("gpt-6-astra");
     expect(catalog?.filter((model) => model.default).map((model) => model.id)).toEqual(["gpt-6-astra"]);
-    expect(catalog?.[5]).toEqual({
+    expect(catalog?.[6]).toEqual({
       id: "muse-spark-1.3",
       display_name: "Meta Muse Spark 1.3",
       family: "Meta Muse",
@@ -75,9 +75,9 @@ describe("omnirush model catalog sanitizer", () => {
     });
   });
 
-  test("Astra, GPT 6 Sol and GPT-5.6 Sol from the backend equal the built-in catalog, so a Muse-less account never reloads", () => {
+  test("Astra, GPT 6.1 Sol, GPT 6 Sol and GPT-5.6 Sol from the backend equal the built-in catalog, so a Muse-less account never reloads", () => {
     const body = backendCatalogBody();
-    const openaiOnly = { ...body, data: body.data.slice(0, 3) };
+    const openaiOnly = { ...body, data: body.data.slice(0, 4) };
     const catalog = sanitizeOmniRushModelCatalog(openaiOnly);
     expect(catalog).not.toBeNull();
     expect(canonicalOmniRushModelCatalog(catalog!)).toBe(canonicalOmniRushModelCatalog(builtinOmniRushModelCatalog()));
@@ -152,11 +152,12 @@ describe("omnirush model catalog sanitizer", () => {
     }]);
   });
 
-  test("an older backend's four fields give Astra and both Sols their v1.0.9 metadata", () => {
+  test("an older backend's four fields give Astra and all Sols their built-in metadata", () => {
     const catalog = sanitizeOmniRushModelCatalog({
       object: "list",
       data: [
         { id: "gpt-6-astra", display_name: "GPT 6 Astra", default: true, reasoning_levels: ["low", "high", "xhigh", "max"] },
+        { id: "gpt-6.1-sol", display_name: "GPT 6.1 Sol", default: false, reasoning_levels: ["low", "high", "xhigh", "max"] },
         { id: "gpt-6-sol", display_name: "GPT 6 Sol", default: false, reasoning_levels: ["low", "high", "xhigh", "max"] },
         { id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", default: false, reasoning_levels: ["low", "high", "xhigh", "max"] },
       ],
@@ -164,15 +165,16 @@ describe("omnirush model catalog sanitizer", () => {
     expect(catalog).toEqual(builtinOmniRushModelCatalog());
   });
 
-  test("the built-ins list Astra, GPT 6 Sol, GPT-5.6 Sol; a backend without GPT 6 Sol serves just the other two", () => {
+  test("the built-ins list Astra, GPT 6.1 Sol, GPT 6 Sol and GPT-5.6 Sol", () => {
     expect(builtinOmniRushModelCatalog().map((model) => [model.id, model.display_name, model.default])).toEqual([
       ["gpt-6-astra", "GPT 6 Astra", true],
+      ["gpt-6.1-sol", "GPT 6.1 Sol", false],
       ["gpt-6-sol", "GPT 6 Sol", false],
       ["gpt-5.6-sol", "GPT-5.6 Sol", false],
     ]);
     const body = backendCatalogBody();
     const catalog = sanitizeOmniRushModelCatalog({ ...body, data: body.data.filter((model) => model.id === "gpt-6-astra" || model.id === "gpt-5.6-sol") });
-    expect(catalog).toEqual(builtinOmniRushModelCatalog().filter((model) => model.id !== "gpt-6-sol"));
+    expect(catalog).toEqual(builtinOmniRushModelCatalog().filter((model) => !["gpt-6.1-sol", "gpt-6-sol"].includes(model.id)));
   });
 
   test("keeps exactly one default, and at most 32 models", () => {

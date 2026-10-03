@@ -685,7 +685,7 @@ function withReasoningSummary(body: ArrayBuffer | string): ArrayBuffer | string 
   } catch {
     return body;
   }
-  if (!isRecord(parsed) || (parsed.model !== "gpt-6-astra" && parsed.model !== "gpt-6-sol")) return body;
+  if (!isRecord(parsed) || !["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol"].includes(parsed.model as string)) return body;
   if (parsed.reasoning != null && !isRecord(parsed.reasoning)) return body;
   const reasoning = isRecord(parsed.reasoning) ? parsed.reasoning : {};
   if ("summary" in reasoning) return body;
