@@ -74,7 +74,7 @@ jobs:
             runner: macos-14
             platform: macos
             target: aarch64-apple-darwin
-            builder_args: --mac --arm64
+            builder_args: --mac --arm64 -c.mac.notarize=true
             update_manifest: latest-mac.yml
           # No Windows build: Windows installs and updates are no longer
           # offered, so no installer and no latest.yml feed are published.
@@ -149,13 +149,61 @@ jobs:
         shell: bash
         run: pnpm --filter @omnirush/desktop build:electron
 
+      # Signed with the Developer ID Application certificate and notarized
+      # with an App Store Connect API key. Refuses to package an unsigned mac
+      # build: a signed install can only be updated by Squirrel to a build
+      # signed by the same team.
+      - name: Prepare macOS signing
+        if: matrix.platform == 'macos'
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name}" ]; then
+              echo "macOS signing secret for $name is missing; refusing to ship an unsigned build." >&2
+              exit 1
+            fi
+          done
+          key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$key"
+          {
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=true"
+            echo "APPLE_API_KEY=$key"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+          } >> "$GITHUB_ENV"
+
       - name: Package installer
+        env:
+          CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
         shell: bash
         run: |
           pnpm --dir apps/desktop exec electron-builder \
             --config electron-builder.yml \
             ${{ matrix.builder_args }} \
             --publish never
+
+      - name: Verify macOS signature and notarization
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app=$(find apps/desktop/dist-electron -maxdepth 2 -name '*.app' -type d | head -n 1)
+          if [ -z "$app" ]; then
+            echo "No packaged .app found under apps/desktop/dist-electron." >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Runtime)'
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
 
       - name: Verify packaged server imports
         shell: bash
