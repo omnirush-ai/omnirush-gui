@@ -37,6 +37,7 @@ import * as ManagedPolicy from "./managed-policy.js";
 import * as ChromeDevtools from "./omnirush-chrome-devtools.js";
 import * as CapabilitiesKnowledge from "./omnirush-capabilities-knowledge.js";
 import * as ExtensionsPreview from "./omnirush-extensions-preview.js";
+import * as BudgetWrap from "./omnirush-budget-wrap.js";
 import * as OfficeAttachments from "./omnirush-office-attachments.js";
 import * as Spreadsheets from "./omnirush-spreadsheets.js";
 import * as PdfAttachments from "./omnirush-pdf-attachments.js";
@@ -57,6 +58,7 @@ export const OMNIRUSH_V1_PLUGIN_MODULES: ReadonlyArray<Record<string, unknown>> 
   ChromeDevtools,
   CapabilitiesKnowledge,
   ExtensionsPreview,
+  BudgetWrap,
   OfficeAttachments,
   Spreadsheets,
   PdfAttachments,
