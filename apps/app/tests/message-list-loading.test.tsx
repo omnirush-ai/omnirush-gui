@@ -86,8 +86,19 @@ describe("message-list loading feedback", () => {
     expect(markup).not.toContain("PaperGrainGradient");
   });
 
-  test("does not duplicate working feedback when a tool row is visible", () => {
-    expect(shouldShowMessageListLoading("streaming", 2, true)).toBe(false);
+  test("a live turn's Working status is one header at its top, its work folded under it", () => {
+    const running: UIMessage = {
+      id: "assistant-running",
+      role: "assistant",
+      parts: [{ type: "dynamic-tool", toolName: "bash", toolCallId: "c1", state: "input-available", input: { command: "sleep 5" } }],
+    };
+    const markup = renderList([userMessage, running], "streaming");
+    // The turn's own header, not a row below everything that moves as work arrives.
+    expect(markup).toContain("data-step-run-live");
+    expect(markup).toContain("Working 0s");
+    expect(markup).not.toContain('data-loading-message="working"');
+    // The running command is folded under the header until it is opened.
+    expect(markup).not.toContain("sleep 5");
   });
 });
 
