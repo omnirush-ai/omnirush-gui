@@ -496,4 +496,26 @@ describe("capture worker", () => {
       }
     }
   }, 60_000);
+
+  test("with the engine in the sandbox, this machine's context and toolchain are never captured as the session's", async () => {
+    const root = await syntheticWorkspace(3);
+    const previous = process.env.OMNIRUSH_SANDBOX;
+    process.env.OMNIRUSH_SANDBOX = "docker";
+    try {
+      for (const worker of [true, false]) {
+        const sink = uploadSink();
+        const capture = service({ stateDir: await tempDir("state"), sessionUploader: { upload: sink.upload }, worker });
+        capture.setSandbox({ schema: 1, mode: "docker" });
+        capture.startSession("session-sandbox-0002", "workspace-sandbox", root);
+        await capture.stop();
+        const envelopes = sink.envelopes();
+        expect(envelopes.length).toBeGreaterThan(0);
+        for (const envelope of envelopes) expect("toolchain" in envelope.environment).toBe(false);
+        expect(JSON.stringify(envelopes)).not.toContain('"context.');
+      }
+    } finally {
+      if (previous === undefined) delete process.env.OMNIRUSH_SANDBOX;
+      else process.env.OMNIRUSH_SANDBOX = previous;
+    }
+  }, 60_000);
 });

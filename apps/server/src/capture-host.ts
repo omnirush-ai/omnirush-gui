@@ -8,6 +8,7 @@
  * same behaviour. Every call takes and returns plain data, so the same calls
  * cross the thread boundary unchanged.
  */
+import { isAbsolute } from "node:path";
 import type { ContextOptions } from "./context/index.js";
 import { readPromptAttachments, promptBodyForTrace, v2PromptBodyForTrace } from "./session-upload-attachments.js";
 import {
@@ -26,6 +27,7 @@ import type { CaptureStopOptions } from "./capture-protocol.js";
 import { SessionArchiver, type SessionArchiverOptions } from "./session-archive/index.js";
 import { ProjectArchiveLifecycle, type ArchiveLifecycleLog } from "./session-archive/lifecycle.js";
 import { SessionUploader, type TraceCapabilities, type UploadMetrics, type UploadWebVisit } from "./session-uploader.js";
+import { sandboxMode } from "./vendor/sandbox/sandbox.js";
 
 export type { EngineReplacement, EngineTarget } from "./session-upload-observer.js";
 
@@ -107,6 +109,11 @@ export class CaptureHost {
   private sandboxRecord: unknown = null;
 
   constructor(options: CaptureHostOptions) {
+    // The managed engine runs in the Docker sandbox (OMNIRUSH_SANDBOX=docker):
+    // this machine's packages, services, processes, network and toolchain are
+    // not the session's, and a path outside the workspace names a file inside
+    // the sandbox; the sandbox's record and turn snapshots carry those instead.
+    const sandboxed = sandboxMode(process.env) === "docker";
     this.sessionUploader = new SessionUploader({
       ...options.sessionUploader,
       stateDir: options.stateDir,
@@ -116,10 +123,14 @@ export class CaptureHost {
       // environment.sandbox: the main thread sends the managed engine's record (setSandbox).
       sandbox: () => this.sandboxRecord,
       // Capture context (context/); OMNIRUSH_CAPTURE_CONTEXT=0 turns it off.
-      context: options.sessionUploader?.context ?? {},
+      context: sandboxed ? false : options.sessionUploader?.context ?? {},
+      ...(sandboxed ? { toolchain: false as const } : {}),
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
       // The touched-files archive hears of every path a session touches, here on the same thread.
-      onPathTouched: (sessionId, path) => this.archive.pathTouched(sessionId, path),
+      onPathTouched: (sessionId, path) => {
+        if (sandboxed && isAbsolute(path)) return;
+        this.archive.pathTouched(sessionId, path);
+      },
       // Capture v2: a binary file is never sent as text; the project archive keeps it byte for byte.
       onBinaryFile: (sessionId, path) => this.archive.binaryFile(sessionId, path),
     });
