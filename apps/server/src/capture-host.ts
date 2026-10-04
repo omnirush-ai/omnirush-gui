@@ -103,6 +103,8 @@ export class CaptureHost {
   private readonly sessionRoots = new Map<string, string>();
   /** The state dir and the app's data/config/cache dirs: never reported or recorded as a touched file. */
   private readonly appDirs: string[];
+  /** The record of the sandbox the managed engine runs in, null on the host (setSandbox). */
+  private sandboxRecord: unknown = null;
 
   constructor(options: CaptureHostOptions) {
     this.sessionUploader = new SessionUploader({
@@ -111,6 +113,8 @@ export class CaptureHost {
       appVersion: options.appVersion,
       engineVersion: options.engineVersion,
       log: options.log,
+      // environment.sandbox: the main thread sends the managed engine's record (setSandbox).
+      sandbox: () => this.sandboxRecord,
       // Capture context (context/); OMNIRUSH_CAPTURE_CONTEXT=0 turns it off.
       context: options.sessionUploader?.context ?? {},
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
@@ -134,6 +138,11 @@ export class CaptureHost {
   startSession(sessionId: string, workspaceId: string, root: string): void {
     this.sessionRoots.set(sessionId, root);
     this.sessionUploader.startSession(sessionId, workspaceId, root);
+  }
+
+  /** The record of the Docker sandbox the managed engine runs in (managed-opencode.ts), sent as environment.sandbox. */
+  setSandbox(record: unknown): void {
+    this.sandboxRecord = record;
   }
 
   recordTrace(sessionId: string, type: string, data?: unknown): void {

@@ -247,6 +247,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       const opencodeModelsEnv = await duringStartup(() => resolveOpencodeModelsEnv());
 
       const opencodeBin = options.opencodeBin || process.env.OMNIRUSH_OPENCODE_BIN;
+      const localWorkspacePaths = () => config.workspaces
+        .filter((entry) => entry.workspaceType !== "remote")
+        .map((entry) => entry.path);
       // Shared by the first spawn and by any later rollover standby, so a
       // replacement engine is identical apart from its port.
       const engineEnv: Record<string, string | undefined> = {
@@ -273,6 +276,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           const startupPort = managedOpencode ? Number(new URL(managedOpencode.url).port) || 0 : 0;
           return [...new Set([config.port, ...poolPorts, startupPort].filter((port) => port > 0))];
         },
+        sandboxWorkspaces: localWorkspacePaths,
       };
       // A 1.x engine (1.18.32+) refuses user-owned config files that carry a
       // V2 `permissions` key: a global file exits the engine at boot, a
@@ -281,9 +285,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       // The bundled 2.x engine reads both spellings, so it needs no check.
       if ((await resolveEngineIdentity(opencodeBin?.trim() || "opencode", { ...process.env, ...engineEnv })).dialect === "v1") {
         await duringStartup(() => assertOpencodeConfigCompat({
-          workspaceRoots: config.workspaces
-            .filter((entry) => entry.workspaceType !== "remote")
-            .map((entry) => entry.path),
+          workspaceRoots: localWorkspacePaths(),
           env: { ...process.env, ...engineEnv },
           logger,
         }));
@@ -293,6 +295,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         cwd,
         excludedPorts: [config.port],
         env: engineEnv,
+        sandboxWorkspaces: localWorkspacePaths(),
       }));
 
       config.opencodeBaseUrl = managedOpencode.url;

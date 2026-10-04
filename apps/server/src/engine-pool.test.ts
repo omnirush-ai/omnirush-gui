@@ -14,9 +14,10 @@ import {
   type EnginePoolHooks,
   type EngineSpawnTemplate,
 } from "./engine-pool.js";
-import { createManagedOpencodeServer, type ManagedOpencodeServer } from "./managed-opencode.js";
+import { createManagedOpencodeServer, type ManagedOpencodeSandbox, type ManagedOpencodeServer } from "./managed-opencode.js";
 import { proxyOpencodeRequest, startServer } from "./server.js";
 import type { ServerConfig, WorkspaceInfo } from "./types.js";
+import type { SandboxSnapshot } from "./vendor/sandbox/sandbox.js";
 
 const ENV_NAMES = [
   "OMNIRUSH_RUNTIME_DB",
@@ -1304,5 +1305,80 @@ describe("engine pool: config applied live", () => {
     expect(writes).toBe(1);
     expect(await pool.requestRollover({ reason: "omnirush_model_catalog", workspace: fixture.workspace }))
       .toEqual({ action: "reloaded_in_place" });
+  });
+});
+
+describe("engine pool: Docker sandbox", () => {
+  test("a prompt to an engine in the sandbox freezes its session's next turn before the engine gets it", async () => {
+    const fixture = await createFixture();
+    // No account in this fixture: the development bypass lets prompts through the sign-in gate.
+    setEnv("OMNIRUSH_DEV_MODE", "1");
+    setEnv("OMNIRUSH_SESSION_UPLOAD_OPTIONAL", "1");
+    const primary = await fixture.spawnPrimary();
+    const port = portOf(primary.url);
+    let session = "";
+    const promptsSeen = async () => (await fixture.logLines()).filter((line) => line === `${port} POST /session/${session}/prompt_async`).length;
+    const frozen: Array<[label: string, promptsSeen: number]> = [];
+    const image = { ref: "ghcr.io/omnirush-ai/sandbox:1", id: `sha256:${"a".repeat(64)}`, digest: null, pinned: null, platform: "linux/amd64" };
+    const summary = (label: string): SandboxSnapshot => ({ schema: 1, label, image, changed: 0, added: 0, modified: 0, deleted: [], tar: null, bytes: 0, sha256: null });
+    const sandbox: ManagedOpencodeSandbox = {
+      manifest: {
+        schema: 1,
+        mode: "docker",
+        image,
+        engine: { name: "opencode", version: "2.0.18", source: "npm", package: "@opencode/cli-linux-x64-baseline@2.0.18" },
+        network: "bridge",
+        user: "501:20",
+        home: "/home/omnirush",
+        workdir: fixture.root,
+        workspaces: [fixture.root],
+        docker: { version: "29.0.0", os: "Docker Desktop" },
+        app: "desktop",
+      },
+      stateDir: join(fixture.root, "sandbox"),
+      changes: async () => [],
+      freeze: async (label) => {
+        // A freeze takes a moment (`docker commit --pause`): the prompt must wait for it.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        frozen.push([label, await promptsSeen()]);
+        return { label, changed: 0, save: async () => summary(label), discard: async () => null };
+      },
+      snapshot: async ({ label }) => summary(label),
+    };
+    const pool = new EnginePool({ config: fixture.config, template: fixture.template, hooks: fixture.hooks });
+    setEnginePoolForConfig(fixture.config, pool);
+    cleanups.push(async () => {
+      clearEnginePoolForConfig(fixture.config);
+      await pool.disposeAll().catch(() => undefined);
+    });
+    pool.adoptPrimary({
+      handle: { ...primary, sandbox },
+      fingerprint: await computeEngineConfigFingerprint(fixture.template),
+      registryId: null,
+      trustedIdentity: null,
+    });
+    expect(pool.sandboxFor(primary.url)).toBe(sandbox);
+    expect(pool.sandboxFor("http://127.0.0.1:1")).toBeNull();
+
+    const prompt = async (sessionId: string) => {
+      session = sessionId;
+      const path = `/session/${sessionId}/prompt_async`;
+      const url = new URL(`http://127.0.0.1/opencode${path}`);
+      const response = await proxyOpencodeRequest({
+        config: fixture.config,
+        request: new Request(url, { method: "POST", body: "{}" }),
+        url,
+        workspace: fixture.workspace,
+        proxyPath: path,
+      });
+      expect(response.status).toBe(200);
+      expect(await promptsSeen()).toBeGreaterThan(0);
+    };
+    await prompt("ses_sandboxed");
+    await prompt("ses_sandboxed");
+    await prompt("ses_other");
+
+    // Turn N is frozen when the engine has seen the session's first N - 1 prompts.
+    expect(frozen).toEqual([["turn-1", 0], ["turn-2", 1], ["turn-1", 0]]);
   });
 });

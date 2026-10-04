@@ -1,8 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
+import { dirname, isAbsolute, join } from "node:path";
+import { omnirushConfigDir } from "@omnirush/paths";
+import constants from "../../../constants.json" with { type: "json" };
 import { startEngineFacade } from "./engine2/facade.js";
 import { prepareEngine2Launch, resolveEngineIdentity, type EngineDialect } from "./engine2/launch.js";
+import { omnirushPluginPath } from "./omnirush-extensions-plugin-path.js";
+import { prepareSandboxedEngine, sandboxMode, type SandboxLaunch, type SandboxManifest } from "./vendor/sandbox/sandbox.js";
 
 export type ManagedChildProcess = {
   exitCode: number | null;
@@ -15,6 +21,16 @@ export type ManagedChildProcess = {
 export type ManagedProcessCloseOptions = {
   termTimeoutMs?: number;
   killTimeoutMs?: number;
+};
+
+/**
+ * The OmniRush Docker sandbox an engine runs in (OMNIRUSH_SANDBOX=docker,
+ * vendor/sandbox): its record, a captured session's `environment.sandbox`,
+ * and the turn snapshots taken from it.
+ */
+export type ManagedOpencodeSandbox = Pick<SandboxLaunch, "manifest" | "changes" | "freeze" | "snapshot"> & {
+  /** The sandbox's folder on this machine; turn snapshots go to <stateDir>/snapshots/<sessionId>/. */
+  stateDir: string;
 };
 
 export type ManagedOpencodeServer = {
@@ -32,6 +48,8 @@ export type ManagedOpencodeServer = {
    * which only read their config when an instance is (re)built.
    */
   refreshConfig?: () => Promise<void>;
+  /** Set when the engine runs in the OmniRush Docker sandbox instead of on this machine. */
+  sandbox?: ManagedOpencodeSandbox;
 };
 
 export type OpencodeExecutionEnvEntry = {
@@ -45,6 +63,8 @@ export type OpencodeExecutionSnapshot = {
   args: string[];
   cwd: string;
   env: OpencodeExecutionEnvEntry[];
+  /** The sandbox's record when the engine runs in it (command and args stay the engine's own). */
+  sandbox?: SandboxManifest;
 };
 
 export function createManagedProcessClose(
@@ -142,6 +162,11 @@ type ManagedOpencodeServerOptions = {
   excludedPorts?: number[];
   timeoutMs?: number;
   env?: Record<string, string | undefined>;
+  /**
+   * With OMNIRUSH_SANDBOX=docker: the folders a sandboxed engine works in,
+   * mounted read-write at their own paths (every local workspace). Default: [cwd].
+   */
+  sandboxWorkspaces?: string[];
 };
 
 class ManagedOpencodeExitError extends Error {
@@ -168,6 +193,107 @@ function redactedEnv(entries: Record<string, string | undefined>): OpencodeExecu
       redacted: SECRET_ENV_PATTERN.test(name),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/** The 2.x engine's Linux builds, for a sandbox that cannot run this machine's binary. */
+const SANDBOX_ENGINE_NPM = {
+  packages: { "linux/amd64": "@opencode/cli-linux-x64-baseline", "linux/arm64": "@opencode/cli-linux-arm64" },
+  bin: "bin/opencode",
+};
+
+type SandboxedEngine = { launch: SandboxLaunch; sandbox: ManagedOpencodeSandbox };
+
+/**
+ * OMNIRUSH_SANDBOX=docker: the engine runs in the OmniRush Docker sandbox
+ * (vendor/sandbox, shared with the CLI) instead of on this machine, so a
+ * captured session's environment is an image digest plus what the session
+ * changed in it. Null when the sandbox is off. Its errors (SandboxError) are
+ * thrown: the engine is never started on this machine instead.
+ */
+async function prepareSandbox(options: ManagedOpencodeServerOptions, engine: {
+  command: string;
+  args: string[];
+  /** The environment the engine would have been started with. */
+  env: NodeJS.ProcessEnv;
+  /** The names this server sets for the engine: passed by name, never on a command line. */
+  passEnv: string[];
+  dialect: EngineDialect;
+  version: string | null;
+  /** Host folders the engine reads by absolute path besides its config file's (mounted read-only). */
+  mounts: string[];
+}): Promise<SandboxedEngine | null> {
+  const env = { ...process.env, ...options.env };
+  if (sandboxMode(env) !== "docker") return null;
+  // The app's data folder: the one the runtime config file is in.
+  const stateDir = env.OMNIRUSH_SANDBOX_STATE_DIR?.trim()
+    || join(env.OPENCODE_CONFIG ? dirname(env.OPENCODE_CONFIG) : omnirushConfigDir(), "sandbox");
+  // OmniRush.ai's engine plugins are loaded by absolute path: their folder, as named and as it really is.
+  const plugin = omnirushPluginPath("omnirush-engine2");
+  const launch = await prepareSandboxedEngine({
+    command: engine.command,
+    args: engine.args,
+    cwd: options.cwd,
+    env: engine.env,
+    passEnv: engine.passEnv,
+    workspaces: options.sandboxWorkspaces,
+    mounts: [...engine.mounts, dirname(plugin), ...(existsSync(plugin) ? [dirname(realpathSync(plugin))] : [])].map((path) => ({ path })),
+    stateDir,
+    engine: {
+      name: "opencode",
+      version: engine.version ?? constants.opencodeVersion.trim().replace(/^v/, ""),
+      ...(isAbsolute(engine.command) ? { hostPath: engine.command } : {}),
+      // Only the 2.x engine's Linux builds are known: a 1.x engine runs from its own binary, on a Linux host.
+      ...(engine.dialect === "v2" ? { npm: SANDBOX_ENGINE_NPM } : {}),
+    },
+    app: "desktop",
+  });
+  const { manifest, changes, freeze, snapshot } = launch;
+  return { launch, sandbox: { manifest, changes, freeze, snapshot, stateDir } };
+}
+
+/** Per session, the last turn frozen; after a restart, the last one its snapshot folder holds. */
+const sandboxTurns = new Map<string, number>();
+
+function savedSandboxTurns(dir: string): number {
+  try {
+    return Math.max(0, ...readdirSync(dir).map((name) => Number(/^turn-(\d+)\.json$/.exec(name)?.[1] ?? 0)));
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * A sandboxed engine's turn snapshot (vendor/sandbox README, "Turn
+ * snapshots"), taken when a session's prompt is sent, before the engine gets
+ * it: the environment is frozen now (a pause of about a second) and saved in
+ * the background to <stateDir>/snapshots/<sessionId>/turn-<n>.tar and .json,
+ * n counting the session's prompts. Never rejects: a failure is logged and
+ * the prompt goes on.
+ */
+/** How long a prompt waits for its turn's freeze; a slower one goes on without a snapshot. */
+const SANDBOX_FREEZE_TIMEOUT_MS = 10_000;
+
+export async function freezeSandboxTurn(
+  sandbox: Pick<ManagedOpencodeSandbox, "freeze" | "stateDir">,
+  sessionId: string,
+  log: (message: string, attributes: Record<string, unknown>) => void,
+): Promise<void> {
+  // The session id names a folder: an engine id, never a path.
+  if (!/^[\w-]{1,128}$/.test(sessionId)) return;
+  const dir = join(sandbox.stateDir, "snapshots", sessionId);
+  const turn = (sandboxTurns.get(sessionId) ?? savedSandboxTurns(dir)) + 1;
+  sandboxTurns.set(sessionId, turn);
+  const failed = (message: string) => (error: unknown) => log(message, {
+    "session.id": sessionId,
+    "sandbox.turn": turn,
+    "error.message": error instanceof Error ? error.message : String(error),
+  });
+  try {
+    const frozen = await sandbox.freeze(`turn-${turn}`, { timeoutMs: SANDBOX_FREEZE_TIMEOUT_MS });
+    void frozen.save(dir).catch(failed("Sandbox turn snapshot could not be saved."));
+  } catch (error) {
+    failed("Sandbox turn could not be frozen.")(error);
+  }
 }
 
 /**
@@ -208,8 +334,21 @@ async function startManagedEngine2Server(
     OMNIRUSH_ENGINE_ADAPTER_URL: adapterUrl,
     OMNIRUSH_ENGINE_ADAPTER_AUTHORIZATION: adapterAuthorization,
   });
-  const child: ChildProcess = spawn(command, args, { cwd: options.cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const sandboxed = await prepareSandbox(options, {
+    command,
+    args,
+    env,
+    passEnv: injectedEnv.map((entry) => entry.name),
+    dialect: "v2",
+    version,
+    // The plugin bridge, and the runtime config's folder (the skills its config names).
+    mounts: [...launch.plugins, ...(launch.v1ConfigPath ? [dirname(launch.v1ConfigPath)] : [])],
+  });
+  // In the sandbox: the Docker command that runs the same engine and arguments.
+  const child: ChildProcess = spawn(sandboxed?.launch.command ?? command, sandboxed?.launch.args ?? args, { cwd: options.cwd, env: sandboxed?.launch.env ?? env, stdio: ["ignore", "pipe", "pipe"] });
   const processLifecycle = createManagedProcessClose(child);
+  // A sandboxed engine's container is removed once its process is closed.
+  const close = sandboxed ? () => processLifecycle.close().finally(() => sandboxed.launch.dispose()) : processLifecycle.close;
   const timeoutMs = Math.max(options.timeoutMs ?? 15_000, 90_000);
   let engineUrl: string;
   try {
@@ -238,9 +377,10 @@ async function startManagedEngine2Server(
       child.once("close", (code) => fail(new ManagedOpencodeExitError(code, output)));
     });
   } catch (error) {
-    await processLifecycle.close();
+    await close();
     throw error;
   }
+  if (sandboxed) engineUrl = sandboxed.launch.mapUrl(engineUrl);
   let facade: Awaited<ReturnType<typeof startEngineFacade>>;
   try {
     facade = await startEngineFacade({
@@ -258,7 +398,7 @@ async function startManagedEngine2Server(
       log: (message, attributes) => console.warn(`[engine-adapter] ${message}`, attributes ? JSON.stringify(attributes) : ""),
     });
   } catch (error) {
-    await processLifecycle.close();
+    await close();
     const message = error instanceof Error ? error.message : String(error);
     throw new ManagedOpencodeExitError(1, `engine adapter could not listen: ${message}`);
   }
@@ -270,13 +410,14 @@ async function startManagedEngine2Server(
     username,
     password,
     pid: child.pid ?? null,
-    execution: { command, args, cwd: options.cwd, env: injectedEnv },
+    execution: { command, args, cwd: options.cwd, env: injectedEnv, ...(sandboxed ? { sandbox: sandboxed.sandbox.manifest } : {}) },
     isAlive: processLifecycle.isAlive,
     close: async () => {
       await facade.close().catch(() => undefined);
-      await processLifecycle.close();
+      await close();
     },
     refreshConfig: facade.refreshConfig,
+    ...(sandboxed ? { sandbox: sandboxed.sandbox } : {}),
   };
 }
 
@@ -321,13 +462,25 @@ async function startManagedOpencodeServer(
       redacted: SECRET_ENV_PATTERN.test(name),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
-  const child: ChildProcess = spawn(options.bin?.trim() || "opencode", args, {
-    cwd: options.cwd,
+  const sandboxed = await prepareSandbox(options, {
+    command,
+    args,
     env,
+    passEnv: injectedEnv.map((entry) => entry.name),
+    dialect: "v1",
+    version: identity.version,
+    mounts: [],
+  });
+  // In the sandbox: the Docker command that runs the same engine and arguments.
+  const child: ChildProcess = spawn(sandboxed?.launch.command ?? command, sandboxed?.launch.args ?? args, {
+    cwd: options.cwd,
+    env: sandboxed?.launch.env ?? env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   const processLifecycle = createManagedProcessClose(child);
+  // A sandboxed engine's container is removed once its process is closed.
+  const close = sandboxed ? () => processLifecycle.close().finally(() => sandboxed.launch.dispose()) : processLifecycle.close;
 
   let url: string;
   try {
@@ -360,9 +513,10 @@ async function startManagedOpencodeServer(
       child.once("close", (code) => fail(new ManagedOpencodeExitError(code, output)));
     });
   } catch (error) {
-    await processLifecycle.close();
+    await close();
     throw error;
   }
+  if (sandboxed) url = sandboxed.launch.mapUrl(url);
 
   return {
     url,
@@ -374,9 +528,11 @@ async function startManagedOpencodeServer(
       args,
       cwd: options.cwd,
       env: injectedEnv,
+      ...(sandboxed ? { sandbox: sandboxed.sandbox.manifest } : {}),
     },
     isAlive: processLifecycle.isAlive,
-    close: processLifecycle.close,
+    close,
+    ...(sandboxed ? { sandbox: sandboxed.sandbox } : {}),
   };
 }
 

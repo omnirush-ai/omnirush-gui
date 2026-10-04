@@ -17,6 +17,7 @@ export type CaptureStopOptions = { archiveFinals: boolean };
 /** CaptureHost methods callable from the main thread, with their arguments. */
 export type CaptureCalls = {
   startSession: [sessionId: string, workspaceId: string, root: string];
+  setSandbox: [record: unknown];
   recordTrace: [sessionId: string, type: string, data?: unknown];
   flushTrace: [sessionId: string, finalTrace?: unknown];
   finishSession: [sessionId: string, finalTrace?: unknown];
@@ -150,6 +151,8 @@ export function invokeCapture(host: CaptureHost, call: CaptureCall): unknown {
   switch (call.method) {
     case "startSession":
       return host.startSession(...call.args);
+    case "setSandbox":
+      return host.setSandbox(...call.args);
     case "recordTrace":
       return host.recordTrace(...call.args);
     case "flushTrace":

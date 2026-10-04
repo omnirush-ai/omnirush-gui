@@ -27,7 +27,7 @@ import {
   removeEngineInstance,
   updateEngineInstanceRole,
 } from "./engine-registry.js";
-import { createManagedOpencodeServer, type ManagedOpencodeServer } from "./managed-opencode.js";
+import { createManagedOpencodeServer, type ManagedOpencodeSandbox, type ManagedOpencodeServer } from "./managed-opencode.js";
 import { appendRuntimeRestartRecord } from "./runtime-restart-log.js";
 import { loopbackFetch } from "./server-fetch.js";
 import type { ServerConfig, WorkspaceInfo } from "./types.js";
@@ -46,6 +46,8 @@ export type EngineSpawnTemplate = {
   reservedPorts: () => number[];
   /** Readiness budget for a standby spawn. Defaults to the managed-engine default. */
   spawnTimeoutMs?: number;
+  /** Every local workspace's folder, which an engine in the Docker sandbox mounts (managed-opencode.ts). */
+  sandboxWorkspaces?: () => string[];
 };
 
 export type EnginePoolStandby = {
@@ -513,6 +515,11 @@ export class EnginePool {
   primaryProcess(): EnginePoolProcess | null {
     const primary = this.generations.find((entry) => entry.status === "primary") ?? null;
     return primary ? { pid: primary.handle.pid ?? null, isAlive: primary.handle.isAlive } : null;
+  }
+
+  /** The Docker sandbox the engine at `baseUrl` runs in; null when it runs on this machine. */
+  sandboxFor(baseUrl: string): ManagedOpencodeSandbox | null {
+    return this.generationForUrl(baseUrl)?.handle.sandbox ?? null;
   }
 
   reportRequestSuccess(baseUrl: string): void {
@@ -1448,6 +1455,7 @@ export class EnginePool {
         ...this.template.env,
         OPENCODE_CONFIG: this.template.runtimeConfigPath,
       },
+      sandboxWorkspaces: this.template.sandboxWorkspaces?.(),
     });
   }
 

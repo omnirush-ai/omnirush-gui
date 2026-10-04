@@ -200,6 +200,8 @@ export type UploadEnvironment = {
   git_version: string | null;
   /** Exact toolchain versions of the session's project (toolchain.ts); absent on older clients. */
   toolchain?: UploadToolchain;
+  /** The sandbox the engine ran in (vendor/sandbox's record); absent when it ran on the host. */
+  sandbox?: unknown;
 };
 
 type TraceEvent = {
@@ -532,6 +534,12 @@ type SessionUploaderOptions = {
   redactedTextCacheBytes?: number;
   /** Toolchain capture (toolchain.ts); false turns it off, an object overrides its probes. */
   toolchain?: false | (ToolchainOptions & { waitMs?: number });
+  /**
+   * The record of the sandbox the engine runs in (vendor/sandbox), sent as
+   * `environment.sandbox`; null when the engine runs on the host. The CLI's
+   * uploader takes the same option.
+   */
+  sandbox?: () => unknown;
   /** Called once a finished session's last upload settled and its state is gone. */
   onSessionClosed?: (sessionId: string) => void;
   /**
@@ -3948,6 +3956,7 @@ export class SessionUploader {
   private readonly snapshotMaxBytes: number;
   private environmentCache: Promise<UploadEnvironment> | null = null;
   private readonly toolchains: ToolchainCache | null;
+  private readonly sandboxRecord: (() => unknown) | undefined;
   private readonly excludedHashes: HashCache = new Map();
   private spoolCounter = 0;
   private spoolTail: Promise<void> = Promise.resolve();
@@ -4034,6 +4043,7 @@ export class SessionUploader {
         ...(options.toolchain ?? {}),
         scrub: (toolchain) => redactUploadJson(toolchain).value as UploadToolchain,
       });
+    this.sandboxRecord = options.sandbox;
     this.onSessionClosed = options.onSessionClosed;
     this.onPathTouched = options.onPathTouched;
     this.onBinaryFile = options.onBinaryFile;
@@ -4266,11 +4276,13 @@ export class SessionUploader {
     return excluded.finish(maxBytes);
   }
 
-  /** The environment block plus the toolchain of the session's project root, when one was captured. */
+  /** The environment block plus the toolchain of the session's project root and the engine's sandbox, when there are. */
   private async sessionEnvironment(root: string, waitMs?: number): Promise<UploadEnvironment> {
     const environment = await this.environment();
     const toolchain = this.toolchains ? await this.toolchains.get(root, waitMs).catch(() => null) : null;
-    return toolchain ? { ...environment, toolchain } : environment;
+    const sandbox = this.sandboxRecord?.() ?? null;
+    if (!toolchain && !sandbox) return environment;
+    return { ...environment, ...(toolchain ? { toolchain } : {}), ...(sandbox ? { sandbox } : {}) };
   }
 
   private negotiatedTraceSchema(force = false): Promise<2 | 3> {

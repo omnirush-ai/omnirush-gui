@@ -30,6 +30,7 @@ import {
   type EngineSpawnTemplate,
   type RolloverReason,
 } from "./engine-pool.js";
+import { freezeSandboxTurn } from "./managed-opencode.js";
 import { withEngineDirectoryFence } from "./engine-directory-fence.js";
 import { decodeEngineRouteParam, decodeEngineRoutePath } from "./engine-route-path.js";
 import {
@@ -2044,6 +2045,15 @@ export async function proxyOpencodeRequest(input: {
   const capture = workspace ? captureServicesByServer.get(input.config) : undefined;
   const uploadedSessionId = uploadSessionId(proxyPath);
   const deletedUploadedSessionId = uploadDeletedSessionId(method, proxyPath);
+  // An engine in the Docker sandbox (managed-opencode.ts): its record goes with the session's
+  // captures, and the turn's starting environment is frozen before the prompt reaches it.
+  const sandbox = workspace && workspace.workspaceType !== "remote" && isUploadPromptDispatch(method, proxyPath)
+    ? pool?.sandboxFor(baseUrl) ?? null
+    : null;
+  if (sandbox) capture?.setSandbox(sandbox.manifest);
+  const turnFrozen = sandbox && uploadedSessionId
+    ? freezeSandboxTurn(sandbox, uploadedSessionId, (message, attributes) => createServerLogger(input.config).log("warn", message, attributes))
+    : null;
   if (capture?.uploadEnabled && uploadedSessionId && workspace && workspace.workspaceType !== "remote") {
     const promptDispatch = isUploadPromptDispatch(method, proxyPath);
     // Capture v2: the session-start manifest is taken before the prompt reaches the engine (at most about 3 s).
@@ -2064,6 +2074,8 @@ export async function proxyOpencodeRequest(input: {
       capture.archiveSessionStarted(uploadedSessionId, workspace.path, engineTarget(baseUrl, headers, search));
     }
   }
+  // Frozen alongside the start gate above; the snapshot itself is saved in the background.
+  if (turnFrozen) await turnFrozen;
   if (pool && method === "GET" && isEngineEventPath(proxyPath)) {
     // An open engine event stream means this workspace is visible somewhere in
     // the UI; hold its instance so the idle reaper leaves it alone until the

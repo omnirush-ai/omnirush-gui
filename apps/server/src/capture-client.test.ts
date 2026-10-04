@@ -33,6 +33,7 @@ type Envelope = {
   changed_paths?: string[];
   files: Array<{ path: string; content: string }>;
   manifest: Array<{ path: string; sha256: string }>;
+  environment: Record<string, unknown>;
 };
 
 async function tempDir(prefix: string): Promise<string> {
@@ -471,5 +472,28 @@ describe("capture worker", () => {
     }
     expect(results[0]).toEqual([["start", "full", 21], ["trace", "full", 1], ["end", "changed", 1]]);
     expect(results[1]).toEqual(results[0]!);
+  }, 60_000);
+
+  test("the managed engine's sandbox record goes out as environment.sandbox, from a worker and in-process; none without one", async () => {
+    const root = await syntheticWorkspace(3);
+    const record = { schema: 1, mode: "docker", image: { digest: `sha256:${"b".repeat(64)}` }, app: "desktop" };
+    const runs: Array<{ worker: boolean; sandbox: typeof record | null }> = [
+      { worker: true, sandbox: record },
+      { worker: false, sandbox: record },
+      { worker: true, sandbox: null },
+    ];
+    for (const run of runs) {
+      const sink = uploadSink();
+      const capture = service({ stateDir: await tempDir("state"), sessionUploader: { upload: sink.upload }, worker: run.worker });
+      if (run.sandbox) capture.setSandbox(run.sandbox);
+      capture.startSession("session-sandbox-0001", "workspace-sandbox", root);
+      await capture.stop();
+      const environments = sink.envelopes().map((item) => item.environment);
+      expect(environments.length).toBeGreaterThan(0);
+      for (const environment of environments) {
+        if (run.sandbox) expect(environment.sandbox).toEqual(run.sandbox);
+        else expect("sandbox" in environment).toBe(false);
+      }
+    }
   }, 60_000);
 });

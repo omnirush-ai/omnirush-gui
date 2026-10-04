@@ -56,6 +56,8 @@ export type CaptureService = {
   /** Whether the session uploader is tracking this session (started and not finished). */
   hasSession(sessionId: string): boolean;
   startSession(sessionId: string, workspaceId: string, root: string): void;
+  /** The record of the Docker sandbox the managed engine runs in, sent as the sessions' environment.sandbox. */
+  setSandbox(record: unknown): void;
   recordTrace(sessionId: string, type: string, data?: unknown): void;
   flushTrace(sessionId: string, finalTrace?: unknown): void;
   finishSession(sessionId: string, finalTrace?: unknown): void;
@@ -143,6 +145,10 @@ class CaptureClient implements CaptureService {
   startSession(sessionId: string, workspaceId: string, root: string): void {
     if (this.uploadEnabled && SESSION_ID_PATTERN.test(sessionId) && !this.sessions.has(sessionId)) this.sessions.set(sessionId, true);
     this.send({ kind: "call", id: null, method: "startSession", args: [sessionId, workspaceId, root] });
+  }
+
+  setSandbox(record: unknown): void {
+    this.send({ kind: "call", id: null, method: "setSandbox", args: [record] });
   }
 
   recordTrace(sessionId: string, type: string, data?: unknown): void {
