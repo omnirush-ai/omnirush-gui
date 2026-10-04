@@ -16,7 +16,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -342,14 +342,55 @@ export function createSandbox(options = {}) {
   }
 
   /**
-   * "host" shares the host's network (Linux with a local daemon: the
-   * engine's loopback is the host's). "bridge" everywhere else (Docker
-   * Desktop, colima): ports are published and host services relayed.
+   * "bridge" (the default everywhere): the sandbox has its own network, the
+   * engine's port is published on the host's loopback, and only the host
+   * services the engine was given are relayed in, so nothing else listening
+   * on this machine's loopback is reachable. "host" (OMNIRUSH_SANDBOX_NETWORK
+   * =host, Linux only) shares the host's network and reaches all of it.
    */
-  function networkMode(info) {
+  function networkMode() {
     const forced = String(hostEnv.OMNIRUSH_SANDBOX_NETWORK ?? "").trim().toLowerCase();
-    if (forced === "host" || forced === "bridge") return forced;
-    return platform === "linux" && !info.desktop && !info.remote ? "host" : "bridge";
+    return forced === "host" ? "host" : "bridge";
+  }
+
+  /**
+   * How a relayed host service is reached from inside. A Linux daemon on
+   * this machine shares its filesystem, so each service gets a unix socket
+   * in a folder only this sandbox mounts ("socket"). Docker Desktop and
+   * colima run in a VM whose shared folders carry no sockets; there the
+   * relay goes through the VM's host gateway ("gateway").
+   */
+  function relayMode(info) {
+    return platform === "linux" && !info.desktop && !info.remote ? "socket" : "gateway";
+  }
+
+  /**
+   * One unix socket per host port in a fresh folder: each connection on
+   * `<dir>/p<port>.sock` is piped to 127.0.0.1:<port>. The entrypoint
+   * listens on 127.0.0.1:<port> inside and connects to the socket.
+   */
+  async function socketRelays(ports) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "omnirush-relay-"));
+    const servers = await Promise.all(ports.map((port) => new Promise((resolve, reject) => {
+      const server = net.createServer((inside) => {
+        const host = net.connect(port, "127.0.0.1");
+        inside.on("error", () => host.destroy());
+        host.on("error", () => inside.destroy());
+        inside.pipe(host).pipe(inside);
+      });
+      server.once("error", reject);
+      server.listen(path.join(dir, `p${port}.sock`), () => {
+        server.unref();
+        resolve(server);
+      });
+    })));
+    return {
+      dir,
+      close: () => {
+        for (const server of servers) server.close();
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
   }
 
   /** The image, pulled when missing, with the digest a task pins. */
@@ -488,7 +529,7 @@ export function createSandbox(options = {}) {
     const image = await resolveImage(input.image || hostEnv.OMNIRUSH_SANDBOX_IMAGE || DEFAULT_IMAGE);
     // No engine: run `command` itself from the image (a shell, a check).
     const engine = input.engine ? await ensureEngine(input.engine, image) : null;
-    const network = networkMode(info);
+    const network = networkMode();
     const env = input.env ?? {};
     const cwd = checkMountPath(path.resolve(input.cwd), "The engine folder");
 
@@ -524,10 +565,11 @@ export function createSandbox(options = {}) {
     for (const extra of input.mounts ?? []) addBind(extra.path, extra.readonly !== false);
     if (!binds.some((bind) => within(cwd, bind.source))) addBind(cwd, false);
 
-    // The engine listens inside; the host connects to the same port number.
+    // A server (`serve --port`) listens inside; the host connects to the same port number.
     let args = [...input.args];
+    const serves = Boolean(flagValue(args, "--port") || flagValue(args, "--hostname"));
     let port = Number(flagValue(args, "--port")?.value ?? 0);
-    if (network === "bridge") {
+    if (network === "bridge" && serves) {
       if (!port) port = await pickPort();
       args = setFlag(setFlag(args, "--hostname", "0.0.0.0"), "--port", port);
     }
@@ -551,6 +593,8 @@ export function createSandbox(options = {}) {
       }
     }
     const relayed = network === "bridge" ? loopbackPorts([...Object.values(passed), configText]).filter((entry) => entry !== port) : [];
+    const relays = relayed.length && relayMode(info) === "socket" ? await socketRelays(relayed) : null;
+    if (relays) binds.push({ type: "bind", source: relays.dir, target: relays.dir, readonly: false });
     const identity = gitIdentity(homedir, hostEnv);
     const inline = {
       HOME: SANDBOX_HOME,
@@ -558,6 +602,7 @@ export function createSandbox(options = {}) {
       XDG_STATE_HOME: stateHome,
       OMNIRUSH_SANDBOX_SESSION: "1",
       ...(relayed.length ? { OMNIRUSH_SANDBOX_HOST_PORTS: relayed.join(",") } : {}),
+      ...(relays ? { OMNIRUSH_SANDBOX_RELAY_DIR: relays.dir } : {}),
       ...(hostEnv.OMNIRUSH_SANDBOX_HOST_GATEWAY ? { OMNIRUSH_SANDBOX_HOST_GATEWAY: hostEnv.OMNIRUSH_SANDBOX_HOST_GATEWAY } : {}),
       ...(identity.name && !passed.GIT_AUTHOR_NAME ? { GIT_AUTHOR_NAME: identity.name, GIT_COMMITTER_NAME: identity.name } : {}),
       ...(identity.email && !passed.GIT_AUTHOR_EMAIL ? { GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_EMAIL: identity.email } : {}),
@@ -578,7 +623,7 @@ export function createSandbox(options = {}) {
       "--label", `${LABEL}.owner=${hostname}:${pid}`,
       ...(network === "host"
         ? ["--network", "host"]
-        : ["--publish", `127.0.0.1:${port}:${port}`, "--add-host", "host.docker.internal:host-gateway"]),
+        : [...(serves ? ["--publish", `127.0.0.1:${port}:${port}`] : []), "--add-host", "host.docker.internal:host-gateway"]),
       ...(uid !== null && gid !== null ? ["--user", `${uid}:${gid}`] : []),
       ...Object.keys(passed).sort().flatMap((key) => ["-e", key]),
       ...Object.entries(inline).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
@@ -606,7 +651,7 @@ export function createSandbox(options = {}) {
 
     let disposed = null;
     const dispose = () => {
-      disposed ??= call(["rm", "-f", container], { timeoutMs: 30_000 }).then(() => undefined, () => undefined);
+      disposed ??= call(["rm", "-f", container], { timeoutMs: 30_000 }).then(() => undefined, () => undefined).finally(() => relays?.close());
       return disposed;
     };
 
@@ -743,7 +788,7 @@ export function createSandbox(options = {}) {
     });
   }
 
-  return { inspect, networkMode, resolveImage, ensureEngine, reapOrphans, prepareEngine };
+  return { inspect, networkMode, relayMode, resolveImage, ensureEngine, reapOrphans, prepareEngine };
 }
 
 /**

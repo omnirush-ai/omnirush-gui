@@ -160,7 +160,9 @@ export interface DockerInfo {
 
 export interface Sandbox {
   inspect(): Promise<DockerInfo>;
-  networkMode(info: DockerInfo): SandboxNetwork;
+  networkMode(): SandboxNetwork;
+  /** How relayed host services are reached: a unix socket per port (Linux daemon) or the VM's host gateway. */
+  relayMode(info: DockerInfo): "socket" | "gateway";
   resolveImage(ref: string): Promise<SandboxImageRecord & { schema: string | null }>;
   ensureEngine(engine: SandboxEngine, image: SandboxImageRecord): Promise<{ path: string; mount: unknown; record: SandboxManifest["engine"] }>;
   reapOrphans(): Promise<string[]>;
