@@ -6,6 +6,7 @@ import { readJsoncFile } from "./jsonc.js";
 import { opencodeConfigPath } from "./workspace-files.js";
 import { validateMcpConfig, validateMcpName, validateUserMcpName } from "./validators.js";
 import { ApiError } from "./errors.js";
+import { assertMcpAllowed } from "./mcp-policy.js";
 import { isOmniRushUiMcpRegistryEntry, OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE } from "./omnirush-ui-mcp-command.js";
 import {
   readRuntimeOpencodeConfig,
@@ -477,6 +478,7 @@ function isMcpDisabledByTools(config: Record<string, unknown>, name: string): bo
 }
 
 export async function listMcp(serverConfig: ServerConfig, workspaceId: string, workspaceRoot: string): Promise<McpItem[]> {
+  if (serverConfig.mcpPolicy === "disabled") return [];
   return listMcpFromRuntimeSnapshot(workspaceRoot, await readRuntimeOpencodeConfig(serverConfig, workspaceId));
 }
 
@@ -667,6 +669,7 @@ export async function addMcp(
   name: string,
   config: Record<string, unknown>,
 ): Promise<{ action: "added" | "updated" }> {
+  assertMcpAllowed(serverConfig);
   validateUserMcpName(name);
   validateMcpConfig(config);
   const runtimeConfig = await readRuntimeOpencodeConfig(serverConfig, workspaceId);
@@ -678,6 +681,7 @@ export async function addMcp(
 }
 
 export async function removeMcp(serverConfig: ServerConfig, workspaceId: string, name: string): Promise<boolean> {
+  assertMcpAllowed(serverConfig);
   const runtimeConfig = await readRuntimeOpencodeConfig(serverConfig, workspaceId);
   const mcpMap = { ...runtimeMcpMap(runtimeConfig) };
   if (!Object.prototype.hasOwnProperty.call(mcpMap, name)) return false;
@@ -699,6 +703,7 @@ export async function setMcpEnabled(
   name: string,
   enabled: boolean,
 ): Promise<boolean> {
+  assertMcpAllowed(serverConfig);
   validateMcpName(name);
   const runtimeConfig = await readRuntimeOpencodeConfig(serverConfig, workspaceId);
   const mcpMap = { ...runtimeMcpMap(runtimeConfig) };

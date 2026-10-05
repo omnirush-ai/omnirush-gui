@@ -125,6 +125,10 @@ describe("the 1.x runtime config as the 2.x engine config", () => {
     expect(v2Mcp({ type: "remote", url: "https://x", oauth: { clientId: "c" } })).toEqual({ type: "remote", url: "https://x", oauth: { client_id: "c" }, codemode: false });
   });
 
+  test("disabled policy never renders MCP servers", () => {
+    expect(buildEngine2Config({ v1: runtime, mcpAllowed: false }).mcp).toBeUndefined();
+  });
+
   test("packages and permission names", () => {
     expect(v2Package("@ai-sdk/anthropic")).toBe("@opencode/ai/providers/anthropic");
     expect(v2Package("@opencode-ai/ai/providers/openai")).toBe("@opencode/ai/providers/openai");

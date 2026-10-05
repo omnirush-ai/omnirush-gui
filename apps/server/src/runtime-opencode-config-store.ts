@@ -618,6 +618,7 @@ export function writeManagedDesktopPolicy(config: ServerConfig, policy: DesktopC
 export function mergeOpencodeConfigs(
   persisted: Record<string, unknown>,
   runtime: RuntimeOpencodeConfig,
+  mcpEnabled = true,
 ): Record<string, unknown> {
   const persistedPermission = isRecord(persisted.permission) ? persisted.permission : {};
   const persistedExternalDirectory = isRecord(persistedPermission.external_directory)
@@ -634,10 +635,12 @@ export function mergeOpencodeConfigs(
       ...(Array.isArray(persisted.disabled_providers) ? persisted.disabled_providers.filter((item) => typeof item === "string") : []),
       ...runtimeDisabledProviderList(runtime),
     ].filter((item, index, list) => list.indexOf(item) === index),
-    mcp: {
-      ...(isRecord(persisted.mcp) ? persisted.mcp : {}),
-      ...runtimeMcpMap(runtime),
-    },
+    mcp: mcpEnabled
+      ? {
+          ...(isRecord(persisted.mcp) ? persisted.mcp : {}),
+          ...runtimeMcpMap(runtime),
+        }
+      : {},
     permission: {
       ...persistedPermission,
       external_directory: {

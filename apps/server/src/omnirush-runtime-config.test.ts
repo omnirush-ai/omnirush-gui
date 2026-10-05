@@ -82,6 +82,21 @@ async function readConfigFile(config: ServerConfig): Promise<Record<string, unkn
 }
 
 describe("omnirush runtime config file", () => {
+  test("disabled policy omits MCP and adds an engine permission fence", () => {
+    const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot(
+      { mcp: { posthog: { type: "remote", url: "https://mcp.example" } } },
+      undefined,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      "disabled",
+    );
+    expect(parsed.mcp).toEqual({});
+    expect(parsed.permission).toMatchObject({ "mcp.*": "deny" });
+    expect(parsed.plugin).toContain(expect.stringContaining("omnirush-mcp-policy"));
+  });
+
   test("managed browser restrictions use scalar actions in global and agent permissions", () => {
     const parsed = buildOmniRushRuntimeConfigObjectFromSnapshot({
       managedPolicy: {

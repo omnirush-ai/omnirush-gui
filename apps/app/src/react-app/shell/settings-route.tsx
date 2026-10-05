@@ -214,7 +214,7 @@ import {
 const ROUTE_OMNIRUSH_CAPABILITIES: OmniRushServerCapabilities = {
   skills: { read: true, write: true, source: "omnirush" },
   plugins: { read: true, write: true },
-  mcp: { read: true, write: true },
+  mcp: { read: false, write: false },
   commands: { read: true, write: true },
   config: { read: true, write: true },
 };
@@ -2085,6 +2085,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const routeOmniRushCapabilities: OmniRushServerCapabilities | null = omnirushClient
     ? ROUTE_OMNIRUSH_CAPABILITIES
     : null;
+  const mcpDisabledByPolicy = routeOmniRushStatus !== "connected"
+    || routeOmniRushCapabilities?.mcp?.read !== true;
   const environmentRuntimeKey = buildOmniRushEnvRuntimeKey({
     baseUrl: omnirushServerSnapshot.omnirushServerBaseUrl || omnirushServerSnapshot.omnirushServerUrl,
     pid: omnirushServerSnapshot.omnirushServerHostInfo?.pid ?? null,
@@ -2405,6 +2407,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
                 selectedWorkspaceRoot={selectedWorkspaceRoot}
                 isRemoteWorkspace={isRemoteWorkspace}
                 mcpServers={connectionsSnapshot.mcpServers}
+                mcpDisabled={mcpDisabledByPolicy}
                 mcpStatus={connectionsSnapshot.mcpStatus}
                 mcpLastUpdatedAt={connectionsSnapshot.mcpLastUpdatedAt}
                 mcpStatuses={connectionsSnapshot.mcpStatuses}

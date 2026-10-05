@@ -58,6 +58,8 @@ export type EngineFacadeOptions = {
   writeEngineConfig?: (config: JsonRecord) => Promise<void>;
   /** Plugin directories the rendered config names (OmniRush.ai's plugin bridge). */
   plugins?: string[];
+  /** Whether MCP servers may be rendered into the 2.x config. */
+  mcpAllowed?: boolean;
   /** Engine state paths reported by `/path`. */
   paths?: { state?: string; config?: string };
   log?: (message: string, attributes?: Record<string, unknown>) => void;
@@ -262,7 +264,7 @@ export async function startEngineFacade(options: EngineFacadeOptions): Promise<E
   let v1ConfigCache: JsonRecord = await readV1Config();
   const refreshConfig = async (): Promise<void> => {
     v1ConfigCache = await readV1Config();
-    if (options.writeEngineConfig) await options.writeEngineConfig(buildEngine2Config({ v1: v1ConfigCache, apiKeys, plugins: options.plugins }));
+    if (options.writeEngineConfig) await options.writeEngineConfig(buildEngine2Config({ v1: v1ConfigCache, apiKeys, plugins: options.plugins, mcpAllowed: options.mcpAllowed }));
   };
 
   // ---- location reloads ---------------------------------------------------

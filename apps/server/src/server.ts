@@ -174,6 +174,7 @@ import {
   writeOmniRushWorkspaceConfig,
 } from "./omnirush-workspace-config-store.js";
 import { buildOmniRushRuntimeConfigObject, omnirushGatewayConfigured, omnirushRuntimeConfigFilePath, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
+import { assertMcpAllowed, mcpAllowed, mcpPolicyForConfig, MCP_DISABLED_MESSAGE } from "./mcp-policy.js";
 import { omnirushModelWantsReasoningSummary, readOmniRushModelCatalog } from "./omnirush-model-catalog.js";
 import {
   SUBAGENT_MODEL_FALLBACK_TRACE,
@@ -1566,8 +1567,11 @@ export async function proxyOpencodeV2Request(input: {
   if (/^\/api\/config(?:\/|$)/.test(decodedPath)) {
     throw new ApiError(403, "engine_config_private", "Engine configuration is private");
   }
-  if (method !== "GET" && method !== "HEAD" && /^\/api\/mcp(?:\/|$)/.test(decodedPath)) {
-    throw new ApiError(403, "engine_mcp_managed", "Manage connections through OmniRush.ai");
+  if (/^(?:\/api)?\/mcp(?:\/|$)/.test(decodedPath)) {
+    assertMcpAllowed(input.config);
+    if (method !== "GET" && method !== "HEAD") {
+      throw new ApiError(403, "engine_mcp_managed", "Manage connections through OmniRush.ai");
+    }
   }
   const sessionMatch = routePath.match(/^\/api\/session\/([^/]+)(?:\/|$)/);
   const sessionId = sessionMatch?.[1] ? decodeEngineRouteParam(sessionMatch[1]) : null;
@@ -1986,6 +1990,9 @@ export async function proxyOpencodeRequest(input: {
   // forwards mutations to the engine.
   if (method !== "GET" && method !== "HEAD") {
     ensureWritable(input.config);
+  }
+  if (/^(?:\/api)?\/mcp(?:\/|$)/.test(normalizeOpencodeProxyPath(proxyPath))) {
+    assertMcpAllowed(input.config);
   }
   if (workspace && workspace.workspaceType !== "remote" && isUploadPromptDispatch(method, proxyPath)) {
     if (uploadDispatchRefused(input.config, workspace)) {
@@ -2687,7 +2694,7 @@ function buildCapabilities(config: ServerConfig): Capabilities {
     providerSync: true,
     skills: { read: true, write: writeEnabled, source: "omnirush" },
     plugins: { read: true, write: writeEnabled },
-    mcp: { read: true, write: writeEnabled },
+    mcp: { read: mcpAllowed(config), write: writeEnabled && mcpAllowed(config) },
     commands: { read: true, write: writeEnabled },
     config: { read: true, write: writeEnabled },
     engine: { rollover: enginePoolForConfig(config) !== null },
@@ -3114,6 +3121,7 @@ function createRoutes(
     const opencode = mergeOpencodeConfigs(
       await readOpencodeConfig(workspace.path),
       await readEffectiveRuntimeOpencodeConfig(config, workspace.id),
+      mcpAllowed(config),
     );
     const lastAudit = await readLastAudit(workspace.path, workspace.id);
     return jsonResponse({ opencode, omnirush, updatedAt: lastAudit?.timestamp ?? null });
@@ -3176,6 +3184,9 @@ function createRoutes(
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const body = await readJsonBody(ctx.request);
     const resolved = readCloudPluginResolved(body.resolved);
+    if (resolved.memberships.some((membership) => membership.configObject?.objectType === "mcp")) {
+      assertMcpAllowed(config);
+    }
     const marketplace = body.marketplace && typeof body.marketplace === "object" && !Array.isArray(body.marketplace)
       ? Object.fromEntries(Object.entries(body.marketplace))
       : null;
@@ -3249,6 +3260,9 @@ function createRoutes(
     const dryRun = body.dryRun === true;
 
     const bundle = await resolveClaudePluginBundle({ url, ref });
+    if (bundle.resolved.memberships.some((membership) => membership.configObject?.objectType === "mcp")) {
+      assertMcpAllowed(config);
+    }
     if (dryRun) {
       return jsonResponse({ preview: bundle.preview });
     }
@@ -4439,6 +4453,14 @@ function createRoutes(
   });
 
   addRoute(routes, "GET", "/workspace/:id/mcp", "client", async (ctx) => {
+    if (!mcpAllowed(config)) {
+      return jsonResponse({
+        items: [],
+        engineSync: null,
+        managedOAuthState: { available: false, recovery: false },
+        mcpPolicy: { mode: mcpPolicyForConfig(config), enabled: false, message: MCP_DISABLED_MESSAGE },
+      });
+    }
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const items = await listMcp(config, workspace.id, workspace.path);
     const managedState = await listLocalManagedMcpConnectionsSafe(config, workspace.id);
@@ -4450,23 +4472,33 @@ function createRoutes(
     });
   });
 
-  addRoute(routes, "GET", "/mcp-apps/sandbox.html", "none", async (ctx) => new Response(MCP_APP_SANDBOX_PROXY_HTML, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": buildMcpAppSandboxCsp(parseMcpAppSandboxCsp(ctx.url.searchParams.get("csp"))),
-      "Cache-Control": "no-store",
-      "Referrer-Policy": "strict-origin",
-      "X-Content-Type-Options": "nosniff",
-    },
-  }));
-  addRoute(routes, "GET", "/mcp-apps/sandbox.js", "none", async () => new Response(MCP_APP_SANDBOX_PROXY_SCRIPT, {
-    headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
-  }));
-  addRoute(routes, "GET", "/mcp-apps/sandbox.css", "none", async () => new Response(MCP_APP_SANDBOX_PROXY_CSS, {
-    headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
-  }));
+  addRoute(routes, "GET", "/mcp-apps/sandbox.html", "none", async (ctx) => {
+    assertMcpAllowed(config);
+    return new Response(MCP_APP_SANDBOX_PROXY_HTML, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": buildMcpAppSandboxCsp(parseMcpAppSandboxCsp(ctx.url.searchParams.get("csp"))),
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "strict-origin",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  });
+  addRoute(routes, "GET", "/mcp-apps/sandbox.js", "none", async () => {
+    assertMcpAllowed(config);
+    return new Response(MCP_APP_SANDBOX_PROXY_SCRIPT, {
+      headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+    });
+  });
+  addRoute(routes, "GET", "/mcp-apps/sandbox.css", "none", async () => {
+    assertMcpAllowed(config);
+    return new Response(MCP_APP_SANDBOX_PROXY_CSS, {
+      headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+    });
+  });
 
   addRoute(routes, "GET", "/workspace/:id/mcp-apps/list", "client", async (ctx) => {
+    assertMcpAllowed(config);
     requireClientScope(ctx, "viewer");
     const workspace = await resolveWorkspace(config, ctx.params.id);
     try {
@@ -4482,6 +4514,7 @@ function createRoutes(
   });
 
   addRoute(routes, "POST", "/workspace/:id/mcp-apps/resolve", "client", async (ctx) => {
+    assertMcpAllowed(config);
     requireClientScope(ctx, "viewer");
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const body = await readJsonBody(ctx.request);
@@ -4525,6 +4558,7 @@ function createRoutes(
   });
 
   addRoute(routes, "POST", "/workspace/:id/mcp-apps/call", "client", async (ctx) => {
+    assertMcpAllowed(config);
     requireClientScope(ctx, "viewer");
     const workspace = await resolveWorkspace(config, ctx.params.id);
     const body = await readJsonBody(ctx.request);
@@ -4554,6 +4588,7 @@ function createRoutes(
   });
 
   addRoute(routes, "POST", "/workspace/:id/mcp/managed", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);
@@ -4624,11 +4659,13 @@ function createRoutes(
   });
 
   addRoute(routes, "GET", "/workspace/:id/mcp/:name/managed", "client", async (ctx) => {
+    assertMcpAllowed(config);
     const workspace = await resolveWorkspace(config, ctx.params.id);
     return jsonResponse(await getLocalManagedMcpConnection(config, workspace.id, ctx.params.name ?? ""));
   });
 
   addRoute(routes, "POST", "/workspace/:id/mcp/:name/managed/connect", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);
@@ -4640,6 +4677,7 @@ function createRoutes(
   });
 
   addRoute(routes, "GET", "/mcp/oauth/callback", "none", async (ctx) => {
+    assertMcpAllowed(config);
     const state = ctx.url.searchParams.get("state") ?? "";
     const code = ctx.url.searchParams.get("code") ?? "";
     if (!state || !code) throw new ApiError(400, "managed_mcp_oauth_callback_invalid", "OAuth callback is missing code or state");
@@ -4654,17 +4692,21 @@ function createRoutes(
     );
   });
 
-  const managedGatewayHandler = async (ctx: RequestContext) => handleLocalManagedMcpGateway(
-    config,
-    ctx.request,
-    ctx.params.workspaceId ?? "",
-    ctx.params.name ?? "",
-  );
+  const managedGatewayHandler = async (ctx: RequestContext) => {
+    assertMcpAllowed(config);
+    return handleLocalManagedMcpGateway(
+      config,
+      ctx.request,
+      ctx.params.workspaceId ?? "",
+      ctx.params.name ?? "",
+    );
+  };
   addRoute(routes, "POST", "/mcp/managed/:workspaceId/:name", "none", managedGatewayHandler);
   addRoute(routes, "GET", "/mcp/managed/:workspaceId/:name", "none", managedGatewayHandler);
   addRoute(routes, "DELETE", "/mcp/managed/:workspaceId/:name", "none", managedGatewayHandler);
 
   addRoute(routes, "POST", "/workspace/:id/mcp", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);
@@ -4710,6 +4752,7 @@ function createRoutes(
   });
 
   addRoute(routes, "DELETE", "/workspace/:id/mcp/:name", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);
@@ -4760,6 +4803,7 @@ function createRoutes(
   // Toggle `enabled` on a workspace MCP. Strict body validation — `Boolean(body.enabled)`
   // would silently disable on `{}` or coerce `"false"` to true.
   addRoute(routes, "POST", "/workspace/:id/mcp/:name/enabled", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);
@@ -4809,6 +4853,7 @@ function createRoutes(
   });
 
   addRoute(routes, "DELETE", "/workspace/:id/mcp/:name/auth", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);
@@ -5776,6 +5821,12 @@ function enqueueWorkspaceMcpRefreshSync(request: WorkspaceMcpRefreshRequest): Pr
 
 async function runWorkspaceMcpRefreshSync(input: WorkspaceMcpRefreshRequest): Promise<void> {
   const { config, workspace, trigger } = input;
+  if (!mcpAllowed(config)) {
+    // The policy is also applied at engine config/proxy level; skip cloud
+    // reconciliation so a background timer cannot recreate a live MCP entry.
+    await syncRuntimeMcpToOpencodeEngine(config, workspace, undefined, undefined, input.serverState ?? null).catch(() => undefined);
+    return;
+  }
   const directory = resolveOpencodeDirectory(workspace);
   // Re-register runtime-DB MCPs: a rebuilt instance reads disk configs
   // (including the server-managed runtime config file for the primary
@@ -5839,6 +5890,20 @@ async function syncRuntimeMcpToOpencodeEngine(
   options?: { throwOnFailure?: boolean; deferred?: boolean },
   serverState?: EngineMcpServerState | null,
 ): Promise<EngineMcpSyncResult> {
+  if (!mcpAllowed(config)) {
+    // Existing runtime rows are retained for the isolated Harbor workflow,
+    // but they must not remain live in an engine that has switched to the
+    // normal deny policy.
+    const runtimeConfig = await readEffectiveRuntimeOpencodeConfig(config, workspace.id).catch(() => undefined);
+    const names = Object.keys(runtimeConfig ? runtimeMcpMap(runtimeConfig) : {})
+      .filter((name) => !onlyNames || onlyNames.includes(name));
+    const state = activeEngineMcpServerState(config, serverState);
+    for (const name of names) {
+      if (state) deleteEngineMcpRegistration(config, state, workspace, name);
+      await disconnectMcpFromOpencodeEngine(config, workspace, name).catch(() => undefined);
+    }
+    return { status: "skipped", syncedNames: [], failures: [] };
+  }
   const activeState = activeEngineMcpServerState(config, serverState);
   const coordinationState = activeEngineMcpServerState(config);
   if (!coordinationState) {

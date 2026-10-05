@@ -571,6 +571,8 @@ function createImageLightboxEvalMessages(sessionId: string): UIMessage[] {
 }
 
 export type SessionSurfaceProps = {
+  /** OmniRush GUI has no MCP capability; isolated Harbor tasks do not use this surface. */
+  mcpDisabled?: boolean;
   client: OmniRushServerClient;
   environmentClient?: OmniRushServerClient | null;
   workspaceId: string;
@@ -2652,6 +2654,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [props.client, props.workspaceId]);
 
   const listMcp = useCallback(async (): Promise<{ servers: McpServerEntry[]; statuses: McpStatusMap; status: string | null }> => {
+    if (props.mcpDisabled === true) {
+      const status = "MCP servers are disabled in OmniRush.ai.";
+      setToolMcpServers([]);
+      setToolMcpStatuses({});
+      setToolMcpStatus(status);
+      return { servers: [], statuses: {}, status };
+    }
     const pushId = ++mcpConnectPushRef.current;
     const scope = readCloudInventoryScope();
     const cachedConnect = (scope ? readCachedConnectCapabilities(scope) : null) ?? EMPTY_CONNECT_CAPABILITY_INVENTORY;
@@ -2719,7 +2728,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     setToolMcpStatus(status);
 
     return { servers, statuses, status };
-  }, [opencodeClient, props.client, props.workspaceId, props.workspaceRoot]);
+  }, [opencodeClient, props.client, props.mcpDisabled, props.workspaceId, props.workspaceRoot]);
 
   const listImportedPlugins = useCallback(async (): Promise<CloudImportedPlugin[]> => {
     const pushId = ++pluginConnectPushRef.current;

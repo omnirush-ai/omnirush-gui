@@ -25,6 +25,7 @@ import {
   omnirushTitleRecoveryPluginPath,
   omnirushReasoningEffortPluginPath,
   omnirushSwarmPluginPath,
+  omnirushMcpPolicyPluginPath,
   omnirushOfficeAttachmentsPluginPath,
   omnirushSpreadsheetsPluginPath,
   omnirushChromeDevtoolsPluginPath,
@@ -54,6 +55,7 @@ import {
   type OmniRushModelCatalog,
 } from "./omnirush-model-catalog.js";
 import { writeFileAtomic } from "./atomic-write.js";
+import { mcpPolicyForConfig, type McpPolicyMode } from "./mcp-policy.js";
 import {
   OMNIRUSH_BEST_PRACTICES,
   bestPracticesEnabled,
@@ -139,6 +141,7 @@ export async function buildOmniRushRuntimeConfigObject(
     internalGateway && config ? await readOmniRushModelCatalog(config) : undefined,
     config ? omnirushRuntimeSkillsDir(config) : undefined,
     config ? omnirushBestPracticesSkillsDir(config) : undefined,
+    config ? mcpPolicyForConfig(config) : "enabled",
   );
 }
 
@@ -168,10 +171,12 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   catalog: OmniRushModelCatalog = builtinOmniRushModelCatalog(),
   skillsDir?: string,
   bestPracticesDir?: string,
+  mcpPolicy: McpPolicyMode = "enabled",
 ): Record<string, unknown> {
   const disabledProviders = runtimeDisabledProviderList(runtimeConfig);
   // OMNIRUSH_APPROVALS in the server environment wins over the persisted setting.
   const permissions = legacyExecutionPermissions(runtimeConfig.managedPolicy?.execution, resolveApprovalMode(runtimeConfig, env).mode);
+  const mcpPermission = mcpPolicy === "disabled" ? { "mcp.*": "deny" } : {};
   const { managedPolicy: _managedPolicy, approvals: _approvals, bestPractices: _bestPractices, ...engineConfig } = runtimeConfig;
   const enabled = bestPracticesEnabled(runtimeConfig);
   const skillPaths = [
@@ -202,7 +207,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       ...ownProviders,
       ...(runtimeConfig.managedPolicy.allowZenModel !== false ? ["opencode"] : []),
     ] } : onlyOwnProviders ? { enabled_providers: ownProviders } : {}),
-    permission: { ...engineConfig.permission, ...permissions },
+    permission: { ...engineConfig.permission, ...permissions, ...mcpPermission },
     // omnirush.ai's own on-demand skills (the swarm procedure).
     ...(skillPaths.length ? { skills: { paths: skillPaths } } : {}),
     default_agent: runtimeConfig.default_agent ?? "omnirush",
@@ -218,6 +223,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
         prompt: enabled ? `${OMNIRUSH_AGENT_PROMPT}\n\n${OMNIRUSH_BEST_PRACTICES.systemPrompt}` : OMNIRUSH_AGENT_PROMPT,
         permission: {
           ...permissions,
+          ...mcpPermission,
           skill: {
             // OmniRush.ai supplies its own current skill routing and no longer
             // supports these engine or legacy workspace skills.
@@ -260,14 +266,17 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
       omnirushReasoningEffortPluginPath(),
       omnirushTitleRecoveryPluginPath(),
       omnirushSwarmPluginPath(),
+      omnirushMcpPolicyPluginPath(),
       ...runtimePluginList(runtimeConfig),
     ],
     ...(disabledProviders.length ? { disabled_providers: disabledProviders } : {}),
     // Registry launches of omnirush-ui-mcp are never delivered, whatever the
     // runtime DB holds: the MCP ships inside the desktop app, not on npm.
-    mcp: Object.fromEntries(Object.entries(runtimeMcpMap(runtimeConfig))
-      .filter(([name, entry]) => !name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX)
-        && !isOmniRushUiMcpRegistryEntry(entry))),
+    mcp: mcpPolicy === "disabled"
+      ? {}
+      : Object.fromEntries(Object.entries(runtimeMcpMap(runtimeConfig))
+        .filter(([name, entry]) => !name.startsWith(CONNECT_MCP_SERVER_NAME_PREFIX)
+          && !isOmniRushUiMcpRegistryEntry(entry))),
     ...(Object.keys(provider).length ? { provider } : {}),
   };
 }

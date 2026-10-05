@@ -35,6 +35,7 @@ type CloudMcpSubmitReadinessClient = Pick<
 >;
 
 type UseCloudMcpSubmitReadinessInput = {
+  enabled?: boolean;
   cloudAuthStatus: DenAuthStatus;
   client: CloudMcpSubmitReadinessClient | null;
   workspaceId: string | null;
@@ -184,7 +185,7 @@ export function useCloudMcpSubmitReadiness(
   const submit = useCallback(async (submission: CloudMcpSubmitInput): Promise<CloudMcpSubmissionResult> => {
     const initialSnapshot = gateSnapshotRef.current;
     const capturedScopeKey = initialSnapshot.decision.scopeKey;
-    const gateRequired = !submission.skipGate && initialSnapshot.decision.mode !== "bypass";
+    const gateRequired = input.enabled !== false && !submission.skipGate && initialSnapshot.decision.mode !== "bypass";
     let prepare: (() => Promise<CloudMcpSubmissionPreparationResult>) | undefined;
 
     if (gateRequired) {
@@ -338,7 +339,7 @@ export function useCloudMcpSubmitReadiness(
         setState(IDLE_CLOUD_MCP_SUBMISSION_GATE_STATE);
       },
     });
-  }, [waitForAuthResolution]);
+  }, [input.enabled, waitForAuthResolution]);
 
   const clearFailure = useCallback(() => {
     setState(clearCloudMcpSubmissionFailure);
