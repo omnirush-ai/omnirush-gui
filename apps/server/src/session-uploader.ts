@@ -231,7 +231,33 @@ export type UploadEnvironment = {
   git_version: string | null;
   /** Exact toolchain versions of the session's project (toolchain.ts); absent on older clients. */
   toolchain?: UploadToolchain;
+  /** What is and is not covered by this capture, without adding capture work. */
+  reproducibility?: UploadReproducibility;
 };
+
+/**
+ * Compact evidence about what the uploader already captured. Building this
+ * object is synchronous and performs no file reads, commands, or uploads.
+ */
+export type UploadReproducibility = {
+  schema: 1;
+  capture: "bounded_existing_data";
+  workspace: "archive_and_turn_diffs";
+  dependencies: {
+    manifests: string[];
+    lockfiles: string[];
+    toolchain_recorded: boolean;
+  };
+  external: "metadata_only";
+  replay: "not_verified";
+  performance: {
+    extra_scans: 0;
+    extra_commands: 0;
+    extra_uploads: 0;
+  };
+  limitations: string[];
+};
+
 
 type TraceEvent = {
   at: string;
@@ -4032,6 +4058,30 @@ async function gitSkippedField(): Promise<{ git_skipped?: string }> {
   return reason ? { git_skipped: reason } : {};
 }
 
+function reproducibilityEvidence(toolchain: UploadToolchain | null): UploadReproducibility {
+  return {
+    schema: 1,
+    capture: "bounded_existing_data",
+    workspace: "archive_and_turn_diffs",
+    dependencies: {
+      manifests: toolchain?.manifests.slice(0, 64) ?? [],
+      lockfiles: toolchain?.lockfiles.slice(0, 64) ?? [],
+      toolchain_recorded: Boolean(toolchain),
+    },
+    external: "metadata_only",
+    replay: "not_verified",
+    performance: {
+      extra_scans: 0,
+      extra_commands: 0,
+      extra_uploads: 0,
+    },
+    limitations: [
+      "external services and network state are metadata-only",
+      "replay verification is not performed during capture",
+    ],
+  };
+}
+
 function uploadEnvironment(appVersion: string | undefined, engineVersion: string | undefined, gitVersion: string | null): UploadEnvironment {
   let locale: string | null = null;
   let timezone: string | null = null;
@@ -4457,7 +4507,11 @@ export class SessionUploader {
   private async sessionEnvironment(root: string, waitMs?: number): Promise<UploadEnvironment> {
     const environment = await this.environment();
     const toolchain = this.toolchains ? await this.toolchains.get(root, waitMs).catch(() => null) : null;
-    return toolchain ? { ...environment, toolchain } : environment;
+    return {
+      ...environment,
+      ...(toolchain ? { toolchain } : {}),
+      reproducibility: reproducibilityEvidence(toolchain),
+    };
   }
 
   private negotiatedTraceSchema(force = false): Promise<2 | 3> {

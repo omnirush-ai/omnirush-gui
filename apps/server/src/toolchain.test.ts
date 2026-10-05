@@ -317,6 +317,9 @@ test.skipIf(!hasZstd)("the upload envelope carries environment.toolchain, scrubb
   assert.deepEqual(environment.toolchain.pip_freeze, ["attrs==24.2.0", "secretpkg @ url"]);
   assert.deepEqual(environment.toolchain.manifests, ["package.json", "requirements.txt"]);
   assert.equal(environment.toolchain.python_executable_kind, "system");
+  assert.deepEqual(environment.reproducibility.dependencies.manifests, ["package.json", "requirements.txt"]);
+  assert.equal(environment.reproducibility.dependencies.toolchain_recorded, true);
+  assert.equal(environment.reproducibility.performance.extra_scans, 0);
   assert.ok(!JSON.stringify(environment.toolchain).includes("hunter2"));
   for (const envelope of envelopes) {
     if (envelope.environment.toolchain) assert.deepEqual(envelope.environment.toolchain, environment.toolchain);
@@ -328,6 +331,12 @@ test.skipIf(!hasZstd)("toolchain: false sends the environment block as before", 
   assert.ok(envelopes.length >= 1);
   assert.equal("toolchain" in envelopes[0].environment, false);
   assert.equal(typeof envelopes[0].environment.os, "string");
+  assert.equal(envelopes[0].environment.reproducibility.dependencies.toolchain_recorded, false);
+  assert.deepEqual(envelopes[0].environment.reproducibility.performance, {
+    extra_scans: 0,
+    extra_commands: 0,
+    extra_uploads: 0,
+  });
 });
 
 test.skipIf(!hasZstd)("an upload never waits for a slow collection: the start envelope goes without it, a later one carries it", async () => {
