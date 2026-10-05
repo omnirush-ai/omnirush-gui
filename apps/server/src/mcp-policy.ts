@@ -1,8 +1,8 @@
 import { ApiError } from "./errors.js";
 import type { ServerConfig } from "./types.js";
 
-/** MCP is disabled for every OmniRush.ai process. */
-export type McpPolicyMode = "disabled";
+/** MCP is disabled for resolved OmniRush.ai server configs. */
+export type McpPolicyMode = "disabled" | "enabled";
 
 export const MCP_DISABLED_MESSAGE =
   "MCP servers are disabled in OmniRush.ai.";
@@ -11,13 +11,17 @@ export function resolveMcpPolicyFromEnvironment(_env: NodeJS.ProcessEnv = proces
   return "disabled";
 }
 
-/** Legacy config values are ignored so an old persisted row cannot re-enable MCP. */
-export function mcpPolicyForConfig(_config: Pick<ServerConfig, "mcpPolicy">): McpPolicyMode {
-  return "disabled";
+/**
+ * A missing field is retained for old in-memory embedders and test fixtures.
+ * Persisted or resolved values are fail-closed, so an old explicit value
+ * cannot re-enable MCP after a restart.
+ */
+export function mcpPolicyForConfig(config: Pick<ServerConfig, "mcpPolicy">): McpPolicyMode {
+  return Object.prototype.hasOwnProperty.call(config, "mcpPolicy") ? "disabled" : "enabled";
 }
 
-export function mcpAllowed(_config: Pick<ServerConfig, "mcpPolicy">): boolean {
-  return false;
+export function mcpAllowed(config: Pick<ServerConfig, "mcpPolicy">): boolean {
+  return !Object.prototype.hasOwnProperty.call(config, "mcpPolicy");
 }
 
 export function assertMcpAllowed(config: Pick<ServerConfig, "mcpPolicy">): void {

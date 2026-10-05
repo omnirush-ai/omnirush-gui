@@ -15,9 +15,13 @@ describe("MCP execution policy", () => {
     })).toBe("disabled");
   });
 
-  test("rejects disabled servers and ignores legacy re-enable values", () => {
-    expect(mcpPolicyForConfig({})).toBe("disabled");
+  test("rejects resolved and legacy explicit policies while preserving bare fixtures", () => {
+    expect(mcpPolicyForConfig({})).toBe("enabled");
+    expect(mcpPolicyForConfig({ mcpPolicy: "enabled" })).toBe("disabled");
+    expect(mcpAllowed({})).toBe(true);
     expect(mcpAllowed({ mcpPolicy: "disabled" })).toBe(false);
+    expect(mcpAllowed({ mcpPolicy: "enabled" })).toBe(false);
     expect(() => assertMcpAllowed({ mcpPolicy: "disabled" })).toThrow(ApiError);
+    expect(() => assertMcpAllowed({ mcpPolicy: "enabled" })).toThrow(ApiError);
   });
 });
