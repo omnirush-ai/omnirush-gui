@@ -22,7 +22,10 @@ export const STATE_MEMBER = "__omnirush__/state.json";
 export const STATE_SCHEMA = "omnirush.archive.state.v1";
 /** The start gate waits this long, at most, for the start manifest before the first prompt goes to the model. */
 export const START_GATE_MS = 3_000;
-export const MAX_EXCLUDED_LISTED = 20_000;
+/** At most this many left-out entries are listed; the rest are counted (`excluded_truncated_count`). */
+export const MAX_EXCLUDED_LISTED = 50_000;
+/** A left-out file up to this size is listed with its SHA-256; a larger one with its size and mtime. */
+export const MAX_EXCLUDED_HASH_BYTES = 64 * 1024 * 1024;
 
 export type StateKind = "start" | "pre_tool" | "after" | "final";
 export type StartCapture = "complete" | "partial";
@@ -36,9 +39,11 @@ export type ExcludedReason =
   | "unreadable"
   | "non_utf8"
   | "reserved"
-  | "too_large";
+  | "too_large"
+  /** A touched-files chain: a file of the folder the agent never touched (listed, not archived). */
+  | "not_archived_touched_scope";
 
-export type ExcludedItem = { path: string; type: "file" | "dir"; reason: ExcludedReason; size?: number; sha256?: string };
+export type ExcludedItem = { path: string; type: "file" | "dir" | "symlink"; reason: ExcludedReason; size?: number; sha256?: string; mtime?: number };
 
 /** The scan's left-out entries, by path (the first reason wins), at most MAX_EXCLUDED_LISTED. */
 export class ExcludedList {
@@ -64,6 +69,15 @@ export class ExcludedList {
 
   get truncated(): boolean {
     return this.dropped > 0;
+  }
+
+  /** How many entries were left out of the listing past MAX_EXCLUDED_LISTED. */
+  get truncatedCount(): number {
+    return this.dropped;
+  }
+
+  has(path: string): boolean {
+    return this.items.has(path);
   }
 
   list(): ExcludedItem[] {
@@ -103,6 +117,7 @@ export function stateDocument(input: StateDocumentInput): Buffer {
     repos: input.repos,
     excluded: input.excluded.list(),
     excluded_truncated: input.excluded.truncated,
+    excluded_truncated_count: input.excluded.truncatedCount,
     scrubbed: [...input.scrubbed].sort(),
     attachments: input.attachments.map(attachmentStateItem),
   }), "utf8");

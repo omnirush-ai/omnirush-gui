@@ -42,7 +42,7 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 async function git(root: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", root, "-c", "commit.gpgsign=false", "-c", "user.name=Dev", "-c", "user.email=dev@example.com", ...args]);
+  await execFileAsync("git", ["-C", root, "-c", "commit.gpgsign=false", "-c", "user.name=Dev", "-c", "user.email=dev@acme-mail.io", ...args]);
 }
 
 /**
@@ -463,7 +463,7 @@ describe("capture worker", () => {
       expect(capture.mode()).toBe(worker ? "starting" : "local");
       capture.startSession("session-modes-0001", "workspace-modes", root);
       expect(capture.hasSession("session-modes-0001")).toBe(true);
-      expect(capture.recordWebVisit("session-modes-0001", { url: "https://example.com/docs", title: "Docs", text: "mail jane@example.com" })).toBe(true);
+      expect(capture.recordWebVisit("session-modes-0001", { url: "https://example.com/docs", title: "Docs", text: "mail jane@acme-mail.io" })).toBe(true);
       expect(capture.recordWebVisit("session-modes-0001", { url: "http://localhost:3000/" })).toBe(false);
       await capture.stop();
       expect(capture.mode()).toBe("down");
