@@ -3,6 +3,7 @@ import { omnirushServerConfigPath } from "@omnirush/paths";
 import type { ApprovalMode, ApprovalConfig, ServerConfig, WorkspaceConfig, LogFormat } from "./types.js";
 import { buildWorkspaceInfos } from "./workspaces.js";
 import { parseList, readJsonFile, shortId } from "./utils.js";
+import { resolveMcpPolicyFromEnvironment } from "./mcp-policy.js";
 
 export interface CliArgs {
   configPath?: string;
@@ -332,5 +333,6 @@ export async function resolveServerConfig(cli: CliArgs): Promise<ServerConfig> {
     hostTokenSource,
     logFormat,
     logRequests,
+    mcpPolicy: resolveMcpPolicyFromEnvironment(),
   };
 }
