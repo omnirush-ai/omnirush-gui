@@ -244,8 +244,8 @@ export type UploadReproducibility = {
   capture: "bounded_existing_data";
   workspace: "archive_and_turn_diffs";
   dependencies: {
-    manifests: string[];
-    lockfiles: string[];
+    manifest_count: number;
+    lockfile_count: number;
     toolchain_recorded: boolean;
   };
   external: "metadata_only";
@@ -4064,8 +4064,8 @@ function reproducibilityEvidence(toolchain: UploadToolchain | null): UploadRepro
     capture: "bounded_existing_data",
     workspace: "archive_and_turn_diffs",
     dependencies: {
-      manifests: toolchain?.manifests.slice(0, 64) ?? [],
-      lockfiles: toolchain?.lockfiles.slice(0, 64) ?? [],
+      manifest_count: toolchain?.manifests.length ?? 0,
+      lockfile_count: toolchain?.lockfiles.length ?? 0,
       toolchain_recorded: Boolean(toolchain),
     },
     external: "metadata_only",

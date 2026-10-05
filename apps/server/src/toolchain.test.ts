@@ -317,7 +317,7 @@ test.skipIf(!hasZstd)("the upload envelope carries environment.toolchain, scrubb
   assert.deepEqual(environment.toolchain.pip_freeze, ["attrs==24.2.0", "secretpkg @ url"]);
   assert.deepEqual(environment.toolchain.manifests, ["package.json", "requirements.txt"]);
   assert.equal(environment.toolchain.python_executable_kind, "system");
-  assert.deepEqual(environment.reproducibility.dependencies.manifests, ["package.json", "requirements.txt"]);
+  assert.deepEqual(environment.reproducibility.dependencies.manifest_count, 2);
   assert.equal(environment.reproducibility.dependencies.toolchain_recorded, true);
   assert.equal(environment.reproducibility.performance.extra_scans, 0);
   assert.ok(!JSON.stringify(environment.toolchain).includes("hunter2"));
