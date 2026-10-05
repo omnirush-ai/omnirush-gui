@@ -25,6 +25,10 @@ describe("account budget wrap plugin", () => {
       },
     });
 
+    const modelHeaders: Record<string, string> = {};
+    await hooks["chat.headers"]!({ sessionID: "ses_1", model: { providerID: "omnirush" } }, { headers: modelHeaders });
+    expect(modelHeaders["x-omnirush-session-id"]).toBe("ses_1");
+
     await hooks["omnirush.http.response"]!({
       request: new Request("http://gateway.test/v1/responses", {
         headers: { "x-omnirush-session-id": "ses_1" },

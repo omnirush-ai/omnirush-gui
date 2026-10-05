@@ -25,6 +25,7 @@ import { useControlAction, type OmniRushControlAction } from "./control/control-
 import { openNotificationCenterEvent } from "./notifications";
 import { useReloadCoordinator } from "./reload-coordinator";
 import { useShellConfig } from "./shell-config";
+import { toast } from "@/components/ui/sonner";
 
 const SEVERITY_ICONS: Record<NotificationSeverity, LucideIcon> = {
   info: Info,
@@ -86,6 +87,25 @@ export function NotificationBell({ variant = "icon" }: { variant?: "icon" | "sid
     })),
   }), [notifications]);
   useControlAction(notificationsListAction);
+
+  const notificationToastAction = useMemo<OmniRushControlAction>(() => ({
+    id: "notifications.show",
+    label: "Show notification",
+    description: "Show a short status notification in the desktop shell.",
+    kind: "command",
+    sideEffect: "none",
+    requiresArgs: true,
+    execute: (args) => {
+      const value = args && typeof args === "object" ? args as Record<string, unknown> : {};
+      const title = typeof value.title === "string" ? value.title : "OmniRush";
+      const body = typeof value.body === "string" ? value.body : "";
+      const severity = value.severity === "warning" || value.severity === "error" || value.severity === "success" ? value.severity : "info";
+      const show = severity === "warning" ? toast.warning : severity === "error" ? toast.error : severity === "success" ? toast.success : toast.info;
+      show(title, body ? { description: body } : undefined);
+      return { shown: true };
+    },
+  }), []);
+  useControlAction(notificationToastAction);
 
   const unreadCount = useMemo(
     () => notifications.filter((notification) => notification.readAt === null).length,
