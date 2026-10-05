@@ -365,6 +365,8 @@ export type ScanOptions = {
   excludedList?: ExcludedList;
   /** Capture v2 (a folder in no repository): the regenerable folders (node_modules, .venv, target, ...) are left out. */
   pruneRegenerable?: boolean;
+  /** A listing scan (never packed): a file larger than this is not hashed (its sha256 stays null). */
+  maxHashBytes?: number;
 };
 
 /**
@@ -633,6 +635,10 @@ export async function scanArchiveTree(root: string, options: ScanOptions = {}): 
     if (isGitConfigPath(rel)) {
       // Read and scrubbed in the hash pass; never from the cache (its bytes are needed for pass 2).
       toHash.push(entry);
+      entries.push(entry);
+      return;
+    }
+    if (options.maxHashBytes !== undefined && entry.size > options.maxHashBytes) {
       entries.push(entry);
       return;
     }

@@ -2384,7 +2384,7 @@
   }
  },
  {
-  "name": "real IPv4 addresses are still redacted",
+  "name": "public IPv4 addresses are still redacted; loopback, private and documentation ones are kept",
   "kind": "trace",
   "input": {
    "schema_version": 1,
@@ -2410,7 +2410,7 @@
            "input": {
             "command": "curl http://203.0.113.9:8080/health"
            },
-           "output": "10.0.0.5\nip=192.168.1.20\nGET http://203.0.113.9:8080 ok\nping from 8.8.8.8 (8.8.8.8): 56 bytes\nlisten 127.0.0.1:5432; peer 172.16.0.1.\n"
+           "output": "10.0.0.5\nip=192.168.1.20\nGET http://203.0.113.9:8080 ok\nping from 8.8.8.8 (8.8.8.8): 56 bytes\nlisten 127.0.0.1:5432; peer 172.16.0.1.\nping 52.14.7.21 and 151.101.1.69\n"
           }
          }
         ]
@@ -2442,14 +2442,660 @@
           "state": {
            "status": "completed",
            "input": {
-            "command": "curl http://[REDACTED_PII]:8080/health"
+            "command": "curl http://203.0.113.9:8080/health"
            },
-           "output": "[REDACTED_PII]\nip=[REDACTED_PII]\nGET http://[REDACTED_PII]:8080 ok\nping from [REDACTED_PII] ([REDACTED_PII]): 56 bytes\nlisten [REDACTED_PII]:5432; peer [REDACTED_PII].\n"
+           "output": "10.0.0.5\nip=192.168.1.20\nGET http://203.0.113.9:8080 ok\nping from [REDACTED_PII] ([REDACTED_PII]): 56 bytes\nlisten 127.0.0.1:5432; peer 172.16.0.1.\nping [REDACTED_PII] and [REDACTED_PII]\n"
           }
          }
         ]
        }
       ]
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "loopback, unspecified, example e-mail and a placeholder token written to code are kept (tester session, anonymised)",
+  "kind": "trace",
+  "input": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/config.py",
+            "content": "BIND_HOST = \"0.0.0.0\"\nDEFAULT_EMAIL = \"ops@example.invalid\"\nFORM_PLACEHOLDER = \"e.g. Jane Doe\"\nAPI_TOKEN = \"fake-not-a-real-token-0000\"\n\n\ndef get_config():\n    return {\n        \"BIND_HOST\": BIND_HOST,\n        \"DEFAULT_EMAIL\": DEFAULT_EMAIL,\n        \"FORM_PLACEHOLDER\": FORM_PLACEHOLDER,\n        \"API_TOKEN\": API_TOKEN,\n    }\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_2",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/server.js",
+            "content": "const http = require(\"http\");\n\nconst host = \"127.0.0.1\";\nconst port = 3000;\n\nconst server = http.createServer((req, res) => {\n  res.end(\"ok\");\n});\n\nserver.listen(port, host, () => {\n  console.log(\"serving on http://127.0.0.1:3000\");\n});\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_3",
+          "tool": "edit",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/README.md",
+            "oldString": "# demo\n",
+            "newString": "# demo\n\n- `server.js` starts a minimal Node.js HTTP server on `127.0.0.1:3000` and responds with `ok`.\n"
+           },
+           "output": "Edit applied successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_4",
+          "tool": "read",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/config.py"
+           },
+           "output": "1: BIND_HOST = \"0.0.0.0\"\n2: DEFAULT_EMAIL = \"ops@example.invalid\"\n4: API_TOKEN = \"fake-not-a-real-token-0000\""
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_5",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "node server.js & sleep 3; curl -s http://127.0.0.1:3000"
+           },
+           "output": "serving on http://127.0.0.1:3000\nok"
+          }
+         },
+         {
+          "type": "text",
+          "text": "Start server.js bound to 0.0.0.0:3000, then fetch http://localhost:3000. Contact ops@example.invalid or noreply@example.com."
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  },
+  "expected": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/config.py",
+            "content": "BIND_HOST = \"0.0.0.0\"\nDEFAULT_EMAIL = \"ops@example.invalid\"\nFORM_PLACEHOLDER = \"e.g. Jane Doe\"\nAPI_TOKEN = \"fake-not-a-real-token-0000\"\n\n\ndef get_config():\n    return {\n        \"BIND_HOST\": BIND_HOST,\n        \"DEFAULT_EMAIL\": DEFAULT_EMAIL,\n        \"FORM_PLACEHOLDER\": FORM_PLACEHOLDER,\n        \"API_TOKEN\": API_TOKEN,\n    }\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_2",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/server.js",
+            "content": "const http = require(\"http\");\n\nconst host = \"127.0.0.1\";\nconst port = 3000;\n\nconst server = http.createServer((req, res) => {\n  res.end(\"ok\");\n});\n\nserver.listen(port, host, () => {\n  console.log(\"serving on http://127.0.0.1:3000\");\n});\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_3",
+          "tool": "edit",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/README.md",
+            "oldString": "# demo\n",
+            "newString": "# demo\n\n- `server.js` starts a minimal Node.js HTTP server on `127.0.0.1:3000` and responds with `ok`.\n"
+           },
+           "output": "Edit applied successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_4",
+          "tool": "read",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/config.py"
+           },
+           "output": "1: BIND_HOST = \"0.0.0.0\"\n2: DEFAULT_EMAIL = \"ops@example.invalid\"\n4: API_TOKEN = \"fake-not-a-real-token-0000\""
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_5",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "node server.js & sleep 3; curl -s http://127.0.0.1:3000"
+           },
+           "output": "serving on http://127.0.0.1:3000\nok"
+          }
+         },
+         {
+          "type": "text",
+          "text": "Start server.js bound to 0.0.0.0:3000, then fetch http://localhost:3000. Contact ops@example.invalid or noreply@example.com."
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "real secrets and personal data next to the kept values are still redacted",
+  "kind": "trace",
+  "input": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/settings.py",
+            "content": "BIND_HOST = \"0.0.0.0\"\nUPSTREAM = \"52.14.7.21\"\nOWNER_EMAIL = \"jane.doe@gmail.com\"\nSUPPORT = \"support@acme-widgets.io\"\nAPI_TOKEN = \"q7Xk2mP9vR4tL8wZ3nB6\"\nSTRIPE = \"sk_live_51Hx7Gq2eZvKYlo2C\"\nAWS_ACCESS_KEY_ID = \"AKIAIOSFODNN7EXAMPLE\"\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_2",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "cat .env"
+           },
+           "output": "API_TOKEN=q7Xk2mP9vR4tL8wZ3nB6\nDB_PASSWORD=hunter2hunter2\nping 151.101.1.69 ok"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  },
+  "expected": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/settings.py",
+            "content": "BIND_HOST = \"0.0.0.0\"\nUPSTREAM = \"[REDACTED_PII]\"\nOWNER_EMAIL = \"[REDACTED_PII]\"\nSUPPORT = \"[REDACTED_PII]\"\nAPI_TOKEN = \"[REDACTED]\"\nSTRIPE = \"[REDACTED]\"\nAWS_ACCESS_KEY_ID = \"[REDACTED]\"\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         },
+         {
+          "type": "tool",
+          "callID": "call_2",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "cat .env"
+           },
+           "output": "API_TOKEN=[REDACTED]\nDB_PASSWORD=[REDACTED]\nping [REDACTED_PII] ok"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "kept IPv4 ranges (private, link-local, loopback, documentation, netmasks); public addresses are redacted",
+  "kind": "trace",
+  "input": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "ip addr; ip route"
+           },
+           "output": "inet 10.1.2.3/8 brd 10.255.255.255\ninet 172.16.5.4 172.31.255.1 not-private 172.32.0.1\ninet 192.168.0.10 netmask 255.255.255.0\nlink 169.254.169.254 gw 0.0.0.0 bcast 255.255.255.255 mask 255.255.240.0 odd 255.255.0.255\ndocs 192.0.2.10 198.51.100.20 203.0.113.30 lo 127.0.0.53 ::1\npublic 8.8.8.8 1.1.1.1 52.14.7.21 192.0.3.1 198.51.101.2\n"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  },
+  "expected": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "ip addr; ip route"
+           },
+           "output": "inet 10.1.2.3/8 brd 10.255.255.255\ninet 172.16.5.4 172.31.255.1 not-private [REDACTED_PII]\ninet 192.168.0.10 netmask 255.255.255.0\nlink 169.254.169.254 gw 0.0.0.0 bcast 255.255.255.255 mask 255.255.240.0 odd [REDACTED_PII]\ndocs 192.0.2.10 198.51.100.20 203.0.113.30 lo 127.0.0.53 ::1\npublic [REDACTED_PII] [REDACTED_PII] [REDACTED_PII] [REDACTED_PII] [REDACTED_PII]\n"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "kept e-mails: reserved, test, placeholder and no-reply addresses; personal ones go",
+  "kind": "trace",
+  "input": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "git log --format=%ae"
+           },
+           "output": "a@example.com\nb@mail.example.org\nc@example.net\nd@host.invalid\ne@site.test\nf@foo.example\ng@box.localhost\nuser@domain.com\nyou@yourdomain.com\nnoreply@github.com\nno-reply@accounts.google.com\njane.doe@gmail.com\nsam@omnirush.dev\nexample@gmail.com\nuser@examples.com\n"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  },
+  "expected": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "git log --format=%ae"
+           },
+           "output": "a@example.com\nb@mail.example.org\nc@example.net\nd@host.invalid\ne@site.test\nf@foo.example\ng@box.localhost\nuser@domain.com\nyou@yourdomain.com\nnoreply@github.com\nno-reply@accounts.google.com\n[REDACTED_PII]\n[REDACTED_PII]\n[REDACTED_PII]\n[REDACTED_PII]\n"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "placeholder assignment values are kept; secret-shaped ones are not",
+  "kind": "trace",
+  "input": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/.env.example",
+            "content": "API_TOKEN=your-token-here\nAPI_KEY=YOUR_API_KEY\nDB_PASSWORD=changeme\nSECRET_KEY=xxxxxxxxxxxxxxxx\nAUTH_TOKEN=fake-not-a-real-token-0000\nACCESS_TOKEN=replace-me-with-a-token\nSHORT_TOKEN=abc12\nREAL_TOKEN=9f8e7d6c5b4a39281706\nPASSWORD=password1234\nCLIENT_SECRET=Tq3vX8kPz2LmN7rB\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  },
+  "expected": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "write",
+          "state": {
+           "status": "completed",
+           "input": {
+            "filePath": "/work/proj/.env.example",
+            "content": "API_TOKEN=your-token-here\nAPI_KEY=YOUR_API_KEY\nDB_PASSWORD=changeme\nSECRET_KEY=xxxxxxxxxxxxxxxx\nAUTH_TOKEN=fake-not-a-real-token-0000\nACCESS_TOKEN=replace-me-with-a-token\nSHORT_TOKEN=abc12\nREAL_TOKEN=[REDACTED]\nPASSWORD=[REDACTED]\nCLIENT_SECRET=[REDACTED]\n"
+           },
+           "output": "Wrote file successfully."
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "Arch and Debian package releases are versions, not IPv4 addresses",
+  "kind": "trace",
+  "input": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "pacman -Q"
+           },
+           "output": "alsa-ucm-conf 1.2.15.3-1\nimagemagick 7.1.2.8-1\nlibmodplug 0.8.9.0-7\nsddm-git 0.21.0.12.gbc9eee8-1\nmirror 52.14.7.21\n"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  },
+  "expected": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "turn.messages",
+     "data": {
+      "messages": [
+       {
+        "info": {
+         "id": "msg_1",
+         "role": "assistant"
+        },
+        "parts": [
+         {
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "bash",
+          "state": {
+           "status": "completed",
+           "input": {
+            "command": "pacman -Q"
+           },
+           "output": "alsa-ucm-conf 1.2.15.3-1\nimagemagick 7.1.2.8-1\nlibmodplug 0.8.9.0-7\nsddm-git 0.21.0.12.gbc9eee8-1\nmirror [REDACTED_PII]\n"
+          }
+         }
+        ]
+       }
+      ],
+      "part": 1,
+      "parts": 1
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "a package version under a version key is not an IPv4 address; the same digits elsewhere are",
+  "kind": "trace",
+  "input": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "environment",
+     "data": {
+      "packages": [
+       {
+        "name": "update-notifier-common",
+        "version": "3.192.1.7"
+       },
+       {
+        "name": "alsa-ucm-conf",
+        "version": "1.2.15.3-1"
+       }
+      ],
+      "note": "mirror 3.192.1.7"
+     }
+    }
+   ]
+  },
+  "expected": {
+   "schema_version": 1,
+   "session_id": "ses_1",
+   "events": [
+    {
+     "at": "2026-10-04T00:00:00.000Z",
+     "type": "environment",
+     "data": {
+      "packages": [
+       {
+        "name": "update-notifier-common",
+        "version": "3.192.1.7"
+       },
+       {
+        "name": "alsa-ucm-conf",
+        "version": "1.2.15.3-1"
+       }
+      ],
+      "note": "mirror [REDACTED_PII]"
      }
     }
    ]

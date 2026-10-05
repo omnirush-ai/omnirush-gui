@@ -68,10 +68,10 @@ describe("session uploader privacy", () => {
   });
 
   test("scrubs common personal identifiers before upload", () => {
-    const result = redactUploadText("jane@example.com +1 (415) 555-0132 192.0.2.25");
-    expect(result.text).not.toContain("jane@example.com");
+    const result = redactUploadText("jane@acme-mail.io +1 (415) 555-0132 52.14.7.25");
+    expect(result.text).not.toContain("jane@acme-mail.io");
     expect(result.text).not.toContain("415");
-    expect(result.text).not.toContain("192.0.2.25");
+    expect(result.text).not.toContain("52.14.7.25");
     expect(result.count).toBe(3);
   });
 
@@ -230,7 +230,7 @@ describe("session uploader privacy", () => {
     const sessionId = "session-changes-1234";
     sessionUploader.startSession(sessionId, "workspace-changes", root);
     await sessionUploader.idle(sessionId);
-    await writeFile(join(root, "created.txt"), "contact jane@example.com");
+    await writeFile(join(root, "created.txt"), "contact jane@acme-mail.io");
     sessionUploader.recordTrace(sessionId, "file.read", { path: "created.txt" });
     sessionUploader.flushTrace(sessionId);
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -241,7 +241,7 @@ describe("session uploader privacy", () => {
     const changeFile = (change?.files as Array<{ path: string; content: string }>).find((file) => file.path === "__omnirush__/changes.json");
     expect(changeFile).toBeDefined();
     expect(changeFile?.content).toContain('"path":"created.txt"');
-    expect(changeFile?.content).not.toContain("jane@example.com");
+    expect(changeFile?.content).not.toContain("jane@acme-mail.io");
   });
 
   test("records a privacy manifest and touched paths without uploading denied files", async () => {
@@ -409,7 +409,7 @@ function makeUploads() {
 }
 
 async function git(root: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", root, "-c", "commit.gpgsign=false", "-c", "user.name=Dev", "-c", "user.email=dev@example.com", ...args]);
+  const { stdout } = await execFileAsync("git", ["-C", root, "-c", "commit.gpgsign=false", "-c", "user.name=Dev", "-c", "user.email=dev@acme-mail.io", ...args]);
   return String(stdout).trim();
 }
 
@@ -527,7 +527,7 @@ describe("session uploader envelope v2", () => {
     await writeFile(join(root, "credentials.json"), '{"password":"hunter2-committed"}\n');
     await writeFile(join(root, "blob.bin"), Buffer.from([0, 1, 2, 3, 4]));
     await git(root, "add", "-A");
-    await git(root, "commit", "-q", "-m", "initial commit by jane@example.com");
+    await git(root, "commit", "-q", "-m", "initial commit by jane@acme-mail.io");
     await writeFile(join(root, "app.txt"), "line one\nline two added\n");
     await writeFile(join(root, "credentials.json"), '{"password":"hunter2-modified"}\n');
     await writeFile(join(root, "blob.bin"), Buffer.from([0, 9, 9, 9, 9, 9]));
@@ -578,7 +578,7 @@ describe("session uploader envelope v2", () => {
     expect(start.manifest.find((entry) => entry.path === "blob.bin")).toMatchObject({ binary: true, archived: "byte_exact", size: 6 });
     expect(start.files.some((file) => file.path === "blob.bin")).toBe(false);
     const serialized = JSON.stringify(uploads);
-    for (const forbidden of ["ghp_secrettoken123456", "oauth2:", "hunter2", "abcdef123456", "jane@example.com", ".git/"]) {
+    for (const forbidden of ["ghp_secrettoken123456", "oauth2:", "hunter2", "abcdef123456", "jane@acme-mail.io", ".git/"]) {
       expect(serialized).not.toContain(forbidden);
     }
   });
@@ -1495,7 +1495,7 @@ describe("session uploader trace additions", () => {
       parentSessionId: sessionId,
       title: "Subtask",
       agent: "explore",
-      messages: [{ info: { id: "cmsg_1", role: "user", sessionID: "ses_child_1" }, parts: [{ type: "text", text: "find jane@example.com" }] }],
+      messages: [{ info: { id: "cmsg_1", role: "user", sessionID: "ses_child_1" }, parts: [{ type: "text", text: "find jane@acme-mail.io" }] }],
       lastMessageId: "cmsg_1",
     });
     first.recordChildSession(sessionId, {
@@ -1523,7 +1523,7 @@ describe("session uploader trace additions", () => {
       ["ses_grandchild_1", "ses_child_1", null, null],
     ]);
     expect(JSON.stringify(children[0]?.data?.messages)).toContain("cmsg_1");
-    expect(JSON.stringify(children)).not.toContain("jane@example.com");
+    expect(JSON.stringify(children)).not.toContain("jane@acme-mail.io");
     const end = uploads.at(-1)!;
     expect(end.session).toEqual({
       provider_id: "anthropic", model_id: "claude-sonnet-4-5", variant: "high", child_session_ids: ["ses_child_1", "ses_grandchild_1"],
@@ -1622,8 +1622,8 @@ describe("session uploader trace additions", () => {
     const sessionUploader = new SessionUploader({ upload, fallbackScanMs: 60_000 });
     const sessionId = "session-web-1234";
     sessionUploader.startSession(sessionId, "workspace-web", root);
-    const text = `Contact jane@example.com about AKIA1234567890123456 ${"page text ".repeat(20_000)}`;
-    expect(sessionUploader.recordWebVisit(sessionId, { url: "https://user:pw@example.com/docs?q=1#top", title: "Docs jane@example.com", text })).toBe(true);
+    const text = `Contact jane@acme-mail.io about AKIA1234567890123456 ${"page text ".repeat(20_000)}`;
+    expect(sessionUploader.recordWebVisit(sessionId, { url: "https://user:pw@example.com/docs?q=1#top", title: "Docs jane@acme-mail.io", text })).toBe(true);
     expect(sessionUploader.recordWebVisit(sessionId, { url: "https://example.org/short", title: null, text: "brief" })).toBe(true);
     for (const url of ["file:///etc/passwd", "data:text/html,<p>hi</p>", "chrome://settings", "http://localhost:3000/app", "http://127.0.0.1:8080/", "https://[::1]/", "ftp://example.com/x"]) {
       expect(sessionUploader.recordWebVisit(sessionId, { url, title: "local", text: "secret local page" })).toBe(false);
@@ -1638,7 +1638,7 @@ describe("session uploader trace additions", () => {
     expect(long?.data?.title).toBe("Docs [REDACTED_PII]");
     expect(long?.data?.text_truncated).toBe(true);
     expect(Buffer.byteLength(String(long?.data?.text))).toBeLessThanOrEqual(MAX_UPLOAD_WEB_VISIT_TEXT_BYTES);
-    expect(String(long?.data?.text)).not.toContain("jane@example.com");
+    expect(String(long?.data?.text)).not.toContain("jane@acme-mail.io");
     expect(String(long?.data?.text)).not.toContain("AKIA1234567890123456");
     expect(short?.data).toEqual({ url: "https://example.org/short", title: null, text: "brief", text_truncated: false });
     expect(JSON.stringify(uploads)).not.toContain("secret local page");
@@ -1653,7 +1653,7 @@ describe("session uploader trace additions", () => {
     const sessionId = "session-attachment-1234";
     sessionUploader.startSession(sessionId, "workspace-attachment", root);
     const text = `OPENAI_API_KEY=sk-1234567890abcdefghijklmnop\n${"notes ".repeat(60_000)}`;
-    sessionUploader.recordAttachment(sessionId, { name: "../notes jane@example.com report.txt", mime: "text/plain", bytes: Buffer.byteLength(text), sha256: sha256(text), text });
+    sessionUploader.recordAttachment(sessionId, { name: "../notes jane@acme-mail.io report.txt", mime: "text/plain", bytes: Buffer.byteLength(text), sha256: sha256(text), text });
     sessionUploader.recordAttachment(sessionId, { name: "photo.png", mime: "image/png", bytes: 12, sha256: sha256("png"), text: null });
     sessionUploader.flushTrace(sessionId);
     await sessionUploader.stop();
@@ -1982,7 +1982,7 @@ describe("session uploader secret rails", () => {
       ["settings.py", "SECRET = Ab1/Cd2+Ef3=", "SECRET = [REDACTED]"],
       ["ci.yml", `token: ${GITHUB_TOKEN}`, "token: [REDACTED]"],
       ["config.yml", 'api_key: "abcdef1234567890"', 'api_key: "[REDACTED]"'],
-      ["config.yml", "password: changeme1", "password: [REDACTED]"],
+      ["config.yml", "password: hunter7abc", "password: [REDACTED]"],
       ["config.yml", "META_MUSE_API_KEY: 'synthetic'", "META_MUSE_API_KEY: '[REDACTED]'"],
       ["config.yml", 'token: "config.token"', 'token: "[REDACTED]"'],
       ["config.yml", "token: config-token", "token: [REDACTED]"],
@@ -2050,14 +2050,14 @@ describe("session uploader secret rails", () => {
   test("scrubs the trace and .json files as JSON so escapes survive redaction", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-upload-json-"));
     roots.push(root);
-    await writeFile(join(root, "config.json"), '{\n  "note": "{\\"password\\":\\"hunter2abc\\"}",\n  "nested": {"apiKey": "abcdefghijkl", "author": "Jane <jane@example.com>"}\n}\n');
+    await writeFile(join(root, "config.json"), '{\n  "note": "{\\"password\\":\\"hunter2abc\\"}",\n  "nested": {"apiKey": "abcdefghijkl", "author": "Jane <jane@acme-mail.io>"}\n}\n');
     await writeFile(join(root, "settings.json"), '// JSON with comments falls back to text scrubbing\n{"password": "hunter2abc"}\n');
     await writeFile(join(root, "data.json"), '{"a": 1.0, "b": [1, 2]}');
     const { uploads, upload } = makeUploads();
     const sessionUploader = new SessionUploader({ upload, fallbackScanMs: 60_000 });
     const sessionId = "session-json-1";
     sessionUploader.startSession(sessionId, "workspace-json", root);
-    sessionUploader.recordTrace(sessionId, "message", { text: 'line one\n@app.function(gpu="h100")\nx@example.com', token: GITHUB_TOKEN });
+    sessionUploader.recordTrace(sessionId, "message", { text: 'line one\n@app.function(gpu="h100")\nx@acme-mail.io', token: GITHUB_TOKEN });
     sessionUploader.flushTrace(sessionId);
     await sessionUploader.stop();
 
@@ -2082,7 +2082,7 @@ describe("session uploader secret rails", () => {
   });
 
   test("never leaves a dangling backslash when scrubbing escaped text", () => {
-    const raw = JSON.stringify({ text: `line one\n@app.function(gpu="h100")\nx@example.com\njane@example.com\tAKIAIOSFODNN7EXAMPLE\nTOKEN=${GITHUB_TOKEN}` });
+    const raw = JSON.stringify({ text: `line one\n@app.function(gpu="h100")\nx@acme-mail.io\njane@acme-mail.io\tAKIAIOSFODNN7EXAMPLE\nTOKEN=${GITHUB_TOKEN}` });
     const result = redactUploadText(raw);
     expect(JSON.parse(result.text)).toEqual({ text: 'line one\n@app.function(gpu="h100")\n[REDACTED_PII]\n[REDACTED_PII]\t[REDACTED]\nTOKEN=[REDACTED]' });
     expect(result.count).toBe(4);
@@ -2094,7 +2094,7 @@ describe("session uploader secret rails", () => {
     expect(redactUploadJsonText('{"a":{"toJSON":1},"secret":"abcdefghijkl","n":1e3}')).toBe('{"a":{"toJSON":1},"secret":"[REDACTED]","n":1000}');
     expect(redactUploadJsonText("not json")).toBeNull();
     // "secrets" is a family word, the plural "tokens" deliberately is not (tokenizer configs).
-    expect(redactUploadJson({ at: new Date(0), secrets: ["abcdefghijkl", "short"], tokens: ["abcdefghijkl"], "jane@example.com": 1 }))
+    expect(redactUploadJson({ at: new Date(0), secrets: ["abcdefghijkl", "short"], tokens: ["abcdefghijkl"], "jane@acme-mail.io": 1 }))
       .toEqual({ value: { at: "1970-01-01T00:00:00.000Z", secrets: ["[REDACTED]", "short"], tokens: ["abcdefghijkl"], "[REDACTED_PII]": 1 }, count: 2 });
     expect(redactUploadContent("nested/x.JSON", '{"password":"hunter2abc"}')).toBe('{"password":"[REDACTED]"}');
     expect(redactUploadContent("x.txt", '{"password":"hunter2abc"}')).toBe('{"password":"[REDACTED]"}');
@@ -2111,13 +2111,13 @@ describe("session uploader secret rails", () => {
     // Both rules are applied only to lines holding their keyword or "@"; the
     // result must equal a whole-text pass, line endings and escapes included.
     expect(redactUploadContent("notes.txt", "first line\npassword=hunter2hunter2\r\nlast")).toBe("first line\npassword=[REDACTED]\r\nlast");
-    expect(redactUploadContent("notes.txt", "a@b\njane@example.com\n@x\nx@y.io")).toBe("a@b\n[REDACTED_PII]\n@x\n[REDACTED_PII]");
+    expect(redactUploadContent("notes.txt", "a@b\njane@acme-mail.io\n@x\nx@y.io")).toBe("a@b\n[REDACTED_PII]\n@x\n[REDACTED_PII]");
     expect(redactUploadContent("notes.txt", "jane@\nexample.com and key\n=abcdefgh12")).toBe("jane@\nexample.com and key\n=abcdefgh12");
     expect(redactUploadContent("run.sh", "echo done \\\nexport API_KEY=abc123def456\nTOKEN='S3cretValue99'"))
       .toBe("echo done \\\nexport API_KEY=abc123def456\nTOKEN='[REDACTED]'");
-    expect(redactUploadContent("app.ts", "const keyName = config.token;\nconst apiKey = \"sk-proj-abcdefghijklmnop1234\";\n// contact: dev@example.com"))
+    expect(redactUploadContent("app.ts", "const keyName = config.token;\nconst apiKey = \"sk-proj-abcdefghijklmnop1234\";\n// contact: dev@acme-mail.io"))
       .toBe("const keyName = config.token;\nconst apiKey = \"[REDACTED]\";\n// contact: [REDACTED_PII]");
-    expect(redactUploadContent("data.json", "{\n  \"note\": \"line\\npassword=hunter2hunter2\",\n  \"author\": \"jane@example.com\"\n}\n"))
+    expect(redactUploadContent("data.json", "{\n  \"note\": \"line\\npassword=hunter2hunter2\",\n  \"author\": \"jane@acme-mail.io\"\n}\n"))
       .toBe("{\n  \"note\": \"line\\npassword=[REDACTED]\",\n  \"author\": \"[REDACTED_PII]\"\n}\n");
   });
 
@@ -2504,7 +2504,7 @@ describe("session uploader scrubber parity: second-sample refinements", () => {
   test("JSON repeated keys are kept and scrubbed (test_json_repeated_keys_are_kept_and_scrubbed)", () => {
     const deep = `{"a": 1, "a": ${"[".repeat(600)}${"]".repeat(600)}}`;
     const cases: Array<[string, string]> = [
-      ['{"a": "x@example.com", "a": "clean"}', '{"a":"[REDACTED_PII]","a":"clean"}'],
+      ['{"a": "x@acme-mail.io", "a": "clean"}', '{"a":"[REDACTED_PII]","a":"clean"}'],
       [`{"a": "${GITHUB_TOKEN}", "a": "clean"}`, '{"a":"[REDACTED]","a":"clean"}'],
       ['{"password": "hunter2abc", "password": "x"}', '{"password":"[REDACTED]","password":"x"}'],
       [
@@ -3508,7 +3508,7 @@ describe("session uploader incremental snapshots", () => {
 
   test("a new chat on a captured workspace sends scrubbed files from the redacted-text cache, not the scrubber", async () => {
     const root = await workspace("texts", 4);
-    await writeFile(join(root, "src", "contact.txt"), "mail jane@example.com about it\n");
+    await writeFile(join(root, "src", "contact.txt"), "mail jane@acme-mail.io about it\n");
     await writeFile(join(root, "src", "config.yml"), "password: hunter2hunter2\n");
     const { uploads, upload } = makeUploads();
     const sessionUploader = new SessionUploader({ upload, changeDebounceMs: 60_000, fallbackScanMs: 60_000 });
@@ -3532,7 +3532,7 @@ describe("session uploader incremental snapshots", () => {
     expect(second.manifest).toEqual(first.manifest);
 
     // New bytes are scrubbed again, never served from the text of the old ones.
-    await writeFile(join(root, "src", "contact.txt"), "mail joe@example.com instead of jane\n");
+    await writeFile(join(root, "src", "contact.txt"), "mail joe@acme-mail.io instead of jane\n");
     const edited = { ...sessionUploader.metrics };
     sessionUploader.startSession("session-texts-third1", "workspace-texts", root);
     await sessionUploader.idle("session-texts-third1");

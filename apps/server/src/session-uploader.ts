@@ -814,15 +814,60 @@ const SECRET_PATTERNS: Redaction[] = [
 // `Bearer <token>`: the token part is decided by isBearerSecret. The character
 // class already excludes `${...}` and `<...>` placeholders.
 const BEARER_TOKEN = tokenPattern(String.raw`(Bearer[ \t]+)([A-Za-z0-9_.~+/=-]{16,})`, "gi");
+/**
+ * Personal-data matches kept as written: code and docs are full of addresses
+ * and e-mails that identify nobody. IPv4: unspecified and "this network"
+ * (0.0.0.0/8), loopback (127/8), private (10/8, 172.16/12, 192.168/16),
+ * link-local (169.254/16), the documentation ranges (192.0.2/24,
+ * 198.51.100/24, 203.0.113/24) and netmask-shaped values (ones, then zeros:
+ * 255.255.255.0, 255.255.255.255). Every other (public) address is redacted.
+ * The backend's is_kept_ipv4.
+ */
+const IPV4_KEPT_PREFIXES: number[][] = [[0], [10], [127], [169, 254], [192, 168], [192, 0, 2], [198, 51, 100], [203, 0, 113]];
+export function isKeptIpv4(address: string): boolean {
+  const octets = address.split(".").map(Number);
+  if (octets.length !== 4) return false;
+  if (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) return true;
+  if (IPV4_KEPT_PREFIXES.some((prefix) => prefix.every((octet, index) => octets[index] === octet))) return true;
+  const value = ((octets[0]! << 24) | (octets[1]! << 16) | (octets[2]! << 8) | octets[3]!) >>> 0;
+  const inverted = ~value >>> 0;
+  // A netmask: ones, then zeros (255.255.255.255 included).
+  return ((inverted & (inverted + 1)) >>> 0) === 0;
+}
+
+/**
+ * E-mails kept as written: the reserved example and test domains (RFC 2606,
+ * RFC 6761), placeholder domains (`user@domain.com`, `you@yourdomain.com`)
+ * and no-reply senders. Every other address is redacted. The backend's
+ * is_kept_email.
+ */
+const EMAIL_KEPT_DOMAINS = new Set(["example.com", "example.org", "example.net", "test", "localhost"]);
+const EMAIL_KEPT_SUFFIXES = [".example.com", ".example.org", ".example.net", ".invalid", ".test", ".example", ".localhost"];
+const EMAIL_PLACEHOLDER_LABELS = new Set([
+  "domain", "yourdomain", "your-domain", "mydomain", "my-domain", "yourcompany", "your-company", "yoursite", "your-site",
+  "yourapp", "your-app", "yourorg", "your-org", "yourname",
+]);
+const EMAIL_KEPT_LOCALS = new Set(["noreply", "no-reply", "no_reply", "donotreply", "do-not-reply"]);
+export function isKeptEmail(address: string): boolean {
+  const at = address.lastIndexOf("@");
+  const local = address.slice(0, at).toLowerCase();
+  const domain = address.slice(at + 1).toLowerCase();
+  if (EMAIL_KEPT_LOCALS.has(local)) return true;
+  if (EMAIL_KEPT_DOMAINS.has(domain) || EMAIL_KEPT_SUFFIXES.some((suffix) => domain.endsWith(suffix))) return true;
+  const labels = domain.split(".");
+  return labels.length >= 2 && EMAIL_PLACEHOLDER_LABELS.has(labels[labels.length - 2]!);
+}
+
 const PII_PATTERNS: Redaction[] = [
-  [tokenPattern(String.raw`[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,}\b`, "gi"), REDACTED_PII],
+  [tokenPattern(String.raw`[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,}\b`, "gi"), (match) => (isKeptEmail(match) ? match : REDACTED_PII)],
   [tokenPattern(String.raw`(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})(?!\w)`), REDACTED_PII],
   [tokenPattern(String.raw`\d{3}-\d{2}-\d{4}(?!\w)`), REDACTED_PII],
   // IPv4. Not inside a longer version token: never right after a letter
   // (`ubuntu1.22.04.1`, `v1.2.3.4`), after an alphanumeric and `.~+-`
   // (`16.15-0ubuntu0.24.04.1`), after a dpkg epoch (`1:2.3.4.5`), nor
-  // followed by another `.digit` group (`1.2.3.4.5`). The backend's `ipv4`.
-  [tokenPattern(String.raw`(?<![A-Za-z0-9][.~+-])(?<!\d:)(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?!\.?\d)`, "g", String.raw`[\dA-Za-z.\\]`), REDACTED_PII],
+  // followed by another `.digit` group (`1.2.3.4.5`) or a package release
+  // (`1.2.15.3-1`). The backend's `ipv4`. Kept as written: see isKeptIpv4.
+  [tokenPattern(String.raw`(?<![A-Za-z0-9][.~+-])(?<!\d:)(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?!\.?\d)(?!-\d+(?![\d.]))`, "g", String.raw`[\dA-Za-z.\\]`), (match) => (isKeptIpv4(match) ? match : REDACTED_PII)],
 ];
 
 const PRIVACY_POLICY = {
@@ -1101,7 +1146,7 @@ function isFilesystemPathValue(value: string): boolean {
  * `token: config.token`. The backend's is_secret_assignment_value.
  */
 export function isSecretAssignmentValue(value: string, mode: RedactMode, quoted: boolean): boolean {
-  if (value.length < 8 || PYTHON_WHITESPACE_CHAR.test(value) || value.startsWith("[REDACTED")) return false;
+  if (value.length < 8 || PYTHON_WHITESPACE_CHAR.test(value) || value.startsWith("[REDACTED") || isPlaceholderValue(value)) return false;
   if (value.includes("(") || value.includes("${") || value.includes("$(") || CODE_EXPRESSION_VALUE.test(value)) return false;
   if (value.startsWith("<") && value.endsWith(">")) return false;
   if (isFilesystemPathValue(value)) return false;
@@ -1112,6 +1157,36 @@ export function isSecretAssignmentValue(value: string, mode: RedactMode, quoted:
       && (/\d/.test(value) || (value.length >= 20 && /[a-z]/.test(value) && /[A-Z]/.test(value)));
   }
   return /[A-Za-z]/.test(value) && !(identifier && value.includes("."));
+}
+
+/**
+ * Placeholder assignment values, never secrets: a value made only of these
+ * words, digit runs of up to four digits or counting up (`12345678`) and runs
+ * of one repeated character (`xxxx`, `0000`), at least one of them a marker
+ * (PLACEHOLDER_MARKERS, or a repeated-character run of 3+): `your-token-here`,
+ * `changeme`, `fake-not-a-real-token-0000`, `YOUR_API_KEY`, `xxxxxxxxxxxx`.
+ * Segments as keySegments splits a key. The backend's is_placeholder_value.
+ */
+const PLACEHOLDER_MARKERS = new Set([
+  "your", "yours", "here", "fake", "dummy", "example", "sample", "placeholder", "changeme", "replaceme", "replace", "insert",
+  "todo", "fixme", "tbd", "mock", "demo", "redacted", "notreal", "test", "testing",
+]);
+const PLACEHOLDER_WORDS = new Set([
+  "my", "the", "a", "an", "not", "real", "is", "goes", "go", "put", "enter", "set", "this", "to", "with", "of", "for", "in", "me",
+  "change", "secret", "secrets", "token", "tokens", "key", "keys", "api", "apikey", "password", "passwd", "pass", "pwd", "value",
+  "access", "auth", "private", "client", "id", "string", "foo", "bar", "baz", "qux", "abc", "xyz", "default", "dev", "local",
+]);
+const REPEATED_CHAR = /^(.)\1*$/su;
+export function isPlaceholderValue(value: string): boolean {
+  const segments = keySegments(value);
+  if (segments.length === 0) return false;
+  let marked = false;
+  for (const segment of segments) {
+    if (PLACEHOLDER_MARKERS.has(segment) || ([...segment].length >= 3 && REPEATED_CHAR.test(segment))) marked = true;
+    else if (PLACEHOLDER_WORDS.has(segment) || (/^[0-9]+$/.test(segment) && (segment.length <= 4 || "0123456789".includes(segment)))) continue;
+    else return false;
+  }
+  return marked;
 }
 
 /**
@@ -1128,8 +1203,10 @@ function isBearerSecret(token: string): boolean {
 function applyRedaction(text: string, [pattern, replacement]: Redaction, tally: { count: number }): string {
   pattern.lastIndex = 0;
   return text.replace(pattern, (match: string, group?: string) => {
-    tally.count += 1;
-    return typeof replacement === "string" ? replacement : replacement(match, group ?? "");
+    const replaced = typeof replacement === "string" ? replacement : replacement(match, typeof group === "string" ? group : "");
+    // A kept match (isKeptEmail, isKeptIpv4) is returned as it was and is no redaction.
+    if (replaced !== match) tally.count += 1;
+    return replaced;
   });
 }
 
@@ -1300,7 +1377,12 @@ export function redactUploadText(input: string, options: RedactUploadTextOptions
   const mailed = text;
   text = redactGatedLines(mailed, (from) => mailed.indexOf("@", from), (line) => applyRedaction(line, PII_PATTERNS[0]!, tally));
   if (DIGIT_GATE.test(text)) {
-    for (const redaction of PII_PATTERNS.slice(1)) text = applyRedaction(text, redaction, tally);
+    // A JSON value under a `version` key (`"version": "3.192.1.7"`, a package list) is a version, never an address.
+    const versionField = options.context !== undefined && keySegments(options.context).at(-1) === "version";
+    for (const redaction of PII_PATTERNS.slice(1)) {
+      if (versionField && redaction === PII_PATTERNS[3]) continue;
+      text = applyRedaction(text, redaction, tally);
+    }
   }
   return { text, count: tally.count };
 }
@@ -3926,6 +4008,25 @@ const EXCLUDED_FILES_MARGIN_BYTES = 256 * 1024;
 const FINAL_TOOLCHAIN_WAIT_MS = 3_000;
 
 /** `{ git_skipped: "xcode_clt_missing" }` when capture may not run git here (command-guard.ts), else nothing. */
+/**
+ * Why the project archive leaves this session folder out on purpose (a
+ * credential store such as `~/.aws`, the home directory, app data, a system
+ * directory), for the start upload: `{project_archive: {status: "skipped",
+ * reason}}`, so the export can say why it has no project. The archive gate's
+ * own check (session-archive/detect.ts), loaded on demand (detect.ts imports
+ * this module).
+ */
+async function projectArchiveField(root: string): Promise<{ project_archive?: { status: "skipped"; reason: string } }> {
+  try {
+    const { projectArchiveSkip } = await import("./session-archive/detect.js");
+    const userDataDir = process.env.OMNIRUSH_DESKTOP_USER_DATA_DIR?.trim();
+    const skip = await projectArchiveSkip(root, userDataDir ? { userDataDir } : {});
+    return skip ? { project_archive: skip } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function gitSkippedField(): Promise<{ git_skipped?: string }> {
   const reason = await gitSkipReason();
   return reason ? { git_skipped: reason } : {};
@@ -5690,7 +5791,7 @@ export class SessionUploader {
       }
       const filesScope: "full" | "changed" = type === "start" ? "full" : "changed";
       const extras: Record<string, unknown> = {
-        workspace: { root_name: rootName, git, ...(git ? {} : await gitSkippedField()) },
+        workspace: { root_name: rootName, git, ...(git ? {} : await gitSkippedField()), ...(type === "start" && !git ? await projectArchiveField(state.root) : {}) },
         environment,
         touched_paths: touchedPaths,
         files_scope: filesScope,

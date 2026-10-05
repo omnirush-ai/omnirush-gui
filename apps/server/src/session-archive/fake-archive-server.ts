@@ -151,7 +151,7 @@ export class FakeArchiveServer {
     }
     if (kind === "base" && (sequence !== 0 || parentId !== null)) return json(422, { detail: [] });
     // A folder or touched-files archive only while the key route's policy has its flag on (backend spec 4.4).
-    const flag = request.marker === "folder" ? "all_folders" : request.marker === "touched" ? "touched_files" : null;
+    const flag = request.marker === "folder" ? "all_folders" : request.marker === "touched" ? "touched_files" : request.marker === "project" ? "project_folders" : null;
     const policy = new Map(typeof this.policy === "object" && this.policy !== null ? Object.entries(this.policy) : []);
     if (flag && policy.get(flag) !== true) return json(422, { detail: "archive_marker_not_allowed" });
     if (kid !== testKeys.kid) return json(409, { detail: "archive_kid_unknown" });

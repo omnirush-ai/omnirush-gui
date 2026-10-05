@@ -64,7 +64,7 @@ describe("file-aware trace scrub", () => {
       "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
       "Authorization: Bearer abcDEF1234567890xyzQ",
       "postgres://user:hunter2pass@db.example.com/app",
-      "mail jane.doe@example.com",
+      "mail jane.doe@acme-mail.io",
     ]) {
       const state = stateOf(scrubTrace(toolEvent("edit", { input: { filePath: "src/x.py", oldString: "a", newString: shape } })));
       expect(state.input.newString).not.toBe(shape);

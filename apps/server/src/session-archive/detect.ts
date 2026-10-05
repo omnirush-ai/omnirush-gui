@@ -8,18 +8,18 @@
  * and is not, or is not inside, a credential, app-data or system location.
  * Git roots never get those refusals.
  */
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path, { isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 
-import { isUploadDirectoryDenied } from "../session-uploader.js";
+import { isUploadDirectoryDenied, REGENERABLE_DIR_NAMES } from "../session-uploader.js";
 import type { ArchivePolicy } from "./policy.js";
 
 export type ArchivableProject = {
   archivable: boolean;
-  /** git_dir | git_file | git_parent | folder | touched | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
+  /** git_dir | git_file | git_parent | folder | project | touched | no_marker | gitfile_invalid | root_not_directory | root_too_broad */
   reason: string;
-  /** The marker that qualified the root (".git", "folder", "touched"), null when not archivable. */
+  /** The marker that qualified the root (".git", "folder", "project", "touched"), null when not archivable. */
   marker: string | null;
 };
 
@@ -235,6 +235,101 @@ export const defaultProjectDetectors: readonly ProjectMarkerDetector[] = [gitMar
 export const FOLDER_MARKER = "folder";
 /** The marker of the files the agent touched in a plain folder (touched-files policy); the server accepts it only while that policy is on. */
 export const TOUCHED_MARKER = "touched";
+/** The marker of a folder without git that looks like a project (looksLikeProject), archived whole like a git repository; the server accepts it only while the project-folders policy is on. */
+export const PROJECT_MARKER = "project";
+
+// --- a folder without git that looks like a project ---------------------------
+
+/** Manifests and lockfiles that make a folder a project (exact names, compared without case). */
+const PROJECT_FILE_NAMES = new Set([
+  "package.json", "pyproject.toml", "setup.py", "pipfile", "cargo.toml", "go.mod", "pom.xml", "gemfile", "composer.json",
+  "cmakelists.txt", "makefile", "gnumakefile", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb",
+  "poetry.lock", "uv.lock", "pipfile.lock", "cargo.lock", "go.sum", "gemfile.lock", "composer.lock",
+]);
+/** `requirements*.txt`, `build.gradle*`, `*.csproj`. */
+const PROJECT_FILE_PATTERN = /^(?:requirements[^/]*\.txt|build\.gradle(?:\.kts)?|[^/]+\.csproj)$/i;
+/** What a `src/` folder must hold (one file is enough) to make its folder a project. */
+const CODE_FILE_PATTERN = /\.(?:c|cc|cpp|cs|go|h|hpp|java|js|jsx|kt|mjs|cjs|php|py|rb|rs|scala|swift|ts|tsx|vue|svelte|dart|lua|sh)$/i;
+/** How deep below the root a manifest counts (the root is depth 0). */
+const PROJECT_MAX_DEPTH = 2;
+/** At most this many directory entries are looked at, and this many folders opened, so a 100k-file folder costs the same. */
+const PROJECT_MAX_ENTRIES = 600;
+const PROJECT_MAX_DIRS = 40;
+const PROJECT_SRC_MAX_ENTRIES = 200;
+
+export type ProjectEvidence = { path: string; kind: "manifest" | "src" };
+
+/**
+ * Whether a folder without git looks like a project: the root, or a folder at
+ * most two levels below it, holds a manifest or lockfile (package.json,
+ * pyproject.toml, requirements*.txt, Cargo.toml, go.mod, pom.xml,
+ * build.gradle*, Gemfile, composer.json, *.csproj, CMakeLists.txt, Makefile,
+ * ...), or a `src/` folder that holds a code file. A bounded breadth-first
+ * walk (PROJECT_MAX_ENTRIES entries, PROJECT_MAX_DIRS folders) that never
+ * follows a link and never enters a hidden, regenerable or denied folder
+ * (`.git`, `node_modules`, `.venv`, `dist`, ...). The evidence, or null. Never throws.
+ */
+export async function looksLikeProject(root: string): Promise<ProjectEvidence | null> {
+  let budget = PROJECT_MAX_ENTRIES;
+  let dirs = 0;
+  let level: string[] = [""];
+  for (let depth = 0; depth <= PROJECT_MAX_DEPTH && level.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const rel of level) {
+      if (budget <= 0 || dirs >= PROJECT_MAX_DIRS) return null;
+      dirs += 1;
+      let handle: Awaited<ReturnType<typeof opendir>>;
+      try {
+        handle = await opendir(rel ? join(root, ...rel.split("/")) : root);
+      } catch {
+        continue;
+      }
+      try {
+        for await (const entry of handle) {
+          if (budget <= 0) break;
+          budget -= 1;
+          const name = entry.name;
+          const path = rel ? `${rel}/${name}` : name;
+          if (entry.isFile()) {
+            if (PROJECT_FILE_NAMES.has(name.toLowerCase()) || PROJECT_FILE_PATTERN.test(name)) return { path, kind: "manifest" };
+            continue;
+          }
+          if (!entry.isDirectory() || name.startsWith(".") || REGENERABLE_DIR_NAMES.has(name) || isUploadDirectoryDenied(path)) continue;
+          if (name.toLowerCase() === "src" && (await holdsCodeFile(join(root, ...path.split("/"))))) return { path, kind: "src" };
+          if (depth < PROJECT_MAX_DEPTH) next.push(path);
+        }
+      } catch {
+        // An unreadable folder says nothing.
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    }
+    level = next;
+  }
+  return null;
+}
+
+/** Whether a `src/` folder holds a code file directly (bounded; links are not followed). */
+async function holdsCodeFile(dir: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof opendir>>;
+  try {
+    handle = await opendir(dir);
+  } catch {
+    return false;
+  }
+  let seen = 0;
+  try {
+    for await (const entry of handle) {
+      if (++seen > PROJECT_SRC_MAX_ENTRIES) return false;
+      if (entry.isFile() && CODE_FILE_PATTERN.test(entry.name)) return true;
+    }
+  } catch {
+    return false;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  return false;
+}
 
 /** Top-level system and app directories of macOS and Linux (one list: the other system's names are absent). */
 const FOLDER_POSIX_SYSTEM_DIRS = [
@@ -364,9 +459,11 @@ export async function folderRootRefusal(root: string, options: FolderGateOptions
 /**
  * The folder markers (4.4): a root with no `.git` entry at all, that
  * folderRootRefusal accepts, is a project with marker `folder` while
- * `policy()` has `allFolders` on, or else with marker `touched` (only the
- * files the agent touches there) while it has `touchedFiles` on. The policy
- * is asked last, only for such a root. Never throws.
+ * `policy()` has `allFolders` on, or else with marker `project` (archived
+ * whole, like a git repository) when it looks like a project
+ * (looksLikeProject) and `projectFolders` is on, or else with marker
+ * `touched` (only the files the agent touches there) while it has
+ * `touchedFiles` on. The policy is asked last, only for such a root. Never throws.
  */
 export function folderDetector(policy: () => Promise<ArchivePolicy>, options: FolderGateOptions = {}): ProjectMarkerDetector {
   return async (root) => {
@@ -375,11 +472,39 @@ export function folderDetector(policy: () => Promise<ArchivePolicy>, options: Fo
       if (await folderRootRefusal(root, options)) return null;
       const answer = await policy();
       if (answer.allFolders) return { archivable: true, reason: "folder", marker: FOLDER_MARKER };
+      if (answer.projectFolders === true && (await looksLikeProject(root))) return { archivable: true, reason: "project", marker: PROJECT_MARKER };
       return answer.touchedFiles ? { archivable: true, reason: "touched", marker: TOUCHED_MARKER } : null;
     } catch {
       return null;
     }
   };
+}
+
+/** Why a session folder is not archived, as a start upload reports it (`workspace.project_archive.reason`). */
+export type ProjectArchiveSkipReason = "credential_root" | "root_too_broad" | "root_app_data" | "root_system";
+const SKIP_REASONS: Record<FolderRefusal, ProjectArchiveSkipReason> = {
+  root_credentials: "credential_root",
+  root_too_broad: "root_too_broad",
+  root_app_data: "root_app_data",
+  root_system: "root_system",
+};
+
+/**
+ * What the start upload says about a session folder the archive gate
+ * refuses on purpose (a credential store such as `~/.aws`, the home
+ * directory, app data, a system directory): `{status: "skipped", reason}`,
+ * so the export can say why it has no project. Null for a git repository
+ * (or a folder inside one), and for any folder the refusals let through
+ * (whether it is archived then depends on the policy). Never throws.
+ */
+export async function projectArchiveSkip(root: string, options: FolderGateOptions & ProjectGateOptions = {}): Promise<{ status: "skipped"; reason: ProjectArchiveSkipReason } | null> {
+  try {
+    if ((await isArchivableProject(root, defaultProjectDetectors, options)).archivable) return null;
+    const refusal = await folderRootRefusal(root, options);
+    return refusal ? { status: "skipped", reason: SKIP_REASONS[refusal] } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -24,6 +24,8 @@ import {
   folderDetector,
   folderRootRefusal,
   isArchivableProject,
+  looksLikeProject,
+  PROJECT_MARKER,
   TOUCHED_MARKER,
   type FolderGateOptions,
   type ProjectMarkerDetector,
@@ -60,6 +62,7 @@ import {
   ARCHIVE_SCHEMA_V2,
   captureV2Override,
   ExcludedList,
+  MAX_EXCLUDED_HASH_BYTES,
   START_GATE_MS,
   STATE_MEMBER,
   stateDocument,
@@ -119,6 +122,8 @@ export const POLICY_TTL_MS = 5 * 60_000;
 const OUTSIDE_CACHE_SUFFIX = "outside";
 /** The hash cache of the enclosing repository's .git (enclosing.ts) is kept under the root's key with this suffix. */
 const ENCLOSING_CACHE_SUFFIX = "enclosing";
+/** The hash cache of a touched-files chain's listing of the files it does not hold (listNotArchived). */
+const LISTING_CACHE_SUFFIX = "listing";
 
 /** Adds an outside scan (outside.ts) to a workspace scan: entries in archive order, gone paths and exclusions. */
 function mergeScans(scan: { entries: ScannedEntry[]; excluded: ExcludedCounts; gone?: Set<string> }, outside: Pick<TouchedScanResult, "entries" | "gone" | "excluded"> | null): void {
@@ -311,9 +316,10 @@ class DiskBudgetPause extends Error {
   }
 }
 
-/** Whether `policy` lets a chain with this marker capture: a plain folder needs all_folders, touched files touched_files, git nothing. */
+/** Whether `policy` lets a chain with this marker capture: a plain folder needs all_folders, a git-less project project_folders, touched files touched_files, git nothing. */
 function markerAllowed(marker: string, policy: ArchivePolicy): boolean {
   if (marker === FOLDER_MARKER) return policy.allFolders;
+  if (marker === PROJECT_MARKER) return policy.projectFolders === true;
   if (marker === TOUCHED_MARKER) return policy.touchedFiles;
   return true;
 }
@@ -544,7 +550,7 @@ export class SessionArchiver {
       const next = state.next_sequence === 0 ? turn ?? state.turn_seen ?? 0 : turn ?? (state.last_turn ?? 0) + 1;
       if (state.last_turn !== null && next <= state.last_turn) return { status: "skipped", reason: "stale_turn" };
       // A plain folder's or touched files' archives pause while their policy is off; the next one after it is on again catches up.
-      if ((state.marker === FOLDER_MARKER || touched) && !(await this.policyAllows(state.marker, generation))) return { status: "skipped", reason: "not_archivable" };
+      if ((state.marker === FOLDER_MARKER || state.marker === PROJECT_MARKER || touched) && !(await this.policyAllows(state.marker, generation))) return { status: "skipped", reason: "not_archivable" };
       const key = await this.currentKey();
       if (key === "disabled") return { status: "skipped", reason: "disabled" };
       if (key === "unavailable") return { status: "skipped", reason: "unavailable" };
@@ -693,7 +699,15 @@ export class SessionArchiver {
     if (!marker) {
       const plain = await isArchivableProject(real, [async (candidate) => ((await folderRootRefusal(candidate, this.folderGate)) ? null : { archivable: true, reason: FOLDER_MARKER, marker: FOLDER_MARKER })], { appDirs: this.appDirs });
       if (!plain.archivable) return null;
-      marker = FOLDER_MARKER;
+      // The marker the base will most likely get, from the policy kept now (the base checks it again;
+      // a prescan of another marker is dropped): all folders, else a git-less project, else, with the
+      // policy unknown, a whole folder as before. With the policy known and neither on there is no whole
+      // folder to take (touched files, or nothing), so a big plain folder costs no start scan.
+      const kept = this.policy?.value ?? null;
+      if (kept?.allFolders) marker = FOLDER_MARKER;
+      else if ((!kept || kept.projectFolders === true) && (await looksLikeProject(real))) marker = PROJECT_MARKER;
+      else if (!kept) marker = FOLDER_MARKER;
+      else return null;
     }
     const cache = await this.loadHashCache(stateKey(real));
     const excludedList = new ExcludedList();
@@ -1045,7 +1059,7 @@ export class SessionArchiver {
    * the root checks and the folder refusals, and their policy is on.
    */
   private async chainAllowed(state: SessionState, generation: number): Promise<boolean> {
-    if (state.marker !== FOLDER_MARKER && state.marker !== TOUCHED_MARKER) return (await isArchivableProject(state.root, this.detectors, { appDirs: this.appDirs })).archivable;
+    if (state.marker !== FOLDER_MARKER && state.marker !== PROJECT_MARKER && state.marker !== TOUCHED_MARKER) return (await isArchivableProject(state.root, this.detectors, { appDirs: this.appDirs })).archivable;
     const accepted: ProjectMarkerDetector = async (root) => ((await folderRootRefusal(root, this.folderGate)) ? null : { archivable: true, reason: state.marker, marker: state.marker });
     if (!(await isArchivableProject(state.root, [accepted], { appDirs: this.appDirs })).archivable) return false;
     return this.policyAllows(state.marker, generation);
@@ -1056,7 +1070,12 @@ export class SessionArchiver {
     if (generation !== this.generation) return;
     const value = this.policy?.value ?? POLICY_OFF;
     this.policy = {
-      value: { allFolders: value.allFolders && marker !== FOLDER_MARKER, touchedFiles: value.touchedFiles && marker !== TOUCHED_MARKER },
+      value: {
+        ...value,
+        allFolders: value.allFolders && marker !== FOLDER_MARKER,
+        touchedFiles: value.touchedFiles && marker !== TOUCHED_MARKER,
+        ...(value.projectFolders === true && marker !== PROJECT_MARKER ? { projectFolders: true } : { projectFolders: false }),
+      },
       at: this.now().getTime(),
     };
   }
@@ -1198,14 +1217,16 @@ export class SessionArchiver {
         if (generation === this.generation) await this.noteUnchanged(state, kind, turn, options);
         return { status: "skipped", reason: "unchanged" };
       }
+      // Capture v2: every file of the folder this chain does not hold is listed with its reason (never dropped silently).
+      if (excludedList) await this.listNotArchived(state.root, change.next, excludedList, signal);
       files = change.files;
       deleted = kind === "delta" ? change.deleted : undefined;
       excluded = scan.excluded;
       ignored = scan.ignored;
       next = change.next;
     } else {
-      // A plain folder sends no git block (workspace.git null), even inside a larger repository.
-      const withGit = state.marker !== FOLDER_MARKER;
+      // A plain folder or a git-less project sends no git block (workspace.git null), even inside a larger repository.
+      const withGit = state.marker !== FOLDER_MARKER && state.marker !== PROJECT_MARKER;
       const gitReading = kind === "base" && withGit ? readArchiveGit(state.root) : null;
       const scan = prescan
         ? { entries: [...prescan.result.scan.entries], excluded: { ...prescan.result.scan.excluded }, ignored: prescan.result.scan.ignored }
@@ -1440,8 +1461,11 @@ export class SessionArchiver {
     if (!prescan) return null;
     this.dropPrescan(sessionId);
     const result = await prescan.work;
-    if (!result || result.marker !== marker || resolve(prescan.root) !== resolve(root)) return null;
-    if (!v2 && marker === FOLDER_MARKER) return null;
+    // A plain folder and a git-less project are scanned alike in a v2 chain (the regenerable folders left out, no git block).
+    const plain = (value: string) => value === FOLDER_MARKER || value === PROJECT_MARKER;
+    const same = result?.marker === marker || (v2 && result !== null && plain(result.marker) && plain(marker));
+    if (!result || !same || resolve(prescan.root) !== resolve(root)) return null;
+    if (!v2 && plain(marker)) return null;
     return { result, capture: prescan.capture };
   }
 
@@ -1466,7 +1490,8 @@ export class SessionArchiver {
       includeCredentialFiles: this.includeCredentials,
       hashCache: cache,
       ...(excludedList ? { excludedList } : {}),
-      ...(v2 && marker === FOLDER_MARKER ? { pruneRegenerable: true } : {}),
+      // A git-less project leaves the regenerable folders out like a v2 plain folder (they have no .gitignore to say so).
+      ...((v2 && marker === FOLDER_MARKER) || marker === PROJECT_MARKER ? { pruneRegenerable: true } : {}),
       ...(signal ? { signal } : {}),
     });
     // What the ignore rules left out is still archived when the agent
@@ -1484,6 +1509,51 @@ export class SessionArchiver {
       if (kept.entries.length > 0) scan.entries = [...scan.entries, ...kept.entries].sort((left, right) => compareArchivePaths(left.path, right.path));
     }
     return scan;
+  }
+
+  /**
+   * Capture v2, a touched-files chain: lists every entry of the folder the
+   * chain does not hold (`held`, its entries after this archive). A file the
+   * agent never touched is `not_archived_touched_scope` with its size and
+   * SHA-256 (up to MAX_EXCLUDED_HASH_BYTES; a larger one with its mtime);
+   * what the whole-folder rules leave out keeps their reason (`credential`,
+   * `gitignored`, `regenerable` folders, ...). A stat walk with its own hash
+   * cache (an unchanged file is never read twice), at capture time, never
+   * in the start gate.
+   */
+  private async listNotArchived(root: string, held: readonly ArchiveEntry[], excludedList: ExcludedList, signal?: AbortSignal): Promise<void> {
+    const cacheKey = stateKey(`${root}\0${LISTING_CACHE_SUFFIX}`);
+    const cache = await this.loadHashCache(cacheKey);
+    const rules = new ExcludedList();
+    let scan: { entries: ScannedEntry[] };
+    try {
+      scan = await scanArchiveTree(root, {
+        excludedDirs: this.appDirs,
+        includeCredentialFiles: this.includeCredentials,
+        hashCache: cache,
+        excludedList: rules,
+        pruneRegenerable: true,
+        maxHashBytes: MAX_EXCLUDED_HASH_BYTES,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      this.log("warn", "OmniRush touched-files listing failed", { error: errorSummary(error) });
+      return;
+    }
+    const archived = new Set(held.map((entry) => entry.path));
+    for (const item of rules.list()) if (!archived.has(item.path)) excludedList.add(item);
+    for (const entry of scan.entries) {
+      if (entry.type === "dir" || archived.has(entry.path)) continue;
+      excludedList.add({
+        path: entry.path,
+        type: entry.type === "symlink" ? "symlink" : "file",
+        reason: "not_archived_touched_scope",
+        ...(entry.type === "file" ? { size: entry.size } : {}),
+        ...(entry.sha256 ? { sha256: entry.sha256 } : entry.type === "file" ? { mtime: entry.mtime } : {}),
+      });
+    }
+    if (cache.changed) await this.saveHashCache(cacheKey, cache).catch(() => undefined);
   }
 
   /**
