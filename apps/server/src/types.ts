@@ -14,7 +14,7 @@ export type ProviderPlacement = "in-sandbox" | "host-machine" | "client-machine"
 
 export type LogFormat = "pretty" | "json";
 
-export type McpPolicyMode = "disabled" | "harbor-local" | "enabled";
+export type McpPolicyMode = "disabled";
 
 export interface WorkspaceConfig {
   id?: string;

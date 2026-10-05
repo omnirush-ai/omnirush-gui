@@ -21,8 +21,6 @@ export type EngineConfigInput = {
   apiKeys?: Record<string, string>;
   /** Plugin directories the engine loads (OmniRush.ai's plugin bridge). */
   plugins?: string[];
-  /** Whether MCP servers may be rendered into the 2.x config. */
-  mcpAllowed?: boolean;
 };
 
 /** 1.x tool / permission names in 2.x (core/src/v1/config/migrate.ts normalizeAction). */
@@ -258,13 +256,8 @@ export function buildEngine2Config(input: EngineConfigInput): JsonRecord {
   }
   const small = modelSelection(v1.small_model);
   if (small) agents.title = { model: small, ...(isRecord(agents.title) ? agents.title : {}) };
+  // MCP is intentionally never copied into the managed engine config.
   const servers: JsonRecord = {};
-  if (input.mcpAllowed !== false && isRecord(v1.mcp)) {
-    for (const [name, server] of Object.entries(v1.mcp)) {
-      const mapped = v2Mcp(server);
-      if (mapped) servers[name] = mapped;
-    }
-  }
   const policies = [
     ...(Array.isArray(v1.enabled_providers)
       ? [

@@ -571,7 +571,7 @@ function createImageLightboxEvalMessages(sessionId: string): UIMessage[] {
 }
 
 export type SessionSurfaceProps = {
-  /** OmniRush GUI has no MCP capability; isolated Harbor tasks do not use this surface. */
+  /** OmniRush GUI has no MCP capability. */
   mcpDisabled?: boolean;
   client: OmniRushServerClient;
   environmentClient?: OmniRushServerClient | null;

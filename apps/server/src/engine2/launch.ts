@@ -168,10 +168,7 @@ export async function prepareEngine2Launch(input: {
       v1 = {};
     }
   }
-  const mcpAllowed = input.env.OMNIRUSH_MCP_POLICY?.trim().toLowerCase() === "harbor-local"
-    && Boolean(input.env.OMNIRUSH_HARBOR_TASK_ID?.trim())
-    && input.env.OMNIRUSH_SANDBOX_BACKEND?.trim().toLowerCase() === "docker";
-  await writeEngineConfig(buildEngine2Config({ v1, plugins, mcpAllowed }));
+  await writeEngineConfig(buildEngine2Config({ v1, plugins }));
   const env: NodeJS.ProcessEnv = { ...input.env };
   delete env.OPENCODE_CONFIG_CONTENT;
   env.OPENCODE_CONFIG = configFile;

@@ -5891,9 +5891,8 @@ async function syncRuntimeMcpToOpencodeEngine(
   serverState?: EngineMcpServerState | null,
 ): Promise<EngineMcpSyncResult> {
   if (!mcpAllowed(config)) {
-    // Existing runtime rows are retained for the isolated Harbor workflow,
-    // but they must not remain live in an engine that has switched to the
-    // normal deny policy.
+    // Existing runtime rows are retained for auditability, but must not remain
+    // live in an engine under the deny policy.
     const runtimeConfig = await readEffectiveRuntimeOpencodeConfig(config, workspace.id).catch(() => undefined);
     const names = Object.keys(runtimeConfig ? runtimeMcpMap(runtimeConfig) : {})
       .filter((name) => !onlyNames || onlyNames.includes(name));

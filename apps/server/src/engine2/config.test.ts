@@ -115,18 +115,13 @@ describe("the 1.x runtime config as the 2.x engine config", () => {
     });
   });
 
-  test("MCP servers keep direct tools (no code mode)", () => {
-    expect(config.mcp).toEqual({
-      servers: {
-        "omnirush-cloud": { type: "remote", url: "https://mcp.example/mcp", headers: { authorization: "Bearer x" }, disabled: false, codemode: false },
-        local: { type: "local", command: ["node", "server.js"], environment: { A: "1" }, disabled: true, timeout: { catalog: 5000, execution: 5000 }, codemode: false },
-      },
-    });
+  test("MCP servers are never copied into the managed config", () => {
+    expect(config.mcp).toBeUndefined();
     expect(v2Mcp({ type: "remote", url: "https://x", oauth: { clientId: "c" } })).toEqual({ type: "remote", url: "https://x", oauth: { client_id: "c" }, codemode: false });
   });
 
   test("disabled policy never renders MCP servers", () => {
-    expect(buildEngine2Config({ v1: runtime, mcpAllowed: false }).mcp).toBeUndefined();
+    expect(buildEngine2Config({ v1: runtime }).mcp).toBeUndefined();
   });
 
   test("packages and permission names", () => {

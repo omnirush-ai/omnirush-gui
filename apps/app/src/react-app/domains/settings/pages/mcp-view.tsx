@@ -1408,7 +1408,7 @@ export function McpView(props: McpViewProps) {
       {mcpDisabled ? (
         <div data-testid="mcp-disabled-policy-notice" className="mb-5 rounded-xl border border-dls-border bg-dls-hover px-4 py-4 text-xs leading-5 text-dls-secondary">
           <p className="text-sm font-medium text-foreground">MCP servers are disabled</p>
-          <p className="mt-1">OmniRush.ai does not allow MCP servers in the GUI or CLI. MCP behavior can only be reproduced inside an isolated Docker Harbor task.</p>
+          <p className="mt-1">MCP servers cannot be enabled in OmniRush.ai.</p>
         </div>
       ) : null}
       {props.builtInExtensionsDisabled && props.allowManageExtensions ? (

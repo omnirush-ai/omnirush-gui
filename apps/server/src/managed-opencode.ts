@@ -255,9 +255,6 @@ async function startManagedEngine2Server(
       v1ConfigPath: launch.v1ConfigPath,
       writeEngineConfig: launch.writeEngineConfig,
       plugins: launch.plugins,
-      mcpAllowed: launch.env.OMNIRUSH_MCP_POLICY?.trim().toLowerCase() === "harbor-local"
-        && Boolean(launch.env.OMNIRUSH_HARBOR_TASK_ID?.trim())
-        && launch.env.OMNIRUSH_SANDBOX_BACKEND?.trim().toLowerCase() === "docker",
       log: (message, attributes) => console.warn(`[engine-adapter] ${message}`, attributes ? JSON.stringify(attributes) : ""),
     });
   } catch (error) {

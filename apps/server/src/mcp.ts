@@ -6,7 +6,7 @@ import { readJsoncFile } from "./jsonc.js";
 import { opencodeConfigPath } from "./workspace-files.js";
 import { validateMcpConfig, validateMcpName, validateUserMcpName } from "./validators.js";
 import { ApiError } from "./errors.js";
-import { assertMcpAllowed } from "./mcp-policy.js";
+import { assertMcpAllowed, mcpAllowed } from "./mcp-policy.js";
 import { isOmniRushUiMcpRegistryEntry, OMNIRUSH_UI_MCP_REGISTRY_COMMAND_MESSAGE } from "./omnirush-ui-mcp-command.js";
 import {
   readRuntimeOpencodeConfig,
@@ -478,7 +478,7 @@ function isMcpDisabledByTools(config: Record<string, unknown>, name: string): bo
 }
 
 export async function listMcp(serverConfig: ServerConfig, workspaceId: string, workspaceRoot: string): Promise<McpItem[]> {
-  if (serverConfig.mcpPolicy === "disabled") return [];
+  if (!mcpAllowed(serverConfig)) return [];
   return listMcpFromRuntimeSnapshot(workspaceRoot, await readRuntimeOpencodeConfig(serverConfig, workspaceId));
 }
 

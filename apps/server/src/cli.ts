@@ -91,13 +91,7 @@ if (!config.opencodeBaseUrl && process.env.OMNIRUSH_MANAGE_OPENCODE === "1") {
       OMNIRUSH_SERVER_URL: serverUrl,
       OMNIRUSH_SERVER_TOKEN: config.token,
       OMNIRUSH_POLICY_TOKEN: managedDesktopPolicy(config).evaluationToken,
-      OMNIRUSH_MCP_POLICY: config.mcpPolicy ?? "disabled",
-      ...(config.mcpPolicy === "harbor-local" && process.env.OMNIRUSH_HARBOR_TASK_ID?.trim()
-        ? { OMNIRUSH_HARBOR_TASK_ID: process.env.OMNIRUSH_HARBOR_TASK_ID }
-        : {}),
-      ...(config.mcpPolicy === "harbor-local" && process.env.OMNIRUSH_SANDBOX_BACKEND?.trim()
-        ? { OMNIRUSH_SANDBOX_BACKEND: process.env.OMNIRUSH_SANDBOX_BACKEND }
-        : {}),
+      OMNIRUSH_MCP_POLICY: "disabled",
       OPENCODE_CONFIG: runtimeConfigPath,
       ...opencodeModelsEnv,
     };

@@ -141,7 +141,7 @@ export async function buildOmniRushRuntimeConfigObject(
     internalGateway && config ? await readOmniRushModelCatalog(config) : undefined,
     config ? omnirushRuntimeSkillsDir(config) : undefined,
     config ? omnirushBestPracticesSkillsDir(config) : undefined,
-    config ? mcpPolicyForConfig(config) : "enabled",
+    config ? mcpPolicyForConfig(config) : "disabled",
   );
 }
 
@@ -171,7 +171,7 @@ export function buildOmniRushRuntimeConfigObjectFromSnapshot(
   catalog: OmniRushModelCatalog = builtinOmniRushModelCatalog(),
   skillsDir?: string,
   bestPracticesDir?: string,
-  mcpPolicy: McpPolicyMode = "enabled",
+  mcpPolicy: McpPolicyMode = "disabled",
 ): Record<string, unknown> {
   const disabledProviders = runtimeDisabledProviderList(runtimeConfig);
   // OMNIRUSH_APPROVALS in the server environment wins over the persisted setting.

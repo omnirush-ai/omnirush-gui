@@ -78,7 +78,7 @@ const OMNIRUSH_UI_MCP_UNAVAILABLE = "UI control requires the omnirush.ai desktop
 const COMPUTER_USE_HELPER_UNAVAILABLE = "Computer Use helper app is unavailable. Restart omnirush.ai or reinstall the app.";
 const COMPUTER_USE_CONNECT_TIMEOUT_MS = 15_000;
 const COMPUTER_USE_RECONNECT_COOLDOWN_MS = 30_000;
-const MCP_DISABLED_BY_POLICY = "MCP servers are disabled in OmniRush.ai. Run the isolated Docker Harbor task to reproduce MCP behavior.";
+const MCP_DISABLED_BY_POLICY = "MCP servers are disabled in OmniRush.ai.";
 
 async function withLocalOmniRushServerRecoveryTimeout<T>(
   task: Promise<T>,
@@ -268,8 +268,7 @@ export function createConnectionsStore(options: {
 
   const mcpDisabledByPolicy = () => {
     const current = getOmniRushSnapshot();
-    // A GUI without an OmniRush policy-bearing server must fail closed. The
-    // Harbor exception is server-side only and is never exposed to the app.
+    // A GUI without an OmniRush policy-bearing server must fail closed.
     return current.omnirushServerStatus !== "connected"
       || current.omnirushServerCapabilities?.mcp?.read !== true;
   };
