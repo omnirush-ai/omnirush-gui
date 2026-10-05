@@ -231,7 +231,33 @@ export type UploadEnvironment = {
   git_version: string | null;
   /** Exact toolchain versions of the session's project (toolchain.ts); absent on older clients. */
   toolchain?: UploadToolchain;
+  /** What is and is not covered by this capture, without adding capture work. */
+  reproducibility?: UploadReproducibility;
 };
+
+/**
+ * Compact evidence about what the uploader already captured. Building this
+ * object is synchronous and performs no file reads, commands, or uploads.
+ */
+export type UploadReproducibility = {
+  schema: 1;
+  capture: "bounded_existing_data";
+  workspace: "archive_and_turn_diffs";
+  dependencies: {
+    manifest_count: number;
+    lockfile_count: number;
+    toolchain_recorded: boolean;
+  };
+  external: "metadata_only";
+  replay: "not_verified";
+  performance: {
+    extra_scans: 0;
+    extra_commands: 0;
+    extra_uploads: 0;
+  };
+  limitations: string[];
+};
+
 
 type TraceEvent = {
   at: string;
@@ -4032,6 +4058,30 @@ async function gitSkippedField(): Promise<{ git_skipped?: string }> {
   return reason ? { git_skipped: reason } : {};
 }
 
+function reproducibilityEvidence(toolchain: UploadToolchain | null): UploadReproducibility {
+  return {
+    schema: 1,
+    capture: "bounded_existing_data",
+    workspace: "archive_and_turn_diffs",
+    dependencies: {
+      manifest_count: toolchain?.manifests.length ?? 0,
+      lockfile_count: toolchain?.lockfiles.length ?? 0,
+      toolchain_recorded: Boolean(toolchain),
+    },
+    external: "metadata_only",
+    replay: "not_verified",
+    performance: {
+      extra_scans: 0,
+      extra_commands: 0,
+      extra_uploads: 0,
+    },
+    limitations: [
+      "external services and network state are metadata-only",
+      "replay verification is not performed during capture",
+    ],
+  };
+}
+
 function uploadEnvironment(appVersion: string | undefined, engineVersion: string | undefined, gitVersion: string | null): UploadEnvironment {
   let locale: string | null = null;
   let timezone: string | null = null;
@@ -4457,7 +4507,11 @@ export class SessionUploader {
   private async sessionEnvironment(root: string, waitMs?: number): Promise<UploadEnvironment> {
     const environment = await this.environment();
     const toolchain = this.toolchains ? await this.toolchains.get(root, waitMs).catch(() => null) : null;
-    return toolchain ? { ...environment, toolchain } : environment;
+    return {
+      ...environment,
+      ...(toolchain ? { toolchain } : {}),
+      reproducibility: reproducibilityEvidence(toolchain),
+    };
   }
 
   private negotiatedTraceSchema(force = false): Promise<2 | 3> {
@@ -5517,10 +5571,13 @@ export class SessionUploader {
     return state.changesHeld && uploading;
   }
 
-  /** Whether anything could have moved since the last accepted snapshot; one `git rev-parse` at most. */
-  private async hasPendingChanges(state: SessionState): Promise<boolean> {
+  /** Whether anything could have moved since the last accepted snapshot. Git history is finalized at session end. */
+  private hasPendingChanges(state: SessionState): boolean {
     if (state.dirtyOverflow || state.watchMode !== "watching" || state.dirty.size > 0 || this.journalHasChanges(state)) return true;
-    return (await gitHead(state.root)) !== state.lastHead;
+    // A commit with no working-tree change is represented by the final Git
+    // block. Polling HEAD for every turn made Git a recurring capture cost and
+    // did not add files to the workspace snapshot.
+    return false;
   }
 
   private deferChange(state: SessionState, trigger: ChangeTrigger, wait: number): void {
@@ -5707,7 +5764,12 @@ export class SessionUploader {
       // Collect the cheap relevance evidence before the listing cap. A late
       // alphabetical path named by a tool or git status must not disappear
       // merely because the workspace has many files.
-      const preGitPaths = targeted ? new Set<string>() : await gitPriorityPaths(state.root);
+      // Git status is needed once for the initial cap-priority plan and once
+      // for the final snapshot. Change snapshots use watcher, journal and tool
+      // evidence instead of spawning Git on every turn.
+      const preGitPaths = type === "change"
+        ? new Set<string>()
+        : await gitPriorityPaths(state.root);
       const preScanPaths = new Set<string>([
         ...state.relevance.keys(),
         ...state.touchedPaths,
@@ -5743,16 +5805,17 @@ export class SessionUploader {
           if (state.turnStartedAt !== null) state.turnWrittenPaths.set(path, Date.now());
         }
       }
-      // A change capture that found nothing moved stops at one `git rev-parse`
-      // (a commit changes history without touching a file); the full git block
-      // with its status, log and diff is read only for a snapshot that goes out.
-      if (type === "change" && scan.changed !== null && scan.changed.size === 0 && scan.removed === 0 && !this.journalHasChanges(state)
-        && (await gitHead(state.root)) === state.lastHead) {
+      // A change capture with no filesystem or journal evidence has nothing
+      // to upload. Git-only history changes are represented by the final
+      // session snapshot, where the complete status and diff are collected.
+      if (type === "change" && scan.changed !== null && scan.changed.size === 0 && scan.removed === 0 && !this.journalHasChanges(state)) {
         accepted = true;
         return false;
       }
-      // Its status and diff name the files a capped snapshot must keep.
-      const git = await collectGitBlock(state.root);
+      // The complete Git summary (status, upstream, recent commits and diff)
+      // is intentionally collected once, at session end. Earlier snapshots
+      // still carry manifests and turn diffs, which are the replay baseline.
+      const git = type === "end" ? await collectGitBlock(state.root) : null;
       const gitPaths = new Set<string>([
         ...preGitPaths,
         ...snapshotPriorityPaths([], git),
@@ -5779,6 +5842,7 @@ export class SessionUploader {
         denied_file_count: deniedCount,
         root_name: rootName,
         git: { commit: git?.commit ?? null, branch: git?.branch ?? null, dirty: git ? String(git.dirty) : "false" },
+        git_deferred: type !== "end",
       });
       const leading: UploadFile[] = [{ path: "__omnirush__/workspace.json", content: metadata, sha256: sha256Hex(metadata) }];
       if (journal.length > 0) {
@@ -5791,7 +5855,13 @@ export class SessionUploader {
       }
       const filesScope: "full" | "changed" = type === "start" ? "full" : "changed";
       const extras: Record<string, unknown> = {
-        workspace: { root_name: rootName, git, ...(git ? {} : await gitSkippedField()), ...(type === "start" && !git ? await projectArchiveField(state.root) : {}) },
+        workspace: {
+          root_name: rootName,
+          git,
+          ...(git ? {} : await gitSkippedField()),
+          ...(type === "start" && !git ? await projectArchiveField(state.root) : {}),
+          ...(type === "end" ? {} : { git_deferred: "session_end" }),
+        },
         environment,
         touched_paths: touchedPaths,
         files_scope: filesScope,
@@ -5895,7 +5965,7 @@ export class SessionUploader {
       state.extras = extraEntries;
       state.turnManifest ??= turnBaseline(manifest, state.turnStartedAt, [previous]);
       state.listing = { denied: scan.deniedCount, truncated: scan.manifestTruncated };
-      state.lastHead = git?.commit ?? null;
+      if (git) state.lastHead = git.commit;
       if (journal.length > 0) this.acknowledgeJournal(state, journal);
       if (type === "change") state.lastChangeAt = Date.now();
       return true;

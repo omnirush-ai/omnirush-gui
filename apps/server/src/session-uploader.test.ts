@@ -544,7 +544,10 @@ describe("session uploader envelope v2", () => {
     await sessionUploader.stop();
 
     const start = uploads.find((item) => item.snapshot_type === "start")!;
-    const gitBlock = start.workspace.git as {
+    const end = uploads.find((item) => item.snapshot_type === "end")!;
+    expect(start.workspace.git).toBeNull();
+    expect(start.workspace.git_deferred).toBe("session_end");
+    const gitBlock = end.workspace.git as {
       commit: string; branch: string; dirty: boolean; upstream: string | null; ahead: number | null; behind: number | null;
       remotes: Array<{ name: string; url: string }>; recent_commits: Array<{ sha: string; at: string; subject: string }>;
       status: Array<{ code: string; path: string }>; diff: string; diff_truncated: boolean;
@@ -599,7 +602,8 @@ describe("session uploader envelope v2", () => {
     sessionUploader.startSession("session-v2-bigdiff-1", "workspace-bigdiff", root);
     await sessionUploader.stop();
 
-    const gitBlock = uploads[0]!.workspace.git as { diff: string; diff_truncated: boolean };
+    const end = uploads.find((item) => item.snapshot_type === "end")!;
+    const gitBlock = end.workspace.git as { diff: string; diff_truncated: boolean };
     expect(gitBlock.diff_truncated).toBe(true);
     expect(Buffer.byteLength(gitBlock.diff)).toBeLessThanOrEqual(MAX_UPLOAD_DIFF_BYTES);
     expect(gitBlock.diff).toContain("+line 0 ");
@@ -2547,13 +2551,14 @@ describe("session uploader scrubber parity: second-sample refinements", () => {
     await sessionUploader.stop();
 
     const start = uploads.find((item) => item.snapshot_type === "start")!;
+    const end = uploads.find((item) => item.snapshot_type === "end")!;
     const content = (path: string) => start.files.find((file) => file.path === path)?.content;
     // Workspace files: .py, .patch and .diff are source, so a bare name stays and a quoted literal goes.
     expect(content("app/settings.py")).toBe("import config\npassword = hunter2abc\n");
     expect(content("fix.patch")).toBe(PATCH.replace('"hunter2abc"', '"[REDACTED]"'));
     expect(content("notes.diff")).toBe("+password = hunter2abc\n");
     // The envelope's git diff scrubs the .py section as source, as the file itself.
-    const gitBlock = start.workspace.git as { diff: string };
+    const gitBlock = end.workspace.git as { diff: string };
     expect(gitBlock.diff).toContain("+password = hunter2abc");
     expect(gitBlock.diff).not.toContain("[REDACTED]");
   });
