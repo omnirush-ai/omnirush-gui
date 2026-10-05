@@ -14,13 +14,18 @@ function harborMcpTask(): boolean {
 export default async function omnirushMcpPolicy() {
   if (harborMcpTask()) return {};
   return {
-    config: async (_input: unknown, output: { mcp?: unknown; permission?: Record<string, unknown> }) => {
-      output.mcp = {};
-      output.permission = {
-        ...(output.permission ?? {}),
+    // OpenCode 1.x has shipped both config(config) and config(input, output)
+    // hook shapes; accept either so the fence survives engine upgrades.
+    config: async (input: unknown, output?: { mcp?: unknown; permission?: Record<string, unknown> }) => {
+      const target = output && typeof output === "object"
+        ? output
+        : (input && typeof input === "object" ? input as { mcp?: unknown; permission?: Record<string, unknown> } : null);
+      if (!target) return;
+      target.mcp = {};
+      target.permission = {
+        ...(target.permission ?? {}),
         "mcp.*": "deny",
       };
     },
   };
 }
-
