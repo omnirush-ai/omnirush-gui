@@ -1,10 +1,10 @@
-import { browserScript, reattachSurface } from "@omnirush/cdp";
+import { addInitScript, allocateFreePorts, browserScript, connect, evaluate, reattachSurface } from "@omnirush/cdp";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { evalIn, assertNoLiveSecret, liveOpenAiEnabled, liveOpenAiModel, liveProviderId, provisionLiveOpenAi } from "@omnirush/behaviors";
-import { resolveEvalEngine, SkipError, type Seed } from "@omnirush/env";
+import { needs, resolveEvalEngine, SkipError, type Seed } from "@omnirush/env";
 import type { MockAgentWorkload } from "@omnirush/labs";
 import { chatContinuity } from "./chat-continuity.ts";
 
@@ -97,12 +97,13 @@ export async function configureProvider(
 ): Promise<void> {
   // TODO(primitive): configure a workspace provider and select its model.
   const result = await seed.evalIn(app, browserScript(async (workspaceId, providerId, modelId, defaultModel, opencodeJson) => {
-    const port = localStorage.getItem("omnirush.server.port");
-    const token = localStorage.getItem("omnirush.server.token");
-    if (!port || !token) return "missing local server credentials";
+    const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
+    if (!info.running || !info.baseUrl) return "local server unavailable";
+    const base = info.baseUrl.replace(/\/+$/, "");
+    const token = info.ownerToken ?? info.clientToken ?? "";
     const opencode = JSON.parse(opencodeJson);
     const request = async (path: string, init?: RequestInit) => {
-      const response = await fetch("http://127.0.0.1:" + port + path, {
+      const response = await fetch(base + path, {
         ...init,
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       });
@@ -138,9 +139,11 @@ export async function configureProvider(
   const readiness = browserScript(async (workspaceId, engine, providerId, modelId) => {
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
-      const base = "http://127.0.0.1:" + localStorage.getItem("omnirush.server.port");
-      const headers = { Authorization: "Bearer " + localStorage.getItem("omnirush.server.token") };
       try {
+        const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
+        if (!info.running || !info.baseUrl) throw new Error("Local server unavailable");
+        const base = info.baseUrl.replace(/\/+$/, "");
+        const headers = { Authorization: "Bearer " + (info.ownerToken ?? info.clientToken ?? "") };
         const statusResponse = await fetch(base + "/experimental/engine-v2-preview/status", { headers });
         const status = statusResponse.ok ? await statusResponse.json() : null;
         const selected = status ? status.enabled && status.chatRouting : false;
@@ -261,24 +264,64 @@ async function splitPaneQuestions(
   name: string,
   agentWorkloads: MockAgentWorkload[],
   policy: Record<string, unknown> = { permission: { question: "allow" } },
+  env?: Record<string, string>,
 ) {
-  const providerId = "split-send-mock";
+  // Public pickers accept configured direct providers only when enabled. The
+  // two feature journeys opt in and use an isolated OpenAI-compatible mock.
+  const providerId = env?.VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS === "1" ? "openai" : "split-send-mock";
   const modelId = "split-send-model";
   const mock = seed.mock({ agentWorkloads });
   const den = await seed.den({ mocks: { agent: mock } });
-  const app = await seed.desktop({ name, den, as: "admin", model: `${providerId}/${modelId}` });
+  const app = await seed.desktop({ name, den, as: "admin", model: `${providerId}/${modelId}`, ...(env ? { env } : {}) });
   const workspace = await seed.workspace(app, seed.tmpPath(name));
+  // Renderer sign-in settles before the server's policy identity necessarily does.
+  // Arrange the identical signed-in identity through its supported host-only API.
+  // This awaits real Den policy verification before any workspace mutation.
+  await seed.evalIn(app, browserScript(async (apiBaseUrl) => {
+    const deadline = Date.now() + 15_000;
+    let missing: string[] = [];
+    while (Date.now() < deadline) {
+      const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
+      const token = localStorage.getItem("omnirush.den.authToken");
+      const orgId = localStorage.getItem("omnirush.den.activeOrgId");
+      missing = Object.entries({ server: info.running, endpoint: Boolean(info.baseUrl),
+        hostIdentity: Boolean(info.hostToken), signedIn: Boolean(token), organization: Boolean(orgId) })
+        .filter(([, present]) => !present).map(([name]) => name);
+      if (info.running && info.baseUrl && info.hostToken && token && orgId) {
+        const response = await fetch(info.baseUrl.replace(/\/+$/, "") + "/den-session", {
+          method: "PUT",
+          headers: { Authorization: "Bearer " + (info.ownerToken ?? info.clientToken ?? ""),
+            "x-omnirush-host-token": info.hostToken, "Content-Type": "application/json" },
+          body: JSON.stringify({ baseUrl: apiBaseUrl, token, orgId }),
+          redirect: "error", signal: AbortSignal.timeout(20_000),
+        });
+        if (response.status !== 204) {
+          const body: unknown = await response.json();
+          const code = body && typeof body === "object" ? Reflect.get(body, "code") : "unknown";
+          throw new Error(`Desktop policy identity sync failed: HTTP ${response.status} (${String(code)}).`);
+        }
+        return true;
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
+    }
+    throw new Error(`Desktop policy identity is not ready; missing: ${missing.join(", ")}.`);
+  }, [den.ref.apiUrl]), { awaitPromise: true, timeoutMs: 40_000 });
   // Arrange an allowed native question tool independently of custom-agent defaults.
   // TODO(primitive): write workspace fixture files through a first-class seed API.
   const questionPolicyWritten = await seed.evalIn(app, browserScript(async (workspaceId, content) => {
-    const port = localStorage.getItem("omnirush.server.port");
-    const token = localStorage.getItem("omnirush.server.token");
-    const response = await fetch("http://127.0.0.1:" + port + "/workspace/" + encodeURIComponent(workspaceId) + "/files/content", {
+    const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
+    if (!info.running || !info.baseUrl) throw new Error("Local server unavailable while arranging the question policy.");
+    const response = await fetch(info.baseUrl.replace(/\/+$/, "") + "/workspace/" + encodeURIComponent(workspaceId) + "/files/content", {
       method: "POST",
-      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      headers: { Authorization: "Bearer " + (info.ownerToken ?? info.clientToken ?? ""), "Content-Type": "application/json" },
       body: JSON.stringify({ path: "opencode.json", content }),
     });
-    return response.ok;
+    if (!response.ok) {
+      const body: unknown = await response.json();
+      const code = body && typeof body === "object" ? Reflect.get(body, "code") : "unknown";
+      throw new Error(`Question policy write failed: HTTP ${response.status} (${String(code)}).`);
+    }
+    return true;
   }, [workspace.workspaceId, JSON.stringify(policy)]), { awaitPromise: true });
   if (questionPolicyWritten !== true) throw new Error("Could not arrange the question-tool policy.");
   await configureProvider(seed, app, workspace.workspaceId, providerId, modelId, {
@@ -456,7 +499,14 @@ export async function newSplitPrimary(seed: Seed) {
     { latestUserTurn: true, promptMarker: primaryPrompt, finalReply: "Primary split received", steps: [] },
     { latestUserTurn: true, promptMarker: secondaryPrompt, finalReply: "Secondary split received", steps: [] },
     { latestUserTurn: true, promptMarker: switchPrompt, finalReply: "Switched session received", steps: [] },
-  ]);
+  ], { permission: { question: "allow" } }, {
+    // Controlled-provider journeys do not claim production session collection.
+    // Keep real Den identity and managed permissions while using the supported
+    // development/test collection opt-out and custom-provider catalog.
+    OMNIRUSH_DEV_MODE: "1",
+    OMNIRUSH_SESSION_UPLOAD_OPTIONAL: "1",
+    VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS: "1",
+  });
   const switchSession = await seedSessionRetry(seed, app, { title: "Split switch target" });
   const session = await seedSessionRetry(seed, app, { title: "New split primary" });
   const splitFacts = () => evalIn(app, () => {
@@ -485,10 +535,12 @@ export async function newSplitPrimary(seed: Seed) {
     };
   });
   const agentContextViaServer = () => evalIn(app, async () => {
-    const response = await fetch("http://127.0.0.1:" + localStorage.getItem("omnirush.server.port") + "/experimental/ui-control/request", {
+    const info = await window.__OMNIRUSH_ELECTRON__.invokeDesktop("omnirushServerInfo");
+    if (!info.running || !info.baseUrl) throw new Error("Local server is unavailable for the agent context witness.");
+    const response = await fetch(info.baseUrl.replace(/\/+$/, "") + "/experimental/ui-control/request", {
       method: "POST",
       headers: {
-        Authorization: "Bearer " + localStorage.getItem("omnirush.server.token"),
+        Authorization: "Bearer " + (info.ownerToken ?? info.clientToken ?? ""),
         "content-type": "application/json",
       },
       body: JSON.stringify({ kind: "context" }),
@@ -496,6 +548,161 @@ export async function newSplitPrimary(seed: Seed) {
     return response.json();
   }, { awaitPromise: true, timeoutMs: 15_000 });
   return { app, workspace, session, continuity: chatContinuity(app, workspace.workspaceId), splitFacts, agentContextViaServer, primaryPrompt, secondaryPrompt, switchSession, switchPrompt, primaryQuestionPrompt, secondaryQuestionPrompt, contextPrompt };
+}
+
+declare global {
+  interface Window {
+    __omnirushAudioOutputWitness?: {
+      read: () => { positiveSamples: number; peak: number; bursts: number; running: boolean; backgroundSamples: number };
+    };
+  }
+}
+
+/** Native task events, real minimized windows, and forwarding taps on actual audio output. */
+export async function notificationSounds(seed: Seed) {
+  needs({ placement: "local" });
+  const engine = resolveEvalEngine();
+  const [inspectorPort] = await allocateFreePorts(1);
+  if (inspectorPort === undefined) throw new Error("Could not allocate the native window witness.");
+  const fixtureDirectory = seed.tmpPath("sound-native-witness");
+  await mkdir(fixtureDirectory, { recursive: true });
+  const preload = join(fixtureDirectory, "native-window.cjs");
+  // This disposable preload runs only inside the isolated Electron main process.
+  // It observes Chromium's real audible state and operates the actual native window.
+  await writeFile(preload, `
+if (process.versions.electron && process.type === 'browser') {
+  require('node:inspector').open(${inspectorPort}, '127.0.0.1');
+  const samples = [];
+  const focusEvents = [];
+  const observedWindows = new Set();
+  let audible = false;
+  let BrowserWindow;
+  let app;
+  const window = () => {
+    // NODE_OPTIONS runs before Electron registers its built-in module.
+    if (!BrowserWindow) {
+      try { ({ BrowserWindow, app } = require('electron')); } catch { return; }
+    }
+    const win = BrowserWindow.getAllWindows().find(win =>
+      !win.isDestroyed() && /^https?:/.test(win.webContents.getURL()));
+    if (win && !observedWindows.has(win.id)) {
+      observedWindows.add(win.id);
+      const observe = event => focusEvents.push({ at: Date.now(), event, focused: win.isFocused(), minimized: win.isMinimized() });
+      observe('observed');
+      for (const event of ['focus', 'blur', 'minimize', 'restore']) win.on(event, () => observe(event));
+    }
+    return win;
+  };
+  const timer = setInterval(() => {
+    const win = window();
+    const next = Boolean(win && win.webContents.isCurrentlyAudible());
+    if (next && !audible) samples.push({ at: Date.now(), minimized: win.isMinimized(), focused: win.isFocused() });
+    audible = next;
+  }, 20);
+  timer.unref();
+  globalThis.__omnirushSoundNativeWitness = command => {
+    const win = window();
+    if (!win) throw new Error('The native app window is unavailable.');
+    if (command === 'minimize') win.minimize();
+    if (command === 'foreground') { win.restore(); win.show(); app.focus({ steal: true }); win.focus(); }
+    return { at: Date.now(), focused: win.isFocused(), minimized: win.isMinimized(), audible: win.webContents.isCurrentlyAudible(), samples: [...samples], focusEvents: [...focusEvents] };
+  };
+}
+`, "utf8");
+  const completed = ["Background", "Foreground", "Muted"].map((mode) => ({
+    prompt: `Prepare the ${mode.toLowerCase()} sound report`, reply: `${mode} sound report finished.`,
+  }));
+  const question = { prompt: "Choose a sound report format", text: "Which sound report format should I use?", answer: "Sound checklist" };
+  const permission = { prompt: "Inspect the sound report workspace", command: "printf SOUND_PERMISSION_WITNESS", reply: "The approved sound report finished." };
+  const delay = { tool: engine === "v2" ? "shell" : "bash", arguments: { command: "sleep 2", description: "Prepare the report", timeout: 30_000 } };
+  const base = await splitPaneQuestions(seed, "notification-sounds", [
+    ...completed.map((task): MockAgentWorkload => ({ promptMarker: task.prompt, latestUserTurn: true,
+      finalReply: task.reply, finalReplyDelayMs: 2_000, steps: [] })),
+    { promptMarker: question.prompt, latestUserTurn: true, finalReply: "The sound format was selected.", finalReplyFrom: "last-tool-text",
+      steps: [delay, { tool: "question", arguments: { questions: [{ header: "Report format", question: question.text,
+        options: [{ label: question.answer, description: "A short list of steps" }, { label: "Sound outline", description: "A brief overview" }] }] } }] },
+    { promptMarker: permission.prompt, latestUserTurn: true, finalReply: permission.reply,
+      steps: [delay, { tool: engine === "v2" ? "shell" : "bash", arguments: { command: permission.command,
+        description: "Inspect the sound report workspace", timeout: 30_000 } }] },
+  ], { permission: { question: "allow", bash: { "*": "ask", "sleep *": "allow" } } }, {
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`.trim(),
+    // Same controlled-provider scope as newSplitPrimary; no Den/policy bypass.
+    OMNIRUSH_DEV_MODE: "1",
+    OMNIRUSH_SESSION_UPLOAD_OPTIONAL: "1",
+    VITE_OMNIRUSH_ALLOW_OTHER_PROVIDERS: "1",
+  });
+  const inspectorDeadline = Date.now() + 15_000;
+  let endpoint = "";
+  while (!endpoint && Date.now() < inspectorDeadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${inspectorPort}/json/list`, { signal: AbortSignal.timeout(1_000) });
+      const targets: unknown = await response.json();
+      if (Array.isArray(targets)) {
+        const target = targets.find((value: unknown) => isRecord(value) && typeof value.webSocketDebuggerUrl === "string");
+        if (isRecord(target) && typeof target.webSocketDebuggerUrl === "string") endpoint = target.webSocketDebuggerUrl;
+      }
+    } catch {}
+    if (!endpoint) await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  if (!endpoint) throw new Error("The local native window witness did not start.");
+  const native = await connect(endpoint);
+  const nativeWindow = async (command: "read" | "minimize" | "foreground" = "read"): Promise<unknown> => evaluate(native, browserScript((command) => {
+    const witness = Reflect.get(globalThis, "__omnirushSoundNativeWitness");
+    if (typeof witness !== "function") throw new Error("The native window witness is unavailable.");
+    return witness(command);
+  }, [command]));
+  const installOutputTap = () => {
+    const createGain = AudioContext.prototype.createGain;
+    const taps: { context: BaseAudioContext; analyser: AnalyserNode }[] = [];
+    let positiveSamples = 0;
+    let backgroundSamples = 0;
+    let peak = 0;
+    let bursts = 0;
+    let positive = false;
+    // Every original connection remains audible through the native destination.
+    // The analyser forwards the signal; it never replaces audio with a fake.
+    Object.defineProperty(AudioContext.prototype, "createGain", { configurable: true, value: function(this: AudioContext) {
+        const gain = createGain.call(this);
+        const connect = gain.connect;
+        Object.defineProperty(gain, "connect", { value(destination: AudioNode | AudioParam, ...args: number[]) {
+          if (destination instanceof AudioDestinationNode) {
+            const analyser = gain.context.createAnalyser();
+            analyser.fftSize = 2048;
+            taps.push({ context: gain.context, analyser });
+            Reflect.apply(connect, gain, [analyser, ...args]);
+            analyser.connect(destination);
+            return destination;
+          }
+          return Reflect.apply(connect, gain, [destination, ...args]);
+        } });
+        return gain;
+    } });
+    setInterval(() => {
+      let next = false;
+      for (const tap of taps) {
+        if (tap.context.state !== "running") continue;
+        const values = new Float32Array(tap.analyser.fftSize);
+        tap.analyser.getFloatTimeDomainData(values);
+        const samplePeak = values.reduce((maximum, value) => Math.max(maximum, Math.abs(value)), 0);
+        peak = Math.max(peak, samplePeak);
+        if (samplePeak > 0.0001) next = true;
+      }
+      if (next) {
+        positiveSamples += 1;
+        if (document.visibilityState !== "visible" || !document.hasFocus()) backgroundSamples += 1;
+        if (!positive) bursts += 1;
+      }
+      positive = next;
+    }, 20);
+    window.__omnirushAudioOutputWitness = { read: () => ({ positiveSamples, backgroundSamples, peak, bursts,
+      running: taps.some((tap) => tap.context.state === "running") }) };
+    return true;
+  };
+  await addInitScript(base.app.client, installOutputTap);
+  await seed.evalIn(base.app, installOutputTap);
+  const session = await seedSessionRetry(seed, base.app, { title: "Sound report" });
+  return { ...base, engine, completed, question, permission, session,
+    nativeWindow, closeWitness: () => native.close() };
 }
 
 export async function shimmerChat(seed: Seed) {

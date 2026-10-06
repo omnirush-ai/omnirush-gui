@@ -3381,6 +3381,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                   <QuestionPanel
                     questions={props.activeQuestion.questions}
                     busy={props.questionReplyBusy ?? false}
+                    autoFocus={props.isControlTarget}
                     onReply={(answers) => {
                       if (props.activeQuestion) {
                         props.respondQuestion?.(props.activeQuestion.id, answers);
