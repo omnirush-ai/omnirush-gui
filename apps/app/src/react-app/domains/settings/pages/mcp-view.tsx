@@ -173,6 +173,8 @@ export type McpViewProps = {
   /** Composer agents to render in Library. */
   installedAgents?: LibraryAgentItem[];
   /** MCP capabilities assigned through omnirush.ai Connect. */
+  /** True when the connected OmniRush server has disabled MCP for this client. */
+  mcpDisabled?: boolean;
   availableConnectMcpServers?: McpServerEntry[];
   availableConnectMcpStatuses?: McpStatusMap;
   /** Organization inventory is still being fetched and nothing is cached yet. */
@@ -531,13 +533,20 @@ export function McpView(props: McpViewProps) {
   const setTogglingMcp = (value: SetStateAction<string | null>) => setLocal("togglingMcp", value);
   const configRequestId = useRef(0);
 
-  const quickConnectList = props.quickConnect;
+  const mcpDisabled = props.mcpDisabled === true;
+  const isMcpDirectoryEntry = (entry: McpDirectoryInfo) =>
+    entry.kind === "mcp" || Boolean(entry.type || entry.command?.length || entry.url);
+  const quickConnectList = mcpDisabled
+    ? props.quickConnect.filter((entry) => !isMcpDirectoryEntry(entry))
+    : props.quickConnect;
   const installedSkills = props.installedSkills ?? [];
   const installedCommands = props.installedCommands ?? [];
   const installedAgents = props.installedAgents ?? [];
-  const availableConnectMcpServers = props.availableConnectMcpServers ?? [];
-  const installedPlugins = props.installedPlugins ?? [];
-  const orgMcpItems = props.orgMcpItems ?? [];
+  const availableConnectMcpServers = mcpDisabled ? [] : props.availableConnectMcpServers ?? [];
+  const installedPlugins = mcpDisabled
+    ? (props.installedPlugins ?? []).filter((plugin) => !plugin.files.some((file) => file.objectType === "mcp"))
+    : props.installedPlugins ?? [];
+  const orgMcpItems = mcpDisabled ? [] : props.orgMcpItems ?? [];
   const libraryDetailLists = {
     quickConnect: quickConnectList,
     skills: installedSkills,
@@ -619,6 +628,8 @@ export function McpView(props: McpViewProps) {
     canCreateWorkspaceSkill: typeof props.createWorkspaceSkill === "function",
   });
   const libraryAddKinds = libraryAddKindsForFilter(filter).filter((kind) => (
+    !mcpDisabled || (kind !== "mcp" && kind !== "workspace-mcp")
+  )).filter((kind) => (
     libraryAddAction(kind, libraryAddOptions) !== null
       || (kind === "skill" && workspaceSkillAdd)
   ));
@@ -903,7 +914,7 @@ export function McpView(props: McpViewProps) {
   // Auto-configured built-ins like omnirush-cloud remain active but hidden from
   // Your apps until Show hidden reveals the row for disable/remove. Projected
   // direct org connections are shown through their omnirush.ai Connect card.
-  const visibleMcpServers = inventoryState === "all" && (filter === "all" || filter === "mcp")
+  const visibleMcpServers = !mcpDisabled && inventoryState === "all" && (filter === "all" || filter === "mcp")
     ? showHidden
       ? props.mcpServers
       : props.mcpServers.filter((entry) => {
@@ -1394,6 +1405,12 @@ export function McpView(props: McpViewProps) {
 
   return (
     <section className="w-full max-w-3xl animate-in fade-in duration-300">
+      {mcpDisabled ? (
+        <div data-testid="mcp-disabled-policy-notice" className="mb-5 rounded-xl border border-dls-border bg-dls-hover px-4 py-4 text-xs leading-5 text-dls-secondary">
+          <p className="text-sm font-medium text-foreground">MCP servers are disabled</p>
+          <p className="mt-1">MCP servers cannot be enabled in OmniRush.ai.</p>
+        </div>
+      ) : null}
       {props.builtInExtensionsDisabled && props.allowManageExtensions ? (
         <div className="mb-5 rounded-xl border border-amber-6 bg-amber-2 px-4 py-3 text-xs text-amber-11">
           Built-in omnirush.ai extensions are disabled by your organization. Use Show hidden to review blocked built-ins.
@@ -1674,7 +1691,7 @@ export function McpView(props: McpViewProps) {
         }}
       />
 
-      <McpAdvancedConfigSection
+      {!mcpDisabled ? <McpAdvancedConfigSection
         open={showAdvanced}
         configScope={configScope}
         activeConfig={activeConfig}
@@ -1691,22 +1708,22 @@ export function McpView(props: McpViewProps) {
             ? () => setClaudeImportOpen(true)
             : undefined
         }
-      />
+      /> : null}
 
-      <AddMcpModal
+      {!mcpDisabled ? <AddMcpModal
         open={addMcpModalOpen}
         onClose={() => setAddMcpModalOpen(false)}
         onAdd={props.connectMcp}
         busy={props.busy}
         isRemoteWorkspace={props.isRemoteWorkspace}
-      />
+      /> : null}
 
       <AddLibraryItemModal
         open={addAuthorableKind !== null}
         kind={addAuthorableKind}
         busy={props.busy}
         cloud={cloudSession.isSignedIn}
-        canConfigureMcpConnections={isConnectAdminRole(cloudSession.activeOrganization?.role)}
+        canConfigureMcpConnections={!mcpDisabled && isConnectAdminRole(cloudSession.activeOrganization?.role)}
         onClose={() => setAddAuthorableKind(null)}
         onCreate={handleCreateLibraryItem}
       />

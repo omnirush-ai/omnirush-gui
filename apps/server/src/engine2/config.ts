@@ -256,13 +256,8 @@ export function buildEngine2Config(input: EngineConfigInput): JsonRecord {
   }
   const small = modelSelection(v1.small_model);
   if (small) agents.title = { model: small, ...(isRecord(agents.title) ? agents.title : {}) };
+  // MCP is intentionally never copied into the managed engine config.
   const servers: JsonRecord = {};
-  if (isRecord(v1.mcp)) {
-    for (const [name, server] of Object.entries(v1.mcp)) {
-      const mapped = v2Mcp(server);
-      if (mapped) servers[name] = mapped;
-    }
-  }
   const policies = [
     ...(Array.isArray(v1.enabled_providers)
       ? [

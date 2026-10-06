@@ -58,6 +58,7 @@ export type EngineFacadeOptions = {
   writeEngineConfig?: (config: JsonRecord) => Promise<void>;
   /** Plugin directories the rendered config names (OmniRush.ai's plugin bridge). */
   plugins?: string[];
+  /** Whether MCP servers may be rendered into the 2.x config. */
   /** Engine state paths reported by `/path`. */
   paths?: { state?: string; config?: string };
   log?: (message: string, attributes?: Record<string, unknown>) => void;

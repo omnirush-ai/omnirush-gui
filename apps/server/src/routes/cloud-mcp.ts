@@ -11,6 +11,7 @@ import {
   type CloudMcpLiveStatusObserver,
 } from "../cloud-mcp-health.js";
 import { ApiError } from "../errors.js";
+import { assertMcpAllowed } from "../mcp-policy.js";
 import type { ServerConfig, TokenScope, WorkspaceInfo } from "../types.js";
 import { addRoute, type RequestContext, type Route } from "./registry.js";
 
@@ -95,6 +96,7 @@ export function registerCloudMcpRoutes(options: RegisterCloudMcpRoutesOptions): 
   } = options;
 
   addRoute(routes, "GET", "/workspace/:id/mcp/omnirush-cloud/health", "client", async (ctx) => {
+    assertMcpAllowed(config);
     const workspace = await resolveWorkspace(config, ctx.params.id);
     assertExactWorkspace(ctx.params.id, workspace);
     const health = await readOmniRushCloudMcpHealth({
@@ -111,6 +113,7 @@ export function registerCloudMcpRoutes(options: RegisterCloudMcpRoutesOptions): 
   });
 
   addRoute(routes, "POST", "/workspace/:id/mcp/omnirush-cloud/engine-refresh", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);
@@ -148,6 +151,7 @@ export function registerCloudMcpRoutes(options: RegisterCloudMcpRoutesOptions): 
   });
 
   addRoute(routes, "POST", "/workspace/:id/mcp/omnirush-cloud/reconcile", "client", async (ctx) => {
+    assertMcpAllowed(config);
     ensureWritable(config);
     requireClientScope(ctx, "collaborator");
     const workspace = await resolveWorkspace(config, ctx.params.id);

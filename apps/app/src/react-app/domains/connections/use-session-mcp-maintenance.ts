@@ -347,6 +347,7 @@ export async function healWorkspaceMcpInBackground(input: {
 }
 
 export function useSessionMcpMaintenance(input: {
+  enabled?: boolean;
   cloudSignedIn: boolean;
   client: OmniRushServerClient | null;
   workspaceId: string | null;
@@ -360,6 +361,10 @@ export function useSessionMcpMaintenance(input: {
   );
 
   useEffect(() => {
+    if (input.enabled === false) {
+      setCloudMcpState(IDLE_CLOUD_MCP_MAINTENANCE_STATE);
+      return;
+    }
     if (input.engineReloadBusy) {
       setCloudMcpState(input.cloudSignedIn
         ? { ...IDLE_CLOUD_MCP_MAINTENANCE_STATE, status: "checking" }
@@ -476,6 +481,7 @@ export function useSessionMcpMaintenance(input: {
       if (busyRetryTimer !== null) window.clearTimeout(busyRetryTimer);
     };
   }, [
+    input.enabled,
     input.client,
     input.cloudSignedIn,
     input.directory,

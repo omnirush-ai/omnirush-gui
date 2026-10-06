@@ -78,6 +78,7 @@ const OMNIRUSH_UI_MCP_UNAVAILABLE = "UI control requires the omnirush.ai desktop
 const COMPUTER_USE_HELPER_UNAVAILABLE = "Computer Use helper app is unavailable. Restart omnirush.ai or reinstall the app.";
 const COMPUTER_USE_CONNECT_TIMEOUT_MS = 15_000;
 const COMPUTER_USE_RECONNECT_COOLDOWN_MS = 30_000;
+const MCP_DISABLED_BY_POLICY = "MCP servers are disabled in OmniRush.ai.";
 
 async function withLocalOmniRushServerRecoveryTimeout<T>(
   task: Promise<T>,
@@ -264,6 +265,13 @@ export function createConnectionsStore(options: {
   };
 
   const getOmniRushSnapshot = () => options.omnirushServer.getSnapshot();
+
+  const mcpDisabledByPolicy = () => {
+    const current = getOmniRushSnapshot();
+    // A GUI without an OmniRush policy-bearing server must fail closed.
+    return current.omnirushServerStatus !== "connected"
+      || current.omnirushServerCapabilities?.mcp?.read !== true;
+  };
 
   const resolveOmniRushWorkspaceId = async () => {
     const current = options.runtimeWorkspaceId()?.trim();
@@ -603,6 +611,16 @@ export function createConnectionsStore(options: {
   }
 
   async function refreshMcpServers() {
+    if (mcpDisabledByPolicy()) {
+      mutateState((current) => ({
+        ...current,
+        mcpServers: [],
+        mcpStatuses: {},
+        mcpStatus: MCP_DISABLED_BY_POLICY,
+        mcpLastUpdatedAt: Date.now(),
+      }));
+      return;
+    }
     if (disposed) return;
 
     const refreshToken = mcpStatusSynchronizer.beginRefresh(getWorkspaceContextKey());
@@ -779,6 +797,10 @@ export function createConnectionsStore(options: {
   }
 
   function mcpMutationDenied(builtIn: boolean) {
+    if (mcpDisabledByPolicy()) {
+      setStateField("mcpStatus", MCP_DISABLED_BY_POLICY);
+      return MCP_DISABLED_BY_POLICY;
+    }
     const restriction = builtIn ? "allowBuiltInExtensions" : "allowManageExtensions";
     if (!options.checkDesktopAppRestriction({ restriction })) return null;
     const message = desktopRestrictionNotice(restriction);
@@ -793,6 +815,8 @@ export function createConnectionsStore(options: {
   }
 
   async function connectMcp(entry: McpDirectoryInfo): Promise<McpConnectResult> {
+    const policyError = mcpMutationDenied(false);
+    if (policyError) return { ok: false, error: policyError };
     const builtIn = builtInMcp(getMcpServerName(entry));
     // Use catalog configuration for built-ins; caller-supplied metadata must
     // not turn an arbitrary URL or command into an allowed built-in.
@@ -1190,6 +1214,10 @@ export function createConnectionsStore(options: {
    * waiting for the marker to expire.
    */
   async function syncCloudControlMcp(options?: { force?: boolean }): Promise<"synced" | "unchanged" | "skipped"> {
+    if (mcpDisabledByPolicy()) {
+      setStateField("mcpStatus", MCP_DISABLED_BY_POLICY);
+      return "skipped";
+    }
     const settings = readDenSettings();
     const orgId = settings.activeOrgId?.trim() ?? "";
     if (!orgId || !settings.authToken?.trim()) return "skipped";
@@ -1252,6 +1280,7 @@ export function createConnectionsStore(options: {
   }
 
   async function authorizeMcp(entry: McpServerEntry) {
+    if (mcpMutationDenied(Boolean(builtInMcp(entry.name)))) return;
     if (entry.managedOAuth) {
       try {
         const { omnirushClient, omnirushWorkspaceId, canUseOmniRushServer } = await resolveWritableOmniRushTarget();
@@ -1296,6 +1325,7 @@ export function createConnectionsStore(options: {
   }
 
   async function logoutMcpAuth(name: string) {
+    if (mcpMutationDenied(Boolean(builtInMcp(name)))) return;
     const omnirushSnapshot = getOmniRushSnapshot();
     const isRemoteWorkspace =
       options.workspaceType() === "remote" ||
