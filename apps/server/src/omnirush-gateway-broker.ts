@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 
 import { SESSION_UPLOAD_BUDGET, SESSION_UPLOAD_ENDPOINT_PATH, sessionUploadTimeoutMs, type SessionUploadBudget } from "./session-upload-budget.js";
@@ -816,6 +816,14 @@ const SUBAGENT_BUSY_STATUSES = new Set([429, 502, 503, 504]);
  */
 const UNREACHABLE_RETRY_DELAYS_MS = [500, 2_000];
 
+/** One id joins the desktop retry, edge request and gateway log entries. */
+function clientRequestId(request: Request): string {
+  const supplied = request.headers.get("x-omnirush-client-request-id")?.trim();
+  return supplied && /^[A-Za-z0-9._:-]{1,128}$/.test(supplied)
+    ? supplied
+    : randomUUID().replaceAll("-", "");
+}
+
 /** The failure's name, code and cause code, for the log: never a URL, header or body. */
 function fetchFailure(error: unknown): { name: string; message: string; code: string | null } {
   const value = error instanceof Error ? error : new Error(String(error));
@@ -1025,6 +1033,7 @@ export class OmniRushGatewayBroker {
     const allowed = (request.method === "GET" && (normalizedPath === "models" || normalizedPath === VOICE_TRANSCRIPTIONS_PATH))
       || (request.method === "POST" && (normalizedPath === "responses" || normalizedPath === "responses/compact" || normalizedPath === VOICE_TRANSCRIPTIONS_PATH));
     if (!allowed) return Response.json({ error: "unsupported_gateway_path" }, { status: 404 });
+    const requestId = clientRequestId(request);
 
     const requestBody = request.method === "GET"
       ? undefined
@@ -1036,7 +1045,7 @@ export class OmniRushGatewayBroker {
     const attachments = this.leaveOutRefusedAttachments(normalizedPath, body);
     if (attachments) body = attachments.body;
     let spent = this.state.accessToken;
-    let response = await this.forwardModelRequest(request, normalizedPath, body, spent);
+    let response = await this.forwardModelRequest(request, normalizedPath, body, spent, requestId);
     // Two rounds at most: the first may only adopt a pair the desktop rotated,
     // whose own access token can have expired while the app was idle.
     let refreshUnavailable = false;
@@ -1049,7 +1058,7 @@ export class OmniRushGatewayBroker {
       if (!this.state) break;
       await response.body?.cancel().catch(() => undefined);
       spent = this.state.accessToken;
-      response = await this.forwardModelRequest(request, normalizedPath, body, spent);
+      response = await this.forwardModelRequest(request, normalizedPath, body, spent, requestId);
     }
     if (response.status === 401 && refreshUnavailable) {
       // The session is intact but the refresh could not reach omnirush.ai:
@@ -1071,14 +1080,14 @@ export class OmniRushGatewayBroker {
       }, { status: 401 });
     }
     if (attachments) {
-      const retried = await this.retryWithoutRefusedAttachments(request, normalizedPath, attachments, response);
+      const retried = await this.retryWithoutRefusedAttachments(request, normalizedPath, attachments, response, requestId);
       response = retried.response;
       body = retried.body;
     }
     if (skipped) {
       this.reportSubagentFallback(request, { ...skipped.event, status: response.status, ok: response.ok });
     } else if (!response.ok && response.status !== 401 && body !== undefined) {
-      response = await this.subagentFallback(request, normalizedPath, body, response);
+      response = await this.subagentFallback(request, normalizedPath, body, response, requestId);
     }
     await this.noteUpdateSignals(response, true);
     const contentType = response.headers.get("content-type") ?? "";
@@ -1090,7 +1099,7 @@ export class OmniRushGatewayBroker {
     const streamed = response.ok && response.body && contentType.includes("text/event-stream");
     const responseBody = streamed && response.body
       ? guardEventStream(response.body, {
-          onInterrupted: (reason) => this.log?.("warn", "omnirush.ai model stream interrupted", { reason, path: normalizedPath }),
+          onInterrupted: (reason) => this.log?.("warn", "omnirush.ai model stream interrupted", { reason, path: normalizedPath, clientRequestId: requestId }),
         })
       : response.body;
     return new Response(responseBody, {
@@ -1133,6 +1142,7 @@ export class OmniRushGatewayBroker {
     path: string,
     state: { parsed: unknown; attachments: Attachment[]; body: ArrayBuffer | string },
     first: Response,
+    requestId: string,
   ): Promise<{ response: Response; body: ArrayBuffer | string }> {
     let response = first;
     let { attachments, body } = state;
@@ -1146,7 +1156,7 @@ export class OmniRushGatewayBroker {
       attachments = prepared.attachments;
       body = JSON.stringify(prepared.body);
       this.log?.("warn", "omnirush.ai: the model refused an attachment; sending the request again without it", { path, left_out: suspects.length });
-      response = await this.forwardModelRequest(request, path, body, this.state.accessToken);
+      response = await this.forwardModelRequest(request, path, body, this.state.accessToken, requestId);
     }
     if (response.ok) this.rejectedAttachments.accept(attachments.filter((item) => !this.rejectedAttachments.isBad(item.fingerprint)));
     return { response, body };
@@ -1372,7 +1382,13 @@ export class OmniRushGatewayBroker {
    * goes to the main model instead, so the sub-agent's task continues rather
    * than failing. Account-wide refusals and every other error pass through.
    */
-  private async subagentFallback(request: Request, path: string, body: ArrayBuffer | string, response: Response): Promise<Response> {
+  private async subagentFallback(
+    request: Request,
+    path: string,
+    body: ArrayBuffer | string,
+    response: Response,
+    requestId: string,
+  ): Promise<Response> {
     const fallback = request.headers.get(SUBAGENT_FALLBACK_MODEL_HEADER)?.trim() ?? "";
     if (!fallback || !FALLBACK_MODEL_ID.test(fallback) || (path !== "responses" && path !== "responses/compact")) return response;
     const requested = requestedModel(body);
@@ -1383,7 +1399,7 @@ export class OmniRushGatewayBroker {
       await response.body?.cancel().catch(() => undefined);
       await pause(this.subagentRetryDelayMs, request.signal);
       if (request.signal.aborted || !this.state) return response;
-      const again = await this.forwardModelRequest(request, path, body);
+      const again = await this.forwardModelRequest(request, path, body, undefined, requestId);
       if (again.ok || again.status === 401) return again;
       refusal = await subagentRefusal(again);
       if (refusal.move === "never") return again;
@@ -1394,7 +1410,7 @@ export class OmniRushGatewayBroker {
     const moved = withModel(body, fallback, effort);
     if (moved === null || !this.state) return response;
     await response.body?.cancel().catch(() => undefined);
-    const next = await this.forwardModelRequest(request, path, moved);
+    const next = await this.forwardModelRequest(request, path, moved, undefined, requestId);
     this.log?.("warn", "omnirush.ai sub-agent model refused; sent on the main model", {
       requested,
       used: fallback,
@@ -1451,6 +1467,7 @@ export class OmniRushGatewayBroker {
     path: string,
     body: ArrayBuffer | string | undefined,
     accessToken?: string,
+    requestId = clientRequestId(request),
   ): Promise<Response> {
     const forwardedBody = path === "responses" && body !== undefined
       ? await withReasoningSummary(body, this.reasoningSummaryFor)
@@ -1463,7 +1480,7 @@ export class OmniRushGatewayBroker {
       }
       if (!this.state) break;
       try {
-        return await this.forward(request, path, forwardedBody, attempt === 0 ? accessToken : this.state.accessToken);
+        return await this.forward(request, path, forwardedBody, attempt === 0 ? accessToken : this.state.accessToken, requestId);
       } catch (error) {
         if (request.signal.aborted) throw error;
         failure = fetchFailure(error);
@@ -1473,6 +1490,7 @@ export class OmniRushGatewayBroker {
           error: failure.name,
           code: failure.code,
           message: failure.message,
+          clientRequestId: requestId,
         });
       }
     }
@@ -1484,12 +1502,19 @@ export class OmniRushGatewayBroker {
     );
   }
 
-  private forward(request: Request, path: string, body: ArrayBuffer | string | undefined, accessToken?: string): Promise<Response> {
+  private forward(
+    request: Request,
+    path: string,
+    body: ArrayBuffer | string | undefined,
+    accessToken: string | undefined,
+    requestId: string,
+  ): Promise<Response> {
     if (!this.state) throw new Error("OmniRush gateway credentials are unavailable");
     const headers = new Headers();
     headers.set("Authorization", `Bearer ${accessToken ?? this.state.accessToken}`);
     headers.set("Content-Type", request.headers.get("content-type") || "application/json");
     headers.set("Accept", request.headers.get("accept") || "application/json");
+    headers.set("x-omnirush-client-request-id", requestId);
     for (const name of ["x-omnirush-session-id", "x-omnirush-task-id"]) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value);

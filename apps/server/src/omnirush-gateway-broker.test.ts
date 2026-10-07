@@ -234,6 +234,21 @@ describe("OmniRush gateway broker", () => {
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer access-token");
   });
 
+  test("forwards the client request id so edge failures can be correlated", async () => {
+    const calls: UpstreamCall[] = [];
+    const broker = capturingBroker(calls);
+    const response = await broker.handle(
+      gatewayRequest(
+        { model: "gpt-6-astra", input: "test" },
+        { "x-omnirush-client-request-id": "desktop-request-123" },
+      ),
+      "responses",
+    );
+
+    expect(response.status).toBe(200);
+    expect(calls[0]?.headers.get("x-omnirush-client-request-id")).toBe("desktop-request-123");
+  });
+
   test("requests GPT-6 summaries without an effort header and preserves explicit options", async () => {
     const calls: UpstreamCall[] = [];
     const broker = capturingBroker(calls);
@@ -1320,13 +1335,15 @@ describe("OmniRush gateway broker: connection failures never become a bare 500",
 
   test("a request whose connection fails before an answer is sent again, and answers when one lands", async () => {
     let calls = 0;
+    const requestIds: string[] = [];
     const logs: string[] = [];
     const broker = new OmniRushGatewayBroker({
       credentials,
       engineToken: "local-engine-token",
       log: (_level, message) => logs.push(message),
-      fetch: async () => {
+      fetch: async (_input, init) => {
         calls += 1;
+        requestIds.push(new Headers(init?.headers).get("x-omnirush-client-request-id") ?? "");
         if (calls < 3) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET", message: "socket hang up" } });
         return Response.json({ output: [] });
       },
@@ -1334,6 +1351,9 @@ describe("OmniRush gateway broker: connection failures never become a bare 500",
     const response = await broker.handle(request(), "responses");
     expect(response.status).toBe(200);
     expect(calls).toBe(3);
+    expect(requestIds).toHaveLength(3);
+    expect(new Set(requestIds).size).toBe(1);
+    expect(requestIds[0]).toMatch(/^[A-Za-z0-9]{32}$/);
     expect(logs.filter((line) => line.includes("failed before an answer"))).toHaveLength(2);
   });
 
