@@ -120,6 +120,23 @@ describe("tab ownership", () => {
     expect(registry.ownerOf("s1")).toBe(null);
     expect(registry.setVisibleSession("")).toBe(null);
   });
+
+  test("clearing tabs preserves the visible conversation context", () => {
+    const registry = createBrowserTabRegistry();
+
+    registry.setVisibleSession("A");
+    registry.add({ tabId: "a1", ownerSessionId: "A" });
+    registry.add({ tabId: "b1", ownerSessionId: "B" });
+    registry.select("a1");
+
+    registry.clear();
+
+    expect(registry.size()).toBe(0);
+    expect(registry.list()).toEqual([]);
+    expect(registry.activeTabIdByOwner()).toEqual({});
+    expect(registry.onScreenTabId()).toBe(null);
+    expect(registry.visibleSessionId()).toBe("A");
+  });
 });
 
 describe("renderer helpers", () => {
