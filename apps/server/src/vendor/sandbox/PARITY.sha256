@@ -1,4 +1,4 @@
-# Vendored from omnirush-ai/omnirush-sandbox @ bef63fb67f49. Do not edit these files here:
+# Vendored from omnirush-ai/omnirush-sandbox @ f76d8e4bd60a. Do not edit these files here:
 # change src/ in omnirush-sandbox, then run its scripts/sync.mjs (the tests check this list).
-2e3489dfe528bee13fa726fa633b018d37133fbf2d687787fe0318735790addb  sandbox.js
+25e95f8983a718bd256c6929193619af566a39115fe50c107b361332c2d78e8e  sandbox.js
 1c7b94da26f31997d628af3b781b27c101f34e4116fb88db6c45f116fb0725c1  sandbox.d.ts

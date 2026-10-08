@@ -34,6 +34,14 @@ export const CACHE_VOLUME = "omnirush-sandbox-cache";
 /** Label on every container and image the sandbox creates. */
 export const LABEL = "ai.omnirush.sandbox";
 
+// Keep runaway builds, virtual displays, and fork-heavy tools from consuming
+// the host's RAM through Docker Desktop or colima. The values can be raised
+// for a known-heavy project, but an explicit limit is always present.
+const DEFAULT_MEMORY_LIMIT = "4g";
+const DEFAULT_PIDS_LIMIT = "512";
+const MEMORY_LIMIT_PATTERN = /^[1-9]\d*(?:[bkmg])?$/i;
+const PIDS_LIMIT_PATTERN = /^[1-9]\d{0,5}$/;
+
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const DOCKER_ARCH = { x64: "amd64", arm64: "arm64" };
 
@@ -272,6 +280,15 @@ function setFlag(args, flag, value) {
   const next = [...args];
   next[found.index] = found.inline ? `${flag}=${value}` : String(value);
   return next;
+}
+
+function resourceLimits(env) {
+  const memory = String(env.OMNIRUSH_SANDBOX_MEMORY ?? DEFAULT_MEMORY_LIMIT).trim();
+  const pids = String(env.OMNIRUSH_SANDBOX_PIDS ?? DEFAULT_PIDS_LIMIT).trim();
+  return {
+    memory: MEMORY_LIMIT_PATTERN.test(memory) ? memory : DEFAULT_MEMORY_LIMIT,
+    pids: PIDS_LIMIT_PATTERN.test(pids) ? pids : DEFAULT_PIDS_LIMIT,
+  };
 }
 
 /**
@@ -609,6 +626,7 @@ export function createSandbox(options = {}) {
     };
 
     const container = `omnirush-engine-${slug(input.app || "app")}-${randomBytes(5).toString("hex")}`;
+    const limits = resourceLimits(hostEnv);
     const mounts = [
       ...binds,
       ...(engine ? [engine.mount] : []),
@@ -616,6 +634,9 @@ export function createSandbox(options = {}) {
     ];
     const dockerArgs = [
       "run", "--rm", "--init",
+      "--memory", limits.memory,
+      "--memory-swap", limits.memory,
+      "--pids-limit", limits.pids,
       ...(input.interactive ? ["--interactive", "--tty"] : []),
       "--name", container,
       "--label", `${LABEL}=engine`,

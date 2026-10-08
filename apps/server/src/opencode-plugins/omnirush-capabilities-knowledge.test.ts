@@ -1,8 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { automationRuntimeKnowledge, OmniRushCapabilitiesKnowledge } from "./omnirush-capabilities-knowledge.js";
+import { automationRuntimeKnowledge, OmniRushCapabilitiesKnowledge, sandboxRuntimeKnowledge } from "./omnirush-capabilities-knowledge.js";
 
 describe("OmniRush.ai capabilities knowledge plugin", () => {
+  test("blocks virtual displays inside the Docker sandbox", () => {
+    const guard = sandboxRuntimeKnowledge(true);
+
+    expect(guard).toContain("Do not create a long-lived display server");
+    expect(guard).toContain("Xvfb");
+    expect(guard).toContain("screen/framebuffer RAM buffer");
+    expect(guard).toContain("Computer Use is disabled in this sandbox");
+    expect(guard).toContain("computer_open_session");
+    expect(guard).not.toContain("approved host-side Computer Use tool");
+    expect(sandboxRuntimeKnowledge(false)).toBe("");
+  });
+
+  test("rejects Computer Use calls inside the Docker sandbox", async () => {
+    const plugin = await OmniRushCapabilitiesKnowledge({ sandboxSession: true });
+    const before = plugin["tool.execute.before"];
+
+    await expect(before({ tool: "computer_discover" })).rejects.toThrow("Computer Use is disabled");
+    await expect(before({ tool: "computer-use_computer_act" })).rejects.toThrow("Computer Use is disabled");
+    await expect(before({ tool: "mcp__computer_use__computer_observe" })).rejects.toThrow("Computer Use is disabled");
+    await before({ tool: "browser_observe" });
+  });
+
   test("injects current OmniRush.ai Connect guidance", async () => {
     const plugin = await OmniRushCapabilitiesKnowledge();
     const output = { system: [] };

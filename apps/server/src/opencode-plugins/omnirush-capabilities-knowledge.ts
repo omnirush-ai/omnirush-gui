@@ -64,7 +64,7 @@ Here is what you can help users with:
 ## Enabling Computer Use
 - Go to Settings > Library and enable the "Computer Use" extension.
 - This requires macOS accessibility permissions; the app will prompt for them.
-- Once enabled, the agent can take screenshots and control the mouse/keyboard on the user's desktop.
+- Once enabled, the agent can use the app-scoped Computer Use tool to observe and control the approved app window. It does not grant shell access or whole-screen capture.
 
 ## Connect and MCP servers
 - If the runtime steering says OmniRush.ai Cloud is not ready, do not substitute documentation, browser, or UI tools for the connected-service action; direct the user to \`Settings > Library\` for inventory and \`Settings > Debug\` (developer mode) to repair and test agent access.
@@ -94,6 +94,19 @@ ${automationRuntimeKnowledge()}
 - See the \`create-plugin\` skill for the full API reference.
 
 When users ask "what can I do?" or "what can OmniRush.ai do?", summarize these capabilities; for a specific how-to, read the relevant docs first, then give direct steps.`;
+
+/** Extra rules for the engine process when it is running inside Docker. */
+export function sandboxRuntimeKnowledge(enabled = process.env.OMNIRUSH_SANDBOX_SESSION === "1"): string {
+  if (!enabled) return "";
+  return `## Sandboxed visual work
+This engine runs inside the OmniRush Docker sandbox. Do not create a long-lived display server from an ad-hoc shell command: no \`nohup Xvfb\`, Xephyr, Xvnc, manual \`DISPLAY\` setup, or screen/framebuffer RAM buffer. Do not install X11 packages just to make the sandbox look like a desktop. The sandbox cannot capture the host desktop. Computer Use is disabled in this sandbox: do not call \`computer_discover\`, \`computer_open_session\`, \`computer_observe\`, \`computer_act\`, \`computer_session_status\`, or \`computer_close_session\`, and do not start a host-side Computer Use helper. If visual access is needed, report that it is unavailable. For websites, use the built-in Browser tools. If an existing test runner owns a managed headless display, run that runner as provided and do not leave a display server running.`;
+}
+
+function isComputerUseTool(tool: string): boolean {
+  return /(?:^|[._:-])computer(?:[_-]use)?(?:[._:-]|$)/i.test(tool);
+}
+
+type CapabilitiesKnowledgeInput = { sandboxSession?: boolean };
 
 const docsSearchArgsSchema = z.object({
   query: z.string().min(1).describe("OmniRush.ai docs search query, for example 'connect slack mcp'."),
@@ -210,43 +223,55 @@ function excerpt(content: string, query: string): string {
   return content.slice(from, from + 500).replace(/\s+/g, " ").trim();
 }
 
-export const OmniRushCapabilitiesKnowledge = async () => ({
-  "experimental.chat.system.transform": async (_input: unknown, output: { system: string[] }) => {
-    appendAgentInstructions(output.system, createInstructionSection("capabilities-knowledge", OMNIRUSH_CAPABILITIES_KNOWLEDGE));
-  },
-  tool: {
-    omnirush_docs_search: {
-      description: "Search the bundled OmniRush.ai documentation. Use this first for OmniRush.ai product questions before inspecting implementation code.",
-      args: docsSearchArgsSchema.shape,
-      async execute(rawArgs: unknown) {
-        const args = docsSearchArgsSchema.parse(rawArgs);
-        const docs = await loadDocs();
-        const matches = docs
-          .map((entry) => ({ entry, score: scoreDoc(entry, args.query) }))
-          .filter((match) => match.score > 0)
-          .sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
-          .slice(0, args.limit ?? 5)
-          .map((match) => ({
-            path: match.entry.path,
-            title: match.entry.title,
-            description: match.entry.description,
-            excerpt: excerpt(match.entry.content, args.query),
-          }));
-        return JSON.stringify({ ok: true, matches }, null, 2);
+export const OmniRushCapabilitiesKnowledge = async (input?: CapabilitiesKnowledgeInput) => {
+  const sandboxSession = input?.sandboxSession ?? process.env.OMNIRUSH_SANDBOX_SESSION === "1";
+  return {
+    "experimental.chat.system.transform": async (_input: unknown, output: { system: string[] }) => {
+      appendAgentInstructions(
+        output.system,
+        createInstructionSection("capabilities-knowledge", OMNIRUSH_CAPABILITIES_KNOWLEDGE),
+        createInstructionSection("sandbox-visual-safety", sandboxRuntimeKnowledge()),
+      );
+    },
+    "tool.execute.before": async (event: { tool: string }) => {
+      if (sandboxSession && isComputerUseTool(event.tool)) {
+        throw new Error("Computer Use is disabled inside the OmniRush Docker sandbox.");
+      }
+    },
+    tool: {
+      omnirush_docs_search: {
+        description: "Search the bundled OmniRush.ai documentation. Use this first for OmniRush.ai product questions before inspecting implementation code.",
+        args: docsSearchArgsSchema.shape,
+        async execute(rawArgs: unknown) {
+          const args = docsSearchArgsSchema.parse(rawArgs);
+          const docs = await loadDocs();
+          const matches = docs
+            .map((entry) => ({ entry, score: scoreDoc(entry, args.query) }))
+            .filter((match) => match.score > 0)
+            .sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
+            .slice(0, args.limit ?? 5)
+            .map((match) => ({
+              path: match.entry.path,
+              title: match.entry.title,
+              description: match.entry.description,
+              excerpt: excerpt(match.entry.content, args.query),
+            }));
+          return JSON.stringify({ ok: true, matches }, null, 2);
+        },
+      },
+      omnirush_docs_read: {
+        description: "Read a bundled OmniRush.ai documentation page by docs-relative path returned from omnirush_docs_search.",
+        args: docsReadArgsSchema.shape,
+        async execute(rawArgs: unknown) {
+          const args = docsReadArgsSchema.parse(rawArgs);
+          const normalized = args.path.replace(/^\/+/, "");
+          if (normalized.split("/").includes("..")) throw new Error("Invalid docs path");
+          const docs = await loadDocs();
+          const entry = docs.find((doc) => doc.path === normalized);
+          if (!entry) throw new Error(`OmniRush.ai docs page not found: ${normalized}`);
+          return JSON.stringify(entry, null, 2);
+        },
       },
     },
-    omnirush_docs_read: {
-      description: "Read a bundled OmniRush.ai documentation page by docs-relative path returned from omnirush_docs_search.",
-      args: docsReadArgsSchema.shape,
-      async execute(rawArgs: unknown) {
-        const args = docsReadArgsSchema.parse(rawArgs);
-        const normalized = args.path.replace(/^\/+/, "");
-        if (normalized.split("/").includes("..")) throw new Error("Invalid docs path");
-        const docs = await loadDocs();
-        const entry = docs.find((doc) => doc.path === normalized);
-        if (!entry) throw new Error(`OmniRush.ai docs page not found: ${normalized}`);
-        return JSON.stringify(entry, null, 2);
-      },
-    },
-  },
-});
+  };
+};
