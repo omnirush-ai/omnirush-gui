@@ -17,13 +17,57 @@ type ReasoningBlockProps = {
   className?: string
 }
 
+const HEADING_LINE = /^\*\*(.+?)\*\*\s*(?:<!--\s*-->)?$/
+
 /**
- * Thinking is collapsed by default — a single "Thinking… / Thought"
- * line with a chevron; the full reasoning renders as markdown only
- * when the user opens it.
+ * A reasoning summary split into its bold status headings (whole lines like
+ * "**Planning the fix**") and its prose. The ChatGPT/Codex backend sends
+ * heading-only summaries for its models (openai/codex#34873), sometimes with
+ * an empty `<!-- -->` placeholder after the heading, so `body` is often "".
+ */
+export function reasoningSummaryParts(text: string): { headings: string[]; body: string } {
+  const headings: string[] = []
+  const body: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    const heading = HEADING_LINE.exec(trimmed)
+    if (heading) headings.push(heading[1]!.trim())
+    else if (trimmed !== "<!-- -->") body.push(line)
+  }
+  return { headings, body: body.join("\n").trim() }
+}
+
+/** Whether a reasoning part renders anything: only reasoning with prose does. */
+export function reasoningIsShown(text: string): boolean {
+  return reasoningSummaryParts(text).body !== ""
+}
+
+/** The latest reasoning heading of the run since the last user message, for the live "Working" row. */
+export function latestReasoningHeading(messages: readonly { role: string; parts: readonly { type: string; text?: string }[] }[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.role === "user") return null
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = message.parts[partIndex]!
+      if (part.type !== "reasoning" || typeof part.text !== "string") continue
+      const heading = reasoningSummaryParts(part.text).headings.at(-1)
+      if (heading) return heading
+    }
+  }
+  return null
+}
+
+/**
+ * Reasoning with prose is collapsed by default: a single "Reasoning trace"
+ * line with a chevron; the full reasoning renders as markdown only when the
+ * user opens it. Heading-only reasoning renders nothing here: as in Codex's
+ * status row, its latest heading rides on the live "Working" row instead
+ * (latestReasoningHeading), and a finished one has nothing to open.
  */
 export function ReasoningBlock({ text, isStreaming, className }: ReasoningBlockProps) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
+
+  if (!reasoningIsShown(text)) return null
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={cn("w-full", className)} data-reasoning-block="">

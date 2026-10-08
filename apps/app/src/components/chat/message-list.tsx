@@ -90,7 +90,7 @@ import { CapabilityCallLine } from "@/components/chat/capability-call-line"
 import { CodeModeTool } from "@/components/chat/code-mode-tool"
 import { codeModeToolCalls } from "@/lib/code-mode-tools"
 import { hasPreservedMcpAppResult, McpAppFrame } from "@/components/chat/mcp-app-frame"
-import { ReasoningBlock } from "@/components/chat/reasoning-block"
+import { latestReasoningHeading, ReasoningBlock, reasoningIsShown } from "@/components/chat/reasoning-block"
 import { SubagentRunLine } from "@/components/chat/subagent-run-line"
 import { ToolAggregateGroup } from "@/components/chat/tool-aggregate-group"
 import {
@@ -133,8 +133,6 @@ import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/co
 
 const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
 
-/** Above this many step rows a finished turn folds into one summary line. */
-const COLLAPSED_STEP_RUN_MIN_ROWS = 4
 
 const ParentRunContext = React.createContext({ active: true, lastProgressAt: 0 })
 
@@ -755,10 +753,15 @@ const UserMessage = React.memo(
                     })}
                   </MessageContent>
                 ) : null}
-                {!isStreaming && (
+                {/* Always laid out, so the turn below never shifts when its first
+                    message arrives; while the run starts it is hidden and inert. */}
+                {(
                   <MessageActions
+                    inert={isStreaming || undefined}
+                    aria-hidden={isStreaming || undefined}
                     className={cn(
-                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100"
+                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100",
+                      isStreaming && "invisible"
                     )}
                   >
                     <MessageTimestamp message={message} className="mr-1.5" />
@@ -881,10 +884,16 @@ const MessageComponent = React.memo(
 
 MessageComponent.displayName = "MessageComponent"
 
-const LoadingMessage = React.memo(({ elapsedSeconds }: { elapsedSeconds: number }) => (
+/** "Working 12s", with the run's latest reasoning heading as Codex's status row shows it. */
+function workingLabel(elapsedSeconds: number, heading: string | null): string {
+  return `Working ${formatElapsedSeconds(elapsedSeconds)}${heading ? ` · ${heading}` : ""}`
+}
+
+/** The live Working row, before the turn has anything to fold under it. */
+const LoadingMessage = React.memo(({ label }: { label: string }) => (
     <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
       <div data-loading-message="working" className="py-1 text-sm text-muted-foreground">
-        <span className="ow-text-shimmer tabular-nums">Working {formatElapsedSeconds(elapsedSeconds)}</span>
+        <span className="ow-text-shimmer tabular-nums">{label}</span>
       </div>
     </Message>
 ))
@@ -1181,12 +1190,14 @@ function getRenderableMessage(message: UIMessage) {
 }
 
 /**
- * A finished turn's steps collapse to a single "Worked for 1m 19s" line
- * that expands back into the full run. Only live turns show their steps
- * unprompted; once the answer is in, the reasoning is available but out
- * of the way.
+ * A turn's work folds under one line at the top of the turn, as in Codex:
+ * while it runs, the live "Working 12s · <latest heading>" status; once it is
+ * done, "Worked for 1m 19s". Everything before the answer (steps, reasoning,
+ * and the agent's progress notes) is inside, and the line never moves while
+ * the work grows under it. It is the same element live and finished, so an
+ * opened run stays open when the turn ends.
  */
-function CompletedStepRun({ label, children }: { label: string; children: React.ReactNode }) {
+function CompletedStepRun({ label, live = false, children }: { label: string; live?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false)
 
   return (
@@ -1196,7 +1207,7 @@ function CompletedStepRun({ label, children }: { label: string; children: React.
           className="group flex cursor-pointer items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
           aria-label={open ? `${label}. Hide steps` : `${label}. Show steps`}
         >
-          <span>{label}</span>
+          <span className={cn(live && "ow-text-shimmer tabular-nums")} data-step-run-live={live ? "" : undefined}>{label}</span>
           <ChevronRight
             aria-hidden="true"
             className={cn(
@@ -1212,6 +1223,14 @@ function CompletedStepRun({ label, children }: { label: string; children: React.
     </Collapsible>
   )
 }
+
+/**
+ * The live run's status line ("Working 12s · heading") when the latest turn
+ * shows it as its own header; null while the list shows it (before the turn
+ * has any message) or while something needs attention (waiting on approval,
+ * a delegated task, reconnecting), when the work stays open instead.
+ */
+const LiveRunLabelContext = React.createContext<string | null>(null)
 
 interface AssistantMessageGroupProps {
   items: UIMessageWithIndex[]
@@ -1248,6 +1267,8 @@ function MessageGroup({
   // silently corrupt fork/revert boundaries.
   const lastRealItem = items.findLast((item) => !isSessionErrorMessage(item.message))
   const isLiveGroup = isStreaming && isLastGroup
+  const liveRunLabel = React.useContext(LiveRunLabelContext)
+  const liveLabel = isLiveGroup ? liveRunLabel : null
 
   if (!lastItem || isMessageEmptyGroup(items)) {
     return null;
@@ -1257,12 +1278,23 @@ function MessageGroup({
   const lastTextMessage = getLastTextPart(lastItem.message)
   const mcpAppParts = collectMcpAppParts(items)
 
-  // Leading messages without prose (tool/reasoning steps) render inline and
-  // rely on the transcript's one scroll container. Tool activity must never
-  // create a nested scrollbar while it grows.
+  // Steps render inline and rely on the transcript's one scroll container.
+  // Tool activity must never create a nested scrollbar while it grows.
+  // The 2.x engine records each step as its own assistant message, and the
+  // agent writes progress notes between them, so the turn's answer is its
+  // LAST assistant message with prose: every message before it is work.
+  // Without one (a turn cut short), the leading messages without prose are.
+  const answerIndex = items.findLastIndex((item) =>
+    item.message.role === "assistant"
+    && !isSessionErrorMessage(item.message)
+    && getRenderableMessage(item.message) !== null)
   let stepCount = 0
-  while (stepCount < items.length && !getRenderableMessage(items[stepCount].message)) {
-    stepCount += 1
+  if (answerIndex > 0) {
+    stepCount = answerIndex
+  } else {
+    while (stepCount < items.length && !getRenderableMessage(items[stepCount].message)) {
+      stepCount += 1
+    }
   }
   let stepItems = items.slice(0, stepCount)
   let proseItems = items.slice(stepCount)
@@ -1275,6 +1307,28 @@ function MessageGroup({
     if (split) {
       stepItems = [...stepItems, { index: firstProse.index, message: split.steps }]
       proseItems = [{ index: firstProse.index, message: split.answer }, ...proseItems.slice(1)]
+    }
+  }
+  // While the turn runs under its header, only the agent's latest note stays
+  // below it; the calls it made after that note fold with the rest of the
+  // work instead of showing below the note until the next one arrives.
+  if (isLiveGroup && liveLabel !== null) {
+    if (proseItems.length > 1) {
+      stepItems = [...stepItems, ...proseItems.slice(1)]
+      proseItems = proseItems.slice(0, 1)
+    }
+    // A step can hold the note and then a call in one message: the note
+    // keeps its text, and the call folds with the work.
+    const note = proseItems[0]
+    if (note && note.message.role === "assistant" && !isSessionErrorMessage(note.message)) {
+      const work = note.message.parts.filter((part) => part.type !== "text" && part.type !== "file")
+      if (work.some((part) => "toolCallId" in part)) {
+        stepItems = [...stepItems, { index: note.index, message: { ...note.message, id: `${note.message.id}:work`, parts: work } }]
+        proseItems = [{
+          index: note.index,
+          message: { ...note.message, parts: note.message.parts.filter((part) => part.type === "text" || part.type === "file") },
+        }]
+      }
     }
   }
   // How long the turn spent working, from the first step to when the answer
@@ -1296,29 +1350,43 @@ function MessageGroup({
   )
   // An aggregate line counts each call it absorbed: it reads as one row but
   // stands for that much work, and folding should key off the work done.
+  // Reasoning that renders nothing (a finished heading-only summary) is no row.
+  const shownReasoning = proseReasoning.filter((reasoning) => reasoningIsShown(reasoning.text))
   const stepRowCount =
     stepItems.reduce(
       (total, item) =>
         total +
         (item.message.role === "assistant" && !isSessionErrorMessage(item.message)
           ? getAssistantRenderGroups(item.message.parts, showThinking).reduce(
-            (rows, group) => rows + (group.kind === "tool-aggregate" ? group.parts.length + group.thoughts.length : 1),
+            (rows, group) =>
+              rows + (group.kind === "tool-aggregate"
+                ? group.parts.length + group.thoughts.filter((thought) => reasoningIsShown(thought.text)).length
+                : group.kind === "reasoning"
+                  ? (reasoningIsShown(group.text) ? 1 : 0)
+                  : 1),
             0
           )
           : 1),
       0
-    ) + proseReasoning.length
+    ) + shownReasoning.length
   const stepRunLabel =
     stepsStartedAt !== null && stepsEndedAt !== null && stepsEndedAt > stepsStartedAt
       ? `Worked for ${formatToolCallDuration(stepsEndedAt - stepsStartedAt)}`
       : stepRowCount === 1
         ? "1 step"
         : `${stepRowCount} steps`
-  // A short finished run reads fine as a list, so only long ones fold away.
-  const collapseSteps =
-    !isLiveGroup && stepItems.length > 0 && stepRowCount > COLLAPSED_STEP_RUN_MIN_ROWS
+  // Every finished turn folds its work above its answer, as in Codex, and a
+  // live one folds under its status header. Work that still needs to be seen
+  // stays open: a live turn waiting on the user or a delegated task (no
+  // header); a finished turn with a call still in flight (a sub-agent awaiting
+  // its result), or with no answer to fold it above (cut short by the user).
+  const stepsInFlight = stepItems.some((item) =>
+    item.message.parts.some((part) => "toolCallId" in part && isToolPartInFlight(part as AnyToolPart)))
+  const hasAnswer = proseItems.some((item) => getRenderableMessage(item.message) !== null)
+  const collapseSteps = stepItems.length > 0 && stepRowCount > 0
+    && (isLiveGroup ? liveLabel !== null : hasAnswer && !stepsInFlight)
   const foldedReasoning = collapseSteps
-    ? proseReasoning.map((reasoning) => (
+    ? shownReasoning.map((reasoning) => (
       <Message
         key={`folded-reasoning-${reasoning.key}`}
         className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10"
@@ -1384,9 +1452,12 @@ function MessageGroup({
       {/* The scroll area keeps the same 8px rhythm the parts inside a single
           message use, so a step row is spaced identically whether or not a
           message boundary happens to fall between it and the previous row. */}
+      {liveLabel !== null && !collapseSteps ? (
+        <LoadingMessage label={liveLabel} />
+      ) : null}
       {stepItems.length > 0 ? (
         collapseSteps ? (
-          <CompletedStepRun label={stepRunLabel}>
+          <CompletedStepRun label={liveLabel ?? stepRunLabel} live={liveLabel !== null}>
             <div className="flex flex-col gap-2">
               {renderItems(stepItems, 0)}
               {foldedReasoning}
@@ -1486,12 +1557,7 @@ interface MessageListProps {
   syncHealth?: RunSyncHealth
 }
 
-export function shouldShowMessageListLoading(
-  status: ThreadStatus,
-  messageCount: number,
-  hasVisibleToolActivity = false,
-) {
-  if (hasVisibleToolActivity) return false
+export function shouldShowMessageListLoading(status: ThreadStatus, messageCount: number) {
   return status === "streaming" || (status === "submitted" && messageCount > 0)
 }
 
@@ -1562,7 +1628,6 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
     () => collectLatestAssistantToolParts(messages),
     [messages],
   )
-  const hasVisibleToolActivity = latestAssistantToolParts.some(isToolPartInFlight)
   const waiting = activityStatus === "waiting" || activityStatus === "compacting" || childBlocked
   const showReconnecting = !waiting && !retryStatus && shouldShowRunReconnecting(status, syncDegraded)
   const noNewActivity = hasNoNewActivity({
@@ -1570,7 +1635,15 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
     disconnected: syncDegraded, lastProgressAt, now: Date.now(),
   })
   const showLoading = !waiting && !noNewActivity && !showReconnecting && tasks.length === 0
-    && shouldShowMessageListLoading(status, messages.length, hasVisibleToolActivity)
+    // The Working row is the run's status line, as Codex's status row: it stays
+    // under running tool rows instead of vanishing and coming back each call.
+    && shouldShowMessageListLoading(status, messages.length)
+  const liveHeading = React.useMemo(() => (showLoading ? latestReasoningHeading(messages) : null), [showLoading, messages])
+  const lastListItem = items.at(-1)
+  // Once the run has an assistant turn, the Working row is that turn's header
+  // (at its top, the work folded under it) instead of a row below everything.
+  const turnOwnsStatus = showLoading && lastListItem !== undefined && isMessageGroup(lastListItem)
+  const liveLabel = showLoading ? workingLabel(runElapsedSeconds, liveHeading) : null
   const baseUrl = workspace?.opencodeBaseUrl
   React.useEffect(() => {
     if (!noNewActivity || !baseUrl) return
@@ -1584,6 +1657,7 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
 
   return (
     <ParentRunContext.Provider value={{ active: runActive, lastProgressAt }}>
+    <LiveRunLabelContext.Provider value={turnOwnsStatus ? liveLabel : null}>
     <CurrentToolLifecycleProvider
       activityStatus={activityStatus}
       currentToolCallIds={currentToolCallIds}
@@ -1618,12 +1692,13 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
         )
         })}
 
-        {showLoading && <LoadingMessage elapsedSeconds={runElapsedSeconds} />}
+        {liveLabel !== null && !turnOwnsStatus && <LoadingMessage label={liveLabel} />}
         {showReconnecting && <ReconnectingMessage lastConfirmedAt={syncHealth?.lastConfirmedAt ?? null} />}
         {retryStatus ? <RetryMessage status={retryStatus} /> : null}
         {error && !hasSessionErrorMessage ? <ErrorMessage error={error} /> : null}
       </div>
     </CurrentToolLifecycleProvider>
+    </LiveRunLabelContext.Provider>
     </ParentRunContext.Provider>
   )
 }
