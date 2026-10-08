@@ -48,14 +48,6 @@ function latestMessageElement(container: HTMLElement) {
   return null;
 }
 
-function messageElementById(container: HTMLElement, messageId: string) {
-  const messageEls = container.querySelectorAll("[data-message-id]");
-  for (const element of messageEls) {
-    if (!(element instanceof HTMLElement)) continue;
-    if (messageIdForElement(element) === messageId) return element;
-  }
-  return null;
-}
 
 function latestMessageTopClippedId(container: HTMLElement) {
   const latestMessage = latestMessageElement(container);
@@ -237,19 +229,19 @@ export function useSessionScrollController(
     [scrollToBottom],
   );
 
-  const jumpToStartOfMessage = useCallback(
+  // The up arrow: back to the top of the chat. It is the user's own scroll
+  // (as a wheel gesture would be), so the handler switches to manual browse
+  // and a streaming reply no longer pins the view to the bottom.
+  const jumpToTop = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
-      const messageId = readScrollState(selectedSessionId).topClippedMessageId;
       const container = options.containerRef.current;
-      if (!messageId || !container) return;
+      if (!container) return;
 
-      const target = messageElementById(container, messageId);
-      if (!target) return;
-
-      setManualScroll(selectedSessionId, container.scrollTop, messageId);
-      target.scrollIntoView({ behavior, block: "start" });
+      markScrollGesture(container);
+      setManualScroll(selectedSessionId, container.scrollTop, readScrollState(selectedSessionId).topClippedMessageId);
+      container.scrollTo({ top: 0, behavior });
     },
-    [options.containerRef, selectedSessionId, setManualScroll],
+    [options.containerRef, selectedSessionId, setManualScroll, markScrollGesture],
   );
 
   useEffect(() => {
@@ -338,6 +330,6 @@ export function useSessionScrollController(
     markScrollGesture,
     scrollToBottom,
     jumpToLatest,
-    jumpToStartOfMessage,
+    jumpToTop,
   };
 }
