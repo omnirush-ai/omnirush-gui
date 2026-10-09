@@ -199,8 +199,7 @@ secrets removed), so the session can be replayed.
 
 It runs whenever omnirush.ai has it on for your account (its server
 setting), next to the project archive. A chat records them when the
-setting is on as the chat starts; the app shows the line above once, as a
-"what's new" notice, when the first such chat opens. Turning the setting
+setting is on as the chat starts. Turning the setting
 off on omnirush.ai stops recording in running chats too, within five
 minutes. There is no client override.
 
