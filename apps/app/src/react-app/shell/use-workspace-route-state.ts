@@ -28,7 +28,6 @@ import { getNativeSession, isMissingSessionError } from "@/app/lib/opencode-sess
 import { createOmniRushServerClient, OmniRushServerError, type OmniRushServerClient } from "@/app/lib/omnirush-server";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { toast } from "@/components/ui/sonner";
-import { showFilesUsedNoticeOnce } from "./files-used-notice";
 import { forgetMissingChatMemory } from "./missing-chat";
 import type { ResolvedWorkspaceEndpoint } from "@/app/lib/workspace-endpoint";
 import type { WorkspaceConnectionState } from "@/app/types";
@@ -1241,21 +1240,6 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const opencode2BaseUrl = selectedWorkspaceEndpoint ? `${selectedWorkspaceEndpoint.mountedBaseUrl}/opencode2` : "";
   const routingServerUrl = selectedWorkspaceEndpoint?.baseUrl ?? "";
   const routingServerToken = selectedWorkspaceEndpoint?.token ?? "";
-  // Session files: omnirush.ai's line, once, as a "what's new" notice (desktop only; dismissed for good).
-  // Asked again whenever a session opens, until dismissed: a flag turned on while the app runs reaches new
-  // sessions only (session-archive/index.ts), so the line shows when the first session that records them opens.
-  useEffect(() => {
-    if (!isDesktopRuntime() || !routingServerUrl || !routingServerToken) return;
-    const client = createOmniRushServerClient({ baseUrl: routingServerUrl, token: routingServerToken });
-    void showFilesUsedNoticeOnce(client, (text, onDismiss) => {
-      toast.info(text, {
-        id: "files-used-notice",
-        duration: Infinity,
-        action: { label: "Got it", onClick: onDismiss },
-      });
-    });
-  }, [routingServerUrl, routingServerToken, selectedSessionId]);
-
   useEffect(() => {
     if (!routingServerUrl || !routingServerToken) {
       setEngineV2ChatRouting(false);
