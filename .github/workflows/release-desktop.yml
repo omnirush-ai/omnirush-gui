@@ -77,8 +77,14 @@ jobs:
             target: aarch64-apple-darwin
             builder_args: --mac --arm64 -c.mac.forceCodeSigning=true
             update_manifest: latest-mac.yml
-          # No Windows build: Windows installs and updates are no longer
-          # offered, so no installer and no latest.yml feed are published.
+          # Windows NSIS installer. It is unsigned until WINDOWS_CSC_LINK
+          # and WINDOWS_CSC_KEY_PASSWORD are configured in repository secrets.
+          - name: Windows x64
+            runner: windows-2022
+            platform: windows
+            target: x86_64-pc-windows-msvc
+            builder_args: --win --x64
+            update_manifest: latest.yml
           - name: Linux x64
             runner: ubuntu-22.04
             platform: linux
@@ -163,17 +169,40 @@ jobs:
         shell: bash
         run: scripts/release/macos-signing-env.sh
 
+      - name: Report Windows signing status
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          WINDOWS_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CSC_LINK)) {
+            Write-Host '::warning::WINDOWS_CSC_LINK is not configured; this Windows installer will be unsigned.'
+          } else {
+            Write-Host 'Windows signing certificate configured; electron-builder will sign the installer.'
+          }
+
       - name: Package installer
         env:
-          CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'macos' && 'true' || 'false' }}
+          CSC_LINK: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_LINK || (matrix.platform == 'windows' && secrets.WINDOWS_CSC_LINK || '') }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || (matrix.platform == 'windows' && secrets.WINDOWS_CSC_KEY_PASSWORD || '') }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ (matrix.platform == 'macos' && 'true') || (matrix.platform == 'windows' && secrets.WINDOWS_CSC_LINK != '' && 'true') || 'false' }}
         shell: bash
         run: |
           pnpm --dir apps/desktop exec electron-builder \
             --config electron-builder.yml \
             ${{ matrix.builder_args }} \
             --publish never
+
+      - name: Report Windows Authenticode signature
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem apps/desktop/dist-electron -Filter '*.exe' -File)
+          if ($installers.Count -eq 0) { throw 'No Windows installer was produced.' }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+            Write-Host ("{0}: {1}" -f $installer.Name, $signature.Status)
+          }
 
       # The app was notarized and stapled before electron-builder zipped it;
       # the DMG is signed, notarized and stapled here, and its sha512 in
