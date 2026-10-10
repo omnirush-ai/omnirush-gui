@@ -548,6 +548,84 @@ async function readableErrorResponse(response: Response, consoleUrl: string | nu
   });
 }
 
+/** A streamed refusal is one small error frame; anything longer is a real stream. */
+const MAX_STREAMED_REFUSAL_BYTES = 64 * 1024;
+
+/**
+ * A streamed refusal as a 403 the engine shows once: the gateway refuses a
+ * capped session or a Windows cut-off with HTTP 200, one `event: error`
+ * frame naming its `detail`, and `x-should-retry: false`. The engine
+ * retries any stream error it does not recognise (and never sees that
+ * header), so the same refusal would be sent again and again. The message
+ * is kept word for word: one ending on the console link keeps the app's
+ * "Open console" button. Null for anything but exactly one such frame.
+ */
+function streamedRefusalResponse(text: string, headers: Headers): Response | null {
+  const events = text.split(/\r\n\r\n|\n\n|\r\r/).filter((block) => block.trim());
+  if (events.length !== 1) return null;
+  const { name, data } = sseEventFields(new TextEncoder().encode(events[0]));
+  if (data === null) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (!isRecord(payload) || (name !== "error" && payload.type !== "error")) return null;
+  const detail = stringField(payload.detail);
+  if (!detail) return null;
+  const nested = isRecord(payload.error) ? payload.error : null;
+  const message = stringField(nested?.message) ?? stringField(payload.message)
+    ?? gatewayErrorMessage(detail) ?? `omnirush.ai could not complete the model request (${detail}).`;
+  const result = responseHeaders(headers);
+  result.set("content-type", "application/json");
+  result.set("x-should-retry", "false");
+  return new Response(JSON.stringify({ error: { message, type: stringField(nested?.type) ?? "invalid_request_error", code: detail } }), {
+    status: 403,
+    headers: result,
+  });
+}
+
+/**
+ * A stream marked `x-should-retry: false`: the refusal as a 403
+ * (streamedRefusalResponse), or the stream's bytes unchanged.
+ */
+async function streamedRefusalOrBody(response: Response, body: ReadableStream<Uint8Array>): Promise<Response | ReadableStream<Uint8Array>> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let done = false;
+  while (total <= MAX_STREAMED_REFUSAL_BYTES) {
+    const result = await reader.read();
+    if (result.done) {
+      done = true;
+      break;
+    }
+    chunks.push(result.value);
+    total += result.value.byteLength;
+  }
+  if (done) {
+    const decoder = new TextDecoder();
+    const text = chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") + decoder.decode();
+    const refusal = streamedRefusalResponse(text, response.headers);
+    if (refusal) return refusal;
+  }
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      if (done) controller.close();
+    },
+    async pull(controller) {
+      const result = await reader.read();
+      if (result.done) controller.close();
+      else controller.enqueue(result.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
 async function boundedText(response: Response, maxBytes: number): Promise<string | null> {
   if (!response.body) return "";
   const reader = response.body.getReader();
@@ -1088,11 +1166,17 @@ export class OmniRushGatewayBroker {
       return await readableErrorResponse(response, this.consoleUrl);
     }
     const streamed = response.ok && response.body && contentType.includes("text/event-stream");
-    const responseBody = streamed && response.body
-      ? guardEventStream(response.body, {
+    let upstreamBody: ReadableStream<Uint8Array> | null = response.body;
+    if (streamed && upstreamBody && response.headers.get("x-should-retry") === "false") {
+      const refusal = await streamedRefusalOrBody(response, upstreamBody);
+      if (refusal instanceof Response) return refusal;
+      upstreamBody = refusal;
+    }
+    const responseBody = streamed && upstreamBody
+      ? guardEventStream(upstreamBody, {
           onInterrupted: (reason) => this.log?.("warn", "omnirush.ai model stream interrupted", { reason, path: normalizedPath }),
         })
-      : response.body;
+      : upstreamBody;
     return new Response(responseBody, {
       status: response.status,
       statusText: response.statusText,
