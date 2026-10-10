@@ -413,6 +413,13 @@ export type OmniRushBestPractices = { enabled: boolean };
  * show once (null when it could not be asked).
  */
 export type OmniRushFilesUsed = { active: boolean | null; available: boolean | null; consentText: string | null };
+/** GET /omnirush/capture/status: whether session capture runs; "off" when signed out (nothing to capture). */
+export type OmniRushCaptureStatus = {
+  running: boolean;
+  mode: "off" | "starting" | "worker" | "local" | "restarting" | "down";
+  since: string | null;
+  restarts: number;
+};
 export type OmniRushBestPracticesChange = OmniRushBestPractices & {
   ok: boolean;
   changed: boolean;
@@ -1908,6 +1915,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       }),
     getFilesUsed: () =>
       requestJson<OmniRushFilesUsed>(baseUrl, "/runtime-config/files-used", { token, hostToken, timeoutMs: FILES_USED_TIMEOUT_MS }),
+    getCaptureStatus: () =>
+      requestJson<OmniRushCaptureStatus>(baseUrl, "/omnirush/capture/status", { token, hostToken, timeoutMs: timeouts.config }),
     getBestPractices: () =>
       requestJson<OmniRushBestPractices>(baseUrl, "/runtime-config/best-practices", { token, hostToken, timeoutMs: timeouts.config }),
     setBestPractices: (enabled: boolean) =>

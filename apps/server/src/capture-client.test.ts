@@ -505,3 +505,74 @@ describe("capture worker", () => {
     expect(results[1]).toEqual(results[0]!);
   }, 60_000);
 });
+
+describe("capture worker restarts", () => {
+  // The worker's test-only crash hook (capture-worker.ts) answers only with this set.
+  let crashSwitch: string | undefined;
+  beforeAll(() => {
+    crashSwitch = process.env.OMNIRUSH_CAPTURE_TEST_CRASH;
+    process.env.OMNIRUSH_CAPTURE_TEST_CRASH = "1";
+  });
+  afterAll(() => {
+    if (crashSwitch === undefined) delete process.env.OMNIRUSH_CAPTURE_TEST_CRASH;
+    else process.env.OMNIRUSH_CAPTURE_TEST_CRASH = crashSwitch;
+  });
+
+  function crashing(options: Partial<CaptureServiceOptions> = {}) {
+    const restarts: Array<Record<string, unknown>> = [];
+    const modes: string[] = [];
+    const capture = service({
+      stateDir: "",
+      sessionUploader: {},
+      log: (_level, message, attributes) => {
+        if (message.includes("starting a new") && attributes) restarts.push(attributes);
+      },
+      onModeChange: (mode) => modes.push(mode),
+      ...options,
+    });
+    const crash = async () => {
+      await until(() => capture.mode() === "worker", 10_000, "a ready worker");
+      capture.recordTrace("session-crash-0001", "omnirush.test.worker_crash");
+      await until(() => capture.mode() === "restarting", 10_000, "the worker's exit");
+    };
+    return { capture, restarts, modes, crash };
+  }
+
+  test("a worker that keeps exiting is replaced every time, after a pause that doubles up to its cap, and is \"down\" only once stopped", async () => {
+    const { capture, restarts, modes, crash } = crashing({ stateDir: await tempDir("state"), restartBackoffMs: { baseMs: 40, maxMs: 160 } });
+    for (let index = 0; index < 5; index += 1) await crash();
+    expect(restarts.map((item) => [item.code, item.attempt, item.delayMs])).toEqual([[70, 1, 40], [70, 2, 80], [70, 3, 160], [70, 4, 160], [70, 5, 160]]);
+    expect(capture.status()).toMatchObject({ mode: "restarting", restarts: 5 });
+    await until(() => capture.mode() === "worker", 10_000, "the sixth worker");
+    expect(await capture.diagnostics()).not.toBeNull();
+    expect(modes).toEqual([...Array.from({ length: 5 }, () => ["worker", "restarting", "starting"]).flat(), "worker"]);
+    await capture.stop();
+    expect(capture.mode()).toBe("down");
+    expect(modes.at(-1)).toBe("down");
+  }, 60_000);
+
+  test("a worker that stayed up long enough starts the backoff over", async () => {
+    const { capture, restarts, crash } = crashing({ stateDir: await tempDir("state"), restartBackoffMs: { baseMs: 40, maxMs: 1_000, stableMs: 300 } });
+    await crash();
+    await crash();
+    await until(() => capture.mode() === "worker", 10_000, "the third worker");
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
+    await crash();
+    expect(restarts.map((item) => [item.attempt, item.delayMs])).toEqual([[1, 40], [2, 80], [1, 40]]);
+    expect(capture.status().restarts).toBe(3);
+  }, 30_000);
+
+  test("calls made while restarting reach the next worker", async () => {
+    const root = await syntheticWorkspace(5);
+    const sink = uploadSink();
+    const { capture, crash } = crashing({ stateDir: await tempDir("state"), sessionUploader: { upload: sink.upload }, restartBackoffMs: { baseMs: 400, maxMs: 400 } });
+    await crash();
+    capture.startSession("session-restart-0001", "workspace-restart", root);
+    const diagnostics = capture.diagnostics();
+    expect(capture.mode()).toBe("restarting");
+    expect(await diagnostics).not.toBeNull();
+    expect(capture.mode()).toBe("worker");
+    await capture.idle();
+    expect(sink.envelopes().map((item) => [item.session_id, item.snapshot_type])).toEqual([["session-restart-0001", "start"]]);
+  }, 30_000);
+});
