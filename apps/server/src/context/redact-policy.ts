@@ -114,6 +114,33 @@ export function looksRandom(value: string): boolean {
   return shannonEntropy(value) >= 3.0;
 }
 
+function charClass(char: string): string | undefined {
+  return /[0-9]/.test(char) ? "d" : /[A-Z]/.test(char) ? "u" : /[a-z]/.test(char) ? "l" : undefined;
+}
+
+/**
+ * An unquoted value with a name's shape that is still generated
+ * (`client-secret=Xk7pQ2vR...` in a `.properties` file): 16+ characters,
+ * no dot, two classes, 3.5+ bits per character, and the class changes
+ * between neighbours (digit, upper, lower; a capital starting a word does
+ * not count) at 30%+ of them. Names change class only between words.
+ */
+export function looksRandomName(value: string): boolean {
+  if (value.length < 16 || value.includes(".")) return false;
+  const classes = Number(/[a-z]/.test(value)) + Number(/[A-Z]/.test(value)) + Number(/[0-9]/.test(value));
+  if (classes < 2 || shannonEntropy(value) < 3.5) return false;
+  let pairs = 0;
+  let changes = 0;
+  for (let index = 1; index < value.length; index += 1) {
+    const before = charClass(value[index - 1]!);
+    const after = charClass(value[index]!);
+    if (before === undefined || after === undefined) continue;
+    pairs += 1;
+    if (before !== after && !(before === "u" && after === "l")) changes += 1;
+  }
+  return pairs > 0 && changes >= 0.3 * pairs;
+}
+
 /**
  * Credential files: any non-placeholder value of a secret-named key there is
  * a credential. `.env*` except examples and templates, `.npmrc`, `.pypirc`,
@@ -137,13 +164,16 @@ const ASSIGNMENT_BODY = String.raw`(\\?["']?)((?=[\w.-]{0,63}?(?:${KEYWORD}))[A-
   + String.raw`(?:"((?:[^"${WS}\\]|\\[^${WS}]){8,})"`
   + String.raw`|'((?:[^'${WS}\\]|\\[^${WS}]){8,})'`
   + String.raw`|\\"((?:[^"${WS}\\]|\\[^"${WS}]){8,})\\"`
-  + String.raw`|((?:[^${WS}"',;&\\]|\\[^${WS}]){8,}))`;
+  // An unquoted value ends at an escaped line break or tab (`KEY=value\n+NEXT=...`).
+  + String.raw`|((?:[^${WS}"',;&\\]|\\[^${WS}nrt]){8,}))`;
 const CONFIG_ASSIGNMENT = new RegExp(String.raw`(?:(?<![\w.\\-])|(?<=\\[nrt]))` + ASSIGNMENT_BODY, "gi");
-const SOURCE_ASSIGNMENT = new RegExp(String.raw`(?:(?<![^${WS}\x80-\uffff{,("'\x60+#])|(?<=\\[nrt]))` + ASSIGNMENT_BODY, "gi");
+// In code the name follows a space, an opening bracket, a quote, `+`, `#` or
+// a sigil (`$password = '...'` in PHP, Perl, PowerShell).
+const SOURCE_ASSIGNMENT = new RegExp(String.raw`(?:(?<![^${WS}\x80-\uffff{,("'\x60+#$])|(?<=\\[nrt]))` + ASSIGNMENT_BODY, "gi");
 
 const SECRET_SEGMENTS = new Set([
   "secret", "secrets", "password", "passwords", "passwd", "pwd", "token", "credential", "credentials",
-  "auth", "authorization", "authtoken", "authkey", "apikey",
+  "auth", "authorization", "authtoken", "authkey", "apikey", "pgpassword",
 ]);
 const SECRET_PAIRS: Array<[string, string]> = [
   ["api", "key"], ["access", "key"], ["secret", "key"], ["private", "key"], ["client", "key"], ["client", "secret"],
@@ -232,7 +262,7 @@ export function isSecretValue(value: string, context: ValueContext = {}): boolea
   if (value.includes("(")) return false;
   if (context.credentialFile) return true;
   if (context.mode === "source" && !context.quoted) return false;
-  if (!context.quoted && IDENTIFIER_VALUE.test(value)) return false;
+  if (!context.quoted && IDENTIFIER_VALUE.test(value)) return looksRandomName(value);
   return looksRandom(value);
 }
 
@@ -349,9 +379,21 @@ function redactUrlPasswords(text: string, hidden: string, tally: Tally, spans: A
 
 const MAX_ASSIGNMENT_DEPTH = 4;
 
+/** Shell scripts: there an unquoted `NAME=value` is a literal, never an expression. */
+export function isShellFile(path: string | undefined): boolean {
+  return path !== undefined && /\.(?:sh|bash|zsh|ksh)$/i.test(path);
+}
+
+// A query parameter that carries a one-time credential although its name ends
+// in a word the key rules skip (`?token_hash=` in Supabase sign-in links).
+const QUERY_SECRET_KEYS = new Set(["token hash"]);
+
+type AssignmentContext = { mode: "source" | "config"; credentialFile: boolean; shellFile: boolean };
+
 function redactAssignments(
-  text: string, hidden: string, tally: Tally, mode: "source" | "config", credentialFile: boolean, spans: Array<[number, number]>, depth = 0,
+  text: string, hidden: string, tally: Tally, context: AssignmentContext, spans: Array<[number, number]>, depth = 0,
 ): string {
+  const { mode, credentialFile, shellFile } = context;
   // A fresh expression per call: the pass recurses into values while the outer replace is still running.
   const pattern = new RegExp(mode === "source" ? SOURCE_ASSIGNMENT : CONFIG_ASSIGNMENT);
   return text.replace(pattern, (match: string, _quote: string, key: string, doubleQuoted: string | undefined, singleQuoted: string | undefined, escapedQuoted: string | undefined, bare: string | undefined, offset: number) => {
@@ -359,32 +401,58 @@ function redactAssignments(
     const value = doubleQuoted ?? singleQuoted ?? escapedQuoted ?? bare ?? "";
     const quote = doubleQuoted !== undefined ? '"' : singleQuoted !== undefined ? "'" : escapedQuoted !== undefined ? '\\"' : "";
     const prefix = match.slice(0, match.length - value.length - quote.length * 2);
-    if (isSecretKey(key) && isSecretValue(value, { mode, quoted: bare === undefined, credentialFile })) {
+    // A URL query value (`?name=value&`) and a shell `NAME=value` are literals like a quoted one.
+    const query = bare !== undefined && offset > 0 && (text[offset - 1] === "?" || text[offset - 1] === "&");
+    const shellLiteral = shellFile && bare !== undefined && prefix === `${key}=` && !/[$`]/.test(value);
+    const secretKey = isSecretKey(key) || (query && QUERY_SECRET_KEYS.has(keySegments(key).join(" ")));
+    if (secretKey && isSecretValue(value, { mode: query || shellLiteral ? "config" : mode, quoted: bare === undefined || query || shellLiteral, credentialFile })) {
       note(tally, "secret_assignment");
       return `${prefix}${quote}${hidden}${quote}`;
     }
     if (depth >= MAX_ASSIGNMENT_DEPTH) return match;
-    return `${prefix}${quote}${redactAssignments(value, hidden, tally, mode, credentialFile, [], depth + 1)}${quote}`;
+    return `${prefix}${quote}${redactAssignments(value, hidden, tally, context, [], depth + 1)}${quote}`;
   });
 }
 
 const ASSIGNMENT_GATE = /secret|passw|pwd|token|credential|auth|key/i;
 
 // A label on its own line and the value alone on the next one (notes,
-// READMEs, `.txt` files): `API_KEY:` then `abc123...`. The whole next line
-// must be one token; it is judged like any other value.
-const NEXT_LINE_VALUE = /(^|\n)([^\S\n]*[-*#>]*[^\S\n]*[*_`"']*)([A-Za-z_][\w.-]{0,63})([*_`"']*[^\S\n]*[:=][^\S\n]*[*_`"']*\r?\n[^\S\n]*)([`"']?)([^\s`"']{12,})\5(?=[^\S\n]*(?:\r?\n|$))/g;
+// READMEs, `.txt` and `.properties` files): `API_KEY:` then `abc123...`, one
+// blank line between them allowed. The whole value line must be one token;
+// it is judged like any other value. Line by line, so a label right under
+// another empty label is still read.
+// Python's `\s` without the line break, so both ports split values alike.
+const HS = String.raw`\t\v\f\r \x1c-\x1f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000`;
+const LABEL_LINE = new RegExp(String.raw`^([${HS}]*[-*#>]*[${HS}]*[*_\x60"']*)([A-Za-z_][\w.-]{0,63})([*_\x60"']*[${HS}]*[:=][${HS}]*[*_\x60"']*)$`);
+const VALUE_LINE = new RegExp(String.raw`^([${HS}]*)([\x60"']?)([^${WS}\x60"']{12,})\2([${HS}]*)$`);
+const BLANK_LINE = new RegExp(String.raw`^[${HS}]*$`);
 
 function redactNextLineValues(text: string, hidden: string, tally: Tally, credentialFile: boolean, spans: Array<[number, number]>): string {
-  NEXT_LINE_VALUE.lastIndex = 0;
-  return text.replace(NEXT_LINE_VALUE, (match: string, start: string, lead: string, key: string, sep: string, quote: string, value: string, offset: number) => {
-    if (insideOpaque(spans, offset, offset + match.length) || !isSecretKey(key)) return match;
+  const lines = text.split("\n");
+  const starts: number[] = [];
+  let at = 0;
+  for (const line of lines) {
+    starts.push(at);
+    at += line.length + 1;
+  }
+  let changed = false;
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const label = LABEL_LINE.exec(lines[index]!);
+    if (!label || !isSecretKey(label[2]!)) continue;
+    let target = index + 1;
+    if (BLANK_LINE.test(lines[target]!) && target + 1 < lines.length) target += 1;
+    const found = VALUE_LINE.exec(lines[target]!);
+    if (!found) continue;
+    const value = found[3]!;
     // The next line is an assignment of its own (`API_KEY=` left empty above `OTHER=value`).
-    if (/^[A-Za-z_][\w.-]*[:=]/.test(value)) return match;
-    if (!isSecretValue(value, { mode: "config", quoted: true, credentialFile })) return match;
+    if (/^[A-Za-z_][\w.-]*[:=]/.test(value)) continue;
+    if (insideOpaque(spans, starts[index]!, starts[target]! + lines[target]!.length)) continue;
+    if (!isSecretValue(value, { mode: "config", quoted: true, credentialFile })) continue;
     note(tally, "secret_assignment");
-    return `${start}${lead}${key}${sep}${quote}${hidden}${quote}`;
-  });
+    lines[target] = `${found[1]!}${found[2]!}${hidden}${found[2]!}${found[4]!}`;
+    changed = true;
+  }
+  return changed ? lines.join("\n") : text;
 }
 
 const AWS_ID = /(?:AKIA|ASIA)[0-9A-Z]{16}/;
@@ -467,7 +535,7 @@ export function redactCredentials(input: string, options: CredentialOptions = {}
   let text = input.includes("-----BEGIN ") ? redactPrivateKeys(input, hidden, tally) : input;
   if (text.includes("://")) text = redactUrlPasswords(text, hidden, tally, opaqueSpans(text));
   if (ASSIGNMENT_GATE.test(text)) {
-    text = redactAssignments(text, hidden, tally, options.mode ?? "config", credentialFile, opaqueSpans(text));
+    text = redactAssignments(text, hidden, tally, { mode: options.mode ?? "config", credentialFile, shellFile: isShellFile(options.context) }, opaqueSpans(text));
     if (text.includes("\n") && options.mode !== "source") text = redactNextLineValues(text, hidden, tally, credentialFile, opaqueSpans(text));
   }
   const nearAws = options.awsContext === true || (options.context !== undefined && AWS_CONTEXT.test(options.context));
