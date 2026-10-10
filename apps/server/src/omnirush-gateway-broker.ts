@@ -191,6 +191,7 @@ const GATEWAY_ERROR_COPY: Record<string, string> = {
   token_capacity: BUSY_COPY,
   gateway_overload: BUSY_COPY,
   queue_timeout: BUSY_COPY,
+  omni_queue_timeout: "every model seat is taken right now, and this turn waited in line too long. Send your message again; your place in line is kept for a few minutes.",
   provider_rate_limited: BUSY_COPY,
   voice_unavailable: "voice input is not available on this account yet.",
   transcription_unavailable: "the transcription service did not answer. Try again in a moment.",
@@ -260,9 +261,33 @@ function stringField(value: unknown): string | null {
  * type, code or message), which would end the turn silently, and the engine
  * shows only a nested error's message.
  */
+/**
+ * Codes that end the turn instead of being retried by the engine. A turn the
+ * gateway's omni queue held past its maximum wait (`omni_queue_timeout`,
+ * sent inside the committed stream) would otherwise be retried up to five
+ * times by the engine, each retry waiting in line again: the chat shows
+ * "running" for many minutes with nothing happening. The engine retries any
+ * stream error except a few codes; `invalid_prompt` is one it shows as it is
+ * and never retries (provider/error.ts, session/retry.ts), as long as the
+ * message names nothing its retry patterns match.
+ */
+const TURN_ENDING_STREAM_CODES = new Set(["omni_queue_timeout"]);
+const QUEUE_TIMEOUT_COPY = "omnirush.ai: every model seat is taken right now, and this turn waited in line too long. Send your message again; your place in line is kept for a few minutes.";
+
+function turnEndingEvent(code: string, sequence: unknown): Uint8Array {
+  const frame = {
+    type: "error",
+    sequence_number: typeof sequence === "number" && Number.isFinite(sequence) ? sequence : -1,
+    error: { type: "invalid_request_error", code: "invalid_prompt", message: QUEUE_TIMEOUT_COPY, param: code },
+  };
+  return new TextEncoder().encode(`event: error\ndata: ${JSON.stringify(frame)}\n\n`);
+}
+
 function errorEvent(block: Uint8Array, payload: Record<string, unknown>): Uint8Array {
   const nested = isRecord(payload.error) ? payload.error : null;
   const code = stringField(nested ? nested.code : payload.code);
+  const baseCode = code?.replace(/^upstream_/, "") ?? null;
+  if (baseCode && TURN_ENDING_STREAM_CODES.has(baseCode)) return turnEndingEvent(baseCode, payload.sequence_number);
   const original = stringField(nested ? nested.message : payload.message);
   const readable = code ? gatewayErrorMessage(code, original) : null;
   const sequence = payload.sequence_number;
