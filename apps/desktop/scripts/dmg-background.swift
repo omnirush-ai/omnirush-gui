@@ -37,7 +37,7 @@ let desktopDir = scriptURL.deletingLastPathComponent().deletingLastPathComponent
 let outputDir =
   CommandLine.arguments.count > 1
   ? URL(fileURLWithPath: CommandLine.arguments[1]) : desktopDir.appendingPathComponent("build")
-let variant = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "orbit"
+let variant = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "split-b"
 let markURL = desktopDir.appendingPathComponent("../app/public/omnirush-mark.png").standardizedFileURL
 guard let markImage = NSImage(contentsOf: markURL),
   let mark = markImage.cgImage(forProposedRect: nil, context: nil, hints: nil)
