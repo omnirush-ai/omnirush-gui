@@ -71,6 +71,44 @@ jobs:
           name: omnirush-electron-${{ matrix.artifact }}
           path: apps/desktop/dist-electron/**
 
+  windows-update-check:
+    name: Windows update in place
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A version above the latest release, as a real update would carry.
+      - name: Build the Windows installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @omnirush/desktop run build:electron
+          pnpm --dir apps/desktop exec electron-builder --config electron-builder.yml --win nsis --x64 --publish never -c.extraMetadata.version=99.0.0
+
+      - name: Update the latest release in place
+        shell: pwsh
+        run: scripts/release/check-windows-update.ps1 -NewInstaller (Get-ChildItem apps/desktop/dist-electron/*.exe | Select-Object -First 1).FullName
+
   electron-macos-notarization-smoke:
     name: Electron macOS notarization smoke
     runs-on: macos-14

@@ -1,5 +1,5 @@
 pkgbase = omnirush
-	pkgdesc = OmniRush.ai desktop app: AI agents for every profession
+	pkgdesc = omnirush desktop app: AI agents for every profession
 	pkgver = 0.0.0
 	pkgrel = 1
 	url = https://github.com/omnirush-ai/omnirush-gui

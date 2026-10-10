@@ -52,7 +52,8 @@ describe("Electron distribution configs", () => {
     const config = await readConfig("electron-builder.yml");
     assert.equal(config.extends, "./electron-builder.base.yml");
     assert.equal(config.appId, "ai.omnirush.desktop");
-    assert.equal(config.productName, "omnirush.ai");
+    assert.equal(config.productName, "omnirush");
+    assert.equal(config.win.executableName, "OmniRush.ai");
     assert.equal(config.protocols[0].schemes[0], "omnirush");
     assert.equal(config.artifactName, "omnirush-${os}-${arch}-${version}.${ext}");
     // Published package names, so upgrades replace the installed package.

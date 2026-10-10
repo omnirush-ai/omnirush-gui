@@ -33,7 +33,7 @@
 # Explicitly NOT touched by `reset`:
 #   - ~/Library/Application Support/ai.omnirush.desktop.dev/** (tokens,
 #     workspaces registry, prefs). Use `reset-webview` for WebKit state.
-#   - /Applications/OmniRush.ai.app (prod build never targeted).
+#   - /Applications/omnirush.app (prod build never targeted).
 #
 set -euo pipefail
 

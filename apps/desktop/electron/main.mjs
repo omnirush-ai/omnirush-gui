@@ -149,7 +149,10 @@ const BLANK_SLATE_LAUNCH = resolveBlankSlateLaunch({
   profile: processBlankSlateProfile,
 });
 const APP_NAME = BLANK_SLATE_LAUNCH.appName;
-let currentDisplayAppName = APP_NAME;
+// The name people see. APP_NAME stays the Electron app name because it names
+// the keychain item that holds the sign-in.
+const DISPLAY_APP_NAME = APP_NAME === DESKTOP_DISTRIBUTION.appName ? DESKTOP_DISTRIBUTION.displayName : APP_NAME;
+let currentDisplayAppName = DISPLAY_APP_NAME;
 installStdioErrorHandlers();
 installSocketTypeOfServiceGuard();
 await initOmniRushSentry({
@@ -179,7 +182,7 @@ const RELEASE_DOWNLOAD_BASE_URL = "https://github.com/omnirush-ai/omnirush-gui/r
 const RELEASE_PAGE_URL = "https://github.com/omnirush-ai/omnirush-gui/releases/latest";
 const DOCS_PAGE_URL = "https://github.com/omnirush-ai/omnirush-gui#readme";
 const applicationMenu = createApplicationMenu({
-  appName: APP_NAME,
+  appName: DISPLAY_APP_NAME,
   docsUrl: DOCS_PAGE_URL,
   getWindow: () => createMainWindow(),
 });
@@ -483,7 +486,7 @@ function windowsBrandShortcutPath() {
 }
 
 function windowsInstalledShortcutPath() {
-  return path.join(windowsProgramsPath(), windowsInstalledShortcutFileName(APP_NAME));
+  return path.join(windowsProgramsPath(), windowsInstalledShortcutFileName(DISPLAY_APP_NAME));
 }
 
 function windowsBrandShortcutMarkerPath() {
@@ -2385,7 +2388,8 @@ const desktopCommandHandlers = {
     currentDisplayAppName = applyBrandAppName(
       BLANK_SLATE_LAUNCH.enabled || DESKTOP_DISTRIBUTION.flavor === "enterprise" ? null : args[0],
       {
-      fallbackName: APP_NAME,
+      fallbackName: DISPLAY_APP_NAME,
+      electronFallbackName: APP_NAME,
       platform: process.platform,
       updateElectronAppName: process.platform === "darwin",
       runtimeProcess: process,
@@ -3043,7 +3047,8 @@ or use: pnpm dev:worktree`);
         ? null
         : bootstrapConfig.brandAppName,
       {
-      fallbackName: APP_NAME,
+      fallbackName: DISPLAY_APP_NAME,
+      electronFallbackName: APP_NAME,
       platform: process.platform,
       updateElectronAppName: true,
       runtimeProcess: process,

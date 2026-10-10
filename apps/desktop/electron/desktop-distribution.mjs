@@ -1,6 +1,9 @@
 export const PUBLIC_DESKTOP_DISTRIBUTION = Object.freeze({
   flavor: "public",
+  // The Electron app name. It names the keychain item that holds the sign-in,
+  // so it stays as shipped; people see displayName.
   appName: "omnirush.ai",
+  displayName: "omnirush",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: false,
@@ -14,6 +17,7 @@ export const PUBLIC_DESKTOP_DISTRIBUTION = Object.freeze({
 export const CLOUD_DESKTOP_DISTRIBUTION = Object.freeze({
   flavor: "cloud",
   appName: "omnirush.ai Cloud",
+  displayName: "omnirush.ai Cloud",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: true,
@@ -24,6 +28,7 @@ export const CLOUD_DESKTOP_DISTRIBUTION = Object.freeze({
 export const ENTERPRISE_DESKTOP_DISTRIBUTION = Object.freeze({
   flavor: "enterprise",
   appName: "omnirush.ai Enterprise",
+  displayName: "omnirush.ai Enterprise",
   appIdentifier: "ai.omnirush.desktop",
   protocolScheme: "omnirush",
   requireSignin: true,

@@ -51,7 +51,7 @@ applies.
   binary directly:
 
   ```sh
-  OMNIRUSH_APPROVALS=full "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai"
+  OMNIRUSH_APPROVALS=full "/Applications/omnirush.app/Contents/MacOS/omnirush"
   ```
 
   On Linux run the AppImage or installed binary the same way; on Windows set

@@ -1,12 +1,16 @@
 extends: ./electron-builder.base.yml
 appId: ai.omnirush.desktop
-productName: omnirush.ai
+productName: omnirush
 protocols:
   - name: OmniRush.ai
     schemes:
       - omnirush
 linux:
   executableName: omnirush
+win:
+  # The executable keeps its published name so taskbar pins and the install
+  # folder of existing installs stay valid; shortcuts take the product name.
+  executableName: OmniRush.ai
 # Package names stay as published before the lowercase product name, so
 # package managers upgrade the installed package instead of adding a second one.
 deb:

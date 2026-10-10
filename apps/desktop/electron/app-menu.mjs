@@ -53,7 +53,7 @@ export function createApplicationMenu({ appName, docsUrl, getWindow }) {
             {
               label: currentAppName,
               submenu: [
-                { role: "about" },
+                { role: "about", label: `About ${currentAppName}` },
                 {
                   label: "Check for Updates...",
                   click: () => {
@@ -71,11 +71,11 @@ export function createApplicationMenu({ appName, docsUrl, getWindow }) {
                 { type: "separator" },
                 { role: "services" },
                 { type: "separator" },
-                { role: "hide" },
+                { role: "hide", label: `Hide ${currentAppName}` },
                 { role: "hideOthers" },
                 { role: "unhide" },
                 { type: "separator" },
-                { role: "quit" },
+                { role: "quit", label: `Quit ${currentAppName}` },
               ],
             },
           ]

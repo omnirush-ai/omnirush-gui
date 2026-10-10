@@ -9,10 +9,11 @@ const MAX_APP_NAME_LENGTH = 64;
  * @param {unknown} requestedName
  * @param {{
  *   fallbackName: string,
+ *   electronFallbackName?: string,
  *   platform: string,
  *   updateElectronAppName: boolean,
  *   runtimeProcess: { title: string },
- *   app: { setName: (name: string) => void },
+ *   app: { setName: (name: string) => void, setAboutPanelOptions?: (options: { applicationName: string }) => void },
  *   applicationMenu: { setAppName: (name: string) => unknown },
  *   window?: { setTitle: (name: string) => void } | null,
  * }} dependencies
@@ -23,9 +24,12 @@ export function applyBrandAppName(requestedName, dependencies) {
 
   if (dependencies.platform === "darwin") {
     dependencies.runtimeProcess.title = appName;
+    dependencies.app.setAboutPanelOptions?.({ applicationName: appName });
   }
   if (dependencies.updateElectronAppName) {
-    dependencies.app.setName(appName);
+    // Without a brand, Electron keeps its own name (it names the keychain
+    // item); only the visible surfaces take the display name.
+    dependencies.app.setName(requested ? appName : dependencies.electronFallbackName ?? appName);
   }
   dependencies.applicationMenu.setAppName(appName);
   dependencies.window?.setTitle(appName);

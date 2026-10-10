@@ -60,11 +60,11 @@ build for Intel Macs.
 
 **macOS.** Builds are not notarized yet. On first open, macOS reports that it
 could not verify the app: click **Done**, open **System Settings > Privacy &
-Security**, click **Open Anyway** next to OmniRush.ai.app, then **Open**.
+Security**, click **Open Anyway** next to omnirush, then **Open**.
 Alternatively, run:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/OmniRush.ai.app
+xattr -dr com.apple.quarantine /Applications/omnirush.app
 ```
 
 When asked to use "omnirush.ai Safe Storage", enter your login password and
