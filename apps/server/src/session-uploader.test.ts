@@ -3069,19 +3069,19 @@ describe("session uploader gateway auth", () => {
     await sessionUploader.stop();
   });
 
-  test("drops the upload without a refresh or spool entry when the account is signed out", async () => {
+  test("keeps the upload in the spool, without a refresh, while this device has no account (a sign-in the server retired)", async () => {
     for (const status of [403, 401]) {
-      const { sessionUploader, sessionId, uploads, warnings, rejected, counters } = await authHarness(
+      const { sessionUploader, sessionId, uploads, rejected, counters } = await authHarness(
         () => unauthorized(status, { error: "omnirush_account_required" }),
         async () => "fresh-token",
       );
       expect(counters).toEqual({ attempts: 1, refreshes: 0 });
       expect(uploads).toHaveLength(0);
       expect(rejected).toHaveLength(0);
-      expect(await sessionUploader.spoolStatus()).toEqual({ entries: 0, bytes: 0 });
-      expect(await sessionUploader.sessionDeliveryStatus(sessionId)).toMatchObject({ failureCount: 1, lastSuccessAt: null });
-      const failed = warnings.find((warning) => warning.message === "OmniRush session upload operation failed");
-      expect(failed?.attributes).toMatchObject({ error: `sessionUploader upload failed with status ${status} (omnirush_account_required)` });
+      expect(await sessionUploader.spoolStatus()).toMatchObject({ entries: 1 });
+      // A drain while the account is still gone keeps it too.
+      await sessionUploader.drainSpool();
+      expect(await sessionUploader.spoolStatus()).toMatchObject({ entries: 1 });
       await sessionUploader.stop();
     }
   });

@@ -6528,12 +6528,14 @@ export class SessionUploader {
         }
         lastReason = `sessionUploader upload failed with status ${response.status}`;
         if (UNAUTHORIZED_STATUSES.has(response.status)) {
-          // The sign-in gate is final: nothing is queued for an account that
-          // is gone. Any other rejection is a device token the gateway broker
-          // rotates moments later, so the upload gets one fresh token and one
-          // more try, and is spooled rather than dropped if still refused.
+          // No account on this device right now (the server retired its sign-in):
+          // the upload is kept, stamped with its account, for when it is back;
+          // only a user's sign-out deletes it. Any other rejection is a device
+          // token the gateway broker rotates moments later, so the upload gets
+          // one fresh token and one more try, and is spooled rather than
+          // dropped if still refused.
           if (await responseSignalsAccountRequired(response)) {
-            return { ok: false, retryable: false, reason: `${lastReason} (${ACCOUNT_REQUIRED_MARKER})` };
+            return { ok: false, retryable: true, reason: `${lastReason} (${ACCOUNT_REQUIRED_MARKER})` };
           }
           if (refreshAttempted) return { ok: false, retryable: true, reason: lastReason };
           refreshAttempted = true;
