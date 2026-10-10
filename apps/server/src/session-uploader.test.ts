@@ -193,6 +193,7 @@ describe("session uploader privacy", () => {
     await writeFile(join(root, "app.txt"), "hello\n");
     const sent: Array<{ key: string | undefined; envelope: Record<string, unknown> }> = [];
     const sessionUploader = new SessionUploader({
+      capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed, _signal, request) => {
         sent.push({ key: request?.idempotencyKey, envelope: JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown> });
@@ -223,6 +224,7 @@ describe("session uploader privacy", () => {
     const envelopes: Array<Record<string, unknown>> = [];
     const asked: string[] = [];
     const sessionUploader = new SessionUploader({
+      capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed) => {
         envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
@@ -251,6 +253,7 @@ describe("session uploader privacy", () => {
     const envelopes: Array<Record<string, unknown>> = [];
     let asked = 0;
     const make = () => new SessionUploader({
+      capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed) => {
         envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
@@ -279,6 +282,7 @@ describe("session uploader privacy", () => {
     const accepted: Array<Record<string, unknown>> = [];
     let lookups = 0;
     const sessionUploader = new SessionUploader({
+      capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed) => {
         const envelope = JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>;
@@ -1477,6 +1481,7 @@ describe("session upload deadline and spool drain", () => {
     const keys: Array<string | undefined> = [];
     let answers = 0;
     const sessionUploader = new SessionUploader({
+      capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, _compressed, _signal, request) => {
         keys.push(request?.idempotencyKey);
@@ -3987,4 +3992,32 @@ describe("session uploader incremental snapshots", () => {
     expect(start.files.reduce((sum, file) => sum + file.content.length, 0)).toBeGreaterThanOrEqual(58 * 1024 * 1024);
     expect(start.privacy).toMatchObject({ files_truncated: false });
   }, 60_000);
+});
+
+describe("upload features", () => {
+  test("without the backend's idempotency_key feature (or any capability answer) no Idempotency-Key is sent and no integrity read is made", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-upload-nofeat-"));
+    roots.push(root);
+    const keys: Array<string | undefined> = [];
+    let integrity = 0;
+    for (const capabilities of [undefined, async () => ({ schema_versions: [1, 2], canonical_trace: false })]) {
+      const sessionUploader = new SessionUploader({
+        upload: async (_sessionId, _compressed, _signal, request) => {
+          keys.push(request?.idempotencyKey);
+          return Response.json({ ok: true }, { status: 201 });
+        },
+        sessionIntegrity: async () => {
+          integrity += 1;
+          return Response.json({ max_segment: 4, max_sequence: 9 });
+        },
+        ...(capabilities ? { capabilities } : {}),
+        fallbackScanMs: 60_000,
+      });
+      sessionUploader.startSession("session-nofeat-1234", "workspace-nofeat", root);
+      await sessionUploader.stop();
+    }
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((key) => key === undefined)).toBe(true);
+    expect(integrity).toBe(0);
+  });
 });

@@ -468,6 +468,7 @@ describe("capture worker", () => {
         return Response.json({ detail: "session_not_found" }, { status: 404 });
       },
       sessionUploader: {
+        capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
         upload: async (_sessionId, _bytes, _signal, request) => {
           keys.push(request?.idempotencyKey);
           return Response.json({ detail: "unavailable" }, { status: 503 });
