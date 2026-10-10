@@ -345,6 +345,131 @@
    "name": "escaped empty key above another assignment kept",
    "input": "SOME_SECRET_KEY=\\nSERVICE_NAME=svc-alpha-77beta",
    "expect": "SOME_SECRET_KEY=\\nSERVICE_NAME=svc-alpha-77beta"
+  },
+  {
+   "name": "label then value on the next line under another label",
+   "input": "server.port=\r\nspring.datasource.app-db.password=\r\nq8⟨+⟩zr2lmt5vxp9k3d-wq7n4b6h1j0f2g8sy5c\r\nmax-retries=10\r\n",
+   "expect": "server.port=\r\nspring.datasource.app-db.password=\r\n[REDACTED]\r\nmax-retries=10\r\n",
+   "context": "application.properties"
+  },
+  {
+   "name": "label, blank line, then value",
+   "input": "OPENAI_API_KEY=\n\nXK⟨+⟩7PQ2VRT9MZ-LW3NC8BD4HJ6FS\n\nANTHROPIC_API_KEY=\n",
+   "expect": "OPENAI_API_KEY=\n\n[REDACTED]\n\nANTHROPIC_API_KEY=\n",
+   "context": "keys.txt"
+  },
+  {
+   "name": "label= then a long value on the next line",
+   "input": "notes-for-me-v2-a1\nOPENAI_COMPATIBLE_API_KEY=\nXk⟨+⟩7pQ2vR-t9mZ_Lw3Nc8Bd4Hj6Fs1Gq5Yt0Ue2Ia7Ob3Pc9Rd4Se6Tf\nOTHER_THING_NAME=x\n",
+   "expect": "notes-for-me-v2-a1\nOPENAI_COMPATIBLE_API_KEY=\n[REDACTED]\nOTHER_THING_NAME=x\n",
+   "context": "README.md"
+  },
+  {
+   "name": "empty labels and a comment after a blank line kept",
+   "input": "OPENAI_API_KEY=\n\nANTHROPIC_API_KEY=\n\n# filled in by CI\n",
+   "expect": null,
+   "same": true,
+   "context": ".env.example"
+  },
+  {
+   "name": "label, blank line, then prose kept",
+   "input": "password:\n\nask the admin for it\n",
+   "expect": null,
+   "same": true
+  },
+  {
+   "name": "unquoted value ends at an escaped line break",
+   "input": "\"diff\": \"--- a/.env\\n+++ b/.env\\n@@ -1 +1 @@\\n-x\\n+NEXTA_CLIENT_SECRET=a8⟨+⟩f3k2m9q7w4e1r6t5y0u3i8o2p7s4d6\\n+NEXTA_CLIENT_URL=https://example.com/cb\"",
+   "expect": "\"diff\": \"--- a/.env\\n+++ b/.env\\n@@ -1 +1 @@\\n-x\\n+NEXTA_CLIENT_SECRET=[REDACTED]\\n+NEXTA_CLIENT_URL=https://example.com/cb\"",
+   "context": "NOTES.md"
+  },
+  {
+   "name": "generated value with a name shape, unquoted",
+   "input": "oauth2.client-id=web\nspring.security.oauth2.client-secret=Xk⟨+⟩7pQ2vRt9mZLw3Nc8Bd4Hj6Fs1Gq5Yt0Ue2Ia7\n",
+   "expect": "oauth2.client-id=web\nspring.security.oauth2.client-secret=[REDACTED]\n",
+   "context": "application.properties"
+  },
+  {
+   "name": "lowercase generated value, unquoted",
+   "input": "API_KEY=ak⟨+⟩_7f3k2m9q7w4e1r6t5y0u3i8o2p7s4d6g9h1j\n",
+   "expect": "API_KEY=[REDACTED]\n",
+   "context": ".env.example"
+  },
+  {
+   "name": "camelCase names as values kept",
+   "input": "password = userPasswordHash\ntoken: accessTokenExpiresAt\nAPI_KEY=myApiToken2024Prod\nsecret=getAuthTokenForUser123\n",
+   "expect": null,
+   "same": true,
+   "context": "notes.md"
+  },
+  {
+   "name": "uuid with a name-like key kept",
+   "input": "app.api-key-id=3f2b8a4e-9c1d-4e7a-b5f6-0a1b2c3d4e5f\n",
+   "expect": null,
+   "same": true,
+   "context": "a.properties"
+  },
+  {
+   "name": "shell script: unquoted password ending in !",
+   "input": "#!/bin/bash\nDB_PASSWORD=Xk⟨+⟩7pQ2vRt9mZ!\nexport ADMIN_PASSWORD=Hn⟨+⟩4rT8wq2Lzp!\n",
+   "expect": "#!/bin/bash\nDB_PASSWORD=[REDACTED]\nexport ADMIN_PASSWORD=[REDACTED]\n",
+   "context": "deploy.sh",
+   "mode": "source"
+  },
+  {
+   "name": "shell script: PGPASSWORD before a command",
+   "input": "PGPASSWORD=Su⟨+⟩mmer2024!x psql -h db\n",
+   "expect": "PGPASSWORD=[REDACTED] psql -h db\n",
+   "context": "run.sh",
+   "mode": "source"
+  },
+  {
+   "name": "shell script: references kept",
+   "input": "DB_PASSWORD=$(cat /run/secrets/db)\nAPI_TOKEN=${API_TOKEN:-}\nexport SECRET_KEY=\"$1\"\nTOKEN=`gen-token`\n",
+   "expect": null,
+   "same": true,
+   "context": "run.sh",
+   "mode": "source"
+  },
+  {
+   "name": "shell script: spaced or non-shell file unquoted kept",
+   "input": "password = generatedPass2024xyz\n",
+   "expect": null,
+   "same": true,
+   "context": "app.py",
+   "mode": "source"
+  },
+  {
+   "name": "php variable assignment",
+   "input": "<?php\n$db_password = 'q8⟨+⟩Zr2LmT5vXp9K';\n$api_key = \"f9⟨+⟩Kd83LmQp2Zx7Rt\";\n",
+   "expect": "<?php\n$db_password = '[REDACTED]';\n$api_key = \"[REDACTED]\";\n",
+   "context": "config.php",
+   "mode": "source"
+  },
+  {
+   "name": "php references kept",
+   "input": "<?php\n$password = getenv('DB_PASSWORD');\n$token = $request->get('token');\n$secret = $config['app_secret_value'];\n",
+   "expect": null,
+   "same": true,
+   "context": "a.php",
+   "mode": "source"
+  },
+  {
+   "name": "token_hash in a logged url",
+   "input": "GET https://abc.supabase.co/auth/v1/verify?token_hash=pk⟨+⟩ce_8f3a9b2c7d1e4f5a6b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c&type=signup 200\n",
+   "expect": "GET https://abc.supabase.co/auth/v1/verify?token_hash=[REDACTED]&type=signup 200\n",
+   "context": "server.log"
+  },
+  {
+   "name": "token_hash hex after &",
+   "input": "http://localhost:3000/auth/confirm?type=email&token_hash=8f⟨+⟩3a9b2c7d1e4f5a6b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c",
+   "expect": "http://localhost:3000/auth/confirm?type=email&token_hash=[REDACTED]"
+  },
+  {
+   "name": "token_hash outside a query, placeholders and short values kept",
+   "input": "token_hash=8f3a9b2c7d1e4f5a6b8c9d0e1f2a3b4c5d6e7f8a\n/verify?token_hash={{ .TokenHash }}&type=x\n/verify?token_hash=YOUR_TOKEN_HASH&x=1\n/search?q=hello-world-2024-x&page_token_hash=abc\n",
+   "expect": null,
+   "same": true
   }
  ]
 }
