@@ -1545,6 +1545,39 @@ describe("session uploader trace additions", () => {
     await second.stop();
   });
 
+  test("child ids noted while the turn runs are listed at once, deduped, and kept across a restart without a transcript event", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-upload-child-ids-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-upload-child-ids-state-"));
+    roots.push(root, stateDir);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const { uploads, upload } = makeUploads();
+    const makeUploader = () => new SessionUploader({ stateDir, upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-child-ids-1234";
+
+    const first = makeUploader();
+    first.startSession(sessionId, "workspace-child-ids", root);
+    await first.idle(sessionId);
+    expect(first.noteChildSessionIds(sessionId, ["ses_child_1", "ses_grandchild_1"])).toBe(2);
+    expect(first.noteChildSessionIds(sessionId, ["ses_child_1", sessionId, "bad id!", "ses_child_2"])).toBe(1);
+    expect(first.noteChildSessionIds("session-unknown", ["ses_child_9"])).toBe(0);
+    expect(await first.childSessionIds(sessionId)).toEqual(["ses_child_1", "ses_grandchild_1", "ses_child_2"]);
+    // The next envelope (here a trace flush) lists them.
+    first.recordTrace(sessionId, "session.idle", { status: "busy" });
+    first.flushTrace(sessionId);
+    await first.idle(sessionId);
+    expect(uploads.at(-1)!.session).toMatchObject({ child_session_ids: ["ses_child_1", "ses_grandchild_1", "ses_child_2"] });
+    // Ids only: the transcripts still come when the turn settles.
+    expect(traceEvents(uploads).filter((event) => event.type === "session.child")).toEqual([]);
+    // The app quits before the turn settles: the next start still lists them.
+    await first.stop();
+    const second = makeUploader();
+    second.startSession(sessionId, "workspace-child-ids", root);
+    await second.idle(sessionId);
+    const resumedStart = uploads.find((item) => item.snapshot_type === "start" && item.session_segment === 2)!;
+    expect(resumedStart.session).toMatchObject({ child_session_ids: ["ses_child_1", "ses_grandchild_1", "ses_child_2"] });
+    await second.stop();
+  });
+
   test("sub-agents on their own models keep them; a gateway fallback records the model that really answered", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-upload-subagent-model-"));
     roots.push(root);

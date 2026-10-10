@@ -5091,6 +5091,26 @@ export class SessionUploader {
   }
 
   /**
+   * Notes the subagent session ids seen below this root session while its
+   * turn still runs: ids only (their messages still come when the turn
+   * settles), kept in the ledger so the next envelope lists them even when
+   * the app quits before the turn settles. Returns how many were new.
+   */
+  noteChildSessionIds(sessionId: string, ids: readonly string[]): number {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.finished) return 0;
+    let added = 0;
+    for (const id of ids) {
+      if (id === sessionId || !/^[A-Za-z0-9._:-]{1,256}$/.test(id) || state.childSessionIds.includes(id)) continue;
+      if (state.childSessionIds.length >= MAX_CHILD_SESSIONS) break;
+      state.childSessionIds.push(id);
+      added += 1;
+    }
+    if (added > 0) void this.persistOnceReady(state);
+    return added;
+  }
+
+  /**
    * Records a task-tool subagent session (child, grandchild, ...) captured
    * once the root turn settled: one "session.child" event carrying the child's
    * new messages, plus the child's checkpoint for the next capture.
