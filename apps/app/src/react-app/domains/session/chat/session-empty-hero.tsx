@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Zap } from "lucide-react";
 
 import type { ComposerAttachment } from "@/app/types";
-import { resolveOrganizationPromptCardContent } from "@/components/chat/task-suggestions";
+import { CODING_STARTER_CARDS, resolveOrganizationPromptCardContent } from "@/components/chat/task-suggestions";
 import { useCheckDesktopRestriction, useOrgRestrictions } from "@/react-app/domains/cloud/desktop-config-provider";
 import {
   NewTaskComposer,
@@ -17,28 +17,12 @@ type HeroSuggestion = {
   prompt: string;
 };
 
-const DEFAULT_SUGGESTIONS: HeroSuggestion[] = [
-  {
-    title: "Summarize my week",
-    description: "Pull highlights from email and calendar.",
-    prompt: "Summarize my week: pull the highlights from my connected email and calendar and give me a short digest of what happened and what needs my attention.",
-  },
-  {
-    title: "Clean up a spreadsheet",
-    description: "Drop in a CSV and describe the result you want.",
-    prompt: "Create a sample CSV file with 20 rows of fake customer data (name, email, company, revenue). Then show me a summary of the data.",
-  },
-  {
-    title: "Draft a document",
-    description: "Reports, emails, or briefs from a few bullet points.",
-    prompt: "Draft a one-page project brief. Ask me for the bullet points you need, then turn them into a clear, well-structured document.",
-  },
-  {
-    title: "Automate a web task",
-    description: "Use the built-in browser for repetitive steps.",
-    prompt: "Open craigslist.org in the browser and search for couches for sale. Show me the top 5 results with prices.",
-  },
-];
+/** The coding task templates (task-suggestions.tsx): filled in, never sent on their own. */
+const DEFAULT_SUGGESTIONS: HeroSuggestion[] = CODING_STARTER_CARDS.map((card) => ({
+  title: card.title,
+  description: card.description,
+  prompt: card.prompt,
+}));
 
 type TimeGreeting = {
   title: string;
