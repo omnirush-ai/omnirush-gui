@@ -449,6 +449,17 @@ export type OmniRushVoiceStatus = {
   branch: string | null;
 };
 
+/** GET /omnirush/integrity/:sessionId: the server's "Good session ★" for one chat ("pending" until it confirms). */
+export type OmniRushGoodSession = {
+  good_session: true | false | "pending";
+  reasons: string[];
+  good_session_reasons: string[];
+  integrity: string | null;
+  checked_at: string | null;
+  /** The server's human message per quality reason code, when it sends them. */
+  messages?: Record<string, string>;
+};
+
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
   /** Whether an omnirush.ai account is signed in (its models can run). */
@@ -1933,6 +1944,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         `/omnirush/voice/status${workspaceId ? `?workspace=${encodeURIComponent(workspaceId)}` : ""}`,
         { token, hostToken, timeoutMs: timeouts.config },
       ),
+    getGoodSession: (sessionId: string) =>
+      requestJson<OmniRushGoodSession>(baseUrl, `/omnirush/integrity/${encodeURIComponent(sessionId)}`, { token, hostToken, timeoutMs: timeouts.sessionRead }),
     /** Where the renderer POSTs one voice segment (multipart), and its headers; the local server adds the device bearer. */
     voiceTranscriptionEndpoint: () => ({
       url: `${baseUrl}/omnirush/voice/transcribe`,

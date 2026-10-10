@@ -57,6 +57,12 @@ import {
   type GoodSessionCheck,
   type GoodSessionTone,
 } from "../../../app/lib/good-session";
+import {
+  GOOD_SESSION_TURN_END_DELAY_MS,
+  goodSessionCopy,
+  nextGoodSessionCheckMs,
+} from "../../../app/lib/good-session-integrity";
+import type { OmniRushGoodSession, OmniRushServerClient } from "../../../app/lib/omnirush-server";
 import { readPref, useAccountQuality, writePref } from "../../../app/lib/quality";
 import { isDesktopRuntime, isWindowsPlatform } from "../../../app/utils";
 import { hasLiveSessionActivity, useSessionActivityStore } from "../session/status/session-activity-store";
@@ -127,6 +133,8 @@ export type GoodSessionChecklistBarProps = {
   onFinishIt?: (prompt: string) => void;
   /** Send a prompt on its own (the server's auto-retry). */
   onAutoRetry?: (prompt: string) => void;
+  /** The local server, for the server-confirmed "Good session ★" line (none without it). */
+  client?: Pick<OmniRushServerClient, "getGoodSession">;
 };
 
 /** How long a turn's end settles before an auto-retry is judged (late Stop or error events land first). */
@@ -205,6 +213,87 @@ function useServerSessionStatus(sessionId: string, active: boolean, turnRunning:
   return read.sessionId === sessionId ? read.status : null;
 }
 
+/** Final answers (true or false) per session, until that session's next turn ends. */
+const finalGoodSessions = new Map<string, OmniRushGoodSession>();
+
+/**
+ * The server's "Good session ★" for the open session (GET
+ * /omnirush/integrity/:sessionId): once when it opens, once about 5 s after
+ * each turn ends, and while "pending" again at 30 s, 1 m, 2 m, 5 m, then
+ * every 10 m, up to 24 h after the last turn. True and false are final
+ * until the next turn ends. Null while unknown (shown as pending).
+ */
+function useGoodSession(
+  client: Pick<OmniRushServerClient, "getGoodSession"> | undefined,
+  sessionId: string,
+  active: boolean,
+  turnRunning: boolean,
+  endedAt: number | null,
+): OmniRushGoodSession | null {
+  const [read, setRead] = useState<{ sessionId: string; result: OmniRushGoodSession | null }>(() => ({
+    sessionId,
+    result: finalGoodSessions.get(sessionId) ?? null,
+  }));
+  const edge = useRef({ sessionId, running: turnRunning });
+  const lastEnd = useRef(endedAt);
+  lastEnd.current = endedAt;
+  useEffect(() => {
+    const previous = edge.current;
+    edge.current = { sessionId, running: turnRunning };
+    if (!client || !active || turnRunning) return;
+    const turnEnded = previous.sessionId === sessionId && previous.running;
+    if (turnEnded) finalGoodSessions.delete(sessionId);
+    const known = finalGoodSessions.get(sessionId) ?? null;
+    setRead({ sessionId, result: known });
+    if (known) return;
+    const lastTurnEndedAt = turnEnded ? Date.now() : lastEnd.current ?? Date.now();
+    let cancelled = false;
+    let timer: number | undefined;
+    let pendingChecks = 0;
+    const check = async () => {
+      const result = await client.getGoodSession(sessionId).catch(() => null);
+      if (cancelled) return;
+      if (result && result.good_session !== "pending") finalGoodSessions.set(sessionId, result);
+      setRead({ sessionId, result });
+      pendingChecks += 1;
+      const wait = nextGoodSessionCheckMs({ result, pendingChecks, lastTurnEndedAt, now: Date.now() });
+      if (wait !== null) timer = window.setTimeout(() => void check(), wait);
+    };
+    timer = window.setTimeout(() => void check(), turnEnded ? GOOD_SESSION_TURN_END_DELAY_MS : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [active, client, sessionId, turnRunning]);
+  return read.sessionId === sessionId ? read.result : null;
+}
+
+/** "Good session ★", "Checking session…" (muted) or why not, with the rewards guide. */
+export function GoodSessionLine({ result }: { result: OmniRushGoodSession | null }) {
+  const copy = goodSessionCopy(result);
+  return (
+    <p role="status" data-testid="good-session-confirmed" data-state={copy.state} className="mx-auto max-w-[800px] pb-1 text-[11px] leading-4">
+      {copy.state === "good" ? (
+        <span className="font-medium text-foreground">{copy.text}</span>
+      ) : copy.state === "pending" ? (
+        <span className="text-muted-foreground">{copy.text}</span>
+      ) : (
+        <span className="text-amber-11">
+          {copy.text}{" "}
+          <button
+            type="button"
+            data-testid="good-session-rewards-link"
+            className="font-medium underline underline-offset-2"
+            onClick={() => void openDesktopUrl(copy.link.url).catch(() => undefined)}
+          >
+            {copy.link.label}
+          </button>
+        </span>
+      )}
+    </p>
+  );
+}
+
 const TONE_TEXT: Record<GoodSessionTone, string> = { amber: "text-amber-11", red: "text-red-11" };
 const TONE_BOX: Record<GoodSessionTone, string> = {
   amber: "border-amber-7/40 bg-amber-2/30 text-amber-11",
@@ -263,6 +352,7 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
   }), [facts, nativeWindows, props.isRemoteWorkspace, props.turnRunning, props.workspaceRoot, windowsCounts]);
   const hasPrompt = props.messages.some((message) => message.role === "user");
   const server = useServerSessionStatus(props.sessionId, hasPrompt, props.turnRunning);
+  const goodSession = useGoodSession(props.client, props.sessionId, hasPrompt, props.turnRunning, facts.endedAt);
   // /me/quality's client grade only while the server says nothing about this session.
   const serverGood = useServerGood(props.sessionId, local.onTrack && !serverStatusUsable(server));
   const checklist = useMemo(
@@ -388,6 +478,7 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
           {checklist.reasons.map((reason) => <p key={reason} className="text-amber-11">{reason}</p>)}
         </div>
       ) : null}
+      {props.client ? <GoodSessionLine result={goodSession} /> : null}
       <div className="mx-auto flex max-w-[800px] items-center gap-2 pb-1.5">
         <div
           className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-full border border-border bg-popover/60 px-2.5 py-1 text-[11px] leading-4 text-muted-foreground"

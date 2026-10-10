@@ -3339,6 +3339,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           turnRunning={chatStreaming || (effectiveActivityStatus !== "idle" && effectiveActivityStatus !== "error")}
           onFinishIt={handleMessageListSetPrompt}
           onAutoRetry={handleAutoRetry}
+          client={props.client}
         />
         <ReactSessionComposer
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}
