@@ -289,3 +289,103 @@ export function spinIdempotencyKey(value) {
   const key = text(value);
   return key && key.length <= 64 && /^[0-9A-Za-z._:-]+$/.test(key) ? key : globalThis.crypto.randomUUID();
 }
+
+const SESSION_STATUSES = ["on_track", "at_risk", "failing", "unknown"];
+const CHECK_STATES = ["pass", "fail", "warn", "pending"];
+const DOCK_MODES = ["off", "observe", "warn", "enforce"];
+const DOCK_STAGES = ["none", "warn", "surcharge", "cap"];
+const VERDICT_STATES = ["pending", "usable", "not_usable"];
+/** The fastest the app re-asks for a session's status, and its pace when the server names none. */
+export const SESSION_STATUS_MIN_POLL_SECONDS = 30;
+export const SESSION_STATUS_DEFAULT_POLL_SECONDS = 60;
+
+function oneOf(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function nonNegative(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+function parseDock(value) {
+  if (!value || typeof value !== "object") return null;
+  const weight = Number(value.weight);
+  const capAt = Number(value.cap_at_tokens);
+  return {
+    mode: oneOf(value.mode, DOCK_MODES, "off"),
+    stage: oneOf(value.stage, DOCK_STAGES, "none"),
+    weight: Number.isFinite(weight) && weight > 0 ? weight : 1,
+    sessionTokens: nonNegative(value.session_tokens),
+    surchargeTokens: nonNegative(value.surcharge_tokens),
+    capAtTokens: value.cap_at_tokens === null || value.cap_at_tokens === undefined || !Number.isFinite(capAt) ? null : capAt,
+    capped: value.capped === true,
+    message: text(value.message),
+    link: text(value.link),
+  };
+}
+
+function parseVerdict(value) {
+  if (!value || typeof value !== "object") return null;
+  const weight = Number(value.reward_weight);
+  return {
+    state: oneOf(value.state, VERDICT_STATES, "pending"),
+    reasons: Array.isArray(value.reasons) ? value.reasons.map(text).filter((reason) => reason !== null) : [],
+    rewardWeight: Number.isFinite(weight) ? weight : null,
+  };
+}
+
+/**
+ * The block's `client` switches (contract revision 2); null when absent:
+ * no auto-retry, the finish guard and the one-more-turn nudge on.
+ */
+function parseClientSwitches(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const retry = value.auto_retry && typeof value.auto_retry === "object" ? value.auto_retry : null;
+  const max = Number(retry?.max);
+  return {
+    autoRetry: retry
+      ? {
+        enabled: retry.enabled === true,
+        max: Number.isFinite(max) && max > 0 ? Math.min(3, Math.floor(max)) : 1,
+        message: text(retry.message),
+      }
+      : null,
+    finishGuard: value.finish_guard !== false,
+    oneMoreTurn: value.one_more_turn !== false,
+  };
+}
+
+/**
+ * The server's status block for one session (GET /me/sessions/{id}/status,
+ * or `session_status` on /device/me); null when it is missing or malformed.
+ * Labels, hints and messages are the server's words, kept as given.
+ */
+export function parseSessionStatus(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const sessionId = text(value.session_id);
+  if (!sessionId) return null;
+  const poll = Number(value.poll_seconds);
+  return {
+    sessionId,
+    status: oneOf(value.status, SESSION_STATUSES, "unknown"),
+    reasons: Array.isArray(value.reasons)
+      ? value.reasons
+        .filter((reason) => reason && typeof reason === "object" && text(reason.message))
+        .map((reason) => ({ code: text(reason.code) ?? "", message: text(reason.message) }))
+      : [],
+    message: text(value.message),
+    dock: parseDock(value.dock),
+    verdict: parseVerdict(value.verdict),
+    checklist: Array.isArray(value.checklist)
+      ? value.checklist
+        .filter((item) => item && typeof item === "object" && text(item.id) && text(item.label))
+        .map((item) => ({ id: text(item.id), state: oneOf(item.state, CHECK_STATES, "pending"), label: text(item.label), hint: text(item.hint) ?? "" }))
+      : [],
+    evaluatedAt: isoTime(value.evaluated_at),
+    client: parseClientSwitches(value.client),
+    pollSeconds: Number.isFinite(poll) && poll > 0
+      ? Math.max(SESSION_STATUS_MIN_POLL_SECONDS, Math.floor(poll))
+      : SESSION_STATUS_DEFAULT_POLL_SECONDS,
+  };
+}

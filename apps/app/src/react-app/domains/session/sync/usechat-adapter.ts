@@ -146,11 +146,13 @@ export function snapshotToUIMessages(snapshot: OmniRushSessionSnapshot): UIMessa
     const created = message.info.time?.created;
     const time = message.info.time;
     const completed = time && "completed" in time ? time.completed : undefined;
+    // The engine's finish reason ("stop", "length", "tool-calls", ...): the Good session checklist reads it.
+    const finish = message.info.role === "assistant" ? message.info.finish : undefined;
     const uiMessage = {
       id: message.info.id,
       role: message.info.role,
       ...(typeof created === "number"
-        ? { metadata: { opencode: { created, ...(typeof completed === "number" ? { completed } : {}) } } }
+        ? { metadata: { opencode: { created, ...(typeof completed === "number" ? { completed } : {}), ...(finish ? { finish } : {}) } } }
         : {}),
       parts: message.parts.flatMap<UIMessage["parts"][number]>((part) => {
         if (part.type === "text") {

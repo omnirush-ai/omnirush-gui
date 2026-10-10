@@ -78,6 +78,9 @@ function startEngine() {
     authorizations: [] as string[],
     /** Runs once a page of messages was read. */
     onMessagesRead: null as (() => void) | null,
+    /** The engine's /session/:id/children answers, by session id. */
+    children: {} as Record<string, Array<{ id: string }>>,
+    childrenReads: 0,
   };
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -97,7 +100,12 @@ function startEngine() {
         control.onMessagesRead?.();
         return page;
       }
-      if (url.pathname === `/session/${SESSION}/children`) return Response.json([]);
+      const childrenOf = /^\/session\/([^/]+)\/children$/.exec(url.pathname);
+      if (childrenOf) {
+        control.childrenReads += 1;
+        const id = decodeURIComponent(childrenOf[1]!);
+        return id === SESSION || id in control.children ? Response.json(control.children[id] ?? []) : Response.json({ code: "not_found" }, { status: 404 });
+      }
       if (url.pathname === `/session/${SESSION}`) return Response.json({ id: SESSION });
       return Response.json({ code: "not_found" }, { status: 404 });
     },
@@ -173,6 +181,14 @@ class FakeUploader implements ObservedUploader {
   }
 
   recordChildSession(_sessionId: string, _child: UploadChildSession): void {}
+
+  /** Every batch of ids noted while a turn ran. */
+  readonly notedChildIds: string[][] = [];
+
+  noteChildSessionIds(_sessionId: string, ids: readonly string[]): number {
+    this.notedChildIds.push([...ids]);
+    return ids.length;
+  }
 
   captureSnapshot(_sessionId: string, trigger: "prompt" | "turn_completed", outcome?: "aborted"): void {
     this.entries.push({ kind: "snapshot", trigger, ...(outcome ? { outcome } : {}) });
@@ -306,6 +322,30 @@ describe("session upload observer", () => {
     expect(clock.waits.slice(0, 120).every((ms) => ms === 1_000)).toBe(true);
     expect(Math.max(...clock.waits)).toBe(10_000);
     expect(engine.control.statusReads).toBeLessThan(1_300);
+  });
+
+  test("the sub-agents below a running turn are listed about once a minute, ids only, before the turn settles", async () => {
+    const clock = fakeClock();
+    const engine = startEngine();
+    const sessionUploader = new FakeUploader();
+    engine.control.messages = [message("msg_user_0001", "user", "Split the work")];
+    engine.control.status = () => (clock.elapsed() < 5 * 60_000 ? "busy" : "idle");
+    clock.at(90_000, () => {
+      engine.control.children[SESSION] = [{ id: "ses_child_1" }, { id: "ses_child_2" }];
+      engine.control.children.ses_child_1 = [{ id: "ses_grand_1" }];
+      engine.control.children.ses_grand_1 = [{ id: "ses_great_1" }];
+      engine.control.children.ses_great_1 = [{ id: "ses_too_deep" }];
+    });
+    clock.at(5 * 60_000, () => engine.control.messages.push(message("msg_assistant_0001", "assistant", "Done")));
+
+    await observe({ sessionUploader, archive: fakeArchive(), observers: createSessionObservers(), target: engine.target, timing: clock.timing });
+
+    // About one listing a minute while busy (the first finds none yet), three layers down.
+    expect(sessionUploader.notedChildIds.length).toBeGreaterThanOrEqual(3);
+    expect(sessionUploader.notedChildIds.length).toBeLessThanOrEqual(5);
+    expect(sessionUploader.notedChildIds[0]).toEqual([]);
+    expect(sessionUploader.notedChildIds.at(-1)).toEqual(["ses_child_1", "ses_child_2", "ses_grand_1", "ses_great_1"]);
+    expect(sessionUploader.labels()).toEqual(["session.idle", "snapshot:turn_completed", "flush:turn"]);
   });
 
   test("a turn stopped with Esc is recorded as aborted: session.idle outcome, the snapshot's outcome and turn.completed's", async () => {

@@ -2176,6 +2176,11 @@ const desktopCommandHandlers = {
   "omnirushQualitySpins": async (event) => {
       return omnirushAccountStore.qualitySpinTotals();
   },
+  // The server's live checklist for the open session; null: the app shows its own.
+  "omnirushSessionStatus": async (event, ...args) => {
+      const input = args[0] && typeof args[0] === "object" ? args[0] : {};
+      return omnirushAccountStore.sessionStatus({ sessionId: input.sessionId });
+  },
   "omnirushQualitySpin": async (event, ...args) => {
       const input = args[0] && typeof args[0] === "object" ? args[0] : {};
       return omnirushAccountStore.spinQuality({ idempotencyKey: typeof input.idempotencyKey === "string" ? input.idempotencyKey : undefined });
@@ -2558,6 +2563,9 @@ const desktopCommandHandlers = {
   },
   "__setTurnRunning": async (event, ...args) => {
       return turnGuard.setTurnRunning(args[0] === true);
+  },
+  "__setFinishState": async (event, ...args) => {
+      return turnGuard.setFinishState(args[0]);
   },
 };
 

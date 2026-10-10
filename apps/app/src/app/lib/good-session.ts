@@ -31,6 +31,7 @@
 // desktop's own part is `messageFacts` (the transcript as tool calls).
 
 import type { UIMessage } from "ai";
+import type { OmniRushSessionStatus } from "@omnirush/types/desktop-ipc";
 
 export const GOOD_SESSION_LABEL = "Good session ★";
 /** All local checks pass; the server decides after upload. */
@@ -53,10 +54,28 @@ export const WSL_BANNER_TEXT = "Sessions from native Windows don't count as Good
 export const TURN_GUARD_TITLE = "A turn is still running.";
 export const TURN_GUARD_DETAIL = `Quit now and this session won't count as a ${GOOD_SESSION_LABEL}.`;
 export const TURN_GUARD_MESSAGE = `${TURN_GUARD_TITLE} ${TURN_GUARD_DETAIL}`;
-export const TURN_GUARD_WAIT = "Wait for it";
+/** Keeps the app open and lets the running turn finish. */
+export const TURN_GUARD_WAIT = "Finish it";
 export const TURN_GUARD_QUIT = "Quit anyway";
 
 export const NUDGE_TITLE = `Not a ${GOOD_SESSION_LABEL} yet`;
+
+/** The finish guard (M4b): no turn runs, but the last one needs finishing. */
+export type FinishGuardKind = "awaiting" | "cut";
+export const FINISH_GUARD_TITLE = "This session is one step from counting.";
+export const FINISH_GUARD_DETAIL: Readonly<Record<FinishGuardKind, string>> = Object.freeze({
+  awaiting: "The agent asked you a question. Answer it (or tell it to go ahead) and let the turn finish, or this session won't pass the quality check.",
+  cut: "The last turn stopped before it finished. Send \"continue\" and let it finish, or this session won't pass the quality check.",
+});
+export const FINISH_GUARD_FINISH = "Finish it";
+export const FINISH_GUARD_QUIT = "Quit anyway";
+/** What "Finish it" puts in the composer (editable, not sent). */
+export const FINISH_GUARD_PROMPT: Readonly<Record<FinishGuardKind, string>> = Object.freeze({
+  awaiting: "Go ahead.",
+  cut: "Continue and finish the task.",
+});
+/** The desktop's "Finish it" ({ sessionId, kind }), from the native dialog (turn-guard.mjs) or the in-app one. */
+export const FINISH_GUARD_EVENT = "omnirush:finish-guard:finish";
 
 /**
  * Server texts that still say "replay-ready ★" (older servers): users read
@@ -454,10 +473,12 @@ function toolUrl(input: Record<string, unknown>): string {
 // --- The checklist -----------------------------------------------------------
 
 export type GoodSessionCheckId = "code" | "ran" | "project" | "finished" | "windows";
-export type GoodSessionCheckState = "pass" | "fail" | "pending";
+/** "warn" comes from the server only. */
+export type GoodSessionCheckState = "pass" | "fail" | "warn" | "pending";
 
 export type GoodSessionCheck = {
-  id: GoodSessionCheckId;
+  /** A GoodSessionCheckId locally; the server's ids may grow. */
+  id: string;
   state: GoodSessionCheckState;
   /** "code changed", "ran/tested", "in project", "finish your turn". */
   label: string;
@@ -488,8 +509,12 @@ export type GoodSessionInput = {
   workspaceRoot?: string;
   /** A turn is running (busy, retrying, waiting on a question or a permission). */
   turnRunning?: boolean;
-  /** "pass": the last message is an answer with no session error and no unfinished tool call. */
-  lastTurn?: "pass" | "cut";
+  /**
+   * "pass": the last turn ended on an answer (no error, no unfinished tool,
+   * text after the last tool call, a good finish reason); "awaiting": that
+   * answer asks the user something; "cut": anything else.
+   */
+  lastTurn?: LastTurn;
   /** Native Windows (not WSL). */
   nativeWindows?: boolean;
   /** Remote workspaces do not necessarily have a local project folder. */
@@ -561,7 +586,7 @@ export function goodSessionChecklist({
   const codeShort = fileCount < FLOOR_FILES
     ? ` (${fileCount} of ${FLOOR_FILES} files)`
     : lines < FLOOR_LINES ? ` (${lines} of ${FLOOR_LINES} lines)` : "";
-  const finished = turnRunning ? "pending" : lastTurn === "pass" ? "pass" : "cut";
+  const finished = turnRunning ? "pending" : lastTurn;
   const noRoot = !isRemoteWorkspace && unknownRoot && calls.some((call) => !call.notRun);
   const checks: GoodSessionCheck[] = [
     {
@@ -598,13 +623,17 @@ export function goodSessionChecklist({
     },
     {
       id: "finished",
-      state: finished === "cut" ? "fail" : finished,
-      label: finished === "pending" ? "finish your turn" : finished === "pass" ? "turn finished" : "last turn cut off",
+      state: finished === "pending" || finished === "pass" ? finished : "fail",
+      label: finished === "pending"
+        ? "finish your turn"
+        : finished === "pass" ? "turn finished" : finished === "awaiting" ? "answer the agent" : "last turn cut off",
       hint: finished === "pending"
         ? "Let the turn finish: quitting or stopping now cuts it off."
         : finished === "pass"
           ? "The last turn finished."
-          : "The last turn stopped before it finished: send a follow-up and let it finish.",
+          : finished === "awaiting"
+            ? "The agent asked you a question: answer it (or tell it to go ahead) and let the turn finish."
+            : "The last turn stopped before it finished: send a follow-up and let it finish.",
     },
   ];
   if (nativeWindows) {
@@ -618,7 +647,7 @@ export function goodSessionChecklist({
 
 function mark(check: GoodSessionCheck): string {
   if (check.state === "pending") return check.label;
-  return `${check.label} ${check.state === "pass" ? "✓" : "✗"}`;
+  return `${check.label} ${check.state === "pass" ? "✓" : check.state === "warn" ? "!" : "✗"}`;
 }
 
 /** The checklist's heading: the filled ★ only on the server's word. */
@@ -645,60 +674,159 @@ export function shouldNudge({ wasRunning, running, checklist, alreadyNudged }: {
   return Boolean(wasRunning && !running && !alreadyNudged && (checklist?.missing?.length ?? 0) > 0);
 }
 
-// --- The don't-quit-mid-turn guard --------------------------------------------
+// --- The don't-quit-mid-turn guard and the finish guard ---------------------------
 
 export type QuitGuard = {
   readonly state: "idle" | "asking" | "waiting";
-  request(input?: { running?: boolean; interactive?: boolean; hangup?: boolean }): "quit" | "ask";
+  request(input?: { running?: boolean; interactive?: boolean; hangup?: boolean; finish?: string | null }): "quit" | "ask" | "finish";
   answer(wait: boolean): "wait" | "quit";
+  askedAbout(finish: string): boolean;
   turnEnded(): boolean;
 };
 
 /**
- * `request({ running, interactive, hangup })` answers "quit" (go ahead) or
- * "ask" (show TURN_GUARD_MESSAGE with "Wait for it" / "Quit anyway"). The
- * first quit request while a turn runs asks; a second one, whatever the
- * answer, quits. `answer(wait)` takes the user's choice; `turnEnded()`
- * re-arms the guard for the next turn and says whether the user was waiting.
- * Headless runs and a closed terminal (hangup) never ask.
+ * `request({ running, interactive, hangup, finish })` answers "quit" (go
+ * ahead), "ask" (a turn runs: TURN_GUARD_MESSAGE with "Wait for it" / "Quit
+ * anyway") or "finish" (`finish`, a "<session>:<state>" key: the finish
+ * guard's "Finish it" / "Quit anyway"). The first quit request while a turn
+ * runs asks; a second one, whatever the answer, quits. Each finish key asks
+ * once, ever. `answer(wait)` takes the user's choice; `turnEnded()` re-arms
+ * the running-turn question for the next turn and says whether the user was
+ * waiting. Headless runs and a closed terminal (hangup) never ask.
  */
 export function createQuitGuard(): QuitGuard {
   let state: "idle" | "asking" | "waiting" = "idle";
+  let askingFinish = false;
+  const asked = new Set<string>();
   return {
     get state() {
       return state;
     },
-    request({ running = false, interactive = true, hangup = false } = {}) {
-      if (!interactive || hangup || !running) return "quit";
-      if (state === "idle") {
+    request({ running = false, interactive = true, hangup = false, finish = null } = {}) {
+      if (!interactive || hangup) return "quit";
+      if (running) {
+        if (state === "idle") {
+          state = "asking";
+          askingFinish = false;
+          return "ask";
+        }
+        return "quit";
+      }
+      if (finish && state !== "asking" && !asked.has(finish)) {
+        asked.add(finish);
         state = "asking";
-        return "ask";
+        askingFinish = true;
+        return "finish";
       }
       return "quit";
     },
     answer(wait) {
       if (state !== "asking") return wait ? "wait" : "quit";
+      if (askingFinish) {
+        // Asked once for this state: the next request quits, and a new turn asks as usual.
+        askingFinish = false;
+        state = "idle";
+        return wait ? "wait" : "quit";
+      }
       if (wait) {
         state = "waiting";
         return "wait";
       }
       return "quit";
     },
+    askedAbout(finish) {
+      return asked.has(finish);
+    },
     turnEnded() {
       const was = state;
       state = "idle";
+      askingFinish = false;
       return was === "waiting" || was === "asking";
     },
   };
 }
 
+// --- How the last turn ended (session_qc._completion) ------------------------------
+
+/** An answer that asks the user something (session_qc.AWAITING_USER, on the last 400 characters). */
+const AWAITING_USER = /(would you like|do you want|should i|shall i|let me know|which (one|option)|can you (confirm|clarify|provide)|please (confirm|clarify|provide))[^.]*\?\s*$/i;
+const MENU_ITEM = /^[ \t]*(?:\*\*)?\(?\d{1,2}[.)]/;
+const MENU_ITEM_MORE = /^(?:[ \t]+\S|[ \t]*[-*+] )/;
+const MENU_CHOICE = /\b(options?|pick|choose|which one|which of|prefer|should i)\b/i;
+/** Finish reasons of a turn that did not finish (session_qc.BAD_FINISH). */
+export const BAD_FINISH: ReadonlySet<string> = new Set(["length", "error", "tool-calls", "content-filter", "abort", "aborted"]);
+
+/**
+ * Whether an answer ends on a numbered list for the user to choose from
+ * (session_qc._ends_on_menu): the list is the answer's last block, and the
+ * line that leads into it is a question or asks the user to choose, or its
+ * last line asks which option. A summary of what was done is not a menu.
+ */
+export function endsOnMenu(text: string): boolean {
+  const lines = text.split(/\r\n|\r|\n/).filter((line) => line.trim());
+  let index = lines.length - 1;
+  let items = 0;
+  while (index >= 0 && (MENU_ITEM.test(lines[index]!) || MENU_ITEM_MORE.test(lines[index]!))) {
+    if (MENU_ITEM.test(lines[index]!)) items += 1;
+    index -= 1;
+  }
+  if (items < 2) return false;
+  const lead = index >= 0 ? lines[index]!.trim() : "";
+  const last = lines.at(-1)!.trim();
+  return lead.endsWith("?")
+    || (lead.endsWith(":") && MENU_CHOICE.test(lead))
+    || (last.endsWith("?") && MENU_CHOICE.test(last));
+}
+
+/** Whether a final answer waits on the user: a question (AWAITING_USER) or a menu. */
+export function awaitsUser(text: string): boolean {
+  const tail = text.trim().slice(-600);
+  return AWAITING_USER.test(tail.slice(-400)) || endsOnMenu(tail);
+}
+
+export type LastTurn = "pass" | "cut" | "awaiting";
+/**
+ * How the last turn ended. "stopped" (the Stop button, or the app closed
+ * mid-turn) and "gateway" (an omnirush.ai gateway error) are excused: the
+ * checklist still reads "last turn cut off", but the finish guard stays out
+ * of it. "none": no answer in the last turn yet.
+ */
+export type LastTurnEnd = LastTurn | "stopped" | "gateway" | "none";
+
+/** What the checklist's `finished` shows for an ending. */
+export function lastTurnOf(ended: LastTurnEnd): LastTurn {
+  return ended === "pass" || ended === "awaiting" ? ended : "cut";
+}
+
 // --- The desktop's transcript -------------------------------------------------
 
-function sessionErrorOf(message: UIMessage): boolean {
-  return message.parts.some((part) => {
+function sessionErrorOf(message: UIMessage): Record<string, unknown> | null {
+  for (const part of message.parts) {
     const metadata = record((part as { providerMetadata?: unknown }).providerMetadata);
-    return record(metadata.opencode).sessionError !== undefined;
-  });
+    const opencode = record(metadata.opencode);
+    if (opencode.sessionError !== undefined) return record(opencode.sessionError);
+  }
+  return null;
+}
+
+/**
+ * The gateway refusing on purpose: out of tokens for the day, the Windows
+ * cut-off, the session cap, an app update required. Its messages start with
+ * "omnirush.ai: " (and usually end on a console link); retrying cannot help.
+ */
+const REFUSAL = /(^|Message: )omnirush\.ai:|daily_grant_exhausted|windows_cutoff|session_quality_cap|update_required|client update required/im;
+
+/**
+ * How a turn that ended on an error ended. The engine's MessageAbortedError
+ * is the Stop button; an APIError is the gateway (session_qc._interruption).
+ * `retryable`: a gateway or stream error worth one automatic "continue"
+ * (never a stop or a refusal).
+ */
+function errorEnding(error: Record<string, unknown>): { ended: LastTurnEnd; retryable: boolean } {
+  if (error.kind === "aborted") return { ended: "stopped", retryable: false };
+  const refusal = REFUSAL.test(`${str(error.title)}\n${str(error.technicalDetails)}`) || Boolean(str(record(error.action).link));
+  if (/^Error type: APIError$/m.test(str(error.technicalDetails))) return { ended: "gateway", retryable: !refusal };
+  return { ended: "cut", retryable: !refusal && (error.kind === "provider-timeout" || error.kind === "provider-incomplete") };
 }
 
 function messageCalls(message: UIMessage): ToolCall[] {
@@ -720,18 +848,197 @@ function messageCalls(message: UIMessage): ToolCall[] {
   return calls;
 }
 
-/** The desktop transcript as the checklist reads it: { calls, lastTurn } (the CLI's sessionFacts). */
-export function messageFacts(messages: readonly UIMessage[]): { calls: ToolCall[]; lastTurn: "pass" | "cut" } {
+function messageOpencode(message: UIMessage): Record<string, unknown> {
+  return record(record(message.metadata).opencode);
+}
+
+/** How the last turn (the messages after the last prompt) ended (session_qc._completion). */
+type TurnEnding = { ended: LastTurnEnd; endedAt: number | null; retryable: boolean };
+
+function lastTurnEnd(messages: readonly UIMessage[]): TurnEnding {
+  let start = messages.length;
+  while (start > 0 && messages[start - 1]!.role !== "user") start -= 1;
+  const turn = messages.slice(start).filter((message) => message.role === "assistant");
+  const last = turn.at(-1);
+  if (!last) return { ended: "none", endedAt: null, retryable: false };
+  const completed = messageOpencode(last).completed;
+  const endedAt = typeof completed === "number" ? completed : null;
+  const error = sessionErrorOf(last);
+  if (error) return { ...errorEnding(error), endedAt };
+  let finalText = "";
+  let afterLastTool = true;
+  let unfinished = false;
+  let finish = "";
+  for (const message of turn) {
+    const reason = messageOpencode(message).finish;
+    if (typeof reason === "string" && reason) finish = reason;
+    for (const part of message.parts) {
+      const value = part as unknown as Record<string, unknown>;
+      if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+        afterLastTool = false;
+        finalText = "";
+        if (value.state === "input-streaming" || value.state === "input-available") unfinished = true;
+      } else if (part.type === "text" && str(value.text).trim()) {
+        afterLastTool = true;
+        finalText = str(value.text);
+      }
+    }
+  }
+  const reason = finish.toLowerCase();
+  if (unfinished || BAD_FINISH.has(reason) || !finalText.trim() || !afterLastTool) {
+    // A tool chain cut mid-call, or a stream that ended on an error or between tool calls.
+    return { ended: "cut", endedAt, retryable: unfinished || reason === "tool-calls" || reason === "error" };
+  }
+  return { ended: awaitsUser(finalText) ? "awaiting" : "pass", endedAt, retryable: false };
+}
+
+/**
+ * The desktop transcript as the checklist reads it: { calls, lastTurn } (the
+ * CLI's sessionFacts), plus how the last turn ended (`ended`), when
+ * (`endedAt`, ms; null when unknown) and whether one automatic "continue"
+ * could help (`retryable`), for the finish guard and the auto-retry.
+ */
+export function messageFacts(messages: readonly UIMessage[]): { calls: ToolCall[]; lastTurn: LastTurn } & TurnEnding {
   const calls: ToolCall[] = [];
-  let lastCalls: ToolCall[] = [];
   for (const message of messages) {
     if (message.role !== "assistant") continue;
-    lastCalls = messageCalls(message);
-    calls.push(...lastCalls);
+    calls.push(...messageCalls(message));
   }
-  const last = messages.at(-1);
-  const lastTurn = last && last.role === "assistant" && !sessionErrorOf(last) && !lastCalls.some((call) => call.unfinished) ? "pass" : "cut";
-  return { calls, lastTurn };
+  const ending = lastTurnEnd(messages);
+  return { calls, lastTurn: lastTurnOf(ending.ended), ...ending };
+}
+
+// --- The server's checklist (GET /me/sessions/{id}/status) ---------------------------
+
+export type GoodSessionTone = "amber" | "red";
+
+/** The checklist the bar shows, with the server's own words when it answered. */
+export type ShownChecklist = GoodSessionChecklist & {
+  source: "server" | "local";
+  /** The server's headline, or null. */
+  message: string | null;
+  messageTone: GoodSessionTone | null;
+  /** The server's reasons, in order. */
+  reasons: string[];
+  /** The escalation line (warn → surcharge → cap), or null. */
+  dock: { tone: GoodSessionTone; message: string; link: string | null } | null;
+};
+
+function localShown(local: GoodSessionChecklist): ShownChecklist {
+  return { ...local, source: "local", message: null, messageTone: null, reasons: [], dock: null };
+}
+
+/** Whether the server block is missing or says nothing yet: the local checklist shows then, exactly as without it. */
+export function serverStatusUsable(status: OmniRushSessionStatus | null | undefined): status is OmniRushSessionStatus {
+  if (!status) return false;
+  return !(status.status === "unknown" && status.checklist.length === 0);
+}
+
+/**
+ * The bar's checklist: the server's `checklist[]`, `message`, `reasons` and
+ * `dock` when it answered for this session; otherwise the local checklist,
+ * unchanged. An answer with no checklist items keeps the local items under
+ * the server's message. The filled ★ comes from the server's `usable`
+ * verdict (or, without a server block, from /me/quality's client grade).
+ */
+export function shownChecklist({ local, server, sessionId, serverGood = false }: {
+  local: GoodSessionChecklist;
+  server: OmniRushSessionStatus | null | undefined;
+  sessionId: string;
+  serverGood?: boolean;
+}): ShownChecklist {
+  if (!serverStatusUsable(server) || server.sessionId !== sessionId) {
+    if (!serverGood || !local.onTrack) return localShown(local);
+    return localShown({ ...local, verdict: "good", text: checklistText(local.checks, "good") });
+  }
+  const checks: GoodSessionCheck[] = server.checklist.length
+    ? server.checklist.map((item) => ({ id: item.id, state: item.state, label: goodSessionWording(item.label), hint: goodSessionWording(item.hint) }))
+    : local.checks;
+  const onTrack = checks.every((check) => check.state === "pass");
+  const verdict: GoodSessionVerdict = server.verdict?.state === "usable" ? "good" : onTrack ? "on-track" : "incomplete";
+  const dock = server.dock;
+  const dockTone: GoodSessionTone = dock && (dock.stage === "surcharge" || dock.stage === "cap" || dock.capped || server.status === "failing") ? "red" : "amber";
+  return {
+    checks,
+    verdict,
+    onTrack,
+    missing: checks.filter((check) => check.state === "fail"),
+    text: checklistText(checks, verdict),
+    work: local.work,
+    source: "server",
+    message: server.message ? goodSessionWording(server.message) : null,
+    messageTone: server.status === "failing" ? "red" : server.status === "at_risk" ? "amber" : null,
+    reasons: server.reasons.map((reason) => reason.message),
+    dock: dock?.message && (dock.stage !== "none" || dock.capped)
+      ? { tone: dockTone, message: dock.message, link: dock.link }
+      : null,
+  };
+}
+
+/** Milliseconds to the next status read: the server's `poll_seconds`, at least 30 s; 60 s when it named none. */
+export function sessionStatusPollMs(status: Pick<OmniRushSessionStatus, "pollSeconds"> | null | undefined): number {
+  const seconds = status?.pollSeconds;
+  return Math.max(30, typeof seconds === "number" && seconds > 0 ? seconds : 60) * 1000;
+}
+
+/**
+ * Whether quitting should ask the finish guard, and with which words. Arms
+ * when no turn runs and the last turn was cut off or waits on the user; an
+ * excused ending (stopped, gateway error) never arms. The server arms it
+ * too when its `finished` item is the one step left (fail or pending, every
+ * other item passing or warning) and it judged after the last turn ended.
+ */
+export function finishGuardKind({ turnRunning, ended, endedAt = null, server = null }: {
+  turnRunning: boolean;
+  ended: LastTurnEnd;
+  endedAt?: number | null;
+  server?: OmniRushSessionStatus | null;
+}): FinishGuardKind | null {
+  if (turnRunning || ended === "stopped" || ended === "gateway" || ended === "none") return null;
+  // The server's kill switch (`client.finish_guard: false`).
+  if (serverStatusUsable(server) && server.client?.finishGuard === false) return null;
+  if (ended === "awaiting" || ended === "cut") return ended;
+  if (!serverStatusUsable(server)) return null;
+  const finished = server.checklist.find((item) => item.id === "finished");
+  if (!finished || (finished.state !== "fail" && finished.state !== "pending")) return null;
+  if (!server.checklist.every((item) => item === finished || item.state === "pass" || item.state === "warn")) return null;
+  // The local transcript says it finished: only a verdict newer than that turn overrides it.
+  const judgedAt = server.evaluatedAt ? Date.parse(server.evaluatedAt) : Number.NaN;
+  if (endedAt === null || !Number.isFinite(judgedAt) || judgedAt < endedAt) return null;
+  return /\b(question|answer|reply|waiting)\b/i.test(`${finished.label} ${finished.hint}`) ? "awaiting" : "cut";
+}
+
+/**
+ * The message to send on its own after a turn ended on a gateway, stream or
+ * tool-chain error, or null. Only when the server turned it on for this
+ * session (`client.auto_retry`; never offline), at most `max` times in a
+ * row, never after the user pressed Stop and never on a refusal.
+ */
+export function autoRetryMessage({ turnRunning, ended, retryable, userStopped, retriesInARow, server }: {
+  turnRunning: boolean;
+  ended: LastTurnEnd;
+  retryable: boolean;
+  userStopped: boolean;
+  retriesInARow: number;
+  server: OmniRushSessionStatus | null | undefined;
+}): string | null {
+  const retry = server?.client?.autoRetry;
+  if (!retry?.enabled || !retry.message || retriesInARow >= retry.max) return null;
+  if (turnRunning || userStopped || !retryable || (ended !== "cut" && ended !== "gateway")) return null;
+  return retry.message;
+}
+
+/** The `depth` item's hint for the one-time "one more turn" nudge, or null (off: `client.one_more_turn: false`). */
+export function oneMoreTurnHint(server: OmniRushSessionStatus | null | undefined): string | null {
+  if (!serverStatusUsable(server) || server.client?.oneMoreTurn === false) return null;
+  const depth = server.checklist.find((item) => item.id === "depth");
+  if (!depth || (depth.state !== "warn" && depth.state !== "fail") || !depth.hint) return null;
+  return goodSessionWording(depth.hint);
+}
+
+/** The key the guard asks once for: one session, one state. */
+export function finishGuardKey(sessionId: string, kind: FinishGuardKind): string {
+  return `${sessionId}:${kind}`;
 }
 
 /** Whether ending or deleting a session is about a session whose turn runs. */

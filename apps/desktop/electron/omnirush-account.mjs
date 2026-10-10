@@ -13,7 +13,7 @@ import {
   writePlaintextCredentialFile,
 } from "./plaintext-credential-file.mjs";
 import { CLIENT_HEADER, guiClientHeaderValue, parseClientUpdate } from "./update-gate.mjs";
-import { parseAccountQuality, parseFailLabels, parseQualitySessions, parseSpinHistory, profileSessionId, parseSpinResult, parseWheelSegments, spinIdempotencyKey, spinRefusal } from "./quality.mjs";
+import { parseAccountQuality, parseFailLabels, parseQualitySessions, parseSessionStatus, parseSpinHistory, profileSessionId, parseSpinResult, parseWheelSegments, spinIdempotencyKey, spinRefusal } from "./quality.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,6 +45,8 @@ const MAX_KEYCHAIN_DELETES = 8;
  */
 const SERVER_ROTATION_GRACE_MS = 120_000;
 const REFRESH_TIMEOUT_MS = 20_000;
+/** A session's live status: past this the app shows its own checklist (the server contract's 3 s). */
+const SESSION_STATUS_TIMEOUT_MS = 3_000;
 /**
  * A refresh token that may already have been rotated (the answer was lost)
  * is sent again only while that attempt, timeout included, ends inside the
@@ -1150,7 +1152,7 @@ export function createDesktopOmniRushAccountStore({
     url.pathname += pathname;
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${current.accessToken}`);
-    const response = await send(url, { ...init, headers, signal: AbortSignal.timeout(20_000) });
+    const response = await send(url, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(20_000) });
     if (response.status === 401 && refreshesLeft > 0) {
       const refreshed = await refresh(current.accessToken);
       if (!refreshed) return response;
@@ -1180,6 +1182,26 @@ export function createDesktopOmniRushAccountStore({
         sessions: parseQualitySessions(payload.sessions),
         failLabels: parseFailLabels(payload.fail_labels),
       };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The server's live status for one session (GET /me/sessions/{id}/status),
+   * within 3 s. Null while signed out, offline, slow or on a bad answer: the
+   * app then shows its own checklist.
+   */
+  async function sessionStatus(input = {}) {
+    const sessionId = profileSessionId(input.sessionId);
+    if (!sessionId) return null;
+    try {
+      const response = await sendAuthorized(`/me/sessions/${encodeURIComponent(sessionId)}/status`, {
+        method: "GET",
+        signal: AbortSignal.timeout(SESSION_STATUS_TIMEOUT_MS),
+      });
+      if (!response?.ok) return null;
+      return parseSessionStatus(await response.json());
     } catch {
       return null;
     }
@@ -1262,5 +1284,5 @@ export function createDesktopOmniRushAccountStore({
     }
   }
 
-  return { load, save, refresh, authorize, status, clear, qualityDetails, qualitySpinTotals, spinQuality };
+  return { load, save, refresh, authorize, status, clear, qualityDetails, qualitySpinTotals, spinQuality, sessionStatus };
 }

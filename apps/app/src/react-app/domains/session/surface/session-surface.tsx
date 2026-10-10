@@ -98,7 +98,7 @@ import { getSessionActivityStatusLabel, useSessionActivityStore, type SessionAct
 import { PermissionApprovalPanel } from "@/react-app/domains/session/chat/permission-approval-modal";
 import { QuestionPanel } from "@/react-app/domains/session/modals/question-modal";
 import { QueuedMessagesPanel } from "@/react-app/domains/session/modals/queued-messages-panel";
-import { GoodSessionChecklistBar, WslBanner } from "@/react-app/domains/quality/good-session";
+import { GoodSessionChecklistBar, WslBanner, noteUserStop } from "@/react-app/domains/quality/good-session";
 import { deriveOpenTargets, sameOpenTargets, selectAutoOpenTarget, type OpenTarget } from "@/react-app/domains/session/artifacts/open-target";
 import { usePanelTabStore } from "@/react-app/domains/session/panel/panel-tab-store";
 import {
@@ -2321,6 +2321,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const handleAbort = useCallback(async () => {
     const phase = getQueuedDrainState(props.sessionId).phase;
     if (!chatStreaming && phase.kind !== "sending" && phase.kind !== "admission_unknown") return;
+    // A stopped turn is the user's call: no automatic retry follows it.
+    noteUserStop(props.sessionId);
     setError(null);
     // Stop means stop: drop queued follow-ups before aborting, otherwise the
     // queue-drain effect below re-prompts the agent the moment the abort
@@ -2868,6 +2870,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
       }
     });
   }, [props.sessionId, sendDraft]);
+  const handleAutoRetry = useCallback((prompt: string) => {
+    void handleResumeInterrupted(prompt);
+  }, [handleResumeInterrupted]);
   const handleResumeUnknownOutcome = useCallback(() => {
     void handleResumeInterrupted(interruptedTaskRecoveryPrompt);
   }, [handleResumeInterrupted]);
@@ -3332,6 +3337,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
           workspaceRoot={props.workspaceRoot}
           isRemoteWorkspace={props.isRemoteWorkspace}
           turnRunning={chatStreaming || (effectiveActivityStatus !== "idle" && effectiveActivityStatus !== "error")}
+          onFinishIt={handleMessageListSetPrompt}
+          onAutoRetry={handleAutoRetry}
         />
         <ReactSessionComposer
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}

@@ -41,6 +41,8 @@ export const OMNIRUSH_SWARM_MAX_PER_TURN = Number.POSITIVE_INFINITY;
 export const SUBAGENT_FALLBACK_MODEL_HEADER = "x-omnirush-subagent-fallback-model";
 export const SUBAGENT_FALLBACK_EFFORT_HEADER = "x-omnirush-subagent-fallback-effort";
 export const SUBAGENT_ROOT_SESSION_HEADER = "x-omnirush-subagent-root";
+/** The main session above a sub-agent's model request; the gateway files the request under it (forwarded upstream). */
+export const PARENT_SESSION_HEADER = "x-parent-session-id";
 
 /** The session upload trace event recording that a sub-agent ran on the main model instead of the picked one. */
 export const SUBAGENT_MODEL_FALLBACK_TRACE = "subagent.model_fallback";

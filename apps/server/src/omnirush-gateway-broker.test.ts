@@ -968,6 +968,39 @@ describe("readable gateway errors", () => {
     }
   });
 
+  test("a streamed refusal (capped session, Windows cut-off) becomes a 403 the engine shows once, word for word", async () => {
+    const sse = { "content-type": "text/event-stream", "x-should-retry": "false" };
+    for (const [detail, message] of [
+      ["session_quality_cap", "omnirush.ai: this session is paused: it used a lot of tokens without becoming usable. Start a new session in a project folder: https://gateway.example/console/account"],
+      ["windows_cutoff", "omnirush.ai: sessions from native Windows are paused. Switch to WSL: https://omnirush.ai/console/wsl"],
+    ]) {
+      const frame = `event: error\ndata: ${JSON.stringify({ type: "error", sequence_number: -1, detail, error: { type: "invalid_request_error", code: "omnirush.ai", message } })}\n\n`;
+      const response = await refusingBroker(200, frame, sse).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+      expect(response.status).toBe(403);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("content-type")).toBe("application/json");
+      expect(await response.json()).toEqual({ error: { message, type: "invalid_request_error", code: detail } });
+    }
+  });
+
+  test("a stream marked not-to-retry that is not a single refusal frame passes unchanged", async () => {
+    const sse = { "content-type": "text/event-stream", "x-should-retry": "false" };
+    const created = 'event: response.created\ndata: {"response":{"id":"resp_1"},"sequence_number":0,"type":"response.created"}\n\n';
+    const done = 'event: response.completed\ndata: {"response":{"id":"resp_1"},"sequence_number":1,"type":"response.completed"}\n\n';
+    const streamed = await refusingBroker(200, created + done, sse).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+    expect(streamed.status).toBe(200);
+    expect(await streamed.text()).toBe(created + done);
+    // No `detail`: an ordinary stream error, normalized as before.
+    const plain = 'event: error\ndata: {"type":"error","sequence_number":4,"code":"server_error","message":"The server had an error while processing your request.","param":null}\n\n';
+    const errored = await refusingBroker(200, plain, sse).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+    expect(errored.status).toBe(200);
+    expect(await errored.text()).toBe(plain);
+    // Without the header the refusal frame streams through as before.
+    const frame = `event: error\ndata: ${JSON.stringify({ type: "error", sequence_number: -1, detail: "windows_cutoff", error: { type: "invalid_request_error", code: "omnirush.ai", message: "omnirush.ai: paused." } })}\n\n`;
+    const unmarked = await refusingBroker(200, frame, { "content-type": "text/event-stream" }).handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+    expect(unmarked.status).toBe(200);
+  });
+
   test("a spent grant says which limit ran out and when it resets, and is never resent", async () => {
     const spent = (headers: Record<string, string>) => refusingBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), {
       "content-type": "application/json",
@@ -1210,6 +1243,7 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     "x-omnirush-subagent-root": "ses_main",
     "x-omnirush-session-id": "ses_child",
     "x-omnirush-task-id": "msg_1",
+    "x-parent-session-id": "ses_main",
   };
   const refuse = (status: number, code: string) => Response.json({ detail: code }, { status });
 
@@ -1231,6 +1265,8 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     for (const call of calls) {
       expect([...call.headers.keys()].filter((name) => name.startsWith("x-omnirush-subagent"))).toEqual([]);
       expect(call.headers.get("x-omnirush-session-id")).toBe("ses_child");
+      // The main session goes upstream: the gateway files the request under it.
+      expect(call.headers.get("x-parent-session-id")).toBe("ses_main");
     }
     expect(events).toEqual([expect.objectContaining({
       sessionId: "ses_child",

@@ -136,6 +136,7 @@ export type ObservedUploader = Pick<
   | "childCheckpoints"
   | "childSessionIds"
   | "recordChildSession"
+  | "noteChildSessionIds"
   | "captureSnapshot"
   | "flushTrace"
 >;
@@ -224,6 +225,8 @@ const ENGINE_UNAVAILABLE_TRACE_MS = 60_000;
 const NEVER_BUSY_SETTLE_MS = 10 * 60_000;
 /** A turn ended by the next prompt waits at most this long for that prompt's message to show up in the engine before it settles as it is. */
 const CUT_PROMPT_WAIT_MS = 15_000;
+/** While a turn runs, the subagent sessions below it are listed (ids only) about this often. */
+const CHILD_IDS_INTERVAL_MS = 60_000;
 /** A settled turn whose messages the engine did not answer for (a timeout, a dropped connection) is read again after these waits. */
 const HISTORY_RETRY_DELAYS_MS = [2_000, 5_000];
 
@@ -322,6 +325,34 @@ async function captureChildSessions(input: {
     }
     await captureChildSessions({ ...input, parentSessionId: childId, depth: input.depth + 1 });
   }
+}
+
+/**
+ * The ids of the subagent sessions below `rootSessionId`, children first,
+ * at most MAX_UPLOAD_CHILD_SESSION_DEPTH layers down. A layer the engine
+ * cannot list (an error status) is left out.
+ */
+async function childSessionIdsBelow(fetchEngine: EngineFetch, rootSessionId: string): Promise<string[]> {
+  const ids: string[] = [];
+  const seen = new Set([rootSessionId]);
+  let layer = [rootSessionId];
+  for (let depth = 1; depth <= MAX_UPLOAD_CHILD_SESSION_DEPTH && layer.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const parent of layer) {
+      const children = await readEngineJson(fetchEngine, `/session/${encodeURIComponent(parent)}/children`, 1024 * 1024)
+        .catch(nullOnErrorStatus);
+      if (!Array.isArray(children)) continue;
+      for (const child of children.slice(0, 200)) {
+        const id = isRecord(child) && typeof child.id === "string" && child.id ? child.id : null;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        ids.push(id);
+        next.push(id);
+      }
+    }
+    layer = next;
+  }
+  return ids;
 }
 
 function sum(values: readonly number[]): number {
@@ -954,6 +985,8 @@ export function observeUploadedSession(input: {
     let readTarget = session.target;
     // When the observer first saw that the next prompt ended this turn.
     let cutSeenAt: number | null = null;
+    // When the subagent sessions below were last listed.
+    let childIdsAt = startedAt;
     while (timing.now() - startedAt < timing.maxTurnMs) {
       // An engine that took over from a closed one is read at once, without the closed one's backoff.
       if (session.target !== readTarget) {
@@ -1012,6 +1045,15 @@ export function observeUploadedSession(input: {
       if (status !== "idle") {
         observedBusy = true;
         idleReads = 0;
+        // The v2 daemon has no children route: nothing to list there.
+        if (!v2 && timing.now() - childIdsAt >= CHILD_IDS_INTERVAL_MS) {
+          childIdsAt = timing.now();
+          try {
+            sessionUploader.noteChildSessionIds(sessionId, await childSessionIdsBelow(fetchEngine, sessionId));
+          } catch (error) {
+            if (stopped.aborted) throw error;
+          }
+        }
         continue;
       }
       if (idleReads === 0) {

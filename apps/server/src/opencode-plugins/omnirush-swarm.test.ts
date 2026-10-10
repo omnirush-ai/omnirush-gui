@@ -539,12 +539,18 @@ describe("omnirush swarm plugin: sub-agent model and effort", () => {
       return output.headers;
     };
     expect(await headers("ses_grand", "gpt-6-sol")).toEqual({
+      "x-parent-session-id": "ses_main",
       "x-omnirush-subagent-fallback-model": "gpt-6-astra",
       "x-omnirush-subagent-fallback-effort": "max",
       "x-omnirush-subagent-root": "ses_main",
     });
     expect(await headers("ses_main", "gpt-6-astra")).toEqual({});
-    expect(await headers("ses_grand", "gpt-6-astra")).toEqual({});
+    // Every sub-agent request names its main session, on any model.
+    expect(await headers("ses_grand", "gpt-6-astra")).toEqual({ "x-parent-session-id": "ses_main" });
+    expect(await headers("ses_child", "gpt-6-astra")).toEqual({ "x-parent-session-id": "ses_main" });
+    const other = { headers: {} as Record<string, string> };
+    await hooks["chat.headers"]({ sessionID: "ses_child", model: { id: "claude", providerID: "anthropic" } }, other);
+    expect(other.headers).toEqual({});
 
     // The finished task names the sub-agent's own model.
     const output = { output: "<task>done</task>", metadata: { sessionId: "ses_child", model: { providerID: "omnirush", modelID: "gpt-6-astra" } } as Record<string, unknown> };

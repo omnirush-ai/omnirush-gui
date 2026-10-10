@@ -1,15 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import type { UIMessage } from "ai";
+import type { OmniRushSessionStatus } from "@omnirush/types/desktop-ipc";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  FINISH_GUARD_DETAIL,
+  FINISH_GUARD_PROMPT,
+  FINISH_GUARD_TITLE,
   GOOD_SESSION_GUIDE,
   GOOD_SESSION_ON_TRACK,
   TURN_GUARD_MESSAGE,
   TURN_GUARD_QUIT,
   TURN_GUARD_WAIT,
+  autoRetryMessage,
+  awaitsUser,
   checklistText,
   createQuitGuard,
+  endsOnMenu,
+  finishGuardKey,
+  finishGuardKind,
   fetchedUrls,
   goodSessionChecklist,
   goodSessionNudge,
@@ -19,17 +28,21 @@ import {
   leavingRunningTurn,
   localDay,
   messageFacts,
+  oneMoreTurnHint,
   outsideProject,
   personalService,
   ranSomething,
+  sessionStatusPollMs,
   shellWrites,
   shouldNudge,
+  shownChecklist,
   showWslBanner,
   startsServer,
   windowsNotCounted,
   writtenLines,
 } from "../src/app/lib/good-session";
 import { GoodSessionGuide } from "../src/react-app/domains/quality/good-session";
+import { CODING_STARTER_CARDS } from "../src/components/chat/task-suggestions";
 
 const ROOT = "/home/dev/projects/todo-api";
 const BODY = Array.from({ length: 20 }, (_, i) => `export const v${i} = ${i};`).join("\n");
@@ -315,6 +328,7 @@ describe("the live checklist", () => {
           { type: "tool-write", toolCallId: "1", state: "output-available", input: { filePath: "src/a.rs", content: BODY }, output: "ok" },
           { type: "tool-write", toolCallId: "2", state: "output-available", input: { filePath: "src/b.rs", content: BODY }, output: "ok" },
           { type: "tool-bash", toolCallId: "3", state: "output-available", input: { command: "cargo test" }, output: "ok" },
+          { type: "text", text: "Done." },
         ] as UIMessage["parts"],
       },
     ];
@@ -391,7 +405,7 @@ describe("the don't-leave-mid-turn guard", () => {
 
   test("the dialog says the spec's words", () => {
     expect(TURN_GUARD_MESSAGE).toBe("A turn is still running. Quit now and this session won't count as a Good session ★.");
-    expect([TURN_GUARD_WAIT, TURN_GUARD_QUIT]).toEqual(["Wait for it", "Quit anyway"]);
+    expect([TURN_GUARD_WAIT, TURN_GUARD_QUIT]).toEqual(["Finish it", "Quit anyway"]);
   });
 });
 
@@ -438,5 +452,279 @@ describe("wording, the guide and the WSL banner", () => {
       { id: "code", state: "pass", label: "code changed", hint: "" },
       { id: "finished", state: "pending", label: "finish your turn", hint: "" },
     ])).toBe("Good session: code changed ✓ · finish your turn");
+  });
+});
+
+// --- The server's checklist, the finish guard and the auto-retry --------------------
+
+function serverStatus(overrides: Partial<OmniRushSessionStatus> = {}): OmniRushSessionStatus {
+  return {
+    sessionId: "ses_1",
+    status: "on_track",
+    reasons: [],
+    message: null,
+    dock: null,
+    verdict: null,
+    checklist: [
+      { id: "project", state: "pass", label: "in a project", hint: "The work stays in the project." },
+      { id: "code", state: "pass", label: "code changed (3 files, 120 lines)", hint: "" },
+      { id: "depth", state: "warn", label: "1 of 2 turns", hint: "One more turn would make this count: send a follow-up." },
+      { id: "brand_new", state: "pending", label: "a new check", hint: "" },
+    ],
+    evaluatedAt: "2026-10-10T13:00:00Z",
+    client: null,
+    pollSeconds: 60,
+    ...overrides,
+  };
+}
+
+function assistant(id: string, parts: unknown[], opencode: Record<string, unknown> = {}): UIMessage {
+  return { id, role: "assistant", metadata: { opencode }, parts: parts as UIMessage["parts"] };
+}
+
+function prompt(id = "u"): UIMessage {
+  return { id, role: "user", parts: [{ type: "text", text: "fix the parser" }] };
+}
+
+function errorMessage(sessionError: Record<string, unknown>): UIMessage {
+  return { id: "err", role: "assistant", parts: [{ type: "text", text: String(sessionError.title ?? "error"), providerMetadata: { opencode: { sessionError } } }] as UIMessage["parts"] };
+}
+
+const local = goodSessionChecklist({ ...messageFacts(transcript(realWork())), workspaceRoot: ROOT });
+
+describe("the server's checklist", () => {
+  test("renders the server's items in order with its words, unknown ids generically, warn as its own state", () => {
+    const shown = shownChecklist({ local, server: serverStatus(), sessionId: "ses_1" });
+    expect(shown.source).toBe("server");
+    expect(shown.checks.map((check) => [check.id, check.state, check.label])).toEqual([
+      ["project", "pass", "in a project"],
+      ["code", "pass", "code changed (3 files, 120 lines)"],
+      ["depth", "warn", "1 of 2 turns"],
+      ["brand_new", "pending", "a new check"],
+    ]);
+    expect(shown.verdict).toBe("incomplete");
+    expect(shown.text).toBe("Good session: in a project ✓ · code changed (3 files, 120 lines) ✓ · 1 of 2 turns ! · a new check");
+    expect(shown.missing).toEqual([]);
+  });
+
+  test("message, reasons and the dock: amber for warn/at_risk, red for failing, surcharge and cap", () => {
+    const atRisk = shownChecklist({
+      local,
+      sessionId: "ses_1",
+      server: serverStatus({
+        status: "at_risk",
+        message: "Open a project folder.",
+        reasons: [{ code: "generic_folder", message: "This runs in your Downloads folder: open a project folder." }],
+        dock: { mode: "warn", stage: "warn", weight: 1, sessionTokens: 1, surchargeTokens: 0, capAtTokens: null, capped: false, message: "Heads up: this session may be charged more.", link: null },
+      }),
+    });
+    expect(atRisk.message).toBe("Open a project folder.");
+    expect(atRisk.messageTone).toBe("amber");
+    expect(atRisk.reasons).toEqual(["This runs in your Downloads folder: open a project folder."]);
+    expect(atRisk.dock).toEqual({ tone: "amber", message: "Heads up: this session may be charged more.", link: null });
+    for (const stage of ["surcharge", "cap"] as const) {
+      const shown = shownChecklist({
+        local,
+        sessionId: "ses_1",
+        server: serverStatus({ status: "failing", dock: { mode: "enforce", stage, weight: 1.5, sessionTokens: 1, surchargeTokens: 1, capAtTokens: 2, capped: stage === "cap", message: "Using tokens at 1.5x.", link: "https://omnirush.ai/console/sessions" } }),
+      });
+      expect(shown.dock).toEqual({ tone: "red", message: "Using tokens at 1.5x.", link: "https://omnirush.ai/console/sessions" });
+      expect(shown.messageTone).toBe("red");
+    }
+    const quiet = shownChecklist({ local, sessionId: "ses_1", server: serverStatus({ dock: { mode: "observe", stage: "none", weight: 1, sessionTokens: 1, surchargeTokens: 0, capAtTokens: null, capped: false, message: "observing", link: null } }) });
+    expect(quiet.dock).toBeNull();
+  });
+
+  test("the filled ★ comes from the server's usable verdict", () => {
+    const passing = serverStatus({ checklist: [{ id: "code", state: "pass", label: "code changed", hint: "" }] });
+    expect(shownChecklist({ local, sessionId: "ses_1", server: passing }).verdict).toBe("on-track");
+    expect(shownChecklist({ local, sessionId: "ses_1", server: { ...passing, verdict: { state: "usable", reasons: [], rewardWeight: 2 } } }).verdict).toBe("good");
+  });
+
+  test("falls back to the local checklist exactly when the block is null, unknown and empty, for another session, or the read failed", () => {
+    for (const server of [null, undefined, serverStatus({ status: "unknown", checklist: [] }), serverStatus({ sessionId: "ses_other" })]) {
+      const shown = shownChecklist({ local, server, sessionId: "ses_1" });
+      expect(shown.source).toBe("local");
+      expect(shown.checks).toEqual(local.checks);
+      expect(shown.text).toBe(local.text);
+      expect(shown.verdict).toBe(local.verdict);
+      expect(shown.message).toBeNull();
+      expect(shown.dock).toBeNull();
+    }
+    // Without a server block, /me/quality's client grade still fills the ★ once the local checks pass.
+    const onTrack = goodSessionChecklist({ ...messageFacts(transcript([...realWork(), tool("bash", { command: "npm test" })])), workspaceRoot: ROOT });
+    expect(shownChecklist({ local: onTrack, server: null, sessionId: "ses_1", serverGood: true }).verdict).toBe("good");
+  });
+
+  test("an answer with a message but no items keeps the local items under the server's words", () => {
+    const shown = shownChecklist({ local, sessionId: "ses_1", server: serverStatus({ status: "at_risk", checklist: [], message: "Run the tests." }) });
+    expect(shown.source).toBe("server");
+    expect(shown.checks).toEqual(local.checks);
+    expect(shown.message).toBe("Run the tests.");
+  });
+
+  test("polls at the server's pace: 30 s at least, 60 s when it names none or the read failed", () => {
+    expect(sessionStatusPollMs(null)).toBe(60_000);
+    expect(sessionStatusPollMs({ pollSeconds: 10 })).toBe(30_000);
+    expect(sessionStatusPollMs({ pollSeconds: 90 })).toBe(90_000);
+  });
+});
+
+describe("how the last turn ended (session_qc._completion)", () => {
+  test("questions and menus wait on the user; a summary list does not", () => {
+    expect(awaitsUser("I fixed the parser. Would you like me to add tests for the edge cases?")).toBe(true);
+    expect(awaitsUser("Done. Let me know if you want anything else changed?")).toBe(true);
+    expect(awaitsUser("Fixed it. Let me know if you need anything else.")).toBe(false);
+    expect(endsOnMenu("Which option should I take?\n1. Rewrite the lexer\n2. Patch the tokenizer")).toBe(true);
+    expect(endsOnMenu("Pick one of these options:\n1. Rewrite\n2. Patch")).toBe(true);
+    expect(endsOnMenu("I made the following changes:\n1. Rewrote the lexer\n2. Added tests")).toBe(false);
+    expect(endsOnMenu("Next?\n1. Only one item")).toBe(false);
+  });
+
+  test("a finished answer passes; a question is awaiting, with its own checklist words", () => {
+    expect(messageFacts([prompt(), assistant("a", [tool("bash", { command: "npm test" }), { type: "text", text: "All tests pass." }], { finish: "stop" })]).ended).toBe("pass");
+    const asking = [prompt(), assistant("a", [{ type: "text", text: "Shall I also update the docs?" }], { finish: "stop" })];
+    const facts = messageFacts(asking);
+    expect(facts.ended).toBe("awaiting");
+    expect(facts.lastTurn).toBe("awaiting");
+    const finished = goodSessionChecklist({ ...facts, workspaceRoot: ROOT }).checks.find((check) => check.id === "finished")!;
+    expect([finished.state, finished.label]).toEqual(["fail", "answer the agent"]);
+  });
+
+  test("cut off: a bad finish reason, an unfinished tool, or no answer after the last tool call", () => {
+    for (const finish of ["length", "error", "tool-calls", "content-filter", "aborted"]) {
+      expect(messageFacts([prompt(), assistant("a", [{ type: "text", text: "Half done" }], { finish })]).ended).toBe("cut");
+    }
+    expect(messageFacts([prompt(), assistant("a", [tool("bash", { command: "npm test" }, "input-streaming")])]).ended).toBe("cut");
+    expect(messageFacts([prompt(), assistant("a", [{ type: "text", text: "Running the tests" }, tool("bash", { command: "npm test" })])]).ended).toBe("cut");
+    // The answer may sit in a later message of the same turn.
+    expect(messageFacts([prompt(), assistant("a1", [tool("bash", { command: "npm test" })], { finish: "tool-calls" }), assistant("a2", [{ type: "text", text: "Done." }], { finish: "stop" })]).ended).toBe("pass");
+  });
+
+  test("the Stop button and gateway errors are excused; other errors cut; no answer yet is none", () => {
+    expect(messageFacts([prompt(), errorMessage({ kind: "aborted", title: "Task interrupted", technicalDetails: "Error type: MessageAbortedError" })]).ended).toBe("stopped");
+    expect(messageFacts([prompt(), errorMessage({ kind: "generic", title: "Bad gateway", technicalDetails: "Error type: APIError\nStatus: 502" })]).ended).toBe("gateway");
+    expect(messageFacts([prompt(), errorMessage({ kind: "generic", title: "Context too long", technicalDetails: "Error type: ContextOverflowError" })]).ended).toBe("cut");
+    expect(messageFacts([prompt()]).ended).toBe("none");
+    expect(messageFacts([]).ended).toBe("none");
+  });
+
+  test("retryable: gateway, stream and tool-chain errors; never a stop or a refusal", () => {
+    const retryable = (messages: UIMessage[]) => messageFacts(messages).retryable;
+    expect(retryable([prompt(), errorMessage({ kind: "generic", title: "Bad gateway", technicalDetails: "Error type: APIError\nStatus: 502" })])).toBe(true);
+    expect(retryable([prompt(), errorMessage({ kind: "provider-incomplete", title: "The model response was interrupted", technicalDetails: "Error type: UnknownError" })])).toBe(true);
+    expect(retryable([prompt(), assistant("a", [tool("bash", { command: "npm test" }, "input-streaming")])])).toBe(true);
+    expect(retryable([prompt(), errorMessage({ kind: "aborted", title: "Task interrupted", technicalDetails: "Error type: MessageAbortedError" })])).toBe(false);
+    for (const refusal of [
+      "Message: omnirush.ai: you've used today's tokens: https://omnirush.ai/console/account",
+      "Message: Daily limit\nResponse: {\"detail\":\"daily_grant_exhausted\"}",
+      "Message: refused\nResponse: {\"detail\":\"windows_cutoff\"}",
+      "Message: paused\nResponse: {\"detail\":\"session_quality_cap\"}",
+      "Message: update\nCode: update_required",
+    ]) {
+      expect(retryable([prompt(), errorMessage({ kind: "generic", title: "Refused", technicalDetails: `Error type: APIError\n${refusal}` })])).toBe(false);
+    }
+    expect(retryable([prompt(), assistant("a", [{ type: "text", text: "Half done" }], { finish: "length" })])).toBe(false);
+  });
+});
+
+describe("the finish guard", () => {
+  test("arms on cut and awaiting when no turn runs; never on a stop, a gateway error, a running turn or a fresh session", () => {
+    expect(finishGuardKind({ turnRunning: false, ended: "cut" })).toBe("cut");
+    expect(finishGuardKind({ turnRunning: false, ended: "awaiting" })).toBe("awaiting");
+    expect(finishGuardKind({ turnRunning: true, ended: "cut" })).toBeNull();
+    for (const ended of ["stopped", "gateway", "none", "pass"] as const) {
+      expect(finishGuardKind({ turnRunning: false, ended })).toBeNull();
+    }
+  });
+
+  test("the server arms it when finished is the one step left and it judged after the turn ended", () => {
+    const server = serverStatus({
+      evaluatedAt: "2026-10-10T13:00:00Z",
+      checklist: [
+        { id: "code", state: "pass", label: "code changed", hint: "" },
+        { id: "depth", state: "warn", label: "1 of 2 turns", hint: "" },
+        { id: "finished", state: "fail", label: "last turn cut off", hint: "Send a follow-up and let it finish." },
+      ],
+    });
+    const before = Date.parse("2026-10-10T12:59:00Z");
+    expect(finishGuardKind({ turnRunning: false, ended: "pass", endedAt: before, server })).toBe("cut");
+    expect(finishGuardKind({ turnRunning: false, ended: "pass", endedAt: Date.parse("2026-10-10T13:01:00Z"), server })).toBeNull();
+    expect(finishGuardKind({ turnRunning: false, ended: "pass", endedAt: null, server })).toBeNull();
+    const awaiting = { ...server, checklist: server.checklist.map((item) => item.id === "finished" ? { ...item, state: "pending" as const, hint: "Answer the agent's question." } : item) };
+    expect(finishGuardKind({ turnRunning: false, ended: "pass", endedAt: before, server: awaiting })).toBe("awaiting");
+    const notNext = { ...server, checklist: [...server.checklist, { id: "ran", state: "fail" as const, label: "ran/tested", hint: "" }] };
+    expect(finishGuardKind({ turnRunning: false, ended: "pass", endedAt: before, server: notNext })).toBeNull();
+  });
+
+  test("the server's kill switch (client.finish_guard: false) turns the new states off", () => {
+    const off = serverStatus({ client: { autoRetry: null, finishGuard: false, oneMoreTurn: true } });
+    expect(finishGuardKind({ turnRunning: false, ended: "cut", server: off })).toBeNull();
+    expect(finishGuardKind({ turnRunning: false, ended: "awaiting", server: off })).toBeNull();
+    expect(finishGuardKind({ turnRunning: false, ended: "cut", server: null })).toBe("cut");
+  });
+
+  test("asks once per session and state", () => {
+    const guard = createQuitGuard();
+    expect(guard.request({ finish: finishGuardKey("ses_1", "cut") })).toBe("finish");
+    expect(guard.answer(true)).toBe("wait");
+    expect(guard.request({ finish: finishGuardKey("ses_1", "cut") })).toBe("quit");
+    expect(guard.request({ finish: finishGuardKey("ses_1", "awaiting") })).toBe("finish");
+    expect(guard.answer(false)).toBe("quit");
+    expect(guard.request({ finish: finishGuardKey("ses_2", "cut") })).toBe("finish");
+    expect(guard.answer(true)).toBe("wait");
+    // A running turn still asks its own question afterwards.
+    expect(guard.request({ running: true })).toBe("ask");
+  });
+
+  test("the spec's words and the composer text", () => {
+    expect(FINISH_GUARD_TITLE).toBe("This session is one step from counting.");
+    expect(FINISH_GUARD_DETAIL.awaiting).toBe("The agent asked you a question. Answer it (or tell it to go ahead) and let the turn finish, or this session won't pass the quality check.");
+    expect(FINISH_GUARD_DETAIL.cut).toBe("The last turn stopped before it finished. Send \"continue\" and let it finish, or this session won't pass the quality check.");
+    expect(FINISH_GUARD_PROMPT).toEqual({ awaiting: "Go ahead.", cut: "Continue and finish the task." });
+  });
+});
+
+describe("the server's auto-retry and one-more-turn nudge", () => {
+  const on = serverStatus({ client: { autoRetry: { enabled: true, max: 1, message: "Continue." }, finishGuard: true, oneMoreTurn: true } });
+  const base = { turnRunning: false, ended: "gateway" as const, retryable: true, userStopped: false, retriesInARow: 0, server: on };
+
+  test("fires once after a gateway, stream or tool-chain error", () => {
+    expect(autoRetryMessage(base)).toBe("Continue.");
+    expect(autoRetryMessage({ ...base, ended: "cut" })).toBe("Continue.");
+    expect(autoRetryMessage({ ...base, retriesInARow: 1 })).toBeNull();
+    expect(autoRetryMessage({ ...base, turnRunning: true })).toBeNull();
+  });
+
+  test("never after the Stop button or on a refusal", () => {
+    expect(autoRetryMessage({ ...base, userStopped: true })).toBeNull();
+    expect(autoRetryMessage({ ...base, ended: "stopped", retryable: false })).toBeNull();
+    expect(autoRetryMessage({ ...base, retryable: false })).toBeNull();
+    expect(autoRetryMessage({ ...base, ended: "pass", retryable: false })).toBeNull();
+  });
+
+  test("off when the block or its client switches are absent, or the server turned it off", () => {
+    expect(autoRetryMessage({ ...base, server: null })).toBeNull();
+    expect(autoRetryMessage({ ...base, server: serverStatus() })).toBeNull();
+    expect(autoRetryMessage({ ...base, server: serverStatus({ client: { autoRetry: null, finishGuard: true, oneMoreTurn: true } }) })).toBeNull();
+    expect(autoRetryMessage({ ...base, server: serverStatus({ client: { autoRetry: { enabled: false, max: 1, message: "Continue." }, finishGuard: true, oneMoreTurn: true } }) })).toBeNull();
+    expect(autoRetryMessage({ ...base, server: serverStatus({ client: { autoRetry: { enabled: true, max: 1, message: null }, finishGuard: true, oneMoreTurn: true } }) })).toBeNull();
+  });
+
+  test("one more turn: the depth item's hint, unless the server turned it off", () => {
+    expect(oneMoreTurnHint(serverStatus())).toBe("One more turn would make this count: send a follow-up.");
+    expect(oneMoreTurnHint(serverStatus({ client: { autoRetry: null, finishGuard: true, oneMoreTurn: false } }))).toBeNull();
+    expect(oneMoreTurnHint(serverStatus({ checklist: [{ id: "depth", state: "pass", label: "2 turns", hint: "ok" }] }))).toBeNull();
+    expect(oneMoreTurnHint(null)).toBeNull();
+  });
+});
+
+describe("coding starter cards", () => {
+  test("six task templates, inserted for the user to fill in", () => {
+    expect(CODING_STARTER_CARDS.map((card) => card.title)).toEqual([
+      "Fix a hard bug", "Make it faster", "Fix the build", "Refactor or migrate", "Build a real feature", "Systems work",
+    ]);
+    expect(CODING_STARTER_CARDS[0]!.prompt).toBe("There's a bug in this project: {describe the symptom}. Reproduce it with a failing test or command first, find the root cause, fix it, and run the tests until they pass.");
+    expect(CODING_STARTER_CARDS.every((card) => card.prompt.includes("this project"))).toBe(true);
   });
 });

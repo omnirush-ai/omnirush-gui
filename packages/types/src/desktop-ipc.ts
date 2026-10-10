@@ -280,6 +280,48 @@ export type OmniRushQualityDetails = {
   failLabels: Record<string, string>;
 };
 
+/**
+ * The server's live status for one session (GET /me/sessions/{id}/status).
+ * Labels, hints and messages are server text, shown as given. Null from the
+ * desktop: the app falls back to its own checklist.
+ */
+export type OmniRushSessionStatus = {
+  sessionId: string;
+  status: "on_track" | "at_risk" | "failing" | "unknown";
+  reasons: { code: string; message: string }[];
+  /** The headline above the checklist. */
+  message: string | null;
+  dock: {
+    mode: "off" | "observe" | "warn" | "enforce";
+    stage: "none" | "warn" | "surcharge" | "cap";
+    weight: number;
+    sessionTokens: number;
+    surchargeTokens: number;
+    capAtTokens: number | null;
+    capped: boolean;
+    message: string | null;
+    link: string | null;
+  } | null;
+  verdict: { state: "pending" | "usable" | "not_usable"; reasons: string[]; rewardWeight: number | null } | null;
+  /** In order; ids may grow. */
+  checklist: { id: string; state: "pass" | "fail" | "warn" | "pending"; label: string; hint: string }[];
+  evaluatedAt: string | null;
+  /**
+   * Server switches for the client; null on older servers (no auto-retry,
+   * finish guard and one-more-turn nudge on).
+   */
+  client: {
+    /** Send `message` once after a turn ends on a gateway, stream or tool-chain error (at most `max` in a row). */
+    autoRetry: { enabled: boolean; max: number; message: string | null } | null;
+    /** false: the finish guard's cut/awaiting states are off. */
+    finishGuard: boolean;
+    /** false: no one-more-turn nudge from the `depth` item. */
+    oneMoreTurn: boolean;
+  } | null;
+  /** How often to re-ask while the session is active: 30 or more. */
+  pollSeconds: number;
+};
+
 export type OmniRushQualitySpinRecord = {
   id: string;
   status: "ready" | "spun" | "expired" | "forfeit";
@@ -775,6 +817,7 @@ export type DesktopCommandMap = {
   };
   omnirushQualityDetails: { args: []; result: OmniRushQualityDetails | null };
   omnirushQualitySpins: { args: []; result: OmniRushQualitySpinTotals | null };
+  omnirushSessionStatus: { args: [input: { sessionId: string }]; result: OmniRushSessionStatus | null };
   omnirushQualitySpin: {
     args: [input: { idempotencyKey: string }];
     result: OmniRushQualitySpinOutcome;
@@ -874,6 +917,7 @@ export type DesktopCommandMap = {
   __setNativeTheme: { args: [theme: string]; result: unknown };
   __setApplicationMenuVisible: { args: [visible: boolean]; result: unknown };
   __setTurnRunning: { args: [running: boolean]; result: unknown };
+  __setFinishState: { args: [state: { sessionId: string; kind: "awaiting" | "cut" | null }]; result: unknown };
 };
 
 export type DesktopCommandName = keyof DesktopCommandMap;

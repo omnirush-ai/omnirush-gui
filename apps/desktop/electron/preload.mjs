@@ -6,6 +6,7 @@ const NATIVE_MENU_TOGGLE_SIDEBAR_EVENT = "omnirush:native-menu:toggle-sidebar";
 const NATIVE_MENU_CHECK_UPDATES_EVENT = "omnirush:native-menu:check-updates";
 const NATIVE_MENU_ZOOM_EVENT = "omnirush:native-menu:zoom";
 const AUTOMATION_RUNNER_CREDENTIAL_REJECTED_EVENT = "omnirush:automation-runner:credential-rejected";
+const FINISH_GUARD_EVENT = "omnirush:finish-guard:finish";
 
 function normalizePlatform(value) {
   if (value === "darwin" || value === "linux") return value;
@@ -330,6 +331,12 @@ ipcRenderer.on(NATIVE_MENU_TOGGLE_SIDEBAR_EVENT, () => {
 ipcRenderer.on(NATIVE_MENU_CHECK_UPDATES_EVENT, () => {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new Event(NATIVE_MENU_CHECK_UPDATES_EVENT));
+});
+
+// The finish guard's "Finish it" (turn-guard.mjs): the open session fills its composer.
+ipcRenderer.on(FINISH_GUARD_EVENT, (_event, detail) => {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(FINISH_GUARD_EVENT, { detail }));
 });
 
 ipcRenderer.on(NATIVE_MENU_ZOOM_EVENT, (_event, action) => {
