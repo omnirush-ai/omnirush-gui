@@ -75,6 +75,30 @@ function assertNoSecrets(value, secrets = [GH_TOKEN, NPM_TOKEN, AWS_SECRET, PASS
 
 // --- privacy ------------------------------------------------------------------------
 
+test("privacy: a Windows account name in a profile path is masked in every form, the path kept (WSL, Git Bash, \\wsl$, names with spaces)", () => {
+  // WSL: the Windows account is called the same as the Linux one, or not; never "/mnt/c~".
+  const same = { home: "/home/sam", user: "sam" };
+  assert.equal(privacy.tildeText("cd /mnt/c/Users/sam/app && ls /home/sam", same), "cd /mnt/c/Users/user/app && ls ~");
+  assert.equal(privacy.tildeText("/mnt/c/Users/WinName/app", same), "/mnt/c/Users/user/app");
+  assert.equal(privacy.tildeText("/mnt/d/Users/sam", same), "/mnt/d/Users/user");
+  assert.equal(privacy.tildeText("/mnt/c/Users/user/x and /Users/user/y", { home: "/home/user", user: "user" }), "/mnt/c/Users/user/x and ~/y");
+  // Names with spaces: the whole segment (another segment or a closing quote follows); in prose the name ends at a space.
+  assert.equal(privacy.maskWindowsProfiles("cd '/mnt/c/Users/Jane Doe/proj'"), "cd '/mnt/c/Users/user/proj'");
+  assert.equal(privacy.maskWindowsProfiles('"C:\\Users\\Jane Doe"'), '"C:\\Users\\user"');
+  assert.equal(privacy.maskWindowsProfiles("C:\\Users\\sam and more."), "C:\\Users\\user and more.");
+  // Drive paths, either slash, any case, JSON-escaped; Git Bash and Cygwin; the WSL home from Windows.
+  assert.equal(privacy.maskWindowsProfiles("C:\\Users\\Al.ice\\x c:/users/bob D:\\Users\\Carol."), "C:\\Users\\user\\x c:/users/user D:\\Users\\user.");
+  assert.equal(privacy.maskWindowsProfiles('{"cwd":"C:\\\\Users\\\\sam\\\\proj"}'), '{"cwd":"C:\\\\Users\\\\user\\\\proj"}');
+  assert.equal(privacy.maskWindowsProfiles("/c/Users/Alice/x /cygdrive/c/Users/Alice"), "/c/Users/user/x /cygdrive/c/Users/user");
+  assert.equal(privacy.maskWindowsProfiles("\\\\wsl$\\Ubuntu\\home\\sam\\p \\\\wsl.localhost\\Ubuntu-22.04\\home\\sam //wsl$/Ubuntu/home/sam"), "\\\\wsl$\\Ubuntu\\home\\user\\p \\\\wsl.localhost\\Ubuntu-22.04\\home\\user //wsl$/Ubuntu/home/user");
+  // The same name always masks the same; shared profiles and lookalikes stay.
+  assert.equal(privacy.maskWindowsProfiles("/mnt/c/Users/sam/a /mnt/c/Users/sam/b"), "/mnt/c/Users/user/a /mnt/c/Users/user/b");
+  for (const kept of ["C:\\Users\\Public\\Desktop", "/mnt/c/Users/", "src/c/Users/x", "C:\\Program Files\\x", "/home/sam"]) assert.equal(privacy.maskWindowsProfiles(kept), kept);
+  // The uploader's scrub masks it in every trace string and file too, and counts it (a changed text is never "clean").
+  assert.deepEqual(uploader.redactUploadText("cd /mnt/c/Users/WinName/app"), { text: "cd /mnt/c/Users/user/app", count: 1 });
+  assert.deepEqual(uploader.redactUploadText("cd /mnt/c/Users/user/app"), { text: "cd /mnt/c/Users/user/app", count: 0 });
+});
+
 test("privacy: the home directory and the account name become ~; URLs lose userinfo; addresses become classes", () => {
   const ctx = { home: "/home/alice", user: "alice" };
   assert.equal(privacy.tildeText("cd /home/alice/proj && ls /home/alice", ctx), "cd ~/proj && ls ~");

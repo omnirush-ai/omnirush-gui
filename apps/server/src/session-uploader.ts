@@ -31,6 +31,7 @@ import { ToolchainCache, type CollectOptions as ToolchainOptions, type UploadToo
 import { engine2ImportedFrom } from "./engine2/imported.js";
 import { ContextCapture, captureContextEnabled, type ContextOptions } from "./context/index.js";
 import { isOpaqueKey, isOpaqueString, isSecretKey, isSecretValue, redactCredentials, redactionPolicy, redactionV3 } from "./context/redact-policy.js";
+import { maskWindowsProfiles } from "./context/privacy.js";
 import bundledBestPractices from "./bundled-best-practices.json" with { type: "json" };
 import serverPackage from "../package.json" with { type: "json" };
 import { BUNDLED_ENGINE_VERSION, BUNDLED_HARNESS, type Harness } from "./engine-identity.js";
@@ -1552,11 +1553,15 @@ export type RedactUploadTextOptions = {
  * never contains a dangling backslash, so JSON-escaped text stays escapable.
  */
 export function redactUploadText(input: string, options: RedactUploadTextOptions = {}): { text: string; count: number } {
+  // A Windows account name in a profile path (C:\Users\<name>, WSL's /mnt/c/Users/<name>): masked, the path kept, under every rule set.
+  const masked = maskWindowsProfiles(input);
+  const profiles = masked !== input ? 1 : 0;
+  input = masked;
   if (redactionV3()) {
     const result = redactCredentials(input, { context: options.context, mode: options.mode, awsContext: options.awsContext });
-    return { text: result.text, count: result.count };
+    return { text: result.text, count: result.count + profiles };
   }
-  const tally = { count: 0 };
+  const tally = { count: profiles };
   let text = input.includes("-----BEGIN ") ? applyRedaction(input, PRIVATE_KEY_BLOCK, tally) : input;
   if (text.includes("://")) text = applyRedaction(text, URL_USERINFO, tally);
   const mode = options.mode ?? "config";
