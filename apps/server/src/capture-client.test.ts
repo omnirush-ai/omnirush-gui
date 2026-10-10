@@ -576,3 +576,99 @@ describe("capture worker restarts", () => {
     expect(sink.envelopes().map((item) => [item.session_id, item.snapshot_type])).toEqual([["session-restart-0001", "start"]]);
   }, 30_000);
 });
+
+describe("turns left open: worker restarts and quits", () => {
+  let crashSwitch: string | undefined;
+  let contextSwitch: string | undefined;
+  beforeAll(() => {
+    crashSwitch = process.env.OMNIRUSH_CAPTURE_TEST_CRASH;
+    contextSwitch = process.env.OMNIRUSH_CAPTURE_CONTEXT;
+    process.env.OMNIRUSH_CAPTURE_TEST_CRASH = "1";
+    process.env.OMNIRUSH_CAPTURE_CONTEXT = "0";
+  });
+  afterAll(() => {
+    if (crashSwitch === undefined) delete process.env.OMNIRUSH_CAPTURE_TEST_CRASH;
+    else process.env.OMNIRUSH_CAPTURE_TEST_CRASH = crashSwitch;
+    if (contextSwitch === undefined) delete process.env.OMNIRUSH_CAPTURE_CONTEXT;
+    else process.env.OMNIRUSH_CAPTURE_CONTEXT = contextSwitch;
+  });
+
+  const SESSION = "ses_recovered_0001";
+
+  /** A fake engine with one chat: its status and its messages. */
+  function fakeEngine() {
+    const control = { busy: true, messages: [] as Array<{ info: Record<string, unknown>; parts: unknown[] }> };
+    const message = (id: string, role: "user" | "assistant") => ({
+      info: { id, sessionID: SESSION, role, time: role === "assistant" ? { created: 1, completed: 2 } : { created: 1 } },
+      parts: [{ id: `${id}_p`, messageID: id, sessionID: SESSION, type: "text", text: `${role} ${id}` }],
+    });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/session/status") return Response.json(control.busy ? { [SESSION]: { type: "busy" } } : {});
+        if (url.pathname === `/session/${SESSION}/message`) return Response.json(control.messages);
+        if (url.pathname === `/session/${SESSION}/children`) return Response.json([]);
+        if (url.pathname === `/session/${SESSION}`) return Response.json({ id: SESSION });
+        return Response.json({ code: "not_found" }, { status: 404 });
+      },
+    });
+    cleanups.push(() => server.stop(true));
+    const target = { baseUrl: `http://127.0.0.1:${server.port}`, headers: [] as Array<[string, string]>, search: "", engine: "v1" as const };
+    return { control, message, target };
+  }
+
+  test("a worker killed mid-turn: the next worker uploads the turn's journaled events, marked recovered, and settles the turn from the engine", async () => {
+    const root = await tempDir("recover-root");
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const sink = uploadSink();
+    const engine = fakeEngine();
+    engine.control.messages = [engine.message("msg_1", "user")];
+    const capture = service({
+      stateDir: await tempDir("recover-state"),
+      sessionUploader: { upload: sink.upload },
+      restartBackoffMs: { baseMs: 50, maxMs: 50 },
+    });
+    capture.startSession(SESSION, "workspace-recover", root);
+    capture.captureSnapshot(SESSION, "prompt");
+    capture.recordTrace(SESSION, "engine.request", { body: "do the task" });
+    capture.recordTrace(SESSION, "tool.call", { name: "edit", marker: "before-the-crash" });
+    capture.observeSession(SESSION, engine.target);
+    // The journal is on disk within its flush interval; then the worker dies.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 800));
+    capture.recordTrace(SESSION, "omnirush.test.worker_crash");
+    await until(() => capture.mode() === "restarting", 10_000, "the worker's exit");
+    // The turn finishes while the new worker comes up.
+    engine.control.messages.push(engine.message("msg_2", "assistant"));
+    engine.control.busy = false;
+    await until(() => sink.envelopes().some((item) => JSON.stringify(item).includes("\"recovered\":true")), 30_000, "the settled recovered turn");
+    const envelopes = sink.envelopes() as unknown as Array<{ snapshot_type: string; trace?: Array<{ type: string; data?: unknown }> }>;
+    const recovered = envelopes.find((item) => item.trace?.[0]?.type === "collector.recovered");
+    expect(recovered).toBeDefined();
+    expect(JSON.stringify(recovered)).toContain("before-the-crash");
+    const settled = envelopes.find((item) => item.trace?.some((event) => event.type === "turn.completed"));
+    const completed = settled?.trace?.find((event) => event.type === "turn.completed");
+    expect(completed?.data).toMatchObject({ recovered: true });
+    expect(JSON.stringify(completed)).toContain("msg_2");
+  }, 60_000);
+
+  test("an app quit settles a turn still running before the chat ends", async () => {
+    const root = await tempDir("quit-root");
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const sink = uploadSink();
+    const engine = fakeEngine();
+    engine.control.messages = [engine.message("msg_1", "user"), engine.message("msg_2", "assistant")];
+    const capture = service({ stateDir: await tempDir("quit-state"), sessionUploader: { upload: sink.upload } });
+    capture.startSession(SESSION, "workspace-quit", root);
+    capture.captureSnapshot(SESSION, "prompt");
+    capture.observeSession(SESSION, engine.target);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+    await capture.stop();
+    const envelopes = sink.envelopes() as unknown as Array<{ snapshot_type: string; trace?: Array<{ type: string; data?: unknown }> }>;
+    const completed = envelopes.flatMap((item) => item.trace ?? []).find((event) => event.type === "turn.completed");
+    expect(completed?.data).toMatchObject({ reason: "app_quit" });
+    expect(JSON.stringify(completed)).toContain("msg_2");
+    expect(envelopes.at(-1)?.snapshot_type).toBe("end");
+  }, 60_000);
+});

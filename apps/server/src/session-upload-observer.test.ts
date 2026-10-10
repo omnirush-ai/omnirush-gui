@@ -885,3 +885,57 @@ describe("message outlines and turn outcomes", () => {
     ])).toBe("stopped");
   });
 });
+
+describe("turns left open by an ended process, and turns open at quit", () => {
+  test("a recovered turn on an idle session settles at the first read, with its messages, marked recovered", async () => {
+    const { control, target } = startEngine();
+    control.messages = [message("msg_1", "user"), message("msg_2", "assistant")];
+    const uploader = new FakeUploader();
+    const archive = fakeArchive();
+    const clock = fakeClock();
+    await observeUploadedSession({ sessionUploader: uploader, archive, observers: createSessionObservers(), target, timing: clock.timing, sessionId: SESSION, recovered: true });
+    expect(control.statusReads).toBe(1);
+    expect(uploader.turnMessageIds()).toEqual([["msg_1", "msg_2"]]);
+    const final = uploader.entries.find((entry) => entry.kind === "flush" && entry.final !== undefined);
+    expect(final).toMatchObject({ final: { recovered: true } });
+    expect(uploader.checkpoint).toBe("msg_2");
+    expect(archive.calls).toEqual(["followed", "completed"]);
+  });
+
+  test("a recovered turn still running (a restarted worker) is followed to its end as usual", async () => {
+    const { control, target } = startEngine();
+    let busy = true;
+    control.status = () => (busy ? "busy" : "idle");
+    control.messages = [message("msg_1", "user")];
+    const uploader = new FakeUploader();
+    const archive = fakeArchive();
+    const clock = fakeClock();
+    clock.at(30_000, () => {
+      busy = false;
+      control.messages.push(message("msg_2", "assistant"));
+    });
+    await observeUploadedSession({ sessionUploader: uploader, archive, observers: createSessionObservers(), target, timing: clock.timing, sessionId: SESSION, recovered: true });
+    expect(clock.elapsed()).toBeGreaterThanOrEqual(30_000);
+    expect(uploader.turnMessageIds()).toEqual([["msg_1", "msg_2"]]);
+  });
+
+  test("settleNow (an app quit) ends a running turn with the messages so far, once", async () => {
+    const { control, target } = startEngine();
+    control.status = () => "busy";
+    control.messages = [message("msg_1", "user"), message("msg_2", "assistant")];
+    const uploader = new FakeUploader();
+    const archive = fakeArchive();
+    const observers = createSessionObservers();
+    // A real clock: the observer is between status reads when the app quits.
+    void observeUploadedSession({ sessionUploader: uploader, archive, observers, target, sessionId: SESSION });
+    await Bun.sleep(50);
+    const observed = observers.sessions.get(SESSION);
+    expect(observed?.settleNow).toBeDefined();
+    await observed!.settleNow!();
+    await observed!.settleNow!();
+    observers.controller.abort();
+    expect(uploader.turnMessageIds()).toEqual([["msg_1", "msg_2"]]);
+    expect(uploader.labels()).toContain("session.quit_settled");
+    expect(uploader.entries.find((entry) => entry.kind === "flush" && entry.final !== undefined)).toMatchObject({ final: { reason: "app_quit" } });
+  });
+});

@@ -46,6 +46,7 @@ export type HostRequest =
   | { type: "uploadFile"; sessionId: string; path: string; size: number; options?: UploadRequestOptions }
   | { type: "capabilities" }
   | { type: "accountId" }
+  | { type: "engineTarget"; sessionId: string; workspaceId: string }
   | { type: "sessionIntegrity"; sessionId: string; summary?: boolean; turns?: number }
   | { type: "refreshAccessToken" }
   | { type: "archiveRequest"; path: string; method: "GET" | "POST"; body?: string; refresh?: false }
@@ -56,7 +57,7 @@ export type RequestChannel = "uploader" | "archive";
 export type SerializedResponse = { status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer | null };
 
 export type RequestResult =
-  | { kind: "result"; id: number; ok: true; response: SerializedResponse | null; token?: string | null; value?: TraceCapabilities; account?: string | null }
+  | { kind: "result"; id: number; ok: true; response: SerializedResponse | null; token?: string | null; value?: TraceCapabilities; account?: string | null; target?: EngineTarget | null }
   | { kind: "result"; id: number; ok: false; error: string; name: string };
 
 export type ToWorker = CaptureCall | RequestResult;
@@ -79,6 +80,8 @@ export type CaptureWorkerInit = {
   accountId: boolean;
   /** The main thread can read the server's integrity record of a chat. */
   sessionIntegrity: boolean;
+  /** The main thread can name the engine holding a chat (to settle a turn a previous process left open). */
+  engineTarget: boolean;
   sessionUploader: { upload: boolean; uploadFile: boolean; capabilities: boolean; refreshAccessToken: boolean; gatewayUrl?: string; accessToken?: string };
   archive: {
     enabled: boolean;

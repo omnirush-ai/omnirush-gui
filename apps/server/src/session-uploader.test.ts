@@ -19,6 +19,7 @@ import {
   MAX_SPOOL_AGE_MS,
   uploadIdempotencyKey,
   serverSessionPosition,
+  parseJournal,
   SessionUploader,
   isRetryableUploadStatus,
   mapBounded,
@@ -346,6 +347,79 @@ describe("session uploader privacy", () => {
     const ledger = JSON.parse(await readFile(join(stateDir, "omnirush-upload-sessions.json"), "utf8")) as { sessions: Record<string, { childSessionIds?: string[] }> };
     expect(Object.keys(ledger.sessions)).toHaveLength(1_200);
     expect(Object.values(ledger.sessions).filter((record) => record.childSessionIds)).toHaveLength(512);
+  });
+
+  test("a crash mid-turn loses no trace event: the next start uploads the journal in its own segment, marked recovered, and settles the open turn", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-upload-journal-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-upload-journal-state-"));
+    roots.push(root, stateDir);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const envelopes: Array<Record<string, unknown>> = [];
+    const upload = async (_sessionId: string, compressed: Uint8Array) => {
+      envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+      return Response.json({ ok: true }, { status: 201 });
+    };
+    const crashed = new SessionUploader({ stateDir, upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-journal-1234";
+    crashed.startSession(sessionId, "workspace-journal", root);
+    await crashed.idle(sessionId);
+    crashed.captureSnapshot(sessionId, "prompt");
+    crashed.recordTrace(sessionId, "engine.request", { body: "do the task" });
+    crashed.recordTrace(sessionId, "tool.call", { name: "edit" });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    // The process dies here: no stop(), nothing flushed.
+    expect(envelopes.map((item) => item.snapshot_type)).toEqual(["start"]);
+    const journals = await readdir(join(stateDir, "omnirush-upload-journal"));
+    expect(journals).toHaveLength(1);
+
+    const recoveredTurns: Array<{ sessionId: string; workspaceId: string; root: string }> = [];
+    const next = new SessionUploader({ stateDir, upload, fallbackScanMs: 60_000, onRecoveredTurn: (turn) => recoveredTurns.push(turn) });
+    for (let waited = 0; waited < 5_000 && envelopes.length < 2; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+    const recovered = envelopes[1]!;
+    expect(recovered).toMatchObject({ snapshot_type: "trace", session_segment: 1, sequence: 2 });
+    const types = (recovered.trace as Array<{ type: string }>).map((event) => event.type);
+    expect(types[0]).toBe("collector.recovered");
+    expect(types).toContain("engine.request");
+    expect(types).toContain("tool.call");
+    expect(recoveredTurns).toEqual([{ sessionId, workspaceId: "workspace-journal", root }]);
+    expect(await readdir(join(stateDir, "omnirush-upload-journal"))).toEqual([]);
+    // The chat's next segment starts after the recovered upload.
+    next.startSession(sessionId, "workspace-journal", root);
+    await next.stop();
+    expect(envelopes.slice(2).map((item) => [item.snapshot_type, item.session_segment, item.sequence])).toEqual([["start", 2, 3], ["trace", 2, 4], ["end", 2, 5]]);
+  }, 20_000);
+
+  test("the journal holds only what is not yet handed to an upload, and is gone once the chat ends", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-upload-journal2-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-upload-journal2-state-"));
+    roots.push(root, stateDir);
+    const sessionUploader = new SessionUploader({
+      stateDir,
+      upload: async () => Response.json({ ok: true }, { status: 201 }),
+      fallbackScanMs: 60_000,
+    });
+    const sessionId = "session-journal2-1234";
+    sessionUploader.startSession(sessionId, "workspace-journal2", root);
+    sessionUploader.captureSnapshot(sessionId, "prompt");
+    sessionUploader.recordTrace(sessionId, "tool.call", { n: 1 });
+    sessionUploader.captureSnapshot(sessionId, "turn_completed");
+    sessionUploader.flushTrace(sessionId, { messages: [] });
+    await sessionUploader.idle(sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const dir = join(stateDir, "omnirush-upload-journal");
+    const [name] = await readdir(dir);
+    const journal = parseJournal(await readFile(join(dir, name!), "utf8"));
+    expect(journal?.meta).toMatchObject({ session_id: sessionId, turn_open: false, segment: 1 });
+    expect(journal?.events.map((event) => event.type) ?? []).not.toContain("tool.call");
+    await sessionUploader.stop();
+    expect(await readdir(dir)).toEqual([]);
+  }, 20_000);
+
+  test("reads a journal cut off mid-line by a crash", () => {
+    const meta = { v: 1 as const, session_id: "session-cut-1234", workspace_id: "ws", root: "/w", segment: 3, turn_open: true, at: "2026-10-10T00:00:00.000Z" };
+    const text = `${JSON.stringify({ m: meta })}\n${JSON.stringify({ e: { at: "t", type: "tool.call", data: { a: 1 } } })}\n{"e":{"at":"t","ty`;
+    expect(parseJournal(text)).toEqual({ meta, events: [{ at: "t", type: "tool.call", data: { a: 1 } }] });
+    expect(parseJournal(`${JSON.stringify({ e: { at: "t", type: "x" } })}\n`)).toBeNull();
   });
 
   test("persists session segments and message checkpoints across a resume", async () => {

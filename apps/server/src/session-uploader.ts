@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { createReadStream, createWriteStream, watch, type FSWatcher, type WriteStream } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, readlink, rename, rm, stat } from "node:fs/promises";
+import { appendFile, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, stat } from "node:fs/promises";
 import { homedir, release as osRelease, tmpdir } from "node:os";
 import nodePath, { basename, dirname, extname, join, relative, resolve, sep, type PlatformPath } from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +13,7 @@ import { SESSION_UPLOAD_BUDGET, SESSION_UPLOAD_ENDPOINT_PATH, sessionUploadTimeo
 import { externalFetch } from "./server-fetch.js";
 import {
   UPLOAD_BASE_DIRECTORY,
+  UPLOAD_JOURNAL_DIRECTORY,
   UPLOAD_SESSION_LEDGER_FILE,
   UPLOAD_SPOOL_DIRECTORY,
   UPLOAD_TEMP_DIRECTORY,
@@ -145,6 +146,10 @@ const MAX_SPOOL_TRACE_BYTES = 128 * 1024 * 1024;
 const MAX_SPOOL_TRACE_ENTRIES = 2_000;
 /** A spooled upload that keeps failing with a retryable answer is kept this long, then dropped. */
 export const MAX_SPOOL_AGE_MS = 7 * 24 * 60 * 60_000;
+/** Trace events reach the chat's journal on disk within this long. */
+const JOURNAL_FLUSH_MS = 250;
+/** A journal stops taking events past this size (its chat's meta lines still go in). */
+const MAX_JOURNAL_BYTES = 256 * 1024 * 1024;
 /** How long spooling or a drain waits to learn which account is signed in. */
 const ACCOUNT_LOOKUP_TIMEOUT_MS = 5_000;
 const UPLOAD_ATTEMPTS = 3;
@@ -560,7 +565,76 @@ type SessionState = {
   extras: Map<string, ExtraManifestEntry>;
   /** The numbering already moved past the server's once (an Idempotency-Key it held with other bytes). */
   repositioned?: boolean;
+  /** Trace events not yet handed to an upload, as written to the chat's journal on disk. */
+  journal: JournalState;
 };
+
+type JournalState = {
+  pending: string[];
+  timer: ReturnType<typeof setTimeout> | null;
+  tail: Promise<void>;
+  bytes: number;
+  full: boolean;
+  /** A recovery's stand-in state: never journaled itself. */
+  off: boolean;
+  /**
+   * Lines are written once the chat's own recovery is done (prepareSession):
+   * a journal a previous process left under the same name is read first.
+   */
+  ready: boolean;
+};
+
+/** What a chat's journal says about it (its last meta line). */
+type JournalMeta = {
+  v: 1;
+  session_id: string;
+  workspace_id: string;
+  root: string;
+  segment: number;
+  /** A prompt went out and its turn has not ended. */
+  turn_open: boolean;
+  at: string;
+};
+
+function parseJournalMeta(value: unknown): JournalMeta | null {
+  if (!isRecord(value) || value.v !== 1 || typeof value.session_id !== "string" || typeof value.workspace_id !== "string"
+    || typeof value.root !== "string" || !Number.isSafeInteger(value.segment) || typeof value.turn_open !== "boolean"
+    || typeof value.at !== "string") return null;
+  return {
+    v: 1,
+    session_id: value.session_id,
+    workspace_id: value.workspace_id,
+    root: value.root,
+    segment: Number(value.segment),
+    turn_open: value.turn_open,
+    at: value.at,
+  };
+}
+
+/** A journal file's meta (the last meta line) and its events; null when it holds no meta. */
+export function parseJournal(text: string): { meta: JournalMeta; events: TraceEvent[] } | null {
+  let meta: JournalMeta | null = null;
+  const events: TraceEvent[] = [];
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // A line cut off by the crash.
+      continue;
+    }
+    if (!isRecord(parsed)) continue;
+    if ("m" in parsed) meta = parseJournalMeta(parsed.m) ?? meta;
+    else if (isRecord(parsed.e) && typeof parsed.e.at === "string" && typeof parsed.e.type === "string") {
+      events.push({ at: parsed.e.at, type: parsed.e.type, ...("data" in parsed.e ? { data: parsed.e.data } : {}) });
+    }
+  }
+  return meta ? { meta, events } : null;
+}
+
+/** Where the turns a previous process left open are told: their chat is settled from the engine (capture-host.ts). */
+export type RecoveredTurn = { sessionId: string; workspaceId: string; root: string };
 
 type SessionUploaderOptions = {
   gatewayUrl?: string;
@@ -576,6 +650,12 @@ type SessionUploaderOptions = {
    * this hook the spool is the one account's.
    */
   accountId?: () => Promise<string | null>;
+  /**
+   * A chat a previous process left with its turn open (a crash, a killed
+   * worker): its journaled events are uploaded, then the host settles the
+   * turn from the engine's messages.
+   */
+  onRecoveredTurn?: (turn: RecoveredTurn) => void;
   /** GET /omnirush/me/sessions/{id}/integrity for this account (where the server's copy of a chat stands). */
   sessionIntegrity?: (sessionId: string, options?: { summary?: boolean; turns?: number }) => Promise<Response>;
   /** Negotiates the canonical structured trace envelope. Failures fall back to schema v2. */
@@ -4276,6 +4356,13 @@ export class SessionUploader {
   private readonly spoolMaxAgeMs: number;
   private readonly accountIdHook?: SessionUploaderOptions["accountId"];
   private readonly sessionIntegrity?: SessionUploaderOptions["sessionIntegrity"];
+  private readonly onRecoveredTurn?: SessionUploaderOptions["onRecoveredTurn"];
+  /** Each live chat's journal of trace events (null without a state dir). */
+  private readonly journalDir: string | null;
+  /** The journals a previous process left, read at start; a chat's own start waits for its recovery. */
+  private readonly journalsRead: Promise<void>;
+  private readonly recovering = new Map<string, Promise<void>>();
+  private journalWarned = false;
   /** The signed-in account, once known (it never changes within a process: an account change restarts the server). */
   private accountKnown: string | null = null;
   private accountLookup: Promise<string | null> | null = null;
@@ -4344,6 +4431,7 @@ export class SessionUploader {
     this.stateDir = stateDir;
     this.ledgerPath = stateDir ? join(stateDir, UPLOAD_SESSION_LEDGER_FILE) : null;
     this.spoolDir = stateDir ? join(stateDir, UPLOAD_SPOOL_DIRECTORY) : null;
+    this.journalDir = stateDir ? join(stateDir, UPLOAD_JOURNAL_DIRECTORY) : null;
     // State left under the pre-2.2.2 names is moved before anything reads it.
     this.stateMigrated = stateDir
       ? migrateLegacyUploadState(stateDir, (message, details) => this.log("warn", message, details))
@@ -4364,6 +4452,7 @@ export class SessionUploader {
     this.spoolMaxAgeMs = options.spoolMaxAgeMs ?? MAX_SPOOL_AGE_MS;
     this.accountIdHook = options.accountId;
     this.sessionIntegrity = options.sessionIntegrity;
+    this.onRecoveredTurn = options.onRecoveredTurn;
     this.snapshotMaxBytes = options.snapshotMaxBytes ?? MAX_SNAPSHOT_BYTES;
     this.minChangeIntervalMs = options.minChangeIntervalMs ?? MIN_UPLOAD_CHANGE_INTERVAL_MS;
     this.maxWatchedFiles = options.maxWatchedFiles ?? MAX_UPLOAD_WATCHED_FILES;
@@ -4390,6 +4479,8 @@ export class SessionUploader {
     // Without an account they wait (up to the spool's age limit) for the
     // account to come back: only a user sign-out clears them (clearSpool()).
     if (this.spoolDir && this.enabled) this.scheduleRetry(this.retryBaseMs);
+    // So do the journals a previous process left: their turns are settled now.
+    this.journalsRead = this.enabled ? this.recoverJournals() : Promise.resolve();
   }
 
   /** Capture context wired to this uploader: its trace, its scrub, the project archive and the archive's exclusions. */
@@ -4491,6 +4582,10 @@ export class SessionUploader {
 
   private async prepareSession(state: SessionState): Promise<void> {
     await this.ledgerReady;
+    // What a previous process left of this chat goes out first, numbered before this segment.
+    await this.journalsRead;
+    await this.recovering.get(state.id);
+    state.journal.ready = true;
     const recorded = this.ledger.sessions[state.id];
     // No local record: a new chat, or one this device's ledger lost. The
     // server says where its copy stands, so the numbering goes on after it
@@ -4520,6 +4615,7 @@ export class SessionUploader {
     }
     this.ledger.sessions[state.id] = this.ledgerRecord(state);
     await this.saveLedger();
+    this.journalMeta(state);
   }
 
   /**
@@ -4701,7 +4797,32 @@ export class SessionUploader {
   startSession(sessionId: string, workspaceId: string, root: string): void {
     if (!this.enabled || this.sessions.has(sessionId) || !/^[A-Za-z0-9._:-]{8,128}$/.test(sessionId)) return;
     void this.toolchains?.get(root).catch(() => null); // toolchain.ts: collected in the background
-    const state: SessionState = {
+    const state = this.newSessionState(sessionId, workspaceId, root, this.acquireCache(root));
+    state.ready = this.prepareSession(state);
+    this.sessions.set(sessionId, state);
+    this.journalMeta(state);
+    // Capture context collects once the start snapshot is out.
+    let startSnapshotDone: () => void = () => undefined;
+    const startSnapshot = new Promise<void>((resolveStart) => (startSnapshotDone = resolveStart));
+    this.context?.sessionStarted(sessionId, root, startSnapshot);
+    this.enqueue(state, async () => {
+      await state.ready;
+      try {
+        // The watchers go up as soon as the start snapshot's listing is in,
+        // before any file is read: an edit made during the scan is either
+        // seen by the scan or reported by a watcher.
+        await this.uploadWorkspace(state, "start", state.resumed ? "resume" : "session_start");
+      } finally {
+        state.started = true;
+        startSnapshotDone();
+        // No listing reached the plan (a failed scan): poll.
+        if (state.watchMode === "starting") this.installWatchers(state, null);
+      }
+    });
+  }
+
+  private newSessionState(sessionId: string, workspaceId: string, root: string, cache: Map<string, HashCacheEntry>): SessionState {
+    return {
       id: sessionId,
       root,
       workspaceId,
@@ -4738,7 +4859,7 @@ export class SessionUploader {
       turnSkipped: new Map(),
       turnWrittenPaths: new Map(),
       relevance: new Map(),
-      cache: this.acquireCache(root),
+      cache,
       listing: { denied: 0, truncated: false },
       dirty: new Set(),
       // Nothing is known about the tree yet: the first change capture rescans it.
@@ -4753,27 +4874,8 @@ export class SessionUploader {
       failureCount: 0,
       ready: Promise.resolve(),
       tail: Promise.resolve(),
+      journal: { pending: [], timer: null, tail: Promise.resolve(), bytes: 0, full: false, off: false, ready: false },
     };
-    state.ready = this.prepareSession(state);
-    this.sessions.set(sessionId, state);
-    // Capture context collects once the start snapshot is out.
-    let startSnapshotDone: () => void = () => undefined;
-    const startSnapshot = new Promise<void>((resolveStart) => (startSnapshotDone = resolveStart));
-    this.context?.sessionStarted(sessionId, root, startSnapshot);
-    this.enqueue(state, async () => {
-      await state.ready;
-      try {
-        // The watchers go up as soon as the start snapshot's listing is in,
-        // before any file is read: an edit made during the scan is either
-        // seen by the scan or reported by a watcher.
-        await this.uploadWorkspace(state, "start", state.resumed ? "resume" : "session_start");
-      } finally {
-        state.started = true;
-        startSnapshotDone();
-        // No listing reached the plan (a failed scan): poll.
-        if (state.watchMode === "starting") this.installWatchers(state, null);
-      }
-    });
   }
 
   // --- watcher and dirty tracking --------------------------------------------
@@ -5210,7 +5312,9 @@ export class SessionUploader {
 
   /** Appends one trace event, keeping only the newest MAX_UPLOAD_TRACE_EVENTS. */
   private appendTrace(state: SessionState, type: string, data?: unknown): void {
-    state.trace.push({ at: new Date().toISOString(), type, ...(data === undefined ? {} : { data }) });
+    const event: TraceEvent = { at: new Date().toISOString(), type, ...(data === undefined ? {} : { data }) };
+    state.trace.push(event);
+    this.journalEvent(state, event);
     if (state.trace.length > MAX_UPLOAD_TRACE_EVENTS) state.trace.splice(0, state.trace.length - MAX_UPLOAD_TRACE_EVENTS);
   }
 
@@ -5438,6 +5542,8 @@ export class SessionUploader {
     if (trigger === "prompt") state.turnStartedAt = Date.now() + 1;
     const startedAt = state.turnStartedAt;
     state.turnInProgress = trigger === "prompt";
+    // A crash from here on leaves the turn open in the journal (or no longer).
+    this.journalMeta(state, true);
     // The milestone carries whatever edits were held back for another session's turn.
     state.changesHeld = false;
     if (state.changeTimer) {
@@ -5587,6 +5693,7 @@ export class SessionUploader {
         await this.uploadTrace(state, pendingTrace);
         await this.uploadWorkspace(state, "end", "session_end");
       } finally {
+        await this.journalRemove(state);
         this.releaseCache(state);
         this.sessions.delete(sessionId);
         this.onSessionClosed?.(sessionId);
@@ -5610,7 +5717,12 @@ export class SessionUploader {
     this.enqueue(state, async () => {
       await state.ready;
       if (state.trace.length > 0) pendingTrace.push(...state.trace.splice(0));
-      await this.uploadTrace(state, pendingTrace);
+      try {
+        await this.uploadTrace(state, pendingTrace);
+      } finally {
+        // Uploaded, spooled or refused: the journal keeps only what came after.
+        await this.journalRewrite(state);
+      }
     });
   }
 
@@ -6536,6 +6648,217 @@ export class SessionUploader {
     }
   }
 
+  // --- trace journal -------------------------------------------------------
+  // Each live chat's trace events not yet handed to an upload are appended to
+  // a journal on disk (JSON lines: {"m": meta} and {"e": event}) within
+  // JOURNAL_FLUSH_MS, and its turn's opening and end at once. A crash or a
+  // killed worker loses none of them: the next start uploads what a journal
+  // holds, marked recovered, and has the host settle a turn left open.
+
+  private journalPath(sessionId: string): string {
+    return join(this.journalDir!, `${createHash("sha256").update(sessionId).digest("hex").slice(0, 40)}.jsonl`);
+  }
+
+  private journalMetaLine(state: SessionState): string {
+    const meta: JournalMeta = {
+      v: 1,
+      session_id: state.id,
+      workspace_id: state.workspaceId,
+      root: state.root,
+      segment: state.segment,
+      turn_open: state.turnInProgress,
+      at: new Date().toISOString(),
+    };
+    return JSON.stringify({ m: meta });
+  }
+
+  private journalMeta(state: SessionState, now = false): void {
+    if (!this.journalDir || state.finished || state.journal.off) return;
+    state.journal.pending.push(this.journalMetaLine(state));
+    this.scheduleJournal(state, now);
+  }
+
+  private journalEvent(state: SessionState, event: TraceEvent): void {
+    if (!this.journalDir || state.journal.full || state.journal.off) return;
+    let line: string;
+    try {
+      line = JSON.stringify({ e: event });
+    } catch {
+      return;
+    }
+    if (state.journal.bytes + line.length > MAX_JOURNAL_BYTES) {
+      state.journal.full = true;
+      return;
+    }
+    state.journal.bytes += line.length + 1;
+    state.journal.pending.push(line);
+    this.scheduleJournal(state, false);
+  }
+
+  private scheduleJournal(state: SessionState, now: boolean): void {
+    if (now) {
+      if (state.journal.timer) clearTimeout(state.journal.timer);
+      state.journal.timer = null;
+      void this.flushJournal(state);
+      return;
+    }
+    if (state.journal.timer) return;
+    state.journal.timer = setTimeout(() => {
+      state.journal.timer = null;
+      void this.flushJournal(state);
+    }, JOURNAL_FLUSH_MS);
+    state.journal.timer.unref?.();
+  }
+
+  /** Appends the lines waiting for the journal; resolves once they are on disk. */
+  private flushJournal(state: SessionState): Promise<void> {
+    if (!state.journal.ready) return state.journal.tail;
+    const lines = state.journal.pending.splice(0);
+    if (lines.length === 0 || !this.journalDir) return state.journal.tail;
+    const path = this.journalPath(state.id);
+    state.journal.tail = state.journal.tail
+      .then(async () => {
+        await mkdir(this.journalDir!, { recursive: true, mode: 0o700 });
+        await appendFile(path, `${lines.join("\n")}\n`, { mode: 0o600 });
+      })
+      .catch((error: unknown) => this.journalFailed(state, error));
+    return state.journal.tail;
+  }
+
+  /** The events went to an upload: the journal keeps its meta and what was recorded since. */
+  private journalRewrite(state: SessionState): Promise<void> {
+    if (!this.journalDir || state.finished || state.journal.off || !state.journal.ready) return state.journal.tail;
+    if (state.journal.timer) clearTimeout(state.journal.timer);
+    state.journal.timer = null;
+    state.journal.pending = [];
+    const lines = [this.journalMetaLine(state)];
+    state.journal.bytes = 0;
+    state.journal.full = false;
+    for (const event of state.trace) {
+      const line = JSON.stringify({ e: event });
+      if (state.journal.bytes + line.length > MAX_JOURNAL_BYTES) {
+        state.journal.full = true;
+        break;
+      }
+      state.journal.bytes += line.length + 1;
+      lines.push(line);
+    }
+    const path = this.journalPath(state.id);
+    state.journal.tail = state.journal.tail
+      .then(async () => {
+        await mkdir(this.journalDir!, { recursive: true, mode: 0o700 });
+        await writeFileAtomic(path, `${lines.join("\n")}\n`, { mode: 0o600 });
+      })
+      .catch((error: unknown) => this.journalFailed(state, error));
+    return state.journal.tail;
+  }
+
+  /** The chat's last upload settled: nothing is left to recover. */
+  private journalRemove(state: SessionState): Promise<void> {
+    if (state.journal.timer) clearTimeout(state.journal.timer);
+    state.journal.timer = null;
+    state.journal.pending = [];
+    if (!this.journalDir || state.journal.off) return state.journal.tail;
+    const path = this.journalPath(state.id);
+    state.journal.tail = state.journal.tail.then(() => rm(path, { force: true })).catch((error: unknown) => this.journalFailed(state, error));
+    return state.journal.tail;
+  }
+
+  private journalFailed(state: SessionState, error: unknown): void {
+    if (this.journalWarned) return;
+    this.journalWarned = true;
+    this.log("warn", "OmniRush session journal write failed", { sessionId: state.id, error: error instanceof Error ? error.message : "unknown" });
+  }
+
+  /**
+   * App (or capture worker) start: every journal a previous process left is
+   * uploaded as a trace of the segment it was recorded in, after a
+   * "collector.recovered" event; a turn it left open is handed to the host
+   * (onRecoveredTurn) to be settled from the engine. A chat started meanwhile
+   * waits for its own (prepareSession). Journals past the spool's age limit
+   * are deleted unread.
+   */
+  private async recoverJournals(): Promise<void> {
+    if (!this.journalDir) return;
+    await this.stateMigrated;
+    await this.ledgerReady;
+    let names: string[];
+    try {
+      names = (await readdir(this.journalDir)).filter((name) => name.endsWith(".jsonl"));
+    } catch {
+      return;
+    }
+    const found: Array<{ path: string; meta: JournalMeta; events: TraceEvent[] }> = [];
+    for (const name of names) {
+      const path = join(this.journalDir, name);
+      try {
+        const file = await stat(path);
+        const parsed = Date.now() - file.mtimeMs > this.spoolMaxAgeMs ? null : parseJournal(await readFile(path, "utf8"));
+        if (!parsed || (parsed.events.length === 0 && !parsed.meta.turn_open)) {
+          await rm(path, { force: true });
+          continue;
+        }
+        found.push({ path, ...parsed });
+      } catch {
+        await rm(path, { force: true }).catch(() => undefined);
+      }
+    }
+    // Registered before this resolves, so a chat's start finds its recovery.
+    const recovered: Promise<void>[] = [];
+    let chain = Promise.resolve();
+    for (const journal of found) {
+      chain = chain.then(() => this.recoverJournal(journal)).catch((error: unknown) => {
+        this.log("warn", "OmniRush session journal recovery failed", { sessionId: journal.meta.session_id, error: error instanceof Error ? error.message : "unknown" });
+      });
+      const done = chain;
+      this.recovering.set(journal.meta.session_id, done);
+      recovered.push(done.finally(() => {
+        if (this.recovering.get(journal.meta.session_id) === done) this.recovering.delete(journal.meta.session_id);
+      }));
+    }
+    void Promise.allSettled(recovered);
+  }
+
+  private async recoverJournal(journal: { path: string; meta: JournalMeta; events: TraceEvent[] }): Promise<void> {
+    const { meta, events } = journal;
+    const record = this.ledger.sessions[meta.session_id];
+    if (events.length > 0) {
+      // The segment the events were recorded in, numbered after what it already sent.
+      const state = this.newSessionState(meta.session_id, meta.workspace_id, meta.root, new FileHashCache());
+      state.journal.off = true;
+      state.segment = record?.segment ?? meta.segment;
+      state.sequence = record?.nextSequence ?? 0;
+      state.sentBytes = record?.sentBytes ?? 0;
+      state.lastMessageId = record?.lastMessageId;
+      state.failureCount = record?.failureCount ?? 0;
+      state.lastFailureAt = record?.lastFailureAt;
+      state.lastSuccessAt = record?.lastSuccessAt;
+      state.model = record?.model ?? null;
+      state.childSessionIds = [...(record?.childSessionIds ?? [])];
+      state.childCheckpoints = new Map(Object.entries(record?.childCheckpoints ?? {}));
+      state.resumed = state.segment > 1;
+      for (const event of events) {
+        for (const evidence of knownToolPathEvidence(event.type, event.data)) {
+          const path = workspaceRelativePath(state.root, evidence.path.replaceAll("\\", "/"));
+          if (path && !isUploadPathDenied(path) && state.touchedPaths.size < MAX_TOUCHED_PATHS) state.touchedPaths.add(path);
+        }
+      }
+      const marker: TraceEvent = {
+        at: new Date().toISOString(),
+        type: "collector.recovered",
+        data: { reason: "restart", turn_open: meta.turn_open, events: events.length, journal_at: meta.at, session_segment: state.segment },
+      };
+      await this.uploadTrace(state, [marker, ...events]);
+      this.log("info", "OmniRush session journal recovered", { sessionId: meta.session_id, events: events.length, turnOpen: meta.turn_open });
+    }
+    await rm(journal.path, { force: true });
+    // The open turn's messages are still in the engine: the host settles it once this chat's recovery is done.
+    if (meta.turn_open && this.onRecoveredTurn) {
+      const turn: RecoveredTurn = { sessionId: meta.session_id, workspaceId: meta.workspace_id, root: meta.root };
+      queueMicrotask(() => this.onRecoveredTurn?.(turn));
+    }
+  }
+
   // --- durable retry spool -------------------------------------------------
 
   private spoolLocked<T>(operation: () => Promise<T>): Promise<T> {
@@ -6891,8 +7214,9 @@ export class SessionUploader {
     this.traceSchemaProbe = null;
     this.retryFailures = 0;
     return this.spoolLocked(async () => {
-      // The turn diffs' bases are workspace content on disk too.
+      // The turn diffs' bases are workspace content on disk too, and so are the journals.
       await this.bases.clear();
+      if (this.journalDir) await rm(this.journalDir, { recursive: true, force: true });
       if (!this.spoolDir) return;
       await rm(this.spoolDir, { recursive: true, force: true });
       if (this.stateDir) await removeLegacyUploadContent(this.stateDir);
