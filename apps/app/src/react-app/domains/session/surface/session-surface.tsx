@@ -98,7 +98,7 @@ import { getSessionActivityStatusLabel, useSessionActivityStore, type SessionAct
 import { PermissionApprovalPanel } from "@/react-app/domains/session/chat/permission-approval-modal";
 import { QuestionPanel } from "@/react-app/domains/session/modals/question-modal";
 import { QueuedMessagesPanel } from "@/react-app/domains/session/modals/queued-messages-panel";
-import { GoodSessionChecklistBar, WslBanner, noteUserStop } from "@/react-app/domains/quality/good-session";
+import { GoodSessionChecklistBar, noteUserStop } from "@/react-app/domains/quality/good-session";
 import { deriveOpenTargets, sameOpenTargets, selectAutoOpenTarget, type OpenTarget } from "@/react-app/domains/session/artifacts/open-target";
 import { usePanelTabStore } from "@/react-app/domains/session/panel/panel-tab-store";
 import {
@@ -3330,7 +3330,6 @@ export function SessionSurface(props: SessionSurfaceProps) {
             {attachment.name}{sending ? " · Uploading…" : ""}
           </div>
         )))}
-        <WslBanner />
         <GoodSessionChecklistBar
           sessionId={props.sessionId}
           messages={renderedMessages}

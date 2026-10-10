@@ -18,10 +18,8 @@
 //            local_service) and no machine-specific program (V3
 //            host_only_program)
 //   finished the last turn finished (V3 unrecorded_turn, V2 `finished`)
-//   windows  not native Windows (V3 windows_host); WSL is fine. Left out
-//            while the server counts native Windows: `windows_counts` in the
-//            account's quality block (/device/me, GET /me/quality); the
-//            desktop then passes `nativeWindows: false` (`windowsNotCounted`)
+//
+// Native Windows, macOS, Linux and WSL are treated the same.
 //
 // Sub-agents and many turns are not required.
 //
@@ -44,12 +42,7 @@ export const GOOD_SESSION_GUIDE: readonly string[] = Object.freeze([
   "Run it or its tests.",
   "Let the last turn finish.",
 ]);
-export const GOOD_SESSION_WSL_TIP = "On Windows? Use WSL.";
 export const GOOD_SESSION_GUIDE_LINK = "How to make a Good session";
-
-/** The console's WSL guide (omnirush-console app/console/wsl, lib/wsl-guide). */
-export const WSL_GUIDE_URL = "https://omnirush.ai/console/wsl";
-export const WSL_BANNER_TEXT = "Sessions from native Windows don't count as Good sessions. Switch to WSL";
 
 export const TURN_GUARD_TITLE = "A turn is still running.";
 export const TURN_GUARD_DETAIL = `Quit now and this session won't count as a ${GOOD_SESSION_LABEL}.`;
@@ -58,7 +51,7 @@ export const TURN_GUARD_MESSAGE = `${TURN_GUARD_TITLE} ${TURN_GUARD_DETAIL}`;
 export const TURN_GUARD_WAIT = "Finish it";
 export const TURN_GUARD_QUIT = "Quit anyway";
 
-export const NUDGE_TITLE = `Not a ${GOOD_SESSION_LABEL} yet`;
+export const NUDGE_TITLE = "Not a Good session yet";
 
 /** The finish guard (M4b): no turn runs, but the last one needs finishing. */
 export type FinishGuardKind = "awaiting" | "cut";
@@ -515,8 +508,6 @@ export type GoodSessionInput = {
    * answer asks the user something; "cut": anything else.
    */
   lastTurn?: LastTurn;
-  /** Native Windows (not WSL). */
-  nativeWindows?: boolean;
   /** Remote workspaces do not necessarily have a local project folder. */
   isRemoteWorkspace?: boolean;
   /** The server checked this session after upload and it is a Good session ★. */
@@ -529,7 +520,7 @@ function plural(count: number, word: string): string {
 
 /** The checklist for a session, from its tool calls. */
 export function goodSessionChecklist({
-  calls = [], workspaceRoot = "", turnRunning = false, lastTurn = "cut", nativeWindows = false, isRemoteWorkspace = false, serverGood = false,
+  calls = [], workspaceRoot = "", turnRunning = false, lastTurn = "cut", isRemoteWorkspace = false, serverGood = false,
 }: GoodSessionInput = {}): GoodSessionChecklist {
   const codeFiles = new Map<string, number>();
   let testRuns = 0;
@@ -636,9 +627,6 @@ export function goodSessionChecklist({
             : "The last turn stopped before it finished: send a follow-up and let it finish.",
     },
   ];
-  if (nativeWindows) {
-    checks.push({ id: "windows", state: "fail", label: "native Windows", hint: "Sessions from native Windows don't count: use WSL." });
-  }
   const missing = checks.filter((check) => check.state === "fail");
   const onTrack = checks.every((check) => check.state === "pass");
   const verdict: GoodSessionVerdict = onTrack ? (serverGood ? "good" : "on-track") : "incomplete";
@@ -1048,28 +1036,4 @@ export function leavingRunningTurn(input: { action: "close" | "quit" | "switch" 
   // actions should warn about cutting off its last turn.
   if (input.action === "switch") return false;
   return true;
-}
-
-// --- Native Windows ------------------------------------------------------------
-
-export const WSL_BANNER_DISMISSED_KEY = "omnirush.goodSession.wslBannerDismissedDay.v1";
-
-/** The local day ("2026-10-06"): a dismissed banner comes back the next day. */
-export function localDay(now: Date | number = Date.now()): string {
-  const at = new Date(now);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
-}
-
-/**
- * Native Windows the server does not count (`windowsCounts`: its
- * `windows_counts`, absent or false on older servers): the checklist's
- * `windows` check and the WSL banner show only then.
- */
-export function windowsNotCounted(input: { nativeWindows: boolean; windowsCounts?: boolean }): boolean {
-  return input.nativeWindows && input.windowsCounts !== true;
-}
-
-export function showWslBanner(input: { nativeWindows: boolean; windowsCounts?: boolean; dismissedDay: string | null; now?: Date }): boolean {
-  return windowsNotCounted(input) && input.dismissedDay !== localDay(input.now);
 }
