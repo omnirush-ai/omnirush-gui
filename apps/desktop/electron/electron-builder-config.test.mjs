@@ -52,9 +52,31 @@ describe("Electron distribution configs", () => {
     const config = await readConfig("electron-builder.yml");
     assert.equal(config.extends, "./electron-builder.base.yml");
     assert.equal(config.appId, "ai.omnirush.desktop");
-    assert.equal(config.productName, "OmniRush.ai");
+    assert.equal(config.productName, "omnirush.ai");
     assert.equal(config.protocols[0].schemes[0], "omnirush");
     assert.equal(config.artifactName, "omnirush-${os}-${arch}-${version}.${ext}");
+    // Published package names, so upgrades replace the installed package.
+    assert.equal(config.deb.packageName, "omnirush.ai");
+    assert.equal(config.rpm.packageName, "OmniRush.ai");
+    assert.equal(config.pacman.packageName, "omnirush");
+  });
+
+  it("lays out the macOS installer window on a Retina-ready background", async () => {
+    const { dmg } = await readConfig("electron-builder.yml");
+    const size = async (file) => {
+      const png = await readFile(path.resolve(dirname, "..", file));
+      return [png.readUInt32BE(16), png.readUInt32BE(20)];
+    };
+    assert.deepEqual(await size(dmg.background), [dmg.window.width, dmg.window.height]);
+    assert.deepEqual(
+      await size(dmg.background.replace(/\.png$/, "@2x.png")),
+      [dmg.window.width * 2, dmg.window.height * 2],
+    );
+    assert.deepEqual(
+      dmg.contents.map(({ type, path: target }) => [type, target]),
+      [["file", undefined], ["link", "/Applications"]],
+    );
+    assert.ok(dmg.contents[0].x < dmg.contents[1].x);
   });
 
   it("defines an enterprise flavor with the standard app identity and release provider", async () => {

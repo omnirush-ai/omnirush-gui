@@ -1,13 +1,36 @@
 extends: ./electron-builder.base.yml
 appId: ai.omnirush.desktop
-productName: OmniRush.ai
+productName: omnirush.ai
 protocols:
   - name: OmniRush.ai
     schemes:
       - omnirush
 linux:
   executableName: omnirush
+# Package names stay as published before the lowercase product name, so
+# package managers upgrade the installed package instead of adding a second one.
+deb:
+  packageName: omnirush.ai
+rpm:
+  packageName: OmniRush.ai
 pacman:
   # The AUR package's name, so the two replace each other cleanly.
   packageName: omnirush
+# Installer window: background from scripts/dmg-background.swift (the @2x file
+# is picked up next to it), laid out to match that script.
+dmg:
+  title: ${productName}
+  background: build/dmg-background.png
+  iconSize: 128
+  window:
+    width: 660
+    height: 400
+  contents:
+    - x: 170
+      y: 190
+      type: file
+    - x: 490
+      y: 190
+      type: link
+      path: /Applications
 artifactName: omnirush-${os}-${arch}-${version}.${ext}
