@@ -197,6 +197,7 @@ import { buildOpencodeProxyUrl, engineTarget, type EngineTarget } from "./sessio
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { awaitOmniRushModelCatalogSettled, startOmniRushModelCatalogSync } from "./omnirush-model-catalog-sync.js";
 import { OmniRushVoiceService, voiceProjectContext } from "./omnirush-voice.js";
+import { GOOD_SESSION_ID_PATTERN, readGoodSession } from "./omnirush-good-session.js";
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
 import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
@@ -222,6 +223,8 @@ const commandAdmissionsByServer = new WeakMap<ServerConfig, Map<string, { finger
 const captureServicesByServer = new WeakMap<ServerConfig, CaptureService>();
 /** Voice dictation's broker hop (omnirush-voice.ts), per server. */
 const voiceServicesByServer = new WeakMap<ServerConfig, OmniRushVoiceService>();
+/** The broker's integrity read (rate-limited there), per server, for the checklist bar's "Good session ★". */
+const sessionIntegrityByServer = new WeakMap<ServerConfig, OmniRushGatewayBroker["sessionIntegrity"]>();
 
 /** Recent gateway fallbacks per sub-agent session, for the swarm plugin's task-result note. */
 const subagentGatewayFallbacks = new WeakMap<ServerConfig, Map<string, Array<Record<string, unknown>>>>();
@@ -1059,6 +1062,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       });
     },
   });
+  if (gatewayBroker.enabled) sessionIntegrityByServer.set(config, (sessionId, options) => gatewayBroker.sessionIntegrity(sessionId, options));
   voiceServicesByServer.set(config, new OmniRushVoiceService(gatewayBroker, {
     log: (level, message, attributes) => logger.log(level, message, attributes),
   }));
@@ -3877,6 +3881,14 @@ function createRoutes(
     const voice = voiceServicesByServer.get(config);
     if (!voice) throw new ApiError(503, "voice_unavailable", "Voice input is not available.");
     return voice.transcribe(ctx.request);
+  });
+
+  // "Good session ★" for one chat (omnirush-good-session.ts): never an error
+  // the bar would show; 404, 429, offline or signed out read "pending".
+  addRoute(routes, "GET", "/omnirush/integrity/:sessionId", "client", async (ctx) => {
+    const sessionId = ctx.params.sessionId ?? "";
+    if (!GOOD_SESSION_ID_PATTERN.test(sessionId)) throw new ApiError(400, "invalid_session_id", "A valid session id is required");
+    return jsonResponse(await readGoodSession(sessionIntegrityByServer.get(config) ?? null, sessionId));
   });
 
   addRoute(routes, "GET", "/managed-policy", "client", async () =>
