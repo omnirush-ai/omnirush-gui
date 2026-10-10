@@ -534,6 +534,40 @@ describe("session uploader server integration", () => {
     expect(events(turnThree).map((event) => event.type)).toContain("session.resumed");
   }, 90_000);
 
+  test("a prompt to a chat the engine does not have starts nothing: no start or end snapshot", async () => {
+    const { root, stateDir } = await createWorkspace();
+    const engine = startMockEngine({ provider: "anthropic", model: "claude-sonnet-4-5" });
+    const gateway = startMockGateway();
+    const omnirush = await startOmniRush(serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl, gatewayUrl: gateway.gatewayUrl }));
+    const response = await fetch(`${omnirush.base}/workspace/ws_1/opencode/session/ses_missing_chat/prompt_async`, {
+      method: "POST",
+      headers: { Authorization: "Bearer owt_test_token", "content-type": "application/json" },
+      body: JSON.stringify({ parts: [{ type: "text", text: "Do the task" }] }),
+    });
+    expect(response.status).toBe(404);
+    await omnirush.stop();
+    expect(gateway.uploads.filter((upload) => upload.sessionId === "ses_missing_chat")).toEqual([]);
+  }, 30_000);
+
+  test("a user's sign-out (clearUploadQueue) deletes the queued uploads; a start without an account keeps them", async () => {
+    const { root, stateDir } = await createWorkspace();
+    const engine = startMockEngine({ provider: "anthropic", model: "claude-sonnet-4-5" });
+    const spool = join(stateDir, "omnirush-upload-spool");
+    await mkdir(spool, { recursive: true });
+    const id = "000000000001-000001-00000001";
+    await writeFile(join(spool, `${id}.zst`), Buffer.alloc(64, 1));
+    await writeFile(join(spool, `${id}.json`), JSON.stringify({ id, session_id: "ses_queued_0001", snapshot_type: "trace", trigger: "trace_flush", sequence: 1, bytes: 64, created_at: new Date().toISOString(), attempts: 1, account_id: "user-1" }));
+    // Signed out by a refused refresh: the next start has no account, and the queue stays.
+    const retired = await startOmniRush(serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await retired.stop();
+    expect((await readdir(spool)).sort()).toEqual([`${id}.json`, `${id}.zst`]);
+    // The user signed out: the start after it deletes it.
+    const signedOut = await startOmniRush({ ...serverConfig({ root, stateDir, engineBaseUrl: engine.baseUrl }), clearUploadQueue: true });
+    await signedOut.stop();
+    expect(await readdir(spool).catch(() => [])).toEqual([]);
+  }, 30_000);
+
   test("refuses prompt dispatch on a local workspace without an account, unless both development flags are set", async () => {
     const { root, stateDir } = await createWorkspace();
     const engine = startMockEngine({ provider: "anthropic", model: "claude-sonnet-4-5" });

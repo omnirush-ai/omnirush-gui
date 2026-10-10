@@ -901,6 +901,31 @@ function uploadDeletedSessionId(method: string, proxyPath: string): string | nul
 
 type EngineRequestTarget = { baseUrl: string; headers: Headers };
 
+/** How long the existence check before a chat's first captured prompt waits for the engine. */
+const ENGINE_SESSION_CHECK_TIMEOUT_MS = 3_000;
+
+/**
+ * Whether the engine has this session: false only when it answers 404. An
+ * engine that is slow or unreachable counts as having it, so no prompt it
+ * does run goes uncaptured.
+ */
+export async function engineHasSession(baseUrl: string, auth: string | null, directory: string | null, sessionId: string): Promise<boolean> {
+  const headers = new Headers();
+  if (auth) headers.set("Authorization", auth);
+  const scoped = scopeWorkspaceOpencodeRequest(headers, "", directory);
+  try {
+    const response = await loopbackFetch(buildOpencodeProxyUrl(baseUrl, `/session/${encodeURIComponent(sessionId)}`, scoped.search), {
+      method: "GET",
+      headers: scoped.headers,
+      signal: AbortSignal.timeout(ENGINE_SESSION_CHECK_TIMEOUT_MS),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    return response.status !== 404;
+  } catch {
+    return true;
+  }
+}
+
 const SESSION_STOP_TIMEOUT_MS = 5_000;
 const SESSION_STOP_MAX_SESSIONS = 100;
 
@@ -973,12 +998,12 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     credentials: gatewayCredentials
       ? {
           ...gatewayCredentials,
-          // Revoked or expired omnirush.ai credentials also discard spooled
-          // session uploads and queued project archives: a signed-out
-          // account leaves nothing queued.
+          // A device session the server retired (a refused refresh) keeps
+          // the queued uploads and archives, each stamped with its account,
+          // for when the account signs in again; only a user's sign-out
+          // deletes them (config.clearUploadQueue at the next start).
           invalidate: async () => {
             gatewayBroker.resetCapabilities();
-            await capture.signOut();
             await gatewayCredentials.invalidate?.();
           },
         }
@@ -1035,10 +1060,13 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     // "opencode/1.18.32-r2": the bundled engine, as every upload names it (engine-identity.ts).
     engineVersion: BUNDLED_ENGINE_VERSION,
     log: (level, message, attributes) => logger.log(level, message, attributes),
+    ...(gatewayBroker.enabled
+      ? { accountId: () => gatewayBroker.accountId(), sessionIntegrity: (sessionId: string, options?: { summary?: boolean; turns?: number }) => gatewayBroker.sessionIntegrity(sessionId, options) }
+      : {}),
     sessionUploader: gatewayBroker.enabled
       ? {
-          upload: (sessionId, compressed, signal) => gatewayBroker.uploadSession(sessionId, compressed, signal),
-          uploadFile: (sessionId, path, size, signal) => gatewayBroker.uploadSessionFile(sessionId, path, size, signal),
+          upload: (sessionId, compressed, signal, request) => gatewayBroker.uploadSession(sessionId, compressed, signal, request),
+          uploadFile: (sessionId, path, size, signal, request) => gatewayBroker.uploadSessionFile(sessionId, path, size, signal, request),
           capabilities: () => gatewayBroker.sessionUploadCapabilities(),
           refreshAccessToken: () => gatewayBroker.refreshAccessToken(),
         }
@@ -1060,6 +1088,10 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     },
   });
   captureServicesByServer.set(config, capture);
+  if (config.clearUploadQueue) {
+    // The user signed out: what the last account queued is deleted before anything else runs.
+    await Promise.race([capture.signOut(), new Promise((resolvePromise) => setTimeout(resolvePromise, 10_000).unref?.())]);
+  }
   try {
     await reconcileLocalManagedMcpRuntimeEntries(config);
   } catch (error) {
@@ -2037,7 +2069,11 @@ export async function proxyOpencodeRequest(input: {
   const capture = workspace ? captureServicesByServer.get(input.config) : undefined;
   const uploadedSessionId = uploadSessionId(proxyPath);
   const deletedUploadedSessionId = uploadDeletedSessionId(method, proxyPath);
-  if (capture?.uploadEnabled && uploadedSessionId && workspace && workspace.workspaceType !== "remote") {
+  // A chat the engine does not have (a stale tab, a deleted chat) is not
+  // started: its prompt is refused, and it would only leave an empty start
+  // and end snapshot behind.
+  if (capture?.uploadEnabled && uploadedSessionId && workspace && workspace.workspaceType !== "remote"
+    && (capture.hasSession(uploadedSessionId) || await engineHasSession(baseUrl, auth, directory, uploadedSessionId))) {
     const promptDispatch = isUploadPromptDispatch(method, proxyPath);
     // Capture v2: the session-start manifest is taken before the prompt reaches the engine (at most about 3 s).
     if (promptDispatch) await capture.archiveStartGate(uploadedSessionId, workspace.path);

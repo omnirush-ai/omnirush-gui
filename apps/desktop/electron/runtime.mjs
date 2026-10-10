@@ -391,6 +391,15 @@ export function snapshotEngineState(state) {
  * apps have no visible stdout, so without this file every engine rollover
  * reason and reload trigger is lost. An explicit OMNIRUSH_SERVER_LOG_FILE wins.
  */
+/**
+ * Set by a user's sign-out, cleared once a server started with it: that
+ * server deletes the queued uploads and archives first. On disk, so a quit
+ * before the next start still clears them at the one after.
+ */
+export function uploadQueueClearMarkerPath(userDataDir) {
+  return path.join(userDataDir, "omnirush-upload-queue-clear");
+}
+
 export function resolveOmniRushServerLogFile(userDataDir, env = process.env) {
   const explicit = String(env.OMNIRUSH_SERVER_LOG_FILE ?? "").trim();
   if (explicit) return explicit;
@@ -2193,6 +2202,7 @@ export function createRuntimeManager({
     process.env.OMNIRUSH_DESKTOP_USER_DATA_DIR = userDataDir;
     omnirushServerState.logFilePath = logFilePath;
     const { startEmbeddedServer } = await import(embeddedServerImportUrl(embeddedPath));
+    const clearUploadQueue = existsSync(uploadQueueClearMarkerPath(userDataDir));
     // startEmbeddedServer falls back to an OS-assigned port if `port` races
     // into EADDRINUSE (see apps/server/src/serve-node.ts), so the bound port
     // below is authoritative.
@@ -2214,6 +2224,7 @@ export function createRuntimeManager({
       localManagedMcpVaultKey,
       appVersion: typeof appVersion === "string" && appVersion.trim() ? appVersion.trim() : undefined,
       captureFileUpload: typeof captureFileUpload === "function" ? captureFileUpload : undefined,
+      clearUploadQueue,
       // Bundled UI-control MCP launch for the startup migration of persisted
       // `npx -y omnirush-ui-mcp` entries; null removes those entries instead.
       omnirushUiMcp: omnirushUiMcpLaunch() ?? null,
@@ -2239,6 +2250,7 @@ export function createRuntimeManager({
         : undefined,
     });
     inProcessServer = handle;
+    if (clearUploadQueue) await rm(uploadQueueClearMarkerPath(userDataDir), { force: true }).catch(() => undefined);
     omnirushServerState.managedOpencodeExecution = handle.managedOpencodeExecution ?? null;
     engineState.managedByServer = Boolean(handle.managedOpencode);
     engineState.managedPid = handle.managedOpencode?.pid ?? null;
@@ -2659,6 +2671,11 @@ export function createRuntimeManager({
     engineInstall,
     omnirushServerInfo,
     omnirushServerRestart: (options) => withRuntimeLifecycle(() => omnirushServerRestart(options)),
+    /** A user's sign-out: the next server start deletes the queued uploads and archives. */
+    markUploadQueueClear: async () => {
+      await mkdir(userDataDir, { recursive: true });
+      await writeFile(uploadQueueClearMarkerPath(userDataDir), `${new Date().toISOString()}\n`, { mode: 0o600 });
+    },
     opencodeMcpAuth,
     sandboxCleanupOmniRushContainers,
   };

@@ -1426,3 +1426,99 @@ describe("OmniRush gateway broker: connection failures never become a bare 500",
     expect(text).toContain("upstream_stream_interrupted");
   });
 });
+
+describe("OmniRush gateway broker upload keys, account and integrity", () => {
+  const credentials = { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-1", refreshToken: "refresh-1" };
+
+  test("uploadSession and uploadSessionFile send the Idempotency-Key they are given", async () => {
+    const keys: Array<string | null> = [];
+    const fileKeys: Array<string | undefined> = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      fetch: async (_input, init) => {
+        keys.push(new Headers(init?.headers).get("idempotency-key"));
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      uploadFile: async (_url, init) => {
+        fileKeys.push((init.headers as Record<string, string>)["Idempotency-Key"]);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+    });
+    const key = "a".repeat(64);
+    await broker.uploadSession("session-key-1234", new Uint8Array([1, 2, 3]), undefined, { idempotencyKey: key });
+    await broker.uploadSession("session-key-1234", new Uint8Array([1, 2, 3]));
+    await broker.uploadSessionFile("session-key-1234", "/tmp/never-read.zst", 3, undefined, { idempotencyKey: key });
+    expect(keys).toEqual([key, null]);
+    expect(fileKeys).toEqual([key]);
+  });
+
+  test("accountId reads /device/me once and keeps the id; a failure is not remembered", async () => {
+    const urls: string[] = [];
+    let healthy = false;
+    const broker = new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      fetch: async (input) => {
+        urls.push(String(input));
+        return healthy ? Response.json({ id: "user-1", email: "x@example.invalid" }) : Response.json({ detail: "down" }, { status: 503 });
+      },
+    });
+    expect(await broker.accountId()).toBeNull();
+    healthy = true;
+    expect(await broker.accountId()).toBe("user-1");
+    expect(await broker.accountId()).toBe("user-1");
+    expect(urls).toEqual(["https://gateway.example/omnirush/device/me", "https://gateway.example/omnirush/device/me"]);
+  });
+
+  test("sessionIntegrity reads the chat's integrity record with the device bearer", async () => {
+    const calls: Array<{ url: string; authorization: string | null }> = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      fetch: async (input, init) => {
+        calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+        return Response.json({ integrity: "ok" });
+      },
+    });
+    expect((await broker.sessionIntegrity("ses_abc/1", { turns: 3 })).status).toBe(200);
+    expect((await broker.sessionIntegrity("ses_abc/1", { summary: true })).status).toBe(200);
+    expect(calls).toEqual([
+      { url: "https://gateway.example/omnirush/me/sessions/ses_abc%2F1/integrity?turns=3", authorization: "Bearer access-1" },
+      { url: "https://gateway.example/omnirush/me/sessions/ses_abc%2F1/integrity?summary=1", authorization: "Bearer access-1" },
+    ]);
+  });
+
+  test("sessionIntegrity stays under the route's limit and honours its Retry-After", async () => {
+    let calls = 0;
+    let limited = false;
+    const broker = new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      fetch: async () => {
+        calls += 1;
+        return limited ? Response.json({ detail: "rate_limited" }, { status: 429, headers: { "Retry-After": "30" } }) : Response.json({ integrity: "ok" });
+      },
+    });
+    const statuses: number[] = [];
+    for (let index = 0; index < 26; index += 1) statuses.push((await broker.sessionIntegrity("ses_limit_1234", { summary: true })).status);
+    expect(statuses.filter((status) => status === 200)).toHaveLength(24);
+    expect(statuses.slice(-2)).toEqual([429, 429]);
+    expect(calls).toBe(24);
+    const fresh = new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      fetch: async () => {
+        calls += 1;
+        return Response.json({ detail: "rate_limited" }, { status: 429, headers: { "Retry-After": "30" } });
+      },
+    });
+    limited = true;
+    calls = 0;
+    expect((await fresh.sessionIntegrity("ses_limit_1234")).status).toBe(429);
+    const local = await fresh.sessionIntegrity("ses_limit_1234");
+    expect(local.status).toBe(429);
+    expect(Number(local.headers.get("retry-after"))).toBeGreaterThan(25);
+    expect(calls).toBe(1);
+  });
+});

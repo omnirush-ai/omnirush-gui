@@ -108,7 +108,10 @@ const MAX_IGNORED_CACHE_ENTRIES = 8_192;
 const ENVELOPE_WRITE_CHUNK_BYTES = 64 * 1024;
 const MAX_CHANGE_JOURNAL_ENTRIES = 512;
 const MAX_CHANGE_JOURNAL_BYTES = 768 * 1024;
-const MAX_SESSION_LEDGER_ENTRIES = 512;
+/** Sessions the ledger keeps: an older chat resumed later restarts at sequence 0 and uploads its history again. */
+const MAX_SESSION_LEDGER_ENTRIES = 5_000;
+/** Of those, the most recent keep their sub-agent ids and checkpoints too (the bulk of a record). */
+const MAX_LEDGER_CHILD_ENTRIES = 512;
 const MAX_TOUCHED_PATHS = 128;
 const MAX_GIT_STATUS_ENTRIES = 500;
 const MAX_GIT_RECENT_COMMITS = 50;
@@ -133,9 +136,16 @@ const REDACTED_TEXT_CACHE_BYTES = 32 * 1024 * 1024;
  * another machine) is no write of the current turn's.
  */
 const TURN_CLOCK_SLACK_MS = 1_000;
+/** Workspace snapshots (start, change, end) in the spool. */
 const MAX_SPOOL_BYTES = 128 * 1024 * 1024;
 const MAX_SPOOL_ENTRIES = 200;
-const MAX_SPOOL_ATTEMPTS = 24;
+/** Trace uploads have a budget of their own: a large snapshot never pushes one out. */
+const MAX_SPOOL_TRACE_BYTES = 128 * 1024 * 1024;
+const MAX_SPOOL_TRACE_ENTRIES = 2_000;
+/** A spooled upload that keeps failing with a retryable answer is kept this long, then dropped. */
+export const MAX_SPOOL_AGE_MS = 7 * 24 * 60 * 60_000;
+/** How long spooling or a drain waits to learn which account is signed in. */
+const ACCOUNT_LOOKUP_TIMEOUT_MS = 5_000;
 const UPLOAD_ATTEMPTS = 3;
 const UPLOAD_RETRY_DELAY_MS = 250;
 const RETRY_BASE_MS = 5_000;
@@ -179,6 +189,10 @@ export function isRetryableUploadStatus(status: number, retryAfter: number | nul
 // A rejected bearer. The body tells a stale device token (refreshed once and
 // retried, spooled if still rejected) from the sign-in gate, which is final.
 const UNAUTHORIZED_STATUSES = new Set([401, 403]);
+/** The 409 detail for an Idempotency-Key the server already holds with other bytes. */
+const IDEMPOTENCY_KEY_REUSED = "idempotency_key_reused";
+/** How long a chat's first prompt waits to learn where the server's copy of it stands. */
+const SERVER_POSITION_TIMEOUT_MS = 5_000;
 const ACCOUNT_REQUIRED_MARKER = "omnirush_account_required";
 
 type SnapshotType = "start" | "change" | "end" | "trace";
@@ -447,6 +461,12 @@ type SpoolMeta = {
   last_attempt_at?: string;
   /** Not sent again before this (a Retry-After the server gave). */
   not_before?: string;
+  /** The account it was captured for; only that account's drain sends it. */
+  account_id?: string;
+  /** Sent as Idempotency-Key, so a re-send is recognised as the same envelope. */
+  idempotency_key?: string;
+  /** SHA-256 of the compressed bytes, checked against the server's `body_sha256`. */
+  body_sha256?: string;
 };
 
 type SessionState = {
@@ -537,6 +557,8 @@ type SessionState = {
   tail: Promise<void>;
   /** Capture v2: the binary files and symlinks of the workspace as last scanned (manifest entries without text). */
   extras: Map<string, ExtraManifestEntry>;
+  /** The numbering already moved past the server's once (an Idempotency-Key it held with other bytes). */
+  repositioned?: boolean;
 };
 
 type SessionUploaderOptions = {
@@ -544,9 +566,17 @@ type SessionUploaderOptions = {
   accessToken?: string;
   fetch?: typeof externalFetch;
   /** Sends one envelope; `signal` aborts at the upload deadline (session-upload-budget.ts) or when the spool is cleared. */
-  upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => Promise<Response>;
+  upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal, request?: UploadRequestOptions) => Promise<Response>;
   /** Sends an immutable compressed envelope directly from its spool/temp path. */
-  uploadFile?: (sessionId: string, path: string, size: number, signal?: AbortSignal) => Promise<Response>;
+  uploadFile?: (sessionId: string, path: string, size: number, signal?: AbortSignal, request?: UploadRequestOptions) => Promise<Response>;
+  /**
+   * The signed-in account's id (null: not known right now). Spooled uploads
+   * are stamped with it and only that account's drain sends them. Without
+   * this hook the spool is the one account's.
+   */
+  accountId?: () => Promise<string | null>;
+  /** GET /omnirush/me/sessions/{id}/integrity for this account (where the server's copy of a chat stands). */
+  sessionIntegrity?: (sessionId: string, options?: { summary?: boolean; turns?: number }) => Promise<Response>;
   /** Negotiates the canonical structured trace envelope. Failures fall back to schema v2. */
   capabilities?: () => Promise<TraceCapabilities>;
   /**
@@ -569,6 +599,10 @@ type SessionUploaderOptions = {
   uploadBudget?: SessionUploadBudget;
   spoolMaxEntries?: number;
   spoolMaxBytes?: number;
+  spoolMaxTraceEntries?: number;
+  spoolMaxTraceBytes?: number;
+  /** How long a spooled upload is kept; MAX_SPOOL_AGE_MS unless a test lowers it. */
+  spoolMaxAgeMs?: number;
   /** Uncompressed envelope cap; the backend's MAX_SNAPSHOT_BYTES unless a test lowers it. */
   snapshotMaxBytes?: number;
   /** Minimum spacing between change snapshots; MIN_UPLOAD_CHANGE_INTERVAL_MS unless a test lowers it. */
@@ -608,7 +642,7 @@ export type TraceCapabilities = {
 
 type TransmitOutcome =
   | { ok: true }
-  | { ok: false; retryable: boolean; reason: string; unsupportedSchema?: boolean; retryAfterMs?: number };
+  | { ok: false; retryable: boolean; reason: string; unsupportedSchema?: boolean; retryAfterMs?: number; keyReused?: boolean };
 
 type CompressedArtifact = { path: string; size: number };
 
@@ -3889,6 +3923,17 @@ async function boundedResponseText(response: Response, maxBytes = MAX_RESPONSE_B
   }
 }
 
+/** The `body_sha256` of a /collect answer (null: none, as from an older backend). */
+async function responseBodySha256(response: Response): Promise<string | null> {
+  try {
+    const payload: unknown = JSON.parse(await boundedResponseText(response));
+    const value = isRecord(payload) ? payload.body_sha256 : null;
+    return typeof value === "string" && SHA256_HEX.test(value.toLowerCase()) ? value.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function responseSignalsAccountRequired(response: Response): Promise<boolean> {
   return (await boundedResponseText(response)).includes(ACCOUNT_REQUIRED_MARKER);
 }
@@ -4126,8 +4171,52 @@ function parseSpoolMeta(value: unknown): SpoolMeta | null {
     attempts: optionalCount(record.attempts) ?? 0,
     ...(optionalString(record.last_attempt_at) ? { last_attempt_at: record.last_attempt_at } : {}),
     ...(optionalString(record.not_before) ? { not_before: record.not_before } : {}),
+    ...(optionalString(record.account_id) ? { account_id: record.account_id } : {}),
+    ...(typeof record.idempotency_key === "string" && SHA256_HEX.test(record.idempotency_key) ? { idempotency_key: record.idempotency_key } : {}),
+    ...(typeof record.body_sha256 === "string" && SHA256_HEX.test(record.body_sha256) ? { body_sha256: record.body_sha256 } : {}),
   };
 }
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * The Idempotency-Key of a /collect upload: the lowercase hex SHA-256 of
+ * `${session_id}\n${segment}\n${sequence}\n${snapshot_type}` (UTF-8, no
+ * trailing newline), the same in the CLI. The backend answers a re-send
+ * under the same key with the first upload's answer.
+ */
+export function uploadIdempotencyKey(sessionId: string, segment: number, sequence: number, snapshotType: SnapshotType): string {
+  return createHash("sha256").update(`${sessionId}\n${segment}\n${sequence}\n${snapshotType}`, "utf8").digest("hex");
+}
+
+/**
+ * The highest segment and sequence of an integrity answer (its top-level
+ * max_segment and max_sequence, else read off its segments); null when it
+ * holds nothing.
+ */
+export function serverSessionPosition(payload: unknown): { segment: number; sequence: number } | null {
+  if (!isRecord(payload)) return null;
+  const topSegment = Number.isSafeInteger(payload.max_segment) ? Number(payload.max_segment) : null;
+  const topSequence = Number.isSafeInteger(payload.max_sequence) ? Number(payload.max_sequence) : null;
+  if (topSequence !== null) return { segment: topSegment ?? 0, sequence: topSequence };
+  if (!Array.isArray(payload.segments)) return null;
+  let segment = 0;
+  let sequence = 0;
+  let found = false;
+  for (const item of payload.segments) {
+    if (!isRecord(item)) continue;
+    const max = typeof item.max_sequence === "number" && Number.isSafeInteger(item.max_sequence) ? item.max_sequence : 0;
+    const sequences = Array.isArray(item.sequences) ? item.sequences.filter((value): value is number => Number.isSafeInteger(value)) : [];
+    const highest = Math.max(max, ...sequences, 0);
+    if (typeof item.segment === "number" && Number.isSafeInteger(item.segment)) segment = Math.max(segment, item.segment);
+    sequence = Math.max(sequence, highest);
+    found = found || highest > 0;
+  }
+  return found ? { segment, sequence } : null;
+}
+
+/** What a /collect upload carries besides its body. */
+export type UploadRequestOptions = { idempotencyKey?: string };
 
 export class SessionUploader {
   private readonly uploadUrl: string | null;
@@ -4155,6 +4244,16 @@ export class SessionUploader {
   private readonly uploadBudget: SessionUploadBudget;
   private readonly spoolMaxEntries: number;
   private readonly spoolMaxBytes: number;
+  private readonly spoolMaxTraceEntries: number;
+  private readonly spoolMaxTraceBytes: number;
+  private readonly spoolMaxAgeMs: number;
+  private readonly accountIdHook?: SessionUploaderOptions["accountId"];
+  private readonly sessionIntegrity?: SessionUploaderOptions["sessionIntegrity"];
+  /** The signed-in account, once known (it never changes within a process: an account change restarts the server). */
+  private accountKnown: string | null = null;
+  private accountLookup: Promise<string | null> | null = null;
+  /** Spool entries this process wrote: the current account's even while its id is not known. */
+  private readonly ownSpoolEntries = new Set<string>();
   private readonly snapshotMaxBytes: number;
   private environmentCache: Promise<UploadEnvironment> | null = null;
   private readonly toolchains: ToolchainCache | null;
@@ -4233,6 +4332,11 @@ export class SessionUploader {
     this.uploadBudget = options.uploadBudget ?? SESSION_UPLOAD_BUDGET;
     this.spoolMaxEntries = options.spoolMaxEntries ?? MAX_SPOOL_ENTRIES;
     this.spoolMaxBytes = options.spoolMaxBytes ?? MAX_SPOOL_BYTES;
+    this.spoolMaxTraceEntries = options.spoolMaxTraceEntries ?? MAX_SPOOL_TRACE_ENTRIES;
+    this.spoolMaxTraceBytes = options.spoolMaxTraceBytes ?? MAX_SPOOL_TRACE_BYTES;
+    this.spoolMaxAgeMs = options.spoolMaxAgeMs ?? MAX_SPOOL_AGE_MS;
+    this.accountIdHook = options.accountId;
+    this.sessionIntegrity = options.sessionIntegrity;
     this.snapshotMaxBytes = options.snapshotMaxBytes ?? MAX_SNAPSHOT_BYTES;
     this.minChangeIntervalMs = options.minChangeIntervalMs ?? MIN_UPLOAD_CHANGE_INTERVAL_MS;
     this.maxWatchedFiles = options.maxWatchedFiles ?? MAX_UPLOAD_WATCHED_FILES;
@@ -4255,16 +4359,10 @@ export class SessionUploader {
     );
     void this.stateMigrated.then(() => this.cleanTempDir(60 * 60_000)).catch(() => undefined);
     this.context = !options.context || !this.enabled ? null : this.createContext(stateDir, options.context);
-    if (this.spoolDir) {
-      if (this.enabled) {
-        // Uploads spooled by a previous process are retried once this one is up.
-        this.scheduleRetry(this.retryBaseMs);
-      } else {
-        // Without an account there is nobody to deliver queued snapshots to;
-        // a sign-out must not leave workspace content waiting on disk.
-        void this.clearSpool().catch(() => undefined);
-      }
-    }
+    // Uploads spooled by a previous process are retried once this one is up.
+    // Without an account they wait (up to the spool's age limit) for the
+    // account to come back: only a user sign-out clears them (clearSpool()).
+    if (this.spoolDir && this.enabled) this.scheduleRetry(this.retryBaseMs);
   }
 
   /** Capture context wired to this uploader: its trace, its scrub, the project archive and the archive's exclusions. */
@@ -4331,7 +4429,12 @@ export class SessionUploader {
     await this.ledgerReady;
     const entries = Object.entries(this.ledger.sessions)
       .sort(([, left], [, right]) => right.lastSeenAt.localeCompare(left.lastSeenAt))
-      .slice(0, MAX_SESSION_LEDGER_ENTRIES);
+      .slice(0, MAX_SESSION_LEDGER_ENTRIES)
+      .map(([sessionId, record], index): [string, SessionLedgerRecord] => {
+        if (index < MAX_LEDGER_CHILD_ENTRIES || (!record.childSessionIds && !record.childCheckpoints)) return [sessionId, record];
+        const { childSessionIds: _ids, childCheckpoints: _checkpoints, ...rest } = record;
+        return [sessionId, rest];
+      });
     this.ledger.sessions = Object.fromEntries(entries);
     const snapshot = JSON.stringify(this.ledger);
     this.ledgerWriteTail = this.ledgerWriteTail
@@ -4361,7 +4464,13 @@ export class SessionUploader {
 
   private async prepareSession(state: SessionState): Promise<void> {
     await this.ledgerReady;
-    const previous = this.ledger.sessions[state.id];
+    const recorded = this.ledger.sessions[state.id];
+    // No local record: a new chat, or one this device's ledger lost. The
+    // server says where its copy stands, so the numbering goes on after it
+    // instead of reusing keys it already holds.
+    const server = recorded ? null : await this.serverPosition(state.id);
+    const previous: SessionLedgerRecord | undefined = recorded
+      ?? (server ? { segment: server.segment, nextSequence: server.sequence, lastSeenAt: new Date().toISOString() } : undefined);
     state.segment = (previous?.segment ?? 0) + 1;
     state.sequence = previous?.nextSequence ?? 0;
     state.sentBytes = previous?.sentBytes ?? 0;
@@ -4376,10 +4485,54 @@ export class SessionUploader {
     state.childCheckpoints = new Map([...Object.entries(previous?.childCheckpoints ?? {}), ...state.childCheckpoints]);
     state.resumed = Boolean(previous);
     if (state.resumed) {
-      this.appendTrace(state, "session.resumed", { session_segment: state.segment, previous_segment: previous?.segment ?? null });
+      this.appendTrace(state, "session.resumed", {
+        session_segment: state.segment,
+        previous_segment: previous?.segment ?? null,
+        ...(server ? { ledger: "server" } : {}),
+      });
     }
     this.ledger.sessions[state.id] = this.ledgerRecord(state);
     await this.saveLedger();
+  }
+
+  /**
+   * Where the server's copy of a chat stands (its highest segment and
+   * sequence), from the integrity route; null when it has none or cannot
+   * say (offline, an older backend).
+   */
+  private async serverPosition(sessionId: string): Promise<{ segment: number; sequence: number } | null> {
+    if (!this.sessionIntegrity) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const response = await Promise.race([
+        this.sessionIntegrity(sessionId, { summary: true }),
+        new Promise<null>((resolvePromise) => {
+          timer = setTimeout(() => resolvePromise(null), SERVER_POSITION_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      if (!response) return null;
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return null;
+      }
+      return serverSessionPosition(JSON.parse(await boundedResponseText(response, 4 * 1024 * 1024)));
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Moves a chat's numbering past the server's (or one segment on, when the server cannot say). */
+  private async repositionSession(state: SessionState): Promise<void> {
+    const server = await this.serverPosition(state.id);
+    const from = { segment: state.segment, sequence: state.sequence };
+    state.segment = Math.max(state.segment + 1, (server?.segment ?? 0) + 1);
+    state.sequence = Math.max(state.sequence, server?.sequence ?? 0);
+    this.appendTrace(state, "collector.resegmented", { from_segment: from.segment, from_sequence: from.sequence, session_segment: state.segment, sequence: state.sequence });
+    this.log("warn", "OmniRush session numbering moved past the server's copy", { sessionId: state.id, segment: state.segment, sequence: state.sequence });
+    await this.persistSession(state).catch(() => undefined);
   }
 
   private async persistSession(state: SessionState): Promise<void> {
@@ -5941,7 +6094,7 @@ export class SessionUploader {
           budgetBytes: budget,
         });
       }
-      if (!uploaded) return false;
+      if (uploaded !== true) return false;
       // The baseline is the last *accepted* manifest (uploaded or spooled): the
       // next change snapshot reports exactly what moved since this one.
       accepted = true;
@@ -5990,6 +6143,7 @@ export class SessionUploader {
           trace: batch.events,
         });
       let uploaded = await this.uploadEnvelope(state, "trace", "trace_flush", await makeBody(schemaVersion));
+      if (uploaded === "key_reused") uploaded = await this.uploadEnvelope(state, "trace", "trace_flush", await makeBody(schemaVersion));
       if (uploaded === "unsupported_schema" && schemaVersion === TRACE_SCHEMA_VERSION && !downgraded) {
         downgraded = true;
         schemaVersion = 2;
@@ -6023,37 +6177,29 @@ export class SessionUploader {
     }
   }
 
-  private async send(sessionId: string, compressed: Uint8Array | CompressedArtifact, deadline: AbortSignal, cancel?: AbortSignal): Promise<Response> {
+  private async send(sessionId: string, compressed: Uint8Array | CompressedArtifact, deadline: AbortSignal, cancel?: AbortSignal, request: UploadRequestOptions = {}): Promise<Response> {
     const signal = cancel ? AbortSignal.any([deadline, cancel]) : deadline;
     if (signal.aborted) return Promise.reject(signal.reason);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.token}`,
+      "Content-Type": "application/zstd",
+      "X-OmniRush-Session-ID": sessionId,
+      ...(request.idempotencyKey ? { "Idempotency-Key": request.idempotencyKey } : {}),
+    };
     if ("path" in compressed) {
       await this.validateCompressedArtifact(compressed);
-      if (this.fileUploader) return untilAborted(this.fileUploader(sessionId, compressed.path, compressed.size, signal), signal);
+      if (this.fileUploader) return untilAborted(this.fileUploader(sessionId, compressed.path, compressed.size, signal, request), signal);
       if (!this.uploader) {
         const body = fileReadableBody(compressed.path, signal);
-        const init: RequestInit & { duplex: "half" } = {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-            "Content-Type": "application/zstd",
-            "X-OmniRush-Session-ID": sessionId,
-          },
-          body,
-          duplex: "half",
-          signal,
-        };
+        const init: RequestInit & { duplex: "half" } = { method: "POST", headers, body, duplex: "half", signal };
         return this.fetcher(this.uploadUrl!, init);
       }
-      return untilAborted(readFile(compressed.path).then((bytes) => this.uploader!(sessionId, bytes, signal)), signal);
+      return untilAborted(readFile(compressed.path).then((bytes) => this.uploader!(sessionId, bytes, signal, request)), signal);
     }
-    if (this.uploader) return untilAborted(this.uploader(sessionId, compressed, signal), signal);
+    if (this.uploader) return untilAborted(this.uploader(sessionId, compressed, signal, request), signal);
     return this.fetcher(this.uploadUrl!, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/zstd",
-        "X-OmniRush-Session-ID": sessionId,
-      },
+      headers,
       body: compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength) as ArrayBuffer,
       signal,
     });
@@ -6085,17 +6231,31 @@ export class SessionUploader {
     attempts = UPLOAD_ATTEMPTS,
     cancel?: AbortSignal,
     schemaVersion: 2 | 3 = 2,
+    check: { idempotencyKey?: string; bodySha256?: string } = {},
   ): Promise<TransmitOutcome> {
     const timeoutMs = sessionUploadTimeoutMs("path" in compressed ? compressed.size : compressed.byteLength, this.uploadBudget);
     let lastReason = "session upload unavailable";
     let refreshAttempted = false;
+    let resentForHash = false;
     let attempt = 0;
+    const request: UploadRequestOptions = check.idempotencyKey ? { idempotencyKey: check.idempotencyKey } : {};
     while (attempt < attempts) {
       // Each attempt, the retry with a refreshed bearer too, gets a deadline of its own.
       const deadline = AbortSignal.timeout(timeoutMs);
       try {
-        const response = await this.send(sessionId, compressed, deadline, cancel);
-        if (response.ok) return { ok: true };
+        const response = await this.send(sessionId, compressed, deadline, cancel, request);
+        if (response.ok) {
+          // The server names the SHA-256 of the bytes it stored: a different
+          // one means the body was damaged on the way, so it is sent again.
+          const stored = check.bodySha256 ? await responseBodySha256(response) : null;
+          if (!stored || stored === check.bodySha256) return { ok: true };
+          lastReason = "the server stored different bytes than were sent";
+          this.log("warn", "OmniRush session upload stored with a different body hash; sending it again", { sessionId });
+          // The first such answer is sent again at once, outside the transport attempts.
+          if (!resentForHash) resentForHash = true;
+          else attempt += 1;
+          continue;
+        }
         lastReason = `sessionUploader upload failed with status ${response.status}`;
         if (UNAUTHORIZED_STATUSES.has(response.status)) {
           // The sign-in gate is final: nothing is queued for an account that
@@ -6120,6 +6280,11 @@ export class SessionUploader {
         }
         if (response.status === 422 && schemaVersion === TRACE_SCHEMA_VERSION && await responseSignalsUnsupportedSchema(response)) {
           return { ok: false, retryable: false, reason: lastReason, unsupportedSchema: true };
+        }
+        // The server holds other bytes under this key: final for this envelope.
+        if (response.status === 409) {
+          const keyReused = (await boundedResponseText(response)).includes(IDEMPOTENCY_KEY_REUSED);
+          return { ok: false, retryable: false, reason: keyReused ? `${lastReason} (${IDEMPOTENCY_KEY_REUSED})` : lastReason, ...(keyReused ? { keyReused } : {}) };
         }
         await response.body?.cancel().catch(() => undefined);
         const retryAfter = retryAfterMs(response.headers?.get?.("retry-after"));
@@ -6184,7 +6349,7 @@ export class SessionUploader {
     snapshotType: SnapshotType,
     trigger: UploadTrigger,
     body: EnvelopeBody,
-  ): Promise<boolean | "unsupported_schema"> {
+  ): Promise<boolean | "unsupported_schema" | "key_reused"> {
     if (!this.uploadUrl && !this.uploader && !this.fileUploader) return false;
     const sequence = state.sequence + 1;
     const path = await this.envelopeTempPath();
@@ -6254,11 +6419,22 @@ export class SessionUploader {
         return false;
       }
       const compressed: CompressedArtifact = { path, size: compressedBytes };
+      const idempotencyKey = uploadIdempotencyKey(state.id, state.segment, sequence, snapshotType);
+      const bodySha256 = await sha256File(path);
+      // The sequence is taken before the envelope leaves: one the server
+      // stored is never used again for other bytes (it would answer
+      // idempotency_key_reused), even if this process ends before it answers.
+      state.sequence = sequence;
+      await this.persistSession(state).catch(() => undefined);
       const account = this.account.signal;
       const uploadSignal = AbortSignal.any([account, this.halted.signal]);
       const spoolArtifact = async (reason: string, retryAfter?: number): Promise<boolean> => {
+        const accountId = await this.currentAccount();
         const spooled = await this.spoolEnvelopeFile({
           id: "", session_id: state.id, snapshot_type: snapshotType, trigger, sequence, bytes: compressedBytes, created_at: new Date().toISOString(), attempts: 1,
+          idempotency_key: idempotencyKey,
+          body_sha256: bodySha256,
+          ...(accountId ? { account_id: accountId } : {}),
           ...(retryAfter !== undefined ? { not_before: new Date(Date.now() + retryAfter).toISOString() } : {}),
         }, path, account);
         if (!spooled) {
@@ -6267,7 +6443,6 @@ export class SessionUploader {
           return false;
         }
         state.sentBytes += bytes;
-        state.sequence = sequence;
         state.failureCount += 1;
         state.lastFailureAt = new Date().toISOString();
         await this.persistSession(state).catch(() => undefined);
@@ -6292,11 +6467,18 @@ export class SessionUploader {
       }
       let outcome: TransmitOutcome;
       try {
-        outcome = await this.transmit(state.id, compressed, UPLOAD_ATTEMPTS, uploadSignal, body.schemaVersion ?? UPLOAD_SCHEMA_VERSION);
+        outcome = await this.transmit(state.id, compressed, UPLOAD_ATTEMPTS, uploadSignal, body.schemaVersion ?? UPLOAD_SCHEMA_VERSION, { idempotencyKey, bodySha256 });
       } finally {
         releaseUpload();
       }
       if (!outcome.ok && outcome.unsupportedSchema) return "unsupported_schema";
+      if (!outcome.ok && outcome.keyReused && !state.repositioned) {
+        // This chat's numbering on the server is ahead of the local ledger (a
+        // lost or capped ledger): continue after the server's, once.
+        state.repositioned = true;
+        await this.repositionSession(state);
+        return "key_reused";
+      }
       if (!outcome.ok) {
         if ((!outcome.retryable || !this.spoolDir) && !account.aborted) {
           await this.recordLedgerOutcome(state.id, "failure").catch(() => undefined);
@@ -6305,9 +6487,9 @@ export class SessionUploader {
         return await spoolArtifact(outcome.reason, outcome.retryAfterMs);
       }
       state.sentBytes += bytes;
-      state.sequence = sequence;
       state.lastSuccessAt = new Date().toISOString();
-      await this.persistSession(state).catch((error: unknown) => {
+      // The sequence is already on disk; this only records the outcome (stop() waits for it).
+      void this.persistSession(state).catch((error: unknown) => {
         this.log("warn", "OmniRush session ledger update failed", {
           sessionId: state.id,
           error: error instanceof Error ? error.message : "unknown",
@@ -6393,26 +6575,90 @@ export class SessionUploader {
         await writePrivateFileAtomic(target, await readFile(sourcePath));
       }
       await this.writeSpoolMeta({ ...meta, id });
+      this.ownSpoolEntries.add(id);
       await this.enforceSpoolBounds();
       return true;
     });
   }
 
+  /**
+   * Keeps the spool within its bounds, oldest first: trace uploads and
+   * workspace snapshots each within a budget of their own, so a large start
+   * snapshot never pushes out a trace (nor traces a snapshot).
+   */
   private async enforceSpoolBounds(): Promise<void> {
     const entries = await this.listSpool();
-    let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
-    let count = entries.length;
-    for (const entry of entries) {
-      if (count <= this.spoolMaxEntries && total <= this.spoolMaxBytes) break;
-      await this.removeSpoolEntry(entry.id);
-      total -= entry.bytes;
-      count -= 1;
-      this.log("warn", "OmniRush session upload spool dropped its oldest entry", {
-        sessionId: entry.session_id,
-        snapshotType: entry.snapshot_type,
-        sequence: entry.sequence,
-      });
+    const classes: Array<{ entries: SpoolMeta[]; maxEntries: number; maxBytes: number }> = [
+      { entries: entries.filter((entry) => entry.snapshot_type === "trace"), maxEntries: this.spoolMaxTraceEntries, maxBytes: this.spoolMaxTraceBytes },
+      { entries: entries.filter((entry) => entry.snapshot_type !== "trace"), maxEntries: this.spoolMaxEntries, maxBytes: this.spoolMaxBytes },
+    ];
+    for (const kind of classes) {
+      let total = kind.entries.reduce((sum, entry) => sum + entry.bytes, 0);
+      let count = kind.entries.length;
+      for (const entry of kind.entries) {
+        if (count <= kind.maxEntries && total <= kind.maxBytes) break;
+        await this.removeSpoolEntry(entry.id);
+        total -= entry.bytes;
+        count -= 1;
+        this.log("warn", "OmniRush session upload spool dropped its oldest entry", {
+          sessionId: entry.session_id,
+          snapshotType: entry.snapshot_type,
+          sequence: entry.sequence,
+        });
+      }
     }
+  }
+
+  /** Whether a spooled upload is past the spool's age limit (an unreadable date counts as fresh). */
+  private spoolEntryExpired(entry: SpoolMeta, now = Date.now()): boolean {
+    const created = Date.parse(entry.created_at);
+    return Number.isFinite(created) && now - created > this.spoolMaxAgeMs;
+  }
+
+  /**
+   * The signed-in account's id; null while it cannot be learned (offline, or
+   * no account). Asked once per process: an account change restarts the server.
+   */
+  private async currentAccount(): Promise<string | null> {
+    if (this.accountKnown || !this.accountIdHook) return this.accountKnown;
+    this.accountLookup ??= (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const id = await Promise.race([
+          this.accountIdHook!().catch(() => null),
+          new Promise<null>((resolvePromise) => {
+            timer = setTimeout(() => resolvePromise(null), ACCOUNT_LOOKUP_TIMEOUT_MS);
+            timer.unref?.();
+          }),
+        ]);
+        const trimmed = typeof id === "string" ? id.trim() : "";
+        if (trimmed) this.accountKnown = trimmed;
+        return this.accountKnown;
+      } finally {
+        clearTimeout(timer);
+        this.accountLookup = null;
+      }
+    })();
+    return this.accountLookup;
+  }
+
+  /**
+   * Whether the current account's drain may send `entry`. Without an account
+   * hook the spool is one account's. An entry stamped for another account
+   * waits (for that account, or its age limit). An unstamped one (spooled
+   * before stamping, or while the id was unknown) is this account's once
+   * the id is known, and stamped so; until then only this process's own are.
+   */
+  private async spoolEntryOwned(entry: SpoolMeta, account: string | null, spoolDir: string): Promise<boolean> {
+    if (!this.accountIdHook) return true;
+    if (entry.account_id) return entry.account_id === account;
+    if (!account) return this.ownSpoolEntries.has(entry.id);
+    entry.account_id = account;
+    await this.spoolLocked(async () => {
+      await lstat(join(spoolDir, `${entry.id}.zst`));
+      await this.writeSpoolMeta(entry);
+    }).catch(() => undefined);
+    return true;
   }
 
   private scheduleRetry(delayMs?: number): void {
@@ -6486,11 +6732,31 @@ export class SessionUploader {
     const spoolDir = this.spoolDir;
     if (!spoolDir || !this.enabled) return { delivered, pending: 0 };
     const entries = await this.spoolLocked(() => this.listSpool());
+    const account = this.accountIdHook ? await this.currentAccount() : null;
     let pending = entries.length;
     let failures = 0;
     let nextDueAt = Number.POSITIVE_INFINITY;
+    let waitingForAccount = false;
     for (const entry of entries) {
       if (this.stopped || signal.aborted) break;
+      if (this.spoolEntryExpired(entry)) {
+        await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        pending -= 1;
+        this.log("warn", "OmniRush session upload artifact dropped from spool", {
+          sessionId: entry.session_id,
+          snapshotType: entry.snapshot_type,
+          sequence: entry.sequence,
+          reason: "expired",
+        });
+        continue;
+      }
+      // Another account's upload is never sent; it is not this drain's to retry either.
+      if (!(await this.spoolEntryOwned(entry, account, spoolDir))) {
+        // Waiting to learn the account: tried again on the backoff.
+        if (account) pending -= 1;
+        else waitingForAccount = true;
+        continue;
+      }
       const dueAt = this.spoolEntryDueAt(entry);
       if (failures >= MAX_DRAIN_FAILURES || dueAt > Date.now()) {
         nextDueAt = Math.min(nextDueAt, dueAt);
@@ -6510,11 +6776,15 @@ export class SessionUploader {
       const releaseUpload = await GLOBAL_CAPTURE_ADMISSION.acquire(signal);
       let outcome: TransmitOutcome;
       try {
-        outcome = await this.transmit(entry.session_id, compressed, 1, signal);
+        outcome = await this.transmit(entry.session_id, compressed, 1, signal, 2, {
+          ...(entry.idempotency_key ? { idempotencyKey: entry.idempotency_key } : {}),
+          ...(entry.body_sha256 ? { bodySha256: entry.body_sha256 } : {}),
+        });
       } finally {
         releaseUpload();
       }
       if (outcome.ok) {
+        this.ownSpoolEntries.delete(entry.id);
         await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
         await this.recordLedgerOutcome(entry.session_id, "success").catch(() => undefined);
         this.retryFailures = 0;
@@ -6531,7 +6801,8 @@ export class SessionUploader {
       }
       // Stopped or signed out mid-upload: the entry stays as it was, or goes with the spool.
       if (signal.aborted) break;
-      if (!outcome.retryable || entry.attempts + 1 >= MAX_SPOOL_ATTEMPTS) {
+      // A retryable failure keeps the entry, however long the outage (up to the spool's age limit).
+      if (!outcome.retryable) {
         await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
         pending -= 1;
         this.log("warn", "OmniRush session upload artifact dropped from spool", {
@@ -6558,7 +6829,7 @@ export class SessionUploader {
       await this.recordLedgerOutcome(entry.session_id, "failure").catch(() => undefined);
       nextDueAt = Math.min(nextDueAt, this.spoolEntryDueAt(attempted));
     }
-    if (failures > 0) this.retryFailures += 1;
+    if (failures > 0 || waitingForAccount) this.retryFailures += 1;
     if (pending > 0 && !signal.aborted) {
       this.scheduleRetry(Math.max(this.jitteredBackoffMs(), Number.isFinite(nextDueAt) ? nextDueAt - Date.now() : 0));
     }
@@ -6575,11 +6846,13 @@ export class SessionUploader {
 
   /**
    * Discards every spooled upload and the stored turn-diff bases, and aborts
-   * every upload in flight without spooling it. Wire this to sign-out and
-   * consent withdrawal: once the account is gone nothing may stay queued on
-   * disk.
+   * every upload in flight without spooling it. Wire this to a user's
+   * sign-out and consent withdrawal only: a device session the server
+   * retired (a refused refresh) keeps its queue for when the account is
+   * back, each upload stamped with its account.
    */
   clearSpool(): Promise<void> {
+    this.ownSpoolEntries.clear();
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;

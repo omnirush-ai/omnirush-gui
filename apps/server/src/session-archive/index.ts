@@ -210,7 +210,12 @@ export type SessionArchiverOptions = {
   minimumFreeDiskBytes?: number;
   /** Tests and diagnostics: override the filesystem free-space probe. */
   freeDiskBytes?: (path: string) => Promise<number>;
+  /** The signed-in account's id (null: not known now): queued archives of another account are never uploaded for this one. */
+  accountId?: () => Promise<string | null>;
 };
+
+/** How long claimAccount() waits to learn the account. */
+const ACCOUNT_LOOKUP_TIMEOUT_MS = 5_000;
 
 export type CaptureSkipReason =
   | "not_archivable"
@@ -435,6 +440,7 @@ export class SessionArchiver {
   private readonly pendingByteBudget: number;
   private readonly minimumFreeDiskBytes: number;
   private readonly freeDiskBytes: (path: string) => Promise<number>;
+  private readonly accountId?: () => Promise<string | null>;
   private packingReservedBytes = 0;
   private budgetTail: Promise<void> = Promise.resolve();
   private started: Promise<void> | null = null;
@@ -498,6 +504,7 @@ export class SessionArchiver {
     };
     this.pendingByteBudget = archiveDiskBytes(options.pendingByteBudget, "OMNIRUSH_ARCHIVE_PENDING_BYTE_BUDGET", DEFAULT_PENDING_BYTE_BUDGET);
     this.minimumFreeDiskBytes = archiveDiskBytes(options.minimumFreeDiskBytes, "OMNIRUSH_ARCHIVE_MIN_FREE_DISK_BYTES", DEFAULT_MIN_FREE_DISK_BYTES);
+    this.accountId = options.accountId;
     this.freeDiskBytes = options.freeDiskBytes ?? (async (path) => {
       const filesystem = await statfs(path);
       return Number(filesystem.bavail) * Number(filesystem.bsize);
@@ -540,6 +547,36 @@ export class SessionArchiver {
       this.log("warn", "OmniRush archive state recovery failed", { error: errorSummary(error) });
     });
     return this.started;
+  }
+
+  /**
+   * App start with an account: the archive state on disk is this account's.
+   * The state a device session the server retired left behind waits for the
+   * account to come back (only a user's sign-out removes it, signOut()); if
+   * another account signed in meanwhile, it is removed rather than uploaded
+   * for that one. Nothing happens while the account cannot be learned.
+   */
+  async claimAccount(): Promise<void> {
+    if (!this.accountId) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const id = await Promise.race([
+      this.accountId().catch(() => null),
+      new Promise<null>((resolvePromise) => {
+        timer = setTimeout(() => resolvePromise(null), ACCOUNT_LOOKUP_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (!id) return;
+    const path = join(this.dir, "account.json");
+    const saved = await readJsonFile(path);
+    const owner = saved && typeof saved === "object" && typeof Reflect.get(saved, "account_id") === "string" ? String(Reflect.get(saved, "account_id")) : null;
+    if (owner === id) return;
+    if (owner) {
+      this.log("warn", "OmniRush project archives queued for another account were removed", {});
+      await this.signOut();
+    }
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    await writeJsonAtomic(path, { v: 1, account_id: id });
   }
 
   /** The device bearer changed (session uploader token rotation). */

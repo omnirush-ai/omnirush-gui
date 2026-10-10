@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import { SESSION_UPLOAD_BUDGET, SESSION_UPLOAD_ENDPOINT_PATH, sessionUploadTimeoutMs, type SessionUploadBudget } from "./session-upload-budget.js";
 import { externalFetch } from "./server-fetch.js";
 import type { OmniRushGatewayCredentials } from "./types.js";
-import type { TraceCapabilities } from "./session-uploader.js";
+import type { TraceCapabilities, UploadRequestOptions } from "./session-uploader.js";
 import {
   SUBAGENT_FALLBACK_EFFORT_HEADER,
   SUBAGENT_FALLBACK_MODEL_HEADER,
@@ -695,6 +695,11 @@ function secureEqual(left: string, right: string): boolean {
   return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
 }
 
+/** Integrity reads per minute this device makes, under the route's 30 per account. */
+const INTEGRITY_CALLS_PER_MINUTE = 24;
+
+export type SessionIntegrityOptions = { summary?: boolean; turns?: number };
+
 function refreshUrl(gatewayUrl: string): string {
   const url = new URL(gatewayUrl);
   url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "") + "/device/refresh";
@@ -997,6 +1002,11 @@ function responseHeaders(headers: Headers): Headers {
 
 export class OmniRushGatewayBroker {
   private state: CredentialState | null;
+  private knownAccountId: string | null = null;
+  /** When the last integrity reads went out (one minute's worth), and a Retry-After the route gave. */
+  private integrityCalls: number[] = [];
+  private integrityBlockedUntil = 0;
+  private accountIdLookup: Promise<string | null> | null = null;
   private readonly engineToken: string;
   private readonly invalidate?: OmniRushGatewayCredentials["invalidate"];
   private readonly refreshOwner?: OmniRushGatewayCredentials["refresh"];
@@ -1243,7 +1253,7 @@ export class OmniRushGatewayBroker {
    * deadline of its own; `signal`, the session uploader's own deadline or cancel,
    * ends either sooner.
    */
-  uploadSession(sessionId: string, body: Uint8Array, signal?: AbortSignal): Promise<Response> {
+  uploadSession(sessionId: string, body: Uint8Array, signal?: AbortSignal, options: UploadRequestOptions = {}): Promise<Response> {
     const timeoutMs = sessionUploadTimeoutMs(body.byteLength, this.sessionUploadBudget);
     return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, SESSION_UPLOAD_ENDPOINT_PATH), {
       method: "POST",
@@ -1251,13 +1261,14 @@ export class OmniRushGatewayBroker {
         Authorization: `Bearer ${state.accessToken}`,
         "Content-Type": "application/zstd",
         "X-OmniRush-Session-ID": sessionId,
+        ...(options.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : {}),
       },
       body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
       signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
     }));
   }
 
-  uploadSessionFile(sessionId: string, path: string, size: number, signal?: AbortSignal): Promise<Response> {
+  uploadSessionFile(sessionId: string, path: string, size: number, signal?: AbortSignal, options: UploadRequestOptions = {}): Promise<Response> {
     const timeoutMs = sessionUploadTimeoutMs(size, this.sessionUploadBudget);
     return this.withDeviceBearer(async (state) => {
       const requestSignal = signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs);
@@ -1266,6 +1277,7 @@ export class OmniRushGatewayBroker {
         Authorization: `Bearer ${state.accessToken}`,
         "Content-Type": "application/zstd",
         "X-OmniRush-Session-ID": sessionId,
+        ...(options.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : {}),
       };
       // The Electron file transport bypasses this.fetcher.
       if (this.clientHeader) headers[CLIENT_HEADER] = this.clientHeader;
@@ -1319,6 +1331,71 @@ export class OmniRushGatewayBroker {
   resetCapabilities(): void {
     this.capabilityCache = null;
     this.capabilityProbe = null;
+  }
+
+  /**
+   * The server's integrity record of one chat (GET
+   * `<gateway root>/me/sessions/{id}/integrity`), with the device bearer and
+   * the same bounded 401 refresh as uploadSession(). `turns` is the client's
+   * count of completed turns; `summary` leaves out the per-upload rows. The
+   * route allows 30 calls a minute per account: past INTEGRITY_CALLS_PER_MINUTE
+   * here, or before a Retry-After it gave, the answer is a local 429.
+   */
+  async sessionIntegrity(sessionId: string, options: SessionIntegrityOptions = {}): Promise<Response> {
+    const now = Date.now();
+    this.integrityCalls = this.integrityCalls.filter((at) => now - at < 60_000);
+    const waitMs = Math.max(this.integrityBlockedUntil - now, this.integrityCalls.length >= INTEGRITY_CALLS_PER_MINUTE ? this.integrityCalls[0]! + 60_000 - now : 0);
+    if (waitMs > 0) {
+      return Response.json({ detail: "rate_limited" }, { status: 429, headers: { "Retry-After": String(Math.ceil(waitMs / 1_000)) } });
+    }
+    this.integrityCalls.push(now);
+    const response = await this.withDeviceBearer((state) => {
+      const url = new URL(apiUrl(state.gatewayUrl, `me/sessions/${encodeURIComponent(sessionId)}/integrity`));
+      if (options.summary) url.searchParams.set("summary", "1");
+      if (options.turns !== undefined && Number.isSafeInteger(options.turns) && options.turns >= 0) url.searchParams.set("turns", String(options.turns));
+      return this.fetcher(url.toString(), {
+        method: "GET",
+        headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+    });
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      this.integrityBlockedUntil = Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 3_600) * 1_000 : 60_000);
+    }
+    return response;
+  }
+
+  /**
+   * The id of the account behind the device bearer (`<gateway root>/device/me`),
+   * learned once: an account change restarts the server. Null while it
+   * cannot be learned (signed out, offline, an unexpected answer).
+   */
+  accountId(): Promise<string | null> {
+    if (this.knownAccountId) return Promise.resolve(this.knownAccountId);
+    this.accountIdLookup ??= (async () => {
+      try {
+        const response = await this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, "device/me"), {
+          method: "GET",
+          headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(8_000),
+        }));
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          return null;
+        }
+        const text = await boundedText(response, 256 * 1024);
+        const payload: unknown = text === null ? null : JSON.parse(text);
+        const id = isRecord(payload) && typeof payload.id === "string" ? payload.id.trim() : "";
+        if (id) this.knownAccountId = id;
+        return id || null;
+      } catch {
+        return null;
+      } finally {
+        this.accountIdLookup = null;
+      }
+    })();
+    return this.accountIdLookup;
   }
 
   private capabilityKey(state: CredentialState): string {

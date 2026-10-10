@@ -21,7 +21,7 @@ import type { UsedToolCall } from "./files-used.js";
 export type ProjectArchiver = Pick<
   SessionArchiver,
   "captureBase" | "captureDelta" | "captureFinal" | "startFinalCandidates" | "recordTouched" | "forgetTouched" | "drain" | "signOut" | "stop"
-> & Partial<Pick<SessionArchiver, "startManifest" | "hasStartManifest" | "captureState" | "recordAttachments" | "recordBinary" | "filesUsedToolCallEnded" | "filesUsedTurnStarted" | "filesUsedTurnEnded" | "filesUsedMaybe" | "filesUsedStatus">>;
+> & Partial<Pick<SessionArchiver, "claimAccount" | "startManifest" | "hasStartManifest" | "captureState" | "recordAttachments" | "recordBinary" | "filesUsedToolCallEnded" | "filesUsedTurnStarted" | "filesUsedTurnEnded" | "filesUsedMaybe" | "filesUsedStatus">>;
 
 /** Engine reads for one session, resolving to the parsed JSON, or null when it cannot be read. */
 export type ArchiveEngineReads = {
@@ -37,6 +37,11 @@ export type ProjectArchiveLifecycleOptions = {
   archiver: ProjectArchiver;
   /** An account is connected and OMNIRUSH_ARCHIVE_ENABLED is not off. */
   enabled: boolean;
+  /**
+   * No account is connected (a sign-in the server retired, or none yet):
+   * the queue on disk waits for it rather than being removed.
+   */
+  accountMissing?: boolean;
   log: ArchiveLifecycleLog;
   /** Session steps (engine reads plus a capture) running at once. */
   concurrency?: number;
@@ -190,6 +195,7 @@ export class ProjectArchiveLifecycle {
   private readonly quitBudgetMs: number;
   private readonly now: () => number;
   private readonly enabled: boolean;
+  private readonly accountMissing: boolean;
   private signedOut = false;
   private stopped = false;
   /** Archiving is off for the account until then (428 / 503 archive_disabled). */
@@ -211,6 +217,7 @@ export class ProjectArchiveLifecycle {
   constructor(options: ProjectArchiveLifecycleOptions) {
     this.archiver = options.archiver;
     this.enabled = options.enabled;
+    this.accountMissing = options.accountMissing === true;
     this.log = options.log;
     this.concurrency = Math.max(1, options.concurrency ?? 1);
     this.consentRecheckMs = options.consentRecheckMs ?? DEFAULT_CONSENT_RECHECK_MS;
@@ -233,19 +240,22 @@ export class ProjectArchiveLifecycle {
    * App start. With an account, resumes the uploads the last run left
    * unfinished, and checks the folders of recent sessions once for changes
    * made after their last archive (a final archive the last shutdown did not
-   * get to, or edits while the app was closed). Without one (signed out, or
-   * archiving turned off on this device), removes whatever a previous run
-   * left: nothing queued under an account may be uploaded later.
+   * get to, or edits while the app was closed); a queue another account left
+   * is removed first (claimAccount). Without an account the queue waits for
+   * it (a user's sign-out removes it, signOut()); with archiving turned off
+   * on this device it is removed.
    */
   start(): void {
     if (!this.enabled) {
-      this.track(this.archiver.signOut().catch((error: unknown) => this.warn("clear", error)));
+      if (!this.accountMissing) this.track(this.archiver.signOut().catch((error: unknown) => this.warn("clear", error)));
       return;
     }
-    this.kick();
-    this.track(this.archiver.startFinalCandidates().then((sessionIds) => {
+    this.track((async () => {
+      await this.archiver.claimAccount?.().catch((error: unknown) => this.warn("account", error));
+      this.kick();
+      const sessionIds = await this.archiver.startFinalCandidates();
       for (const sessionId of sessionIds) this.final(sessionId, "app_start");
-    }, (error: unknown) => this.warn("start", error)));
+    })().catch((error: unknown) => this.warn("start", error)));
   }
 
   /**

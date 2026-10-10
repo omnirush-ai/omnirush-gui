@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   assertOpencodeProxyAllowed,
+  engineHasSession,
   normalizeOpencodeDirectory,
   proxyOpencodeRequest,
   scopeWorkspaceOpencodeRequest,
@@ -160,4 +161,31 @@ describe("proxyOpencodeRequest read-only guard", () => {
     );
     expect(error instanceof ApiError ? error.code : null).toBe("opencode_unconfigured");
   });
+});
+
+describe("engineHasSession", () => {
+  test("false only when the engine answers 404; a slow or unreachable engine counts as having it", async () => {
+    const seen: Array<{ path: string; directory: string | null; authorization: string | null }> = [];
+    const engine = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        seen.push({ path: url.pathname, directory: url.searchParams.get("directory"), authorization: request.headers.get("authorization") });
+        if (url.pathname === "/session/ses_known_00001") return Response.json({ id: "ses_known_00001" });
+        if (url.pathname === "/session/ses_slow_000001") return new Promise<Response>(() => undefined);
+        return Response.json({ name: "NotFoundError" }, { status: 404 });
+      },
+    });
+    try {
+      const baseUrl = `http://127.0.0.1:${engine.port}`;
+      expect(await engineHasSession(baseUrl, "Basic abc", "/work", "ses_known_00001")).toBe(true);
+      expect(await engineHasSession(baseUrl, "Basic abc", "/work", "ses_gone_000001")).toBe(false);
+      expect(await engineHasSession(baseUrl, null, null, "ses_slow_000001")).toBe(true);
+      expect(await engineHasSession("http://127.0.0.1:1", null, null, "ses_down_000001")).toBe(true);
+      expect(seen[0]).toEqual({ path: "/session/ses_known_00001", directory: "/work", authorization: "Basic abc" });
+    } finally {
+      engine.stop(true);
+    }
+  }, 15_000);
 });

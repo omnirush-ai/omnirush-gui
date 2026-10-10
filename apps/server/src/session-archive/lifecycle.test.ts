@@ -115,11 +115,12 @@ function engine(input: { parentID?: string; messages?: () => unknown; session?: 
   return { reader, reads };
 }
 
-function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; now?: () => number; concurrency?: number; finalIdleMs?: number; quitBudgetMs?: number } = {}) {
+function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; accountMissing?: boolean; now?: () => number; concurrency?: number; finalIdleMs?: number; quitBudgetMs?: number } = {}) {
   const logs: Array<{ level: string; message: string; attributes?: Record<string, unknown> }> = [];
   const subject = new ProjectArchiveLifecycle({
     archiver,
     enabled: options.enabled ?? true,
+    ...(options.accountMissing ? { accountMissing: true } : {}),
     log: (level, message, attributes) => logs.push({ level, message, ...(attributes ? { attributes } : {}) }),
     consentRecheckMs: 60_000,
     ...(options.now ? { now: options.now } : {}),
@@ -333,7 +334,28 @@ describe("ProjectArchiveLifecycle", () => {
     expect(archiver.calls).toEqual(["drain", `base ses_resumed_0001 ${root} 3`, `delta ses_resumed_0001 ${root} 4`, "drain"]);
   });
 
-  test("without an account (or with archiving turned off) start clears what a previous run left and nothing is captured", async () => {
+  test("without an account the queue a previous run left waits for it (a refused refresh never clears it) and nothing is captured", async () => {
+    const archiver = new FakeArchiver();
+    const { subject } = lifecycle(archiver, { enabled: false, accountMissing: true });
+    subject.start();
+    const root = await tempDir("root");
+    subject.sessionStarted({ sessionId: "ses_retired_0001", root, engine: engine().reader });
+    subject.turnCompleted("ses_retired_0001", messages(1));
+    await subject.settled();
+    expect(archiver.calls).toEqual([]);
+  });
+
+  test("with an account, start first claims the queue for it, then drains", async () => {
+    const archiver = new FakeArchiver();
+    const calls = archiver.calls;
+    const claiming = Object.assign(archiver, { claimAccount: async () => { calls.push("claim"); } });
+    const { subject } = lifecycle(claiming);
+    subject.start();
+    await subject.settled();
+    expect(calls.slice(0, 2)).toEqual(["claim", "drain"]);
+  });
+
+  test("with archiving turned off on this device start clears what a previous run left and nothing is captured", async () => {
     const archiver = new FakeArchiver();
     const { subject } = lifecycle(archiver, { enabled: false });
     subject.start();

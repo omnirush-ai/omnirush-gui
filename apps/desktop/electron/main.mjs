@@ -2196,6 +2196,8 @@ const desktopCommandHandlers = {
       return result;
   },
   "omnirushAccountSignOut": async (event, ...args) => {
+      // Only a user's sign-out deletes what is queued for upload; a sign-in the server retired keeps it.
+      await runtimeManager.markUploadQueueClear();
       const result = await omnirushAccountStore.clear();
       await runtimeManager.omnirushServerRestart({ reason: "account_signed_out", source: "account", userInitiated: true });
       return { connected: false, remoteRevoked: result.remoteRevoked, reason: result.reason };

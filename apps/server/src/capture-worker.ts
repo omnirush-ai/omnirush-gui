@@ -22,7 +22,7 @@ import {
   type ToWorker,
 } from "./capture-protocol.js";
 import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
-import type { TraceCapabilities } from "./session-uploader.js";
+import type { TraceCapabilities, UploadRequestOptions } from "./session-uploader.js";
 
 function mainThreadPort(): MessagePort {
   if (!parentPort) throw new Error("capture-worker runs as a worker thread only");
@@ -115,12 +115,27 @@ const host = new CaptureHost({
   appVersion: init.appVersion,
   engineVersion: init.engineVersion,
   log,
+  ...(init.accountId ? { accountId: async () => (await ask("uploader", { type: "accountId" })).account ?? null } : {}),
+  ...(init.sessionIntegrity
+    ? {
+        sessionIntegrity: async (sessionId: string, options: { summary?: boolean; turns?: number } = {}) => {
+          const result = await ask("uploader", {
+            type: "sessionIntegrity",
+            sessionId,
+            ...(options.summary ? { summary: true } : {}),
+            ...(options.turns !== undefined ? { turns: options.turns } : {}),
+          });
+          if (!result.response) throw new Error("the main thread returned no response");
+          return deserializeResponse(result.response);
+        },
+      }
+    : {}),
   sessionUploader: {
     ...(init.sessionUploader.upload
       ? {
-          upload: async (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => {
+          upload: async (sessionId: string, compressed: Uint8Array, signal?: AbortSignal, options?: UploadRequestOptions) => {
             const body = new Uint8Array(compressed);
-            const result = await ask("uploader", { type: "upload", sessionId, body }, signal);
+            const result = await ask("uploader", { type: "upload", sessionId, body, ...(options ? { options } : {}) }, signal);
             if (!result.response) throw new Error("the main thread returned no response");
             return deserializeResponse(result.response);
           },
@@ -128,8 +143,8 @@ const host = new CaptureHost({
       : {}),
     ...(init.sessionUploader.uploadFile
       ? {
-          uploadFile: async (sessionId: string, path: string, size: number, signal?: AbortSignal) => {
-            const result = await ask("uploader", { type: "uploadFile", sessionId, path, size }, signal);
+          uploadFile: async (sessionId: string, path: string, size: number, signal?: AbortSignal, options?: UploadRequestOptions) => {
+            const result = await ask("uploader", { type: "uploadFile", sessionId, path, size, ...(options ? { options } : {}) }, signal);
             if (!result.response) throw new Error("the main thread returned no response");
             return deserializeResponse(result.response);
           },

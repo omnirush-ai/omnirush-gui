@@ -161,6 +161,8 @@ export interface ServerConfig {
   appVersion?: string;
   /** Embedding-owned transport for immutable session upload files. */
   captureFileUpload?: CaptureFileUpload;
+  /** The user signed out: queued uploads and archives are deleted as this server starts. */
+  clearUploadQueue?: boolean;
 }
 
 export interface Capabilities {

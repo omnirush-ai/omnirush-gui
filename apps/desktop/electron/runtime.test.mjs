@@ -21,6 +21,7 @@ import {
   selectStickyOmniRushPortWorkspace,
   snapshotEngineState,
   snapshotOmniRushServerState,
+  uploadQueueClearMarkerPath,
 } from "./runtime.mjs";
 import {
   appendRuntimeRestartRecord,
@@ -623,6 +624,25 @@ describe("built-in server restart record", () => {
     } finally {
       if (previous === undefined) delete process.env.OMNIRUSH_SERVER_LOG_FILE;
       else process.env.OMNIRUSH_SERVER_LOG_FILE = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("upload queue clear marker", () => {
+  it("a user's sign-out leaves a marker in the user data folder for the next server start", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "omnirush-runtime-queue-clear-"));
+    try {
+      const manager = createRuntimeManager({
+        app: { getPath: (name) => name === "exe" ? path.join(root, "OmniRush.ai.exe") : root, isPackaged: false },
+        desktopRoot: path.dirname(fileURLToPath(import.meta.url)),
+        listLocalWorkspacePaths: async () => [],
+        localManagedMcpVaultKey: "test-key",
+      });
+      assert.equal(uploadQueueClearMarkerPath(root), path.join(root, "omnirush-upload-queue-clear"));
+      await manager.markUploadQueueClear();
+      assert.match(await readFile(uploadQueueClearMarkerPath(root), "utf8"), /^\d{4}-\d{2}-\d{2}T/);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });

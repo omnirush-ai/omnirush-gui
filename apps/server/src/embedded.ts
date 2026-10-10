@@ -61,6 +61,8 @@ export type EmbeddedServerOptions = CliArgs & {
   appVersion?: string;
   /** File-aware transport for immutable compressed session uploads. */
   captureFileUpload?: CaptureFileUpload;
+  /** The user signed out since the last start: queued uploads and archives are deleted first. */
+  clearUploadQueue?: boolean;
   /**
    * How the embedding desktop launches its bundled UI-control MCP. Persisted
    * entries still using `npx -y omnirush-ui-mcp` are rewritten to it before
@@ -99,6 +101,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   config.resumeInterruptedTasks = options.resumeInterruptedTasks === true && options.manageOpencode === true && !config.opencodeBaseUrl;
   config.appVersion = typeof options.appVersion === "string" && options.appVersion.trim() ? options.appVersion.trim() : undefined;
   config.captureFileUpload = options.captureFileUpload;
+  config.clearUploadQueue = options.clearUploadQueue === true;
   const logger = createServerLogger(config);
 
   // Spawn managed OpenCode if requested and no explicit base URL was provided.
