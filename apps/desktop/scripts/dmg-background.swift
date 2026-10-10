@@ -27,6 +27,7 @@ let navy: UInt32 = 0x011627
 let navyLift: UInt32 = 0x0a2540
 let blue: UInt32 = 0x0090ff
 let cyan: UInt32 = 0x00a2c7
+let violet: UInt32 = 0x6e56cf
 let ink: UInt32 = 0x1c2024
 let muted: UInt32 = 0x60646c
 let paper: UInt32 = 0xfcfcfd
@@ -261,7 +262,7 @@ func midnight(_ c: CGContext, scale: CGFloat) {
   c.drawLinearGradient(gradient([(0, rgb(navyLift)), (1, rgb(navy))]), start: .zero, end: CGPoint(x: 0, y: height), options: [])
   glow(c, CGPoint(x: 520, y: 120), 300, blue, 0.40)
   glow(c, CGPoint(x: 120, y: 320), 260, cyan, 0.22)
-  glow(c, CGPoint(x: 330, y: 0), 260, 0x6e56cf, 0.18)
+  glow(c, CGPoint(x: 330, y: 0), 260, violet, 0.18)
   // Motion streaks: thin lines that speed up toward Applications.
   c.saveGState()
   c.setLineCap(.round)
@@ -332,6 +333,78 @@ func orbit(_ c: CGContext, scale: CGFloat) {
   hint(c, colour: rgb(muted))
 }
 
+// The mark as a tinted image, so it can cast a glow (a clip would cut it off).
+func tintedMark(_ colour: CGColor, pixels: Int) -> CGImage {
+  let ctx = CGContext(
+    data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
+    space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+  let rect = CGRect(x: 0, y: 0, width: pixels, height: pixels)
+  let maskForClip = CGImage(
+    maskWidth: markMask.width, height: markMask.height, bitsPerComponent: 8, bitsPerPixel: 8,
+    bytesPerRow: markMask.bytesPerRow, provider: markMask.dataProvider!, decode: [1, 0],
+    shouldInterpolate: true)!
+  ctx.clip(to: rect, mask: maskForClip)
+  ctx.setFillColor(colour)
+  ctx.fill(rect)
+  return ctx.makeImage()!
+}
+
+// Variant "combo": midnight's navy and glows, orbit's huge mark lit by a cyan
+// rim glow, and a lit comet trail from the app into Applications.
+func combo(_ c: CGContext, scale: CGFloat, mark markRect: CGRect) {
+  c.drawLinearGradient(gradient([(0, rgb(navyLift)), (1, rgb(navy))]), start: .zero, end: CGPoint(x: 0, y: height), options: [])
+  glow(c, CGPoint(x: 520, y: 120), 300, blue, 0.38)
+  glow(c, CGPoint(x: 120, y: 320), 260, cyan, 0.20)
+  glow(c, CGPoint(x: 330, y: 0), 260, violet, 0.22)
+  // Watermark: a dark mark with a cyan rim light, then a faint sheen inside.
+  let image = tintedMark(rgb(0x0b2140), pixels: Int(markRect.width * scale))
+  c.saveGState()
+  c.setShadow(offset: .zero, blur: 26, color: rgb(cyan, 0.55))
+  c.translateBy(x: markRect.minX, y: markRect.maxY); c.scaleBy(x: 1, y: -1)
+  c.setAlpha(0.85)
+  c.draw(image, in: CGRect(origin: .zero, size: markRect.size))
+  c.restoreGState()
+  c.saveGState()
+  c.translateBy(x: markRect.minX, y: markRect.maxY); c.scaleBy(x: 1, y: -1)
+  c.setAlpha(0.10)
+  c.draw(tintedMark(rgb(0x9fdcff), pixels: Int(markRect.width * scale)), in: CGRect(origin: .zero, size: markRect.size))
+  c.restoreGState()
+  // The trail lands in a soft glow at the folder.
+  glow(c, CGPoint(x: 432, y: 186), 70, cyan, 0.45)
+  let start = CGPoint(x: 246, y: 190), control = CGPoint(x: 326, y: 106), end = CGPoint(x: 402, y: 184)
+  let count = 24
+  for i in 0..<count {
+    let t = CGFloat(i) / CGFloat(count - 1)
+    let u = 1 - t
+    let p = CGPoint(x: u * u * start.x + 2 * u * t * control.x + t * t * end.x, y: u * u * start.y + 2 * u * t * control.y + t * t * end.y)
+    let r = 1.1 + t * t * 5
+    // Cyan at the app, violet in the middle, cyan-white at the head.
+    let colour: UInt32 = t < 0.35 ? cyan : t < 0.75 ? violet : 0x7fdcff
+    c.saveGState()
+    c.setShadow(offset: .zero, blur: 4 + 10 * t, color: rgb(colour, 0.9))
+    c.setFillColor(rgb(colour, 0.35 + 0.65 * t))
+    c.fillEllipse(in: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
+    c.restoreGState()
+  }
+  c.saveGState()
+  c.setShadow(offset: .zero, blur: 16, color: rgb(cyan, 0.95))
+  let head = CGMutablePath()
+  head.move(to: CGPoint(x: 400, y: 170)); head.addLine(to: CGPoint(x: 416, y: 186)); head.addLine(to: CGPoint(x: 396, y: 198))
+  c.addPath(head); c.setLineWidth(4); c.setLineCap(.round); c.setLineJoin(.round); c.setStrokeColor(rgb(0xffffff)); c.strokePath()
+  c.restoreGState()
+  // Frosted pills behind the labels (Finder draws them black).
+  for icon in [appIcon, applicationsIcon] {
+    let pill = CGPath(roundedRect: CGRect(x: icon.x - 64, y: 258, width: 128, height: 26), cornerWidth: 13, cornerHeight: 13, transform: nil)
+    c.saveGState()
+    c.setShadow(offset: CGSize(width: 0, height: 4), blur: 14, color: rgb(0x000000, 0.35))
+    c.addPath(pill); c.setFillColor(rgb(0xffffff, 0.9)); c.fillPath()
+    c.restoreGState()
+  }
+  grain(c, scale: scale, amount: 0.06)
+  header(c, colour: rgb(0xffffff))
+  hint(c, colour: rgb(0xffffff, 0.72))
+}
+
 func render(scale: CGFloat) -> Data {
   let w = Int(width * scale), h = Int(height * scale)
   guard
@@ -351,6 +424,9 @@ func render(scale: CGFloat) -> Data {
   case "flow": flow(c, scale: scale)
   case "midnight": midnight(c, scale: scale)
   case "orbit": orbit(c, scale: scale)
+  // Mark centred behind the layout, or large and cropped off the right edge.
+  case "combo-a": combo(c, scale: scale, mark: CGRect(x: 120, y: -20, width: 420, height: 420))
+  case "combo-b": combo(c, scale: scale, mark: CGRect(x: 300, y: -90, width: 560, height: 560))
   default: fatalError("unknown variant \(variant)")
   }
   NSGraphicsContext.restoreGraphicsState()
