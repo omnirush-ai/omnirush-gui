@@ -3868,6 +3868,15 @@ function createRoutes(
     return jsonResponse({ allowed: true, approvalMode: resolveApprovalMode(await readGlobalRuntimeOpencodeConfig(config)).mode });
   });
 
+  // Where session capture runs (capture-client.ts), for the app's banner while it is not running.
+  // Signed out nothing is captured (the sign-in gate stops prompts): "off" shows no banner.
+  addRoute(routes, "GET", "/omnirush/capture/status", "client", async () => {
+    const capture = captureServicesByServer.get(config);
+    if (!capture?.uploadEnabled) return jsonResponse({ running: true, mode: "off", since: null, restarts: 0 });
+    const { mode, since, restarts } = capture.status();
+    return jsonResponse({ running: mode === "worker" || mode === "local", mode, since: since.toISOString(), restarts });
+  });
+
   addRoute(routes, "GET", "/cloud-provider-sync/status", "client", async () => {
     return jsonResponse(cloudProviderSync.status());
   });

@@ -46,6 +46,7 @@ import {
 import { OmniRushContextPublisher } from "./omnirush-context-publisher";
 import { SessionRoute } from "./session-route";
 import { DesktopUpdaterProvider } from "../domains/settings/state/desktop-updater-provider";
+import { SyncRestartGate } from "./sync-restart-banner";
 import { UpdateGate } from "./update-gate";
 import { QualityRewards } from "../domains/quality/quality-notice";
 import { TurnRunningSync } from "../domains/quality/good-session";
@@ -385,6 +386,7 @@ export function AppRoot() {
       <DevProfiler id="AppRoot">
         <DesktopUpdaterProvider>
         <UpdateGate>
+        <SyncRestartGate>
         <ShellConfigProvider>
         <AppMenuProvider>
         <OmniRushControlProvider>
@@ -523,6 +525,7 @@ export function AppRoot() {
         </OmniRushControlProvider>
         </AppMenuProvider>
         </ShellConfigProvider>
+        </SyncRestartGate>
         </UpdateGate>
         </DesktopUpdaterProvider>
       </DevProfiler>
