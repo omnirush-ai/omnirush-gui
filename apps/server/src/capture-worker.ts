@@ -116,6 +116,9 @@ const host = new CaptureHost({
   engineVersion: init.engineVersion,
   log,
   ...(init.accountId ? { accountId: async () => (await ask("uploader", { type: "accountId" })).account ?? null } : {}),
+  ...(init.engineTarget
+    ? { engineTarget: async (sessionId: string, workspaceId: string) => (await ask("uploader", { type: "engineTarget", sessionId, workspaceId })).target ?? null }
+    : {}),
   ...(init.sessionIntegrity
     ? {
         sessionIntegrity: async (sessionId: string, options: { summary?: boolean; turns?: number } = {}) => {

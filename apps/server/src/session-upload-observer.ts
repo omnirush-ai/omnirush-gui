@@ -32,14 +32,21 @@ export type EngineTarget = {
  * snapshot is taken right as the prompt goes out, and its messages stop
  * before the prompt's own.
  */
-type FollowedTurn = { snapshotTaken: boolean; cutAt: number | null };
+type FollowedTurn = { snapshotTaken: boolean; cutAt: number | null; settled?: boolean };
 
 /**
  * A session being observed: the engine its latest captured request went to
  * (an engine that restarted may answer on another port), how many requests
  * asked for it while it was, the turn being followed, and the observation itself.
  */
-type ObservedSession = { target: EngineTarget; requests: number; turn: FollowedTurn | null; done: Promise<void> };
+type ObservedSession = {
+  target: EngineTarget;
+  requests: number;
+  turn: FollowedTurn | null;
+  done: Promise<void>;
+  /** Settles the turn being followed now, as the engine has it (an app quit); nothing when none is open. */
+  settleNow?: () => Promise<void>;
+};
 
 /** The engine that took over from a closed one: its base URL and its Authorization header. */
 export type EngineReplacement = { baseUrl: string; authorization: string | null };
@@ -797,6 +804,12 @@ export function observeUploadedSession(input: {
   sessionId: string;
   target: EngineTarget;
   timing?: Partial<ObserverTiming>;
+  /**
+   * The turn was left open by a process that ended (a crash, a killed
+   * worker): an idle session settles at its first read, and the turn's end
+   * says it was recovered.
+   */
+  recovered?: boolean;
 }): Promise<void> {
   if (!input.sessionUploader.enabled) return Promise.resolve();
   const observer = input.observers;
@@ -872,7 +885,14 @@ export function observeUploadedSession(input: {
    * history when it was read already; a turn ended by the next prompt keeps
    * only the messages from before that prompt.
    */
+  let recovering = input.recovered === true;
   const settle = async (status: string, read?: EngineHistory): Promise<void> => {
+    // Once per turn: an app quit may settle it while the follow loop is about to.
+    const turn = turnState();
+    if (turn.settled) return;
+    turn.settled = true;
+    const recovered = recovering;
+    recovering = false;
     let history: EngineHistory | null = read ?? null;
     let unavailable: Record<string, unknown> = { unavailable: true };
     try {
@@ -953,7 +973,12 @@ export function observeUploadedSession(input: {
     // A turn the user stopped (Esc, Stop) says so on its trigger and its turn.completed event too.
     const aborted = outcome === "stopped" ? ("aborted" as const) : undefined;
     captureTurnSnapshot(aborted);
-    sessionUploader.flushTrace(sessionId, { messages: history ? newest.messages : unavailable, ...(aborted ? { outcome: aborted } : {}) });
+    sessionUploader.flushTrace(sessionId, {
+      messages: history ? newest.messages : unavailable,
+      ...(aborted ? { outcome: aborted } : {}),
+      ...(recovered ? { recovered: true } : {}),
+      ...(status === "quit" ? { reason: "app_quit" } : {}),
+    });
     // The delta's turn number is the engine's completed-turn count, which
     // survives app restarts; without the messages the archiver numbers it
     // right after the last archived turn. It also arms the idle final archive.
@@ -1015,6 +1040,11 @@ export function observeUploadedSession(input: {
       }
       if (unavailableTraced && unavailableSince !== null) {
         sessionUploader.recordTrace(sessionId, "session.engine_recovered", { failures, unavailable_ms: timing.now() - unavailableSince });
+      }
+      // A turn a previous process left open: an idle session has nothing more to wait for.
+      if (recovering && status === "idle") {
+        await settle(status);
+        return session.requests;
       }
       failures = 0;
       unavailableSince = null;
@@ -1084,6 +1114,11 @@ export function observeUploadedSession(input: {
     return null;
   };
 
+  session.settleNow = async () => {
+    if (!session.turn || session.turn.settled) return;
+    sessionUploader.recordTrace(sessionId, "session.quit_settled", {});
+    await settle("quit");
+  };
   session.done = (async () => {
     const checkpoint = await sessionUploader.sessionCheckpoint(sessionId);
     if (checkpoint.lastMessageId) observer.lastMessageIds.set(sessionId, checkpoint.lastMessageId);

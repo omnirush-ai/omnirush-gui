@@ -18,6 +18,8 @@ export const UPLOAD_TEMP_DIRECTORY = "omnirush-upload-tmp";
 export const UPLOAD_SESSION_LEDGER_FILE = "omnirush-upload-sessions.json";
 export const UPLOAD_SPOOL_DIRECTORY = "omnirush-upload-spool";
 export const UPLOAD_BASE_DIRECTORY = "omnirush-upload-bases";
+/** Each live chat's trace events not yet handed to an upload, so a crash loses none (session-uploader.ts). */
+export const UPLOAD_JOURNAL_DIRECTORY = "omnirush-upload-journal";
 
 /** The same files under the names used up to 2.2.1. */
 export const LEGACY_UPLOAD_STATE_NAMES = {

@@ -47,6 +47,8 @@ const RESTART_STABLE_MS = 5 * 60_000;
 /** Calls waiting for a worker to start; past this the oldest one nobody waits on is dropped. */
 const MAX_QUEUED_CALLS = 20_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
+/** Chats whose engine is remembered for a restarted worker. */
+const MAX_OBSERVED_TARGETS = 256;
 
 export type CaptureServiceOptions = Omit<CaptureHostOptions, "onSessionClosed"> & {
   /** Run capture on a worker thread; default on unless OMNIRUSH_CAPTURE_WORKER is 0, false, no or off. */
@@ -149,6 +151,8 @@ class CaptureClient implements CaptureService {
   /** Only the first start falls back to capturing in-process; later failures start new workers. */
   private canRunLocally = true;
   private overflowing = false;
+  /** The engine each recently observed chat's requests went to: a restarted worker settles their open turns there. */
+  private readonly observedTargets = new Map<string, EngineTarget>();
   private stopping: Promise<void> | null = null;
 
   constructor(private readonly options: CaptureServiceOptions) {
@@ -234,6 +238,9 @@ class CaptureClient implements CaptureService {
   }
 
   observeSession(sessionId: string, target: EngineTarget): void {
+    this.observedTargets.delete(sessionId);
+    this.observedTargets.set(sessionId, target);
+    if (this.observedTargets.size > MAX_OBSERVED_TARGETS) this.observedTargets.delete(this.observedTargets.keys().next().value as string);
     this.send({ kind: "call", id: null, method: "observeSession", args: [sessionId, target] });
   }
 
@@ -382,6 +389,8 @@ class CaptureClient implements CaptureService {
       engineVersion: this.options.engineVersion,
       accountId: Boolean(this.options.accountId),
       sessionIntegrity: Boolean(this.options.sessionIntegrity),
+      // Always: the chats this thread saw observed are known here even without a resolver.
+      engineTarget: true,
       sessionUploader: {
         upload: Boolean(sessionUploader.upload),
         uploadFile: Boolean(sessionUploader.uploadFile),
@@ -582,6 +591,15 @@ class CaptureClient implements CaptureService {
           ...(request.turns !== undefined ? { turns: request.turns } : {}),
         })) };
       }
+      case "engineTarget":
+        // A chat this server saw go to an engine (a restarted worker's), else the workspace's engine.
+        return {
+          kind: "result",
+          id,
+          ok: true,
+          response: null,
+          target: this.observedTargets.get(request.sessionId) ?? (this.options.engineTarget ? await this.options.engineTarget(request.sessionId, request.workspaceId) : null),
+        };
       case "accountId":
         return { kind: "result", id, ok: true, response: null, account: this.options.accountId ? await this.options.accountId() : null };
       case "refreshAccessToken": {

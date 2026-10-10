@@ -193,7 +193,7 @@ import { CloudProviderSync, parseCloudProviderDenSession } from "./cloud-provide
 import { createEngineV2Preview, type EngineV2Preview } from "./engine-v2-preview.js";
 import { sessionUploaderEnabled } from "./session-uploader.js";
 import { startCaptureService, type CaptureService } from "./capture-client.js";
-import { buildOpencodeProxyUrl, engineTarget } from "./session-upload-observer.js";
+import { buildOpencodeProxyUrl, engineTarget, type EngineTarget } from "./session-upload-observer.js";
 import { OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 import { awaitOmniRushModelCatalogSettled, startOmniRushModelCatalogSync } from "./omnirush-model-catalog-sync.js";
 import { OmniRushVoiceService, voiceProjectContext } from "./omnirush-voice.js";
@@ -901,6 +901,27 @@ function uploadDeletedSessionId(method: string, proxyPath: string): string | nul
 
 type EngineRequestTarget = { baseUrl: string; headers: Headers };
 
+/**
+ * The engine holding a chat of a local workspace, scoped like the proxy's
+ * requests, for settling a turn a previous process left open; null for a
+ * remote or unknown workspace, no engine, or an engine without the chat.
+ */
+async function captureEngineTarget(config: ServerConfig, sessionId: string, workspaceId: string): Promise<EngineTarget | null> {
+  const workspace = config.workspaces.find((item) => item.id === workspaceId);
+  if (!workspace || workspace.workspaceType === "remote") return null;
+  const route = enginePoolForConfig(config)?.routeRequest("GET", `/session/${sessionId}/message`) ?? null;
+  const connection = route ? null : resolveWorkspaceOpencodeConnection(config, workspace);
+  const baseUrl = route?.target.baseUrl ?? connection?.baseUrl?.trim() ?? "";
+  if (!baseUrl) return null;
+  const auth = route ? buildEngineAuthProbeHeader(route.target.username, route.target.password) : connection?.authHeader ?? null;
+  const directory = resolveOpencodeDirectory(workspace);
+  if (!(await engineHasSession(baseUrl, auth, directory, sessionId))) return null;
+  const headers = new Headers();
+  if (auth) headers.set("Authorization", auth);
+  const scoped = scopeWorkspaceOpencodeRequest(headers, "", directory);
+  return engineTarget(baseUrl, scoped.headers, scoped.search);
+}
+
 /** How long the existence check before a chat's first captured prompt waits for the engine. */
 const ENGINE_SESSION_CHECK_TIMEOUT_MS = 3_000;
 
@@ -1060,6 +1081,8 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     // "opencode/1.18.32-r2": the bundled engine, as every upload names it (engine-identity.ts).
     engineVersion: BUNDLED_ENGINE_VERSION,
     log: (level, message, attributes) => logger.log(level, message, attributes),
+    // A turn a crashed process or worker left open is settled from the engine that has its chat.
+    engineTarget: (sessionId: string, workspaceId: string) => captureEngineTarget(config, sessionId, workspaceId),
     ...(gatewayBroker.enabled
       ? { accountId: () => gatewayBroker.accountId(), sessionIntegrity: (sessionId: string, options?: { summary?: boolean; turns?: number }) => gatewayBroker.sessionIntegrity(sessionId, options) }
       : {}),

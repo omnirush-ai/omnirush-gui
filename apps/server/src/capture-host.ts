@@ -25,7 +25,7 @@ import {
 import type { CaptureStopOptions } from "./capture-protocol.js";
 import { SessionArchiver, type FilesUsedStatus, type SessionArchiverOptions } from "./session-archive/index.js";
 import { ProjectArchiveLifecycle, type ArchiveLifecycleLog } from "./session-archive/lifecycle.js";
-import { SessionUploader, type TraceCapabilities, type UploadMetrics, type UploadRequestOptions, type UploadWebVisit } from "./session-uploader.js";
+import { SessionUploader, type RecoveredTurn, type TraceCapabilities, type UploadMetrics, type UploadRequestOptions, type UploadWebVisit } from "./session-uploader.js";
 
 export type { EngineReplacement, EngineTarget } from "./session-upload-observer.js";
 
@@ -33,6 +33,10 @@ export type CaptureLog = ArchiveLifecycleLog;
 
 /** Prompt bodies larger than this are not parsed for the trace (nor for attachments). */
 const MAX_TRACED_REQUEST_BYTES = 4 * 1024 * 1024;
+/** An app quit gives the turns still open this long in all to be settled from the engine. */
+const QUIT_SETTLE_BUDGET_MS = 5_000;
+/** A recovered turn asks for its engine again after these waits (the engine may still be starting). */
+const RECOVERY_TARGET_DELAYS_MS = [0, 5_000, 15_000, 30_000, 60_000];
 
 /** A captured engine request, as the "engine.request" trace event and the prompt's attachments are built from it. */
 export type PromptRecord = {
@@ -60,6 +64,12 @@ export type CaptureHostOptions = {
   log: CaptureLog;
   /** The signed-in account's id (null: not known now); spooled uploads are stamped with it. */
   accountId?: () => Promise<string | null>;
+  /**
+   * The engine holding a chat of this workspace, for settling a turn a
+   * previous process left open; null when there is none (remote, unknown,
+   * or the engine does not have the chat).
+   */
+  engineTarget?: (sessionId: string, workspaceId: string) => Promise<EngineTarget | null>;
   /** GET /omnirush/me/sessions/{id}/integrity with the device bearer. */
   sessionIntegrity?: (sessionId: string, options?: { summary?: boolean; turns?: number }) => Promise<Response>;
   sessionUploader: {
@@ -107,8 +117,10 @@ export class CaptureHost {
   private readonly sessionRoots = new Map<string, string>();
   /** The state dir and the app's data/config/cache dirs: never reported or recorded as a touched file. */
   private readonly appDirs: string[];
+  private readonly engineTarget?: CaptureHostOptions["engineTarget"];
 
   constructor(options: CaptureHostOptions) {
+    this.engineTarget = options.engineTarget;
     this.sessionUploader = new SessionUploader({
       ...options.sessionUploader,
       stateDir: options.stateDir,
@@ -117,6 +129,8 @@ export class CaptureHost {
       log: options.log,
       ...(options.accountId ? { accountId: options.accountId } : {}),
       ...(options.sessionIntegrity ? { sessionIntegrity: options.sessionIntegrity } : {}),
+      // A turn a crashed process or worker left open is settled from the engine's messages.
+      onRecoveredTurn: (turn) => void this.recoverTurn(turn),
       // Capture context (context/); OMNIRUSH_CAPTURE_CONTEXT=0 turns it off.
       context: options.sessionUploader?.context ?? {},
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
@@ -212,7 +226,7 @@ export class CaptureHost {
   }
 
   /** The engine accepted a captured request: follow the session until its turn settles. */
-  observeSession(sessionId: string, target: EngineTarget): void {
+  observeSession(sessionId: string, target: EngineTarget, recovered = false): void {
     const root = this.sessionRoots.get(sessionId);
     void observeUploadedSession({
       sessionUploader: this.sessionUploader,
@@ -221,7 +235,29 @@ export class CaptureHost {
       observers: this.observers,
       sessionId,
       target,
+      ...(recovered ? { recovered } : {}),
     });
+  }
+
+  /**
+   * A turn a previous process (or worker) left open: the chat resumes here
+   * and its observer settles the turn from the engine's messages, or follows
+   * it to its end when it is still running. Without an engine that has the
+   * chat, its messages wait for its next prompt (the checkpoint did not move).
+   */
+  private async recoverTurn(turn: RecoveredTurn): Promise<void> {
+    if (!this.engineTarget) return;
+    const stopped = this.observers.controller.signal;
+    for (const delay of RECOVERY_TARGET_DELAYS_MS) {
+      if (delay > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, delay).unref?.());
+      if (stopped.aborted || this.sessionUploader.hasSession(turn.sessionId)) return;
+      const target = await this.engineTarget(turn.sessionId, turn.workspaceId).catch(() => null);
+      if (stopped.aborted || this.sessionUploader.hasSession(turn.sessionId)) return;
+      if (!target) continue;
+      this.startSession(turn.sessionId, turn.workspaceId, turn.root);
+      this.observeSession(turn.sessionId, target, true);
+      return;
+    }
   }
 
   /** Files used, for the app's one-time notice: what omnirush.ai says. */
@@ -250,10 +286,27 @@ export class CaptureHost {
    * final archives (unless `archiveFinals` is false: the account is gone).
    */
   async stop(options: CaptureStopOptions = { archiveFinals: true }): Promise<void> {
+    // Turns still open get their messages and their end first, within a bounded budget.
+    await this.settleOpenTurns(QUIT_SETTLE_BUDGET_MS);
     const archiveStopped = this.archive.stop({ finals: options.archiveFinals });
     this.observers.controller.abort();
     await this.sessionUploader.stop().catch(() => undefined);
     await archiveStopped;
+  }
+
+  /** Settles every followed turn as the engine has it now, waiting at most `budgetMs`. */
+  private async settleOpenTurns(budgetMs: number): Promise<void> {
+    const open = [...this.observers.sessions.values()].map((session) => session.settleNow?.().catch(() => undefined));
+    if (open.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(open),
+      new Promise((resolvePromise) => {
+        timer = setTimeout(resolvePromise, budgetMs);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   /** Resolves once every queued capture, upload and archive step has settled (tests, profiling). */
