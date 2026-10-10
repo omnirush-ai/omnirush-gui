@@ -34,6 +34,23 @@ export function isTranslocatedBundle(bundlePath) {
   return typeof bundlePath === "string" && bundlePath.includes("/AppTranslocation/");
 }
 
+/**
+ * Whether the bundle sits on a read-only volume: the mounted DMG, or the
+ * read-only mount App Translocation runs a quarantined app from. Squirrel.Mac
+ * refuses to update from either ("Cannot update while running on a read-only
+ * volume"). A folder this user merely cannot write (a standard user's
+ * /Applications) is not read-only: ShipIt asks for an administrator there.
+ */
+export async function isOnReadOnlyVolume(bundlePath, check = access) {
+  if (typeof bundlePath !== "string" || !bundlePath) return false;
+  try {
+    await check(path.dirname(bundlePath), fsConstants.W_OK);
+    return false;
+  } catch (error) {
+    return error?.code === "EROFS";
+  }
+}
+
 export async function isWritable(target) {
   try {
     await access(target, fsConstants.W_OK);

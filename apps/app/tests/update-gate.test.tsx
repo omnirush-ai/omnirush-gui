@@ -31,13 +31,14 @@ const required: UpdateGateState = {
 };
 const blocked: UpdateGateState = { ...required, status: "blocked", message: "Update OmniRush.ai to 3.1.0 to keep using models.", source: "rejection" };
 
-function fakeUpdate(over: Partial<{ label: string; working: boolean; detail: string | null; command: string | null }> = {}) {
+function fakeUpdate(over: Partial<{ label: string; working: boolean; detail: string | null; command: string | null; installFailed: boolean }> = {}) {
   return {
     updateNow: () => undefined,
     working: false,
     detail: null,
     label: "Update and restart",
     command: null,
+    installFailed: false,
     showDownloaded: () => undefined,
     ...over,
   };
@@ -156,9 +157,26 @@ describe("Update now", () => {
 
   test("nothing opens a browser by itself", () => {
     const hook = read("../src/react-app/shell/update-gate.tsx");
-    // openDownload runs only from the "open-download" action and the explicit link.
-    expect(hook.match(/openDownload\(/g)?.length).toBe(3);
+    // openDownload runs only from the "open-download" action and the explicit links.
+    expect(hook.match(/openDownload\(/g)?.length).toBe(4);
     expect(hook).toContain('case "open-download":\n        openDownload(gate.downloadUrl);');
+  });
+
+  test("a restart that did not go through offers the manual download beside the retry", () => {
+    const failed = renderToStaticMarkup(
+      <RequiredUpdateBanner gate={required} appName="OmniRush.ai" update={fakeUpdate({ installFailed: true, detail: "The update did not finish: moved" })} />,
+    );
+    expect(failed).toContain('data-testid="update-required-banner-download"');
+    expect(failed).toContain("Download manually");
+    const fine = renderToStaticMarkup(<RequiredUpdateBanner gate={required} appName="OmniRush.ai" update={fakeUpdate()} />);
+    expect(fine).not.toContain("update-required-banner-download");
+  });
+
+  test("Restarting… never spins forever: the main answer and the quit both have a watchdog", () => {
+    const state = read("../src/react-app/domains/settings/state/electron-updater-state.ts");
+    expect(state).toContain("withRestartWatchdog(bridge.installAndRestart())");
+    expect(state).toContain("RESTART_STALLED_MS");
+    expect(state).toContain('result?.fallback === "move-to-applications"');
   });
 
   test("the download starts in the background as soon as an update is required", () => {

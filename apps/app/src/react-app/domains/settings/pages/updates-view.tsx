@@ -238,6 +238,18 @@ export function UpdatesView(props: UpdatesViewProps) {
                 </Alert>
               ) : null}
 
+              {updateState === "error" && props.updateStatus?.failedAction === "install" ? (
+                <div>
+                  <Button
+                    variant="outline"
+                    data-testid="update-install-failed-download"
+                    onClick={() => void window.__OMNIRUSH_ELECTRON__?.shell?.openExternal?.(downloadPageUrl)}
+                  >
+                    {t("settings.update_open_download_page_button")}
+                  </Button>
+                </div>
+              ) : null}
+
               {updateState === "blocked" && updateErrorMessage ? (
                 <Alert>
                   <Info />
