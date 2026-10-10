@@ -348,7 +348,10 @@ export const OmniRushSwarm = async (input?: { client?: SwarmClient; directory?: 
     if (known !== undefined) return known;
     try {
       const response = await input?.client?.session?.get?.({ path: { id: sessionId } });
-      const parent = typeof response?.data?.parentID === "string" && response.data.parentID ? response.data.parentID : null;
+      // An error answer (no session record) is unknown too: not cached, so the
+      // sub-agent's next request still names its main session.
+      if (!response?.data || typeof response.data !== "object") return null;
+      const parent = typeof response.data.parentID === "string" && response.data.parentID ? response.data.parentID : null;
       remember(parents, sessionId, parent, MAX_TRACKED_SESSIONS);
       return parent;
     } catch {
