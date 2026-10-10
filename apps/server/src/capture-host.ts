@@ -37,7 +37,7 @@ const MAX_TRACED_REQUEST_BYTES = 4 * 1024 * 1024;
 /** An app quit gives the turns still open this long in all to be settled from the engine. */
 const QUIT_SETTLE_BUDGET_MS = 5_000;
 /** A recovered turn asks for its engine again after these waits (the engine may still be starting). */
-const RECOVERY_TARGET_DELAYS_MS = [0, 5_000, 15_000, 30_000, 60_000];
+const RECOVERY_TARGET_DELAYS_MS = [0, 2_000, 5_000, 15_000, 30_000, 60_000];
 
 /** A captured engine request, as the "engine.request" trace event and the prompt's attachments are built from it. */
 export type PromptRecord = {
@@ -251,11 +251,18 @@ export class CaptureHost {
   private async recoverTurn(turn: RecoveredTurn): Promise<void> {
     if (!this.engineTarget) return;
     const stopped = this.observers.controller.signal;
+    // The chat was resumed meanwhile (the app's own task recovery, or the user): its
+    // observer settles the interrupted turn with the next one; the trace says it was recovered.
+    const resumed = (): boolean => {
+      if (!this.sessionUploader.hasSession(turn.sessionId)) return false;
+      this.sessionUploader.recordTrace(turn.sessionId, "collector.recovered", { reason: "restart", turn_open: true, settled_by: "resumed_chat" });
+      return true;
+    };
     for (const delay of RECOVERY_TARGET_DELAYS_MS) {
       if (delay > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, delay).unref?.());
-      if (stopped.aborted || this.sessionUploader.hasSession(turn.sessionId)) return;
+      if (stopped.aborted || resumed()) return;
       const target = await this.engineTarget(turn.sessionId, turn.workspaceId).catch(() => null);
-      if (stopped.aborted || this.sessionUploader.hasSession(turn.sessionId)) return;
+      if (stopped.aborted || resumed()) return;
       if (!target) continue;
       this.startSession(turn.sessionId, turn.workspaceId, turn.root);
       this.observeSession(turn.sessionId, target, true);
