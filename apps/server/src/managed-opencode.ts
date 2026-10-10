@@ -3,6 +3,7 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { globalOpencodeConfigDir } from "@omnirush/paths";
 import { engineDataEnv } from "./engine-data-home.js";
+import { repairEngineStoreBeforeStart } from "./engine-store-repair.js";
 
 export type ManagedChildProcess = {
   exitCode: number | null;
@@ -193,6 +194,11 @@ async function startManagedOpencodeServer(
       redacted: SECRET_ENV_PATTERN.test(name),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
+  // One malformed session row makes the engine answer 500 for that chat and
+  // for its project's whole session list: set such rows aside first.
+  await repairEngineStoreBeforeStart(env, (level, message, attributes) => {
+    console[level === "warn" ? "warn" : "info"](`[engine-store] ${message}`, attributes ?? {});
+  });
   const child: ChildProcess = spawn(options.bin?.trim() || "opencode", args, {
     cwd: options.cwd,
     env,

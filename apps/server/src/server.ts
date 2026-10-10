@@ -32,6 +32,7 @@ import {
 } from "./engine-pool.js";
 import { withEngineDirectoryFence } from "./engine-directory-fence.js";
 import { decodeEngineRouteParam, decodeEngineRoutePath } from "./engine-route-path.js";
+import { repairEngineStoresAfterServerError } from "./engine-store-repair.js";
 import {
   clearEngineInstanceReaperForConfig,
   EngineInstanceReaper,
@@ -723,10 +724,24 @@ async function assertWorkspaceOwnsProxiedSessionRead(
   const directory = resolveOpencodeDirectory(workspace);
   if (!sessionId || !directory) return;
 
-  const result = await createWorkspaceOpencodeClient(config, workspace, { sessionId }).session.get({ sessionID: sessionId });
+  const readSession = () => createWorkspaceOpencodeClient(config, workspace, { sessionId }).session.get({ sessionID: sessionId });
+  let result = await readSession();
+  // A 500 here is, in practice, a damaged row in the engine's session store
+  // (engine-store-repair.ts): set it aside while the engine runs and read again.
+  if (result.error !== undefined && result.response?.status === 500 && isEngineUnknownError(result.error)
+    && await repairEngineStoresAfterServerError() > 0) {
+    result = await readSession();
+  }
   if (result.error !== undefined) {
     if (result.response?.status === 404) {
       throw new ApiError(404, "session_not_found", "Session not found");
+    }
+    if (result.response?.status === 500 && isEngineUnknownError(result.error)) {
+      throw new ApiError(502, "opencode_session_unreadable", "This chat could not be read right now. Restart OmniRush.ai to repair it; your chats are kept.", {
+        status: result.response.status,
+        body: result.error,
+        path: `/session/${encodeURIComponent(sessionId)}`,
+      });
     }
     throw new ApiError(502, "opencode_request_failed", "OmniRush request failed", {
       ...(result.response ? { status: result.response.status } : {}),
@@ -1988,6 +2003,11 @@ export function createWorkspaceOpencodeClient(
   });
 }
 
+/** The engine's answer to an unexpected failure: `{ name: "UnknownError", data: { message, ref } }`. */
+export function isEngineUnknownError(body: unknown): boolean {
+  return Boolean(body) && typeof body === "object" && (body as { name?: unknown }).name === "UnknownError";
+}
+
 export function unwrapOpencodeResult<T, E>(result: OpencodeClientResult<T, E>, path: string): NonNullable<T> {
   if (result.data != null) {
     return result.data;
@@ -2248,6 +2268,17 @@ export async function proxyOpencodeRequest(input: {
         served = { baseUrl: reroute.target.baseUrl, headers: headersForEngineConnection(headers, reroute.target) };
       } finally {
         release?.();
+      }
+    }
+
+    // A session read the engine fails with 500 is, in practice, a damaged row
+    // in its session store (one row breaks the chat and the project's whole
+    // list): set it aside while the engine runs and read once more.
+    if (response.status === 500 && method === "GET" && /^\/(?:api\/)?session(?:\/|$)/.test(normalizeOpencodeProxyPath(proxyPath))) {
+      const failure = await response.clone().json().catch(() => null);
+      if (isEngineUnknownError(failure) && await repairEngineStoresAfterServerError() > 0) {
+        await response.body?.cancel().catch(() => undefined);
+        response = await loopbackFetch(buildOpencodeProxyUrl(served.baseUrl, proxyPath, search), { method, headers: served.headers, body, signal: input.recoverySignal });
       }
     }
 
