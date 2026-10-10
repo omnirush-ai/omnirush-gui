@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createDesktopOmniRushAccountStore } from "./omnirush-account.mjs";
-import { parseAccountQuality, parseSpinHistory, parseSpinResult, spinIdempotencyKey, spinRefusal } from "./quality.mjs";
+import { parseAccountQuality, parseSessionStatus, parseSpinHistory, parseSpinResult, spinIdempotencyKey, spinRefusal } from "./quality.mjs";
 
 const GATEWAY = "http://localhost:8090/omnirush/v1";
 const SEGMENTS = [
@@ -282,4 +282,84 @@ test("spins history: totals and the last 10 spins, each marked when replay-ready
   assert.equal(history.recent[1].clientGrade, true);
   assert.equal(history.recent[2].clientGrade, false);
   assert.equal(parseSpinHistory(null), null);
+});
+
+const SESSION_STATUS = {
+  session_id: "ses_abc",
+  status: "at_risk",
+  reasons: [{ code: "no_code", message: "No code has changed yet after 31 tool calls." }, { code: "x" }],
+  message: "One step left.",
+  dock: { mode: "warn", stage: "surcharge", weight: 1.5, session_tokens: 5400000, surcharge_tokens: 300000, cap_at_tokens: null, capped: false, message: "Using tokens at 1.5x.", link: "https://omnirush.ai/console/sessions" },
+  verdict: { state: "pending", reasons: ["finished"], reward_weight: 2 },
+  checklist: [
+    { id: "project", state: "pass", label: "in a project", hint: "ok" },
+    { id: "depth", state: "warn", label: "1 of 2 turns", hint: "One more turn would make this count: send a follow-up." },
+    { id: "brand_new", state: "sideways", label: "new item" },
+    { id: "", state: "pass", label: "no id" },
+  ],
+  evaluated_at: "2026-10-10T13:00:00Z",
+  poll_seconds: 60,
+  client: { auto_retry: { enabled: true, max: 1, message: "Continue." }, finish_guard: false },
+};
+
+test("session status: the server block, its words kept, unknown states pending, unknown ids kept", () => {
+  const status = parseSessionStatus(SESSION_STATUS);
+  assert.equal(status.status, "at_risk");
+  assert.deepEqual(status.reasons, [{ code: "no_code", message: "No code has changed yet after 31 tool calls." }]);
+  assert.deepEqual(status.checklist.map((item) => [item.id, item.state, item.label]), [
+    ["project", "pass", "in a project"], ["depth", "warn", "1 of 2 turns"], ["brand_new", "pending", "new item"],
+  ]);
+  assert.equal(status.dock.stage, "surcharge");
+  assert.equal(status.dock.weight, 1.5);
+  assert.equal(status.dock.capAtTokens, null);
+  assert.equal(status.verdict.rewardWeight, 2);
+  assert.deepEqual(status.client, { autoRetry: { enabled: true, max: 1, message: "Continue." }, finishGuard: false, oneMoreTurn: true });
+  assert.equal(status.pollSeconds, 60);
+});
+
+test("session status: poll at least every 30 s, 60 s by default; no client block on older servers", () => {
+  assert.equal(parseSessionStatus({ ...SESSION_STATUS, poll_seconds: 5 }).pollSeconds, 30);
+  assert.equal(parseSessionStatus({ ...SESSION_STATUS, poll_seconds: undefined }).pollSeconds, 60);
+  assert.equal(parseSessionStatus({ ...SESSION_STATUS, poll_seconds: 120 }).pollSeconds, 120);
+  assert.equal(parseSessionStatus({ ...SESSION_STATUS, client: undefined }).client, null);
+  assert.equal(parseSessionStatus({ session_id: "ses_x" }).status, "unknown");
+  assert.deepEqual(parseSessionStatus({ session_id: "ses_x" }).checklist, []);
+  assert.equal(parseSessionStatus(null), null);
+  assert.equal(parseSessionStatus({ status: "on_track" }), null);
+});
+
+test("session status: GET /me/sessions/{id}/status with the device credential; null on errors, bad ids or signed out", async () => {
+  const seen = [];
+  const store = await signedInStore(async (url, init) => {
+    seen.push({ path: new URL(url).pathname, authorization: new Headers(init.headers).get("authorization"), signal: init.signal instanceof AbortSignal });
+    return Response.json(SESSION_STATUS);
+  });
+  const status = await store.sessionStatus({ sessionId: "ses_abc" });
+  assert.equal(status.sessionId, "ses_abc");
+  assert.deepEqual(seen, [{ path: "/omnirush/me/sessions/ses_abc/status", authorization: "Bearer access-1", signal: true }]);
+  assert.equal(await store.sessionStatus({ sessionId: "../me" }), null);
+  assert.equal(await store.sessionStatus({}), null);
+  assert.equal(seen.length, 1, "bad ids never reach the server");
+
+  const failing = await signedInStore(async () => new Response("down", { status: 503 }));
+  assert.equal(await failing.sessionStatus({ sessionId: "ses_abc" }), null);
+  const offline = await signedInStore(async () => { throw new TypeError("fetch failed"); });
+  assert.equal(await offline.sessionStatus({ sessionId: "ses_abc" }), null);
+  const timedOut = await signedInStore(async () => { throw new DOMException("The operation timed out.", "TimeoutError"); });
+  assert.equal(await timedOut.sessionStatus({ sessionId: "ses_abc" }), null);
+  const garbage = await signedInStore(async () => new Response("not json", { status: 200 }));
+  assert.equal(await garbage.sessionStatus({ sessionId: "ses_abc" }), null);
+
+  const directory = await mkdtemp(path.join(os.tmpdir(), "omnirush-quality-"));
+  let calls = 0;
+  const signedOut = createDesktopOmniRushAccountStore({
+    filePath: path.join(directory, "account.bin"),
+    loadSafeStorage: () => testStorage(),
+    platform: /** @type {NodeJS.Platform} */ ("linux"),
+    env: { OMNIRUSH_DEV_MODE: "1" },
+    execFileImpl: async (file) => { throw new Error(`unexpected ${file}`); },
+    fetchImpl: async () => { calls += 1; return Response.json(SESSION_STATUS); },
+  });
+  assert.equal(await signedOut.sessionStatus({ sessionId: "ses_abc" }), null);
+  assert.equal(calls, 0);
 });

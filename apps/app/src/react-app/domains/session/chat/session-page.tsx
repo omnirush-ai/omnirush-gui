@@ -102,8 +102,8 @@ import { isSameWorkbenchSession } from "./workbench-store";
 import { ReactSessionRuntime } from "../sync/runtime-sync";
 import { useSessionInteractions } from "../sync/use-session-interactions";
 import { createClient } from "@/app/lib/opencode";
-import { createQuitGuard, leavingRunningTurn } from "@/app/lib/good-session";
-import { TurnGuardDialog } from "@/react-app/domains/quality/good-session";
+import { createQuitGuard, finishGuardKey, leavingRunningTurn, type FinishGuardKind } from "@/app/lib/good-session";
+import { FinishGuardDialog, TurnGuardDialog, finishGuardFor, requestFinishIt } from "@/react-app/domains/quality/good-session";
 import { createClientV2, isOpencodeV2BaseUrl } from "@/app/lib/opencode-v2-adapter";
 import {
   availableNarrowPane,
@@ -513,6 +513,7 @@ export function SessionPage(props: SessionPageProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   // The don't-leave-mid-turn confirm: what to do on "Quit anyway".
   const [turnGuardProceed, setTurnGuardProceed] = useState<(() => void) | null>(null);
+  const [finishGuard, setFinishGuard] = useState<{ sessionId: string; kind: FinishGuardKind; proceed: () => void } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [sessionActionId, setSessionActionId] = useState<string | null>(null);
   const workbenchPrimary = useWorkbenchStore((state) => state.primary);
@@ -1194,9 +1195,17 @@ export function SessionPage(props: SessionPageProps) {
   useEffect(() => {
     leaveGuard.current.turnEnded();
   }, [runningTurns]);
-  const guardLeave = useCallback((running: boolean, proceed: () => void) => {
-    if (leaveGuard.current.request({ running }) === "ask") {
+  // No turn runs but its last one needs finishing (cut off, or waiting on
+  // the user): the finish guard asks once per session and state.
+  const guardLeave = useCallback((running: boolean, proceed: () => void, sessionId?: string) => {
+    const kind = !running && sessionId ? finishGuardFor(sessionId) : null;
+    const verdict = leaveGuard.current.request({ running, finish: kind && sessionId ? finishGuardKey(sessionId, kind) : null });
+    if (verdict === "ask") {
       setTurnGuardProceed(() => proceed);
+      return;
+    }
+    if (verdict === "finish" && kind && sessionId) {
+      setFinishGuard({ sessionId, kind, proceed });
       return;
     }
     proceed();
@@ -1438,7 +1447,7 @@ export function SessionPage(props: SessionPageProps) {
               setSessionActionId(sessionId);
               setDeleteOpen(true);
             };
-            guardLeave(leavingRunningTurn({ action: "delete", turnRunning: sessionTurnRunning(sessionId) }), openDelete);
+            guardLeave(leavingRunningTurn({ action: "delete", turnRunning: sessionTurnRunning(sessionId) }), openDelete, sessionId);
           } : undefined}
           onArchiveSession={props.onArchiveSession ? (sessionId, archived) => {
             void props.onArchiveSession?.(sessionId, archived);
@@ -2092,6 +2101,22 @@ export function SessionPage(props: SessionPageProps) {
           leaveGuard.current.answer(false);
           setTurnGuardProceed(null);
           proceed?.();
+        }}
+      />
+
+      <FinishGuardDialog
+        kind={finishGuard?.kind ?? null}
+        onFinish={() => {
+          const guard = finishGuard;
+          leaveGuard.current.answer(true);
+          setFinishGuard(null);
+          if (guard) requestFinishIt(guard.sessionId, guard.kind);
+        }}
+        onQuit={() => {
+          const guard = finishGuard;
+          leaveGuard.current.answer(false);
+          setFinishGuard(null);
+          guard?.proceed();
         }}
       />
 

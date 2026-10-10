@@ -1,6 +1,7 @@
 /** @jsxImportSource react */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIMessage } from "ai";
+import type { OmniRushSessionStatus } from "@omnirush/types/desktop-ipc";
 import { AlertTriangle, CircleCheck, CircleX, Star, X } from "lucide-react";
 
 import {
@@ -19,11 +20,18 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
-import { omnirushQualityDetails, openDesktopUrl } from "../../../app/lib/desktop";
+import { omnirushQualityDetails, omnirushSessionStatus, openDesktopUrl } from "../../../app/lib/desktop";
 import {
+  FINISH_GUARD_DETAIL,
+  FINISH_GUARD_EVENT,
+  FINISH_GUARD_FINISH,
+  FINISH_GUARD_PROMPT,
+  FINISH_GUARD_QUIT,
+  FINISH_GUARD_TITLE,
   GOOD_SESSION_GUIDE,
   GOOD_SESSION_GUIDE_LINK,
   GOOD_SESSION_WSL_TIP,
+  NUDGE_TITLE,
   TURN_GUARD_DETAIL,
   TURN_GUARD_QUIT,
   TURN_GUARD_TITLE,
@@ -31,16 +39,23 @@ import {
   WSL_BANNER_DISMISSED_KEY,
   WSL_BANNER_TEXT,
   WSL_GUIDE_URL,
+  autoRetryMessage,
   checklistHeading,
-  checklistText,
+  finishGuardKind,
   goodSessionChecklist,
   goodSessionNudge,
   messageFacts,
   localDay,
+  oneMoreTurnHint,
+  serverStatusUsable,
+  sessionStatusPollMs,
   shouldNudge,
+  shownChecklist,
   showWslBanner,
   windowsNotCounted,
+  type FinishGuardKind,
   type GoodSessionCheck,
+  type GoodSessionTone,
 } from "../../../app/lib/good-session";
 import { readPref, useAccountQuality, writePref } from "../../../app/lib/quality";
 import { isDesktopRuntime, isWindowsPlatform } from "../../../app/utils";
@@ -76,12 +91,14 @@ function CheckMark({ check }: { check: GoodSessionCheck }) {
       className={cn(
         "inline-flex items-center gap-1 whitespace-nowrap",
         check.state === "pass" && "text-foreground",
-        check.state === "fail" && "text-amber-11",
+        (check.state === "fail" || check.state === "warn") && "text-amber-11",
       )}
     >
       {check.label}
       {check.state === "pending" ? null : check.state === "pass" ? (
         <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />
+      ) : check.state === "warn" ? (
+        <AlertTriangle className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />
       ) : (
         <CircleX className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />
       )}
@@ -93,18 +110,11 @@ const NUDGED_STORAGE_KEY = "omnirush.goodSession.nudged.v1";
 const NUDGED_KEEP = 200;
 
 function nudgedSessions(): string[] {
-  try {
-    const parsed = JSON.parse(readPref(NUDGED_STORAGE_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
+  return rememberedSessions(NUDGED_STORAGE_KEY);
 }
 
 function rememberNudged(sessionId: string) {
-  const ids = nudgedSessions().filter((id) => id !== sessionId);
-  ids.push(sessionId);
-  writePref(NUDGED_STORAGE_KEY, JSON.stringify(ids.slice(-NUDGED_KEEP)));
+  rememberSession(NUDGED_STORAGE_KEY, sessionId);
 }
 
 export type GoodSessionChecklistBarProps = {
@@ -113,6 +123,92 @@ export type GoodSessionChecklistBarProps = {
   workspaceRoot: string;
   isRemoteWorkspace: boolean;
   turnRunning: boolean;
+  /** "Finish it": put the reply in the composer and focus it (never sends). */
+  onFinishIt?: (prompt: string) => void;
+  /** Send a prompt on its own (the server's auto-retry). */
+  onAutoRetry?: (prompt: string) => void;
+};
+
+/** How long a turn's end settles before an auto-retry is judged (late Stop or error events land first). */
+const AUTO_RETRY_SETTLE_MS = 4_000;
+/** Sessions whose running turn the user stopped (the Stop button); cleared when a turn starts. */
+const userStops = new Set<string>();
+/** Automatic retries in a row per session; reset when a turn finishes. */
+const autoRetries = new Map<string, number>();
+
+/** The Stop button: no auto-retry follows this turn. */
+export function noteUserStop(sessionId: string) {
+  userStops.add(sessionId);
+}
+
+const ONE_MORE_TURN_STORAGE_KEY = "omnirush.goodSession.oneMoreTurn.v1";
+
+function rememberedSessions(key: string): string[] {
+  try {
+    const parsed = JSON.parse(readPref(key) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberSession(key: string, sessionId: string) {
+  const ids = rememberedSessions(key).filter((id) => id !== sessionId);
+  ids.push(sessionId);
+  writePref(key, JSON.stringify(ids.slice(-NUDGED_KEEP)));
+}
+
+/** The open sessions' finish states, for the in-app delete guard (the native quit guard gets them over IPC). */
+const finishStates = new Map<string, FinishGuardKind>();
+
+export function finishGuardFor(sessionId: string): FinishGuardKind | null {
+  return finishStates.get(sessionId) ?? null;
+}
+
+function reportFinishState(sessionId: string, kind: FinishGuardKind | null) {
+  if (kind) finishStates.set(sessionId, kind);
+  else finishStates.delete(sessionId);
+  if (!isDesktopRuntime()) return;
+  void Promise.resolve(window.__OMNIRUSH_ELECTRON__?.invokeDesktop?.("__setFinishState", { sessionId, kind })).catch(() => undefined);
+}
+
+/** "Finish it" for a session: its checklist bar fills the composer. */
+export function requestFinishIt(sessionId: string, kind: FinishGuardKind) {
+  window.dispatchEvent(new CustomEvent(FINISH_GUARD_EVENT, { detail: { sessionId, kind } }));
+}
+
+/**
+ * The server's live status for the open session (GET
+ * /me/sessions/{id}/status, 3 s), re-read every `poll_seconds` (30 s or
+ * more, 60 s by default) and when a turn starts or ends. Null while it is
+ * unknown, the request failed or outside the desktop: the bar then shows
+ * the local checklist.
+ */
+function useServerSessionStatus(sessionId: string, active: boolean, turnRunning: boolean): OmniRushSessionStatus | null {
+  const [read, setRead] = useState<{ sessionId: string; status: OmniRushSessionStatus | null }>({ sessionId, status: null });
+  useEffect(() => {
+    if (!active || !isDesktopRuntime()) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      const status = await omnirushSessionStatus({ sessionId }).catch(() => null);
+      if (cancelled) return;
+      setRead({ sessionId, status });
+      timer = window.setTimeout(() => void poll(), sessionStatusPollMs(status));
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [active, sessionId, turnRunning]);
+  return read.sessionId === sessionId ? read.status : null;
+}
+
+const TONE_TEXT: Record<GoodSessionTone, string> = { amber: "text-amber-11", red: "text-red-11" };
+const TONE_BOX: Record<GoodSessionTone, string> = {
+  amber: "border-amber-7/40 bg-amber-2/30 text-amber-11",
+  red: "border-red-7/40 bg-red-2/30 text-red-11",
 };
 
 const SERVER_VERDICT_REFRESH_MS = 5 * 60_000;
@@ -165,12 +261,83 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
     turnRunning: props.turnRunning,
     nativeWindows: windowsNotCounted({ nativeWindows, windowsCounts }),
   }), [facts, nativeWindows, props.isRemoteWorkspace, props.turnRunning, props.workspaceRoot, windowsCounts]);
-  const serverGood = useServerGood(props.sessionId, local.onTrack);
-  const checklist = useMemo(
-    () => (serverGood && local.onTrack ? { ...local, verdict: "good" as const, text: checklistText(local.checks, "good") } : local),
-    [local, serverGood],
-  );
   const hasPrompt = props.messages.some((message) => message.role === "user");
+  const server = useServerSessionStatus(props.sessionId, hasPrompt, props.turnRunning);
+  // /me/quality's client grade only while the server says nothing about this session.
+  const serverGood = useServerGood(props.sessionId, local.onTrack && !serverStatusUsable(server));
+  const checklist = useMemo(
+    () => shownChecklist({ local, server, sessionId: props.sessionId, serverGood }),
+    [local, props.sessionId, server, serverGood],
+  );
+
+  // The finish guard: the desktop asks before quitting, closing or deleting while this is set.
+  const finishKind = hasPrompt
+    ? finishGuardKind({ turnRunning: props.turnRunning, ended: facts.ended, endedAt: facts.endedAt, server })
+    : null;
+  useEffect(() => {
+    const sessionId = props.sessionId;
+    reportFinishState(sessionId, finishKind);
+    return () => reportFinishState(sessionId, null);
+  }, [finishKind, props.sessionId]);
+  // The server's auto-retry: on this session's running → done edge, after
+  // the end settles, judged on the latest transcript.
+  const latest = useRef({ facts, server, turnRunning: props.turnRunning, onAutoRetry: props.onAutoRetry });
+  latest.current = { facts, server, turnRunning: props.turnRunning, onAutoRetry: props.onAutoRetry };
+  const retryEdge = useRef<{ sessionId: string; running: boolean }>({ sessionId: props.sessionId, running: props.turnRunning });
+  useEffect(() => {
+    const previous = retryEdge.current;
+    const sessionId = props.sessionId;
+    retryEdge.current = { sessionId, running: props.turnRunning };
+    if (props.turnRunning) {
+      if (!previous.running) userStops.delete(sessionId);
+      return;
+    }
+    if (previous.sessionId !== sessionId || !previous.running) return;
+    const timer = window.setTimeout(() => {
+      const now = latest.current;
+      if (now.facts.ended === "pass" || now.facts.ended === "awaiting") {
+        autoRetries.delete(sessionId);
+        return;
+      }
+      const retriesInARow = autoRetries.get(sessionId) ?? 0;
+      if (!now.onAutoRetry) return;
+      const message = autoRetryMessage({
+        turnRunning: now.turnRunning,
+        ended: now.facts.ended,
+        retryable: now.facts.retryable,
+        userStopped: userStops.has(sessionId),
+        retriesInARow,
+        server: now.server,
+      });
+      if (!message) return;
+      autoRetries.set(sessionId, retriesInARow + 1);
+      now.onAutoRetry(message);
+    }, AUTO_RETRY_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [props.sessionId, props.turnRunning]);
+
+  // One more turn would make it count (the server's `depth` item): once per session.
+  const depthHint = props.turnRunning ? null : oneMoreTurnHint(server);
+  useEffect(() => {
+    if (!depthHint || rememberedSessions(ONE_MORE_TURN_STORAGE_KEY).includes(props.sessionId)) return;
+    rememberSession(ONE_MORE_TURN_STORAGE_KEY, props.sessionId);
+    toast(NUDGE_TITLE, { id: `good-session-depth:${props.sessionId}`, description: depthHint, duration: 12_000 });
+  }, [depthHint, props.sessionId]);
+
+  const onFinishIt = props.onFinishIt;
+  useEffect(() => {
+    if (!onFinishIt) return;
+    const sessionId = props.sessionId;
+    const listener = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const detail: unknown = event.detail;
+      if (!detail || typeof detail !== "object" || !("sessionId" in detail) || !("kind" in detail)) return;
+      if (detail.sessionId !== sessionId || (detail.kind !== "awaiting" && detail.kind !== "cut")) return;
+      onFinishIt(FINISH_GUARD_PROMPT[detail.kind]);
+    };
+    window.addEventListener(FINISH_GUARD_EVENT, listener);
+    return () => window.removeEventListener(FINISH_GUARD_EVENT, listener);
+  }, [onFinishIt, props.sessionId]);
 
   // The nudge: on the running → done edge of this session's turn.
   const wasRunning = useRef<{ sessionId: string; running: boolean }>({ sessionId: props.sessionId, running: props.turnRunning });
@@ -188,8 +355,39 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
 
   if (!hasPrompt) return null;
   const verdict = checklist.verdict;
+  const dock = checklist.dock;
+  const dockLink = dock?.link;
   return (
-    <div className="px-4 max-lg:px-3 lg:px-8" data-testid="good-session-checklist" data-verdict={verdict}>
+    <div className="px-4 max-lg:px-3 lg:px-8" data-testid="good-session-checklist" data-verdict={verdict} data-source={checklist.source}>
+      {dock ? (
+        <div
+          role="status"
+          data-testid="good-session-dock"
+          data-tone={dock.tone}
+          className={cn("mx-auto mb-1.5 flex max-w-[800px] items-center gap-2 rounded-lg border px-3 py-1.5 text-xs", TONE_BOX[dock.tone])}
+        >
+          <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{dock.message}</span>
+          {dockLink ? (
+            <button
+              type="button"
+              data-testid="good-session-dock-link"
+              className="shrink-0 font-medium underline underline-offset-2"
+              onClick={() => void openDesktopUrl(dockLink).catch(() => undefined)}
+            >
+              Details
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {checklist.message || checklist.reasons.length ? (
+        <div className="mx-auto max-w-[800px] pb-1 text-[11px] leading-4 text-muted-foreground" data-testid="good-session-server-message">
+          {checklist.message ? (
+            <p className={cn("font-medium", checklist.messageTone ? TONE_TEXT[checklist.messageTone] : "text-foreground")}>{checklist.message}</p>
+          ) : null}
+          {checklist.reasons.map((reason) => <p key={reason} className="text-amber-11">{reason}</p>)}
+        </div>
+      ) : null}
       <div className="mx-auto flex max-w-[800px] items-center gap-2 pb-1.5">
         <div
           className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-full border border-border bg-popover/60 px-2.5 py-1 text-[11px] leading-4 text-muted-foreground"
@@ -283,6 +481,31 @@ export function WslBanner({ className }: { className?: string }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/** The finish guard in the app (deleting the session): "Finish it" (the default) or "Quit anyway". */
+export function FinishGuardDialog(props: { kind: FinishGuardKind | null; onFinish: () => void; onQuit: () => void }) {
+  return (
+    <AlertDialog open={props.kind !== null} onOpenChange={(open) => { if (!open) props.onFinish(); }}>
+      <AlertDialogContent data-testid="finish-guard-dialog">
+        <AlertDialogHeader>
+          <AlertDialogMedia className="bg-amber-3/50 text-amber-11">
+            <AlertTriangle />
+          </AlertDialogMedia>
+          <AlertDialogTitle>{FINISH_GUARD_TITLE}</AlertDialogTitle>
+          <AlertDialogDescription>{props.kind ? FINISH_GUARD_DETAIL[props.kind] : null}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogAction variant="outline" data-testid="finish-guard-quit" onClick={props.onQuit}>
+            {FINISH_GUARD_QUIT}
+          </AlertDialogAction>
+          <AlertDialogCancel variant="default" autoFocus data-testid="finish-guard-finish">
+            {FINISH_GUARD_FINISH}
+          </AlertDialogCancel>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
