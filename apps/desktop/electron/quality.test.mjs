@@ -96,17 +96,17 @@ test("quality block parses every field, including revision 2", () => {
     nextSpinHint: { progress: 0.6, text: "Add tests to earn a spin.", sessionId: "ses_1" },
     biggestWinToday: { tokens: 10000000, at: "2026-10-04T09:00:00Z" },
     nudge: null,
-    windowsCounts: false,
+    windowsCounts: true,
   });
   // A server without `notices` still has its one `notice`.
   const legacy = parseAccountQuality({ tier: "limited", tokens_multiplier: 0.3, notice: { id: "n", title: "Hi" } });
   assert.equal(legacy.notices[0].id, "n");
   assert.equal(legacy.tokensMultiplier, 0.3);
   assert.equal(legacy.preview, false);
-  // Native Windows counts for a Good session ★ only when the server says so.
-  assert.equal(legacy.windowsCounts, false);
+  // Native Windows counts unless the server says it does not.
+  assert.equal(legacy.windowsCounts, true);
   assert.equal(parseAccountQuality({ ...QUALITY, windows_counts: true }).windowsCounts, true);
-  assert.equal(parseAccountQuality({ ...QUALITY, windows_counts: "true" }).windowsCounts, false);
+  assert.equal(parseAccountQuality({ ...QUALITY, windows_counts: false }).windowsCounts, false);
 });
 
 test("a spin answer must name a segment the wheel can land on", () => {

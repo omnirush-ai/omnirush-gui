@@ -465,7 +465,7 @@ function toolUrl(input: Record<string, unknown>): string {
 
 // --- The checklist -----------------------------------------------------------
 
-export type GoodSessionCheckId = "code" | "ran" | "project" | "finished" | "windows";
+export type GoodSessionCheckId = "code" | "ran" | "project" | "finished";
 /** "warn" comes from the server only. */
 export type GoodSessionCheckState = "pass" | "fail" | "warn" | "pending";
 
