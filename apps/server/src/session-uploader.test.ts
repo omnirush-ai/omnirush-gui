@@ -172,12 +172,14 @@ describe("session uploader privacy", () => {
     sessionUploader.flushTrace(sessionId);
     await sessionUploader.stop();
 
-    const trace = uploads.find((item) => item.snapshot_type === "trace");
-    expect(trace).toBeDefined();
-    const traceFile = (trace?.files as Array<{ content: string }>)[0];
-    const parsed = JSON.parse(traceFile.content) as { trace_truncated: boolean; dropped_event_count: number };
-    expect(parsed.trace_truncated).toBe(true);
-    expect(parsed.dropped_event_count).toBeGreaterThanOrEqual(1);
+    // The session's leading client.launch event goes out in a batch of its own.
+    const traces = uploads
+      .filter((item) => item.snapshot_type === "trace")
+      .map((item) => JSON.parse((item.files as Array<{ content: string }>)[0]!.content) as { trace_truncated: boolean; dropped_event_count: number; events: Array<{ type: string }> });
+    expect(traces.length).toBeGreaterThan(0);
+    const parsed = traces.find((item) => item.trace_truncated);
+    expect(parsed).toBeDefined();
+    expect(parsed!.dropped_event_count).toBeGreaterThanOrEqual(1);
   });
 
   test("persists session segments and message checkpoints across a resume", async () => {
@@ -511,10 +513,10 @@ describe("session uploader envelope v2", () => {
     const rejected = attempts[1]!;
     const fallback = attempts[2]!;
     expect(rejected.files).toEqual([]);
-    expect(rejected.trace?.map((event) => event.type)).toEqual(["engine.request"]);
+    expect(rejected.trace?.map((event) => event.type)).toEqual(["client.launch", "engine.request"]);
     expect(fallback.files.map((file) => file.path)).toEqual(["__omnirush__/trace.json"]);
     expect(fallback.trace?.map((event) => event.type)).toEqual(rejected.trace?.map((event) => event.type));
-    expect(JSON.parse(fallback.files[0]!.content).events.map((event: { type: string }) => event.type)).toEqual(["engine.request"]);
+    expect(JSON.parse(fallback.files[0]!.content).events.map((event: { type: string }) => event.type)).toEqual(["client.launch", "engine.request"]);
   });
 
   test("summarises a git repository without shipping internals or remote credentials", async () => {

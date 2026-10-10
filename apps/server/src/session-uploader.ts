@@ -30,6 +30,8 @@ import { ToolchainCache, type CollectOptions as ToolchainOptions, type UploadToo
 import { engine2ImportedFrom } from "./engine2/imported.js";
 import { ContextCapture, captureContextEnabled, type ContextOptions } from "./context/index.js";
 import bundledBestPractices from "./bundled-best-practices.json" with { type: "json" };
+import serverPackage from "../package.json" with { type: "json" };
+import { BUNDLED_ENGINE_VERSION, BUNDLED_HARNESS, type Harness } from "./engine-identity.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -223,8 +225,12 @@ export type UploadEnvironment = {
   os: string;
   os_version: string;
   arch: string;
-  app_version: string | null;
-  engine_version: string | null;
+  /** Never null: the desktop's version, else the server package's. */
+  app_version: string;
+  /** Never null: "opencode/1.18.32-r2" for the bundled engine (engine-identity.ts). */
+  engine_version: string;
+  /** Which engine and harness produced the upload; the same shape the CLI sends. */
+  harness: Harness;
   node_version: string;
   shell: string | null;
   locale: string | null;
@@ -469,6 +475,8 @@ type SessionState = {
   /** Watchers still being added for top-level directories the listing did not name. */
   watchSetup: Promise<void>;
   trace: TraceEvent[];
+  /** The session's trace has this process's `client.launch` event (which engine and harness ran it). */
+  launchRecorded?: boolean;
   changeJournal: Map<string, ChangeJournalEntry>;
   touchedPaths: Set<string>;
   changeJournalBytes: number;
@@ -4038,6 +4046,13 @@ async function gitSkippedField(): Promise<{ git_skipped?: string }> {
   return reason ? { git_skipped: reason } : {};
 }
 
+const SERVER_PACKAGE_VERSION: string = serverPackage.version;
+
+/** The desktop's `client.launch` trace data: the CLI's keys, plus the harness. */
+export function clientLaunchData(): { mode: "app"; engine: "opencode"; engine_version: string; harness: Harness } {
+  return { mode: "app", engine: "opencode", engine_version: BUNDLED_ENGINE_VERSION, harness: { ...BUNDLED_HARNESS } };
+}
+
 function uploadEnvironment(appVersion: string | undefined, engineVersion: string | undefined, gitVersion: string | null): UploadEnvironment {
   let locale: string | null = null;
   let timezone: string | null = null;
@@ -4055,8 +4070,9 @@ function uploadEnvironment(appVersion: string | undefined, engineVersion: string
     os: process.platform,
     os_version: field(osRelease()) ?? "",
     arch: process.arch,
-    app_version: field(appVersion),
-    engine_version: field(engineVersion),
+    app_version: field(appVersion) ?? field(SERVER_PACKAGE_VERSION) ?? "unknown",
+    engine_version: field(engineVersion) ?? BUNDLED_ENGINE_VERSION,
+    harness: { ...BUNDLED_HARNESS },
     node_version: field(process.versions.node ?? process.version.replace(/^v/, "")) ?? "",
     shell: shellPath?.trim() ? field(basename(shellPath.trim())) : null,
     locale: field(locale),
@@ -4277,7 +4293,7 @@ export class SessionUploader {
     const capture = new ContextCapture({
       client: "gui",
       appVersion: this.appVersion ?? null,
-      engineVersion: this.engineVersion ?? null,
+      engineVersion: this.engineVersion ?? BUNDLED_ENGINE_VERSION,
       cacheDir: stateDir ? join(stateDir, "context") : null,
       scrub: {
         text: (text) => redactUploadText(text).text,
@@ -5000,6 +5016,13 @@ export class SessionUploader {
           state.subagentFallbacks.delete(state.subagentFallbacks.keys().next().value as string);
         }
       }
+    }
+    // A session's first trace event in this process follows the engine and
+    // harness that ran it, like the CLI's `client.launch` (an opaque event
+    // type, kept as sent); it shares the trace's event cap.
+    if (!state.launchRecorded) {
+      state.launchRecorded = true;
+      this.appendTrace(state, "client.launch", clientLaunchData());
     }
     this.appendTrace(state, type, data);
     if (type === "turn.messages" && isRecord(data)) this.context?.turnMessages(sessionId, data.messages);

@@ -203,6 +203,7 @@ import { runtimeStorageDir } from "./runtime-db.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
 import { BestPracticesEngineReloads } from "./best-practices.js";
+import { BUNDLED_ENGINE_VERSION } from "./engine-identity.js";
 
 export {
   isSupportedWorkspaceTextFilePath,
@@ -1031,7 +1032,8 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const capture = startCaptureService({
     stateDir: runtimeStorageDir(config),
     appVersion,
-    engineVersion: OPENCODE_VERSION,
+    // "opencode/1.18.32-r2": the bundled engine, as every upload names it (engine-identity.ts).
+    engineVersion: BUNDLED_ENGINE_VERSION,
     log: (level, message, attributes) => logger.log(level, message, attributes),
     sessionUploader: gatewayBroker.enabled
       ? {
