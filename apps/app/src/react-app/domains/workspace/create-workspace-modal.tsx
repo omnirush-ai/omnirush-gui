@@ -1,7 +1,6 @@
 /** @jsxImportSource react */
 import {
   useEffect,
-  useMemo,
   useReducer,
   useRef,
   type SetStateAction,
@@ -24,7 +23,6 @@ import { CreateWorkspaceLocalPanel } from "./create-workspace-local-panel";
 import {
   createInitialWorkspaceLocalState,
   createWorkspaceLocalReducer,
-  shouldTickWorkspaceElapsedClock,
   type CreateWorkspaceLocalState,
 } from "./create-workspace-modal-state";
 import {
@@ -52,8 +50,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     screen,
     selectedFolder,
     pickingFolder,
-    showProgressDetails,
-    now,
     projectLabel,
     remoteUrl,
     remoteToken,
@@ -67,8 +63,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const setScreen = (value: SetStateAction<CreateWorkspaceScreen>) => setLocal("screen", value);
   const setSelectedFolder = (value: SetStateAction<string | null>) => setLocal("selectedFolder", value);
   const setPickingFolder = (value: SetStateAction<boolean>) => setLocal("pickingFolder", value);
-  const setShowProgressDetails = (value: SetStateAction<boolean>) => setLocal("showProgressDetails", value);
-  const setNow = (value: SetStateAction<number>) => setLocal("now", value);
   const setProjectLabel = (value: SetStateAction<string>) => setLocal("projectLabel", value);
   const setRemoteUrl = (value: SetStateAction<string>) => setLocal("remoteUrl", value);
   const setRemoteToken = (value: SetStateAction<string>) => setLocal("remoteToken", value);
@@ -79,25 +73,10 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const showClose = props.showClose ?? true;
   const submitting = props.submitting ?? false;
   const remoteSubmitting = props.remoteSubmitting ?? false;
-  const workerSubmitting = props.workerSubmitting ?? false;
-  const progress = props.submittingProgress ?? null;
-  const workerDisabled = Boolean(props.workerDisabled);
   const showProjectLabel = props.showProjectLabel ?? true;
-  const workerDisabledReason = (props.workerDisabledReason ?? "").trim();
-  const workerDebugLines = useMemo(
-    () => (props.workerDebugLines ?? []).flatMap((line) => {
-      const trimmed = line.trim();
-      return trimmed ? [trimmed] : [];
-    }),
-    [props.workerDebugLines],
-  );
   const hasSelectedFolder = Boolean(selectedFolder?.trim());
   const localError = (props.localError ?? "").trim() || null;
   const remoteError = (props.remoteError ?? "").trim() || null;
-  const elapsedSeconds = useMemo(() => {
-    if (!progress?.startedAt) return 0;
-    return Math.max(0, Math.floor((now - progress.startedAt) / 1000));
-  }, [now, progress]);
 
   const headerTitle = (() => {
     switch (screen) {
@@ -126,23 +105,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     if (!props.open) return;
     dispatchLocal({ type: "reset" });
   }, [props.open]);
-
-  // The modal remains mounted when closed. Only publish elapsed-time updates
-  // while its progress UI is both visible and backed by a real start time.
-  useEffect(() => {
-    if (!submitting) {
-      setShowProgressDetails(false);
-    }
-    if (!shouldTickWorkspaceElapsedClock({
-      open: props.open,
-      submitting,
-      startedAt: progress?.startedAt,
-    })) return;
-
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(id);
-  }, [progress?.startedAt, props.open, submitting]);
 
   // Focus the URL field when the remote screen opens.
   useEffect(() => {
@@ -284,24 +246,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
             onClose={props.onClose}
             onSubmit={() => void handleLocalSubmit()}
             confirmLabel={props.confirmLabel}
-            workerLabel={props.workerLabel}
-            onConfirmWorker={props.onConfirmWorker}
-            preset={preset}
-            workerSubmitting={workerSubmitting}
-            workerDisabled={workerDisabled}
-            workerDisabledReason={workerDisabledReason}
-            workerCtaLabel={props.workerCtaLabel}
-            workerCtaDescription={props.workerCtaDescription}
-            onWorkerCta={props.onWorkerCta}
-            workerRetryLabel={props.workerRetryLabel}
-            onWorkerRetry={props.onWorkerRetry}
-            workerDebugLines={workerDebugLines}
-            progress={progress}
-            elapsedSeconds={elapsedSeconds}
-            showProgressDetails={showProgressDetails}
-            onToggleProgressDetails={() =>
-              setShowProgressDetails((prev) => !prev)
-            }
           />
         ) : null}
 

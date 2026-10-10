@@ -31,7 +31,7 @@ const FALLBACK_FAIL_LABELS: Record<string, string> = {
   outside_path: "edits outside the project folder",
   home_folder: "started in the home folder",
   wrong_folder: "started in another folder",
-  windows_host: "recorded on Windows",
+  windows_host: "operating system not counted",
   small_fix: "a small fix",
   one_shot: "a one-shot answer",
   non_coding: "not coding work",
