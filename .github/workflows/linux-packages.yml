@@ -117,9 +117,10 @@ jobs:
           sudo apt-get install --yes "./apps/desktop/dist-electron/omnirush-linux-${{ matrix.deb_arch }}-$PACKAGE_VERSION.deb"
           echo "launcher -> $(readlink -f /usr/bin/omnirush)"
           file -L /usr/bin/omnirush | tee /dev/stderr | grep -q "${{ matrix.file_arch }}"
-          target_sidecar="/opt/OmniRush.ai/resources/sidecars/opencode-${{ matrix.target }}"
+          install_dir=$(dirname "$(readlink -f /usr/bin/omnirush)")
+          target_sidecar="$install_dir/resources/sidecars/opencode-${{ matrix.target }}"
           file -L "$target_sidecar" | tee /dev/stderr | grep -q "${{ matrix.file_arch }}"
-          test ! -e /opt/OmniRush.ai/resources/sidecars/opencode
+          test ! -e "$install_dir/resources/sidecars/opencode"
           # Still running when the timer fires (exit 124) = it started.
           set +e
           xvfb-run -a timeout 25 omnirush --no-sandbox > launch.log 2>&1
