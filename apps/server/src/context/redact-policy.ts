@@ -89,13 +89,29 @@ export function shannonEntropy(value: string): number {
   return entropy;
 }
 
-function charClasses(value: string): number {
-  return [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(value)).length;
-}
+// Code and template characters: a value holding one is an expression
+// (`response.data?.[KEY]`, `{apiKey}`, `settings.KEY)`), never a literal.
+const CODE_CHARS = /[\s[\]{}()<>`\\]|\?[.[]|\$[{(]/;
+const CONSTANT_NAME = /^[A-Z]+(?:_[A-Z0-9]+)*$/;
+const DOTTED_NAME = /^[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)+$/;
 
-/** 12+ characters, two or more character classes and 3.0+ bits per character. */
+/**
+ * A generated-looking literal: 12+ characters with no code or template
+ * characters, letters and digits both (or 20+ characters with both cases
+ * about equally), 3.0+ bits per character, and not a constant's name
+ * (`OPENAI_API_KEY`) or a dotted name (`settings.token`). Words joined by
+ * dashes (`dev-password`) are not generated.
+ */
 export function looksRandom(value: string): boolean {
-  return value.length >= 12 && charClasses(value) >= 2 && shannonEntropy(value) >= 3.0;
+  if (value.length < 12 || CODE_CHARS.test(value) || CONSTANT_NAME.test(value) || DOTTED_NAME.test(value)) return false;
+  const digits = /[0-9]/.test(value);
+  const upper = value.replace(/[^A-Z]/g, "").length;
+  const lower = value.replace(/[^a-z]/g, "").length;
+  // Without digits, only a long run whose case is balanced like random
+  // text (a camelCase name is mostly lower case).
+  const balanced = value.length >= 20 && upper >= 0.3 * (upper + lower) && lower >= 0.3 * (upper + lower);
+  if (!((upper + lower > 0 && digits) || balanced)) return false;
+  return shannonEntropy(value) >= 3.0;
 }
 
 /**
@@ -354,6 +370,21 @@ function redactAssignments(
 
 const ASSIGNMENT_GATE = /secret|passw|pwd|token|credential|auth|key/i;
 
+// A label on its own line and the value alone on the next one (notes,
+// READMEs, `.txt` files): `API_KEY:` then `abc123...`. The whole next line
+// must be one token; it is judged like any other value.
+const NEXT_LINE_VALUE = /(^|\n)([^\S\n]*[-*#>]*[^\S\n]*[*_`"']*)([A-Za-z_][\w.-]{0,63})([*_`"']*[^\S\n]*[:=][^\S\n]*[*_`"']*\r?\n[^\S\n]*)([`"']?)([^\s`"']{12,})\5(?=[^\S\n]*(?:\r?\n|$))/g;
+
+function redactNextLineValues(text: string, hidden: string, tally: Tally, credentialFile: boolean, spans: Array<[number, number]>): string {
+  NEXT_LINE_VALUE.lastIndex = 0;
+  return text.replace(NEXT_LINE_VALUE, (match: string, start: string, lead: string, key: string, sep: string, quote: string, value: string, offset: number) => {
+    if (insideOpaque(spans, offset, offset + match.length) || !isSecretKey(key)) return match;
+    if (!isSecretValue(value, { mode: "config", quoted: true, credentialFile })) return match;
+    note(tally, "secret_assignment");
+    return `${start}${lead}${key}${sep}${quote}${hidden}${quote}`;
+  });
+}
+
 const AWS_ID = /(?:AKIA|ASIA)[0-9A-Z]{16}/;
 const AWS_CONTEXT = /(?:AKIA|ASIA)[0-9A-Z]{16}|aws[_ .-]?secret[_ .-]?access[_ .-]?key/i;
 const AWS_SECRET = token(String.raw`[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`);
@@ -433,7 +464,10 @@ export function redactCredentials(input: string, options: CredentialOptions = {}
   const credentialFile = isCredentialFile(options.context);
   let text = input.includes("-----BEGIN ") ? redactPrivateKeys(input, hidden, tally) : input;
   if (text.includes("://")) text = redactUrlPasswords(text, hidden, tally, opaqueSpans(text));
-  if (ASSIGNMENT_GATE.test(text)) text = redactAssignments(text, hidden, tally, options.mode ?? "config", credentialFile, opaqueSpans(text));
+  if (ASSIGNMENT_GATE.test(text)) {
+    text = redactAssignments(text, hidden, tally, options.mode ?? "config", credentialFile, opaqueSpans(text));
+    if (text.includes("\n") && options.mode !== "source") text = redactNextLineValues(text, hidden, tally, credentialFile, opaqueSpans(text));
+  }
   const nearAws = options.awsContext === true || (options.context !== undefined && AWS_CONTEXT.test(options.context));
   text = redactAwsSecrets(text, hidden, tally, nearAws, opaqueSpans(text));
   text = redactTokens(text, hidden, tally, opaqueSpans(text));
