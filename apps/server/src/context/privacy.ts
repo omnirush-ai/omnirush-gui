@@ -1,8 +1,11 @@
 // What every capture-context item goes through before it is recorded: the
 // home directory (and the account name wherever it appears in a path) becomes
-// `~`, URLs lose their userinfo and secret-looking query values, and the
-// text runs through the uploader's CONFIG secret scrub (injected, so this
-// module is the same in the CLI and the desktop app).
+// `~`, a Windows account's name in a profile path becomes `user` (whatever
+// form the path takes: C:\Users\<name>, /mnt/c/Users/<name> under WSL,
+// /c/Users/<name> in Git Bash, \\wsl$\<distro>\home\<name>), URLs lose
+// their userinfo and secret-looking query values, and the text runs through
+// the uploader's CONFIG secret scrub (injected, so this module is the same in
+// the CLI and the desktop app).
 
 import { homedir, userInfo } from "node:os";
 
@@ -41,10 +44,45 @@ function escapeRegExp(text: string): string {
 
 const homeRegexCache = new Map<string, RegExp>();
 
+/** What an account name in a Windows profile path becomes (one placeholder for every name, so the same name always masks the same). */
+export const PROFILE_PLACEHOLDER = "user";
+/** Profile folders that are not an account: kept. */
+const SHARED_PROFILES = new Set(["public", "default", "default user", "all users", "defaultapppool", "wdagutilityaccount", PROFILE_PLACEHOLDER]);
+/** A path separator: `/`, or a run of backslashes (JSON-escaped text doubles them). */
+const SEP = String.raw`(?:\\+|/)`;
+/** A character of a profile folder's name. */
+const NAME_CHAR = String.raw`[^\\/\s"'\`<>|:*?;,()\[\]{}]`;
+/**
+ * A Windows profile path up to the account name: `<drive>:\Users\` (either
+ * slash), `/mnt/<drive>/Users/` (WSL), `/<drive>/Users/` and
+ * `/cygdrive/<drive>/Users/` (Git Bash, Cygwin), and the WSL home seen from
+ * Windows, `\\wsl$\<distro>\home\` (or `\\wsl.localhost`). Then the name: one
+ * path segment, with spaces only when another segment or a closing quote
+ * follows (in free text a name ends at a space), never ending in a dot
+ * (sentence punctuation).
+ */
+const WINDOWS_PROFILE = new RegExp(
+  String.raw`((?<![\w.$-])(?:/mnt|/cygdrive)?/[A-Za-z]/[Uu][Ss][Ee][Rr][Ss]/|(?<![\w])[A-Za-z]:${SEP}[Uu][Ss][Ee][Rr][Ss]${SEP}|(?:\\+|//)wsl(?:\$|\.localhost)${SEP}[^\\/\s"']+${SEP}home${SEP})`
+    + String.raw`(${NAME_CHAR}+(?: ${NAME_CHAR}+)*(?=\\|/|["'\`])|${NAME_CHAR}*[^\\/\s"'\`<>|:*?;,()\[\]{}.])`,
+  "g",
+);
+
+/**
+ * Every Windows account name in a profile path as PROFILE_PLACEHOLDER, the
+ * path otherwise as it was: `/mnt/c/Users/Jane Doe/app` becomes
+ * `/mnt/c/Users/user/app`, `C:\Users\sam` becomes `C:\Users\user`. Shared
+ * profiles (Public, Default, All Users) are kept.
+ */
+export function maskWindowsProfiles(text: string): string {
+  if (!text || !/users|wsl/i.test(text)) return text;
+  return text.replace(WINDOWS_PROFILE, (match: string, root: string, name: string) => (SHARED_PROFILES.has(name.toLowerCase()) ? match : root + PROFILE_PLACEHOLDER));
+}
+
 /**
  * Replaces the home directory with `~` wherever it appears in `text` (both
  * slash styles on Windows), and any other home-style path of the account
- * (`/home/<user>`, `/Users/<user>`, `C:\Users\<user>`) the same way.
+ * (`/home/<user>`, `/Users/<user>`) the same way. Every other Windows profile
+ * path keeps its shape with the account name masked (maskWindowsProfiles).
  */
 export function tildeText(text: string, privacy: PrivacyContext): string {
   if (!text) return text;
@@ -63,12 +101,13 @@ export function tildeText(text: string, privacy: PrivacyContext): string {
     }
     out = out.replace(pattern, "~");
   }
+  // A Windows profile that is not the home (WSL's /mnt/c/Users/<name>, whatever the Windows account is called).
+  out = maskWindowsProfiles(out);
   const user = privacy.user;
   if (user && user.length >= 2 && /^[\w.@-]+$/.test(user)) {
     const name = escapeRegExp(user);
-    out = out
-      .replace(new RegExp(`(?:/home|/Users|/var/home)/${name}(?=$|[/\\s"'\`:;,)\\]}>])`, "g"), "~")
-      .replace(new RegExp(`[A-Za-z]:[\\\\/]Users[\\\\/]${name}(?=$|[\\\\/\\s"'\`:;,)\\]}>])`, "gi"), "~");
+    // Not inside a drive's profile folder (/mnt/c/Users/<user>, /c/Users/<user>): that is masked above, structure kept.
+    out = out.replace(new RegExp(`(?<!/[A-Za-z]|[A-Za-z]:)(?:/home|/Users|/var/home)/${name}(?=$|[/\\s"'\`:;,)\\]}>])`, "g"), "~");
   }
   return out;
 }

@@ -2353,7 +2353,8 @@ describe("session uploader secret rails", () => {
       ["a.ts", 'const secret = "./secrets/key1.pem";'],
       ["a.ts", 'const secret = "../keys/key1.pem";'],
       ["a.ts", 'const secret = "~/.aws/credentials1";'],
-      ["a.ts", 'const secret = "C:/Users/me/token1.txt";'],
+      // (A profile path's account segment is masked, maskWindowsProfiles; a drive path elsewhere stays as it is.)
+      ["a.ts", 'const secret = "D:/keys/me/token1.txt";'],
       ["a.go", 'password := "secrets/db/primary"'],
       ["a.rb", 'password = "abcdefghijklmnopqrstuvwxyz"'],
       ["a.rb", 'password = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"'],
