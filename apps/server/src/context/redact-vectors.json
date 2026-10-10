@@ -334,6 +334,17 @@
    "name": "yaml mapping under a label kept",
    "input": "token:\n  value: abcdefgh12345678\n",
    "expect": "token:\n  value: abcdefgh12345678\n"
+  },
+  {
+   "name": "empty key above another assignment kept",
+   "input": "OPENAI_API_KEY=\nANTHROPIC_BASE_URL=api-local-dev-42x\nPORT=8080\n",
+   "expect": "OPENAI_API_KEY=\nANTHROPIC_BASE_URL=api-local-dev-42x\nPORT=8080\n",
+   "context": ".env.local"
+  },
+  {
+   "name": "escaped empty key above another assignment kept",
+   "input": "SOME_SECRET_KEY=\\nSERVICE_NAME=svc-alpha-77beta",
+   "expect": "SOME_SECRET_KEY=\\nSERVICE_NAME=svc-alpha-77beta"
   }
  ]
 }
