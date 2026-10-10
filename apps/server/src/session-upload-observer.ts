@@ -718,6 +718,23 @@ function historyBefore(history: EngineHistory, cutAt: number): { history: Engine
 type MessagePart = { messages: unknown[]; bytes: number };
 
 /**
+ * A chat's whole transcript as the engine has it now (oldest first, cut into
+ * trace-sized parts), for re-sending what the server is missing; null when
+ * the engine cannot be read.
+ */
+export async function readSessionTranscript(target: EngineTarget, sessionId: string, signal: AbortSignal): Promise<unknown[][] | null> {
+  const fetchEngine = engineFetch(() => target, () => AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
+  const v2 = target.engine === "v2";
+  const path = v2 ? `/api/session/${encodeURIComponent(sessionId)}/context` : `/session/${encodeURIComponent(sessionId)}/message`;
+  try {
+    const history = await readEngineHistory(engineMessages(fetchEngine, path, !v2), undefined, MAX_BACKLOG_MESSAGE_BYTES);
+    return messageParts(history.delta, history.sizes).map((part) => part.messages);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A settled turn's messages (oldest first) cut into the parts its trace
  * flushes carry, oldest part first: the newest messages up to `maxBytes` make
  * the last part, and each earlier part takes the next older ones. One part,

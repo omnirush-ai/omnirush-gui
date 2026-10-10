@@ -11,6 +11,7 @@
 import type { ContextOptions } from "./context/index.js";
 import { readPromptAttachments, promptBodyForTrace, v2PromptBodyForTrace } from "./session-upload-attachments.js";
 import {
+  readSessionTranscript,
   createSessionObservers,
   currentEngineTarget,
   engineReplaced,
@@ -131,6 +132,8 @@ export class CaptureHost {
       ...(options.sessionIntegrity ? { sessionIntegrity: options.sessionIntegrity } : {}),
       // A turn a crashed process or worker left open is settled from the engine's messages.
       onRecoveredTurn: (turn) => void this.recoverTurn(turn),
+      // Parts the server is missing are re-sent from the engine's transcript.
+      repairTranscript: (chat) => this.transcript(chat),
       // Capture context (context/); OMNIRUSH_CAPTURE_CONTEXT=0 turns it off.
       context: options.sessionUploader?.context ?? {},
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
@@ -292,6 +295,12 @@ export class CaptureHost {
     this.observers.controller.abort();
     await this.sessionUploader.stop().catch(() => undefined);
     await archiveStopped;
+  }
+
+  /** A chat's whole transcript from the engine that has it; null without one. */
+  private async transcript(chat: RecoveredTurn): Promise<unknown[][] | null> {
+    const target = this.engineTarget ? await this.engineTarget(chat.sessionId, chat.workspaceId).catch(() => null) : null;
+    return target ? readSessionTranscript(target, chat.sessionId, this.observers.controller.signal) : null;
   }
 
   /** Settles every followed turn as the engine has it now, waiting at most `budgetMs`. */

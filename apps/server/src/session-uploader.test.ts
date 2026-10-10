@@ -20,6 +20,7 @@ import {
   uploadIdempotencyKey,
   serverSessionPosition,
   parseJournal,
+  integrityFindings,
   SessionUploader,
   isRetryableUploadStatus,
   mapBounded,
@@ -4019,5 +4020,169 @@ describe("upload features", () => {
     expect(keys.length).toBeGreaterThan(0);
     expect(keys.every((key) => key === undefined)).toBe(true);
     expect(integrity).toBe(0);
+  });
+});
+
+describe("integrity confirmation", () => {
+  const FEATURES = async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true });
+
+  async function endedChat(options: { refuseSecond?: boolean } = {}) {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-confirm-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-confirm-state-"));
+    roots.push(root, stateDir);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    let uploads = 0;
+    const first = new SessionUploader({
+      stateDir,
+      capabilities: FEATURES,
+      upload: async () => {
+        uploads += 1;
+        return options.refuseSecond && uploads === 2 ? Response.json({ detail: "bad" }, { status: 422 }) : Response.json({ ok: true }, { status: 201 });
+      },
+      sessionIntegrity: async () => Response.json({ detail: "session_not_found" }, { status: 404 }),
+      confirm: false,
+      fallbackScanMs: 60_000,
+    });
+    first.startSession("session-confirm-1234", "workspace-confirm", root);
+    first.recordTrace("session-confirm-1234", "tool.call", {});
+    first.flushTrace("session-confirm-1234");
+    await first.stop();
+    return { root, stateDir };
+  }
+
+  test("a good or not-good answer is final; the ledger keeps it", async () => {
+    const { stateDir } = await endedChat();
+    let calls = 0;
+    const uploader = new SessionUploader({
+      stateDir,
+      capabilities: FEATURES,
+      upload: async () => Response.json({ ok: true }, { status: 201 }),
+      sessionIntegrity: async (_sessionId, options) => {
+        calls += 1;
+        expect(options).toEqual({ summary: true });
+        return Response.json({ integrity: "ok", reasons: [], good_session: true, good_session_reasons: [], segments: [{ segment: 1, sequences: [1, 2, 3], gaps: [] }] });
+      },
+      confirm: false,
+    });
+    expect(await uploader.confirmSession("session-confirm-1234")).toMatchObject({ verdict: "good", checks: 1 });
+    expect(calls).toBe(1);
+    await uploader.stop();
+    const ledger = JSON.parse(await readFile(join(stateDir, "omnirush-upload-sessions.json"), "utf8")) as { sessions: Record<string, { confirmation?: { verdict: string; nextAt?: string } }> };
+    expect(ledger.sessions["session-confirm-1234"]?.confirmation).toMatchObject({ verdict: "good" });
+    expect(ledger.sessions["session-confirm-1234"]?.confirmation?.nextAt).toBeUndefined();
+  });
+
+  test("a gap the ledger explains (an upload the server refused) asks for nothing; pending is asked again later", async () => {
+    const { stateDir } = await endedChat({ refuseSecond: true });
+    let repairs = 0;
+    const uploader = new SessionUploader({
+      stateDir,
+      capabilities: FEATURES,
+      upload: async () => Response.json({ ok: true }, { status: 201 }),
+      sessionIntegrity: async () => Response.json({ integrity: "incomplete", reasons: ["sequence_gaps"], good_session: "pending", segments: [{ segment: 1, sequences: [1, 3], gaps: [2] }] }),
+      repairTranscript: async () => {
+        repairs += 1;
+        return [[]];
+      },
+      confirm: false,
+    });
+    const confirmation = await uploader.confirmSession("session-confirm-1234");
+    expect(confirmation).toMatchObject({ verdict: "pending", checks: 1 });
+    expect(confirmation?.nextAt).toBeDefined();
+    expect(confirmation?.repairedAt).toBeUndefined();
+    expect(repairs).toBe(0);
+    await uploader.stop();
+  });
+
+  test("a gap nothing here explains gets the transcript re-sent from the engine, once", async () => {
+    const { stateDir, root } = await endedChat();
+    const sent: Array<Record<string, unknown>> = [];
+    const asked: Array<{ sessionId: string; workspaceId: string; root: string }> = [];
+    const uploader = new SessionUploader({
+      stateDir,
+      capabilities: FEATURES,
+      upload: async (_sessionId, compressed) => {
+        sent.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      sessionIntegrity: async () => Response.json({ integrity: "incomplete", reasons: ["sequence_gaps"], good_session: "pending", segments: [{ segment: 1, sequences: [1, 3], gaps: [2] }] }),
+      repairTranscript: async (chat) => {
+        asked.push(chat);
+        return [[{ info: { id: "msg_1", role: "user" }, parts: [] }]];
+      },
+      confirm: false,
+    });
+    const first = await uploader.confirmSession("session-confirm-1234");
+    expect(first?.repairedAt).toBeDefined();
+    expect(asked).toEqual([{ sessionId: "session-confirm-1234", workspaceId: "workspace-confirm", root }]);
+    expect(sent).toHaveLength(1);
+    const types = (sent[0]!.trace as Array<{ type: string }>).map((event) => event.type);
+    expect(types[0]).toBe("collector.repair");
+    expect(types).toContain("turn.messages");
+    expect(sent[0]).toMatchObject({ snapshot_type: "trace", session_segment: 1, sequence: 4 });
+    await uploader.confirmSession("session-confirm-1234");
+    expect(asked).toHaveLength(1);
+    await uploader.stop();
+  });
+
+  test("a gap a spooled upload will fill drains the spool instead of re-sending", async () => {
+    const { stateDir } = await endedChat();
+    const spool = join(stateDir, "omnirush-upload-spool");
+    await mkdir(spool, { recursive: true });
+    const id = "000000000009-000009-00000009";
+    await writeFile(join(spool, `${id}.zst`), Buffer.alloc(32, 9));
+    await writeFile(join(spool, `${id}.json`), JSON.stringify({ id, session_id: "session-confirm-1234", snapshot_type: "trace", trigger: "trace_flush", sequence: 2, bytes: 32, created_at: new Date().toISOString(), attempts: 1 }));
+    let repairs = 0;
+    const delivered: string[] = [];
+    const uploader = new SessionUploader({
+      stateDir,
+      capabilities: FEATURES,
+      upload: async (sessionId) => {
+        delivered.push(sessionId);
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      sessionIntegrity: async () => Response.json({ integrity: "incomplete", reasons: ["sequence_gaps"], good_session: "pending", segments: [{ segment: 1, sequences: [1, 3], gaps: [2] }] }),
+      repairTranscript: async () => {
+        repairs += 1;
+        return [[]];
+      },
+      confirm: false,
+      retryBaseMs: 60_000,
+    });
+    await uploader.confirmSession("session-confirm-1234");
+    await uploader.drainSpool();
+    expect(repairs).toBe(0);
+    expect(delivered).toContain("session-confirm-1234");
+    await uploader.stop();
+  });
+
+  test("at launch, recent ended chats without a final verdict are checked; a judged one is not", async () => {
+    const { stateDir } = await endedChat();
+    const ledgerPath = join(stateDir, "omnirush-upload-sessions.json");
+    const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as { version: 1; sessions: Record<string, Record<string, unknown>> };
+    const record = ledger.sessions["session-confirm-1234"]!;
+    ledger.sessions["session-judged-1234"] = { ...record, confirmation: { verdict: "not_good", checkedAt: new Date().toISOString(), checks: 1 } };
+    await writeFile(ledgerPath, JSON.stringify(ledger));
+    const checked: string[] = [];
+    const uploader = new SessionUploader({
+      stateDir,
+      capabilities: FEATURES,
+      upload: async () => Response.json({ ok: true }, { status: 201 }),
+      sessionIntegrity: async (sessionId) => {
+        checked.push(sessionId);
+        return Response.json({ integrity: "ok", reasons: [], good_session: true, segments: [] });
+      },
+    });
+    for (let waited = 0; waited < 25_000 && checked.length === 0; waited += 100) await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(checked).toEqual(["session-confirm-1234"]);
+    await uploader.stop();
+  }, 40_000);
+
+  test("reads an integrity answer against the refusals the ledger holds", () => {
+    expect(integrityFindings({ good_session: "pending", reasons: ["sequence_gaps"], segments: [{ segment: 2, gaps: [5, 6] }, { segment: null, gaps: [1] }] }, ["2:5"]))
+      .toEqual({ verdict: "pending", gaps: ["2:6", "?:1"], missing: false });
+    expect(integrityFindings({ good_session: false, reasons: ["no_trace"], segments: [] })).toEqual({ verdict: "not_good", gaps: [], missing: true });
+    expect(integrityFindings("nope")).toBeNull();
   });
 });
