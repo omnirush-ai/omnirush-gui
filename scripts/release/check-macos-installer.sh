@@ -38,10 +38,11 @@ echo "Finder shows: $(finder_name "$mounted_app")"
 
 cat > "$work/window.swift" <<'SWIFT'
 import CoreGraphics
-let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-for window in list where window[kCGWindowOwnerName as String] as? String == "Finder"
-  && window[kCGWindowName as String] as? String == CommandLine.arguments[1] {
-  print(window[kCGWindowNumber as String] ?? "")
+import Foundation
+let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+for window in list where (window[kCGWindowOwnerName as String] as? String) == "Finder"
+  && (window[kCGWindowName as String] as? String) == CommandLine.arguments[1] {
+  print(window[kCGWindowNumber as String]!)
   break
 }
 SWIFT
@@ -61,17 +62,33 @@ osascript <<APPLESCRIPT
 tell application "Finder"
   set w to container window of disk "$volume"
   set o to icon view options of w
-  log "bounds: " & ((bounds of w) as string)
+  set AppleScript's text item delimiters to ", "
+  log "bounds: " & ((bounds of w) as text)
   log "toolbar visible: " & (toolbar visible of w) & ", statusbar visible: " & (statusbar visible of w)
   log "icon size: " & (icon size of o)
   try
     log "background: " & (name of (background picture of o as alias))
   end try
-  repeat with i in (items of w)
-    log (name of i) & " at " & ((position of i) as string)
-  end repeat
 end tell
 APPLESCRIPT
+# Icon positions and the background, as stored in the image's .DS_Store.
+python3 -m pip install --quiet --break-system-packages ds_store mac_alias 2>/dev/null \
+  || python3 -m pip install --quiet ds_store mac_alias
+python3 - "$mount/.DS_Store" <<'PYTHON'
+import sys
+from ds_store import DSStore
+from mac_alias import Alias
+with DSStore.open(sys.argv[1], "r") as store:
+    for entry in store:
+        if entry.code == b"Iloc":
+            print(f"{entry.filename}: icon at {entry.value}")
+        elif entry.code == b"bwsp":
+            print("window:", {k: entry.value[k] for k in ("WindowBounds", "ShowToolbar", "ShowStatusBar", "ShowSidebar")})
+        elif entry.code == b"icvp":
+            view = entry.value
+            background = Alias.from_bytes(view["backgroundImageAlias"]).target.filename if "backgroundImageAlias" in view else None
+            print(f"icon view: iconSize={view.get('iconSize')} backgroundType={view.get('backgroundType')} background={background}")
+PYTHON
 shoot true installer-dark.png
 osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false'
 osascript -e "tell application \"Finder\" to close every window" >/dev/null 2>&1 || true
