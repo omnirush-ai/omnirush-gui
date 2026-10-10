@@ -154,7 +154,9 @@ function useRequiredUpdate(gate: UpdateGateState) {
           ? "The installer is open. Replace the app from it, then open it again."
           : null;
   const command = installMode === "package" && updaterState === "ready" ? status?.installCommand ?? null : null;
-  return { updateNow, working, detail, label, command, showDownloaded: updater.showDownloadedUpdate };
+  // A restart that did not go through: offer the manual download next to the retry.
+  const installFailed = updaterState === "error" && status?.failedAction === "install";
+  return { updateNow, working, detail, label, command, installFailed, showDownloaded: updater.showDownloadedUpdate };
 }
 
 type RequiredUpdate = ReturnType<typeof useRequiredUpdate>;
@@ -194,6 +196,16 @@ export function RequiredUpdateBanner(props: { gate: UpdateGateState; appName: st
       <span className="truncate" data-testid="update-required-banner-text">{text}</span>
       {detail ? <span className={props.update.command ? "hidden truncate font-mono text-amber-900/80 select-text md:inline" : "hidden truncate text-amber-900/80 md:inline"}>· {detail}</span> : null}
       <UpdateNowButton update={props.update} testId="update-required-banner-button" />
+      {props.update.installFailed ? (
+        <button
+          type="button"
+          data-testid="update-required-banner-download"
+          onClick={() => openDownload(props.gate.downloadUrl)}
+          className="shrink-0 text-[11px] font-semibold underline underline-offset-2 hover:text-black mac:titlebar-no-drag"
+        >
+          Download manually
+        </button>
+      ) : null}
     </div>
   );
 }

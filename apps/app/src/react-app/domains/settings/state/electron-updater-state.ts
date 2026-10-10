@@ -178,6 +178,28 @@ function capabilitiesFromBridge(state: {
   };
 }
 
+// The main process gives an install 2 minutes to start; the renderer waits a
+// little longer for its answer, and as long again for the app to go away.
+const RESTART_ANSWER_MS = 150_000;
+const RESTART_STALLED_MS = 90_000;
+const RESTART_STALLED_MESSAGE =
+  "The app did not restart. Quit it fully and open it again to finish the update, or download the new version from the download page.";
+
+type InstallAndRestartResult = Awaited<ReturnType<NonNullable<ElectronUpdaterBridge["installAndRestart"]>>>;
+
+function withRestartWatchdog(pending: Promise<InstallAndRestartResult>): Promise<InstallAndRestartResult> {
+  let timer: number | undefined;
+  return Promise.race([
+    pending,
+    new Promise<InstallAndRestartResult>((resolve) => {
+      timer = window.setTimeout(
+        () => resolve({ ok: false, reason: RESTART_STALLED_MESSAGE } as InstallAndRestartResult),
+        RESTART_ANSWER_MS,
+      );
+    }),
+  ]).finally(() => window.clearTimeout(timer));
+}
+
 /** Where "Open download page" goes: the server's download_url while an update is required. */
 function downloadPageUrl(): string {
   return useUpdateGateStore.getState().state.downloadUrl;
@@ -738,7 +760,10 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
           return;
         }
       }
-      const result = await bridge.installAndRestart();
+      // The main process answers once the install is under way (the app
+      // starts quitting) or has failed, so show "Restarting…" meanwhile.
+      setUpdateStatus((current) => ({ ...(current ?? {}), state: "ready", restarting: true }));
+      const result = await withRestartWatchdog(bridge.installAndRestart());
       if (!isCurrentReleaseChannel()) return;
       if (!result?.ok) {
         if (result?.reason === "update-not-downloaded") {
@@ -750,6 +775,17 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
           return;
         }
         const reason = result?.reason ? stripRemoteMethodErrorPrefix(result.reason) : "Update install failed.";
+        if (result?.fallback === "move-to-applications") {
+          // macOS app on the DMG or in Downloads: the message says to move it.
+          setUpdateStatus((current) => ({
+            ...(current ?? {}),
+            state: "error",
+            restarting: false,
+            message: reason,
+            failedAction: "install",
+          }));
+          return;
+        }
         if (result?.fallback === "download-page") {
           // The app could not replace itself (the administrator prompt was
           // cancelled): this is the one place the download page opens, and
@@ -770,8 +806,16 @@ export function useElectronUpdaterState(options: UseElectronUpdaterStateOptions)
         });
         return;
       }
-      if (result.mode === "in-place") {
+      if (result.mode === "in-place" || result.mode === "moving") {
         setUpdateStatus((current) => ({ ...(current ?? {}), state: "ready", restarting: true }));
+        // The app is quitting now. Still here much later: something held it open.
+        window.setTimeout(() => {
+          setUpdateStatus((current) => current?.restarting
+            ? { ...current, state: "error", restarting: false, message: RESTART_STALLED_MESSAGE, failedAction: "install" }
+            : current);
+        }, RESTART_STALLED_MS);
+      } else {
+        setUpdateStatus((current) => (current?.restarting ? { ...current, restarting: false } : current));
       }
       if (result.mode === "manual-dmg") {
         // The shell opened the DMG and quits shortly; leave the instructions

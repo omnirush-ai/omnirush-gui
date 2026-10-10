@@ -264,11 +264,15 @@ declare global {
         installAndRestart?: () => Promise<{
           ok: boolean;
           reason?: string;
-          mode?: UpdaterInstallMode;
+          /** "moving": a macOS app is being moved to /Applications and reopens from there. */
+          mode?: UpdaterInstallMode | "moving";
           path?: string | null;
           command?: string | null;
-          /** The app could not replace itself (an administrator prompt was cancelled). */
-          fallback?: "download-page";
+          /**
+           * "download-page": the app could not replace itself (an administrator prompt was cancelled).
+           * "move-to-applications": a macOS app on the DMG or in Downloads must be moved first.
+           */
+          fallback?: "download-page" | "move-to-applications";
         }>;
         showDownloaded?: () => Promise<{ ok: boolean }>;
       };

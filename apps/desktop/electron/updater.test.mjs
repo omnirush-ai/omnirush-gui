@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -45,7 +46,16 @@ const desktopVersion = JSON.parse(
 let isolatedUpdaterImportId = 0;
 
 function fakeUpdaterHarness({ version, files }) {
-  const listeners = new Map();
+  // Several listeners per event, like an EventEmitter; `listeners.get(name)`
+  // fires them all (undefined while none is registered).
+  const registered = new Map();
+  const listeners = {
+    get: (name) => (registered.get(name)?.size
+      ? (...args) => { for (const fn of [...registered.get(name)]) fn(...args); }
+      : undefined),
+  };
+  // The app's own events: a real install quits the app (before-quit).
+  const appEvents = new EventEmitter();
   const calls = [];
   const feeds = [];
   const downloadFeeds = [];
@@ -55,7 +65,11 @@ function fakeUpdaterHarness({ version, files }) {
     disableDifferentialDownload: false,
     allowPrerelease: false,
     allowDowngrade: false,
-    on: (name, fn) => listeners.set(name, fn),
+    on: (name, fn) => {
+      if (!registered.has(name)) registered.set(name, new Set());
+      registered.get(name).add(fn);
+    },
+    removeListener: (name, fn) => registered.get(name)?.delete(fn),
     setFeedURL: (feed) => feeds.push(feed),
     checkForUpdates: async () => ({ updateInfo: { version, ...(files ? { files } : {}) } }),
     downloadUpdate: async () => {
@@ -64,9 +78,10 @@ function fakeUpdaterHarness({ version, files }) {
     },
     quitAndInstall: () => {
       calls.push("quitAndInstall");
+      appEvents.emit("before-quit");
     },
   };
-  return { updater, listeners, calls, feeds, downloadFeeds };
+  return { updater, listeners, appEvents, calls, feeds, downloadFeeds };
 }
 
 async function registerFakeUpdaterIpc({ version, files = undefined, ...options }) {
@@ -87,6 +102,8 @@ async function registerFakeUpdaterIpc({ version, files = undefined, ...options }
     getVersion: () => "0.17.0",
     getPath: (key) => path.join(tempDir, key),
     quit: () => harness.calls.push("quit"),
+    on: (name, fn) => harness.appEvents.on(name, fn),
+    removeListener: (name, fn) => harness.appEvents.removeListener(name, fn),
   };
   const registered = registerIsolatedUpdaterIpc({
     app,
@@ -998,6 +1015,7 @@ async function publishingFeedHarness(options = {}) {
   };
   harness.updater.quitAndInstall = (isSilent, isForceRunAfter) => {
     installs.push({ version: downloaded.at(-1), isSilent, isForceRunAfter });
+    harness.appEvents.emit("before-quit");
   };
   return { ...harness, feed, downloaded, installs };
 }
@@ -1457,5 +1475,274 @@ describe("Linux package installs", () => {
     );
     assert.equal(linuxInstallCommand(null, "/x"), null);
     assert.equal(shellQuote("/home/o'neil/My Downloads/x.deb"), "'/home/o'\\''neil/My Downloads/x.deb'");
+  });
+});
+
+describe("restart to update finishes or says why", () => {
+  const READ_ONLY = "Cannot update while running on a read-only volume. The application is on a read-only volume. Please move the application and try again.";
+
+  async function stagedInPlace(options = {}) {
+    const order = [];
+    const registered = await registerFakeUpdaterIpc({
+      version: "3.3.3",
+      allowQuit: () => order.push("allowQuit"),
+      restoreQuitGuard: () => order.push("restoreQuitGuard"),
+      ...options,
+    });
+    assert.equal((await registered.handlers.get("omnirush:updater:check")(null, "stable")).available, true);
+    assert.deepEqual(await registered.handlers.get("omnirush:updater:download")(), { ok: true, mode: "in-place" });
+    return { ...registered, order };
+  }
+
+  it("lets the install through the quit guard before it quits the app", async () => {
+    const { tempDir, handlers, updater, order, calls } = await stagedInPlace();
+    try {
+      const original = updater.quitAndInstall;
+      updater.quitAndInstall = (...args) => {
+        order.push("quitAndInstall");
+        original(...args);
+      };
+      assert.deepEqual(await handlers.get("omnirush:updater:installAndRestart")(), { ok: true, mode: "in-place" });
+      assert.deepEqual(order, ["allowQuit", "quitAndInstall"]);
+      assert.deepEqual(calls, ["download", "quitAndInstall"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an error Squirrel raises after quitAndInstall instead of answering ok", async () => {
+    const { tempDir, handlers, updater, listeners, appEvents, order } = await stagedInPlace();
+    try {
+      let attempts = 0;
+      updater.quitAndInstall = () => {
+        attempts += 1;
+        // Squirrel.Mac answers asynchronously through the updater's error event.
+        setTimeout(() => listeners.get("error")(new Error("Code signature at URL did not pass validation")), 5);
+      };
+      const result = await handlers.get("omnirush:updater:installAndRestart")();
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /could not be installed: Code signature at URL did not pass validation/);
+      assert.deepEqual(order, ["allowQuit", "restoreQuitGuard"], "a failed install re-arms the quit guard");
+      // The staged download stays and installTriggered is reset: the button retries.
+      updater.quitAndInstall = () => {
+        attempts += 1;
+        appEvents.emit("before-quit");
+      };
+      assert.deepEqual(await handlers.get("omnirush:updater:installAndRestart")(), { ok: true, mode: "in-place" });
+      assert.equal(attempts, 2);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("explains a read-only volume refusal as a move to Applications", async () => {
+    const { tempDir, handlers, updater, listeners } = await stagedInPlace();
+    try {
+      updater.quitAndInstall = () => setTimeout(() => listeners.get("error")(new Error(READ_ONLY)), 5);
+      const result = await handlers.get("omnirush:updater:installAndRestart")();
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /drag it into Applications, open it from there and update again, or download the new version/);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers ok when Electron's updater announces before-quit-for-update", async () => {
+    const nativeUpdater = new EventEmitter();
+    const { tempDir, handlers, updater } = await stagedInPlace({ nativeUpdater });
+    try {
+      updater.quitAndInstall = () => setTimeout(() => nativeUpdater.emit("before-quit-for-update"), 5);
+      assert.deepEqual(await handlers.get("omnirush:updater:installAndRestart")(), { ok: true, mode: "in-place" });
+      assert.equal(nativeUpdater.listenerCount("before-quit-for-update"), 0, "listeners are removed");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives up with a message when the install never starts", async () => {
+    const { tempDir, handlers, updater, order } = await stagedInPlace({ installStartTimeoutMs: 30 });
+    try {
+      updater.quitAndInstall = () => {};
+      const result = await handlers.get("omnirush:updater:installAndRestart")();
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /did not start within 0 seconds\. Quit .* and open it again to finish the update, or download the new version/);
+      assert.deepEqual(order, ["allowQuit", "restoreQuitGuard"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a synchronous quitAndInstall throw", async () => {
+    const { tempDir, handlers, updater } = await stagedInPlace();
+    try {
+      updater.quitAndInstall = () => {
+        throw new Error("No update filepath provided, can't quit and install");
+      };
+      const result = await handlers.get("omnirush:updater:installAndRestart")();
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /No update filepath provided/);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("macOS app outside Applications", () => {
+  const DMG_BUNDLE = "/Volumes/OmniRush.ai 3.3.2-arm64/OmniRush.ai.app";
+  const TRANSLOCATED = "/private/var/folders/xy/T/AppTranslocation/0A1B/d/OmniRush.ai.app";
+
+  async function stagedMac({ bundle = DMG_BUNDLE, readOnly = true, inApplications = false, answer = 1, move = () => true, ...options } = {}) {
+    const order = [];
+    const dialogs = [];
+    const registered = await registerFakeUpdaterIpc({
+      version: "3.3.3",
+      platform: "darwin",
+      isDeveloperIdSigned: async () => true,
+      getAppPath: () => `${bundle}/Contents/Resources/app.asar`,
+      execPath: `${bundle}/Contents/MacOS/OmniRush.ai`,
+      isReadOnlyVolume: async () => readOnly,
+      isInApplicationsFolder: () => inApplications,
+      moveToApplicationsFolder: () => {
+        order.push("move");
+        return move();
+      },
+      showMessageBox: async (options) => {
+        dialogs.push(options);
+        return { response: answer };
+      },
+      allowQuit: () => order.push("allowQuit"),
+      restoreQuitGuard: () => order.push("restoreQuitGuard"),
+      restartDelayMs: 1,
+      ...options,
+    });
+    registered.app.quit = () => order.push("quit");
+    assert.equal((await registered.handlers.get("omnirush:updater:check")(null, "stable")).installMode, "in-place");
+    assert.deepEqual(await registered.handlers.get("omnirush:updater:download")(), { ok: true, mode: "in-place" });
+    return { ...registered, order, dialogs };
+  }
+
+  it("from the DMG: asks to move instead of handing Squirrel an update it refuses", async () => {
+    const { tempDir, handlers, calls, order, dialogs } = await stagedMac({ answer: 1 });
+    try {
+      const result = await handlers.get("omnirush:updater:installAndRestart")();
+      assert.equal(result.ok, false);
+      assert.equal(result.fallback, "move-to-applications");
+      assert.match(result.reason, /disk image or the Downloads folder/);
+      assert.equal(dialogs.length, 1);
+      assert.deepEqual(dialogs[0].buttons, ["Move to Applications", "Cancel"]);
+      assert.deepEqual(calls, ["download"], "quitAndInstall never runs from a read-only volume");
+      assert.deepEqual(order, []);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("from the DMG: Move to Applications moves the app and quits this copy", async () => {
+    const { tempDir, handlers, calls, order } = await stagedMac({ answer: 0 });
+    try {
+      assert.deepEqual(await handlers.get("omnirush:updater:installAndRestart")(), { ok: true, mode: "moving" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(order, ["allowQuit", "move", "allowQuit", "quit"]);
+      assert.deepEqual(calls, ["download"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("a failed move says why and re-arms the quit guard", async () => {
+    const { tempDir, handlers, order } = await stagedMac({
+      answer: 0,
+      move: () => {
+        throw new Error("Failed to copy bundle");
+      },
+    });
+    try {
+      const result = await handlers.get("omnirush:updater:installAndRestart")();
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /could not be moved to Applications: Failed to copy bundle/);
+      assert.deepEqual(order, ["allowQuit", "move", "restoreQuitGuard"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("App Translocation counts as outside Applications even when the check cannot see a read-only volume", async () => {
+    const { tempDir, handlers, calls } = await stagedMac({ bundle: TRANSLOCATED, readOnly: false, answer: 1 });
+    try {
+      const result = await handlers.get("omnirush:updater:installAndRestart")();
+      assert.equal(result.fallback, "move-to-applications");
+      assert.deepEqual(calls, ["download"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("in Applications (or any writable folder) installs in place", async () => {
+    for (const setup of [
+      { bundle: "/Applications/OmniRush.ai.app", readOnly: false, inApplications: true },
+      { bundle: "/Users/test/Apps/OmniRush.ai.app", readOnly: false, inApplications: false },
+    ]) {
+      const { tempDir, handlers, calls, dialogs } = await stagedMac(setup);
+      try {
+        assert.deepEqual(await handlers.get("omnirush:updater:installAndRestart")(), { ok: true, mode: "in-place" });
+        assert.deepEqual(calls, ["download", "quitAndInstall"]);
+        assert.equal(dialogs.length, 0);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("asks at launch only when the app cannot update where it is", async () => {
+    const blocked = await stagedMac({ answer: 1 });
+    const fine = await stagedMac({ bundle: "/Applications/OmniRush.ai.app", readOnly: false, inApplications: true });
+    try {
+      const asked = await blocked.offerMoveAtLaunch();
+      assert.equal(asked.offered, true);
+      assert.equal(asked.ok, false);
+      assert.deepEqual(blocked.dialogs[0].buttons, ["Move to Applications", "Not Now"]);
+      assert.deepEqual(await fine.offerMoveAtLaunch(), { offered: false });
+      assert.equal(fine.dialogs.length, 0);
+    } finally {
+      await rm(blocked.tempDir, { recursive: true, force: true });
+      await rm(fine.tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("OMNIRUSH_UPDATER_MOVE_ANSWER answers without a dialog", async () => {
+    const { tempDir, offerMoveAtLaunch, dialogs, order } = await stagedMac({ env: { OMNIRUSH_UPDATER_MOVE_ANSWER: "move" } });
+    try {
+      assert.deepEqual(await offerMoveAtLaunch(), { offered: true, ok: true, mode: "moving" });
+      assert.equal(dialogs.length, 0);
+      assert.ok(order.includes("move"));
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("quitting from the DMG installs nothing (Squirrel would refuse it)", async () => {
+    const { tempDir, prepareInstallOnQuit } = await stagedMac();
+    try {
+      assert.equal(await prepareInstallOnQuit(), null);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("read-only volume detection", async () => {
+  const { isOnReadOnlyVolume } = await import("./self-install.mjs");
+  const failing = (code) => async () => {
+    const error = new Error(code);
+    error.code = code;
+    throw error;
+  };
+  it("EROFS on the bundle's folder is a read-only volume", async () => {
+    assert.equal(await isOnReadOnlyVolume("/Volumes/X/OmniRush.ai.app", failing("EROFS")), true);
+  });
+  it("a folder this user cannot write is not", async () => {
+    assert.equal(await isOnReadOnlyVolume("/Applications/OmniRush.ai.app", failing("EACCES")), false);
+    assert.equal(await isOnReadOnlyVolume("/Applications/OmniRush.ai.app", async () => undefined), false);
+    assert.equal(await isOnReadOnlyVolume(null), false);
   });
 });

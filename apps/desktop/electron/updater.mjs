@@ -22,6 +22,7 @@ import {
   canReplaceInPlace,
   fileExists,
   isAuthorizationCancelled,
+  isOnReadOnlyVolume,
   isTranslocatedBundle,
   launchMacSwap,
   linuxAppImagePath,
@@ -525,6 +526,20 @@ export function registerUpdaterIpc({
   installAppImage = replaceAppImage,
   relaunchAppImage = relaunchAppImageAfterExit,
   restartDelayMs = 300,
+  // Re-arms the quit guard when an install that was let through did not start.
+  restoreQuitGuard = () => {},
+  // Electron's own autoUpdater: it emits before-quit-for-update once an
+  // in-place install is accepted and the app starts closing.
+  nativeUpdater = null,
+  // How long an in-place install may take to start quitting the app (Squirrel
+  // copies and verifies the whole bundle first) before the user is told.
+  installStartTimeoutMs = 120_000,
+  // macOS: Squirrel cannot update an app on a read-only volume (the DMG, App
+  // Translocation); the user is offered a move to /Applications instead.
+  showMessageBox = null,
+  isReadOnlyVolume = isOnReadOnlyVolume,
+  isInApplicationsFolder = () => (typeof app.isInApplicationsFolder === "function" ? app.isInApplicationsFolder() : true),
+  moveToApplicationsFolder = () => app.moveToApplicationsFolder(),
 }) {
   const quitApp = () => {
     allowQuit();
@@ -642,6 +657,145 @@ export function registerUpdaterIpc({
       ...updaterChannelState(app, channel, targetVersion, feedOptions),
       ...(await describeInstall()),
     };
+  }
+
+  function appDisplayName() {
+    try {
+      return (typeof app.getName === "function" && app.getName()) || "OmniRush.ai";
+    } catch {
+      return "OmniRush.ai";
+    }
+  }
+
+  function runningMacBundle() {
+    try {
+      return macBundleFromPath(getAppPath()) ?? macAppBundlePath(execPath);
+    } catch {
+      return macAppBundlePath(execPath);
+    }
+  }
+
+  /**
+   * macOS: the running bundle when it sits where Squirrel.Mac cannot update
+   * it (the mounted DMG, an App Translocation mount), else null.
+   */
+  async function macBundleBlockingUpdate() {
+    if (platform !== "darwin" || !app.isPackaged) return null;
+    const bundle = runningMacBundle();
+    if (!bundle) return null;
+    try {
+      if (isInApplicationsFolder()) return null;
+    } catch {
+      // Unknown: judge by the location alone.
+    }
+    if (isTranslocatedBundle(bundle) || (await isReadOnlyVolume(bundle))) return bundle;
+    return null;
+  }
+
+  function moveNeededReason() {
+    const name = appDisplayName();
+    return `${name} is running from the disk image or the Downloads folder, where it cannot update itself. Quit ${name}, drag it into Applications, open it from there and update again, or download the new version from the download page.`;
+  }
+
+  /**
+   * Offers to move the app into /Applications. Electron copies it there,
+   * quits this copy and reopens the moved one, which can then update.
+   * OMNIRUSH_UPDATER_MOVE_ANSWER=move|cancel answers without the dialog
+   * (unattended update rigs).
+   */
+  async function offerMoveToApplications({ atLaunch = false } = {}) {
+    const name = appDisplayName();
+    const preset = typeof env.OMNIRUSH_UPDATER_MOVE_ANSWER === "string" ? env.OMNIRUSH_UPDATER_MOVE_ANSWER.trim() : "";
+    let move = false;
+    if (preset === "move" || preset === "cancel") {
+      move = preset === "move";
+    } else if (typeof showMessageBox === "function") {
+      try {
+        const { response } = await showMessageBox({
+          type: "info",
+          message: atLaunch ? `Move ${name} to Applications?` : `Move ${name} to Applications to update`,
+          detail: `${name} is running from the disk image or the Downloads folder, where it cannot update itself. Move it to Applications and it reopens from there${atLaunch ? "." : ". Then choose Restart to update again."}`,
+          buttons: ["Move to Applications", atLaunch ? "Not Now" : "Cancel"],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        });
+        move = response === 0;
+      } catch {
+        move = false;
+      }
+    }
+    const notMoved = (detail = "") => ({
+      ok: false,
+      fallback: "move-to-applications",
+      reason: `${detail}${moveNeededReason()}`,
+    });
+    if (!move) return notMoved();
+    allowQuit();
+    try {
+      if (!moveToApplicationsFolder()) {
+        restoreQuitGuard();
+        return notMoved();
+      }
+    } catch (error) {
+      restoreQuitGuard();
+      return notMoved(`${name} could not be moved to Applications: ${String(error?.message ?? error)}. `);
+    }
+    // Electron quits by itself after the move; make sure this copy goes.
+    setTimeout(() => quitApp(), restartDelayMs);
+    return { ok: true, mode: "moving" };
+  }
+
+  function installFailureReason(error) {
+    const message = String(error?.message ?? error ?? "unknown error").replace(/^Error:\s*/, "");
+    if (/read-only volume/i.test(message)) return moveNeededReason();
+    return `The update could not be installed: ${message}`;
+  }
+
+  /**
+   * Starts an electron-updater install and resolves only once it is under
+   * way (the app starts quitting) or has failed. Squirrel.Mac reports a
+   * refused update (read-only volume, signature mismatch) through the
+   * updater's error event after quitAndInstall returned; answering before
+   * that left the renderer on "Restarting…" with nothing happening.
+   */
+  function startInPlaceInstall(updater) {
+    return new Promise((resolve) => {
+      const cleanups = [];
+      let settled = false;
+      const settle = (result) => {
+        if (settled) return;
+        settled = true;
+        for (const cleanup of cleanups) {
+          try {
+            cleanup();
+          } catch {
+            // Already detached.
+          }
+        }
+        resolve(result);
+      };
+      const listen = (emitter, name, handler) => {
+        if (typeof emitter?.on !== "function") return;
+        emitter.on(name, handler);
+        const off = emitter.removeListener ?? emitter.off;
+        if (typeof off === "function") cleanups.push(() => off.call(emitter, name, handler));
+      };
+      const started = () => settle({ ok: true, mode: "in-place" });
+      listen(updater, "error", (error) => settle({ ok: false, reason: installFailureReason(error) }));
+      listen(app, "before-quit", started);
+      listen(nativeUpdater, "before-quit-for-update", started);
+      const timer = setTimeout(() => settle({
+        ok: false,
+        reason: `The update did not start within ${Math.round(installStartTimeoutMs / 1000)} seconds. Quit ${appDisplayName()} and open it again to finish the update, or download the new version from the download page.`,
+      }), installStartTimeoutMs);
+      cleanups.push(() => clearTimeout(timer));
+      try {
+        updater.quitAndInstall(false, true);
+      } catch (error) {
+        settle({ ok: false, reason: installFailureReason(error) });
+      }
+    });
   }
 
   /** The file a self-install mode downloads itself, from the manifest just read. */
@@ -1284,6 +1438,8 @@ export function registerUpdaterIpc({
       // Quitting never asks for a password: an /Applications this user cannot
       // write waits for "Restart to update".
       if (installMode === "mac-swap" && !(await canReplace(installTarget))) return null;
+      // Squirrel would refuse it (DMG, App Translocation); the next launch asks to move.
+      if (installMode === "in-place" && (await macBundleBlockingUpdate())) return null;
       const newest = await withTimeout(
         queueUpdaterOperation(() => ensureNewestDownloaded(updater, installMode)),
         quitUpdateTimeoutMs,
@@ -1421,18 +1577,35 @@ export function registerUpdaterIpc({
         return { ok: false, reason: String(error?.message ?? error) };
       }
     }
-    try {
-      // Re-assert the in-place-write default right before the swap; the ShipIt
-      // defaults domain may have been wiped when stale state was cleaned.
-      await enableSquirrelDirectContentsWrite();
-      installTriggered = true;
-      allowQuit();
-      updater.quitAndInstall(false, true);
-      return { ok: true, mode: "in-place" };
-    } catch (error) {
-      return { ok: false, reason: String(error?.message ?? error) };
+    if (await macBundleBlockingUpdate()) return offerMoveToApplications();
+    // Re-assert the in-place-write default right before the swap; the ShipIt
+    // defaults domain may have been wiped when stale state was cleaned.
+    await enableSquirrelDirectContentsWrite(shipItDefaultsDomain);
+    installTriggered = true;
+    // An update install is never held up by the running-turn question.
+    allowQuit();
+    const started = await startInPlaceInstall(updater);
+    if (!started.ok) {
+      installTriggered = false;
+      restoreQuitGuard();
+      console.warn("[updater] install did not start", started.reason);
     }
+    return started;
   }));
 
-  return { ensureAutoUpdater, prepareInstallOnQuit };
+  /**
+   * At launch (macOS): an app that runs from the DMG or a translocated copy
+   * can never update itself, so offer the move to /Applications right away.
+   */
+  async function offerMoveAtLaunch() {
+    try {
+      if (!(await macBundleBlockingUpdate())) return { offered: false };
+      return { offered: true, ...(await offerMoveToApplications({ atLaunch: true })) };
+    } catch (error) {
+      console.warn("[updater] move check failed", error?.message ?? error);
+      return { offered: false };
+    }
+  }
+
+  return { ensureAutoUpdater, prepareInstallOnQuit, offerMoveAtLaunch };
 }

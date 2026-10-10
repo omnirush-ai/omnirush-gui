@@ -136,6 +136,10 @@ export function createTurnGuard(deps) {
       allowed = true;
       closeDialog();
     },
+    /** An update install that was let through did not start: ask again from now on. */
+    restoreQuit() {
+      allowed = false;
+    },
     get state() {
       return guard.state;
     },

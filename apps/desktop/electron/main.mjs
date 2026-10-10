@@ -2939,10 +2939,15 @@ const browserLoginSync = createBrowserLoginSync({
 browserLoginSync.registerIpc(ipcMain, { evalSeam: browserLoginEvalSeam });
 
 registerMigrationIpc({ app, ipcMain });
-const { ensureAutoUpdater, prepareInstallOnQuit } = registerUpdaterIpc({
+const { ensureAutoUpdater, prepareInstallOnQuit, offerMoveAtLaunch } = registerUpdaterIpc({
   app,
   ipcMain,
   allowQuit: () => turnGuard.allowQuit(),
+  restoreQuitGuard: () => turnGuard.restoreQuit(),
+  nativeUpdater: require("electron").autoUpdater,
+  showMessageBox: (options) => (mainWindow && !mainWindow.isDestroyed()
+    ? dialog.showMessageBox(mainWindow, options)
+    : dialog.showMessageBox(options)),
   getMainWindow: () => mainWindow,
   // All distributions intentionally share one application identifier, so they also
   // share Squirrel's ShipIt domain. Keep the shared default rather than
@@ -3112,6 +3117,10 @@ or use: pnpm dev:worktree`);
     // a working app first. Renderer-owned checks pass the selected release
     // channel explicitly, avoiding stale stable-feed results for alpha users.
     runDetachedTask("initialize updater", ensureAutoUpdater);
+    // macOS: a copy running from the DMG or Downloads can never update itself.
+    if (process.platform === "darwin" && !BLANK_SLATE_LAUNCH.enabled) {
+      runDetachedTask("offer move to Applications", offerMoveAtLaunch);
+    }
   }).catch((error) => {
     console.error("[desktop] startup failed", error);
     dialog.showErrorBox(

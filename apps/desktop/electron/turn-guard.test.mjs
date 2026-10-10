@@ -126,6 +126,17 @@ test("allowQuit while the dialog is open closes it", async () => {
   assert.equal(dialogs[0].aborted, true);
 });
 
+test("restoreQuit after an update install that did not start asks again", () => {
+  const { guard, dialogs } = setup();
+  guard.setTurnRunning(true);
+  guard.allowQuit();
+  guard.restoreQuit();
+  const event = fakeEvent();
+  assert.equal(guard.guardQuit(event, () => {}), false);
+  assert.equal(event.prevented, true);
+  assert.equal(dialogs.length, 1);
+});
+
 test("only a strict true marks a turn running", () => {
   const { guard } = setup();
   assert.equal(guard.setTurnRunning("yes"), false);
