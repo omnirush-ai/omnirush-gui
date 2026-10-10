@@ -105,19 +105,24 @@ func text(_ c: CGContext, _ string: String, size: CGFloat, weight: NSFont.Weight
 }
 
 // Header: the mark beside the name, as on the app's welcome card.
-func header(_ c: CGContext, colour: CGColor, y: CGFloat = 52) {
+func header(_ c: CGContext, colour: CGColor, y: CGFloat = 52, left fixedLeft: CGFloat? = nil) {
   let name = "omnirush"
   let font = NSFont.systemFont(ofSize: 16, weight: .semibold)
   let nameWidth = (name as NSString).size(withAttributes: [.font: font, .kern: -0.2]).width
   let markSize: CGFloat = 22
   let gap: CGFloat = 8
-  let left = (width - (markSize + gap + nameWidth)) / 2
+  let left = fixedLeft ?? (width - (markSize + gap + nameWidth)) / 2
   drawMarkShape(c, CGRect(x: left, y: y - markSize / 2, width: markSize, height: markSize), colour)
   text(c, name, size: 16, weight: .semibold, colour: colour, x: left + markSize + gap, midY: y, kern: -0.2)
 }
 
-func hint(_ c: CGContext, colour: CGColor) {
-  text(c, "Drag omnirush to Applications to install", size: 12.5, weight: .regular, colour: colour, centreX: width / 2, midY: 352)
+func hint(_ c: CGContext, colour: CGColor, left: CGFloat? = nil) {
+  let message = "Drag omnirush to Applications to install"
+  if let left {
+    text(c, message, size: 12.5, weight: .regular, colour: colour, x: left, midY: 352)
+  } else {
+    text(c, message, size: 12.5, weight: .regular, colour: colour, centreX: width / 2, midY: 352)
+  }
 }
 
 // Film grain from a fixed-seed generator, so renders are repeatable.
@@ -405,6 +410,114 @@ func combo(_ c: CGContext, scale: CGFloat, mark markRect: CGRect) {
   hint(c, colour: rgb(0xffffff, 0.72))
 }
 
+// A soft mask (white = light side) from a function of a point, at pixel
+// resolution. Rows run bottom-up because the context is flipped.
+func softMask(scale: CGFloat, _ value: (CGPoint) -> CGFloat) -> CGImage {
+  let w = Int(width * scale), h = Int(height * scale)
+  var pixels = [UInt8](repeating: 0, count: w * h)
+  for row in 0..<h {
+    let y = height - (CGFloat(row) + 0.5) / scale
+    for col in 0..<w {
+      let v = value(CGPoint(x: (CGFloat(col) + 0.5) / scale, y: y))
+      pixels[row * w + col] = UInt8(max(0, min(1, v)) * 255)
+    }
+  }
+  let provider = CGDataProvider(data: Data(pixels) as CFData)!
+  return CGImage(
+    width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: w,
+    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: 0), provider: provider,
+    decode: nil, shouldInterpolate: true, intent: .defaultIntent)!
+}
+
+func smoothstep(_ a: CGFloat, _ b: CGFloat, _ x: CGFloat) -> CGFloat {
+  let t = max(0, min(1, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
+
+func clipped(_ c: CGContext, _ mask: CGImage, _ draw: () -> Void) {
+  c.saveGState()
+  c.clip(to: CGRect(x: 0, y: 0, width: width, height: height), mask: mask)
+  draw()
+  c.restoreGState()
+}
+
+// Midnight's streaks converging into the chevron, in one colour.
+func connector(_ c: CGContext, line: UInt32, lineAlpha: CGFloat, chevron: UInt32, glowColour: UInt32) {
+  c.saveGState()
+  c.setLineCap(.round)
+  for i in 0..<15 {
+    let f = CGFloat(i) / 14
+    let y = 120 + f * 140
+    let bend = (f - 0.5) * 60
+    let path = CGMutablePath()
+    path.move(to: CGPoint(x: 120 + abs(f - 0.5) * 60, y: y))
+    path.addQuadCurve(to: CGPoint(x: 392 - abs(f - 0.5) * 90, y: 190 + (y - 190) * 0.25), control: CGPoint(x: 300, y: y - bend * 0.3))
+    c.addPath(path)
+    c.setLineWidth(1.2)
+    c.setStrokeColor(rgb(line, lineAlpha * (0.3 + 0.7 * (1 - abs(f - 0.5) * 2))))
+    c.strokePath()
+  }
+  let mark = CGMutablePath()
+  mark.move(to: CGPoint(x: 384, y: 166))
+  mark.addLine(to: CGPoint(x: 408, y: 190))
+  mark.addLine(to: CGPoint(x: 384, y: 214))
+  c.setShadow(offset: .zero, blur: 16, color: rgb(glowColour, 0.9))
+  c.addPath(mark); c.setLineWidth(5); c.setLineJoin(.round)
+  c.setStrokeColor(rgb(chevron)); c.strokePath()
+  c.restoreGState()
+}
+
+// Variant "split": midnight's navy around the app blends into orbit's light
+// paper and mark around Applications. `curved` picks an organic elliptical
+// edge; otherwise the blend is a straight vertical feather.
+func split(_ c: CGContext, scale: CGFloat, curved: Bool) {
+  let light = softMask(scale: scale) { p in
+    if curved {
+      let d = hypot((p.x - 610) / 300, (p.y - 200) / 250)
+      return 1 - smoothstep(0.7, 1.08, d)
+    }
+    return smoothstep(290, 440, p.x)
+  }
+  let dark = softMask(scale: scale) { p in
+    if curved {
+      let d = hypot((p.x - 610) / 300, (p.y - 200) / 250)
+      return smoothstep(0.7, 1.08, d)
+    }
+    return 1 - smoothstep(290, 440, p.x)
+  }
+  // Dark side: midnight.
+  c.drawLinearGradient(gradient([(0, rgb(navyLift)), (1, rgb(navy))]), start: .zero, end: CGPoint(x: 0, y: height), options: [])
+  glow(c, CGPoint(x: 170, y: 190), 230, blue, 0.38)
+  glow(c, CGPoint(x: 60, y: 360), 240, cyan, 0.22)
+  glow(c, CGPoint(x: 120, y: 0), 240, violet, 0.24)
+  // Light side: orbit.
+  clipped(c, light) {
+    c.drawLinearGradient(gradient([(0, rgb(paper)), (1, rgb(0xeef1f6))]), start: .zero, end: CGPoint(x: 0, y: height), options: [])
+    glow(c, CGPoint(x: 490, y: 190), 210, blue, 0.14)
+    glow(c, CGPoint(x: 400, y: 200), 120, violet, 0.08)
+    drawMarkShape(c, CGRect(x: 250, y: -40, width: 480, height: 480), rgb(navy), 0.05)
+  }
+  // The connector in white over the dark and in brand blue over the light.
+  clipped(c, dark) { connector(c, line: 0xffffff, lineAlpha: 0.55, chevron: 0xffffff, glowColour: cyan) }
+  clipped(c, light) { connector(c, line: navyLift, lineAlpha: 0.5, chevron: blue, glowColour: blue) }
+  // The left label sits on dark: a frosted pill. The right one is on paper.
+  let pill = CGPath(roundedRect: CGRect(x: appIcon.x - 64, y: 258, width: 128, height: 26), cornerWidth: 13, cornerHeight: 13, transform: nil)
+  c.saveGState()
+  c.setShadow(offset: CGSize(width: 0, height: 4), blur: 14, color: rgb(0x000000, 0.35))
+  c.addPath(pill); c.setFillColor(rgb(0xffffff, 0.9)); c.fillPath()
+  c.restoreGState()
+  grain(c, scale: scale, amount: 0.05)
+  // Title and hint stay on the dark side: centred where the curved edge
+  // leaves the top and bottom dark, left-aligned beside the vertical blend.
+  if curved {
+    header(c, colour: rgb(0xffffff))
+    hint(c, colour: rgb(0xffffff, 0.78))
+  } else {
+    header(c, colour: rgb(0xffffff), left: 36)
+    hint(c, colour: rgb(0xffffff, 0.78), left: 36)
+  }
+}
+
 func render(scale: CGFloat) -> Data {
   let w = Int(width * scale), h = Int(height * scale)
   guard
@@ -427,6 +540,8 @@ func render(scale: CGFloat) -> Data {
   // Mark centred behind the layout, or large and cropped off the right edge.
   case "combo-a": combo(c, scale: scale, mark: CGRect(x: 120, y: -20, width: 420, height: 420))
   case "combo-b": combo(c, scale: scale, mark: CGRect(x: 300, y: -90, width: 560, height: 560))
+  case "split-a": split(c, scale: scale, curved: false)
+  case "split-b": split(c, scale: scale, curved: true)
   default: fatalError("unknown variant \(variant)")
   }
   NSGraphicsContext.restoreGraphicsState()
