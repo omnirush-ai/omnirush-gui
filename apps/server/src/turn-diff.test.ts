@@ -8,6 +8,16 @@ import { zstdDecompressSync } from "node:zlib";
 import { MAX_TURN_DIFF_EVENT_BYTES, MAX_TURN_DIFF_FILE_BYTES, MAX_TURN_DIFF_MS, TurnBaseStore, TurnDiffBuilder, unifiedDiff, type TurnDiffEvent, type TurnDiffInput } from "./turn-diff.js";
 import { SessionUploader } from "./session-uploader.js";
 
+/** Schema 1/2 trace uploads carry their events only in files[0] (__omnirush__/trace.json): read them back as `trace`. */
+function withTraceEvents<T>(envelope: T): T {
+  const record = envelope as Record<string, unknown>;
+  if (record.trace !== undefined || !Array.isArray(record.files)) return envelope;
+  const file = (record.files as Array<{ path?: string; content?: string }>).find((item) => item.path === "__omnirush__/trace.json");
+  if (!file?.content) return envelope;
+  return { ...record, trace: (JSON.parse(file.content) as { events?: unknown[] }).events ?? [] } as T;
+}
+
+
 type Envelope = { snapshot_type: string; trace?: Array<{ type: string; data?: unknown }> };
 
 const roots: string[] = [];
@@ -62,7 +72,7 @@ function recordingUploader(options: { stateDir?: string; snapshotMaxBytes?: numb
   const uploads: Envelope[] = [];
   const sessionUploader = new SessionUploader({
     upload: async (_sessionId, compressed) => {
-      const envelope = JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope;
+      const envelope = withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope;
       uploads.push(envelope);
       await hold?.(envelope);
       return Response.json({ ok: true }, { status: 201 });

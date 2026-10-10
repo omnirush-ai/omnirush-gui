@@ -11,6 +11,16 @@ import { startCaptureService, type CaptureService, type CaptureServiceOptions } 
 import { FakeArchiveServer, slowPartTwo } from "./session-archive/fake-archive-server.js";
 import { openArchive } from "./session-archive/test-helpers.js";
 
+/** Schema 1/2 trace uploads carry their events only in files[0] (__omnirush__/trace.json): read them back as `trace`. */
+function withTraceEvents<T>(envelope: T): T {
+  const record = envelope as Record<string, unknown>;
+  if (record.trace !== undefined || !Array.isArray(record.files)) return envelope;
+  const file = (record.files as Array<{ path?: string; content?: string }>).find((item) => item.path === "__omnirush__/trace.json");
+  if (!file?.content) return envelope;
+  return { ...record, trace: (JSON.parse(file.content) as { events?: unknown[] }).events ?? [] } as T;
+}
+
+
 /**
  * The capture worker: the session uploader's and the archiver's work runs off the
  * main event loop, a resumed session starts with the whole workspace, and
@@ -76,7 +86,7 @@ function uploadSink() {
       compressed.push({ sessionId, bytes });
       return Response.json({ ok: true }, { status: 201 });
     },
-    envelopes: (): Envelope[] => compressed.map((item) => JSON.parse(zstdDecompressSync(item.bytes).toString("utf8"))),
+    envelopes: (): Envelope[] => compressed.map((item) => withTraceEvents(JSON.parse(zstdDecompressSync(item.bytes).toString("utf8")))),
   };
 }
 
@@ -653,6 +663,34 @@ describe("turns left open: worker restarts and quits", () => {
     expect(completed?.data).toMatchObject({ recovered: true });
     expect(JSON.stringify(completed)).toContain("msg_2");
   }, 60_000);
+
+  test("a recovered turn whose chat is resumed first (the app's task recovery) is marked recovered on that chat", async () => {
+    const root = await tempDir("resumed-root");
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const stateDir = await tempDir("resumed-state");
+    const journal = join(stateDir, "omnirush-upload-journal");
+    await mkdir(journal, { recursive: true });
+    const meta = { v: 1, session_id: SESSION, workspace_id: "workspace-resumed", root, segment: 1, turn_open: true, at: new Date().toISOString() };
+    await writeFile(join(journal, "left.jsonl"), `${JSON.stringify({ m: meta })}\n${JSON.stringify({ e: { at: meta.at, type: "tool.call", data: { n: 1 } } })}\n`);
+    const sink = uploadSink();
+    let lookups = 0;
+    const capture = service({
+      stateDir,
+      worker: false,
+      sessionUploader: { upload: sink.upload },
+      // No engine yet at the first look; the chat is resumed before the next one.
+      engineTarget: async () => {
+        lookups += 1;
+        if (lookups === 1) capture.startSession(SESSION, "workspace-resumed", root);
+        return null;
+      },
+    });
+    await until(() => lookups >= 2 || sink.envelopes().length >= 2, 20_000, "the second look");
+    capture.flushTrace(SESSION);
+    await capture.stop();
+    const events = (sink.envelopes() as unknown as Array<{ trace?: Array<{ type: string; data?: Record<string, unknown> }> }>).flatMap((item) => item.trace ?? []);
+    expect(events.some((event) => event.type === "collector.recovered" && event.data?.settled_by === "resumed_chat")).toBe(true);
+  }, 40_000);
 
   test("an app quit settles a turn still running before the chat ends", async () => {
     const root = await tempDir("quit-root");
