@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIMessage } from "ai";
 import type { OmniRushSessionStatus } from "@omnirush/types/desktop-ipc";
-import { AlertTriangle, CircleCheck, CircleX, Star, X } from "lucide-react";
+import { AlertTriangle, CircleCheck, CircleX, Star } from "lucide-react";
 
 import {
   AlertDialog,
@@ -15,7 +15,6 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
@@ -30,29 +29,22 @@ import {
   FINISH_GUARD_TITLE,
   GOOD_SESSION_GUIDE,
   GOOD_SESSION_GUIDE_LINK,
-  GOOD_SESSION_WSL_TIP,
   NUDGE_TITLE,
   TURN_GUARD_DETAIL,
   TURN_GUARD_QUIT,
   TURN_GUARD_TITLE,
   TURN_GUARD_WAIT,
-  WSL_BANNER_DISMISSED_KEY,
-  WSL_BANNER_TEXT,
-  WSL_GUIDE_URL,
   autoRetryMessage,
   checklistHeading,
   finishGuardKind,
   goodSessionChecklist,
   goodSessionNudge,
   messageFacts,
-  localDay,
   oneMoreTurnHint,
   serverStatusUsable,
   sessionStatusPollMs,
   shouldNudge,
   shownChecklist,
-  showWslBanner,
-  windowsNotCounted,
   type FinishGuardKind,
   type GoodSessionCheck,
   type GoodSessionTone,
@@ -64,26 +56,17 @@ import {
 } from "../../../app/lib/good-session-integrity";
 import type { OmniRushGoodSession, OmniRushServerClient } from "../../../app/lib/omnirush-server";
 import { readPref, useAccountQuality, writePref } from "../../../app/lib/quality";
-import { isDesktopRuntime, isWindowsPlatform } from "../../../app/utils";
+import { isDesktopRuntime } from "../../../app/utils";
 import { hasLiveSessionActivity, useSessionActivityStore } from "../session/status/session-activity-store";
 
-/** Native Windows (the app itself; there is no WSL desktop build). The e2e hook forces it on Linux. */
-export function isNativeWindowsHost(): boolean {
-  if (typeof window !== "undefined" && window.__OMNIRUSH_ELECTRON__?.meta?.forceNativeWindows === true) return true;
-  return isWindowsPlatform();
-}
-
-/** The four steps, plus the WSL tip unless the server counts native Windows (`windowsCounts`). */
-export function GoodSessionGuide({ className, windowsCounts = false }: { className?: string; windowsCounts?: boolean }) {
+/** The four steps (native Windows, macOS and Linux alike). */
+export function GoodSessionGuide({ className }: { className?: string }) {
   return (
     <div className={cn("text-xs", className)} data-testid="good-session-guide">
       <p className="font-medium text-foreground">{GOOD_SESSION_GUIDE_LINK}</p>
       <ol className="mt-1 list-decimal space-y-0.5 ps-4 leading-5 text-muted-foreground marker:text-muted-foreground/60">
         {GOOD_SESSION_GUIDE.map((step) => <li key={step}>{step}</li>)}
       </ol>
-      {windowsCounts ? null : (
-        <p className="mt-1 leading-5 text-muted-foreground" data-testid="good-session-wsl-tip">{GOOD_SESSION_WSL_TIP}</p>
-      )}
     </div>
   );
 }
@@ -340,16 +323,13 @@ function useServerGood(sessionId: string, ask: boolean): boolean {
  * missing.
  */
 export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
-  const windowsCounts = useAccountQuality()?.windowsCounts === true;
-  const nativeWindows = useMemo(() => isNativeWindowsHost(), []);
   const facts = useMemo(() => messageFacts(props.messages), [props.messages]);
   const local = useMemo(() => goodSessionChecklist({
     ...facts,
     workspaceRoot: props.workspaceRoot,
     isRemoteWorkspace: props.isRemoteWorkspace,
     turnRunning: props.turnRunning,
-    nativeWindows: windowsNotCounted({ nativeWindows, windowsCounts }),
-  }), [facts, nativeWindows, props.isRemoteWorkspace, props.turnRunning, props.workspaceRoot, windowsCounts]);
+  }), [facts, props.isRemoteWorkspace, props.turnRunning, props.workspaceRoot]);
   const hasPrompt = props.messages.some((message) => message.role === "user");
   const server = useServerSessionStatus(props.sessionId, hasPrompt, props.turnRunning);
   const goodSession = useGoodSession(props.client, props.sessionId, hasPrompt, props.turnRunning, facts.endedAt);
@@ -512,64 +492,9 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
             {GOOD_SESSION_GUIDE_LINK}
           </PopoverTrigger>
           <PopoverContent side="top" align="end" className="w-72 gap-2 rounded-2xl p-3">
-            <GoodSessionGuide windowsCounts={windowsCounts} />
+            <GoodSessionGuide />
           </PopoverContent>
         </Popover>
-      </div>
-    </div>
-  );
-}
-
-/**
- * "Sessions from native Windows don't count as Good sessions. Switch to WSL":
- * dismissible, back the next day; none while the server counts native Windows.
- */
-export function WslBanner({ className }: { className?: string }) {
-  const windowsCounts = useAccountQuality()?.windowsCounts === true;
-  const nativeWindows = useMemo(() => isNativeWindowsHost(), []);
-  const [dismissedDay, setDismissedDay] = useState(() => readPref(WSL_BANNER_DISMISSED_KEY));
-  // Comes back on the next day even when the app stays open.
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 60 * 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  if (!showWslBanner({ nativeWindows, windowsCounts, dismissedDay, now })) return null;
-  const dismiss = () => {
-    const day = localDay();
-    writePref(WSL_BANNER_DISMISSED_KEY, day);
-    setDismissedDay(day);
-  };
-  return (
-    <div className={cn("px-4 max-lg:px-3 lg:px-8", className)}>
-      <div
-        role="status"
-        data-testid="good-session-wsl-banner"
-        className="mx-auto mb-2 flex max-w-[800px] items-center gap-2 rounded-lg border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-xs text-amber-11"
-      >
-        <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 flex-1">
-          {WSL_BANNER_TEXT}{" "}
-          <button
-            type="button"
-            data-testid="good-session-wsl-link"
-            className="font-medium underline underline-offset-2 hover:text-amber-12"
-            onClick={() => void openDesktopUrl(WSL_GUIDE_URL).catch(() => undefined)}
-          >
-            Open the WSL guide
-          </button>
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Dismiss"
-          data-testid="good-session-wsl-dismiss"
-          onClick={dismiss}
-          className="-me-1 text-amber-11 hover:text-amber-12"
-        >
-          <X />
-        </Button>
       </div>
     </div>
   );

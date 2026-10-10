@@ -26,7 +26,6 @@ import {
   isCodePath,
   isHomeFolder,
   leavingRunningTurn,
-  localDay,
   messageFacts,
   oneMoreTurnHint,
   outsideProject,
@@ -36,9 +35,7 @@ import {
   shellWrites,
   shouldNudge,
   shownChecklist,
-  showWslBanner,
   startsServer,
-  windowsNotCounted,
   writtenLines,
 } from "../src/app/lib/good-session";
 import { GoodSessionGuide } from "../src/react-app/domains/quality/good-session";
@@ -66,14 +63,12 @@ function transcript(...assistantParts: unknown[][]): UIMessage[] {
   return messages;
 }
 
-function states(messages: UIMessage[], options: { turnRunning?: boolean; nativeWindows?: boolean; windowsCounts?: boolean; root?: string; serverGood?: boolean; remote?: boolean } = {}) {
+function states(messages: UIMessage[], options: { turnRunning?: boolean; root?: string; serverGood?: boolean; remote?: boolean } = {}) {
   const result = goodSessionChecklist({
     ...messageFacts(messages),
     workspaceRoot: options.root ?? ROOT,
     isRemoteWorkspace: options.remote ?? false,
     turnRunning: options.turnRunning ?? false,
-    // As the checklist bar passes it.
-    nativeWindows: windowsNotCounted({ nativeWindows: options.nativeWindows ?? false, windowsCounts: options.windowsCounts }),
     serverGood: options.serverGood ?? false,
   });
   return { result, by: Object.fromEntries(result.checks.map((check) => [check.id, check.state])) };
@@ -294,20 +289,9 @@ describe("the live checklist", () => {
     expect(states(unanswered).result.checks.find((check) => check.id === "finished")?.label).toBe("last turn cut off");
   });
 
-  test("native Windows adds a failing check; WSL (Linux) does not", () => {
+  test("native Windows counts like macOS and Linux: no Windows check, on track", () => {
     const messages = transcript([...realWork(), tool("bash", { command: "npm test" })]);
-    const windows = states(messages, { nativeWindows: true });
-    expect(windows.by.windows).toBe("fail");
-    expect(windows.result.verdict).toBe("incomplete");
-    expect(windows.result.text).toContain("native Windows ✗");
-    expect(states(messages).by.windows).toBeUndefined();
-    // An older server sends no `windows_counts`; false is the same.
-    expect(states(messages, { nativeWindows: true, windowsCounts: false }).by.windows).toBe("fail");
-  });
-
-  test("while the server counts native Windows (windows_counts), there is no Windows check: on track", () => {
-    const messages = transcript([...realWork(), tool("bash", { command: "npm test" })]);
-    const counted = states(messages, { nativeWindows: true, windowsCounts: true });
+    const counted = states(messages);
     expect(counted.by.windows).toBeUndefined();
     expect(counted.result.verdict).toBe("on-track");
     expect(counted.result.text).toBe(`${GOOD_SESSION_ON_TRACK}: code changed ✓ · ran/tested ✓ · in project ✓ · turn finished ✓`);
@@ -372,7 +356,7 @@ describe("the nudge", () => {
 
   test("says what is missing, gently", () => {
     const nudge = goodSessionNudge(missing);
-    expect(nudge?.title).toBe("Not a Good session ★ yet");
+    expect(nudge?.title).toBe("Not a Good session yet");
     expect(nudge?.body).toContain("run its tests");
   });
 });
@@ -409,7 +393,7 @@ describe("the don't-leave-mid-turn guard", () => {
   });
 });
 
-describe("wording, the guide and the WSL banner", () => {
+describe("wording and the guide", () => {
   test("server texts read Good session ★", () => {
     expect(goodSessionWording("Only replay-ready ★ sessions earn spins: a complete project")).toBe("Only Good sessions ★ earn spins: a complete project");
     expect(goodSessionWording("+1 spin per replay-ready ★ session")).toBe("+1 spin per Good session ★");
@@ -418,7 +402,7 @@ describe("wording, the guide and the WSL banner", () => {
     expect(goodSessionWording(null)).toBeNull();
   });
 
-  test("the guide has the four steps and the WSL tip", () => {
+  test("the guide has the four steps and no WSL tip", () => {
     expect([...GOOD_SESSION_GUIDE]).toEqual([
       "Work inside your project folder.",
       "Build or change real code.",
@@ -427,24 +411,8 @@ describe("wording, the guide and the WSL banner", () => {
     ]);
     const html = renderToStaticMarkup(<GoodSessionGuide />);
     expect(html).toContain("How to make a Good session");
-    expect(html).toContain("On Windows? Use WSL.");
+    expect(html).not.toMatch(/WSL|native Windows/);
     expect(html.match(/<li>/g)?.length).toBe(4);
-    // While the server counts native Windows: the four steps, no WSL tip.
-    const counted = renderToStaticMarkup(<GoodSessionGuide windowsCounts />);
-    expect(counted).not.toContain("On Windows? Use WSL.");
-    expect(counted.match(/<li>/g)?.length).toBe(4);
-  });
-
-  test("the WSL banner: native Windows only, dismissed for the day, back the next day", () => {
-    const now = new Date(2026, 9, 6, 15, 0);
-    expect(localDay(now)).toBe("2026-10-06");
-    expect(showWslBanner({ nativeWindows: true, dismissedDay: null, now })).toBe(true);
-    expect(showWslBanner({ nativeWindows: true, dismissedDay: "2026-10-06", now })).toBe(false);
-    expect(showWslBanner({ nativeWindows: true, dismissedDay: "2026-10-06", now: new Date(2026, 9, 7, 9, 0) })).toBe(true);
-    expect(showWslBanner({ nativeWindows: false, dismissedDay: null, now })).toBe(false);
-    // None while the server counts native Windows; back when it stops.
-    expect(showWslBanner({ nativeWindows: true, windowsCounts: true, dismissedDay: null, now })).toBe(false);
-    expect(showWslBanner({ nativeWindows: true, windowsCounts: false, dismissedDay: null, now })).toBe(true);
   });
 
   test("checklistText marks pending checks without a tick", () => {

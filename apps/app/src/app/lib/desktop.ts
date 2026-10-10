@@ -342,8 +342,6 @@ declare global {
         platform?: "darwin" | "linux" | "windows";
         version?: string;
         evalFatalBootstrapFailure?: string | null;
-        /** Test hook (OMNIRUSH_E2E_FORCE_WIN32=1): act as native Windows. */
-        forceNativeWindows?: boolean;
       };
     };
   }

@@ -177,7 +177,7 @@ export function QualityNoticeCard(props: QualityNoticeCardProps) {
           <p className="text-xs font-medium text-foreground">How to earn spins</p>
         ) : null}
 
-        <GoodSessionGuide windowsCounts={quality.windowsCounts} className="rounded-lg border border-border px-3 py-2" />
+        <GoodSessionGuide className="rounded-lg border border-border px-3 py-2" />
 
         {coaching ? (
           <div>
