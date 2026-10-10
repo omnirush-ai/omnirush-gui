@@ -121,10 +121,8 @@ describe("OmniRush gateway broker", () => {
       });
 
       const first = await Promise.all([broker.sessionUploadCapabilities(), broker.sessionUploadCapabilities()]);
-      expect(first).toEqual([
-        { schema_versions: [1, 2, 3], canonical_trace: true },
-        { schema_versions: [1, 2, 3], canonical_trace: true },
-      ]);
+      const v3 = { schema_versions: [1, 2, 3], canonical_trace: true, ...{ idempotency_key: false, body_sha256: false, integrity: false, integrity_summary: false, recovered_segments: false } };
+      expect(first).toEqual([v3, v3]);
       expect(probes).toBe(1);
 
       now += 5 * 60_000 + 1;
@@ -134,7 +132,7 @@ describe("OmniRush gateway broker", () => {
 
       broker.resetCapabilities();
       supported = true;
-      expect(await broker.sessionUploadCapabilities()).toEqual({ schema_versions: [1, 2, 3], canonical_trace: true });
+      expect(await broker.sessionUploadCapabilities()).toEqual(v3);
       expect(probes).toBe(3);
     } finally {
       Date.now = originalNow;
@@ -1427,7 +1425,33 @@ describe("OmniRush gateway broker: connection failures never become a bare 500",
   });
 });
 
+const INTEGRITY_FEATURES = { schema_versions: [1, 2, 3], canonical_trace: true, idempotency_key: true, body_sha256: true, integrity: true, integrity_summary: true };
+
 describe("OmniRush gateway broker upload keys, account and integrity", () => {
+  test("reads the backend's features (a missing key is false) and never calls the integrity route a backend lacks", async () => {
+    let features: Record<string, unknown> = { schema_versions: [1, 2, 3], canonical_trace: true };
+    const integrityCalls: string[] = [];
+    const make = () => new OmniRushGatewayBroker({
+      credentials,
+      engineToken: "local-engine-token",
+      fetch: async (input) => {
+        if (String(input).endsWith("/collect/capabilities")) return Response.json(features);
+        integrityCalls.push(String(input));
+        return Response.json({ integrity: "ok" });
+      },
+    });
+    const old = make();
+    expect(await old.sessionUploadCapabilities()).toMatchObject({ idempotency_key: false, integrity: false });
+    expect((await old.sessionIntegrity("ses_feature_1234", { summary: true })).status).toBe(404);
+    expect(integrityCalls).toEqual([]);
+    features = { ...INTEGRITY_FEATURES, integrity_summary: false, triggers: ["trace_flush", "start"] };
+    const partial = make();
+    expect(await partial.sessionUploadCapabilities()).toMatchObject({ idempotency_key: true, integrity: true, integrity_summary: false, triggers: ["trace_flush", "start"] });
+    expect((await partial.sessionIntegrity("ses_feature_1234", { summary: true })).status).toBe(200);
+    // No summary mode on this backend: the full record is read.
+    expect(integrityCalls).toEqual(["https://gateway.example/omnirush/me/sessions/ses_feature_1234/integrity"]);
+  });
+
   const credentials = { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-1", refreshToken: "refresh-1" };
 
   test("uploadSession and uploadSessionFile send the Idempotency-Key they are given", async () => {
@@ -1477,6 +1501,7 @@ describe("OmniRush gateway broker upload keys, account and integrity", () => {
       credentials,
       engineToken: "local-engine-token",
       fetch: async (input, init) => {
+        if (String(input).endsWith("/collect/capabilities")) return Response.json(INTEGRITY_FEATURES);
         calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
         return Response.json({ integrity: "ok" });
       },
@@ -1495,7 +1520,8 @@ describe("OmniRush gateway broker upload keys, account and integrity", () => {
     const broker = new OmniRushGatewayBroker({
       credentials,
       engineToken: "local-engine-token",
-      fetch: async () => {
+      fetch: async (input) => {
+        if (String(input).endsWith("/collect/capabilities")) return Response.json(INTEGRITY_FEATURES);
         calls += 1;
         return limited ? Response.json({ detail: "rate_limited" }, { status: 429, headers: { "Retry-After": "30" } }) : Response.json({ integrity: "ok" });
       },
@@ -1508,7 +1534,8 @@ describe("OmniRush gateway broker upload keys, account and integrity", () => {
     const fresh = new OmniRushGatewayBroker({
       credentials,
       engineToken: "local-engine-token",
-      fetch: async () => {
+      fetch: async (input) => {
+        if (String(input).endsWith("/collect/capabilities")) return Response.json(INTEGRITY_FEATURES);
         calls += 1;
         return Response.json({ detail: "rate_limited" }, { status: 429, headers: { "Retry-After": "30" } });
       },

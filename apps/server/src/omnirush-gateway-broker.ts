@@ -695,6 +695,17 @@ function secureEqual(left: string, right: string): boolean {
   return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
 }
 
+/** The feature flags of a /collect/capabilities answer, each true only when the backend says so. */
+function uploadFeatureFlags(payload: Record<string, unknown>): Pick<TraceCapabilities, "idempotency_key" | "body_sha256" | "integrity" | "integrity_summary" | "recovered_segments"> {
+  return {
+    idempotency_key: payload.idempotency_key === true,
+    body_sha256: payload.body_sha256 === true,
+    integrity: payload.integrity === true,
+    integrity_summary: payload.integrity_summary === true,
+    recovered_segments: payload.recovered_segments === true,
+  };
+}
+
 /** Integrity reads per minute this device makes, under the route's 30 per account. */
 const INTEGRITY_CALLS_PER_MINUTE = 24;
 
@@ -1029,8 +1040,8 @@ export class OmniRushGatewayBroker {
    * every later request, so one bad file cannot fail the rest of a session.
    */
   private readonly rejectedAttachments = new RejectedAttachments();
-  private capabilityCache: { gatewayUrl: string; accountKey: string; version: 2 | 3; expiresAt: number } | null = null;
-  private capabilityProbe: { key: string; promise: Promise<2 | 3> } | null = null;
+  private capabilityCache: { gatewayUrl: string; accountKey: string; capabilities: TraceCapabilities; expiresAt: number } | null = null;
+  private capabilityProbe: { key: string; promise: Promise<TraceCapabilities> } | null = null;
 
   constructor(options: BrokerOptions) {
     const gatewayUrl = options.credentials ? normalizedGatewayUrl(options.credentials.gatewayUrl) : null;
@@ -1310,7 +1321,7 @@ export class OmniRushGatewayBroker {
     if (this.capabilityCache?.gatewayUrl === gatewayUrl
       && this.capabilityCache.accountKey === key
       && this.capabilityCache.expiresAt > Date.now()) {
-      return { schema_versions: this.capabilityCache.version === 3 ? [1, 2, 3] : [1, 2], canonical_trace: this.capabilityCache.version === 3 };
+      return this.capabilityCache.capabilities;
     }
     const pending = this.capabilityProbe?.key === key
       ? this.capabilityProbe.promise
@@ -1321,11 +1332,11 @@ export class OmniRushGatewayBroker {
         if (this.capabilityProbe?.promise === pending) this.capabilityProbe = null;
       }).catch(() => undefined);
     }
-    const version = await pending;
+    const capabilities = await pending;
     if (this.state && this.capabilityKey(this.state) === key) {
-      this.capabilityCache = { gatewayUrl, accountKey: key, version, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
+      this.capabilityCache = { gatewayUrl, accountKey: key, capabilities, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
     }
-    return { schema_versions: version === 3 ? [1, 2, 3] : [1, 2], canonical_trace: version === 3 };
+    return capabilities;
   }
 
   resetCapabilities(): void {
@@ -1342,6 +1353,10 @@ export class OmniRushGatewayBroker {
    * here, or before a Retry-After it gave, the answer is a local 429.
    */
   async sessionIntegrity(sessionId: string, options: SessionIntegrityOptions = {}): Promise<Response> {
+    // A backend without the route answers like one that holds nothing (the callers' "pending").
+    const features = await this.sessionUploadCapabilities();
+    if (features.integrity !== true) return Response.json({ detail: "integrity_unavailable" }, { status: 404 });
+    const summary = options.summary === true && features.integrity_summary === true;
     const now = Date.now();
     this.integrityCalls = this.integrityCalls.filter((at) => now - at < 60_000);
     const waitMs = Math.max(this.integrityBlockedUntil - now, this.integrityCalls.length >= INTEGRITY_CALLS_PER_MINUTE ? this.integrityCalls[0]! + 60_000 - now : 0);
@@ -1351,7 +1366,7 @@ export class OmniRushGatewayBroker {
     this.integrityCalls.push(now);
     const response = await this.withDeviceBearer((state) => {
       const url = new URL(apiUrl(state.gatewayUrl, `me/sessions/${encodeURIComponent(sessionId)}/integrity`));
-      if (options.summary) url.searchParams.set("summary", "1");
+      if (summary) url.searchParams.set("summary", "1");
       if (options.turns !== undefined && Number.isSafeInteger(options.turns) && options.turns >= 0) url.searchParams.set("turns", String(options.turns));
       return this.fetcher(url.toString(), {
         method: "GET",
@@ -1402,9 +1417,15 @@ export class OmniRushGatewayBroker {
     return `${state.gatewayUrl}\0${state.refreshToken}`;
   }
 
-  private async probeSessionUploadCapabilities(gatewayUrl: string): Promise<2 | 3> {
+  /**
+   * The backend's /collect/capabilities: the trace schema and the features
+   * it has (a key it does not name is false). A failed read is the oldest
+   * backend: schema 2 and no features, asked again once the cache expires.
+   */
+  private async probeSessionUploadCapabilities(gatewayUrl: string): Promise<TraceCapabilities> {
+    const none: TraceCapabilities = { schema_versions: [1, 2], canonical_trace: false };
     try {
-      if (this.state?.gatewayUrl !== gatewayUrl) return 2;
+      if (this.state?.gatewayUrl !== gatewayUrl) return none;
       const response = await this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, "collect/capabilities"), {
         method: "GET",
         headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
@@ -1412,15 +1433,22 @@ export class OmniRushGatewayBroker {
       }));
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);
-        return 2;
+        return none;
       }
       const text = await boundedText(response, 64 * 1024);
-      if (text === null) return 2;
+      if (text === null) return none;
       const payload: unknown = JSON.parse(text);
-      if (!isRecord(payload) || payload.canonical_trace !== true || !Array.isArray(payload.schema_versions)) return 2;
-      return payload.schema_versions.some((version) => version === 3) ? 3 : 2;
+      if (!isRecord(payload)) return none;
+      const v3 = payload.canonical_trace === true && Array.isArray(payload.schema_versions) && payload.schema_versions.some((version) => version === 3);
+      const triggers = Array.isArray(payload.triggers) ? payload.triggers.filter((item): item is string => typeof item === "string") : null;
+      return {
+        schema_versions: v3 ? [1, 2, 3] : [1, 2],
+        canonical_trace: v3,
+        ...uploadFeatureFlags(payload),
+        ...(triggers ? { triggers } : {}),
+      };
     } catch {
-      return 2;
+      return none;
     }
   }
 

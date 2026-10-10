@@ -719,7 +719,16 @@ type SessionUploaderOptions = {
 export type TraceCapabilities = {
   schema_versions: number[];
   canonical_trace: boolean;
+  /** Features of /collect/capabilities: a key the backend does not send is false. */
+  idempotency_key?: boolean;
+  body_sha256?: boolean;
+  integrity?: boolean;
+  integrity_summary?: boolean;
+  recovered_segments?: boolean;
+  /** The upload triggers the backend takes, when it lists them. */
+  triggers?: string[];
 };
+
 
 type TransmitOutcome =
   | { ok: true }
@@ -4322,6 +4331,10 @@ export function serverSessionPosition(payload: unknown): { segment: number; sequ
   return found ? { segment, sequence } : null;
 }
 
+/** The /collect features this client uses; without a capability answer, none. */
+type UploadFeatures = { idempotencyKey: boolean; integrity: boolean };
+const NO_UPLOAD_FEATURES: UploadFeatures = { idempotencyKey: false, integrity: false };
+
 /** What a /collect upload carries besides its body. */
 export type UploadRequestOptions = { idempotencyKey?: string };
 
@@ -4411,7 +4424,7 @@ export class SessionUploader {
   private readonly onBinaryFile?: (sessionId: string, path: string) => void;
   private readonly fileUploader?: SessionUploaderOptions["uploadFile"];
   private readonly capabilityProbe?: SessionUploaderOptions["capabilities"];
-  private traceSchemaCache: { version: 2 | 3; expiresAt: number } | null = null;
+  private traceSchemaCache: { version: 2 | 3; features: UploadFeatures; expiresAt: number } | null = null;
   private traceSchemaProbe: Promise<2 | 3> | null = null;
   /** Work counters for tests and profiling. */
   readonly metrics: UploadMetrics = freshMetrics();
@@ -4624,7 +4637,7 @@ export class SessionUploader {
    * say (offline, an older backend).
    */
   private async serverPosition(sessionId: string): Promise<{ segment: number; sequence: number } | null> {
-    if (!this.sessionIntegrity) return null;
+    if (!this.sessionIntegrity || !(await this.uploadFeatures()).integrity) return null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const response = await Promise.race([
@@ -4770,6 +4783,7 @@ export class SessionUploader {
     if (this.traceSchemaProbe) return this.traceSchemaProbe;
     this.traceSchemaProbe = (async () => {
       let version: 2 | 3 = 2;
+      let features: UploadFeatures = NO_UPLOAD_FEATURES;
       if (this.capabilityProbe) {
         try {
           const capabilities = await this.capabilityProbe();
@@ -4778,11 +4792,12 @@ export class SessionUploader {
             && capabilities.schema_versions.includes(TRACE_SCHEMA_VERSION)
             ? 3
             : 2;
+          features = { idempotencyKey: capabilities.idempotency_key === true, integrity: capabilities.integrity === true };
         } catch {
           version = 2;
         }
       }
-      this.traceSchemaCache = { version, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
+      this.traceSchemaCache = { version, features, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
       return version;
     })().finally(() => {
       this.traceSchemaProbe = null;
@@ -4791,7 +4806,13 @@ export class SessionUploader {
   }
 
   private downgradeTraceSchema(): void {
-    this.traceSchemaCache = { version: 2, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
+    this.traceSchemaCache = { version: 2, features: this.traceSchemaCache?.features ?? NO_UPLOAD_FEATURES, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
+  }
+
+  /** What the backend's /collect takes beyond the envelope (Idempotency-Key, the integrity route), asked with the trace schema. */
+  private async uploadFeatures(): Promise<UploadFeatures> {
+    await this.negotiatedTraceSchema();
+    return this.traceSchemaCache?.features ?? NO_UPLOAD_FEATURES;
   }
 
   startSession(sessionId: string, workspaceId: string, root: string): void {
@@ -6377,7 +6398,8 @@ export class SessionUploader {
     let refreshAttempted = false;
     let resentForHash = false;
     let attempt = 0;
-    const request: UploadRequestOptions = check.idempotencyKey ? { idempotencyKey: check.idempotencyKey } : {};
+    // The key goes out (and its 400/409 answers mean something) only where the backend takes it.
+    const request: UploadRequestOptions = check.idempotencyKey && (await this.uploadFeatures()).idempotencyKey ? { idempotencyKey: check.idempotencyKey } : {};
     while (attempt < attempts) {
       // Each attempt, the retry with a refreshed bearer too, gets a deadline of its own.
       const deadline = AbortSignal.timeout(timeoutMs);
@@ -6421,7 +6443,7 @@ export class SessionUploader {
           return { ok: false, retryable: false, reason: lastReason, unsupportedSchema: true };
         }
         // The server holds other bytes under this key: final for this envelope.
-        if (response.status === 409) {
+        if (response.status === 409 && request.idempotencyKey) {
           const keyReused = (await boundedResponseText(response)).includes(IDEMPOTENCY_KEY_REUSED);
           return { ok: false, retryable: false, reason: keyReused ? `${lastReason} (${IDEMPOTENCY_KEY_REUSED})` : lastReason, ...(keyReused ? { keyReused } : {}) };
         }
