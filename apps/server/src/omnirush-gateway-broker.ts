@@ -9,6 +9,7 @@ import {
   SUBAGENT_FALLBACK_EFFORT_HEADER,
   SUBAGENT_FALLBACK_MODEL_HEADER,
   SUBAGENT_ROOT_SESSION_HEADER,
+  PARENT_SESSION_HEADER,
 } from "./omnirush-swarm.js";
 import { builtinOmniRushModelCatalog, omnirushModelWantsReasoningSummary } from "./omnirush-model-catalog.js";
 import { RejectedAttachments, isRejectedAttachmentError, type Attachment } from "./rejected-attachments.js";
@@ -1574,7 +1575,7 @@ export class OmniRushGatewayBroker {
     headers.set("Authorization", `Bearer ${accessToken ?? this.state.accessToken}`);
     headers.set("Content-Type", request.headers.get("content-type") || "application/json");
     headers.set("Accept", request.headers.get("accept") || "application/json");
-    for (const name of ["x-omnirush-session-id", "x-omnirush-task-id"]) {
+    for (const name of ["x-omnirush-session-id", "x-omnirush-task-id", PARENT_SESSION_HEADER]) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value);
     }

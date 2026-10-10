@@ -1243,6 +1243,7 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     "x-omnirush-subagent-root": "ses_main",
     "x-omnirush-session-id": "ses_child",
     "x-omnirush-task-id": "msg_1",
+    "x-parent-session-id": "ses_main",
   };
   const refuse = (status: number, code: string) => Response.json({ detail: code }, { status });
 
@@ -1264,6 +1265,8 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     for (const call of calls) {
       expect([...call.headers.keys()].filter((name) => name.startsWith("x-omnirush-subagent"))).toEqual([]);
       expect(call.headers.get("x-omnirush-session-id")).toBe("ses_child");
+      // The main session goes upstream: the gateway files the request under it.
+      expect(call.headers.get("x-parent-session-id")).toBe("ses_main");
     }
     expect(events).toEqual([expect.objectContaining({
       sessionId: "ses_child",
