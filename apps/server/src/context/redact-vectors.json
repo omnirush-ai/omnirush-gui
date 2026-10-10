@@ -267,6 +267,73 @@
    "name": "token after escaped newline",
    "input": "line\\ngh⟨+⟩p_b4z0PMbDeCxAqT4kiRhFv5FnMXlMWbiohfGV",
    "expect": "line\\n[REDACTED]"
+  },
+  {
+   "name": "code expression kept",
+   "input": "const token = response.data?.[TOKEN_FIELD]",
+   "expect": "const token = response.data?.[TOKEN_FIELD]"
+  },
+  {
+   "name": "quoted dotted name kept",
+   "input": "const x = { token: \"settings.token\" }",
+   "expect": "const x = { token: \"settings.token\" }"
+  },
+  {
+   "name": "constant name kept",
+   "input": "client(api_key_env=\"OPENAI_API_KEY\")",
+   "expect": "client(api_key_env=\"OPENAI_API_KEY\")"
+  },
+  {
+   "name": "jsx expression kept",
+   "input": "<Client apiKey={apiKey} secret={props.clientSecret} />",
+   "expect": "<Client apiKey={apiKey} secret={props.clientSecret} />"
+  },
+  {
+   "name": "call argument kept",
+   "input": "OpenAI(api_key=settings.OPENAI_API_KEY)",
+   "expect": "OpenAI(api_key=settings.OPENAI_API_KEY)"
+  },
+  {
+   "name": "dashed words kept",
+   "input": "login({ username: 'admin-user', password: 'demo-password-reset' })",
+   "expect": "login({ username: 'admin-user', password: 'demo-password-reset' })"
+  },
+  {
+   "name": "template braces kept",
+   "input": "headers += f\"Authorization: {auth_header_value}\"",
+   "expect": "headers += f\"Authorization: {auth_header_value}\""
+  },
+  {
+   "name": "strong password kept out",
+   "input": "DB_PASSWORD = 'Tr0ub4dor&3-horse!'",
+   "expect": "DB_PASSWORD = '[REDACTED]'"
+  },
+  {
+   "name": "long mixed-case literal",
+   "input": "client_secret: \"tMSXumEUddzLinslpqaTvtBKRiKG\"",
+   "expect": "client_secret: \"[REDACTED]\""
+  },
+  {
+   "name": "value on the line after its label",
+   "input": "Keys for the demo\nAPI_KEY:\nT7NT4WVI4P0F9L7B9222LGV4TMQ\nUse it once.",
+   "expect": "Keys for the demo\nAPI_KEY:\n[REDACTED]\nUse it once.",
+   "context": "notes.txt"
+  },
+  {
+   "name": "markdown label then value",
+   "input": "**OpenAI API key:**\n`qFJOBNCEPquXOrK4zDVhNomPXW9rmphDvduwHcBE`\n",
+   "expect": null,
+   "same": true
+  },
+  {
+   "name": "label then prose kept",
+   "input": "password:\nask the admin for it\n",
+   "expect": "password:\nask the admin for it\n"
+  },
+  {
+   "name": "yaml mapping under a label kept",
+   "input": "token:\n  value: abcdefgh12345678\n",
+   "expect": "token:\n  value: abcdefgh12345678\n"
   }
  ]
 }
