@@ -197,6 +197,18 @@ export function isRetryableUploadStatus(status: number, retryAfter: number | nul
 const UNAUTHORIZED_STATUSES = new Set([401, 403]);
 /** The 409 detail for an Idempotency-Key the server already holds with other bytes. */
 const IDEMPOTENCY_KEY_REUSED = "idempotency_key_reused";
+/** Refused uploads remembered per chat (for explaining the server's gaps). */
+const MAX_REFUSED_SEQUENCES = 256;
+/** A chat is checked this long after its end snapshot went out (the server stores and judges it first). */
+const CONFIRM_AFTER_END_MS = 15_000;
+/** At launch, chats this recent that the server has not judged yet are checked again. */
+const CONFIRM_WINDOW_MS = 7 * 24 * 60 * 60_000;
+/** A pending answer is asked again after these waits, up to CONFIRM_PENDING_MS after the chat ended. */
+const CONFIRM_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 3 * 60 * 60_000, 6 * 60 * 60_000];
+const CONFIRM_PENDING_MS = 24 * 60 * 60_000;
+/** Launch checks go out one at a time, this far apart, and at most this many per launch. */
+const CONFIRM_LAUNCH_SPACING_MS = 5_000;
+const CONFIRM_LAUNCH_MAX = 20;
 /** How long a chat's first prompt waits to learn where the server's copy of it stands. */
 const SERVER_POSITION_TIMEOUT_MS = 5_000;
 const ACCOUNT_REQUIRED_MARKER = "omnirush_account_required";
@@ -412,6 +424,26 @@ type SessionLedgerRecord = {
   childSessionIds?: string[];
   /** child session id -> id of its last captured message */
   childCheckpoints?: Record<string, string>;
+  /** Where the chat ran, for a repair upload after it ended. */
+  workspaceId?: string;
+  root?: string;
+  /** "segment:sequence" of uploads the server refused for good: gaps it reports there are explained. */
+  refused?: string[];
+  /** When this chat's last segment ended (its end snapshot went out). */
+  endedAt?: string;
+  /** The server's word on the chat (GET /me/sessions/{id}/integrity). */
+  confirmation?: SessionConfirmation;
+};
+
+/** The integrity check's state for one chat: final once the server says good or not good. */
+type SessionConfirmation = {
+  verdict: "good" | "not_good" | "pending";
+  checkedAt: string;
+  checks: number;
+  /** Not asked again before this. */
+  nextAt?: string;
+  /** The transcript was re-sent from the engine (once per chat). */
+  repairedAt?: string;
 };
 
 type SessionLedger = {
@@ -565,6 +597,10 @@ type SessionState = {
   extras: Map<string, ExtraManifestEntry>;
   /** The numbering already moved past the server's once (an Idempotency-Key it held with other bytes). */
   repositioned?: boolean;
+  /** "segment:sequence" of uploads the server refused for good. */
+  refused: string[];
+  /** Set once the chat's end snapshot went out. */
+  endedAt?: string;
   /** Trace events not yet handed to an upload, as written to the chat's journal on disk. */
   journal: JournalState;
 };
@@ -656,6 +692,14 @@ type SessionUploaderOptions = {
    * turn from the engine's messages.
    */
   onRecoveredTurn?: (turn: RecoveredTurn) => void;
+  /**
+   * The server is missing parts of a chat no spooled upload will fill: the
+   * host reads its transcript from the engine (oldest first, in trace-sized
+   * parts), null when it cannot. Re-sent once per chat.
+   */
+  repairTranscript?: (chat: RecoveredTurn) => Promise<unknown[][] | null>;
+  /** Integrity checks of ended chats (after each end, and at launch for recent unconfirmed ones); on unless false. */
+  confirm?: boolean;
   /** GET /omnirush/me/sessions/{id}/integrity for this account (where the server's copy of a chat stands). */
   sessionIntegrity?: (sessionId: string, options?: { summary?: boolean; turns?: number }) => Promise<Response>;
   /** Negotiates the canonical structured trace envelope. Failures fall back to schema v2. */
@@ -2461,6 +2505,11 @@ async function readSessionLedger(path: string | null): Promise<SessionLedger> {
           ...(model ? { model } : {}),
           ...(childSessionIds.length > 0 ? { childSessionIds } : {}),
           ...(Object.keys(childCheckpoints).length > 0 ? { childCheckpoints } : {}),
+          ...(optionalString(record.workspaceId) ? { workspaceId: record.workspaceId } : {}),
+          ...(optionalString(record.root) ? { root: record.root } : {}),
+          ...(Array.isArray(record.refused) ? { refused: record.refused.filter((item): item is string => typeof item === "string").slice(-MAX_REFUSED_SEQUENCES) } : {}),
+          ...(optionalString(record.endedAt) ? { endedAt: record.endedAt } : {}),
+          ...(parseConfirmation(record.confirmation) ? { confirmation: parseConfirmation(record.confirmation)! } : {}),
         };
         return [[sessionId, cleaned] as const];
       }),
@@ -2469,6 +2518,42 @@ async function readSessionLedger(path: string | null): Promise<SessionLedger> {
   } catch {
     return { version: 1, sessions: {} };
   }
+}
+
+function parseConfirmation(value: unknown): SessionConfirmation | null {
+  if (!isRecord(value) || (value.verdict !== "good" && value.verdict !== "not_good" && value.verdict !== "pending")
+    || typeof value.checkedAt !== "string" || !Number.isSafeInteger(value.checks)) return null;
+  return {
+    verdict: value.verdict,
+    checkedAt: value.checkedAt,
+    checks: Number(value.checks),
+    ...(typeof value.nextAt === "string" ? { nextAt: value.nextAt } : {}),
+    ...(typeof value.repairedAt === "string" ? { repairedAt: value.repairedAt } : {}),
+  };
+}
+
+/**
+ * What an integrity answer says for the client: its verdict, and the
+ * sequence gaps no refusal recorded here explains ("segment:sequence"), plus
+ * whether the trace or a segment's start is missing outright.
+ */
+export function integrityFindings(payload: unknown, refused: readonly string[] = []): { verdict: "good" | "not_good" | "pending"; gaps: string[]; missing: boolean } | null {
+  if (!isRecord(payload)) return null;
+  const verdict = payload.good_session === true ? "good" : payload.good_session === false ? "not_good" : "pending";
+  const explained = new Set(refused);
+  const gaps: string[] = [];
+  for (const segment of Array.isArray(payload.segments) ? payload.segments : []) {
+    if (!isRecord(segment) || !Array.isArray(segment.gaps)) continue;
+    const number = Number.isSafeInteger(segment.segment) ? Number(segment.segment) : null;
+    for (const gap of segment.gaps) {
+      if (!Number.isSafeInteger(gap)) continue;
+      const key = `${number ?? "?"}:${gap}`;
+      if (!explained.has(key)) gaps.push(key);
+    }
+  }
+  const reasons = [...(Array.isArray(payload.reasons) ? payload.reasons : []), ...(Array.isArray(payload.good_session_reasons) ? payload.good_session_reasons : [])];
+  const missing = reasons.includes("no_trace") || reasons.includes("segment_start_missing");
+  return { verdict, gaps, missing };
 }
 
 type BoundedTraceBatch = { content: string; events: unknown[] };
@@ -4370,6 +4455,11 @@ export class SessionUploader {
   private readonly accountIdHook?: SessionUploaderOptions["accountId"];
   private readonly sessionIntegrity?: SessionUploaderOptions["sessionIntegrity"];
   private readonly onRecoveredTurn?: SessionUploaderOptions["onRecoveredTurn"];
+  private readonly repairTranscript?: SessionUploaderOptions["repairTranscript"];
+  private readonly confirmEnabled: boolean;
+  /** Integrity checks waiting, by chat. */
+  private readonly confirmTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly confirming = new Set<string>();
   /** Each live chat's journal of trace events (null without a state dir). */
   private readonly journalDir: string | null;
   /** The journals a previous process left, read at start; a chat's own start waits for its recovery. */
@@ -4466,6 +4556,8 @@ export class SessionUploader {
     this.accountIdHook = options.accountId;
     this.sessionIntegrity = options.sessionIntegrity;
     this.onRecoveredTurn = options.onRecoveredTurn;
+    this.repairTranscript = options.repairTranscript;
+    this.confirmEnabled = options.confirm !== false && Boolean(options.sessionIntegrity);
     this.snapshotMaxBytes = options.snapshotMaxBytes ?? MAX_SNAPSHOT_BYTES;
     this.minChangeIntervalMs = options.minChangeIntervalMs ?? MIN_UPLOAD_CHANGE_INTERVAL_MS;
     this.maxWatchedFiles = options.maxWatchedFiles ?? MAX_UPLOAD_WATCHED_FILES;
@@ -4494,6 +4586,8 @@ export class SessionUploader {
     if (this.spoolDir && this.enabled) this.scheduleRetry(this.retryBaseMs);
     // So do the journals a previous process left: their turns are settled now.
     this.journalsRead = this.enabled ? this.recoverJournals() : Promise.resolve();
+    // And the recent chats the server has not judged yet are asked about once that is done.
+    if (this.enabled && this.confirmEnabled) void this.journalsRead.then(() => this.confirmAtLaunch()).catch(() => undefined);
   }
 
   /** Capture context wired to this uploader: its trace, its scrub, the project archive and the archive's exclusions. */
@@ -4590,6 +4684,11 @@ export class SessionUploader {
       ...(state.model ? { model: state.model } : {}),
       ...(state.childSessionIds.length > 0 ? { childSessionIds: [...state.childSessionIds] } : {}),
       ...(state.childCheckpoints.size > 0 ? { childCheckpoints: Object.fromEntries(state.childCheckpoints) } : {}),
+      workspaceId: state.workspaceId,
+      root: state.root,
+      ...(state.refused.length > 0 ? { refused: state.refused.slice(-MAX_REFUSED_SEQUENCES) } : {}),
+      // A new segment is judged again once it ends.
+      ...(state.endedAt ? { endedAt: state.endedAt } : {}),
     };
   }
 
@@ -4613,6 +4712,9 @@ export class SessionUploader {
     state.failureCount = previous?.failureCount ?? 0;
     state.lastFailureAt = previous?.lastFailureAt;
     state.lastSuccessAt = previous?.lastSuccessAt;
+    state.refused = [...(previous?.refused ?? [])];
+    // A pending check of the chat's earlier segment is left to this segment's end.
+    this.cancelConfirm(state.id);
     // Events recorded before the ledger loaded take precedence over what the
     // previous segment left behind; nothing recorded so far is discarded.
     state.model = state.model ?? previous?.model ?? null;
@@ -4896,6 +4998,7 @@ export class SessionUploader {
       ready: Promise.resolve(),
       tail: Promise.resolve(),
       journal: { pending: [], timer: null, tail: Promise.resolve(), bytes: 0, full: false, off: false, ready: false },
+      refused: [],
     };
   }
 
@@ -5713,6 +5816,10 @@ export class SessionUploader {
       try {
         await this.uploadTrace(state, pendingTrace);
         await this.uploadWorkspace(state, "end", "session_end");
+        state.endedAt = new Date().toISOString();
+        await this.persistSession(state).catch(() => undefined);
+        // Once after a chat ends (not at quit: the next launch asks).
+        if (!this.stopped) this.scheduleConfirm(sessionId, CONFIRM_AFTER_END_MS);
       } finally {
         await this.journalRemove(state);
         this.releaseCache(state);
@@ -5763,6 +5870,8 @@ export class SessionUploader {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    for (const timer of this.confirmTimers.values()) clearTimeout(timer);
+    this.confirmTimers.clear();
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
@@ -6642,6 +6751,8 @@ export class SessionUploader {
       }
       if (!outcome.ok) {
         if ((!outcome.retryable || !this.spoolDir) && !account.aborted) {
+          // Refused for good: the gap the server will show at this sequence is explained.
+          if (!outcome.retryable) state.refused = [...state.refused, `${state.segment}:${sequence}`].slice(-MAX_REFUSED_SEQUENCES);
           await this.recordLedgerOutcome(state.id, "failure").catch(() => undefined);
           throw new Error(outcome.reason);
         }
@@ -6668,6 +6779,130 @@ export class SessionUploader {
     } finally {
       await rm(path, { force: true }).catch(() => undefined);
     }
+  }
+
+  // --- integrity confirmation ---------------------------------------------
+  // Once a chat ends, and at launch for recent chats the server has not
+  // judged yet, the server's integrity record is compared with the ledger.
+  // Gaps a spooled upload will fill wait for the spool; gaps nothing here
+  // explains (not refused, not spooled) get the chat's transcript re-sent
+  // from the engine, once. Good and not good are final; pending is asked
+  // again with backoff for up to a day after the chat ended.
+
+  private cancelConfirm(sessionId: string): void {
+    const timer = this.confirmTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.confirmTimers.delete(sessionId);
+  }
+
+  private scheduleConfirm(sessionId: string, delayMs: number): void {
+    if (!this.confirmEnabled || this.stopped) return;
+    this.cancelConfirm(sessionId);
+    const timer = setTimeout(() => {
+      this.confirmTimers.delete(sessionId);
+      void this.confirmSession(sessionId).catch((error: unknown) => {
+        this.log("warn", "OmniRush session check failed", { sessionId, error: error instanceof Error ? error.message : "unknown" });
+      });
+    }, Math.max(0, delayMs));
+    timer.unref?.();
+    this.confirmTimers.set(sessionId, timer);
+  }
+
+  /** Launch: recent ended chats without a final verdict, oldest-due first, paced. */
+  private async confirmAtLaunch(): Promise<void> {
+    await this.ledgerReady;
+    const now = Date.now();
+    const due = Object.entries(this.ledger.sessions)
+      .filter(([sessionId, record]) => {
+        if (this.sessions.has(sessionId) || !record.endedAt) return false;
+        const ended = Date.parse(record.endedAt);
+        if (!Number.isFinite(ended) || now - ended > CONFIRM_WINDOW_MS) return false;
+        const confirmation = record.confirmation;
+        if (confirmation && confirmation.verdict !== "pending" && Date.parse(confirmation.checkedAt) >= ended) return false;
+        return !confirmation?.nextAt || Date.parse(confirmation.nextAt) <= now || Date.parse(confirmation.checkedAt) < ended;
+      })
+      .sort(([, left], [, right]) => right.endedAt!.localeCompare(left.endedAt!))
+      .slice(0, CONFIRM_LAUNCH_MAX);
+    due.forEach(([sessionId], index) => this.scheduleConfirm(sessionId, CONFIRM_AFTER_END_MS + index * CONFIRM_LAUNCH_SPACING_MS));
+  }
+
+  /** One integrity check of an ended chat; schedules the next one while the answer is pending. */
+  async confirmSession(sessionId: string): Promise<SessionConfirmation | null> {
+    if (!this.sessionIntegrity || this.confirming.has(sessionId) || this.sessions.has(sessionId)) return null;
+    await this.ledgerReady;
+    const record = this.ledger.sessions[sessionId];
+    if (!record?.endedAt || !(await this.uploadFeatures()).integrity) return null;
+    this.confirming.add(sessionId);
+    try {
+      const previous = record.confirmation;
+      const checks = (previous && Date.parse(previous.checkedAt) >= Date.parse(record.endedAt) ? previous.checks : 0) + 1;
+      let findings: ReturnType<typeof integrityFindings> = null;
+      let retryAfterMs: number | null = null;
+      try {
+        const response = await this.sessionIntegrity(sessionId, { summary: true });
+        if (response.ok) findings = integrityFindings(JSON.parse(await boundedResponseText(response, 4 * 1024 * 1024)), record.refused);
+        else {
+          if (response.status === 429) retryAfterMs = Number(response.headers.get("retry-after")) * 1_000 || 60_000;
+          await response.body?.cancel().catch(() => undefined);
+        }
+      } catch {
+        findings = null;
+      }
+      const verdict = findings?.verdict ?? "pending";
+      let repairedAt = previous?.repairedAt;
+      if (findings && verdict === "pending" && (findings.gaps.length > 0 || findings.missing)) {
+        // What the spool still holds for this chat is on its way: the gaps may be those.
+        const spooled = (await this.spoolLocked(() => this.listSpool())).some((entry) => entry.session_id === sessionId);
+        if (spooled) void this.drainSpool().catch(() => undefined);
+        else if (!repairedAt && record.root && record.workspaceId && this.repairTranscript) {
+          repairedAt = await this.repairSession(sessionId, record, findings.gaps) ? new Date().toISOString() : repairedAt;
+        }
+      }
+      const ended = Date.parse(record.endedAt);
+      const step = CONFIRM_BACKOFF_MS[Math.min(checks, CONFIRM_BACKOFF_MS.length) - 1]!;
+      const wait = Math.max(step, retryAfterMs ?? 0);
+      const again = verdict === "pending" && Date.now() + wait <= ended + CONFIRM_PENDING_MS;
+      const confirmation: SessionConfirmation = {
+        verdict,
+        checkedAt: new Date().toISOString(),
+        checks,
+        ...(again ? { nextAt: new Date(Date.now() + wait).toISOString() } : {}),
+        ...(repairedAt ? { repairedAt } : {}),
+      };
+      const current = this.ledger.sessions[sessionId];
+      if (current) {
+        current.confirmation = confirmation;
+        await this.saveLedger().catch(() => undefined);
+      }
+      if (again) this.scheduleConfirm(sessionId, wait);
+      this.log("info", "OmniRush session checked", { sessionId, verdict, gaps: findings?.gaps.length ?? null, checks });
+      return confirmation;
+    } finally {
+      this.confirming.delete(sessionId);
+    }
+  }
+
+  /** Re-sends an ended chat's transcript from the engine as a trace of its last segment, after a "collector.repair" event. */
+  private async repairSession(sessionId: string, record: SessionLedgerRecord, gaps: readonly string[]): Promise<boolean> {
+    const parts = await this.repairTranscript!({ sessionId, workspaceId: record.workspaceId!, root: record.root! }).catch(() => null);
+    if (!parts || this.sessions.has(sessionId)) return false;
+    const state = this.newSessionState(sessionId, record.workspaceId!, record.root!, new FileHashCache());
+    state.journal.off = true;
+    state.segment = record.segment;
+    state.sequence = record.nextSequence;
+    state.sentBytes = record.sentBytes ?? 0;
+    state.lastMessageId = record.lastMessageId;
+    state.model = record.model ?? null;
+    state.childSessionIds = [...(record.childSessionIds ?? [])];
+    state.refused = [...(record.refused ?? [])];
+    state.endedAt = record.endedAt;
+    state.resumed = state.segment > 1;
+    const at = new Date().toISOString();
+    const events: TraceEvent[] = [{ at, type: "collector.repair", data: { reason: "integrity_gaps", gaps: gaps.slice(0, 200), parts: parts.length } }];
+    parts.forEach((messages, index) => events.push({ at, type: "turn.messages", data: { messages, part: index + 1, parts: parts.length, repair: true } }));
+    await this.uploadTrace(state, events);
+    this.log("info", "OmniRush session transcript re-sent for the server's gaps", { sessionId, gaps: gaps.length, parts: parts.length });
+    return true;
   }
 
   // --- trace journal -------------------------------------------------------
@@ -6858,6 +7093,8 @@ export class SessionUploader {
       state.model = record?.model ?? null;
       state.childSessionIds = [...(record?.childSessionIds ?? [])];
       state.childCheckpoints = new Map(Object.entries(record?.childCheckpoints ?? {}));
+      state.refused = [...(record?.refused ?? [])];
+      state.endedAt = record?.endedAt;
       state.resumed = state.segment > 1;
       for (const event of events) {
         for (const evidence of knownToolPathEvidence(event.type, event.data)) {
@@ -6870,7 +7107,13 @@ export class SessionUploader {
         type: "collector.recovered",
         data: { reason: "restart", turn_open: meta.turn_open, events: events.length, journal_at: meta.at, session_segment: state.segment },
       };
-      await this.uploadTrace(state, [marker, ...events]);
+      try {
+        await this.uploadTrace(state, [marker, ...events]);
+      } catch (error) {
+        // Refused (a 422): recovered data is never dropped; the next start tries again, up to the age limit.
+        this.log("warn", "OmniRush session journal upload refused; kept for the next start", { sessionId: meta.session_id, error: error instanceof Error ? error.message : "unknown" });
+        return;
+      }
       this.log("info", "OmniRush session journal recovered", { sessionId: meta.session_id, events: events.length, turnOpen: meta.turn_open });
     }
     await rm(journal.path, { force: true });
