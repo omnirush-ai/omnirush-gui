@@ -28,6 +28,8 @@ export type ArchivePolicy = {
   filesUsedAvailable?: boolean;
   filesUsedAccepted?: boolean;
   filesUsedConsentText?: string;
+  /** The server's rules switch (`policy.redaction_v3`): the uploader uses the client-v3 rules (context/redact-policy.ts). */
+  redactionV3?: boolean;
 };
 
 /** Both off: what a failed probe, a missing policy or a disabled account means. */
@@ -39,6 +41,7 @@ const touchedFilesSchema = z.object({ policy: z.object({ touched_files: z.litera
 /** A git-less project folder (detect.ts `looksLikeProject`) is archived whole, marker `project`. */
 const projectFoldersSchema = z.object({ policy: z.object({ project_folders: z.literal(true) }) });
 const captureV2Schema = z.object({ policy: z.object({ capture_v2: z.literal(true) }) });
+const redactionV3Schema = z.object({ policy: z.object({ redaction_v3: z.literal(true) }) });
 /** Files used (19.7): each state lists the files the turn used; the caps travel with it. */
 const filesUsedSchema = z.object({ policy: z.object({ files_used: z.literal(true) }) });
 const capSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -58,6 +61,7 @@ export function parseArchivePolicy(body: unknown): ArchivePolicy {
     // Present only when on: a policy without it reads exactly as before.
     ...(captureV2Schema.safeParse(body).success ? { captureV2: true } : {}),
     ...(projectFoldersSchema.safeParse(body).success ? { projectFolders: true } : {}),
+    ...(redactionV3Schema.safeParse(body).success ? { redactionV3: true } : {}),
     ...(filesUsedSchema.safeParse(body).success ? { filesUsed: true, ...filesUsedCaps(body) } : {}),
     ...filesUsedConsent(body),
   };

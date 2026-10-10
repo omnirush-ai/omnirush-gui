@@ -1,0 +1,272 @@
+{
+ "join": "⟨+⟩",
+ "redacted": "[REDACTED]",
+ "opaque_keys": [
+  "reasoningEncryptedContent",
+  "encrypted_content",
+  "encryptedContent",
+  "signature",
+  "thinkingSignature",
+  "redacted_thinking"
+ ],
+ "cases": [
+  {
+   "name": "env var reference kept",
+   "input": "GITHUB_TOKEN=$GITHUB_TOKEN",
+   "expect": "GITHUB_TOKEN=$GITHUB_TOKEN"
+  },
+  {
+   "name": "braced env var kept",
+   "input": "export API_KEY=\"${OPENAI_API_KEY}\"",
+   "expect": "export API_KEY=\"${OPENAI_API_KEY}\""
+  },
+  {
+   "name": "process.env kept",
+   "input": "const token = process.env.SLACK_TOKEN_VALUE_X",
+   "expect": "const token = process.env.SLACK_TOKEN_VALUE_X",
+   "mode": "source"
+  },
+  {
+   "name": "os.environ kept",
+   "input": "password = os.environ[\"DB_PASSWORD\"]",
+   "expect": "password = os.environ[\"DB_PASSWORD\"]",
+   "mode": "source"
+  },
+  {
+   "name": "template kept",
+   "input": "auth_token: \"{{ vault_auth_token_value }}\"",
+   "expect": "auth_token: \"{{ vault_auth_token_value }}\""
+  },
+  {
+   "name": "windows var kept",
+   "input": "set SECRET_KEY=%MY_SECRET_KEY%",
+   "expect": "set SECRET_KEY=%MY_SECRET_KEY%"
+  },
+  {
+   "name": "email kept on the client",
+   "input": "contact jane.doe@gmail.com now",
+   "expect": "contact jane.doe@gmail.com now"
+  },
+  {
+   "name": "phone kept on the client",
+   "input": "call +1 415 555 0101",
+   "expect": "call +1 415 555 0101"
+  },
+  {
+   "name": "ssn kept on the client",
+   "input": "id 123-45-6789",
+   "expect": "id 123-45-6789"
+  },
+  {
+   "name": "public ipv4 kept on the client",
+   "input": "ssh root@8.8.4.4 -p 22",
+   "expect": "ssh root@8.8.4.4 -p 22"
+  },
+  {
+   "name": "version kept",
+   "input": "billiard==3.6.4.0 and version = \"2.4.7.3\"",
+   "expect": "billiard==3.6.4.0 and version = \"2.4.7.3\""
+  },
+  {
+   "name": "kernel kept",
+   "input": "Linux version 5.15.153.1-microsoft-standard-WSL2",
+   "expect": "Linux version 5.15.153.1-microsoft-standard-WSL2"
+  },
+  {
+   "name": "decorator kept",
+   "input": "+@app.route(\"/x\")",
+   "expect": "+@app.route(\"/x\")"
+  },
+  {
+   "name": "git ssh kept",
+   "input": "git@github.com:owner/repo.git",
+   "expect": "git@github.com:owner/repo.git"
+  },
+  {
+   "name": "generic sk- in a blob kept",
+   "input": "blob EuSxsYMIUla2_LmDMWGoVW6MfRSyeybbbyqw0VOHDMwcSs-vwzRk0JKrq5B_I9IWX72IroVtEYd9QRVg3ZBHHwTdLfAjX-sSVCaJ8DXLipJ8ZHwrrVcDj0k6sk-1t8FTrUvkHKdhoIuX2NpfytPseqA0PGxhaTdUise7sZ1d5qlHFRyT_-Z_kd6HhbAPqxpB7LFRaFcqPK1tfGO0Ir7mjqk5VAu1u7CJiShQOBjOYbzQJgWZXdK5MFPa2khz2XtL-psgPtt59sngsuKl4JiPwKBkWIuvNEIbyRRuAlxvxaAV end",
+   "expect": "blob EuSxsYMIUla2_LmDMWGoVW6MfRSyeybbbyqw0VOHDMwcSs-vwzRk0JKrq5B_I9IWX72IroVtEYd9QRVg3ZBHHwTdLfAjX-sSVCaJ8DXLipJ8ZHwrrVcDj0k6sk-1t8FTrUvkHKdhoIuX2NpfytPseqA0PGxhaTdUise7sZ1d5qlHFRyT_-Z_kd6HhbAPqxpB7LFRaFcqPK1tfGO0Ir7mjqk5VAu1u7CJiShQOBjOYbzQJgWZXdK5MFPa2khz2XtL-psgPtt59sngsuKl4JiPwKBkWIuvNEIbyRRuAlxvxaAV end"
+  },
+  {
+   "name": "data uri kept",
+   "input": "src=\"data:image/png;base64,ipx5utjfTxzUn/XZK54xFb2n75zrqbl6q3t/OXwT2ZeZLV06Agdf4T8h4PwFi06l4L2ok4XwVqk3WtcOsk-WVGALBh6bRKfkr1vMRNcsvFUqYI7tg==\"",
+   "expect": null,
+   "same": true
+  },
+  {
+   "name": "word password kept",
+   "input": "password: hunter2hunter",
+   "expect": "password: hunter2hunter"
+  },
+  {
+   "name": "placeholder kept",
+   "input": "API_KEY=your-api-key-here",
+   "expect": "API_KEY=your-api-key-here"
+  },
+  {
+   "name": "aws example id kept",
+   "input": "AKIA⟨+⟩IOSFODNN7EXAMPLE",
+   "expect": "AKIA⟨+⟩IOSFODNN7EXAMPLE"
+  },
+  {
+   "name": "function param kept",
+   "input": "function f(token: string) { return token }",
+   "expect": "function f(token: string) { return token }",
+   "mode": "source"
+  },
+  {
+   "name": "integrity hash kept",
+   "input": "\"integrity\": \"sha512-eyVpl09JmcJpaXZ5xbsrBEYLtg5908t1hfCmB8vI32dTy1IATELbOlZi0vSVy/dCiT8Kb2gWt4SwTH8Q5hPV3M==\"",
+   "expect": null,
+   "same": true
+  },
+  {
+   "name": "uuid under api_key looks random",
+   "input": "api_key = \"3f2b8a4e-9c1d-4e7a-b5f6-0a1b2c3d4e5f\"",
+   "expect": "api_key = \"[REDACTED]\""
+  },
+  {
+   "name": "short secret value kept",
+   "input": "token=abc123",
+   "expect": "token=abc123"
+  },
+  {
+   "name": "truncated private key kept",
+   "input": "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----",
+   "expect": "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
+  },
+  {
+   "name": "url user without password kept",
+   "input": "postgres://live@db.internal:5432/app",
+   "expect": "postgres://live@db.internal:5432/app"
+  },
+  {
+   "name": "url placeholder password kept",
+   "input": "postgres://user:${DB_PASS}@localhost:5432/app",
+   "expect": "postgres://user:${DB_PASS}@localhost:5432/app"
+  },
+  {
+   "name": "bearer placeholder kept",
+   "input": "Authorization: Bearer yourAccessTokenGoesHere",
+   "expect": "Authorization: Bearer yourAccessTokenGoesHere"
+  },
+  {
+   "name": "non-jwt eyJ kept",
+   "input": "ey⟨+⟩JraWQiOiJ4IiwidHlwIjoieSJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkZha2UgVXNlciIsImlhdCI6MTUxNjIzOTAyMn0.HnRI5zBguaFFIU3rkbPU",
+   "expect": "ey⟨+⟩JraWQiOiJ4IiwidHlwIjoieSJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkZha2UgVXNlciIsImlhdCI6MTUxNjIzOTAyMn0.HnRI5zBguaFFIU3rkbPU"
+  },
+  {
+   "name": "openai project key",
+   "input": "OPENAI_API_KEY=sk⟨+⟩-proj-k0t2-IBx0MSFjLIHgdtCHfaBsoexCYqsFdec8ZnbsrQau0e9D6W5Sosy-ZzgMTZ6pDE0O1Vbx6UcE4flEOBRH8gUFXo0dItNV6dby1aGWll5oflgb-XSWpl4kt4O8ItCjaBSnEhCLzw_XAlGQAFIrEEUc5d1",
+   "expect": "OPENAI_API_KEY=[REDACTED]"
+  },
+  {
+   "name": "anthropic key in prose",
+   "input": "use sk⟨+⟩-ant-api03-BI11bAx-D8Kv5xjY64Y7gxOO6E_tSz-2LaqC47M5PEyGbPW4eWwhvH8cUauOv-g1850wDoxpJPC1bLaoZDqiUVdrlhJ47 please",
+   "expect": "use [REDACTED] please"
+  },
+  {
+   "name": "github token",
+   "input": "gh auth: gh⟨+⟩p_b4z0PMbDeCxAqT4kiRhFv5FnMXlMWbiohfGV",
+   "expect": "gh auth: [REDACTED]"
+  },
+  {
+   "name": "aws id and secret",
+   "input": "aws_access_key_id = AK⟨+⟩IAWGN7A7YSXASSWMRT\naws_secret_access_key = RbqEoYnLY/TZ3v44hCp4oQzLdlL2cd0SVjlHRjD5",
+   "expect": "aws_access_key_id = [REDACTED]\naws_secret_access_key = [REDACTED]"
+  },
+  {
+   "name": "aws secret beside id",
+   "input": "id AK⟨+⟩IAWGN7A7YSXASSWMRT\nkey RbqEoYnLY/TZ3v44hCp4oQzLdlL2cd0SVjlHRjD5",
+   "expect": "id [REDACTED]\nkey [REDACTED]"
+  },
+  {
+   "name": "jwt",
+   "input": "cookie=ey⟨+⟩JhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkZha2UgVXNlciIsImlhdCI6MTUxNjIzOTAyMn0.SDfGQZPTGwvY6aLP4vySLMnlhkIOYLh6XrYf1xBiQN1",
+   "expect": "cookie=[REDACTED]"
+  },
+  {
+   "name": "bearer header",
+   "input": "Authorization: Bearer I7T8wjGfFY0tqQk1lkQTaHgZipGR3nOY",
+   "expect": "Authorization: Bearer [REDACTED]"
+  },
+  {
+   "name": "basic header",
+   "input": "Authorization: Basic YWRtaW46WWlKZXV5d3V5cWt1Z2dQeg==",
+   "expect": "Authorization: Basic [REDACTED]"
+  },
+  {
+   "name": "url password keeps user",
+   "input": "postgresql+asyncpg://app_user:xQlWp47ALfe3dCFL2OCf@db.example.net:5432/app",
+   "expect": "postgresql+asyncpg://app_user:[REDACTED]@db.example.net:5432/app"
+  },
+  {
+   "name": "url word password",
+   "input": "redis://default:postgres@localhost:6379",
+   "expect": "redis://default:[REDACTED]@localhost:6379"
+  },
+  {
+   "name": "random secret assignment",
+   "input": "SECRET_KEY = \"I7T8wjGfFY0tqQk1lkQTaHgZipGR3nOY\"",
+   "expect": "SECRET_KEY = \"[REDACTED]\"",
+   "mode": "source"
+  },
+  {
+   "name": "unquoted source value kept",
+   "input": "secret_key = I7T8wjGfFY0tqQk1lkQTaHgZipGR3nOY",
+   "expect": "secret_key = I7T8wjGfFY0tqQk1lkQTaHgZipGR3nOY",
+   "mode": "source"
+  },
+  {
+   "name": "credential file any value",
+   "input": "DB_PASSWORD=supersecretword",
+   "expect": "DB_PASSWORD=[REDACTED]",
+   "context": "app/.env"
+  },
+  {
+   "name": "env example kept",
+   "input": "DB_PASSWORD=supersecretword",
+   "expect": "DB_PASSWORD=supersecretword",
+   "context": "app/.env.example"
+  },
+  {
+   "name": "npmrc token",
+   "input": "//registry.npmjs.org/:_authToken=np⟨+⟩m_Oc6Qi7ggAMKfjlaTNJkd38tGFzUnusvrIPab",
+   "expect": "//registry.npmjs.org/:_authToken=[REDACTED]",
+   "context": ".npmrc"
+  },
+  {
+   "name": "private key body",
+   "input": "-----BEGIN OPENSSH PRIVATE KEY-----\nML3oEigf7Ndm1psPEs4ARwheixekEVufljdIFL63fzIF7TOuKt3xwf3JQEggIIyA\n9Rb7rH9U7n28IkO6cZ+DaFzx0lbKj/sMkrmOjXI65UJaLI4XU6mifWHrOs3Rj+Ye\nY8XQmdSYTBEEIbD5L2N1HLpES55tS9UtfcNATonBTlWQGHGrd/95L4O0LF4GwYXf\ntrliczU231qWz/KR0xQPzcJeEuCBfPGpQPQMOtYu0IZV5JurgCfUtsK05HEFhDBz\n3BpZtyuwTzh3XS0zXoUwk0TnHC3Z7bpcUcFd6N0emr5ZjiTUn9uNfZ9xfFopXxZ4\n-----END OPENSSH PRIVATE KEY-----",
+   "expect": "-----BEGIN OPENSSH PRIVATE KEY-----\n[REDACTED]\n-----END OPENSSH PRIVATE KEY-----"
+  },
+  {
+   "name": "escaped private key body",
+   "input": "-----BEGIN PRIVATE KEY-----\\nML3oEigf7Ndm1psPEs4ARwheixekEVufljdIFL63fzIF7TOuKt3xwf3JQEggIIyA\\n9Rb7rH9U7n28IkO6cZ+DaFzx0lbKj/sMkrmOjXI65UJaLI4XU6mifWHrOs3Rj+Ye\\nY8XQmdSYTBEEIbD5L2N1HLpES55tS9UtfcNATonBTlWQGHGrd/95L4O0LF4GwYXf\\ntrliczU231qWz/KR0xQPzcJeEuCBfPGpQPQMOtYu0IZV5JurgCfUtsK05HEFhDBz\\n3BpZtyuwTzh3XS0zXoUwk0TnHC3Z7bpcUcFd6N0emr5ZjiTUn9uNfZ9xfFopXxZ4\\n-----END PRIVATE KEY-----",
+   "expect": "-----BEGIN PRIVATE KEY-----\\n[REDACTED]\\n-----END PRIVATE KEY-----"
+  },
+  {
+   "name": "slack webhook",
+   "input": "url: https://hooks.sl⟨+⟩ack.com/services/T0QN4252LP/B0PDKN08J0/nWLjmyzkl3OYFE6Jx0v1IOnZ",
+   "expect": null,
+   "startswith": "url: https://hooks.sl⟨+⟩ack.com/services/T0",
+   "endswith": "/[REDACTED]"
+  },
+  {
+   "name": "hugging face token",
+   "input": "HF hf⟨+⟩_6IwtNbhM4UKzG5zqyZnJ5sxl16ddrAChEC",
+   "expect": "HF [REDACTED]"
+  },
+  {
+   "name": "mask replacement",
+   "input": "GITHUB_TOKEN=gh⟨+⟩p_b4z0PMbDeCxAqT4kiRhFv5FnMXlMWbiohfGV",
+   "expect": "GITHUB_TOKEN=ubuntu",
+   "replacement": "ubuntu"
+  },
+  {
+   "name": "token after escaped newline",
+   "input": "line\\ngh⟨+⟩p_b4z0PMbDeCxAqT4kiRhFv5FnMXlMWbiohfGV",
+   "expect": "line\\n[REDACTED]"
+  }
+ ]
+}

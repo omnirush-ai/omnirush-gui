@@ -55,6 +55,7 @@ import {
 } from "./manifest.js";
 import { writeSealedArchive } from "./pack.js";
 import { POLICY_OFF, type ArchivePolicy } from "./policy.js";
+import { CLIENT_V3, redactionV3, setRedactionPolicy } from "../context/redact-policy.js";
 import { SEAL_CONTENT } from "./seal.js";
 import { findLockfiles, scanTouchedFiles, touchedChange, TouchedPathStore, type TouchedScanResult } from "./touched.js";
 import { isOutsideArchivePath, outsideSourcesOf, scanOutsideFiles } from "./outside.js";
@@ -337,6 +338,8 @@ const archiverStateSchema = z.object({
   v: z.literal(1),
   disabled: z.string().nullable(),
   key: z.object({ kid: z.string(), public_key: z.string(), alg: z.string() }).nullable(),
+  /** The server's upload rules switch at the last key answer, so a new process starts with it. */
+  redaction_v3: z.boolean().optional(),
 });
 
 async function readText(path: string): Promise<string | null> {
@@ -1239,6 +1242,10 @@ export class SessionArchiver {
     if (generation !== this.generation) return;
     if (fetched.status === "unavailable" && !probe) return;
     this.policy = { value: fetched.status === "ok" ? fetched.policy : POLICY_OFF, at: this.now().getTime() };
+    // The uploader's rules follow the server's switch; anything but a yes keeps the old rules.
+    const rulesBefore = redactionV3();
+    setRedactionPolicy(fetched.status === "ok" && fetched.policy.redactionV3 === true ? CLIENT_V3 : "legacy");
+    if (redactionV3() !== rulesBefore) void this.saveArchiverState().catch(() => undefined);
     if (fetched.status === "ok") {
       this.filesUsedServer = { on: fetched.policy.filesUsed === true, at: this.now().getTime() };
       this.filesUsed.setLimits({ ...(fetched.policy.filesUsedMaxFileBytes ? { maxFileBytes: fetched.policy.filesUsedMaxFileBytes } : {}), ...(fetched.policy.filesUsedMaxSessionBytes ? { maxSessionBytes: fetched.policy.filesUsedMaxSessionBytes } : {}) });
@@ -1969,6 +1976,7 @@ export class SessionArchiver {
     this.disabled = code;
     this.key = null;
     this.policy = { value: POLICY_OFF, at: this.now().getTime() };
+    setRedactionPolicy("legacy");
     await this.saveArchiverState();
     const records = await this.listQueue();
     for (const record of records) {
@@ -2150,6 +2158,7 @@ export class SessionArchiver {
       v: 1,
       disabled: this.disabled,
       key: this.key ? { kid: this.key.kid, public_key: this.key.publicKey.toString("base64"), alg: this.key.alg } : null,
+      redaction_v3: redactionV3(),
     });
   }
 
@@ -2188,6 +2197,8 @@ export class SessionArchiver {
       this.disabled = saved.data.disabled;
       const publicKey = saved.data.key ? Buffer.from(saved.data.key.public_key, "base64") : null;
       if (saved.data.key && publicKey?.length === 32) this.key = { kid: saved.data.key.kid, publicKey, alg: saved.data.key.alg };
+      // The last answer's switch until this process asks again (a cached key skips the fetch).
+      if (saved.data.redaction_v3 === true && !saved.data.disabled) setRedactionPolicy(CLIENT_V3);
     }
 
     const sessions = new Map<string, SessionState>();
