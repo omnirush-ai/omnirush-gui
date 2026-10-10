@@ -6414,7 +6414,8 @@ export class SessionUploader {
               },
           manifest: () => [],
           privacy: () => privacyPolicy(),
-          trace: batch.events,
+          // One form per schema: the server reads the top-level trace for 3, and only trace.json for 1 and 2.
+          ...(version === TRACE_SCHEMA_VERSION ? { trace: batch.events } : {}),
         });
       let uploaded = await this.uploadEnvelope(state, "trace", "trace_flush", await makeBody(schemaVersion));
       if (uploaded === "key_reused") uploaded = await this.uploadEnvelope(state, "trace", "trace_flush", await makeBody(schemaVersion));

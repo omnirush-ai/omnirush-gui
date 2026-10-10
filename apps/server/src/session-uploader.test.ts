@@ -45,6 +45,16 @@ import {
 } from "./session-uploader.js";
 import { SESSION_UPLOAD_BUDGET, sessionUploadTimeoutMs, type SessionUploadBudget } from "./session-upload-budget.js";
 
+/** Schema 1/2 trace uploads carry their events only in files[0] (__omnirush__/trace.json): read them back as `trace`. */
+function withTraceEvents<T>(envelope: T): T {
+  const record = envelope as Record<string, unknown>;
+  if (record.trace !== undefined || !Array.isArray(record.files)) return envelope;
+  const file = (record.files as Array<{ path?: string; content?: string }>).find((item) => item.path === "__omnirush__/trace.json");
+  if (!file?.content) return envelope;
+  return { ...record, trace: (JSON.parse(file.content) as { events?: unknown[] }).events ?? [] } as T;
+}
+
+
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
 
@@ -98,7 +108,7 @@ describe("session uploader privacy", () => {
       upload: async (sessionId, compressed) => {
         uploads.push({
           sessionId,
-          envelope: JSON.parse(zstdDecompressSync(compressed).toString("utf8")),
+          envelope: withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))),
         });
         return Response.json({ ok: true }, { status: 201 });
       },
@@ -132,7 +142,7 @@ describe("session uploader privacy", () => {
     const uploads: Array<Record<string, unknown>> = [];
     const sessionUploader = new SessionUploader({
       upload: async (_sessionId, compressed) => {
-        const envelope = JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>;
+        const envelope = withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>;
         uploads.push(envelope);
         if (envelope.snapshot_type === "trace" && uploads.filter((item) => item.snapshot_type === "trace").length === 1) {
           traceStarted();
@@ -166,7 +176,7 @@ describe("session uploader privacy", () => {
     const uploads: Array<Record<string, unknown>> = [];
     const sessionUploader = new SessionUploader({
       upload: async (_sessionId, compressed) => {
-        uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       fallbackScanMs: 60_000,
@@ -197,7 +207,7 @@ describe("session uploader privacy", () => {
       capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed, _signal, request) => {
-        sent.push({ key: request?.idempotencyKey, envelope: JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown> });
+        sent.push({ key: request?.idempotencyKey, envelope: withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown> });
         // An envelope the server refuses keeps its sequence: the next one never reuses its key.
         return sent.length === 2 ? Response.json({ detail: "bad" }, { status: 422 }) : Response.json({ ok: true }, { status: 201 });
       },
@@ -228,7 +238,7 @@ describe("session uploader privacy", () => {
       capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed) => {
-        envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        envelopes.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       sessionIntegrity: async (sessionId, options) => {
@@ -257,7 +267,7 @@ describe("session uploader privacy", () => {
       capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed) => {
-        envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        envelopes.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       sessionIntegrity: async () => {
@@ -286,7 +296,7 @@ describe("session uploader privacy", () => {
       capabilities: async () => ({ schema_versions: [1, 2], canonical_trace: false, idempotency_key: true, integrity: true, integrity_summary: true }),
       stateDir,
       upload: async (_sessionId, compressed) => {
-        const envelope = JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>;
+        const envelope = withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>;
         // The server already holds segment 1 up to sequence 5 (this device's ledger was lost).
         if (envelope.session_segment === 1 && Number(envelope.sequence) <= 5 && envelope.snapshot_type === "trace") {
           return Response.json({ detail: "idempotency_key_reused" }, { status: 409 });
@@ -340,7 +350,7 @@ describe("session uploader privacy", () => {
     const sessionUploader = new SessionUploader({
       stateDir,
       upload: async (_sessionId, compressed) => {
-        envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        envelopes.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       fallbackScanMs: 60_000,
@@ -361,7 +371,7 @@ describe("session uploader privacy", () => {
     await writeFile(join(root, "app.txt"), "hello\n");
     const envelopes: Array<Record<string, unknown>> = [];
     const upload = async (_sessionId: string, compressed: Uint8Array) => {
-      envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+      envelopes.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
       return Response.json({ ok: true }, { status: 201 });
     };
     const crashed = new SessionUploader({ stateDir, upload, fallbackScanMs: 60_000 });
@@ -427,6 +437,35 @@ describe("session uploader privacy", () => {
     expect(parseJournal(`${JSON.stringify({ e: { at: "t", type: "x" } })}\n`)).toBeNull();
   });
 
+  test("a schema 2 trace upload carries its events in trace.json only; schema 3 in the top-level trace only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-upload-forms-"));
+    roots.push(root);
+    for (const canonical of [false, true]) {
+      const raw: Array<Record<string, unknown>> = [];
+      const sessionUploader = new SessionUploader({
+        upload: async (_sessionId, compressed) => {
+          raw.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+          return Response.json({ ok: true }, { status: 201 });
+        },
+        capabilities: async () => ({ schema_versions: canonical ? [1, 2, 3] : [1, 2], canonical_trace: canonical }),
+        fallbackScanMs: 60_000,
+      });
+      sessionUploader.startSession("session-forms-1234", "workspace-forms", root);
+      sessionUploader.recordTrace("session-forms-1234", "tool.call", {});
+      sessionUploader.flushTrace("session-forms-1234");
+      await sessionUploader.stop();
+      const trace = raw.find((item) => item.snapshot_type === "trace")!;
+      const files = trace.files as Array<{ path: string }>;
+      if (canonical) {
+        expect(Array.isArray(trace.trace)).toBe(true);
+        expect(files).toEqual([]);
+      } else {
+        expect("trace" in trace).toBe(false);
+        expect(files.map((file) => file.path)).toEqual(["__omnirush__/trace.json"]);
+      }
+    }
+  });
+
   test("persists session segments and message checkpoints across a resume", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-upload-resume-"));
     const stateDir = await mkdtemp(join(tmpdir(), "omnirush-upload-state-"));
@@ -435,7 +474,7 @@ describe("session uploader privacy", () => {
     const makeUploader = () => new SessionUploader({
       stateDir,
       upload: async (_sessionId, compressed) => {
-        uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       fallbackScanMs: 60_000,
@@ -468,7 +507,7 @@ describe("session uploader privacy", () => {
     const uploads: Array<Record<string, unknown>> = [];
     const sessionUploader = new SessionUploader({
       upload: async (_sessionId, compressed) => {
-        uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       changeDebounceMs: 10,
@@ -499,7 +538,7 @@ describe("session uploader privacy", () => {
     const uploads: Array<Record<string, unknown>> = [];
     const sessionUploader = new SessionUploader({
       upload: async (_sessionId, compressed) => {
-        uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       fallbackScanMs: 60_000,
@@ -609,7 +648,7 @@ describe("session uploader privacy", () => {
     const types: string[] = [];
     // The backend refuses the start snapshot (a 400 is never spooled), so no manifest is accepted.
     const upload = async (_sessionId: string, compressed: Uint8Array) => {
-      const type = (JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as { snapshot_type: string }).snapshot_type;
+      const type = (withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as { snapshot_type: string }).snapshot_type;
       types.push(type);
       return type === "start" ? Response.json({ error: "bad_request" }, { status: 400 }) : Response.json({ ok: true }, { status: 201 });
     };
@@ -649,7 +688,7 @@ const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
 function makeUploads() {
   const uploads: Envelope[] = [];
   const upload = async (_sessionId: string, compressed: Uint8Array) => {
-    uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope);
+    uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope);
     return Response.json({ ok: true }, { status: 201 });
   };
   return { uploads, upload };
@@ -730,7 +769,7 @@ describe("session uploader envelope v2", () => {
         return { schema_versions: [1, 2, 3], canonical_trace: true };
       },
       upload: async (_sessionId, compressed) => {
-        const envelope = JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope;
+        const envelope = withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope;
         attempts.push(envelope);
         if (envelope.schema_version === 3 && rejectSchema3) {
           rejectSchema3 = false;
@@ -1024,7 +1063,7 @@ describe("session uploader durable retry", () => {
       stateDir,
       upload: async (_sessionId, compressed) => {
         if (!healthy) return Response.json({ error: "unavailable" }, { status: 503 });
-        uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope);
+        uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope);
         return Response.json({ ok: true }, { status: 201 });
       },
       log: (level, message) => { if (level === "warn") warnings.push(message); },
@@ -1101,7 +1140,7 @@ describe("session uploader durable retry", () => {
     const first = new SessionUploader({
       stateDir,
       upload: async (_sessionId, compressed) => {
-        const envelope = JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope;
+        const envelope = withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope;
         sent.push(String(envelope.snapshot_type));
         // The server's disk filled up before the session ended.
         return envelope.snapshot_type === "end" ? Response.json({ detail: "insufficient storage" }, { status: 507 }) : Response.json({ ok: true }, { status: 201 });
@@ -2972,7 +3011,7 @@ describe("session uploader gateway auth", () => {
       upload: async (_sessionId, compressed) => {
         counters.attempts += 1;
         const response = respond(counters.attempts);
-        if (response.ok) uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope);
+        if (response.ok) uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope);
         return response;
       },
       ...(refresh
@@ -3116,7 +3155,7 @@ describe("session uploader snapshot cap", () => {
       upload: async (_sessionId, compressed) => {
         const buffer = zstdDecompressSync(compressed);
         rawBytes.push(buffer.length);
-        uploads.push(JSON.parse(buffer.toString("utf8")) as Envelope);
+        uploads.push(withTraceEvents(JSON.parse(buffer.toString("utf8")) as Envelope));
         return Response.json({ ok: true }, { status: 201 });
       },
       log: (level, message) => { if (level === "warn") warnings.push(message); },
@@ -3444,7 +3483,7 @@ describe("session uploader incremental snapshots", () => {
       stateDir,
       upload: async (_sessionId, compressed) => {
         if (status !== 201) return Response.json({ error: "rejected" }, { status });
-        uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope);
+        uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope);
         return Response.json({ ok: true }, { status: 201 });
       },
       changeDebounceMs: 60_000,
@@ -3989,7 +4028,7 @@ describe("session uploader incremental snapshots", () => {
 
     const growthMB = (peak - baseline) / (1024 * 1024);
     expect(growthMB).toBeLessThan(120);
-    const start = JSON.parse(zstdDecompressSync(compressedEnvelopes[0]!).toString("utf8")) as Envelope;
+    const start = withTraceEvents(JSON.parse(zstdDecompressSync(compressedEnvelopes[0]!).toString("utf8"))) as Envelope;
     expect(start.snapshot_type).toBe("start");
     expect(start.files.reduce((sum, file) => sum + file.content.length, 0)).toBeGreaterThanOrEqual(58 * 1024 * 1024);
     expect(start.privacy).toMatchObject({ files_truncated: false });
@@ -4103,7 +4142,7 @@ describe("integrity confirmation", () => {
       stateDir,
       capabilities: FEATURES,
       upload: async (_sessionId, compressed) => {
-        sent.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Record<string, unknown>);
+        sent.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Record<string, unknown>);
         return Response.json({ ok: true }, { status: 201 });
       },
       sessionIntegrity: async () => Response.json({ integrity: "incomplete", reasons: ["sequence_gaps"], good_session: "pending", segments: [{ segment: 1, sequences: [1, 3], gaps: [2] }] }),

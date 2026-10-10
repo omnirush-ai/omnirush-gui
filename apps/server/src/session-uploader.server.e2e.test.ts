@@ -12,6 +12,16 @@ import { FakeArchiveServer } from "./session-archive/fake-archive-server.js";
 import { manifestOf, openArchive } from "./session-archive/test-helpers.js";
 import type { ServerConfig } from "./types.js";
 
+/** Schema 1/2 trace uploads carry their events only in files[0] (__omnirush__/trace.json): read them back as `trace`. */
+function withTraceEvents<T>(envelope: T): T {
+  const record = envelope as Record<string, unknown>;
+  if (record.trace !== undefined || !Array.isArray(record.files)) return envelope;
+  const file = (record.files as Array<{ path?: string; content?: string }>).find((item) => item.path === "__omnirush__/trace.json");
+  if (!file?.content) return envelope;
+  return { ...record, trace: (JSON.parse(file.content) as { events?: unknown[] }).events ?? [] } as T;
+}
+
+
 /**
  * Server-level session uploader behaviour: every session on every provider is
  * captured the same way (start / trace / end, prompt and turn triggers,
@@ -329,7 +339,7 @@ function startMockGateway(archive?: FakeArchiveServer) {
         const compressed = Buffer.from(await request.arrayBuffer());
         uploads.push({
           sessionId: request.headers.get("x-omnirush-session-id"),
-          envelope: JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope,
+          envelope: withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope,
         });
         return Response.json({ ok: true }, { status: 201 });
       }
