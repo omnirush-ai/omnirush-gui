@@ -313,6 +313,8 @@ class CaptureClient implements CaptureService {
       stateDir: this.options.stateDir,
       appVersion: this.options.appVersion,
       engineVersion: this.options.engineVersion,
+      accountId: Boolean(this.options.accountId),
+      sessionIntegrity: Boolean(this.options.sessionIntegrity),
       sessionUploader: {
         upload: Boolean(sessionUploader.upload),
         uploadFile: Boolean(sessionUploader.uploadFile),
@@ -479,7 +481,7 @@ class CaptureClient implements CaptureService {
     switch (request.type) {
       case "upload": {
         if (!sessionUploader.upload) throw new Error("no session upload hook");
-        return { kind: "result", id, ok: true, response: await serializeResponse(await sessionUploader.upload(request.sessionId, request.body, signal)) };
+        return { kind: "result", id, ok: true, response: await serializeResponse(await sessionUploader.upload(request.sessionId, request.body, signal, request.options)) };
       }
       case "uploadFile": {
         if (!sessionUploader.uploadFile) throw new Error("no session file upload hook");
@@ -494,13 +496,22 @@ class CaptureClient implements CaptureService {
           kind: "result",
           id,
           ok: true,
-          response: await serializeResponse(await sessionUploader.uploadFile(request.sessionId, path, request.size, signal)),
+          response: await serializeResponse(await sessionUploader.uploadFile(request.sessionId, path, request.size, signal, request.options)),
         };
       }
       case "capabilities": {
         if (!sessionUploader.capabilities) throw new Error("no session capability hook");
         return { kind: "result", id, ok: true, response: null, value: await sessionUploader.capabilities() };
       }
+      case "sessionIntegrity": {
+        if (!this.options.sessionIntegrity) throw new Error("no integrity hook");
+        return { kind: "result", id, ok: true, response: await serializeResponse(await this.options.sessionIntegrity(request.sessionId, {
+          ...(request.summary ? { summary: true } : {}),
+          ...(request.turns !== undefined ? { turns: request.turns } : {}),
+        })) };
+      }
+      case "accountId":
+        return { kind: "result", id, ok: true, response: null, account: this.options.accountId ? await this.options.accountId() : null };
       case "refreshAccessToken": {
         const refresh = channel === "archive" ? archive.refreshAccessToken : sessionUploader.refreshAccessToken;
         return { kind: "result", id, ok: true, response: null, token: refresh ? await refresh() : null };

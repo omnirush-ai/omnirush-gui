@@ -25,7 +25,7 @@ import {
 import type { CaptureStopOptions } from "./capture-protocol.js";
 import { SessionArchiver, type FilesUsedStatus, type SessionArchiverOptions } from "./session-archive/index.js";
 import { ProjectArchiveLifecycle, type ArchiveLifecycleLog } from "./session-archive/lifecycle.js";
-import { SessionUploader, type TraceCapabilities, type UploadMetrics, type UploadWebVisit } from "./session-uploader.js";
+import { SessionUploader, type TraceCapabilities, type UploadMetrics, type UploadRequestOptions, type UploadWebVisit } from "./session-uploader.js";
 
 export type { EngineReplacement, EngineTarget } from "./session-upload-observer.js";
 
@@ -58,9 +58,13 @@ export type CaptureHostOptions = {
   appVersion: string;
   engineVersion: string;
   log: CaptureLog;
+  /** The signed-in account's id (null: not known now); spooled uploads are stamped with it. */
+  accountId?: () => Promise<string | null>;
+  /** GET /omnirush/me/sessions/{id}/integrity with the device bearer. */
+  sessionIntegrity?: (sessionId: string, options?: { summary?: boolean; turns?: number }) => Promise<Response>;
   sessionUploader: {
-    upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal) => Promise<Response>;
-    uploadFile?: (sessionId: string, path: string, size: number, signal?: AbortSignal) => Promise<Response>;
+    upload?: (sessionId: string, compressed: Uint8Array, signal?: AbortSignal, request?: UploadRequestOptions) => Promise<Response>;
+    uploadFile?: (sessionId: string, path: string, size: number, signal?: AbortSignal, request?: UploadRequestOptions) => Promise<Response>;
     capabilities?: () => Promise<TraceCapabilities>;
     refreshAccessToken?: () => Promise<string | null>;
     fetch?: (input: string, init?: RequestInit) => Promise<Response>;
@@ -111,6 +115,8 @@ export class CaptureHost {
       appVersion: options.appVersion,
       engineVersion: options.engineVersion,
       log: options.log,
+      ...(options.accountId ? { accountId: options.accountId } : {}),
+      ...(options.sessionIntegrity ? { sessionIntegrity: options.sessionIntegrity } : {}),
       // Capture context (context/); OMNIRUSH_CAPTURE_CONTEXT=0 turns it off.
       context: options.sessionUploader?.context ?? {},
       ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
@@ -122,8 +128,17 @@ export class CaptureHost {
     const { enabled, excludedDirs, folderGate, baseIdleMs, baseMaxDeferMs, ...auth } = options.archive;
     this.appDirs = [options.stateDir, ...excludedDirs];
     this.archive = new ProjectArchiveLifecycle({
-      archiver: new SessionArchiver({ stateDir: options.stateDir, excludedDirs, folderGate, log: options.log, ...auth }),
+      archiver: new SessionArchiver({
+        stateDir: options.stateDir,
+        excludedDirs,
+        folderGate,
+        log: options.log,
+        ...auth,
+        // Through the gateway broker, the account behind the device bearer (claimAccount()).
+        ...(auth.request && options.accountId ? { accountId: options.accountId } : {}),
+      }),
       enabled: enabled && this.sessionUploader.enabled,
+      accountMissing: !this.sessionUploader.enabled,
       log: options.log,
       ...(baseIdleMs !== undefined ? { baseIdleMs } : {}),
       ...(baseMaxDeferMs !== undefined ? { baseMaxDeferMs } : {}),

@@ -578,6 +578,34 @@ describe("SessionArchiver", () => {
     expect(server.objects().at(-1)!.request).toMatchObject({ session_id: "ses_rotated_key", kind: "base", turn: 1 });
   });
 
+  test("claimAccount keeps the queue for the same account and removes another account's", async () => {
+    const server = new FakeArchiveServer();
+    const { root } = await project();
+    const state = await tempDir("state");
+    let account: string | null = "user-a";
+    const first = archiver(server, state, { accountId: async () => account });
+    await first.claimAccount();
+    expect((await first.captureBase("ses_account_a", root)).status).toBe("queued");
+    await first.stop();
+    // The same account after a restart (a retired sign-in, then signed in again): its queue is still there.
+    const again = archiver(server, state, { accountId: async () => account });
+    await again.claimAccount();
+    expect((await again.drain()).uploaded).toBe(1);
+    await again.stop();
+    // Another account: what user-a queued is removed, never uploaded for user-b.
+    account = "user-b";
+    const other = archiver(server, state, { accountId: async () => account });
+    const uploadsBefore = server.objects().length;
+    await other.claimAccount();
+    expect((await other.drain()).uploaded).toBe(0);
+    expect(server.objects().length).toBe(uploadsBefore);
+    expect(await readFile(join(state, ARCHIVE_STATE_DIRECTORY, "account.json"), "utf8")).toContain("user-b");
+    // While the account cannot be learned nothing changes.
+    account = null;
+    await other.claimAccount();
+    expect(await readFile(join(state, ARCHIVE_STATE_DIRECTORY, "account.json"), "utf8")).toContain("user-b");
+  });
+
   test("signOut aborts uploads in flight and removes every queued archive and record", async () => {
     const server = new FakeArchiveServer();
     const { root } = await project();

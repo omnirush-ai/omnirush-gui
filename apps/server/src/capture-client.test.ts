@@ -454,6 +454,38 @@ describe("capture worker", () => {
     expect(members[1]!.content.equals(brief)).toBe(true);
   }, 60_000);
 
+  test("through the worker, uploads carry their Idempotency-Key, the integrity read reaches the main thread and the spool is stamped with the account", async () => {
+    const stateDir = await tempDir("keys-state");
+    const root = await tempDir("keys-root");
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const keys: Array<string | undefined> = [];
+    const integrity: string[] = [];
+    const capture = service({
+      stateDir,
+      accountId: async () => "user-worker-1",
+      sessionIntegrity: async (sessionId, options) => {
+        integrity.push(`${sessionId}:${options?.summary === true}`);
+        return Response.json({ detail: "session_not_found" }, { status: 404 });
+      },
+      sessionUploader: {
+        upload: async (_sessionId, _bytes, _signal, request) => {
+          keys.push(request?.idempotencyKey);
+          return Response.json({ detail: "unavailable" }, { status: 503 });
+        },
+      },
+    });
+    capture.startSession("session-worker-keys", "workspace-keys", root);
+    await capture.idle();
+    await capture.stop();
+    expect(integrity).toEqual(["session-worker-keys:true"]);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((key) => typeof key === "string" && /^[0-9a-f]{64}$/.test(key))).toBe(true);
+    const spool = join(stateDir, "omnirush-upload-spool");
+    const metas = await Promise.all((await readdir(spool)).filter((name) => name.endsWith(".json")).map(async (name) => JSON.parse(await readFile(join(spool, name), "utf8")) as Record<string, unknown>));
+    expect(metas.length).toBeGreaterThan(0);
+    expect(metas.every((meta) => meta.account_id === "user-worker-1" && typeof meta.idempotency_key === "string")).toBe(true);
+  });
+
   test("OMNIRUSH_CAPTURE_WORKER=0 captures in-process with the same envelopes", async () => {
     const root = await syntheticWorkspace(20);
     const results: Array<Array<[string, string, number]>> = [];
