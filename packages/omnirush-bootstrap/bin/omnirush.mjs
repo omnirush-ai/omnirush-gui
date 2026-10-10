@@ -269,11 +269,11 @@ function inferArtifactType(url) {
 
 function defaultInstalledName(type, manifest, artifact) {
   if (artifact.appName || manifest.appName) return artifact.appName || manifest.appName
-  if (type === "dmg") return "OmniRush.ai.app"
+  if (type === "dmg") return "omnirush.app"
   if (type === "appimage") return "OmniRush.ai.AppImage"
   if (type === "exe") return "OmniRush.ai.exe"
   if (type === "msi") return "OmniRush.ai.msi"
-  if (process.platform === "darwin") return "OmniRush.ai.app"
+  if (process.platform === "darwin") return "omnirush.app"
   if (process.platform === "win32") return "OmniRush.ai.exe"
   return "omnirush"
 }
@@ -339,7 +339,8 @@ function installDmg(input) {
   try {
     execFileSync("hdiutil", ["attach", input.artifactPath, "-nobrowse", "-readonly", "-mountpoint", mountPoint], { stdio: "pipe" })
     mounted = true
-    const appName = input.appName || "OmniRush.ai.app"
+    // The app bundle the image carries (omnirush.app; OmniRush.ai.app before 3.3.4).
+    const appName = input.appName || readdirSync(mountPoint).find((name) => name.endsWith(".app")) || "omnirush.app"
     const sourceApp = join(mountPoint, appName)
     if (!existsSync(sourceApp)) {
       throw new Error(`app_not_found_in_dmg: ${appName}`)
@@ -485,7 +486,7 @@ async function runDoctor(args) {
   if (hasFlag(args.flags, "app") || args.flags.has("app-dir")) {
     const appManifest = join(appDir, "omnirush-app-install.json")
     let appPath = process.platform === "darwin"
-      ? join(appDir, "OmniRush.ai.app")
+      ? join(appDir, "omnirush.app")
       : process.platform === "win32"
         ? join(appDir, "OmniRush.ai.exe")
         : join(appDir, "omnirush")

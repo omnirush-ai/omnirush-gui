@@ -5,7 +5,7 @@
 pkgname=omnirush
 pkgver=0.0.0
 pkgrel=1 # pkgrel should change when PKGBUILD does. Standard is to change back to 1 next time. Any interger is valid.
-pkgdesc="OmniRush.ai desktop app: AI agents for every profession"
+pkgdesc="omnirush desktop app: AI agents for every profession"
 arch=('x86_64' 'aarch64')
 url="https://github.com/omnirush-ai/omnirush-gui"
 license=('MIT')
@@ -61,8 +61,8 @@ package() {
   install -d "${pkgdir}/usr/share/applications"
   cat > "${pkgdir}/usr/share/applications/omnirush.desktop" <<'EOF'
 [Desktop Entry]
-Name=OmniRush.ai
-Comment=OmniRush.ai desktop app
+Name=omnirush
+Comment=omnirush desktop app
 Exec=omnirush %U
 Terminal=false
 Type=Application

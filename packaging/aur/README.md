@@ -14,7 +14,7 @@ sudo pacman -U https://github.com/omnirush-ai/omnirush-gui/releases/download/v<v
 sudo pacman -U https://github.com/omnirush-ai/omnirush-gui/releases/download/v<version>/omnirush-linux-aarch64-<version>.pacman
 ```
 
-It installs the app under `/opt/omnirush.ai`, like the `.deb`, and pacman pulls
+It installs the app under `/opt/omnirush`, like the `.deb`, and pacman pulls
 in the runtime dependencies (the list is `pacman.depends` in
 `apps/desktop/electron-builder.base.yml`).
 

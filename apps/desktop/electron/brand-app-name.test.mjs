@@ -67,3 +67,32 @@ test("keeps the startup fallback and branded-name limit on every platform", () =
   assert.equal(applyBrandAppName("A".repeat(80), dependencies), "A".repeat(64));
   assert.deepEqual(appliedNames, ["OmniRush.ai", "A".repeat(64)]);
 });
+
+test("shows the display name but keeps the Electron name that names the keychain item", () => {
+  const calls = [];
+  const appName = applyBrandAppName(null, {
+    fallbackName: "omnirush",
+    electronFallbackName: "omnirush.ai",
+    platform: "darwin",
+    updateElectronAppName: true,
+    runtimeProcess: {
+      get title() { return ""; },
+      set title(name) { calls.push(["process", name]); },
+    },
+    app: {
+      setName: (name) => calls.push(["app", name]),
+      setAboutPanelOptions: (options) => calls.push(["about", options.applicationName]),
+    },
+    applicationMenu: { setAppName: (name) => calls.push(["menu", name]) },
+    window: { setTitle: (name) => calls.push(["window", name]) },
+  });
+
+  assert.equal(appName, "omnirush");
+  assert.deepEqual(calls, [
+    ["process", "omnirush"],
+    ["about", "omnirush"],
+    ["app", "omnirush.ai"],
+    ["menu", "omnirush"],
+    ["window", "omnirush"],
+  ]);
+});

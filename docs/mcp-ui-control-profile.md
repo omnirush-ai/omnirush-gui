@@ -57,8 +57,8 @@ Nothing to install. The UI-control MCP ships inside the OmniRush.ai desktop app
 as a single bundled file and runs with the app's own binary in Node mode:
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai" \
-  "/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"
+ELECTRON_RUN_AS_NODE=1 "/Applications/omnirush.app/Contents/MacOS/omnirush" \
+  "/Applications/omnirush.app/Contents/Resources/omnirush-ui-mcp/index.mjs"
 ```
 
 The paths above are the macOS default. **Settings -> Extensions -> UI Control**
@@ -89,8 +89,8 @@ command shown in the app:
     "omnirush-ui": {
       "type": "local",
       "command": [
-        "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
-        "/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"
+        "/Applications/omnirush.app/Contents/MacOS/omnirush",
+        "/Applications/omnirush.app/Contents/Resources/omnirush-ui-mcp/index.mjs"
       ],
       "environment": { "ELECTRON_RUN_AS_NODE": "1" },
       "enabled": true
@@ -113,8 +113,8 @@ Both use the same MCP config shape. Add to your `claude_desktop_config.json` or 
 {
   "mcpServers": {
     "omnirush-ui": {
-      "command": "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
-      "args": ["/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"],
+      "command": "/Applications/omnirush.app/Contents/MacOS/omnirush",
+      "args": ["/Applications/omnirush.app/Contents/Resources/omnirush-ui-mcp/index.mjs"],
       "env": { "ELECTRON_RUN_AS_NODE": "1" }
     }
   }
@@ -132,8 +132,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const transport = new StdioClientTransport({
-  command: "/Applications/OmniRush.ai.app/Contents/MacOS/OmniRush.ai",
-  args: ["/Applications/OmniRush.ai.app/Contents/Resources/omnirush-ui-mcp/index.mjs"],
+  command: "/Applications/omnirush.app/Contents/MacOS/omnirush",
+  args: ["/Applications/omnirush.app/Contents/Resources/omnirush-ui-mcp/index.mjs"],
   env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
 });
 const client = new Client({ name: "my-app", version: "1.0.0" });

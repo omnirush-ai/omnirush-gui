@@ -20,8 +20,11 @@ function Show-State($label) {
   Get-Shortcuts | ForEach-Object { Write-Host "shortcut: $_" }
 }
 
-$manifest = (Invoke-WebRequest -UseBasicParsing "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download/latest.yml").Content
+$manifestFile = Join-Path $env:RUNNER_TEMP "latest.yml"
+Invoke-WebRequest -UseBasicParsing "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download/latest.yml" -OutFile $manifestFile
+$manifest = Get-Content -Raw $manifestFile
 $latest = [regex]::Match($manifest, "(?m)^version:\s*(\S+)").Groups[1].Value
+if (-not $latest) { throw "no version in latest.yml" }
 $old = Join-Path $env:RUNNER_TEMP "omnirush-$latest.exe"
 Invoke-WebRequest -UseBasicParsing "https://github.com/omnirush-ai/omnirush-gui/releases/download/v$latest/omnirush-win-x64-$latest.exe" -OutFile $old
 Start-Process -Wait -FilePath $old -ArgumentList "/S"
