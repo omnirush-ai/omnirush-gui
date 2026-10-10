@@ -15,6 +15,16 @@ import {
 } from "./session-upload-state.js";
 import { SessionUploader } from "./session-uploader.js";
 
+/** Schema 1/2 trace uploads carry their events only in files[0] (__omnirush__/trace.json): read them back as `trace`. */
+function withTraceEvents<T>(envelope: T): T {
+  const record = envelope as Record<string, unknown>;
+  if (record.trace !== undefined || !Array.isArray(record.files)) return envelope;
+  const file = (record.files as Array<{ path?: string; content?: string }>).find((item) => item.path === "__omnirush__/trace.json");
+  if (!file?.content) return envelope;
+  return { ...record, trace: (JSON.parse(file.content) as { events?: unknown[] }).events ?? [] } as T;
+}
+
+
 type Envelope = {
   snapshot_type: string;
   trigger: string;
@@ -130,7 +140,7 @@ describe("session upload state migration", () => {
 
     const uploads: Envelope[] = [];
     const upload = async (_sessionId: string, compressed: Uint8Array) => {
-      uploads.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")) as Envelope);
+      uploads.push(withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) as Envelope);
       return Response.json({ ok: true }, { status: 201 });
     };
     const second = new SessionUploader({ stateDir, upload, fallbackScanMs: 60_000, retryBaseMs: 10, retryMaxMs: 20 });
