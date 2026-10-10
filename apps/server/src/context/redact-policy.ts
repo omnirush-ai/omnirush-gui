@@ -379,6 +379,8 @@ function redactNextLineValues(text: string, hidden: string, tally: Tally, creden
   NEXT_LINE_VALUE.lastIndex = 0;
   return text.replace(NEXT_LINE_VALUE, (match: string, start: string, lead: string, key: string, sep: string, quote: string, value: string, offset: number) => {
     if (insideOpaque(spans, offset, offset + match.length) || !isSecretKey(key)) return match;
+    // The next line is an assignment of its own (`API_KEY=` left empty above `OTHER=value`).
+    if (/^[A-Za-z_][\w.-]*[:=]/.test(value)) return match;
     if (!isSecretValue(value, { mode: "config", quoted: true, credentialFile })) return match;
     note(tally, "secret_assignment");
     return `${start}${lead}${key}${sep}${quote}${hidden}${quote}`;
