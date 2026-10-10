@@ -55,6 +55,7 @@ import {
 } from "./manifest.js";
 import { writeSealedArchive } from "./pack.js";
 import { POLICY_OFF, type ArchivePolicy } from "./policy.js";
+import { CLIENT_V3, setRedactionPolicy } from "../context/redact-policy.js";
 import { SEAL_CONTENT } from "./seal.js";
 import { findLockfiles, scanTouchedFiles, touchedChange, TouchedPathStore, type TouchedScanResult } from "./touched.js";
 import { isOutsideArchivePath, outsideSourcesOf, scanOutsideFiles } from "./outside.js";
@@ -1239,6 +1240,8 @@ export class SessionArchiver {
     if (generation !== this.generation) return;
     if (fetched.status === "unavailable" && !probe) return;
     this.policy = { value: fetched.status === "ok" ? fetched.policy : POLICY_OFF, at: this.now().getTime() };
+    // The uploader's rules follow the server's switch; anything but a yes keeps the old rules.
+    setRedactionPolicy(fetched.status === "ok" && fetched.policy.redactionV3 === true ? CLIENT_V3 : "legacy");
     if (fetched.status === "ok") {
       this.filesUsedServer = { on: fetched.policy.filesUsed === true, at: this.now().getTime() };
       this.filesUsed.setLimits({ ...(fetched.policy.filesUsedMaxFileBytes ? { maxFileBytes: fetched.policy.filesUsedMaxFileBytes } : {}), ...(fetched.policy.filesUsedMaxSessionBytes ? { maxSessionBytes: fetched.policy.filesUsedMaxSessionBytes } : {}) });
@@ -1969,6 +1972,7 @@ export class SessionArchiver {
     this.disabled = code;
     this.key = null;
     this.policy = { value: POLICY_OFF, at: this.now().getTime() };
+    setRedactionPolicy("legacy");
     await this.saveArchiverState();
     const records = await this.listQueue();
     for (const record of records) {

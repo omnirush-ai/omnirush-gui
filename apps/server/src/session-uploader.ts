@@ -29,6 +29,7 @@ import { ExcludedFiles, listGitIgnored, type HashCache } from "./excluded-files.
 import { ToolchainCache, type CollectOptions as ToolchainOptions, type UploadToolchain } from "./toolchain.js";
 import { engine2ImportedFrom } from "./engine2/imported.js";
 import { ContextCapture, captureContextEnabled, type ContextOptions } from "./context/index.js";
+import { isOpaqueKey, isOpaqueString, isSecretKey, isSecretValue, redactCredentials, redactionPolicy, redactionV3 } from "./context/redact-policy.js";
 import bundledBestPractices from "./bundled-best-practices.json" with { type: "json" };
 import serverPackage from "../package.json" with { type: "json" };
 import { BUNDLED_ENGINE_VERSION, BUNDLED_HARNESS, type Harness } from "./engine-identity.js";
@@ -884,7 +885,7 @@ const PII_PATTERNS: Redaction[] = [
   [tokenPattern(String.raw`(?<![A-Za-z0-9][.~+-])(?<!\d:)(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?!\.?\d)(?!-\d+(?![\d.]))`, "g", String.raw`[\dA-Za-z.\\]`), (match) => (isKeptIpv4(match) ? match : REDACTED_PII)],
 ];
 
-const PRIVACY_POLICY = {
+const PRIVACY_POLICY_BASE = {
   capture_policy: "consented_workspace_session",
   gitignored_paths_excluded: true,
   git_internals_excluded: true,
@@ -896,6 +897,17 @@ const PRIVACY_POLICY = {
   max_files: MAX_FILES,
   max_diff_bytes: MAX_UPLOAD_DIFF_BYTES,
 } as const;
+
+/**
+ * The envelope's privacy block: which rules ran on this upload. Under
+ * `client-v3` (the server's `policy.redaction_v3`) credentials only; personal
+ * data is left to the server.
+ */
+function privacyPolicy() {
+  return redactionV3()
+    ? { ...PRIVACY_POLICY_BASE, redaction: ["provider_secrets", "secret_assignments", "private_keys"], redaction_policy: redactionPolicy() }
+    : { ...PRIVACY_POLICY_BASE, redaction_policy: redactionPolicy() };
+}
 
 /**
  * SessionUploader's `enabled` for these options, without building one: an
@@ -1373,6 +1385,10 @@ export type RedactUploadTextOptions = {
  * never contains a dangling backslash, so JSON-escaped text stays escapable.
  */
 export function redactUploadText(input: string, options: RedactUploadTextOptions = {}): { text: string; count: number } {
+  if (redactionV3()) {
+    const result = redactCredentials(input, { context: options.context, mode: options.mode, awsContext: options.awsContext });
+    return { text: result.text, count: result.count };
+  }
   const tally = { count: 0 };
   let text = input.includes("-----BEGIN ") ? applyRedaction(input, PRIVATE_KEY_BLOCK, tally) : input;
   if (text.includes("://")) text = applyRedaction(text, URL_USERINFO, tally);
@@ -1445,6 +1461,17 @@ function redactJsonValue(
   if (depth > maxDepth) throw new JsonTooDeep();
   if (value instanceof Prescrubbed) return value.text;
   if (typeof value === "string") {
+    if (redactionV3()) {
+      // client-v3: opaque provider data (encrypted reasoning, signatures, blobs, data: URIs) is never read.
+      if (isOpaqueKey(key) || isOpaqueString(value)) return value;
+      if (key !== undefined && !isPathLikeKey(key) && isSecretKey(key) && isSecretValue(value, { quoted: true })) {
+        tally.count += 1;
+        return REDACTED;
+      }
+      const result = redactUploadText(value, { context: key, awsContext });
+      tally.count += result.count;
+      return result.text;
+    }
     // A JSON string is always a quoted literal, scrubbed in CONFIG mode.
     // A path-like key (`{"src/admin_auth.py": "<sha256>"}`) names a file, never a secret.
     if (key !== undefined && !isPathLikeKey(key) && isSecretAssignmentKey(key) && isSecretAssignmentValue(value, "config", true)) {
@@ -1617,7 +1644,7 @@ function stringifyJsonPairs(value: unknown, indent: string | undefined, current 
  * sanitize_json_file.
  */
 export function redactUploadJsonText(text: string, path?: string): string | null {
-  const raw = redactAwsSecrets(text, path, { count: 0 });
+  const raw = redactionV3() ? text : redactAwsSecrets(text, path, { count: 0 });
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -5809,7 +5836,7 @@ export class SessionUploader {
         session_resumed: state.resumed,
         trigger,
         touched_paths: touchedPaths,
-        ...PRIVACY_POLICY,
+        ...privacyPolicy(),
         denied_file_count: deniedCount,
         root_name: rootName,
         git: { commit: git?.commit ?? null, branch: git?.branch ?? null, dirty: git ? String(git.dirty) : "false" },
@@ -5887,7 +5914,7 @@ export class SessionUploader {
           yield* extraEntries.values();
         },
         privacy: () => ({
-          ...PRIVACY_POLICY,
+          ...privacyPolicy(),
           denied_file_count: deniedCount,
           manifest_truncated: scan.manifestTruncated,
           files_truncated: omittedCount > 0,
@@ -5966,7 +5993,7 @@ export class SessionUploader {
                 await emit({ path: "__omnirush__/trace.json", content: batch.content, sha256: sha256Hex(batch.content) });
               },
           manifest: () => [],
-          privacy: () => ({ ...PRIVACY_POLICY }),
+          privacy: () => privacyPolicy(),
           trace: batch.events,
         });
       let uploaded = await this.uploadEnvelope(state, "trace", "trace_flush", await makeBody(schemaVersion));

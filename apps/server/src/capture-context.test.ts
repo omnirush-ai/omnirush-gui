@@ -683,7 +683,7 @@ test("CLI/desktop parity: the context modules match PARITY.sha256 (the same list
   const contextDir = path.join(import.meta.dir, "context");
   const lines = fs.readFileSync(path.join(contextDir, "PARITY.sha256"), "utf8").split("\n").filter((line) => line && !line.startsWith("#"));
   const listed = new Map(lines.map((line) => { const [hash, name] = line.split(/\s+/); return [name, hash]; }));
-  const files = fs.readdirSync(contextDir).filter((name) => name.endsWith(".ts")).sort();
+  const files = fs.readdirSync(contextDir).filter((name) => name.endsWith(".ts") || name.endsWith(".json")).sort();
   assert.deepEqual([...listed.keys()].sort(), files);
   for (const name of files) assert.equal(createHash("sha256").update(fs.readFileSync(path.join(contextDir, name))).digest("hex"), listed.get(name), `${name} changed: port it to the CLI and update PARITY.sha256 in both`);
 });
