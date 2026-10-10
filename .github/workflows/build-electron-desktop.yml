@@ -145,6 +145,17 @@ jobs:
           echo "bundled engine: $version"
           test "$version" = "$(node -p "require('./apps/desktop/scripts/engine-release.json').version")"
 
+      - name: Check installer window, app name and in-place update
+        run: scripts/release/check-macos-installer.sh apps/desktop/dist-electron "$RUNNER_TEMP/installer-check"
+
+      - name: Upload installer screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnirush-macos-installer-window
+          path: ${{ runner.temp }}/installer-check
+          if-no-files-found: ignore
+
       - name: Upload signed macOS build
         uses: actions/upload-artifact@v4
         with:
