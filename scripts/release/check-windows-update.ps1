@@ -9,6 +9,11 @@ function Get-Installs {
   Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
     Where-Object { $_.DisplayName -match "omnirush" }
 }
+# electron-builder leaves InstallLocation empty in the uninstall entry; the
+# uninstaller sits in the install folder.
+function Get-Folder($entry) {
+  Split-Path ([regex]::Match($entry.UninstallString, '^"([^"]+)"').Groups[1].Value)
+}
 function Get-Shortcuts {
   $places = @("$env:APPDATA\Microsoft\Windows\Start Menu\Programs", [Environment]::GetFolderPath("Desktop"))
   Get-ChildItem $places -Filter *.lnk -Recurse -ErrorAction SilentlyContinue |
@@ -16,7 +21,7 @@ function Get-Shortcuts {
 }
 function Show-State($label) {
   Write-Host "== $label"
-  Get-Installs | ForEach-Object { Write-Host "uninstall entry: $($_.DisplayName) at $($_.InstallLocation)" }
+  Get-Installs | ForEach-Object { Write-Host "uninstall entry: $($_.DisplayName) in $(Get-Folder $_)" }
   Get-Shortcuts | ForEach-Object { Write-Host "shortcut: $_" }
 }
 
@@ -31,7 +36,7 @@ Start-Process -Wait -FilePath $old -ArgumentList "/S"
 Show-State "installed v$latest"
 $before = @(Get-Installs)
 if ($before.Count -ne 1) { throw "expected one install of v$latest" }
-$folder = $before[0].InstallLocation
+$folder = Get-Folder $before[0]
 
 # A file in the app's data folder (keyed by the app id) must survive the update.
 $data = Join-Path $env:APPDATA "ai.omnirush.desktop"
@@ -42,7 +47,7 @@ Start-Process -Wait -FilePath (Resolve-Path $NewInstaller) -ArgumentList "/S", "
 Show-State "after the update"
 $after = @(Get-Installs)
 if ($after.Count -ne 1) { throw "expected one install after the update, found $($after.Count)" }
-if ($after[0].InstallLocation -ne $folder) { throw "the update moved the app from $folder to $($after[0].InstallLocation)" }
+if ((Get-Folder $after[0]) -ne $folder) { throw "the update moved the app from $folder to $(Get-Folder $after[0])" }
 $exe = Get-ChildItem $folder -Filter *.exe | Where-Object { $_.Name -notmatch "^Uninstall" }
 $exe | ForEach-Object { Write-Host "executable: $($_.Name) $($_.VersionInfo.ProductVersion)" }
 if (@($exe).Count -ne 1) { throw "expected one app executable in $folder" }
