@@ -162,6 +162,8 @@ export function createArgs({ name, key, root, croot, image, runtime, run: runFol
     "-w", croot,
     ...resourceArgs({ runtime, env }),
     ...(runtime.name === "podman" ? ["--security-opt", "label=disable"] : []),
+    // Docker on Linux has no host.docker.internal by itself (Docker Desktop and Podman do): services on this machine.
+    ...(runtime.name === "docker" && platform === "linux" && runtime.flavor !== "desktop" ? ["--add-host", "host.docker.internal:host-gateway"] : []),
     ...(user.uid === 0 ? ["--security-opt", "no-new-privileges"] : []),
     "--entrypoint", "/opt/omnirush/bin/boxd",
     image,

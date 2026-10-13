@@ -1150,14 +1150,20 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   // The Linux sandbox (box/): every workspace whose box is on is planned in the background (a missing
   // image starts downloading), and the server's default (local_box) is read for the engine config.
   const boxes = boxServiceFor(config, (level, message, attributes) => logger.log(level, message, attributes));
-  void boxes.ensureAll();
   if (gatewayBroker.enabled) {
-    void gatewayBroker.sessionUploadCapabilities().then(async (capabilities) => {
-      if (!rememberServerDefault(runtimeStorageDir(config), capabilities)) return;
-      await applyBoxEngineConfig(config, "local_box_default");
-      await boxes.ensureAll();
-    }).catch(() => undefined);
+    // Read before the first plan and the engine's first config (at most 1.5 s, else the last answer is
+    // used until it comes): a switch flipped or rolled back on the server applies at this start.
+    const read = gatewayBroker.sessionUploadCapabilities().then((capabilities) => rememberServerDefault(runtimeStorageDir(config), capabilities)).catch(() => false);
+    const inTime = await Promise.race([read.then(() => true), new Promise<false>((resolvePromise) => setTimeout(() => resolvePromise(false), 1_500).unref?.())]);
+    if (!inTime) {
+      void read.then(async (changed) => {
+        if (!changed) return;
+        await applyBoxEngineConfig(config, "local_box_default");
+        await boxes.ensureAll();
+      }).catch(() => undefined);
+    }
   }
+  void boxes.ensureAll();
   if (config.clearUploadQueue) {
     // The user signed out: what the last account queued is deleted before anything else runs.
     await Promise.race([capture.signOut(), new Promise((resolvePromise) => setTimeout(resolvePromise, 10_000).unref?.())]);

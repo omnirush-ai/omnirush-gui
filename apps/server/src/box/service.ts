@@ -124,6 +124,8 @@ export class BoxService {
   private readonly turns = new Map<string, number>();
   /** Each chat's turn number as of its last prompt here (its turns before this run, then one per prompt). */
   private readonly chatTurns = new Map<string, number>();
+  /** Chats (and their project's key) that ran on this machine before the server's default turned the box on: they stay here. */
+  private readonly nativeChats = new Map<string, string>();
   private readonly home: string;
   private readonly env: NodeJS.ProcessEnv;
   private log: BoxLog;
@@ -274,7 +276,7 @@ export class BoxService {
     const keys = [...this.projects.entries()].filter(([, project]) => project.run && !project.run.native).map(([key]) => key).sort();
     const file = join(this.home, DESKTOP_PROJECTS_FILE);
     const write = async () => {
-      const content = `${JSON.stringify({ keys, ...(this.installLog ? { pkglog_dir: this.installLog.raw } : {}), updated: Date.now() })}\n`;
+      const content = `${JSON.stringify({ keys, ...(this.installLog ? { pkglog_dir: this.installLog.raw } : {}), ...(this.nativeChats.size ? { native_chats: [...this.nativeChats.keys()].sort() } : {}), updated: Date.now() })}\n`;
       await mkdir(this.home, { recursive: true });
       const tmp = `${file}.${process.pid}.tmp`;
       await writeFile(tmp, content, { mode: 0o600 });
@@ -299,7 +301,13 @@ export class BoxService {
 
   async setMode(workspace: BoxWorkspace, mode: ProjectBoxMode): Promise<BoxStatus> {
     await this.options.writeSettings(workspace.id, { mode, offered: true });
-    const project = this.projects.get(boxKey(boxRoot(workspace)));
+    const key = boxKey(boxRoot(workspace));
+    // Turned on by the user: the project's chats that stayed on this machine move to the box too.
+    if (mode === "on" && [...this.nativeChats.values()].includes(key)) {
+      for (const [sessionId, chatKey] of this.nativeChats) if (chatKey === key) this.nativeChats.delete(sessionId);
+      await this.writeProjects();
+    }
+    const project = this.projects.get(key);
     if (project) project.nextPlanAt = 0;
     // Planned in the background: a missing image starts downloading now.
     void this.ensure(workspace).catch(() => null);
@@ -414,11 +422,19 @@ export class BoxService {
     // The chat's own turn number, counted with the box on or off: a chat that ran natively
     // (reopened, or its box turned on mid-chat) has its first checkpoint (turn-1) before a later
     // turn; the checkpoint names it as session_turn (CLI: the same).
+    const reopened = capture && !this.chatTurns.has(sessionId) && turnsBefore > 0;
     const chatTurn = capture ? (this.chatTurns.get(sessionId) ?? turnsBefore) + 1 : 0;
     if (capture) this.chatTurns.set(sessionId, chatTurn);
     const run = await this.ensure(workspace).catch(() => null);
     if (!run || run.native) return null;
-    if (!capture) return null;
+    // A reopened chat with turns but no checkpoint ran on this machine: when only the server's default
+    // turned the box on, it goes on here (new chats get the box); a project turned on by its user moves it.
+    if (reopened && !this.turns.has(sessionId) && savedTurns(this.snapshotDir(sessionId)) === 0 && (await this.mode(workspace)).source === "server") {
+      this.nativeChats.set(sessionId, run.key);
+      await this.writeProjects();
+      this.log("info", "box: a chat that ran on this machine stays there", { sessionId, turnsBefore });
+    }
+    if (this.nativeChats.has(sessionId) || !capture) return null;
     const turn = (this.turns.get(sessionId) ?? savedTurns(this.snapshotDir(sessionId))) + 1;
     const started = Date.now();
     try {

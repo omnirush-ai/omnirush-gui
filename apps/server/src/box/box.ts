@@ -24,6 +24,7 @@
 // up (<state>/sandbox/snapshots/<session>/turn-N.{json,tar}, the same
 // transport the 2.2.3 sandbox used; record schema 2).
 
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -232,6 +233,7 @@ export async function openBox({ root, runtime, env = process.env, platform = pro
       if (opened.mounts.includes(containerRoot(pkglog.root, platform))) box.useInstallLog(pkglog);
       else log("info", "box made before the install log: its wrappers are not in this box (Reset sandbox adds them)", { key });
     }
+    try { box.useGitIdentity(); } catch (error) { log("warn", "box git identity not set", { error: error instanceof Error ? error.message : String(error) }); }
     box.setState("ready", null, onState);
     return box;
   } catch (error) {
@@ -420,6 +422,25 @@ export class Box {
     const lines = [`BOXD_PATH_PREFIX=${this.pathPrefix}`, `PYTHONPATH=${inBox(pkglog.py)}`, `BOXD_CHOWN_DIRS=${inBox(path.join(pkglog.root, "raw"))}`];
     writeFileSync(path.join(this.runFolder, "env"), `${lines.join("\n")}\n`, { mode: 0o644 });
     this.writeRecord();
+  }
+
+  /**
+   * This machine's git identity (`git config --global user.name/email`) as the box's
+   * system git config (<run>/gitconfig, GIT_CONFIG_SYSTEM in the env file): commits in
+   * the box carry the user's name, as on this machine. Lowest priority (the box's own
+   * global or repository config wins); never in a checkpoint. CLI: the same.
+   */
+  useGitIdentity(read: (env: Env) => { name: string; email: string } = hostGitIdentity): void {
+    const { name, email } = read(this.env);
+    const file = path.join(this.runFolder, "env");
+    let lines: string[] = [];
+    try { lines = readFileSync(file, "utf8").split("\n").filter((line) => line && !line.startsWith("GIT_CONFIG_SYSTEM=")); } catch { /* none yet */ }
+    if (name || email) {
+      const quote = (value: string) => `"${value.replace(/[\r\n]/g, " ").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+      writeFileSync(path.join(this.runFolder, "gitconfig"), `[user]\n${name ? `\tname = ${quote(name)}\n` : ""}${email ? `\temail = ${quote(email)}\n` : ""}`, { mode: 0o644 });
+      lines.push(`GIT_CONFIG_SYSTEM=${RUN_DIR}/gitconfig`);
+    }
+    writeFileSync(file, `${lines.join("\n")}\n`, { mode: 0o644 });
   }
 
   /** The prompt number the package-manager wrappers write into their lines. */
@@ -684,4 +705,16 @@ export function savedTurns(dir: string): number {
   } catch {
     return 0;
   }
+}
+
+/** This machine's `git config --global user.name` and `user.email` (empty when unset or git is missing). */
+export function hostGitIdentity(env: Env = process.env): { name: string; email: string } {
+  const get = (field: string) => {
+    try {
+      return execFileSync("git", ["config", "--global", "--get", field], { encoding: "utf8", timeout: 3_000, env, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return "";
+    }
+  };
+  return { name: get("user.name"), email: get("user.email") };
 }

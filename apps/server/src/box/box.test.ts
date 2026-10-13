@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { boxKey, containerName, containerRoot, createArgs, credentialPath, filterChanges, helperPath, installShell, parseDiff, parseSize, rt, setToolsRoot, singleFileTar, wslPath } from "./box.js";
+import { Box, boxKey, containerName, containerRoot, createArgs, credentialPath, filterChanges, helperPath, installShell, parseDiff, parseSize, rt, setToolsRoot, singleFileTar, wslPath } from "./box.js";
 import { readBoxSettings } from "./desktop.js";
 import { detectStack, imageFor } from "./images.js";
 import { engineConfig, gcInBackground, mapToBox, rememberServerDefault, resolveMode, serverDefault, type BoxRun } from "./launch.js";
@@ -106,6 +106,23 @@ describe("box core", () => {
     expect(args).toContain("127.0.0.1::7777");
     expect(args.join(" ")).not.toContain("docker.sock");
     expect(args.filter((arg) => arg.startsWith("type=bind")).length).toBe(2);
+    // Docker on Linux: this machine's services as host.docker.internal (Podman and Docker Desktop have it already).
+    const base = { name: "n", key: "k", root: "/p", croot: "/p", image: "img", run: "/h/projects/k", shims: null, token: "t", user: { uid: 1000, gid: 1000 }, env: {} };
+    expect(createArgs({ ...base, runtime: { name: "docker", bin: "docker", vm: false }, platform: "linux" }).join(" ")).toContain("--add-host host.docker.internal:host-gateway");
+    expect(createArgs({ ...base, runtime: { name: "podman", bin: "podman", vm: false }, platform: "linux" })).not.toContain("--add-host");
+    expect(createArgs({ ...base, runtime: { name: "docker", bin: "docker", vm: true, flavor: "desktop" }, platform: "linux" })).not.toContain("--add-host");
+    expect(createArgs({ ...base, runtime: { name: "docker", bin: "docker", vm: true }, platform: "darwin" })).not.toContain("--add-host");
+  });
+
+  test("this machine's git identity is the box's system git config (lowest priority), kept with the env file", async () => {
+    const runFolder = await temp("run");
+    await writeFile(join(runFolder, "env"), "BOXD_PATH_PREFIX=/opt/w\n");
+    const box = new Box({ key: "k", name: "n", root: "/p", croot: "/p", runtime: { name: "docker", bin: "docker" }, home: await temp("home"), runFolder, run: async () => ({ code: 0, stdout: "", stderr: "" }), log: () => {}, platform: "linux", env: {} });
+    box.useGitIdentity(() => ({ name: 'Sam "S" \\ R', email: "sam@example.invalid" }));
+    expect(await readFile(join(runFolder, "env"), "utf8")).toBe("BOXD_PATH_PREFIX=/opt/w\nGIT_CONFIG_SYSTEM=/run/omnirush/gitconfig\n");
+    expect(await readFile(join(runFolder, "gitconfig"), "utf8")).toBe('[user]\n\tname = "Sam \\"S\\" \\\\ R"\n\temail = "sam@example.invalid"\n');
+    box.useGitIdentity(() => ({ name: "", email: "" }));
+    expect(await readFile(join(runFolder, "env"), "utf8")).toBe("BOXD_PATH_PREFIX=/opt/w\n");
   });
 
   test("snapshot filter: noise, mounts and credentials out; a folder changed only by them goes too", () => {
@@ -213,6 +230,35 @@ describe("box plugin", () => {
     await hooks["shell.env"]({ callID: "c2" }, { env: off });
     expect(off).toEqual({});
   });
+
+  test("a chat listed as native (and its sub-agents) stays on this machine; other chats of the project use the box", async () => {
+    const home = await temp("boxhome");
+    const root = await temp("project");
+    process.env.OMNIRUSH_BOX_HOME = home;
+    const key = boxKey(root);
+    await mkdir(join(home, "boxes"), { recursive: true });
+    await writeFile(join(home, "boxes", `${key}.json`), JSON.stringify({ state: "ready", uid: 0 }));
+    await writeFile(join(home, DESKTOP_PROJECTS_FILE), JSON.stringify({ keys: [key], native_chats: ["ses_top"] }));
+    const parents: Record<string, string> = { ses_kid: "ses_top", ses_grandkid: "ses_kid" };
+    const asked: string[] = [];
+    const client = { session: { get: async ({ path: { id } }: { path: { id: string } }) => { asked.push(id); return { data: { parentID: parents[id] } }; } } };
+    const hooks = await OmniRushBox({ directory: root, client });
+    const envOf = async (sessionID: string) => {
+      const env: Record<string, string> = {};
+      await hooks["shell.env"]({ callID: "c", sessionID }, { env });
+      return env.OMNIRUSH_BOX_KEY ?? null;
+    };
+    expect(await envOf("ses_top")).toBeNull();
+    expect(await envOf("ses_grandkid")).toBeNull();
+    expect(await envOf("ses_grandkid")).toBeNull();
+    expect(await envOf("ses_new")).toBe(key);
+    // Each chat's parents are asked once.
+    expect(asked).toEqual(["ses_grandkid", "ses_kid", "ses_top", "ses_new"]);
+    await hooks["tool.execute.before"]({ tool: "read", sessionID: "ses_top" }, { args: { filePath: "/etc/hostname" } });
+    const system = ["Platform: darwin"];
+    await hooks["experimental.chat.system.transform"]({ sessionID: "ses_kid" }, { system });
+    expect(system).toEqual(["Platform: darwin"]);
+  });
 });
 
 describe("box service", () => {
@@ -303,6 +349,48 @@ describe("box service", () => {
     await writeFile(join(boxes.snapshotsDir, "ses_turns_c1", "turn-7.json"), "{}");
     await boxes.beforePrompt("ses_turns_c1", workspace, { turnsBefore: 2 });
     expect(frozen.splice(0)).toEqual(["ses_turns_c1 turn-8 3"]);
+  });
+
+  test("a reopened chat that ran on this machine stays there when only the server's default turned the box on", async () => {
+    const stateDir = await temp("state");
+    const home = await temp("boxhome");
+    const root = await temp("project");
+    const workspace: BoxWorkspace = { id: "ws_n", path: root, workspaceType: "local" };
+    const settings: Settings = new Map();
+    const frozen: string[] = [];
+    const run: BoxRun = {
+      key: boxKey(root), container: "c", runtimeBin: "docker", runtimeArgs: [], backend: "docker", exec: null, root, native: false, box: null,
+      ready: async () => null,
+      label: () => null,
+      setTurn: () => {},
+      freeze: async (label, { sessionId, turn = null }) => {
+        frozen.push(`${sessionId} ${label}`);
+        return { label, turn, copied: 0, carried: 0, save: async () => ({ label, changed: 0, bytes: 0 }), discard: async () => null };
+      },
+    };
+    rememberServerDefault(stateDir, { local_box: { default: "on" } });
+    const boxes = service({ stateDir, workspaces: [workspace], settings, env: { OMNIRUSH_BOX_HOME: home } });
+    boxes.ensure = async () => run;
+    const listed = async () => JSON.parse(await readFile(join(home, DESKTOP_PROJECTS_FILE), "utf8")).native_chats ?? [];
+    // Reopened with 2 turns and no checkpoint: no checkpoint now either, and the plugin is told to leave it here.
+    expect(await boxes.beforePrompt("ses_native_r1", workspace, { turnsBefore: 2 })).toBeNull();
+    await boxes.beforePrompt("ses_native_r1", workspace);
+    // A new chat and a chat that already has checkpoints go in the box.
+    await boxes.beforePrompt("ses_native_n1", workspace);
+    await mkdir(join(boxes.snapshotsDir, "ses_native_b1"), { recursive: true });
+    await writeFile(join(boxes.snapshotsDir, "ses_native_b1", "turn-1.json"), "{}");
+    await boxes.beforePrompt("ses_native_b1", workspace, { turnsBefore: 3 });
+    expect(frozen.splice(0)).toEqual(["ses_native_n1 turn-1", "ses_native_b1 turn-2"]);
+    expect(await listed()).toEqual(["ses_native_r1"]);
+    // The user turns the project on: the chat moves to the box.
+    boxes.ensure = async () => run;
+    await boxes.setMode(workspace, "on");
+    expect(await listed()).toEqual([]);
+    await boxes.beforePrompt("ses_native_r1", workspace);
+    expect(frozen.splice(0)).toEqual(["ses_native_r1 turn-1"]);
+    // Turned on by the user before it was reopened: it moves at once.
+    await boxes.beforePrompt("ses_native_r2", workspace, { turnsBefore: 4 });
+    expect(frozen.splice(0)).toEqual(["ses_native_r2 turn-1"]);
   });
 
   test("a remote workspace never gets a box", async () => {

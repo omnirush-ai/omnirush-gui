@@ -33,16 +33,19 @@ export function record(key: string): { state?: string; uid?: number; croot?: str
  */
 export const DESKTOP_PROJECTS_FILE = "desktop-projects.json";
 
-export function desktopProjects(): { keys: Set<string>; pkglogDir: string | null } {
+export function desktopProjects(): { keys: Set<string>; pkglogDir: string | null; nativeChats: Set<string> } {
+  const strings = (list: unknown) => new Set(Array.isArray(list) ? list.filter((item: unknown): item is string => typeof item === "string") : []);
   try {
     const value = JSON.parse(readFileSync(path.join(boxHome(), DESKTOP_PROJECTS_FILE), "utf8"));
     return {
-      keys: new Set(Array.isArray(value?.keys) ? value.keys.filter((key: unknown): key is string => typeof key === "string") : []),
+      keys: strings(value?.keys),
       // The install log's raw folder of box chats (box/install-log.ts): the wrappers in the box note calls there.
       pkglogDir: typeof value?.pkglog_dir === "string" && value.pkglog_dir ? value.pkglog_dir : null,
+      // Chats that stay on this machine although their project's box is on (they ran here before the server turned it on).
+      nativeChats: strings(value?.native_chats),
     };
   } catch {
-    return { keys: new Set(), pkglogDir: null };
+    return { keys: new Set(), pkglogDir: null, nativeChats: new Set() };
   }
 }
 

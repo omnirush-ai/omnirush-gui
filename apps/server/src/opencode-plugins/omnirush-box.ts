@@ -25,20 +25,42 @@ import path from "node:path";
 
 import { BOX_NOTE, desktopProjects, engineDirs, FILE_TOOLS, keyOf, record, toolPaths, within } from "../box/plugin-lib.js";
 
-export const OmniRushBox = async ({ directory }: { directory?: string }) => {
+/** The engine client's one call used here: a chat's parent (a sub-agent's chat has one). */
+type SessionReader = { session: { get: (options: { path: { id: string } }) => Promise<{ data?: { parentID?: string } | null } | undefined> } };
+
+export const OmniRushBox = async ({ directory, client }: { directory?: string; client?: SessionReader }) => {
   const root = path.resolve(directory || process.cwd());
   const key = keyOf(root);
-  const current = () => {
+  // A chat's top chat (sub-agents run in child chats): asked once per chat, at most 8 levels up.
+  const tops = new Map<string, Promise<string>>();
+  const topOf = (id: string): Promise<string> => {
+    const known = tops.get(id);
+    if (known) return known;
+    const found = (async () => {
+      let current = id;
+      for (let level = 0; level < 8 && client; level += 1) {
+        const parent = (await client.session.get({ path: { id: current } }).catch(() => undefined))?.data?.parentID;
+        if (!parent) break;
+        current = parent;
+      }
+      return current;
+    })();
+    tops.set(id, found);
+    return found;
+  };
+  const current = async (sessionID?: string) => {
     const listed = desktopProjects();
     if (!listed.keys.has(key)) return null;
+    // A chat that ran on this machine before the box was on stays there (with its sub-agents).
+    if (sessionID && listed.nativeChats.size && (listed.nativeChats.has(sessionID) || listed.nativeChats.has(await topOf(sessionID)))) return null;
     const rec = record(key);
     return rec && rec.state !== "off" ? { ...rec, pkglogDir: listed.pkglogDir } : null;
   };
-  const active = () => Boolean(current());
+  const active = async (sessionID?: string) => Boolean(await current(sessionID));
   const allowed = [root, ...engineDirs()];
   return {
     "shell.env": async (input: { callID?: string; sessionID?: string }, output: { env: Record<string, string> }) => {
-      const rec = current();
+      const rec = await current(input.sessionID);
       if (!rec) return;
       output.env.OMNIRUSH_BOX_KEY = key;
       // Desktop: box chats note installs in their own raw folder (boxsh forwards it into the box).
@@ -46,16 +68,16 @@ export const OmniRushBox = async ({ directory }: { directory?: string }) => {
       if (input.callID) output.env.OMNIRUSH_CALL = String(input.callID);
       if (input.sessionID) output.env.OMNIRUSH_SESSION = String(input.sessionID);
     },
-    "tool.execute.before": async (input: { tool: string }, output: { args?: Record<string, unknown> }) => {
-      if (!FILE_TOOLS.has(input.tool) || !active()) return;
+    "tool.execute.before": async (input: { tool: string; sessionID?: string }, output: { args?: Record<string, unknown> }) => {
+      if (!FILE_TOOLS.has(input.tool) || !(await active(input.sessionID))) return;
       for (const raw of toolPaths(input.tool, output.args ?? {})) {
         const full = path.resolve(root, raw);
         if (allowed.some((dir) => within(full, dir))) continue;
         throw new Error(`${raw} is outside the project folder. This session runs in a sandbox: files outside ${root} live inside the Linux container, not where this tool can see them. Use the shell tool (cat, ls, sed, tee, ...) to read or change them.`);
       }
     },
-    "experimental.chat.system.transform": async (_input: unknown, output: { system?: unknown }) => {
-      const rec = current();
+    "experimental.chat.system.transform": async (input: { sessionID?: string }, output: { system?: unknown }) => {
+      const rec = await current(input.sessionID);
       if (!rec || !Array.isArray(output.system)) return;
       // In place: the engine keeps its own reference to this array.
       for (let i = 0; i < output.system.length; i += 1) {
