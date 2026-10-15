@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import type { UIMessage } from "ai";
 import type { PermissionRequest, PermissionV2Request, QuestionRequest } from "@opencode-ai/sdk/v2/client";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
@@ -11,6 +11,7 @@ import { useSessionInteractions, type UseSessionInteractionsInput } from "../src
 import type { OmniRushSessionSnapshot } from "../src/app/lib/omnirush-server";
 import { getReactQueryClient } from "../src/react-app/infra/query-client";
 import { useSessionActivityStore } from "../src/react-app/domains/session/status/session-activity-store";
+import * as notifications from "../src/react-app/shell/desktop-notifications";
 import {
   __applySessionSyncEventForTest,
   __createWorkspaceSessionSyncForTest,
@@ -128,6 +129,27 @@ afterEach(() => {
 });
 
 describe("session permission sync", () => {
+  test("replayed pending permission and question requests notify only once", () => {
+    const input = { workspaceId: "workspace-a", baseUrl: "https://approval-sounds.example/opencode", omnirushToken: "token" };
+    const cleanup = __createWorkspaceSessionSyncForTest(input);
+    const notify = spyOn(notifications, "notifyDesktopEvent").mockImplementation(() => {});
+    try {
+      for (const event of [
+        { type: "permission.asked", properties: permission("sound-v1", "session-a") },
+        { type: "permission.v2.asked", properties: v2Permission("sound-v2", "session-a") },
+        { type: "question.asked", properties: question("sound-question", "session-a") },
+      ]) {
+        __applySessionSyncEventForTest(input, event);
+        __applySessionSyncEventForTest(input, event);
+      }
+      expect(notify).toHaveBeenCalledTimes(3);
+      expect(notify.mock.calls.map(([event]) => event.type)).toEqual(["permission.asked", "permission.asked", "question.asked"]);
+    } finally {
+      notify.mockRestore();
+      cleanup();
+    }
+  });
+
   for (const engine of ["v1", "v2"]) {
     test(`${engine} hydration reads only its required protocols and cancels obsolete reads`, async () => {
       GlobalRegistrator.register({ url: "http://localhost/" });

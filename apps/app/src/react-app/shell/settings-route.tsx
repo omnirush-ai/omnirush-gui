@@ -2367,6 +2367,10 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
               local.setPrefs((previous) => ({ ...previous, analyticsEnabled: !previous.analyticsEnabled }));
             }}
             desktopNotifications={local.prefs.desktopNotifications}
+            notificationSounds={local.prefs.notificationSounds}
+            onToggleNotificationSounds={() => {
+              local.setPrefs((previous) => ({ ...previous, notificationSounds: !previous.notificationSounds }));
+            }}
             onDesktopNotificationsChange={(desktopNotifications) => {
               local.setPrefs((previous) => ({ ...previous, desktopNotifications }));
             }}

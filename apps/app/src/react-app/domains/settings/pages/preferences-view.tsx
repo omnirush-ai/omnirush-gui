@@ -42,6 +42,8 @@ export type PreferencesViewProps = {
   onToggleAnalytics: () => void;
   desktopNotifications: DesktopNotificationPreference;
   onDesktopNotificationsChange: (value: DesktopNotificationPreference) => void;
+  notificationSounds: boolean;
+  onToggleNotificationSounds: () => void;
   /** The server whose sub-agent model setting the Model section shows; hidden without one. */
   subagentModelClient?: SubagentModelClient | null;
 };
@@ -112,6 +114,21 @@ export function PreferencesView(props: PreferencesViewProps) {
           <LayoutSectionTitle>{t("settings.desktop_notifications.title")}</LayoutSectionTitle>
           <LayoutSectionDescription>{t("settings.desktop_notifications.section_desc")}</LayoutSectionDescription>
         </LayoutSectionHeader>
+
+        <LayoutSectionItem>
+          <LayoutSectionItemHeader>
+            <LayoutSectionItemTitle>{t("settings.desktop_notifications.sounds")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("settings.desktop_notifications.sounds_desc")}</LayoutSectionItemDescription>
+            <LayoutSectionItemHeaderActions>
+              <Switch
+                aria-label={t("settings.desktop_notifications.sounds")}
+                checked={props.notificationSounds}
+                disabled={props.busy}
+                onCheckedChange={props.onToggleNotificationSounds}
+              />
+            </LayoutSectionItemHeaderActions>
+          </LayoutSectionItemHeader>
+        </LayoutSectionItem>
 
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
