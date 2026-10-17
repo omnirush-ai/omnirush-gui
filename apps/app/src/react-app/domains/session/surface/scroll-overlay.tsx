@@ -1,21 +1,12 @@
 import { memo, useCallback } from "react";
-
-import {
-  selectSessionIsStickyBottom,
-  selectSessionTopClippedMessageId,
-  useSessionScrollStore,
-} from "./scroll-store";
-
-function useSessionScrollOverlayState(sessionId: string) {
-  const isAtBottom = useSessionScrollStore((state) => selectSessionIsStickyBottom(state.sessions, sessionId));
-  const topClippedMessageId = useSessionScrollStore((state) => selectSessionTopClippedMessageId(state.sessions, sessionId));
-
-  return { isAtBottom, topClippedMessageId };
-}
+import { ArrowDown, ArrowUp } from "lucide-react";
 
 type JumpToStartButtonProps = {
   onJumpToStartOfMessage: (behavior?: ScrollBehavior) => void;
 };
+
+const JUMP_BUTTON_CLASS =
+  "pointer-events-auto inline-flex h-7 items-center gap-1.5 rounded-full border border-dls-border bg-dls-surface/95 px-2.5 text-[11px] font-medium text-dls-text shadow-(--dls-card-shadow) backdrop-blur-md transition-all hover:bg-dls-hover hover:scale-105 active:scale-95 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-dls-border";
 
 const JumpToStartButton = memo(function JumpToStartButton({
   onJumpToStartOfMessage,
@@ -27,10 +18,14 @@ const JumpToStartButton = memo(function JumpToStartButton({
   return (
     <button
       type="button"
-      className="rounded-full px-3 py-1.5 text-xs text-dls-text transition-colors hover:bg-dls-hover"
+      className={JUMP_BUTTON_CLASS}
+      aria-label="Jump to start"
+      title="Jump to start"
+      data-testid="jump-to-start"
       onClick={handleClick}
     >
-      Jump to start
+      <ArrowUp aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="whitespace-nowrap">Jump to start</span>
     </button>
   );
 });
@@ -49,10 +44,14 @@ const JumpToLatestButton = memo(function JumpToLatestButton({
   return (
     <button
       type="button"
-      className="rounded-full px-3 py-1.5 text-xs text-dls-text transition-colors hover:bg-dls-hover"
+      className={JUMP_BUTTON_CLASS}
+      aria-label="Jump to end"
+      title="Jump to end"
+      data-testid="jump-to-latest"
       onClick={handleClick}
     >
-      Jump to latest
+      <ArrowDown aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="whitespace-nowrap">Jump to end</span>
     </button>
   );
 });
@@ -65,28 +64,18 @@ type SessionScrollOverlayProps = {
 };
 
 export const SessionScrollOverlay = memo(function SessionScrollOverlay({
-  sessionId,
-  isStreaming,
   onJumpToLatest,
   onJumpToStartOfMessage,
 }: SessionScrollOverlayProps) {
-  const { isAtBottom, topClippedMessageId } = useSessionScrollOverlayState(sessionId);
-  const showJumpToStart = !isStreaming && Boolean(topClippedMessageId);
-  const showJumpToLatest = !isAtBottom;
-
-  if (!showJumpToStart && !showJumpToLatest) {
-    return null;
-  }
-
   return (
-    <div className="pointer-events-none absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 justify-center">
-      <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-dls-border bg-dls-surface/95 p-1 shadow-(--dls-card-shadow) backdrop-blur-md">
-        {showJumpToStart ? (
-          <JumpToStartButton onJumpToStartOfMessage={onJumpToStartOfMessage} />
-        ) : null}
-        {showJumpToLatest ? (
-          <JumpToLatestButton onJumpToLatest={onJumpToLatest} />
-        ) : null}
+    <div
+      className="pointer-events-none absolute inset-y-0 end-3 z-30 flex flex-col items-end py-3"
+      data-testid="session-scroll-rail"
+      aria-label="Chat navigation"
+    >
+      <JumpToStartButton onJumpToStartOfMessage={onJumpToStartOfMessage} />
+      <div className="mt-auto">
+        <JumpToLatestButton onJumpToLatest={onJumpToLatest} />
       </div>
     </div>
   );

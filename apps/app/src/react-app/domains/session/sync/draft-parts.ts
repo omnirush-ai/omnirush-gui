@@ -46,7 +46,6 @@ export async function draftToParts(
     return segments[segments.length - 1] ?? "file";
   };
 
-  const attachmentFileById = new Map<string, FilePartInput>();
   if (draft.attachments.length > 0) {
     if (!endpoint) {
       throw new Error("Workspace endpoint is unavailable; attachments could not be copied for tool access.");
@@ -58,18 +57,20 @@ export async function draftToParts(
       workspaceRoot: root,
     });
     if (uploaded) {
-      parts.push(uploaded.note);
-      for (const [index, attachment] of draft.attachments.entries()) {
-        const filePart = uploaded.files[index];
-        if (filePart) attachmentFileById.set(attachment.id, filePart);
+      // Attachments are separate from the editor text. Put their model-facing
+      // parts first so an image/file-only prompt and a text-plus-file prompt
+      // reach the model in the same order users see in the composer.
+      for (const filePart of uploaded.files) {
+        if (filePart) parts.push(filePart);
       }
+      parts.push(uploaded.note);
     }
   }
 
-  // Prefer draft.text token order so attachment chips stay inline with surrounding text
-  // (same positions as the composer), instead of dumping every file part at the end.
+  // Attachment markers are retained in draft snapshots for compatibility, but
+  // they are not part of the visible editor and never split the user's text.
   const hasAttachmentTokens = /\[attachment [^\]]+\]/.test(draft.text);
-  if (hasAttachmentTokens || attachmentFileById.size > 0) {
+  if (hasAttachmentTokens || draft.attachments.length > 0) {
     const pasteByLabel = new Map(
       draft.parts
         .filter((part): part is Extract<ComposerPart, { type: "paste" }> => part.type === "paste")
@@ -80,11 +81,6 @@ export async function draftToParts(
       if (!segment) continue;
       const attachmentMatch = segment.match(/^\[attachment (.+)\]$/);
       if (attachmentMatch?.[1]) {
-        const filePart = attachmentFileById.get(attachmentMatch[1]);
-        if (filePart) {
-          parts.push(filePart);
-          attachmentFileById.delete(attachmentMatch[1]);
-        }
         continue;
       }
       const pasteMatch = segment.match(/^\[pasted text (.+)\]$/);
@@ -137,9 +133,6 @@ export async function draftToParts(
         }
       }
       parts.push({ type: "text", text: segment });
-    }
-    for (const filePart of attachmentFileById.values()) {
-      parts.push(filePart);
     }
   } else {
     for (const part of draft.parts) {

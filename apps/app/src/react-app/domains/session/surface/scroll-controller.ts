@@ -239,15 +239,23 @@ export function useSessionScrollController(
 
   const jumpToStartOfMessage = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
-      const messageId = readScrollState(selectedSessionId).topClippedMessageId;
       const container = options.containerRef.current;
-      if (!messageId || !container) return;
+      if (!container) return;
 
-      const target = messageElementById(container, messageId);
-      if (!target) return;
-
-      setManualScroll(selectedSessionId, container.scrollTop, messageId);
-      target.scrollIntoView({ behavior, block: "start" });
+      const messageId = readScrollState(selectedSessionId).topClippedMessageId;
+      setManualScroll(selectedSessionId, 0, null);
+      if (container.scrollTo) {
+        container.scrollTo({ top: 0, behavior });
+      } else {
+        container.scrollTop = 0;
+      }
+      lastKnownScrollTopRef.current = 0;
+      if (messageId) {
+        const target = messageElementById(container, messageId);
+        if (target) {
+          target.scrollIntoView({ behavior, block: "start" });
+        }
+      }
     },
     [options.containerRef, selectedSessionId, setManualScroll],
   );

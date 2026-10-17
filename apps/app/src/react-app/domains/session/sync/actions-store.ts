@@ -141,6 +141,9 @@ export function createSessionActionsStore(options: {
   const buildPromptParts = async (draft: ComposerDraft): Promise<PartInput[]> => {
     const parts: PartInput[] = [];
     const text = draft.resolvedText ?? draft.text;
+    for (const part of await Promise.all(draft.attachments.map(composerAttachmentToFilePart))) {
+      if (part) parts.push(part);
+    }
     parts.push({ type: "text", text } as TextPartInput);
 
     const root = options.runtimeWorkspaceRoot().trim() || options.selectedWorkspaceRoot().trim();
@@ -186,9 +189,6 @@ export function createSessionActionsStore(options: {
     }
 
     parts.push(...firstLineLocalFileParts(text, root));
-    for (const part of await Promise.all(draft.attachments.map(composerAttachmentToFilePart))) {
-      if (part) parts.push(part);
-    }
     return parts;
   };
 

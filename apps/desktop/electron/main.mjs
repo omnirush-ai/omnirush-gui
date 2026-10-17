@@ -2404,14 +2404,24 @@ const desktopCommandHandlers = {
       return shell.openPath(target);
   },
   "__revealItemInDir": async (event, ...args) => {
-      const target = String(args[0] ?? "").trim();
+      let target = String(args[0] ?? "").trim();
       if (!target) return "Path is required.";
+      // Clean up file URI if passed
+      if (target.startsWith("file:///")) {
+        target = target.replace(/^file:\/\/\/?/, "");
+        if (/^[a-zA-Z]:/.test(target)) {
+          // Windows drive letter
+        } else {
+          target = "/" + target;
+        }
+      }
+      // Normalize slashes for platform
+      target = path.resolve(target.replace(/\//g, path.sep));
       if (existsSync(target)) {
         shell.showItemInFolder(target);
         return undefined;
       }
-      // The exact file may not exist yet (or path is slightly off); fall back to
-      // opening the containing directory so the user still lands in the right place.
+      // The exact file may not exist yet; fall back to containing directory
       const parent = path.dirname(target);
       if (parent && parent !== target && existsSync(parent)) {
         const error = await shell.openPath(parent);

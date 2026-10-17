@@ -17,6 +17,14 @@ import { PanelTab, PanelTabClose, PanelTabItem, PanelTabList } from "@/component
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
@@ -82,14 +90,42 @@ flowchart LR
 const STANDALONE_MERMAID_ARTIFACT_CONTENT = `flowchart TD
   StandaloneStart[Standalone Mermaid] --> StandaloneFinish[Rendered artifact]`;
 
+import { revealDesktopItemInDir } from "@/app/lib/desktop";
+
+function absoluteWorkspacePath(root: string, path: string) {
+  const cleanRoot = root.trim().replace(/[/\\]+$/, "");
+  let cleanPath = path.trim().replace(/^file:\/\/\/?/, "").replace(/^\.\//, "");
+  // If cleanPath starts with a drive letter, it's already an absolute path
+  if (/^[a-zA-Z]:[/\\]/.test(cleanPath)) {
+    return cleanPath.replace(/\//g, "\\");
+  }
+  const combined = cleanRoot ? `${cleanRoot}/${cleanPath}` : cleanPath;
+  return combined.replace(/\//g, "\\");
+}
+
 type SidePanelTabProps = {
   tab: PanelTabEntry;
   active: boolean;
+  sessionId?: string;
+  workspaceRoot?: string;
   onSelect: (tabId: string) => void;
   onClose: (tab: PanelTabEntry) => void;
+  onCloseOthers?: (tabId: string) => void;
+  onCloseToRight?: (tabId: string) => void;
+  onCloseAll?: () => void;
 };
 
-function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
+function SidePanelTab({
+  tab,
+  active,
+  sessionId,
+  workspaceRoot = "",
+  onSelect,
+  onClose,
+  onCloseOthers,
+  onCloseToRight,
+  onCloseAll,
+}: SidePanelTabProps) {
   const dragControls = useDragControls();
   const tabRef = React.useRef<HTMLDivElement>(null);
 
@@ -106,58 +142,161 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
     );
   };
 
+  const getTargetRelativePath = (): string => {
+    if (tab.type === "artifact") {
+      if (tab.target?.value) {
+        return tab.target.value.replace(/\\/g, "/");
+      }
+      if (sessionId) {
+        const transcriptTargets = usePanelTabStore.getState().transcriptArtifactTargets[sessionId] ?? [];
+        const found = transcriptTargets.find((item) => item.id === tab.id);
+        if (found?.value) {
+          return found.value.replace(/\\/g, "/");
+        }
+      }
+      if (tab.id.startsWith("file:")) {
+        return tab.id.slice("file:".length).replace(/\\/g, "/");
+      }
+    }
+    return tab.label.replace(/\\/g, "/");
+  };
+
+  const getTargetAbsolutePath = (): string => {
+    const rel = getTargetRelativePath();
+    if (/^[a-zA-Z]:[/\\]/.test(rel)) {
+      return rel.replace(/\//g, "\\");
+    }
+    if (!workspaceRoot) return rel.replace(/\//g, "\\");
+    return absoluteWorkspacePath(workspaceRoot, rel);
+  };
+
+  const handleCopyPath = () => {
+    const absPath = getTargetAbsolutePath();
+    void navigator.clipboard.writeText(absPath).then(() => {
+      toast.success("Path copied to clipboard", { description: absPath });
+    }).catch(() => {
+      toast.error("Failed to copy path");
+    });
+  };
+
+  const handleCopyRelativePath = () => {
+    const relPath = getTargetRelativePath();
+    void navigator.clipboard.writeText(relPath).then(() => {
+      toast.success("Relative path copied to clipboard", { description: relPath });
+    }).catch(() => {
+      toast.error("Failed to copy relative path");
+    });
+  };
+
+  const handleRevealInExplorer = () => {
+    const absPath = getTargetAbsolutePath();
+    void revealDesktopItemInDir(absPath).catch((err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Failed to reveal item in file manager");
+    });
+  };
+
+  const tabInner = (
+    <div ref={tabRef} className="relative">
+      <PanelTab
+        active={active}
+        onClick={() => onSelect(tab.id)}
+        onPointerDown={tab.type === "browser" ? (event) => {
+          if (event.button !== 0) {
+            return;
+          }
+
+          dragControls.start(event);
+        } : undefined}
+        onKeyDown={tab.type === "browser" ? (event: React.KeyboardEvent<HTMLButtonElement>) => {
+          if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
+            return;
+          }
+
+          event.preventDefault();
+          showBrowserTabContextMenu();
+        } : undefined}
+        title={tab.label}
+        aria-label={`Select tab: ${tab.label}`}
+      >
+        {tab.type === "browser" ? (
+          tab.favicon ? (
+            <img src={tab.favicon} alt="" className="size-3.5 shrink-0 rounded-[2px]" />
+          ) : tab.status === "loading" ? (
+            <Loader2 className="animate-spin" />
+          ) : (
+            <Globe />
+          )
+        ) : tab.type === "app" ? <Blocks /> : (
+          <ArtifactIcon type={tab.preview} />
+        )}
+        <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
+      </PanelTab>
+      <PanelTabClose
+        active={active}
+        label={tab.label}
+        onClose={() => onClose(tab)}
+      />
+    </div>
+  );
+
+  if (tab.type === "browser") {
+    return (
+      <PanelTabItem
+        value={tab.id}
+        id={tab.id}
+        dragControls={dragControls}
+        onContextMenu={(event: React.MouseEvent<HTMLDivElement>) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showBrowserTabContextMenu({ clientX: event.clientX, clientY: event.clientY });
+        }}
+      >
+        {tabInner}
+      </PanelTabItem>
+    );
+  }
+
   return (
-    <PanelTabItem
-      value={tab.id}
-      id={tab.id}
-      dragControls={tab.type === "browser" ? dragControls : undefined}
-      onContextMenu={tab.type === "browser" ? (event: React.MouseEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showBrowserTabContextMenu({ clientX: event.clientX, clientY: event.clientY });
-      } : undefined}
-    >
-      <div ref={tabRef} className="relative">
-        <PanelTab
-          active={active}
-          onClick={() => onSelect(tab.id)}
-          onPointerDown={tab.type === "browser" ? (event) => {
-            if (event.button !== 0) {
-              return;
-            }
-
-            dragControls.start(event);
-          } : undefined}
-          onKeyDown={tab.type === "browser" ? (event: React.KeyboardEvent<HTMLButtonElement>) => {
-            if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
-              return;
-            }
-
-            event.preventDefault();
-            showBrowserTabContextMenu();
-          } : undefined}
-          title={tab.label}
-          aria-label={`Select tab: ${tab.label}`}
-        >
-          {tab.type === "browser" ? (
-            tab.favicon ? (
-              <img src={tab.favicon} alt="" className="size-3.5 shrink-0 rounded-[2px]" />
-            ) : tab.status === "loading" ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <Globe />
-            )
-          ) : tab.type === "app" ? <Blocks /> : (
-            <ArtifactIcon type={tab.preview} />
-          )}
-          <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
-        </PanelTab>
-        <PanelTabClose
-          active={active}
-          label={tab.label}
-          onClose={() => onClose(tab)}
-        />
-      </div>
+    <PanelTabItem value={tab.id} id={tab.id}>
+      <ContextMenu>
+        <ContextMenuTrigger className="relative block">
+          {tabInner}
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-56">
+          <ContextMenuItem onClick={() => onClose(tab)}>
+            Close
+            <ContextMenuShortcut>Ctrl+F4</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => onCloseOthers?.(tab.id)}>
+            Close Others
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => onCloseToRight?.(tab.id)}>
+            Close to the Right
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => onClose(tab)}>
+            Close Saved
+            <ContextMenuShortcut>Ctrl+K U</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => onCloseAll?.()}>
+            Close All
+            <ContextMenuShortcut>Ctrl+K W</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={handleCopyPath}>
+            Copy Path
+            <ContextMenuShortcut>Shift+Alt+C</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuItem onClick={handleCopyRelativePath}>
+            Copy Relative Path
+            <ContextMenuShortcut>Ctrl+K Ctrl+Shift+C</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={handleRevealInExplorer}>
+            Reveal in File Explorer
+            <ContextMenuShortcut>Shift+Alt+R</ContextMenuShortcut>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </PanelTabItem>
   );
 }
@@ -554,7 +693,7 @@ export function SidePanel({
   const activeTab = useActivePanelTab(sessionId);
   const isBrowserAvailable = Boolean(getElectronBrowser());
 
-  const { createTab, closeTab, selectTab, reorderTabs } = useSidePanelTabs(sessionId);
+  const { createTab, closeTab, closeOtherTabs, closeTabsToRight, closeAllTabs, selectTab, reorderTabs } = useSidePanelTabs(sessionId);
 
   const seedArtifactOverflowControlAction = React.useMemo<OmniRushControlAction | null>(() => {
     if (!import.meta.env.DEV) return null;
@@ -755,8 +894,13 @@ export function SidePanel({
                     key={tab.id}
                     tab={tab}
                     active={tab.id === activeTab?.id}
+                    sessionId={sessionId}
+                    workspaceRoot={workspaceRoot}
                     onSelect={selectTab}
                     onClose={closeTab}
+                    onCloseOthers={closeOtherTabs}
+                    onCloseToRight={closeTabsToRight}
+                    onCloseAll={closeAllTabs}
                   />
                 ))}
               </PanelTabList>

@@ -51,11 +51,15 @@ test(`attaching an image in ${entryPoint} retains the draft until the upload is 
         await new Promise((resolve) => requestAnimationFrame(resolve));
       }
       const chip = document.querySelector<HTMLElement>("[data-attachment-id]");
+      const editor = document.querySelector<HTMLElement>('[contenteditable="true"]');
+      const attachmentStrip = document.querySelector<HTMLElement>("[data-composer-attachments]");
       return {
         fileBytes: file.size,
         elapsedMs: Math.round(performance.now() - startedAt),
         chipTitle: chip?.getAttribute("title") ?? "",
         chipStatus: chip?.getAttribute("data-attachment-status") ?? "",
+        attachmentOutsideEditor: Boolean(attachmentStrip && !editor?.contains(attachmentStrip)),
+        editorText: editor?.textContent ?? "",
       };
   }, [attachmentName]), { awaitPromise: true, timeoutMs: 60_000 });
   if (!isRecord(attached)) throw new Error(`Attachment result was invalid: ${JSON.stringify(attached)}`);
@@ -65,6 +69,8 @@ test(`attaching an image in ${entryPoint} retains the draft until the upload is 
   expect(typeof attached.elapsedMs === "number" ? attached.elapsedMs : Number.POSITIVE_INFINITY).toBeLessThan(2_000);
   expect(attached.chipTitle).toBe(attachmentName);
   expect(attached.chipStatus).toBe("ready");
+  expect(attached.attachmentOutsideEditor).toBe(true);
+  expect(attached.editorText).toContain("Describe the attached image.");
   await user.screenshot();
 
   await step("paste a video alongside the image", async () => {

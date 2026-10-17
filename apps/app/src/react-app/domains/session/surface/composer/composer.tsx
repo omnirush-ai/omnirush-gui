@@ -5,6 +5,7 @@ import type { Agent } from "@opencode-ai/sdk/v2/client";
 import { AppWindowMac, Cloud, Monitor, ArrowUp, Check, ChevronDown, ChevronRight, FileText, LoaderCircle, Paperclip, Plus, RefreshCw, Settings, Square, Terminal, X, Zap } from "lucide-react";
 import fuzzysort from "fuzzysort";
 import { toast } from "@/components/ui/sonner";
+import { ImageAttachmentBadge } from "@/components/chat/image-attachment-badge";
 import type { CloudImportedPlugin, CloudImportedPluginFile } from "@/app/cloud/import-state";
 import type { ComposerAttachment, McpServerEntry, McpStatus, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
 import { t } from "@/i18n";
@@ -16,7 +17,7 @@ import {
   type ComposerSettingsSection,
 } from "@/react-app/domains/settings/library";
 import { ModelSelect } from "@/components/model-select";
-import { LexicalPromptEditor, syncAttachmentChipStatus, type ComposerAttachmentToken, type LexicalPromptEditorHandle } from "./editor";
+import { LexicalPromptEditor, type LexicalPromptEditorHandle } from "./editor";
 import { listRunningAppsForMention } from "./app-mentions";
 import { COMPUTER_MENTIONS } from "./computer-mentions";
 import type { ComposerMentionKind } from "./mention-encoding";
@@ -171,6 +172,96 @@ function parseClipboardUriList(clipboard: DataTransfer) {
 
 function isImageAttachment(attachment: ComposerAttachment) {
   return attachment.kind === "image" || attachment.mimeType.startsWith("image/");
+}
+
+const ATTACHMENT_TOKEN_RE = /\[attachment [^\]]+\]/g;
+
+function stripAttachmentTokens(value: string) {
+  return value.replace(ATTACHMENT_TOKEN_RE, "");
+}
+
+/** Keep attachment markers in the draft for payload construction while the editor stays text-only. */
+function mergeAttachmentTokens(value: string, attachments: readonly ComposerAttachment[]) {
+  const visibleValue = stripAttachmentTokens(value);
+  if (attachments.length === 0) return visibleValue;
+  return `${visibleValue}${attachments.map((attachment) => `[attachment ${attachment.id}]`).join("")}`;
+}
+
+function ComposerAttachmentStrip(props: {
+  attachments: readonly ComposerAttachment[];
+  uploading: boolean;
+  onRemove: (id: string) => void;
+}) {
+  if (props.attachments.length === 0) return null;
+
+  return (
+    <div
+      aria-label={t("composer.attach_files")}
+      className="mb-2 flex max-w-full flex-wrap items-center gap-2 px-4 pt-3"
+      data-composer-attachments
+      role="list"
+    >
+      {props.attachments.map((attachment) => {
+        const uploading = props.uploading;
+        const status = uploading ? "uploading" : "ready";
+        const spinner = uploading ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-background/60"
+            data-attachment-spinner
+          >
+            <LoaderCircle className="size-4 animate-spin text-foreground" />
+          </span>
+        ) : null;
+
+        if (isImageAttachment(attachment) && attachment.previewUrl) {
+          return (
+            <div
+              key={attachment.id}
+              aria-label={attachment.name}
+              className="relative inline-flex shrink-0"
+              data-attachment-id={attachment.id}
+              data-attachment-status={status}
+              role="listitem"
+              title={attachment.name}
+            >
+              <ImageAttachmentBadge
+                src={attachment.previewUrl}
+                alt={attachment.name}
+                onRemove={() => props.onRemove(attachment.id)}
+              />
+              {spinner}
+            </div>
+          );
+        }
+
+        return (
+          <div
+            key={attachment.id}
+            aria-label={attachment.name}
+            className="relative inline-flex h-10 max-w-[220px] shrink-0 items-center gap-1.5 rounded-xl border border-border/70 bg-muted/40 pl-2 pr-8"
+            data-attachment-id={attachment.id}
+            data-attachment-status={status}
+            role="listitem"
+            title={attachment.name}
+          >
+            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate text-[11px] font-medium text-foreground">{attachment.name}</span>
+            <button
+              type="button"
+              aria-label={`Remove ${attachment.name}`}
+              className="absolute right-1 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={() => props.onRemove(attachment.id)}
+              title="Remove"
+            >
+              <X className="size-3" />
+            </button>
+            {spinner}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function isLocalCapability(origin: SkillCard["origin"] | McpServerEntry["origin"]) {
@@ -765,16 +856,10 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     () => props.pastedText.map((item) => ({ label: item.label, lines: item.lines, text: item.text })),
     [props.pastedText],
   );
-  // Stable tokens keep streaming renders from re-running Lexical's draft sync.
-  const attachmentTokens = useMemo<ComposerAttachmentToken[]>(
-    () => props.attachments.map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      kind: isImageAttachment(attachment) ? "image" : "file",
-      previewUrl: attachment.previewUrl,
-    })),
-    [props.attachments],
-  );
+  const editorDraft = useMemo(() => stripAttachmentTokens(props.draft), [props.draft]);
+  const handleEditorDraftChange = useCallback((value: string) => {
+    props.onDraftChange(mergeAttachmentTokens(value, props.attachments));
+  }, [props.attachments, props.onDraftChange]);
 
   const handleExpandPastedText = useCallback((label: string) => {
     const target = props.pastedText.find((item) => item.label === label);
@@ -899,7 +984,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       applySkillSelection(command.name, options);
       return;
     }
-    props.onDraftChange(`/${command.name} `);
+    handleEditorDraftChange(`/${command.name} `);
     setSlashOpen(false);
     setToolMenuOpen(false);
   };
@@ -917,14 +1002,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
         capability: skill.connectCapabilityName ?? skill.name,
       });
       if (options?.replaceSkillDraft) {
-        props.onDraftChange(`${token} `);
+        handleEditorDraftChange(`${token} `);
       } else {
         const editor = editorRef.current;
         if (editor) {
           editor.insertSkillAtSelection(slug, token);
         } else {
           const separator = props.draft.length > 0 && !/\s$/.test(props.draft) ? " " : "";
-          props.onDraftChange(`${props.draft}${separator}${token} `);
+          handleEditorDraftChange(`${props.draft}${separator}${token} `);
         }
       }
       setSlashOpen(false);
@@ -933,14 +1018,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     }
     const name = skill.name;
     if (options?.replaceSkillDraft) {
-      props.onDraftChange(`[skill ${name}] `);
+      handleEditorDraftChange(`[skill ${name}] `);
     } else {
       const editor = editorRef.current;
       if (editor) {
         editor.insertSkillAtSelection(name);
       } else {
         const separator = props.draft.length > 0 && !/\s$/.test(props.draft) ? " " : "";
-        props.onDraftChange(`${props.draft}${separator}[skill ${name}] `);
+        handleEditorDraftChange(`${props.draft}${separator}[skill ${name}] `);
       }
     }
     setSlashOpen(false);
@@ -1179,14 +1264,6 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     }
   };
 
-  // Attachment chips are raw Lexical token DOM, so their uploading overlay is
-  // synced by attribute whenever the uploading flag or the chip set changes.
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    syncAttachmentChipStatus(root, props.attachmentsUploading ? "uploading" : "ready");
-  }, [props.attachmentsUploading, props.attachments]);
-
   const addAttachments = async (inputFiles: File[]) => {
     if (!inputFiles.length) return;
     if (!props.attachmentsEnabled) {
@@ -1341,13 +1418,11 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
           {renderMentionMenu()}
           {renderSlashMenu()}
 
-          {/*
-            The pasted-text chip used to render twice — once inline inside
-            the Lexical editor (via ComposerPastedTextNode) and again as a
-            separate rail here above the composer. Keep only the inline
-            chip; its pill already shows label + line count, and the user
-            removes it with backspace like any other inline token.
-          */}
+          <ComposerAttachmentStrip
+            attachments={props.attachments}
+            uploading={Boolean(props.attachmentsUploading)}
+            onRemove={props.onRemoveAttachment}
+          />
 
           {dropzoneActive ? (
             <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-[20px] border-2 border-dashed border-dls-accent bg-[color:color-mix(in_oklab,var(--dls-accent)_10%,transparent)]">
@@ -1362,16 +1437,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
             {/* Editor */}
             <LexicalPromptEditor
               ref={editorRef}
-              value={props.draft}
+              value={editorDraft}
               mentions={props.mentions}
               pastedText={pastedTextTokens}
-              attachments={attachmentTokens}
               submitDisabled={props.disabled}
               placeholder={t("composer.placeholder")}
-              onChange={props.onDraftChange}
+              onChange={handleEditorDraftChange}
               onSubmit={handleEditorSubmit}
               onExpandPastedText={handleExpandPastedText}
-              onRemoveAttachment={props.onRemoveAttachment}
               onPasteText={props.onPasteText}
               onPaste={(event) => {
                 // Paste policy:

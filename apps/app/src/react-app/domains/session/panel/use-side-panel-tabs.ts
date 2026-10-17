@@ -41,16 +41,19 @@ export function useSidePanelTabs(sessionId: string) {
   }, [applyBrowserState]);
 
   const createTab = useCreateTab();
-
   const closeTab = useCloseTab();
-
   const selectTab = useSelectTab();
-
   const reorderTabs = useReorderTabs();
+  const closeOtherTabs = usePanelTabStore((state) => state.closeOtherTabs);
+  const closeTabsToRight = usePanelTabStore((state) => state.closeTabsToRight);
+  const closeAllTabs = usePanelTabStore((state) => state.closeAllTabs);
 
   return {
     createTab: (url?: string) => createTab(url, sessionId),
     closeTab: (tab: PanelTab) => closeTab(sessionId, tab),
+    closeOtherTabs: (tabId: string) => closeOtherTabs(sessionId, tabId),
+    closeTabsToRight: (tabId: string) => closeTabsToRight(sessionId, tabId),
+    closeAllTabs: () => closeAllTabs(sessionId),
     selectTab: (tabId: string) => selectTab(sessionId, tabId),
     reorderTabs: (tabIds: string[]) => reorderTabs(sessionId, tabIds),
   };

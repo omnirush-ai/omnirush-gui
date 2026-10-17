@@ -2,8 +2,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIMessage } from "ai";
 import type { OmniRushSessionStatus } from "@omnirush/types/desktop-ipc";
-import { AlertTriangle, CircleCheck, CircleX, Star } from "lucide-react";
+import { AlertTriangle, CircleCheck, CircleDashed, CircleX, Star } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,7 +16,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +39,6 @@ import {
   TURN_GUARD_TITLE,
   TURN_GUARD_WAIT,
   autoRetryMessage,
-  checklistHeading,
   finishGuardKind,
   followUpHintDue,
   goodSessionChecklist,
@@ -51,8 +51,8 @@ import {
   shouldNudge,
   shownChecklist,
   type FinishGuardKind,
-  type GoodSessionCheck,
-  type GoodSessionTone,
+  type GoodSessionCheckState,
+  type ShownChecklist,
 } from "../../../app/lib/good-session";
 import {
   GOOD_SESSION_TURN_END_DELAY_MS,
@@ -76,27 +76,183 @@ export function GoodSessionGuide({ className }: { className?: string }) {
   );
 }
 
-function CheckMark({ check }: { check: GoodSessionCheck }) {
+const CHECK_STATE_LABEL: Record<GoodSessionCheckState, string> = {
+  pass: "Passed",
+  fail: "Not passed",
+  warn: "Warning",
+  pending: "Pending",
+};
+
+function CheckStateIcon({ state }: { state: GoodSessionCheckState }) {
+  if (state === "pass") return <CircleCheck className="size-4 shrink-0 text-emerald-11" strokeWidth={2.5} aria-hidden="true" />;
+  if (state === "warn") return <AlertTriangle className="size-4 shrink-0 text-amber-11" strokeWidth={2.5} aria-hidden="true" />;
+  if (state === "fail") return <CircleX className="size-4 shrink-0 text-amber-11" strokeWidth={2.5} aria-hidden="true" />;
+  return <CircleDashed className="size-4 shrink-0 text-muted-foreground" strokeWidth={2} aria-hidden="true" />;
+}
+
+function CompactSessionStatus({ checklist, result, serverAvailable }: {
+  checklist: ShownChecklist;
+  result: OmniRushGoodSession | null;
+  serverAvailable: boolean;
+}) {
+  const copy = goodSessionCopy(result);
+  if (copy.state === "not-good" || checklist.verdict === "incomplete") {
+    return { label: "Session Details: Needs attention", state: "warning" as const };
+  }
+  if (copy.state === "good" || checklist.verdict === "good") {
+    return { label: "Good session", state: "good" as const };
+  }
+  if (serverAvailable && copy.state === "pending") {
+    return { label: "Checking", state: "checking" as const };
+  }
+  return { label: "On track", state: "on-track" as const };
+}
+
+function CountingStatus({ checklist, result, serverAvailable }: {
+  checklist: ShownChecklist;
+  result: OmniRushGoodSession | null;
+  serverAvailable: boolean;
+}) {
+  const copy = goodSessionCopy(result);
+  if (copy.state === "not-good") return "Not a Good session";
+  if (copy.state === "good" || checklist.verdict === "good") return "Counting as a Good session";
+  if (serverAvailable && copy.state === "pending") return "Checking session quality…";
+  if (checklist.verdict === "on-track") return "On track — final check after upload";
+  return "Not counting yet";
+}
+
+function GoodSessionDetailsDialog({ checklist, result, serverAvailable, open, onOpenChange }: {
+  checklist: ShownChecklist;
+  result: OmniRushGoodSession | null;
+  serverAvailable: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const copy = goodSessionCopy(result);
+  const warningChecks = checklist.checks.filter((check) => check.state === "fail" || check.state === "warn");
+  const hasWarnings = Boolean(
+    warningChecks.length
+    || checklist.message
+    || checklist.reasons.length
+    || checklist.delivery
+    || checklist.dock
+    || copy.state === "not-good",
+  );
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      // Ensure the dialog always displays from the very top on open
+      requestAnimationFrame(() => {
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTop = 0;
+        }
+      });
+    }
+  }, [open]);
+
   return (
-    <span
-      title={check.hint}
-      data-check={check.id}
-      data-state={check.state}
-      className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap",
-        check.state === "pass" && "text-foreground",
-        (check.state === "fail" || check.state === "warn") && "text-amber-11",
-      )}
-    >
-      {check.label}
-      {check.state === "pending" ? null : check.state === "pass" ? (
-        <CircleCheck className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />
-      ) : check.state === "warn" ? (
-        <AlertTriangle className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />
-      ) : (
-        <CircleX className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />
-      )}
-    </span>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="flex max-h-[85vh] flex-col overflow-hidden resize lg:max-w-4xl min-w-[360px] min-h-[380px] max-w-[95vw]"
+        data-testid="good-session-details-dialog"
+      >
+        <DialogHeader className="shrink-0 pb-1 border-b border-border/40">
+          <DialogTitle>Good session details</DialogTitle>
+          <DialogDescription>See what this session needs to count as a Good session.</DialogDescription>
+        </DialogHeader>
+
+        <div
+          ref={scrollContainerRef}
+          className="min-h-0 flex-1 overflow-y-auto pt-3 pe-2"
+        >
+          {/* Top Counting Status summary */}
+          <section aria-labelledby="good-session-counting-status" data-testid="good-session-counting-status" className="mb-4 rounded-xl border border-border bg-muted/20 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <h3 id="good-session-counting-status" className="font-semibold text-foreground">Counting status</h3>
+              <span className="font-medium text-foreground">{CountingStatus({ checklist, result, serverAvailable })}</span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground" data-testid="good-session-counting-work">
+              Counts: {checklist.work.codeFiles} code files · {checklist.work.lines} lines · {checklist.work.testRuns} test runs
+            </p>
+          </section>
+
+          {/* 2-Column Horizontal Layout on medium/large screens */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Left Column: Checklist */}
+            <section aria-labelledby="good-session-checklist-title" data-testid="good-session-details-checklist" className="flex flex-col gap-2">
+              <h3 id="good-session-checklist-title" className="text-sm font-semibold text-foreground">Checklist</h3>
+              <ul className="space-y-2">
+                {checklist.checks.map((check) => (
+                  <li
+                    key={check.id}
+                    data-check={check.id}
+                    data-state={check.state}
+                    className="flex items-start gap-2 rounded-lg border border-border/70 bg-card/40 px-3 py-2"
+                  >
+                    <CheckStateIcon state={check.state} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs">
+                        <span className="font-medium text-foreground">{check.label}</span>
+                        <span className="text-muted-foreground">{CHECK_STATE_LABEL[check.state]}</span>
+                      </div>
+                      {check.hint ? <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{check.hint}</p> : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            {/* Right Column: Warnings & How to make a Good session Guide */}
+            <div className="flex flex-col gap-4">
+              <section aria-labelledby="good-session-warnings-title" data-testid="good-session-warnings" className="rounded-xl border border-border/70 bg-card/30 p-3">
+                <h3 id="good-session-warnings-title" className="mb-2 text-sm font-semibold text-foreground">Warnings</h3>
+                {hasWarnings ? (
+                  <ul className="space-y-1.5 text-xs leading-4 text-amber-11">
+                    {warningChecks.map((check) => <li key={`check-${check.id}`}>{check.label}: {check.hint}</li>)}
+                    {checklist.message ? <li>{checklist.message}</li> : null}
+                    {checklist.reasons.map((reason) => <li key={`reason-${reason}`}>{reason}</li>)}
+                    {checklist.delivery ? <li>{checklist.delivery}</li> : null}
+                    {checklist.dock ? (
+                      <li className="flex items-start gap-2">
+                        <span className="min-w-0 flex-1">{checklist.dock.message}</span>
+                        {checklist.dock.link ? (
+                          <button
+                            type="button"
+                            className="shrink-0 font-medium underline underline-offset-2"
+                            onClick={() => void openDesktopUrl(checklist.dock?.link ?? "").catch(() => undefined)}
+                          >
+                            Open details
+                          </button>
+                        ) : null}
+                      </li>
+                    ) : null}
+                    {copy.state === "not-good" ? (
+                      <li className="flex items-start gap-2">
+                        <span className="min-w-0 flex-1">{copy.text}</span>
+                        <button
+                          type="button"
+                          data-testid="good-session-rewards-link"
+                          className="shrink-0 font-medium underline underline-offset-2"
+                          onClick={() => void openDesktopUrl(copy.link.url).catch(() => undefined)}
+                        >
+                          {copy.link.label}
+                        </button>
+                      </li>
+                    ) : null}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No warnings.</p>
+                )}
+              </section>
+
+              <GoodSessionGuide className="rounded-xl border border-border bg-card/30 p-3" />
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -283,12 +439,6 @@ export function GoodSessionLine({ result }: { result: OmniRushGoodSession | null
   );
 }
 
-const TONE_TEXT: Record<GoodSessionTone, string> = { amber: "text-amber-11", red: "text-red-11" };
-const TONE_BOX: Record<GoodSessionTone, string> = {
-  amber: "border-amber-7/40 bg-amber-2/30 text-amber-11",
-  red: "border-red-7/40 bg-red-2/30 text-red-11",
-};
-
 const SERVER_VERDICT_REFRESH_MS = 5 * 60_000;
 
 /**
@@ -345,6 +495,7 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
     () => shownChecklist({ local, server, sessionId: props.sessionId, serverGood }),
     [local, props.sessionId, server, serverGood],
   );
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // The finish guard: the desktop asks before quitting, closing or deleting while this is set.
   const finishKind = hasPrompt
@@ -452,40 +603,9 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
 
   if (!hasPrompt) return null;
   const verdict = checklist.verdict;
-  const dock = checklist.dock;
-  const dockLink = dock?.link;
+  const compactStatus = CompactSessionStatus({ checklist, result: goodSession, serverAvailable: Boolean(props.client) });
   return (
     <div className="px-4 max-lg:px-3 lg:px-8" data-testid="good-session-checklist" data-verdict={verdict} data-source={checklist.source}>
-      {dock ? (
-        <div
-          role="status"
-          data-testid="good-session-dock"
-          data-tone={dock.tone}
-          className={cn("mx-auto mb-1.5 flex max-w-[800px] items-center gap-2 rounded-lg border px-3 py-1.5 text-xs", TONE_BOX[dock.tone])}
-        >
-          <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 flex-1">{dock.message}</span>
-          {dockLink ? (
-            <button
-              type="button"
-              data-testid="good-session-dock-link"
-              className="shrink-0 font-medium underline underline-offset-2"
-              onClick={() => void openDesktopUrl(dockLink).catch(() => undefined)}
-            >
-              Details
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-      {checklist.message || checklist.reasons.length || checklist.delivery ? (
-        <div className="mx-auto max-w-[800px] pb-1 text-[11px] leading-4 text-muted-foreground" data-testid="good-session-server-message">
-          {checklist.message ? (
-            <p className={cn("font-medium", checklist.messageTone ? TONE_TEXT[checklist.messageTone] : "text-foreground")}>{checklist.message}</p>
-          ) : null}
-          {checklist.reasons.map((reason) => <p key={reason} className="text-amber-11">{reason}</p>)}
-          {checklist.delivery ? <p data-testid="good-session-delivery">{checklist.delivery}</p> : null}
-        </div>
-      ) : null}
       {followUpShown ? (
         <div className="mx-auto flex max-w-[800px] items-center gap-2 pb-1 text-[11px] leading-4 text-muted-foreground" data-testid="good-session-follow-up" role="status">
           <span className="min-w-0 flex-1">{FOLLOW_UP_HINT}</span>
@@ -502,44 +622,42 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
           </button>
         </div>
       ) : null}
-      {props.client ? <GoodSessionLine result={goodSession} /> : null}
       <div className="mx-auto flex max-w-[800px] items-center gap-2 pb-1.5">
         <div
-          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-full border border-border bg-popover/60 px-2.5 py-1 text-[11px] leading-4 text-muted-foreground"
+          className="flex min-w-0 flex-1 items-center gap-2 text-[11px] leading-4 text-muted-foreground"
           aria-label={checklist.text}
           role="status"
+          data-testid="good-session-status"
+          data-state={compactStatus.state}
         >
           <Star
             data-testid="good-session-star"
-            data-filled={verdict === "good" ? "" : undefined}
-            className={cn("size-3 shrink-0", verdict === "good" ? "fill-current text-foreground" : verdict === "on-track" ? "text-foreground" : "text-muted-foreground")}
+            data-filled={compactStatus.state === "good" ? "" : undefined}
+            className={cn("size-3 shrink-0", compactStatus.state === "good" ? "fill-current text-foreground" : compactStatus.state === "warning" ? "text-amber-11" : "text-muted-foreground")}
             aria-hidden="true"
           />
-          <span className="whitespace-nowrap font-medium text-foreground">{checklistHeading(verdict)}:</span>
-          {checklist.checks.map((check, index) => (
-            <span key={check.id} className="inline-flex items-center gap-1.5">
-              {index > 0 ? <span aria-hidden="true" className="text-muted-foreground/60">·</span> : null}
-              <CheckMark check={check} />
-            </span>
-          ))}
+          <span className={cn("min-w-0 truncate font-medium", compactStatus.state === "warning" ? "text-amber-11" : "text-foreground")}>
+            {compactStatus.label}
+          </span>
         </div>
-        <Popover>
-          <PopoverTrigger
-            render={(
-              <button
-                type="button"
-                data-testid="good-session-guide-link"
-                className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground underline-offset-2 transition hover:text-foreground hover:underline"
-              />
-            )}
-          >
-            {GOOD_SESSION_GUIDE_LINK}
-          </PopoverTrigger>
-          <PopoverContent side="top" align="end" className="w-72 gap-2 rounded-2xl p-3">
-            <GoodSessionGuide />
-          </PopoverContent>
-        </Popover>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          data-testid="good-session-details"
+          aria-haspopup="dialog"
+          onClick={() => setDetailsOpen(true)}
+        >
+          Details
+        </Button>
       </div>
+      <GoodSessionDetailsDialog
+        checklist={checklist}
+        result={goodSession}
+        serverAvailable={Boolean(props.client)}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+      />
     </div>
   );
 }

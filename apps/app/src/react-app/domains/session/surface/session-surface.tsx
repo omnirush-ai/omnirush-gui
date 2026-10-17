@@ -2163,17 +2163,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [mentions, pasteParts, props.sessionId]);
 
   const handleComposerDraftChange = useCallback((value: string) => {
+    // Attachments are rendered and removed in their own strip above the text
+    // editor. Typing, history recall, and command insertion must not make a
+    // file disappear merely because its hidden draft marker is absent.
     setComposerDraft(props.sessionId, value);
-    const idsInDraft = new Set(
-      [...value.matchAll(/\[attachment ([^\]]+)\]/g)].map((match) => match[1]).filter((id): id is string => Boolean(id)),
-    );
-    const retained = attachments.filter((attachment) => idsInDraft.has(attachment.id));
-    if (retained.length === attachments.length) return;
-    for (const attachment of attachments) {
-      if (!idsInDraft.has(attachment.id)) revokeAttachmentPreview(attachment);
-    }
-    setComposerAttachments(props.sessionId, retained);
-  }, [attachments, props.sessionId, setComposerAttachments, setComposerDraft]);
+  }, [props.sessionId, setComposerDraft]);
 
   const handleCopyTranscript = async () => {
     try {
@@ -2650,8 +2644,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
       };
     });
     setComposerAttachments(props.sessionId, [...attachments, ...next]);
-    // Inline attachment chips live in the draft as Lexical tokens (same
-    // pattern as pasted-text chips), so they sit in the text flow.
+    // Keep hidden markers for draft snapshots and payload compatibility. The
+    // composer strips them from the editor and renders the attachments above
+    // the text input instead.
     setComposerDraft(
       props.sessionId,
       `${draft}${next.map((attachment) => `[attachment ${attachment.id}]`).join("")}`,
@@ -3273,7 +3268,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           onScroll={sessionScroll.handleScroll}
           // Extra top padding while the find bar is open so it never covers
           // the first message (short transcripts cannot scroll it clear).
-          className={`absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y px-3 pb-4 sm:px-5 ${findOwned ? "pt-16" : "pt-4"}`}
+          className={`absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y ps-3 pe-12 pb-4 sm:ps-5 sm:pe-12 ${findOwned ? "pt-16" : "pt-4"}`}
         >
           {/* Chat column: tighter than the composer (800px) so messages
                keep a comfortable reading width and don't feel "too big". */}

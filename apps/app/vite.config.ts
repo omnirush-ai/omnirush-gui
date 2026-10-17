@@ -107,6 +107,9 @@ export default defineConfig({
       },
     }),
   ],
+  optimizeDeps: {
+    exclude: ["mermaid", "d3", "d3-array", "d3-contour"],
+  },
   server: {
     port: devPort,
     strictPort: true,

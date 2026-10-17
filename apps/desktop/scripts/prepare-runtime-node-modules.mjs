@@ -16,14 +16,18 @@ function packageRoot(name, fromPackageJson, resolveTarget = name) {
   try {
     current = dirname(requireFromPackage.resolve(resolveTarget));
   } catch (error) {
-    const linkedPackageRoot = resolve(dirname(dirname(fromPackageJson)), name);
     try {
-      const linkedPackageJson = JSON.parse(readFileSync(join(linkedPackageRoot, "package.json"), "utf8"));
-      if (linkedPackageJson.name === name) return { root: linkedPackageRoot, packageJson: linkedPackageJson };
+      current = dirname(requireFromPackage.resolve(`${name}/package.json`));
     } catch {
-      // Preserve the original module-resolution error below.
+      const linkedPackageRoot = resolve(dirname(dirname(fromPackageJson)), name);
+      try {
+        const linkedPackageJson = JSON.parse(readFileSync(join(linkedPackageRoot, "package.json"), "utf8"));
+        if (linkedPackageJson.name === name) return { root: linkedPackageRoot, packageJson: linkedPackageJson };
+      } catch {
+        // Preserve the original module-resolution error below.
+      }
+      throw error;
     }
-    throw error;
   }
   while (current !== dirname(current)) {
     try {

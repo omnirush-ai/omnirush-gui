@@ -333,17 +333,8 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
   };
 
   const handleDraftChange = (value: string) => {
-    const idsInDraft = new Set(
-      [...value.matchAll(/\[attachment ([^\]]+)\]/g)].map((match) => match[1]).filter((id): id is string => Boolean(id)),
-    );
-    const currentAttachments = continuationHolderRef.current.state.attachments;
-    const retained = currentAttachments.filter((attachment) => idsInDraft.has(attachment.id));
-    if (retained.length !== currentAttachments.length) {
-      for (const attachment of currentAttachments) {
-        if (!idsInDraft.has(attachment.id)) revokeAttachmentPreview(attachment);
-      }
-      updateAttachments(retained);
-    }
+    // Attachments live in their own strip above the editor. Editing the text
+    // must not remove them; the strip's remove buttons own that state.
     updateDraft(value);
   };
 
@@ -362,6 +353,8 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       };
     });
     updateAttachments([...continuationHolderRef.current.state.attachments, ...next]);
+    // Keep hidden markers for the handoff payload; the shared composer strips
+    // them from the editor and renders these files in its attachment strip.
     updateDraft(`${continuationHolderRef.current.state.draft}${next.map((attachment) => `[attachment ${attachment.id}]`).join("")}`);
   };
 

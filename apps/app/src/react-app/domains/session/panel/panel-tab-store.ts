@@ -46,6 +46,9 @@ export type PanelTabStore = {
   transcriptArtifactTargets: Record<string, OpenTarget[]>;
   openTab: (sessionId: string, tab: PanelTab) => void;
   closeTab: (sessionId: string, tabId: string) => void;
+  closeOtherTabs: (sessionId: string, tabId: string) => void;
+  closeTabsToRight: (sessionId: string, tabId: string) => void;
+  closeAllTabs: (sessionId: string) => void;
   selectTab: (sessionId: string, tabId: string) => void;
   reorderTabs: (sessionId: string, tabIds: string[]) => void;
   syncBrowserTabs: (sessionId: string, browserTabs: BrowserPanelTab[], activeBrowserTabId: string | null) => void;
@@ -262,6 +265,24 @@ export const usePanelTabStore = create<PanelTabStore>()(
           : session.activeTabId;
 
         return updateSession(state, sessionId, { tabs, activeTabId });
+      }),
+      closeOtherTabs: (sessionId, tabId) => set((state) => {
+        const session = getWritableSession(state, sessionId);
+        const tabs = session.tabs.filter((tab) => tab.id === tabId);
+        return updateSession(state, sessionId, { tabs, activeTabId: tabId });
+      }),
+      closeTabsToRight: (sessionId, tabId) => set((state) => {
+        const session = getWritableSession(state, sessionId);
+        const index = session.tabs.findIndex((tab) => tab.id === tabId);
+        if (index < 0) return state;
+        const tabs = session.tabs.slice(0, index + 1);
+        const activeTabId = tabs.some((tab) => tab.id === session.activeTabId)
+          ? session.activeTabId
+          : tabId;
+        return updateSession(state, sessionId, { tabs, activeTabId });
+      }),
+      closeAllTabs: (sessionId) => set((state) => {
+        return updateSession(state, sessionId, { tabs: [], activeTabId: null });
       }),
       selectTab: (sessionId, tabId) => set((state) => {
         const session = getWritableSession(state, sessionId);
