@@ -1,5 +1,5 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import path, { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ServerConfig } from "./types.js";
 import { ApiError } from "./errors.js";
 import { parseFrontmatter, buildFrontmatter } from "./frontmatter.js";
@@ -509,10 +509,22 @@ function resolveWorkspaceInstallPath(workspaceRoot: string, relativePath: string
   }
   const root = resolve(workspaceRoot);
   const candidate = resolve(root, normalized);
-  if (candidate !== root && !candidate.startsWith(`${root}/`)) {
+  if (!isWithinWorkspaceRoot(root, candidate)) {
     throw new ApiError(400, "invalid_cloud_plugin_path", `Invalid cloud plugin path: ${relativePath}`);
   }
   return candidate;
+}
+
+// Platform-independent workspace containment: the old
+// `candidate.startsWith(`${root}/`)` assumed forward slashes, which resolve()
+// never produces on Windows, so valid paths were rejected there.
+export function isWithinWorkspaceRoot(
+  root: string,
+  candidate: string,
+  impl: Pick<typeof path, "relative" | "sep" | "isAbsolute"> = path,
+): boolean {
+  const rel = impl.relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${impl.sep}`) && !impl.isAbsolute(rel));
 }
 
 async function writePluginWorkspaceFile(workspaceRoot: string, path: string, content: string): Promise<void> {
