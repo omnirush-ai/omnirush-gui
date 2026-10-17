@@ -5,7 +5,7 @@ import { AlertTriangle, Check, ChevronUp, CircleHelp, CirclePause, Copy, MoreHor
 
 import { FileChip } from "@/components/chat/file-chip"
 import { ShellCommandText } from "@/components/chat/shell-command-text"
-import { ReasoningBlock } from "@/components/chat/reasoning-block"
+import { ReasoningBlock, reasoningIsShown } from "@/components/chat/reasoning-block"
 import { useCurrentToolLifecycleResolver } from "@/components/chat/current-tool-lifecycle-context"
 import { Button } from "@/components/ui/button"
 import {
@@ -263,13 +263,15 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
   const hiddenCount = rows.length - visibleRows.length
   // Expanded rows interleave the run's thoughts at their chronological
   // slots; thoughts belonging to capped rows stay behind "Show N more".
-  const thoughtsAt = (index: number) => thoughts.filter((thought) => thought.afterIndex === index)
-  const trailingThoughts = hiddenCount > 0 ? [] : thoughts.filter((thought) => thought.afterIndex >= parts.length)
+  // A finished heading-only thought renders nothing, so it gets no row.
+  const shownThoughts = thoughts.filter((thought) => reasoningIsShown(thought.text))
+  const thoughtsAt = (index: number) => shownThoughts.filter((thought) => thought.afterIndex === index)
+  const trailingThoughts = hiddenCount > 0 ? [] : shownThoughts.filter((thought) => thought.afterIndex >= parts.length)
 
   // "Edited 1 file" above "Edited file-chip.tsx" says nothing twice.
   // A group that is exactly one file action (and no thoughts) renders
   // as the row itself — verb, chip, duration — with nothing to expand.
-  const soloRow = rows.length === 1 && thoughts.length === 0 ? rows[0] : undefined
+  const soloRow = rows.length === 1 && shownThoughts.length === 0 ? rows[0] : undefined
   const soloFile = soloRow ? getAggregateRowFile(soloRow.part) : null
   if (soloRow && soloFile) {
     const status = currentLifecycle ?? persistedRowStatus(soloRow.part)
@@ -328,9 +330,9 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
         className="group flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 text-start text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <span className="min-w-0 truncate">{displayRuntimeBrand(summary)}</span>
-        {thoughts.length > 0 ? (
+        {shownThoughts.length > 0 ? (
           <span data-tool-aggregate-thought-count className="shrink-0 text-xs text-muted-foreground/70">
-            · {thoughts.length === 1 ? "1 thought" : `${thoughts.length} thoughts`}
+            · {shownThoughts.length === 1 ? "1 thought" : `${shownThoughts.length} thoughts`}
           </span>
         ) : null}
         {singleCommandDuration ? (
@@ -359,7 +361,9 @@ export function ToolAggregateGroup({ parts, thoughts = [], className }: ToolAggr
         </div>
       ) : null}
 
-      {nowPart && nowCommandShown ? (
+      {/* With the rows open, the running call is already a row there: showing
+          its "now" line too would print the same command twice. */}
+      {expanded ? null : nowPart && nowCommandShown ? (
         <div data-tool-aggregate-now className="mt-1.5 min-w-0">
           {detailBox("command", nowPart.toolCallId, nowCommand)}
         </div>
