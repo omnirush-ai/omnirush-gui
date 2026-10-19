@@ -2,10 +2,12 @@ import { desktopNotificationShow } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/utils";
 import {
   DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE,
+  DEFAULT_NOTIFICATION_SOUNDS_ENABLED,
   isDesktopNotificationPreference,
   type DesktopNotificationPreference,
 } from "@/react-app/kernel/desktop-notification-preferences";
 import { LOCAL_PREFERENCES_KEY } from "@/react-app/kernel/local-preferences-storage";
+import { playNotificationSound } from "./notification-sounds";
 
 type DesktopNotificationImportance = "important" | "routine";
 type WebNotificationHandler = (title: string, description?: string, href?: string) => Promise<void>;
@@ -28,20 +30,23 @@ export function setWebNotificationHandler(handler: WebNotificationHandler | null
   webNotificationHandler = handler;
 }
 
-function readDesktopNotificationPreference(): DesktopNotificationPreference {
-  if (typeof window === "undefined") return DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE;
+function readNotificationPreferences() {
+  const defaults = { mode: DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE, sounds: DEFAULT_NOTIFICATION_SOUNDS_ENABLED };
+  if (typeof window === "undefined") return defaults;
   try {
     const raw = window.localStorage.getItem(LOCAL_PREFERENCES_KEY);
-    if (!raw) return DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE;
+    if (!raw) return defaults;
     const parsed: unknown = JSON.parse(raw);
     const value = parsed && typeof parsed === "object"
       ? Reflect.get(parsed, "desktopNotifications")
       : undefined;
-    return isDesktopNotificationPreference(value)
-      ? value
-      : DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE;
+    const sounds = parsed && typeof parsed === "object" ? Reflect.get(parsed, "notificationSounds") : undefined;
+    return {
+      mode: isDesktopNotificationPreference(value) ? value : defaults.mode,
+      sounds: typeof sounds === "boolean" ? sounds : defaults.sounds,
+    };
   } catch {
-    return DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE;
+    return defaults;
   }
 }
 
@@ -90,8 +95,12 @@ function copyForEvent(event: DesktopNotificationEvent): NotificationCopy {
 
 export function notifyDesktopEvent(event: DesktopNotificationEvent): void {
   const copy = copyForEvent(event);
-  if (!shouldNotify(readDesktopNotificationPreference(), copy.importance)) return;
   if (isAppInView()) return;
+  const preferences = readNotificationPreferences();
+  if (preferences.sounds) {
+    playNotificationSound(event.type === "task.completed" ? "completed" : "attention");
+  }
+  if (!shouldNotify(preferences.mode, copy.importance)) return;
 
   if (!isDesktopRuntime()) {
     void webNotificationHandler?.(copy.title, copy.body).catch(() => undefined);
@@ -101,5 +110,6 @@ export function notifyDesktopEvent(event: DesktopNotificationEvent): void {
   void desktopNotificationShow({
     title: copy.title,
     body: copy.body,
+    silent: true,
   }).catch(() => undefined);
 }

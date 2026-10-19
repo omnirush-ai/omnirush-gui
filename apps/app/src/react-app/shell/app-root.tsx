@@ -58,6 +58,7 @@ import { ShellConfigProvider } from "./shell-config";
 import { WelcomeRoute } from "./welcome-route";
 import { readOrgSelectionPending } from "../../app/lib/den-sign-in-intent";
 import { signedInRoute } from "./den-signin-routing";
+import { installNotificationSoundUnlock } from "./notification-sounds";
 
 
 type DenSigninGateProps = {
@@ -360,6 +361,7 @@ function BrandThemeControlActions() {
 let appOpenedCaptured = false;
 
 export function AppRoot() {
+  useEffect(installNotificationSoundUnlock, []);
   useDesktopFontZoomBehavior();
   useVisualViewportInset();
 

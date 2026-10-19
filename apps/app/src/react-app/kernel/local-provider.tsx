@@ -15,6 +15,7 @@ import { coerceReleaseChannel } from "../../app/lib/release-channels";
 import type { ModelRef, ReleaseChannel, SettingsTab, View } from "../../app/types";
 import {
   DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE,
+  DEFAULT_NOTIFICATION_SOUNDS_ENABLED,
   isDesktopNotificationPreference,
   type DesktopNotificationPreference,
 } from "./desktop-notification-preferences";
@@ -61,6 +62,7 @@ export type LocalPreferences = {
    * users are not surprised by system popups.
    */
   desktopNotifications: DesktopNotificationPreference;
+  notificationSounds: boolean;
 };
 
 type LocalContextValue = {
@@ -86,6 +88,7 @@ const INITIAL_PREFS: LocalPreferences = {
   featureFlags: { microsandboxCreateSandbox: true, workspaceRunMode: false },
   hasCompletedOnboarding: false,
   desktopNotifications: DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE,
+  notificationSounds: DEFAULT_NOTIFICATION_SOUNDS_ENABLED,
 };
 
 function readPersisted<T>(key: string, fallback: T): T {
@@ -125,6 +128,9 @@ export function LocalProvider({ children }: LocalProviderProps) {
     persisted.desktopNotifications = isDesktopNotificationPreference(persisted.desktopNotifications)
       ? persisted.desktopNotifications
       : DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE;
+    persisted.notificationSounds = typeof persisted.notificationSounds === "boolean"
+      ? persisted.notificationSounds
+      : DEFAULT_NOTIFICATION_SOUNDS_ENABLED;
     try {
       if (window.localStorage.getItem(MODEL_PREF_KEY) !== null) {
         return { ...persisted, defaultModel: readStoredDefaultModel() };

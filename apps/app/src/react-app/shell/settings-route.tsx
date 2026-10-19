@@ -2363,6 +2363,10 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             autoCompactContextBusy={autoCompactContextBusy}
             onToggleAutoCompactContext={toggleAutoCompactContext}
             desktopNotifications={local.prefs.desktopNotifications}
+            notificationSounds={local.prefs.notificationSounds}
+            onToggleNotificationSounds={() => {
+              local.setPrefs((previous) => ({ ...previous, notificationSounds: !previous.notificationSounds }));
+            }}
             onDesktopNotificationsChange={(desktopNotifications) => {
               local.setPrefs((previous) => ({ ...previous, desktopNotifications }));
             }}
