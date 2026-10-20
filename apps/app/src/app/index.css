@@ -48,6 +48,54 @@
   app-region: no-drag;
 }
 
+/*
+ * The chat's scrollbars, as Codex draws them: a thin rounded thumb on a clear
+ * track and no arrow buttons, quiet until the pointer is over the scroller.
+ * It covers the transcript and every scroll box inside it (command and output
+ * boxes, error details), so opening one never brings back a platform
+ * scrollbar. Chromium (the desktop app) takes the ::-webkit-scrollbar rules;
+ * browsers without them get the standard thin scrollbar.
+ */
+@utility chat-scrollbar {
+  &::-webkit-scrollbar,
+  & *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  &::-webkit-scrollbar-button,
+  & *::-webkit-scrollbar-button {
+    display: none;
+  }
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-corner,
+  & *::-webkit-scrollbar-track,
+  & *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb,
+  & *::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+    background-color: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  }
+  &:hover::-webkit-scrollbar-thumb,
+  & *:hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+  }
+  &::-webkit-scrollbar-thumb:active,
+  & *::-webkit-scrollbar-thumb:active {
+    background-color: color-mix(in srgb, var(--muted-foreground) 75%, transparent);
+  }
+  @supports not selector(::-webkit-scrollbar) {
+    &,
+    & * {
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in srgb, var(--muted-foreground) 40%, transparent) transparent;
+    }
+  }
+}
+
 @keyframes accordion-down {
   from {
     height: 0;
