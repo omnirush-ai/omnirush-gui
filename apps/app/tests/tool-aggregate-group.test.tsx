@@ -198,6 +198,21 @@ describe("tool aggregate row merging", () => {
     expect(rows.every((row) => row.repeat === 1)).toBe(true);
   });
 
+  test("counts the thoughts it shows; a heading-only one is not a thought", () => {
+    const markup = renderToStaticMarkup(
+      <ToolAggregateGroup
+        parts={[completedCommand, { ...completedCommand, toolCallId: "completed-command-2" }]}
+        thoughts={[
+          { afterIndex: 1, text: "The cache key misses the tenant id.", isStreaming: false },
+          { afterIndex: 2, text: "**Checking the cache**", isStreaming: false },
+        ]}
+      />,
+    );
+    expect(markup).toContain("Ran 2 commands");
+    expect(markup).toContain("1 thought");
+    expect(markup).not.toContain("2 thoughts");
+  });
+
   test("a thought anchored between two identical reads keeps them apart", () => {
     const rows = buildAggregateRows(
       [readOf("read-1", "/repo/a.tsx"), readOf("read-2", "/repo/a.tsx")],
@@ -258,6 +273,42 @@ describe("tool aggregate long details", () => {
     expect(collapsed).toContain("line-clamp-1");
     expect(collapsed).not.toContain("overflow-y-auto");
     expect(collapsed).not.toContain("data-tool-aggregate-copy");
+  });
+
+  test("a running command shows once: opening the rows hides its now line, double-clicked or not", async () => {
+    const registeredDom = typeof globalThis.window === "undefined" || typeof globalThis.document === "undefined";
+    if (registeredDom) GlobalRegistrator.register();
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    const running: DynamicToolUIPart = { ...runningCommand, toolCallId: "running-once", input: { command: "sleep 40 && echo waited", description: "Wait" } };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const shown = () => (container.textContent?.match(/sleep 40 && echo waited/g) ?? []).length;
+    try {
+      await act(async () => root.render(
+        <CurrentToolLifecycleProvider activityStatus="responding" currentToolCallIds={new Set([running.toolCallId])}>
+          <ToolAggregateGroup parts={[running]} />
+        </CurrentToolLifecycleProvider>,
+      ));
+      expect(shown()).toBe(1);
+
+      // Double-clicking the running line swaps it for the full command box: still once.
+      const now = container.querySelector<HTMLElement>("[data-tool-aggregate-now]");
+      if (!now) throw new Error("Expected the running command's now line");
+      await act(async () => { now.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
+      expect(shown()).toBe(1);
+
+      // Opening the rows lists the running call; its now line must not repeat it.
+      const summary = container.querySelector<HTMLButtonElement>("[data-tool-aggregate] > button");
+      if (!summary) throw new Error("Expected the aggregate summary button");
+      await act(async () => summary.click());
+      expect(summary.getAttribute("aria-expanded")).toBe("true");
+      expect(container.querySelector("[data-tool-aggregate-now]")).toBeNull();
+      expect(shown()).toBe(1);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 
   test("clicking a clipped command reveals every line and copies the full command", async () => {
