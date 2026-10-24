@@ -158,11 +158,27 @@ function FileRow({ file, defaultOpen, layout }: { file: ChangedFile; defaultOpen
  * whole working tree), with +/- counts and each file's diff, and a Review
  * button that asks the agent to review them in the chat.
  */
+/** Side by side needs room for two columns of code: on a narrow window the diff is unified (and no toggle shows). */
+const SPLIT_MEDIA_QUERY = "(min-width: 800px)";
+function useSplitFits(): boolean {
+  const [fits, setFits] = useState(() => (typeof window === "undefined" ? true : window.matchMedia(SPLIT_MEDIA_QUERY).matches));
+  useEffect(() => {
+    const query = window.matchMedia(SPLIT_MEDIA_QUERY);
+    const onChange = () => setFits(query.matches);
+    query.addEventListener("change", onChange);
+    onChange();
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  return fits;
+}
+
 export function ChangesPanel(props: SessionCommandTarget) {
   const openFor = useSessionCommandsStore((state) => state.changesOpenFor);
   const closeChanges = useSessionCommandsStore((state) => state.closeChanges);
   const turnId = useSessionCommandsStore((state) => state.changesTurn);
-  const [layout, setLayout] = useState<DiffLayout>(readLayout);
+  const [chosen, setLayout] = useState<DiffLayout>(readLayout);
+  const splitFits = useSplitFits();
+  const layout: DiffLayout = splitFits ? chosen : "unified";
   const open = openFor === props.sessionId;
   const chooseLayout = (next: DiffLayout) => {
     setLayout(next);
@@ -182,7 +198,7 @@ export function ChangesPanel(props: SessionCommandTarget) {
         )}
         data-testid="changes-panel"
       >
-        {open ? <ChangesBody key={turnId ?? "last"} {...props} turnId={turnId} layout={layout} onLayout={chooseLayout} onClose={closeChanges} /> : null}
+        {open ? <ChangesBody key={turnId ?? "last"} {...props} turnId={turnId} layout={layout} onLayout={splitFits ? chooseLayout : null} onClose={closeChanges} /> : null}
       </SheetContent>
     </Sheet>
   );
@@ -191,7 +207,8 @@ export function ChangesPanel(props: SessionCommandTarget) {
 function ChangesBody(props: SessionCommandTarget & {
   turnId: string | null;
   layout: DiffLayout;
-  onLayout: (layout: DiffLayout) => void;
+  /** Null: no choice (the window is too narrow for side by side). */
+  onLayout: ((layout: DiffLayout) => void) | null;
   onClose: () => void;
 }) {
   const client = useOpencodeClient(props);
@@ -297,7 +314,7 @@ function ChangesBody(props: SessionCommandTarget & {
             </button>
           ))}
         </div>
-        <div className="ml-auto flex w-fit items-center gap-0.5 rounded-lg bg-muted p-0.5" role="radiogroup" aria-label="Diff layout">
+        {props.onLayout ? <div className="ml-auto flex w-fit items-center gap-0.5 rounded-lg bg-muted p-0.5" role="radiogroup" aria-label="Diff layout">
           {([["unified", Rows3, "Unified"], ["split", Columns2, "Side by side"]] as const).map(([value, Icon, label]) => (
             <button
               key={value}
@@ -309,13 +326,13 @@ function ChangesBody(props: SessionCommandTarget & {
                 "flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
                 props.layout === value && "bg-background text-foreground shadow-sm",
               )}
-              onClick={() => props.onLayout(value)}
+              onClick={() => props.onLayout?.(value)}
             >
               <Icon className="size-3.5" />
               {label}
             </button>
           ))}
-        </div>
+        </div> : null}
         </div>
       </SheetHeader>
       <div className="min-h-0 flex-1 overflow-auto p-4">
