@@ -177,12 +177,16 @@ export const REAL_SCREEN_OFF_MESSAGE = "Computer use on the person's own screen 
 
 /**
  * Engine permission rules for every mode (computer use on or off): the agent can neither run the command that
- * turns the real screen on nor write the setting. Appended after the mode's own rules (the last match wins); the
- * engine's matcher treats \\ as / (Windows paths match too).
+ * turns the real screen on nor write the person's settings (real-screen.json, and device.json with the device's
+ * on/off), so it can never undo the person's choice for the next start. Appended after the mode's own rules (the
+ * last match wins); the engine's matcher treats \\ as / (Windows paths match too).
  */
 export const REAL_SCREEN_DENY_RULES = Object.freeze({
-  bash: Object.freeze({ "*computer real-screen*": "deny", "*computerUseRealScreen*": "deny", "*OMNIRUSH_COMPUTER_USE_REAL_SCREEN*": "deny", "*computer-use/real-screen.json*": "deny" }),
-  edit: Object.freeze({ "*computer-use/real-screen.json": "deny" }),
+  bash: Object.freeze({
+    "*computer real-screen*": "deny", "*computerUseRealScreen*": "deny", "*OMNIRUSH_COMPUTER_USE_REAL_SCREEN*": "deny", "*computer-use/real-screen.json*": "deny",
+    "*computer-use*real-screen.json*": "deny", "*computer-use*device.json*": "deny", "*\"computerUse\"*": "deny", "*computerUse\\\"*": "deny",
+  }),
+  edit: Object.freeze({ "*computer-use/real-screen.json": "deny", "*computer-use/device.json": "deny" }),
 });
 
 /**
