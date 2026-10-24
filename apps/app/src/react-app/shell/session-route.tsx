@@ -3836,7 +3836,7 @@ export function SessionRoute() {
               // flight. Seed its latest continuation in the destination, but
               // send the immutable submitted snapshot through the scoped mark.
               saveSessionDraft(sessionDraftScope, workspaceId, session.id, {
-                text: persistableComposerDraftText(continuation.draft),
+                text: persistableComposerDraftText(continuation.draft, continuation.pasteParts),
                 mode: "prompt",
               });
               claimComposerSessionDraftScope(session.id, destinationScopeKey);

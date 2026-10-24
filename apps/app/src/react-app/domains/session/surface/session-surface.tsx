@@ -65,7 +65,7 @@ import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMe
 import { desktopBridge, openDesktopUrl } from "@/app/lib/desktop";
 import { parseSlashCommandInvocation } from "./composer/slash-command";
 import { parseConnectSkillToken } from "./composer/connect-skill-token";
-import { createPastedTextChip, resolvePastedTextPlaceholders } from "./composer/pasted-text";
+import { createPastedTextChip, draftHasLostPaste, LOST_PASTE_MESSAGE, resolvePastedTextPlaceholders, unresolvedPasteLabels } from "./composer/pasted-text";
 import {
   canAdmitNextQueuedItem,
   claimQueuedSend,
@@ -1242,6 +1242,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       nextScopeKey: persistedDraftKey,
       currentText: currentDraft,
       storedText: nextDraft,
+      pasteParts: getComposerPasteParts(currentState, props.sessionId),
     });
 
     if (needsHydration) {
@@ -2318,6 +2319,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const sourceAttachments = sourceComposer?.attachments ?? attachments;
     const text = originalDraft.trim();
     if (!text && sourceAttachments.length === 0) return;
+    // A placeholder whose pasted text or quote is gone (only its token left) is never sent as the token itself.
+    if (unresolvedPasteLabels(text, sourceComposer?.pasteParts ?? getComposerPasteParts(useComposerStateStore.getState(), props.sessionId)).length) {
+      toast.error(LOST_PASTE_MESSAGE);
+      return;
+    }
     const nextDraft = {
       ...buildDraft(text, sourceAttachments, sourceComposer),
       messageId: createPromptMessageID(),
@@ -2483,6 +2489,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!text && attachments.length === 0) return;
     const queuedDraft = withoutRevertTarget(buildDraft(text, attachments));
     if (!queuedDraft) return;
+    // Never queued with a lost placeholder (it would reach the model as the bare token): the composer keeps it.
+    if (draftHasLostPaste(queuedDraft)) { toast.error(LOST_PASTE_MESSAGE); return; }
     appendQueuedDraft(props.sessionId, queuedDraft);
     clearComposer();
   }, [appendQueuedDraft, askSideFromDraft, attachments, buildDraft, clearComposer, draft, props.sessionId, sessionOwner]);
@@ -2503,11 +2511,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
   // waiting for the idle drain. Guarded against the drain effect so the same
   // draft cannot be delivered twice.
   const [sendingQueued, setSendingQueued] = useState(false);
+  const lostPasteNoticeRef = useRef<string | null>(null);
   const sendQueuedDraftNow = useCallback(async (id: string) => {
     if (drainingQueueRef.current || sendingQueued) return;
     const item = getComposerQueuedDrafts(useComposerStateStore.getState(), props.sessionId).find((queued) => queued.id === id);
     const target = withoutRevertTarget(item?.draft ?? null);
     if (!item || !target) return;
+    if (draftHasLostPaste(target)) { toast.error(LOST_PASTE_MESSAGE); return; }
     if (revertMessageId && !window.confirm(hiddenDeleteConfirmText(revertedMessageCount))) return;
     if (!claimQueuedSend(props.sessionId, item.id, true)) return;
     const generation = getQueuedSendGeneration(props.sessionId);
@@ -2666,6 +2676,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!nextItem) return;
     const nextDraft = withoutRevertTarget(nextItem.draft);
     if (!nextDraft) return;
+    // A lost placeholder holds the queue (the item stays, to edit or remove), never sent as the bare token.
+    if (draftHasLostPaste(nextDraft)) {
+      if (lostPasteNoticeRef.current !== nextItem.id) { lostPasteNoticeRef.current = nextItem.id; toast.error(LOST_PASTE_MESSAGE); }
+      return;
+    }
     // Claim the send slot atomically BEFORE the send can resolve: the
     // engine's busy status can render before the send promise's continuation
     // runs, and claiming late would erase that observation. The claim is
@@ -2719,7 +2734,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const current = useComposerStateStore.getState();
     if (getComposerDraft(current, props.sessionId) !== draft || getComposerAttachments(current, props.sessionId) !== attachments) return;
     const nextDraft = buildDraft(draft, attachments);
-    const persistableText = persistableComposerDraftText(nextDraft.text);
+    const persistableText = persistableComposerDraftText(nextDraft.text, getComposerPasteParts(current, props.sessionId));
     persistDraft({ text: persistableText, mode: nextDraft.mode });
     props.onDraftChange(nextDraft);
   }, [attachments, buildDraft, draft, hydratedDraftScopeKey, persistDraft, persistedDraftKey, props.onDraftChange, props.sessionId]);

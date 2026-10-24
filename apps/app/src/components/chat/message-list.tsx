@@ -16,9 +16,12 @@ import {
   MoreHorizontal,
   Pencil,
   Split,
+  TextQuote,
   Undo2,
   WifiOff,
 } from "lucide-react"
+import { quoteIntoComposer, unquoteBlock } from "./quote"
+import { SelectionQuote, selectionInMessage } from "./selection-quote"
 import {
   DynamicToolUIPart,
   isFileUIPart,
@@ -714,7 +717,7 @@ function renderUserTextWithSkillChips(text: string, highlightQuery: string | und
 
 const UserMessage = React.memo(
   ({ message, isStreaming }: UserMessageProps) => {
-    const { onRevertToUserMessage, onForkAtMessage, onEditUserMessage, highlightQuery } = useMessageList()
+    const { onRevertToUserMessage, onForkAtMessage, onEditUserMessage, highlightQuery, sessionId } = useMessageList()
     const { onOpenTarget } = useOpenTargets()
     const openLink = (event: React.MouseEvent) => {
       if (!onOpenTarget || !(event.target instanceof Element)) return
@@ -763,6 +766,15 @@ const UserMessage = React.memo(
                             </span>
                           )
                         }
+                        // A quote sent with the prompt (Quote / reply) reads as a quote.
+                        const quoted = unquoteBlock(part.text)
+                        if (quoted !== null) {
+                          return (
+                            <blockquote key={`text-${index}`} className="my-1 block whitespace-pre-wrap border-l-2 border-muted-foreground/40 pl-3 text-muted-foreground" data-quote="">
+                              {renderPlainTextWithLinks(quoted, highlightQuery, `quote-${index}`)}
+                            </blockquote>
+                          )
+                        }
                         return (
                           <span key={`text-${index}`} className="whitespace-pre-wrap">
                             {renderUserTextWithSkillChips(part.text, highlightQuery)}
@@ -791,6 +803,19 @@ const UserMessage = React.memo(
                   >
                     <MessageTimestamp message={message} className="mr-1.5" />
                     <CopyMessageButton messages={[message]} />
+                    {messageText ? (
+                      <MessageAction tooltip="Quote">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Quote"
+                          data-testid="quote-message"
+                          onClick={() => quoteIntoComposer(sessionId, messageText)}
+                        >
+                          <TextQuote />
+                        </Button>
+                      </MessageAction>
+                    ) : null}
                     {messageText ? (
                       <MessageAction tooltip="Edit message">
                         <Button
@@ -833,6 +858,12 @@ const UserMessage = React.memo(
               <ContextMenuItem onClick={() => onEditUserMessage(message.id, messageText)}>
                 <Pencil className="size-4" />
                 Edit message
+              </ContextMenuItem>
+            ) : null}
+            {messageText ? (
+              <ContextMenuItem onClick={() => quoteIntoComposer(sessionId, selectionInMessage(window.getSelection(), message.id) || messageText)}>
+                <TextQuote className="size-4" />
+                Quote
               </ContextMenuItem>
             ) : null}
             {messageText ? (
@@ -1460,6 +1491,17 @@ function MessageGroup({
         <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100 md:px-8">
           <MessageActions className="flex gap-0">
             <CopyMessageButton messages={renderableItems.map((item) => item.message)} />
+            <MessageAction tooltip="Quote">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Quote"
+                data-testid="quote-reply"
+                onClick={() => quoteIntoComposer(sessionId, getMessagesText([lastTextMessage]))}
+              >
+                <TextQuote />
+              </Button>
+            </MessageAction>
             {lastRealItem ? (
               <>
                 <MessageAction tooltip="Branch in new chat">
@@ -1565,6 +1607,7 @@ export function shouldShowRunReconnecting(status: ThreadStatus, syncDegraded: bo
 
 export function MessageList({ messages, status, activityStatus, retryStatus, syncHealth }: MessageListProps) {
   const { workspaceId, sessionId } = useMessageList()
+  const listRef = React.useRef<HTMLDivElement | null>(null)
   const workspace = useWorkspaceMaybe()
   const tasks = React.useMemo(() => activeDelegatedTasks(messages), [messages])
   const [observedAt] = React.useState(() => Date.now())
@@ -1651,7 +1694,8 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
       activityStatus={activityStatus}
       currentToolCallIds={currentToolCallIds}
     >
-      <div className={cn("flex flex-col gap-2 @container/message-list")}>
+      <div ref={listRef} className={cn("flex flex-col gap-2 @container/message-list")}>
+        <SelectionQuote sessionId={sessionId} containerRef={listRef} />
         {messages.length === 0 && <TaskSuggestions className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3 md:px-5 md:pb-5 grow" />}
 
         {items.map((item) => {

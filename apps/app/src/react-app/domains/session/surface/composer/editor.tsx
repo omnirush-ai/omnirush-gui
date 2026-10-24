@@ -338,17 +338,19 @@ function pastedTextChipLabel(label: string, lines: number) {
 
 function createPastedTextChipDom(label: string, lines: number) {
   const dom = document.createElement("span");
-  dom.className = "inline-flex items-center gap-1 rounded-full border border-amber-6/35 bg-amber-3/15 px-2.5 py-1 text-xs font-medium text-warning";
+  dom.className = "inline-flex max-w-full items-center gap-1 rounded-full border border-amber-6/35 bg-amber-3/15 px-2.5 py-1 text-xs font-medium text-warning";
   dom.contentEditable = "false";
   dom.setAttribute("spellcheck", "false");
   dom.title = `Pasted text · ${label}`;
 
   const text = document.createElement("span");
+  // A long label shortens; the Expand link keeps its one line.
+  text.className = "min-w-0 truncate";
   text.textContent = pastedTextChipLabel(label, lines);
 
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "ml-1 inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-medium text-warning underline decoration-amber-8 underline-offset-2 transition-colors hover:bg-amber-4 hover:text-amber-12";
+  button.className = "ml-1 inline-flex shrink-0 whitespace-nowrap items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-medium text-warning underline decoration-amber-8 underline-offset-2 transition-colors hover:bg-amber-4 hover:text-amber-12";
   button.title = "Expand";
   button.setAttribute("aria-label", "Expand pasted text in composer");
   button.dataset.pastedExpandLabel = label;

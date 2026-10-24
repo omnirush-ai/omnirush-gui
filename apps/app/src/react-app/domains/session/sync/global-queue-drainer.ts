@@ -1,5 +1,6 @@
 import type { SessionStatus } from "@opencode-ai/sdk/v2/client";
 
+import { draftHasLostPaste } from "../surface/composer/pasted-text";
 import { isSessionReverted } from "./reverted-sessions";
 import { markTaskRunStart } from "@/app/lib/analytics";
 import { createClient, createPromptMessageID, hasAcceptedPromptMessage, isPromptAdmissionUnknown } from "@/app/lib/opencode";
@@ -347,6 +348,8 @@ async function attemptDrain(sessionId: string) {
   if (!canAdmitNextQueuedItem(getQueuedDrainState(sessionId))) return;
   // A reverted chat: the engine would delete its hidden turns on this send. Held until Restore or a confirmed send.
   if (isSessionReverted(sessionId)) return;
+  // A lost placeholder holds the queue (the item stays, to edit or remove), never sent as the bare token.
+  if (draftHasLostPaste(nextItem.draft)) return;
 
   const draft = { ...withoutRevertTarget(nextItem.draft), messageId: nextItem.draft.messageId ?? createPromptMessageID() };
   // Claim synchronously before any await so a mounted surface cannot win the
