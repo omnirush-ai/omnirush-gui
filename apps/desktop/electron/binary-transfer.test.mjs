@@ -7,10 +7,86 @@ import test from "node:test";
 import {
   DESKTOP_TRANSFER_MAX_BYTES,
   downloadBinaryToPath,
+  downloadClaudeArchive,
   uploadMultipartFromBytes,
 } from "./binary-transfer.mjs";
 
 const allowedUrlPrefixes = ["https://worker.example.test"];
+
+test("Claude archive saving uses a dialog path and only the app's exact server", async () => {
+  await withWorkspace(async (root, stagingDir) => {
+    const localServerUrl = "http://127.0.0.1:39876";
+    const route = "/workspace/project/claude/sessions/00000000-0000-4000-8000-000000000001/export";
+    let fetched = 0, dialogs = 0;
+    const options = {localServerUrl, allowedUrlPrefixes: [], stagingDir,
+      chooseDestination: async filename => { dialogs++; return path.join(root, filename); },
+      fetcher: async (url, init) => { fetched++; assert.equal(url, localServerUrl + route); assert.equal(init.method, "POST"); assert.equal(init.redirect, "error"); return remoteResponse(new Uint8Array([1,2,3]), {headers: {"content-length": String(DESKTOP_TRANSFER_MAX_BYTES + 1)}}); },
+    };
+    for (const url of ["http://127.0.0.1:39877" + route, localServerUrl + "/private", localServerUrl + route + "?redirect=1"]) await assert.rejects(downloadClaudeArchive({url}, options));
+    assert.equal(dialogs, 0); assert.equal(fetched, 0);
+    assert.equal(await downloadClaudeArchive({url: localServerUrl + route}, {...options, chooseDestination: async () => null}), null);
+    assert.equal(fetched, 0);
+    const result = await downloadClaudeArchive({url: localServerUrl + route}, options);
+    assert.equal(result.bytes, 3); assert.deepEqual(await readFile(result.path), Buffer.from([1,2,3]));
+    await assert.rejects(downloadClaudeArchive({url: localServerUrl + route}, options)); // exclusive creation
+  });
+});
+
+test("Claude archive cancellation before or during the dialog never starts a fetch", {timeout: 5000}, async () => {
+  await withWorkspace(async (root, stagingDir) => {
+    for (const beforeDialog of [true, false]) {
+      const controller = new AbortController();
+      let dialogs = 0, fetched = 0;
+      if (beforeDialog) controller.abort();
+      await assert.rejects(downloadClaudeArchive({url: "http://127.0.0.1:39876/workspace/project/claude/sessions/00000000-0000-4000-8000-000000000001/export"}, {
+        localServerUrl: "http://127.0.0.1:39876", allowedUrlPrefixes: [], stagingDir, signal: controller.signal,
+        chooseDestination: async filename => { dialogs++; controller.abort(); return path.join(root, filename); },
+        fetcher: async () => { fetched++; return remoteResponse(new Uint8Array([1])); },
+      }), {name: "AbortError"});
+      assert.equal(dialogs, beforeDialog ? 0 : 1);
+      assert.equal(fetched, 0);
+      assert.deepEqual(await readdir(root), []);
+    }
+  });
+});
+
+test("Claude archive abort cancels a stalled stream and removes private staging bytes", {timeout: 5000}, async () => {
+  await withWorkspace(async (root, stagingDir) => {
+    const controller = new AbortController();
+    let streamCancelled = false;
+    let signal;
+    const filename = "claude-00000000-0000-4000-8000-000000000001.zip";
+    const downloading = downloadClaudeArchive({
+      url: "http://127.0.0.1:39876/workspace/project/claude/sessions/00000000-0000-4000-8000-000000000001/export",
+      headers: {authorization: "Bearer fixture-client", "X-OmniRush-Host-Token": "fixture-host"},
+    }, {
+      localServerUrl: "http://127.0.0.1:39876", allowedUrlPrefixes: [], stagingDir, signal: controller.signal,
+      chooseDestination: async () => path.join(root, filename),
+      fetcher: async (_url, init) => {
+        signal = init.signal;
+        assert.equal(init.headers["X-OmniRush-Host-Token"], "fixture-host");
+        return new Response(new ReadableStream({
+          start(stream) { stream.enqueue(new Uint8Array([80, 75, 255, 0])); },
+          cancel() { streamCancelled = true; },
+        }));
+      },
+    });
+    const rejected = assert.rejects(downloading, {name: "AbortError"});
+    // Wait for bytes on disk, so this exercises an in-flight body read.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const files = await readdir(stagingDir).catch(() => []);
+      if (files.length && (await readFile(path.join(stagingDir, files[0]))).length) break;
+      assert.ok(attempt < 99, "download never staged a chunk");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    controller.abort();
+    await rejected;
+    assert.equal(signal.aborted, true);
+    assert.equal(streamCancelled, true);
+    assert.deepEqual(await readdir(stagingDir), []);
+    assert.deepEqual(await readdir(root), []);
+  });
+});
 
 async function withWorkspace(run) {
   const base = await mkdtemp(path.join(os.tmpdir(), "omnirush-binary-transfer-"));
@@ -170,6 +246,7 @@ test("rejects zero-byte and oversized downloads without leaving partial files", 
 
 test("cancellation removes the incomplete download", async () => {
   await withWorkspace(async (root, stagingDir) => {
+    await mkdir(stagingDir);
     const destinationPath = path.join(root, "cancelled.bin");
     const controller = new AbortController();
     const response = new Response(new ReadableStream({

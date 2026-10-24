@@ -39,13 +39,13 @@ function boundedRecord(value, label, maximumEntries) {
   ]));
 }
 
-function boundedByteCount(value, label, { allowUndefined = false } = {}) {
+function boundedByteCount(value, label, { allowUndefined = false, maximum = DESKTOP_TRANSFER_MAX_BYTES } = {}) {
   if (allowUndefined && value === undefined) return DESKTOP_TRANSFER_MAX_BYTES;
   if (!Number.isSafeInteger(value)) throw transferError(`${label} must be an integer.`, "invalid-size");
   if (value === 0) throw transferError(`${label} must be greater than zero.`, "zero-byte-file");
   if (value < 0) throw transferError(`${label} must be greater than zero.`, "invalid-size");
-  if (value > DESKTOP_TRANSFER_MAX_BYTES) {
-    throw transferError(`${label} exceeds the ${DESKTOP_TRANSFER_MAX_BYTES}-byte limit.`, "file-too-large");
+  if (value > maximum) {
+    throw transferError(`${label} exceeds the ${maximum}-byte limit.`, "file-too-large");
   }
   return value;
 }
@@ -63,7 +63,7 @@ function urlWithinPrefix(candidate, prefixValue) {
   return !prefixPath || candidate.pathname === prefixPath || candidate.pathname.startsWith(`${prefixPath}/`);
 }
 
-function remoteUrl(value, allowedUrlPrefixes) {
+function remoteUrl(value, allowedUrlPrefixes, allowLoopback = false) {
   const raw = boundedString(value, "URL", { required: true, maxLength: 8_192 });
   let parsed;
   try {
@@ -74,7 +74,7 @@ function remoteUrl(value, allowedUrlPrefixes) {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw transferError("URL must use HTTP or HTTPS.", "invalid-url");
   }
-  if (["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)) {
+  if (!allowLoopback && ["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)) {
     throw transferError("Dedicated file transfers are only available for remote destinations.", "loopback-url");
   }
   // The renderer never gets to pick an arbitrary destination: the URL must sit
@@ -259,10 +259,10 @@ export async function uploadMultipartFromBytes(input, options) {
 // through the verified handle, and never unlinked by path: failure cleanup
 // truncates through the handle instead.
 export async function downloadBinaryToPath(input, options) {
-  const url = remoteUrl(input?.url, options?.allowedUrlPrefixes);
+  const url = remoteUrl(input?.url, options?.allowedUrlPrefixes, options?.allowLoopback === true);
   const destination = await resolveAuthorizedPath(input?.destinationPath, options?.authorizedRoots);
   const destinationPath = destination.path;
-  const maxBytes = boundedByteCount(input?.maxBytes, "Maximum download size", { allowUndefined: true });
+  const maxBytes = boundedByteCount(input?.maxBytes, "Maximum download size", { allowUndefined: true, maximum: options?.downloadMaximum ?? DESKTOP_TRANSFER_MAX_BYTES });
   const headers = boundedRecord(input?.headers, "Headers", MAX_HEADERS);
   const method = boundedString(input?.method ?? "GET", "Method", { required: true, maxLength: 16 });
   const signal = timeoutSignal(input?.timeoutMs, options?.signal);
@@ -273,7 +273,10 @@ export async function downloadBinaryToPath(input, options) {
   let stagingPath;
   let stagingFile;
   let destinationFile;
+  let reader;
+  const cancelReader = () => { void reader?.cancel().catch(() => undefined); };
   try {
+    signal?.throwIfAborted();
     const response = await options.fetcher(url, {
       method,
       headers,
@@ -294,12 +297,14 @@ export async function downloadBinaryToPath(input, options) {
     await mkdir(stagingDir, { recursive: true });
     stagingPath = path.join(stagingDir, `download-${randomUUID()}.part`);
     stagingFile = await open(stagingPath, "wx+");
-    const reader = response.body?.getReader();
+    reader = response.body?.getReader();
+    signal?.addEventListener("abort", cancelReader, { once: true });
     let bytes = 0;
     if (reader) {
       while (true) {
         signal?.throwIfAborted();
         const { done, value } = await reader.read();
+        signal?.throwIfAborted();
         if (done) break;
         bytes += value.byteLength;
         if (bytes > maxBytes) {
@@ -310,6 +315,7 @@ export async function downloadBinaryToPath(input, options) {
       }
     }
     if (bytes === 0) throw transferError("Download response was empty.", "zero-byte-file");
+    signal?.throwIfAborted();
     // Only a complete download reaches the workspace. Revalidate the
     // destination, create it exclusively ("wx" never follows a final
     // symlink), and prove by device and inode that the created file resides
@@ -336,6 +342,7 @@ export async function downloadBinaryToPath(input, options) {
       position += bytesRead;
     }
     await destinationFile.sync();
+    signal?.throwIfAborted();
     await destinationFile.close();
     destinationFile = undefined;
     return { ...responseMetadata(response), path: destinationPath, bytes };
@@ -348,9 +355,33 @@ export async function downloadBinaryToPath(input, options) {
     }
     throw error;
   } finally {
+    signal?.removeEventListener("abort", cancelReader);
+    await reader?.cancel().catch(() => undefined);
+    reader?.releaseLock();
     await stagingFile?.close().catch(() => undefined);
     if (stagingPath) {
       await rm(stagingPath, { force: true }).catch(() => undefined);
     }
   }
+}
+
+// Native evidence is larger than ordinary inbox files. This separate operation
+// uses the app's save dialog and known server endpoints as its authorities;
+// neither the output path nor the larger limit comes from renderer input.
+export async function downloadClaudeArchive(input, options) {
+  options.signal?.throwIfAborted();
+  const url = new URL(input.url);
+  if (url.username || url.password || url.search || url.hash || !/\/workspace\/[^/]+\/claude\/sessions\/[a-f0-9-]{36}\/export$/.test(url.pathname)) {
+    throw transferError("Invalid Claude archive endpoint.", "unauthorized-url");
+  }
+  const prefixes = [...options.allowedUrlPrefixes, ...(options.localServerUrl ? [options.localServerUrl] : [])];
+  remoteUrl(url.toString(), prefixes, true);
+  const session = url.pathname.split("/").at(-2);
+  const destination = await options.chooseDestination(`claude-${session}.zip`);
+  options.signal?.throwIfAborted();
+  if (!destination) return null;
+  return downloadBinaryToPath({url: url.toString(), destinationPath: destination, headers: input.headers, method: "POST", maxBytes: 2 ** 32 - 1, timeoutMs: 15 * 60_000}, {
+    ...options, allowedUrlPrefixes: prefixes, allowLoopback: true, downloadMaximum: 2 ** 32 - 1,
+    authorizedRoots: [path.dirname(destination)],
+  });
 }

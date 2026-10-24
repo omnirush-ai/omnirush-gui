@@ -7,7 +7,8 @@
  * logs and closed sessions. Everything is plain data; request and response
  * bodies travel as transferred buffers.
  */
-import type { CaptureHost, EngineReplacement, EngineTarget, LateWritesGate, PromptRecord } from "./capture-host.js";
+import type { CaptureHost, ClaudeCaptureContext, EngineReplacement, EngineTarget, LateWritesGate, PromptRecord } from "./capture-host.js";
+import type { NativeCaptureAction } from "./claude-code/native-capture.js";
 import type { ApprovalMode } from "./approval-mode.js";
 import type { BoxCaptureInfo } from "./box/service.js";
 import type { CommandEventType } from "./command-events.js";
@@ -19,6 +20,7 @@ export type CaptureStopOptions = { archiveFinals: boolean };
 
 /** CaptureHost methods callable from the main thread, with their arguments. */
 export type CaptureCalls = {
+  captureClaude: [context: ClaudeCaptureContext, action: NativeCaptureAction];
   startSession: [sessionId: string, workspaceId: string, root: string, turnsBefore?: number];
   boxSession: [sessionId: string, box: BoxCaptureInfo | null];
   sessionPolicy: [sessionId: string];
@@ -173,6 +175,8 @@ export function transferables(value: HostRequest | SerializedResponse | null): A
 /** Runs one call on a host (the worker's, or the in-process fallback). */
 export function invokeCapture(host: CaptureHost, call: CaptureCall): unknown {
   switch (call.method) {
+    case "captureClaude":
+      return host.captureClaude(...call.args);
     case "startSession":
       return host.startSession(...call.args);
     case "boxSession":

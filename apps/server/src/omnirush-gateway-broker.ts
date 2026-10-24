@@ -17,6 +17,8 @@ import { RejectedAttachments, isRejectedAttachmentError, type Attachment } from 
 import { gatewayUrlAllowed, RELEASE_GATEWAY_ERROR } from "./release-guard.js";
 import { BOX_HEADER, MODEL_NOT_IN_MODE, notInModeMessage, projectMode } from "./model-modes/model-modes.mjs";
 import { MODE_NOT_BOUND, MODEL_NOT_BOUND, SESSION_BIND_UNCONFIRMED, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED, sessionBinder, strictSessions, type StrictSessions } from "./model-modes/strict-sessions.mjs";
+import { ClaudeDeviceAccess, type ClaudeDeviceRequest } from "./claude-code/access.js";
+import type { ClaudeAuthorization } from "./claude-code/runtime.js";
 
 /** A main chat's request on another model than the one it started on (one model per chat). */
 const SESSION_MODEL_FIXED = "session_model_fixed";
@@ -1298,6 +1300,7 @@ export class OmniRushGatewayBroker {
   /** Strict sessions: each chat binds its model and mode once per process (model-modes/strict-sessions.mjs). */
   private readonly reasoningSummaryFor: (model: string) => boolean | Promise<boolean>;
   private readonly clientHeader: string | null;
+  private readonly claudeFetcher: typeof externalFetch;
   private refreshInFlight: Promise<boolean> | null = null;
   /** Whether the last failed refresh left the session as it was (unreachable, 5xx, contended). */
   private lastRefreshTransient = false;
@@ -1344,6 +1347,7 @@ export class OmniRushGatewayBroker {
     this.invalidate = options.credentials?.invalidate;
     this.refreshOwner = options.credentials?.refresh;
     const fetcher = options.fetch ?? externalFetch;
+    this.claudeFetcher = fetcher;
     this.clientHeader = guiClientHeaderValue(options.clientVersion);
     const clientHeader = this.clientHeader;
     // Every call the broker makes goes to omnirush.ai (model, upload, archive
@@ -1673,6 +1677,7 @@ export class OmniRushGatewayBroker {
   }
 
   resetCapabilities(): void {
+    this.claudeDevice = undefined;
     this.capabilityCache = null;
     this.capabilityProbe = null;
     this.capabilityFailure = null;
@@ -1839,6 +1844,48 @@ export class OmniRushGatewayBroker {
       headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
       signal: AbortSignal.timeout(8_000),
     }));
+  }
+
+  private claudeDevice?: ClaudeDeviceAccess;
+  private claudeAccessClient() {
+    this.claudeDevice ??= new ClaudeDeviceAccess(this.claudeDeviceRequest, (this.clientHeader ?? "desktop/unknown").replace(/^gui\//, "desktop/"));
+    return this.claudeDevice;
+  }
+  private readonly claudeDeviceRequest: ClaudeDeviceRequest = (route, init, owner) => this.withDeviceBearer(async state => {
+    const client = (this.clientHeader ?? "desktop/unknown").replace(/^gui\//, "desktop/");
+    if (owner) {
+      const identity = await this.fetcher(apiUrl(state.gatewayUrl, "device/me"), {headers: {Authorization: `Bearer ${state.accessToken}`}, signal: AbortSignal.timeout(8_000)});
+      if (!identity.ok) return identity;
+      const account: unknown = await identity.json();
+      if (!isRecord(account) || account.id !== owner) return new Response(null, {status: 403});
+    }
+    return this.claudeFetcher(apiUrl(state.gatewayUrl, route), {
+      method: init?.method ?? "GET", body: init?.body,
+      headers: {Authorization: `Bearer ${state.accessToken}`, Accept: "application/json", "Content-Type": "application/json", "X-OmniRush-Client": client},
+      signal: AbortSignal.timeout(8_000),
+    });
+  });
+  claudeAccess() { return this.claudeAccessClient().access(); }
+  /** Session-bound tokens stay in this host process, outside the renderer and Docker. */
+  async claudeGrant(context: ClaudeAuthorization) {
+    const client = this.claudeAccessClient(), grant = await client.authorize(context);
+    if (client !== this.claudeDevice) throw new Error("OmniRush account routing changed; retry with the current account");
+    return grant;
+  }
+  revokeClaudeGrant(context: ClaudeAuthorization) { return this.claudeAccessClient().revoke(context); }
+
+  nativeCaptureRequest(owner: string, route: string, init: {method: "GET" | "POST"; body?: string; signal?: AbortSignal; refresh?: false}): Promise<Response> {
+    if (route !== "collect/capabilities" && !ARCHIVE_API_PATH.test(route)) return Promise.resolve(new Response(null, {status: 404}));
+    return this.withDeviceBearer(async state => {
+      const identity = await this.fetcher(apiUrl(state.gatewayUrl, "device/me"), {headers: {Authorization: `Bearer ${state.accessToken}`}, signal: AbortSignal.timeout(8_000)});
+      if (!identity.ok) return identity;
+      const account: unknown = await identity.json();
+      if (!isRecord(account) || account.id !== owner) return new Response(null, {status: 403});
+      return this.fetcher(apiUrl(state.gatewayUrl, route), {
+      method: init.method, headers: {Authorization: `Bearer ${state.accessToken}`, "content-type": "application/json"},
+      body: init.body, signal: init.signal ?? AbortSignal.timeout(30_000),
+      });
+    }, {refresh: init.refresh !== false});
   }
 
   /**
@@ -2274,6 +2321,7 @@ export class OmniRushGatewayBroker {
     if (this.state !== asked) return Boolean(this.state);
     if (!current) {
       this.state = null;
+      this.resetCapabilities();
       void this.invalidate?.().catch(() => undefined);
       return false;
     }

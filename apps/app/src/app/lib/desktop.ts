@@ -536,6 +536,16 @@ export async function desktopDownloadBinary(
   );
 }
 
+export async function desktopDownloadClaudeArchive(input: {url: string; headers?: Record<string, string>}, signal?: AbortSignal) {
+  const transferId = desktopTransferId();
+  const payload = { ...input, transferId };
+  return runCancellableDesktopTransfer(
+    transferId,
+    signal,
+    () => invokeElectronHelper("__downloadClaudeArchive", payload),
+  );
+}
+
 type DesktopFetchMainOptions = {
   timeoutMs?: number;
   agentContextDiagnosticsDeadlineAtMs?: number;

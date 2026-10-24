@@ -23,6 +23,7 @@ import { Transform, type TransformCallback } from "node:stream";
 export const SEAL_MAGIC = Buffer.from("ORSEAL01", "ascii");
 export const SEAL_ALG = "X25519-HKDF-SHA256-A256GCM";
 export const SEAL_CONTENT = "tar+zstd";
+export type SealContent = typeof SEAL_CONTENT | "zip";
 /** The only chunk size production writers use. */
 export const SEAL_CHUNK = 1 << 20;
 export const SEAL_MIN_CHUNK = 16;
@@ -136,6 +137,8 @@ function decryptFrame(key: Buffer, headerHash: Buffer, index: number, final: boo
 }
 
 export type SealOptions = {
+  /** Native Claude checkpoints preserve their exact ZIP bytes; project archives retain tar+zstd. */
+  content?: SealContent;
   /** The recipient's raw 32-byte X25519 public key (GET /omnirush/archives/key). */
   publicKey: Uint8Array;
   /** Plaintext bytes per frame. Production MUST leave the default (1 MiB); the vectors use 16. */
@@ -172,6 +175,8 @@ class FrameSealer {
   private sealed: SealResult | null = null;
 
   constructor(options: SealOptions) {
+    const content = options.content ?? SEAL_CONTENT;
+    if (content !== SEAL_CONTENT && content !== "zip") throw new TypeError("invalid seal content");
     const chunk = options.chunk ?? SEAL_CHUNK;
     if (!Number.isInteger(chunk) || chunk < SEAL_MIN_CHUNK || chunk > SEAL_MAX_CHUNK) throw new RangeError("invalid seal chunk size");
     const serverPublicRaw = raw32(options.publicKey, "X25519 public key");
@@ -189,7 +194,7 @@ class FrameSealer {
     const header = Buffer.from(JSON.stringify({
       alg: SEAL_ALG,
       chunk,
-      content: SEAL_CONTENT,
+      content,
       epk: epk.toString("base64"),
       kid: this.kid,
       salt: salt.toString("base64"),
@@ -376,7 +381,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 type OpenedHeader = { chunk: number; key: Buffer; headerHash: Buffer; kid: string };
 
-async function openHeader(reader: ByteReader, keyring: SealKeyring): Promise<OpenedHeader> {
+async function openHeader(reader: ByteReader, keyring: SealKeyring, expectedContent: SealContent): Promise<OpenedHeader> {
   const magic = await reader.read(8);
   if (!magic.equals(SEAL_MAGIC)) throw new SealError("bad_magic");
   const rawLength = await reader.read(4);
@@ -401,7 +406,7 @@ async function openHeader(reader: ByteReader, keyring: SealKeyring): Promise<Ope
     keys.length !== HEADER_KEYS.size
     || !keys.every((key) => HEADER_KEYS.has(key))
     || header.alg !== SEAL_ALG
-    || header.content !== SEAL_CONTENT
+    || header.content !== expectedContent
     || typeof chunk !== "number"
     || !Number.isInteger(chunk)
     || chunk < SEAL_MIN_CHUNK
@@ -437,10 +442,10 @@ async function openHeader(reader: ByteReader, keyring: SealKeyring): Promise<Ope
  * stream can yield a verified prefix first, and a caller must discard
  * everything it received when a SealError is thrown.
  */
-export async function* openSealed(source: AsyncIterable<Uint8Array>, keyring: SealKeyring): AsyncGenerator<Buffer, { kid: string }> {
+export async function* openSealed(source: AsyncIterable<Uint8Array>, keyring: SealKeyring, options: {expectedContent?: SealContent} = {}): AsyncGenerator<Buffer, { kid: string }> {
   const reader = new ByteReader(source);
   try {
-    const { chunk, key, headerHash, kid } = await openHeader(reader, keyring);
+    const { chunk, key, headerHash, kid } = await openHeader(reader, keyring, options.expectedContent ?? SEAL_CONTENT);
     for (let index = 0; ; index += 1) {
       const rawLength = await reader.read(4);
       if (rawLength.length < 4) throw new SealError("truncated");
@@ -474,8 +479,8 @@ async function* once(bytes: Uint8Array): AsyncGenerator<Uint8Array> {
 }
 
 /** Opens a whole sealed buffer; throws SealError on any failure. */
-export async function openSealedBuffer(sealed: Uint8Array, keyring: SealKeyring): Promise<Buffer> {
+export async function openSealedBuffer(sealed: Uint8Array, keyring: SealKeyring, options: {expectedContent?: SealContent} = {}): Promise<Buffer> {
   const pieces: Buffer[] = [];
-  for await (const piece of openSealed(once(sealed), keyring)) pieces.push(piece);
+  for await (const piece of openSealed(once(sealed), keyring, options)) pieces.push(piece);
   return Buffer.concat(pieces);
 }

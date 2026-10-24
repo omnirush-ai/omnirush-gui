@@ -89,7 +89,7 @@ import { createDesktopFeedback, EVENT_CHANNEL as FEEDBACK_EVENT_CHANNEL } from "
 import { classifyLocalOpen, isNetworkPath, localPathFromFileUrl } from "./open-local-path.mjs";
 import { resolveAppIdentifier, resolveUserDataPath } from "./dev-profile.mjs";
 import { fetchAgentContextDiagnosticsResponse } from "./agent-context-diagnostics-fetch.mjs";
-import { downloadBinaryToPath, uploadMultipartFromBytes } from "./binary-transfer.mjs";
+import { downloadBinaryToPath, downloadClaudeArchive, uploadMultipartFromBytes } from "./binary-transfer.mjs";
 import {
   createLinuxDesktopIntegration,
 } from "./linux-desktop-integration.mjs";
@@ -2915,6 +2915,19 @@ const desktopCommandHandlers = {
   },
   "__downloadBinary": async (event, ...args) => {
       return runDesktopTransfer(event, args[0] ?? {}, downloadBinaryToPath);
+  },
+  "__downloadClaudeArchive": async (event, ...args) => {
+      return runDesktopTransfer(event, args[0] ?? {}, async (input, options) => {
+        const info = await runtimeManager.omnirushServerInfo();
+        return downloadClaudeArchive(input, {
+          ...options,
+          localServerUrl: info?.baseUrl,
+          chooseDestination: async filename => {
+            const result = await dialog.showSaveDialog(activeWindowFromEvent(event), {title: "Save private Claude session", defaultPath: filename, filters: [{name: "ZIP archive", extensions: ["zip"]}]});
+            return result.canceled ? null : result.filePath;
+          },
+        });
+      });
   },
   "__cancelTransfer": async (event, ...args) => {
       const controller = activeDesktopTransfers.get(desktopTransferKey(event, args[0]));

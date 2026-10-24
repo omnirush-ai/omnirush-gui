@@ -39,6 +39,28 @@ function gatewayRequest(body: Record<string, unknown>, headers: Record<string, s
 }
 
 describe("OmniRush gateway broker", () => {
+  test("Claude device mint keeps the desktop client header consistent with its bound client", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000001", contractSha256 = "a".repeat(64);
+    let minted = 0;
+    const broker = new OmniRushGatewayBroker({clientVersion: "3.7.5", credentials: {
+      gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "device-access-fixture", refreshToken: "device-refresh-fixture",
+    }, fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/device/me")) return Response.json({id: "owner"});
+      expect(url.pathname).toBe("/omnirush/device/claude-token");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer device-access-fixture");
+      expect(new Headers(init?.headers).get("x-omnirush-client")).toBe("desktop/3.7.5");
+      if (typeof init?.body !== "string") throw new Error("Expected mint JSON");
+      expect(JSON.parse(init.body).client).toBe("desktop/3.7.5");
+      minted++;
+      return Response.json({token: "orc_" + "a".repeat(43), base_url: "https://gateway.example/claude", expires_in: 900, refresh_after: 600,
+        binding: {binding_id: "00000000-0000-4000-8000-000000000002", session_id: sessionId, root_session_id: sessionId,
+          model: "claude-opus-5-5", upstream_model: "claude-opus-5-5", contract_hash: contractSha256}});
+    }});
+    const grant = await broker.claudeGrant({owner: "owner", sessionId, workspaceId: "project", model: "claude-opus-5-5", contractSha256});
+    expect(minted).toBe(1); expect(grant.client).toBe("desktop/3.7.5");
+  });
+
   test("refreshes one expired credential and retries concurrent requests with the rotated token", async () => {
     let refreshCalls = 0;
     const fetcher = async (input: string | URL | Request, init?: RequestInit) => {

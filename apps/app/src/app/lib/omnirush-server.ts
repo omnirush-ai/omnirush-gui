@@ -17,7 +17,7 @@ import {
   AGENT_CONTEXT_DIAGNOSTICS_REQUEST_TIMEOUT_MS,
   requestAgentContextDiagnosticsPayload,
 } from "./agent-context-diagnostics-transport";
-import { desktopFetch, desktopFetchAgentContextDiagnostics, desktopUploadMultipart, electronLocalPathForFile } from "./desktop";
+import { desktopFetch, desktopFetchAgentContextDiagnostics, desktopUploadMultipart, desktopDownloadClaudeArchive, electronLocalPathForFile } from "./desktop";
 import { isOmniRushGatewayRuntime } from "./gateway-runtime";
 import { isDesktopRuntime } from "./runtime-env";
 import type { ExecResult, OpencodeConfigFile, WorkspaceInfo, WorkspaceList } from "./desktop";
@@ -1895,6 +1895,16 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
   const token = options.token;
   const hostToken = options.hostToken;
 
+  const claudeExportError = (status: number, text: string) => {
+    try {
+      const body: unknown = JSON.parse(text);
+      if (body && typeof body === "object" && "message" in body && typeof body.message === "string" && body.message.trim()) {
+        return new Error(body.message);
+      }
+    } catch { /* Non-JSON errors retain the HTTP status. */ }
+    return new Error(`Claude export failed (${status})`);
+  };
+
   const timeouts = {
     health: 3_000,
     capabilities: 6_000,
@@ -1916,6 +1926,24 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
   return {
     baseUrl,
     token,
+    claude: {
+      request: <T,>(workspaceId: string, route: string, body?: unknown, signal?: AbortSignal) => requestJson<T>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/claude/${route}`, {token, hostToken, method: body === undefined ? "GET" : "POST", body, signal, timeoutMs: 15 * 60_000}),
+      export: async (workspaceId: string, sessionId: string, signal?: AbortSignal) => {
+        const url = `${baseUrl}/workspace/${encodeURIComponent(workspaceId)}/claude/sessions/${encodeURIComponent(sessionId)}/export`;
+        const response = await resolveFetch(url)(url, {method: "POST", headers: buildHeaders(token, hostToken), signal});
+        if (!response.ok) throw claudeExportError(response.status, await response.text());
+        return response.blob();
+      },
+      saveExport: async (workspaceId: string, sessionId: string, signal?: AbortSignal) => {
+        const result = await desktopDownloadClaudeArchive({
+          url: `${baseUrl}/workspace/${encodeURIComponent(workspaceId)}/claude/sessions/${encodeURIComponent(sessionId)}/export`,
+          headers: buildHeaders(token, hostToken),
+        }, signal);
+        if (!result) return null;
+        if (result.status !== 200 || !result.path) throw claudeExportError(result.status, result.body ?? "");
+        return result.path;
+      },
+    },
     health: () =>
       requestJson<{ ok: boolean; version: string; uptimeMs: number }>(baseUrl, "/health", { token, hostToken, timeoutMs: timeouts.health }),
     runtimeVersions: () =>

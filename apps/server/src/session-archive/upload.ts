@@ -8,7 +8,7 @@ import { open, type FileHandle } from "node:fs/promises";
 import { z } from "zod";
 
 import { parseArchivePolicy, type ArchivePolicy } from "./policy.js";
-import { SEAL_ALG, SEAL_CONTENT, sealKid } from "./seal.js";
+import { SEAL_ALG, sealKid, type SealContent } from "./seal.js";
 import { gatewayUrlAllowed } from "../release-guard.js";
 
 export type ArchiveFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -112,7 +112,7 @@ export function resolveArchiveApiRoot(rawGatewayUrl: string | undefined): string
   }
 }
 
-export type ArchiveCreateRequest = {
+export type ArchiveCreateRequest<Content extends SealContent = "tar+zstd"> = {
   archive_id: string;
   session_id: string;
   kind: "base" | "delta";
@@ -122,8 +122,18 @@ export type ArchiveCreateRequest = {
   size: number;
   sha256: string;
   kid: string;
-  content: typeof SEAL_CONTENT;
+  content: Content;
   marker: string;
+  /** Native harness evidence uses the same sealed multipart archive protocol. */
+  payload?: "project" | "claude_native" | "claude_checkpoint";
+  harness?: "claude-code";
+  engine_version?: string;
+  binding_id?: string;
+  contract_hash?: string;
+  plain_sha256?: string;
+  plain_size?: number;
+  manifest_sha256?: string;
+  box_image?: string;
   /** Bytes of the `__media__/` files in this archive (media-store.ts): the server counts them apart from the project's. */
   media_bytes?: number;
 };
@@ -139,7 +149,7 @@ export type ArchiveUploadState = {
 
 /** What the uploader needs from a queued job; it mutates `upload` and `recreates` and persists through the callback. */
 export type ArchiveUploadJob = {
-  request: ArchiveCreateRequest;
+  request: ArchiveCreateRequest<SealContent>;
   sealedPath: string;
   upload: ArchiveUploadState | null;
   recreates: number;
@@ -357,6 +367,7 @@ export class ArchiveUploader {
     if (result.kind === "ok") return null;
     if (result.status === 401) return { status: "blocked", reason: "unauthorized" };
     if (result.status === 403) return { status: "blocked", reason: result.code ?? "forbidden" };
+    if (result.status === 409 && result.code === "archive_payload_disabled") return { status: "disabled", code: result.code };
     if (result.status === 428) return { status: "disabled", code: result.code ?? "archive_consent_required" };
     if (result.status === 503) return { status: "disabled", code: result.code ?? "archive_disabled" };
     if (result.status === 413) return { status: "stop_session", code: result.code ?? "archive_too_large" };
@@ -486,7 +497,13 @@ export class ArchiveUploader {
   private async complete(job: ArchiveUploadJob, upload: ArchiveUploadState, signal?: AbortSignal): Promise<UploadOutcome | "recreate" | "relist" | { reupload: string }> {
     const parts = Array.from({ length: upload.part_count }, (_, index) => ({ part_number: index + 1, etag: upload.etags[String(index + 1)] ?? "" }));
     const result = await this.call("POST", `archives/${job.request.archive_id}/complete`, { parts }, signal);
-    if (result.kind === "ok") return { status: "uploaded" };
+    if (result.kind === "ok") {
+      if (job.request.payload === "claude_native" || job.request.payload === "claude_checkpoint") {
+        const receipt = z.object({archive_id: z.string(), status: z.literal("uploaded"), size: z.number().int().positive()}).safeParse(result.body);
+        if (!receipt.success || receipt.data.archive_id !== job.request.archive_id || receipt.data.size !== job.request.size) return { status: "retry_later", reason: "invalid completion receipt" };
+      }
+      return { status: "uploaded" };
+    }
     const outcome = this.common(result);
     if (outcome) return outcome;
     if (result.kind === "error") {

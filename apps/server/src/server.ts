@@ -1,4 +1,8 @@
 import { managedDesktopPolicy } from "./managed-desktop-policy.js";
+import { uploadClaudeSession } from "./claude-code/transfer.js";
+import { ArchiveUploader } from "./session-archive/upload.js";
+import { SealStream } from "./session-archive/seal.js";
+import { tarMemberHeader } from "./session-archive/pack.js";
 import { parseApprovalMode, resolveApprovalMode, type ApprovalMode } from "./approval-mode.js";
 import { createTaskRecovery, requeueTaskRecoveryAfterEngineLoss, setTaskRecovery } from "./task-recovery.js";
 import {
@@ -247,6 +251,8 @@ import { GOOD_SESSION_ID_PATTERN, readGoodSession } from "./omnirush-good-sessio
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
 import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
+import { ClaudeRuntime } from "./claude-code/runtime.js";
+import { registerClaudeRoutes } from "./claude-code/routes.js";
 import { prepareDesktopInstallLog } from "./install-log-host.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
@@ -1533,6 +1539,22 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     bestPracticesReloads,
   );
 
+  const claudeRuntime = new ClaudeRuntime({
+    directory: join(runtimeStorageDir(config), "claude-sessions"), surface: "gui",
+    access: () => gatewayBroker.claudeAccess(),
+    authorize: context => gatewayBroker.claudeGrant(context),
+    revoke: context => gatewayBroker.revokeClaudeGrant(context),
+  });
+  registerClaudeRoutes({routes, runtime: claudeRuntime,
+    workspace: ctx => resolveWorkspaceWithoutBootstrap(config, ctx.params.id),
+    owner: ctx => requireClientScope(ctx, "owner"),
+    writable: () => ensureWritable(config),
+    upload: id => uploadClaudeSession(claudeRuntime, id, (owner, route, init) => gatewayBroker.nativeCaptureRequest(owner, route, init), owner => {
+      const uploader = new ArchiveUploader({fetch: externalFetch, request: (route, init) => gatewayBroker.nativeCaptureRequest(owner, route, init)});
+      return {fetchKey: signal => uploader.fetchKey(signal), upload: (job, persist, signal) => uploader.upload(job, persist, signal), sealer: options => new SealStream(options), tarHeader: tarMemberHeader};
+    }),
+  });
+
   const serverOptions: {
     hostname: string;
     port: number;
@@ -1919,6 +1941,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   return {
     ...server,
     stop: async () => {
+      const claudeStopped = claudeRuntime.shutdown();
       // First, and synchronously: a stop is also how a user sign-out reaches
       // this server (the desktop clears the account, then restarts it), so
       // archive part uploads in flight are aborted before anything else runs.
@@ -1926,6 +1949,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       // is still stored (an app quit, a restart), never after a sign-out.
       // Before them, each chat in a box gets its last checkpoint (bounded; only when chats ran in a
       // box this run, and the account answers it is still stored within a second).
+      await claudeStopped;
       stopBoxDefaultWatch();
       stopWebSearchWatch();
       stopMcpPolicyWatch();
