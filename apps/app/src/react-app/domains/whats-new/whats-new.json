@@ -6,10 +6,19 @@
       "version": "2.7.0",
       "date": "2026-10-24",
       "new": [
-        "/computer shows whether computer use is on and why not. It turns computer use on or off for this computer (also `omnirush computer on|off`; on by default) and lets the agent use your own screen after you confirm (off by default). When you ask for something on a screen (use my browser, click, open an app), a tip says how."
+        "/computer shows whether computer use is on and why not. It turns computer use on or off for this computer (also `omnirush computer on|off`; on by default) and lets the agent use your own screen after you confirm (off by default). When you ask for something on a screen (use my browser, click, open an app), a tip says how.",
+        "Models can be limited to the sandbox or to your own computer. A project only lists the models its mode allows, and a chat keeps one model: to use another model, start a new chat."
       ],
-      "improved": [],
-      "fixed": []
+      "improved": [
+        "When OmniRush is busy, a turn that waits for a free seat now shows its place in line and an estimated wait, and says when it gets a seat. A slow first reply no longer shows a busy notice.",
+        "In the sandbox, the agent installs missing tools (for example ffmpeg) itself instead of asking you to."
+      ],
+      "fixed": [
+        "A response cut off part way now fails cleanly instead of showing a JSON error or an empty chat.",
+        "OmniRush runs on Android (Termux) again, without the sandbox.",
+        "On a Mac, a sandbox whose connection stays down is restarted automatically instead of failing until you stop it by hand.",
+        "A sponsored card limited to once a day no longer hides the card in its other spot."
+      ]
     },
     {
       "version": "2.6.9",
@@ -270,10 +279,22 @@
       "version": "3.7.5",
       "date": "2026-10-24",
       "new": [
-        "Computer use in Settings > General: see whether it is on (and why not, such as on macOS), turn it off for this computer, and turn on “Use my own screen” after a short confirm (off by default). When you ask for something on a screen (use my browser, click, open an app), a tip above the message box turns it on."
+        "Computer use in Settings > General: see whether it is on (and why not, such as on macOS), turn it off for this computer, and turn on “Use my own screen” after a short confirm (off by default). When you ask for something on a screen (use my browser, click, open an app), a tip above the message box turns it on.",
+        "Side-by-side diffs show what each turn changed.",
+        "Quote a message, or the text you selected in it, into the message box to reply to it.",
+        "Models can be limited to the sandbox or to your own computer. A project only lists the models its mode allows, and a chat keeps one model: to use another model, start a new chat."
       ],
-      "improved": [],
-      "fixed": []
+      "improved": [
+        "Windows updates download only the parts that changed, so they are much smaller.",
+        "The Simplified Chinese translation is complete.",
+        "Messages you send while the sandbox is still setting up wait and go out once it is ready.",
+        "In the sandbox, the agent installs missing tools (for example ffmpeg) itself instead of asking you to."
+      ],
+      "fixed": [
+        "A response cut off part way now fails cleanly instead of showing an error or an empty chat.",
+        "On a Mac, a sandbox whose connection stays down is restarted automatically instead of failing until you stop it by hand.",
+        "A sponsored card limited to once a day no longer hides the card in its other spot."
+      ]
     },
     {
       "version": "3.7.4",
