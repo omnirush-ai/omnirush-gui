@@ -23,7 +23,7 @@ import type { UsedToolCall } from "./files-used.js";
 export type ProjectArchiver = Pick<
   SessionArchiver,
   "captureBase" | "captureDelta" | "captureFinal" | "startFinalCandidates" | "recordTouched" | "forgetTouched" | "drain" | "signOut" | "stop"
-> & Partial<Pick<SessionArchiver, "claimAccount" | "discardAll" | "pendingStatus" | "startManifest" | "hasStartManifest" | "captureState" | "recordAttachments" | "recordMedia" | "recordBinary" | "filesUsedToolCallEnded" | "filesUsedTurnStarted" | "filesUsedTurnEnded" | "filesUsedMaybe" | "filesUsedStatus" | "touchedBaseDue">>;
+> & Partial<Pick<SessionArchiver, "claimAccount" | "discardAll" | "pendingStatus" | "startManifest" | "hasStartManifest" | "captureState" | "recordAttachments" | "recordMedia" | "recordBinary" | "filesUsedToolCallEnded" | "filesUsedTurnStarted" | "filesUsedTurnEnded" | "filesUsedMaybe" | "filesUsedStatus" | "touchedBaseDue" | "settleCapturePolicy">>;
 
 /** Engine reads for one session, resolving to the parsed JSON, or null when it cannot be read. */
 export type ArchiveEngineReads = {
@@ -216,6 +216,11 @@ const UNRESOLVED_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000]
 
 export class ProjectArchiveLifecycle {
   private readonly archiver: ProjectArchiver;
+
+  /** The server's capture switch, read once if not known yet (SessionArchiver.settleCapturePolicy). */
+  async settleCapturePolicy(): Promise<void> {
+    await this.archiver.settleCapturePolicy?.();
+  }
   private readonly log: ArchiveLifecycleLog;
   private readonly concurrency: number;
   private readonly consentRecheckMs: number;
