@@ -1,9 +1,11 @@
 /** @jsxImportSource react */
+import { useRef } from "react";
 import type * as React from "react";
 import { Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { MarkdownBlock } from "../surface/markdown";
+import { findMarkdownAnchor, resolveProjectPath } from "../markdown-anchor";
 
 interface PreviewLoadingProps extends React.ComponentProps<"div"> {}
 
@@ -34,6 +36,8 @@ export function PlainText({ content, className, ...props }: PlainTextProps) {
 interface MarkdownPreviewProps extends React.ComponentProps<"div"> {
   content: string;
   mermaidSource?: boolean;
+  path?: string;
+  onOpenFile?: (path: string) => void;
 }
 
 function mermaidSourceMarkdown(content: string) {
@@ -47,9 +51,33 @@ function mermaidSourceMarkdown(content: string) {
   return `${fence}mermaid\n${content}\n${fence}`;
 }
 
-export function MarkdownPreview({ content, mermaidSource = false, className, ...props }: MarkdownPreviewProps) {
+export function MarkdownPreview({ content, mermaidSource = false, path, onOpenFile, className, ...props }: MarkdownPreviewProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  const onClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!(event.target instanceof Element)) return;
+    const anchor = event.target.closest("a");
+    if (!anchor) return;
+
+    const href = anchor.getAttribute("href") ?? "";
+    if (href.startsWith("#") && href.length > 1) {
+      event.preventDefault();
+      const root = rootRef.current;
+      if (root) findMarkdownAnchor(root, href.slice(1))?.scrollIntoView({ block: "start" });
+      return;
+    }
+
+    if (path && onOpenFile && !/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      const target = resolveProjectPath(path, href);
+      if (target) {
+        event.preventDefault();
+        onOpenFile(target);
+      }
+    }
+  };
+
   return (
-    <div data-omnirush-markdown-preview="" data-omnirush-mermaid-artifact={mermaidSource ? "" : undefined} className={cn("h-full overflow-auto p-4", className)} {...props}>
+    <div ref={rootRef} onClick={onClick} data-omnirush-markdown-preview="" data-omnirush-mermaid-artifact={mermaidSource ? "" : undefined} className={cn("h-full overflow-auto p-4", className)} {...props}>
       <MarkdownBlock text={mermaidSource ? mermaidSourceMarkdown(content) : content} />
     </div>
   );

@@ -55,4 +55,25 @@ test("artifact editor renders code with Pierre and browses workspace files", asy
       "No error dialog, blank artifact surface, or crash message is visible",
     ]);
   });
+
+  await step("Markdown artifact links navigate within the preview", async () => {
+    await user.type({ placeholder: "Search files" }, "omnirush-artifact-links.md", { replace: true });
+    await user.press("Tab");
+    await user.press("Tab");
+    await user.press("Enter");
+    await user.see("Select tab: omnirush-artifact-links.md", { timeoutMs: 30_000 });
+    await user.see("Jump to details");
+
+    await user.click("Jump to details");
+    expect(await world.artifactMarkdownScrollTop()).toBeGreaterThan(0);
+
+    await user.click("Open notes");
+    await user.see("Select tab: omnirush-artifact-notes.md", { timeoutMs: 30_000 });
+    await user.see("The relative artifact link works.");
+    evidence.recordAssertionEvidence(
+      "Markdown artifact previews handle internal anchors and relative workspace links",
+      "Clicking the table-of-contents anchor scrolled the preview, and clicking the sibling-file link opened the linked workspace artifact in the panel.",
+      true,
+    );
+  });
 });

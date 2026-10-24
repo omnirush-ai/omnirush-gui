@@ -11,30 +11,10 @@ import type * as MonacoApi from "monaco-editor/editor/editor.api.js";
 import type { OmniRushServerClient } from "@/app/lib/omnirush-server";
 import { renderMarkdownHtml } from "@/components/markdown/markdown";
 import { isImagePath } from "./image-view";
+import { findMarkdownAnchor, resolveProjectPath } from "../markdown-anchor";
 
 const LARGE = 1_000_000;
 const MAX_IMAGES = 30;
-
-/** `target` relative to the folder of `from` (both project paths), or null when it leaves the project. */
-export function resolveProjectPath(from: string, target: string): string | null {
-  const clean = target.split(/[?#]/)[0]!;
-  if (!clean) return null;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(clean);
-  } catch {
-    return null;
-  }
-  const parts = decoded.startsWith("/") ? [] : from.split("/").slice(0, -1);
-  for (const part of decoded.split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      if (!parts.length) return null;
-      parts.pop();
-    } else parts.push(part);
-  }
-  return parts.length ? parts.join("/") : null;
-}
 
 export function MarkdownPreview(props: {
   client: OmniRushServerClient;
@@ -141,10 +121,8 @@ export function MarkdownPreview(props: {
     const href = anchor.getAttribute("href") ?? "";
     const inline = anchor.getAttribute("data-omnirush-inline-code-path");
     if (href.startsWith("#") && href.length > 1) {
-      const id = decodeURIComponent(href.slice(1));
-      const heading = rootRef.current?.querySelector(`[id="${CSS.escape(id)}"]`)
-        ?? Array.from(rootRef.current?.querySelectorAll("h1,h2,h3,h4,h5,h6") ?? []).find((element) => slug(element.textContent ?? "") === id);
-      heading?.scrollIntoView({ block: "start" });
+      const root = rootRef.current;
+      if (root) findMarkdownAnchor(root, href.slice(1))?.scrollIntoView({ block: "start" });
       return;
     }
     if (/^https?:\/\//i.test(href)) {
@@ -165,9 +143,4 @@ export function MarkdownPreview(props: {
       />
     </div>
   );
-}
-
-/** GitHub-style heading anchor. */
-function slug(text: string): string {
-  return text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, "").replace(/\s+/g, "-");
 }

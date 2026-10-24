@@ -311,6 +311,23 @@ export async function artifactCodeBrowserWorld(seed: Seed) {
       write("restricted/hidden-proof.ts", "export const restricted = true;"),
       write("src/omnirush-artifact-proof.ts", "export const artifactEditor = true;\n"),
       write("config/omnirush-artifact-settings.json", "{\"artifactEditor\":true}\n"),
+      write(
+        "docs/omnirush-artifact-links.md",
+        [
+          "# Artifact links",
+          "",
+          "[Jump to details](#details)",
+          "",
+          "[Open notes](./omnirush-artifact-notes.md)",
+          "",
+          ...Array.from({ length: 30 }, (_, index) => `Filler paragraph ${index + 1}.`),
+          "",
+          "## Details",
+          "",
+          "The internal anchor works.",
+        ].join("\n"),
+      ),
+      write("docs/omnirush-artifact-notes.md", "# Artifact notes\n\nThe relative artifact link works.\n"),
     ]);
     return responses.every((response) => response.ok);
   }, [base.workspace.workspaceId]), { awaitPromise: true });
@@ -337,6 +354,9 @@ export async function artifactCodeBrowserWorld(seed: Seed) {
         ).join("");
         return text(root);
       });
+    },
+    async artifactMarkdownScrollTop() {
+      return seed.evalIn(base.app, () => document.querySelector<HTMLElement>("[data-omnirush-markdown-preview]")?.scrollTop ?? -1);
     },
     async setCatalogFolderRestricted(restricted: boolean) {
       const path = join(base.workspacePath, "restricted");

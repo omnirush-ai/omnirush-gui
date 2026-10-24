@@ -121,6 +121,18 @@ function ArtifactPanelView({ sessionId, client, workspaceId, workspaceRoot, isRe
     });
   };
 
+  const openArtifactPath = (path: string) => {
+    const nextTarget = openTargetFromWorkspaceFile(path);
+    if (!nextTarget) return;
+    usePanelTabStore.getState().openTab(sessionId, {
+      id: nextTarget.id,
+      type: "artifact",
+      label: nextTarget.name,
+      preview: nextTarget.preview,
+      target: nextTarget,
+    });
+  };
+
   const { data, error, isError, isLoading } = useQuery<ArtifactQueryState>({
     queryKey: ["artifact-panel", workspaceId, target.id, target.updatedAt ?? null] as const,
     queryFn: async () => {
@@ -407,7 +419,12 @@ function ArtifactPanelView({ sessionId, client, workspaceId, workspaceRoot, isRe
         ) : data?.kind === "text" && (editing || isDirectTextEdit) ? (
           <TextEditor value={draft} language={target.preview === "markdown" ? "markdown" : "text"} onChange={setDraft} />
         ) : target.preview === "markdown" && data?.kind === "text" ? (
-          <MarkdownPreview content={data.data} mermaidSource={isMermaidArtifact} />
+          <MarkdownPreview
+            content={data.data}
+            mermaidSource={isMermaidArtifact}
+            path={target.value}
+            onOpenFile={openArtifactPath}
+          />
         ) : target.preview === "code" && data?.kind === "text" ? (
           <Suspense fallback={<PreviewLoading />}>
             <ArtifactCodeView
