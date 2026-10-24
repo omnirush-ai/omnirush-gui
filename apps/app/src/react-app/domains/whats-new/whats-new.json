@@ -6,7 +6,7 @@
       "version": "2.7.0",
       "date": "2026-10-24",
       "new": [
-        "/computer shows whether computer use is on and why not. It turns computer use on or off for this computer (also `omnirush computer on|off`; on by default) and lets the agent use your own screen after you confirm (off by default). When you ask for something on a screen (use my browser, click, open an app), a tip says how.",
+        "/computer shows whether computer use is on, turns it on or off for this computer (also `omnirush computer on|off`), and lets the agent use your own screen after you confirm (off by default).",
         "Models can be limited to the sandbox or to your own computer. A project only lists the models its mode allows, and a chat keeps one model: to use another model, start a new chat."
       ],
       "improved": [
