@@ -11,7 +11,7 @@ mock.module("@opencode-ai/sdk/v2/client", () => ({
   },
 }));
 
-const { createClient, createPromptMessageID, PromptAdmissionUnknownError, hasAcceptedPromptMessage } = await import("../src/app/lib/opencode");
+const { createClient, createPromptMessageID, PromptAdmissionUnknownError, hasAcceptedPromptMessage, setSandboxSetupHold, promptHeldForSandbox } = await import("../src/app/lib/opencode");
 
 const originalWindow = globalThis.window;
 const originalFetch = globalThis.fetch;
@@ -166,6 +166,35 @@ describe("OpenCode transport timeouts", () => {
       jest.advanceTimersByTime(60_000);
       expect(attempts()).toBe(1);
     } finally {
+      cancel();
+    }
+  });
+
+  test("a prompt held by the sandbox setup waits past 30 seconds; it is unknown only once the setup is over", async () => {
+    jest.useFakeTimers();
+    installWindow({ __OMNIRUSH_ELECTRON__: {} });
+    const { cancel, observedSignal, attempts } = installControllableFetch();
+    const fetchImpl = createCapturedFetch();
+    const url = "http://127.0.0.1:8788/workspace/ws_box/opencode/session/ses_send/prompt_async";
+    expect(promptHeldForSandbox(url)).toBe(false);
+    setSandboxSetupHold("ws_box", true);
+    expect(promptHeldForSandbox(url)).toBe(true);
+    expect(promptHeldForSandbox("http://127.0.0.1:8788/workspace/ws_other/opencode/session/s/prompt_async")).toBe(false);
+    const response = fetchImpl(new Request(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
+    const state = trackPromise(response);
+    const errorPromise = response.catch((error: unknown) => error);
+    try {
+      jest.advanceTimersByTime(10 * 60_000);
+      await Promise.resolve();
+      expect(state()).toBe("pending");
+      expect(observedSignal()?.aborted).toBe(false);
+      // The box is ready (or the setup failed): the next deadline decides as before.
+      setSandboxSetupHold("ws_box", false);
+      jest.advanceTimersByTime(30_000);
+      expect(await errorPromise).toBeInstanceOf(PromptAdmissionUnknownError);
+      expect(attempts()).toBe(1);
+    } finally {
+      setSandboxSetupHold("ws_box", false);
       cancel();
     }
   });

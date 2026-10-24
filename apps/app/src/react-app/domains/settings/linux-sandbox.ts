@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { captureAnalyticsEvent, type AnalyticsProperties } from "@/app/lib/analytics";
+import { setSandboxSetupHold } from "@/app/lib/opencode";
 import type { OmniRushServerClient, OmniRushWorkspaceBox, OmniRushWorkspaceBoxProgress, OmniRushWorkspaceBoxSetupAction } from "@/app/lib/omnirush-server";
 import { t } from "@/i18n";
 
@@ -212,6 +213,16 @@ export type LinuxSandboxProblem = { message: string; retry: (() => void) | null 
  * while it moves, and when the window comes back), the switch (shown at
  * once, before the server answers), the backend, Retry and Reset.
  */
+/**
+ * Whether this project's box is being set up for its chats (on, downloading
+ * or starting), whatever turned it on: the required level, the user, a model
+ * that runs only in the box. A send then may be held by the local server until
+ * the box is ready (box/service.ts waitForBox), so it waits rather than goes "unknown".
+ */
+export function sandboxSetupHolds(box: Pick<OmniRushWorkspaceBox, "on" | "state"> | null): boolean {
+  return Boolean(box?.on && (box.state === "downloading" || box.state === "starting"));
+}
+
 export function useLinuxSandbox(client: LinuxSandboxClient | null, workspaceId: string | null, { fresh: freshOnOpen = true, sessionId = null }: { fresh?: boolean; sessionId?: string | null } = {}) {
   const [box, setBox] = useState<OmniRushWorkspaceBox | null>(null);
   const [pending, setPending] = useState<LinuxSandboxPending>(null);
@@ -253,6 +264,11 @@ export function useLinuxSandbox(client: LinuxSandboxClient | null, workspaceId: 
 
   useEffect(() => {
     if (boxFor.current === workspaceId) reportSandboxFallback(workspaceId, box);
+  }, [box, workspaceId]);
+
+  // While this project's box is set up the local server may hold its prompts: a send then waits, not "unknown".
+  useEffect(() => {
+    if (workspaceId && boxFor.current === workspaceId) setSandboxSetupHold(workspaceId, sandboxSetupHolds(box));
   }, [box, workspaceId]);
 
   // While it moves: every second for a minute, then every 3 s.
