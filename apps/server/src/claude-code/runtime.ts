@@ -36,6 +36,7 @@ export type ClaudeGrant = {
 };
 export type RuntimeOptions = {
   directory: string; surface: "cli" | "gui";
+  fetch: (input: string, init?: RequestInit) => Promise<Response>;
   access: () => Promise<ClaudeAccess>;
   authorize: (session: ClaudeAuthorization) => Promise<ClaudeGrant>;
   revoke?: (session: ClaudeAuthorization) => Promise<void>;
@@ -595,7 +596,7 @@ export class ClaudeRuntime {
         if (inference) isolation.inferenceRequests++;
         admitted = true;
         this.modelEvidence(session, {type: "request", requestId, route: inference ? "messages" : "count_tokens", requestedModel: body.model, resolvedModel: grant.upstreamModel, binding: session.authorization?.binding, contractSha256: session.contractSha256, policyVersion: grant.policyVersion ?? null, budget: grant.budget ?? null, transformations, originalBodySha256: createHash("sha256").update(originalBody).digest("hex"), forwardedBodySha256: digest(forwardedBody)});
-        let upstream = await fetch(grant.baseUrl + req.url, {method: "POST", headers, body: forwardedBody, redirect: "error", signal: abort.signal});
+        let upstream = await this.options.fetch(grant.baseUrl + req.url, {method: "POST", headers, body: forwardedBody, redirect: "error", signal: abort.signal});
         if (upstream.status === 401 && !abort.signal.aborted) {
           // A rejected token has not admitted inference. Re-mint exactly once;
           // never replay a started stream, a quota refusal, or a provider error.
@@ -604,7 +605,7 @@ export class ClaudeRuntime {
           grant = await this.grant(session, true, abort.signal);
           interrupted(abort.signal);
           headers["x-api-key"] = grant.token;
-          upstream = await fetch(grant.baseUrl + req.url, {method: "POST", headers, body: forwardedBody, redirect: "error", signal: abort.signal});
+          upstream = await this.options.fetch(grant.baseUrl + req.url, {method: "POST", headers, body: forwardedBody, redirect: "error", signal: abort.signal});
         }
         responseStatus = upstream.status; res.statusCode = upstream.status;
         for (const [name, value] of Object.entries(claudeResponseHeaders(upstream.headers))) res.setHeader(name, value);

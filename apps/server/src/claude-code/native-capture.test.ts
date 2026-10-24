@@ -90,6 +90,7 @@ test("session broker re-mints once on rejected authentication and never replays 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-broker-contract-")); roots.push(root);
   const id = "00000000-0000-4000-8000-000000000001", contractSha256 = "a".repeat(64);
   let status = 401, attempts = 0, successful = 0, authorizations = 0, refreshes = 0, first401 = true;
+  let transportCalls = 0;
   const relay = Bun.serve({hostname: "127.0.0.1", port: 0, async fetch(req) {
     attempts++;
     expect(req.headers.get("x-api-key")).toMatch(/^orc_/);
@@ -104,7 +105,13 @@ test("session broker re-mints once on rejected authentication and never replays 
     return Response.json({type: "error", error: {type: "api_error", message: "fixture"}}, {status,
       headers: {"x-should-retry": status === 429 ? "false" : "true", "retry-after": "30"}});
   }});
-  const runtime = new ClaudeRuntime({directory: root, surface: "gui", access: async () => ({owner: "owner", capabilities: ["claude-code"]}),
+  const runtime = new ClaudeRuntime({fetch: (input, init) => {
+    transportCalls++;
+    expect(input).toBe(`http://127.0.0.1:${relay.port}/v1/messages`);
+    expect(init?.redirect).toBe("error");
+    expect(init?.signal?.aborted).toBe(false);
+    return globalThis.fetch(input, init);
+  }, directory: root, surface: "gui", access: async () => ({owner: "owner", capabilities: ["claude-code"]}),
     authorize: async context => {
       authorizations++; if (context.refresh) refreshes++;
       return {owner: "owner", sessionId: id, model: MODEL, upstreamModel: MODEL, client: "desktop/3.7.5",
@@ -119,6 +126,7 @@ test("session broker re-mints once on rejected authentication and never replays 
   try {
     const accepted = await request(); expect(accepted.status).toBe(200); await accepted.arrayBuffer();
     expect({attempts, successful, authorizations, refreshes}).toEqual({attempts: 2, successful: 1, authorizations: 2, refreshes: 1});
+    expect(transportCalls).toBe(2);
     const journal = fs.readFileSync(path.join(Reflect.get(runtime, "dir").call(runtime, "owner", id), "policy", "model-requests.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(journal.map(event => event.type)).toEqual(["request", "provider_identity", "response"]);
     expect(journal.at(-1)).toMatchObject({status: 200, authorizationFailures: [401], completed: true});
@@ -128,6 +136,7 @@ test("session broker re-mints once on rejected authentication and never replays 
       expect(denied.headers.get("x-should-retry")).toBe(status === 429 ? "false" : "true");
       expect(denied.headers.get("retry-after")).toBe("30"); await denied.arrayBuffer();
       expect(attempts).toBe(before + 1); expect(refreshes).toBe(renewed); expect(successful).toBe(1);
+      expect(transportCalls).toBe(attempts);
     }
   } finally { await broker.close(); relay.stop(true); }
 });
@@ -601,7 +610,7 @@ function savedRuntimeFixture(access?: () => Promise<{owner: string; capabilities
   const collector = new NativeCapture({directory: path.join(dir, "native"), configDir, sessionId: id, owner, producerVersion: CLAUDE_VERSION, surface: "gui", transport: "sdk"});
   collector.finish({type: "finish", processStopped: true, successfulResult: false});
   let accessCalls = 0, grants = 0;
-  const runtime = new ClaudeRuntime({directory: root, surface: "gui", docker: path.join(root, "docker-is-unavailable"),
+  const runtime = new ClaudeRuntime({fetch: globalThis.fetch, directory: root, surface: "gui", docker: path.join(root, "docker-is-unavailable"),
     access: async () => { accessCalls++; if (access) return access(); throw new Error("account unavailable"); },
     authorize: async () => { grants++; throw new Error("must not mint"); }});
   return {root, dir, id, owner, raw, session, runtime, counts: () => ({accessCalls, grants})};
@@ -668,7 +677,7 @@ function gate<T>() {
 test("shutdown fences startup blocked on access and never mints or starts Docker after access resolves", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-startup-")); roots.push(root);
   const entered = gate<void>(), access = gate<{owner: string; capabilities: string[]}>(); let grants = 0, dockerCalls = 0;
-  const runtime = new ClaudeRuntime({directory: root, surface: "gui", access: () => { entered.resolve(); return access.promise; }, authorize: async () => { grants++; throw new Error("must not mint"); }});
+  const runtime = new ClaudeRuntime({fetch: globalThis.fetch, directory: root, surface: "gui", access: () => { entered.resolve(); return access.promise; }, authorize: async () => { grants++; throw new Error("must not mint"); }});
   Reflect.set(runtime, "docker", async () => { dockerCalls++; throw new Error("must not start Docker"); });
   const creation = runtime.create(root, "workspace").then(() => "created", () => "cancelled");
   await entered.promise;
@@ -723,7 +732,7 @@ function startupDockerFixture(stage: "build" | "create" | "cp" | "exec" | "resto
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-docker-fixture-")); roots.push(root);
   const workspace = path.join(root, "workspace"); fs.mkdirSync(workspace);
   const docker = path.join(root, "docker-fixture.mjs"), ready = path.join(root, "ready"), release = path.join(root, "release"), log = path.join(root, "calls.jsonl");
-  const runtime = new ClaudeRuntime({directory: path.join(root, "state"), surface: "gui", docker,
+  const runtime = new ClaudeRuntime({fetch: globalThis.fetch, directory: path.join(root, "state"), surface: "gui", docker,
     access: async () => ({owner: "local-owner", capabilities: ["claude-code"]}),
     authorize: async () => { grants++; throw new Error("must not authorize after cancellation"); }});
   let grants = 0;
@@ -814,7 +823,7 @@ test("broker cancellation during account access prevents both mint and provider 
   let grants = 0, providerCalls = 0;
   const relay = Bun.serve({hostname: "127.0.0.1", port: 0, fetch() { providerCalls++; return Response.json({type: "message", model: MODEL, content: [], stop_reason: "end_turn"}); }});
   const id = "00000000-0000-4000-8000-000000000001", contractSha256 = "a".repeat(64);
-  const runtime = new ClaudeRuntime({directory: root, surface: "gui", access: () => { entered.resolve(); return access.promise; },
+  const runtime = new ClaudeRuntime({fetch: globalThis.fetch, directory: root, surface: "gui", access: () => { entered.resolve(); return access.promise; },
     authorize: async () => { grants++; return {owner: "owner", sessionId: id, model: MODEL, upstreamModel: MODEL, client: "desktop/3.7.5", baseUrl: `http://127.0.0.1:${relay.port}`, token: "orc_" + "a".repeat(43), contractSha256}; }});
   const broker = await Reflect.get(runtime, "broker").call(runtime, {owner: "owner", id, model: MODEL, workspaceId: "workspace", contract: {}, contractSha256, turns: []}, () => {}, controller.signal);
   try {
@@ -872,7 +881,7 @@ fs.renameSync=function(from,to){
  }
  return result;
 };
-const runtime=new ClaudeRuntime({directory:root,surface:'gui',docker:path.join(root,'no-docker'),access:async()=>{throw new Error('offline');},authorize:async()=>{throw new Error('must not mint');}});
+const runtime=new ClaudeRuntime({fetch: globalThis.fetch, directory:root,surface:'gui',docker:path.join(root,'no-docker'),access:async()=>{throw new Error('offline');},authorize:async()=>{throw new Error('must not mint');}});
 try{const zip=await runtime.export(id);fs.writeFileSync(path.join(root,'result-'+name),JSON.stringify({status:'exported',zip}));}
 catch(error){fs.writeFileSync(path.join(root,'result-'+name),JSON.stringify({status:'rejected',message:error.message}));}
 `);

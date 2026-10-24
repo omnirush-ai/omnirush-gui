@@ -1540,7 +1540,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   );
 
   const claudeRuntime = new ClaudeRuntime({
-    directory: join(runtimeStorageDir(config), "claude-sessions"), surface: "gui",
+    directory: join(runtimeStorageDir(config), "claude-sessions"), surface: "gui", fetch: externalFetch,
     access: () => gatewayBroker.claudeAccess(),
     authorize: context => gatewayBroker.claudeGrant(context),
     revoke: context => gatewayBroker.revokeClaudeGrant(context),
