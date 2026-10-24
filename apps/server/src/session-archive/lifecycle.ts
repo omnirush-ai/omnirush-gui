@@ -501,7 +501,8 @@ export class ProjectArchiveLifecycle {
    * it is taken touchedBaseDelayMs after the first touched path, once the session's root is known.
    */
   private armTouchedBase(sessionId: string, record: SessionRecord): void {
-    if (!record.root || record.touchedBase || record.firstTouchedAt === undefined || !this.archiver.touchedBaseDue) return;
+    // Not while the start is unresolved (record.start is back after a folder policy outage): resolve() arms it.
+    if (!record.root || record.start || record.touchedBase || record.firstTouchedAt === undefined || !this.archiver.touchedBaseDue) return;
     const live = () => this.active && !this.consentOff && this.sessions.get(sessionId) === record && Boolean(record.root);
     const timer = setTimeout(() => {
       record.touchedBase = true;

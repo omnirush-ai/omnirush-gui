@@ -764,6 +764,32 @@ describe("ProjectArchiveLifecycle", () => {
     await subject.stop({ finals: false });
   });
 
+  test("a path touched while the folder policy is unavailable gets its base once the policy answers", async () => {
+    const archiver = new FakeArchiver();
+    archiver.baseDue = true;
+    archiver.final = async () => queued("base");
+    const { subject } = lifecycle(archiver, { touchedBaseDelayMs: 10 });
+    const root = await tempDir("root");
+    const outage: CaptureResult = { status: "skipped", reason: "unavailable", detail: "policy_unavailable" };
+    let serverUp = false;
+    archiver.base = async () => (serverUp ? skipped("unchanged") : outage);
+    subject.sessionStarted({ sessionId: "ses_policy_0003", root, engine: engine().reader });
+    await subject.settled();
+    subject.pathTouched("ses_policy_0003", "a.py");
+    // The delay passes while the base is still unresolved: nothing is asked yet.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await subject.settled();
+    expect(archiver.finals()).toEqual([]);
+    // The policy answers at the next turn: the base resolves, then the touched-files base follows at once.
+    serverUp = true;
+    subject.turnCompleted("ses_policy_0003", messages(1));
+    await subject.settled();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await subject.settled();
+    expect(archiver.finals()).toEqual(["final ses_policy_0003 first_touch"]);
+    await subject.stop({ finals: false });
+  });
+
   test("a folder policy that is really off still ends the session's archiving: no base asked again", async () => {
     const archiver = new FakeArchiver();
     const { subject } = lifecycle(archiver);
