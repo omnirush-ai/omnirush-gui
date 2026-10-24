@@ -14,6 +14,10 @@
  * points the app at it with OMNIRUSH_UPDATER_DEV_FEED_URL, which every
  * release since the updater rewrite honors for loopback URLs only.
  * --expect none: the check must report no update, and nothing may install.
+ * --from-installer <exe>: install this local build instead of the published
+ * v<from> (to test an updater change before it ships). The feed answers single
+ * Range requests and the run reports the installer bytes it served, so a
+ * differential download shows up as a fraction of the installer size.
  */
 import { execFileSync, spawn } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -32,6 +36,7 @@ function argValue(name) {
 const from = argValue("--from");
 const expect = argValue("--expect");
 const feedDir = argValue("--feed");
+const fromInstaller = argValue("--from-installer");
 const workDir = path.resolve(argValue("--work") ?? path.join(process.cwd(), "updater-e2e"));
 if (!from || !expect) {
   console.error("Usage: windows-updater-e2e.mjs --from X.Y.Z --expect X.Y.Z|none [--feed dir] [--work dir]");
@@ -62,6 +67,16 @@ async function download(url, destination) {
   writeFileSync(destination, Buffer.from(await response.arrayBuffer()));
 }
 
+// Bytes the feed sent per file.
+const served = new Map();
+
+function servedReport(directory) {
+  return [...served].map(([name, bytes]) => {
+    const size = statSync(path.join(directory, name)).size;
+    return { name, served: bytes, size, percent: Math.round((1000 * bytes) / size) / 10 };
+  });
+}
+
 function serveFeed(directory) {
   return new Promise((resolve) => {
     const server = createServer((request, response) => {
@@ -72,9 +87,24 @@ function serveFeed(directory) {
         response.writeHead(404).end();
         return;
       }
-      response.writeHead(200, { "content-length": statSync(file).size, "content-type": "application/octet-stream" });
+      const size = statSync(file).size;
+      const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range ?? "");
+      const start = range ? Number(range[1]) : 0;
+      const end = range && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+      if (range && start > end) {
+        response.writeHead(416, { "content-range": `bytes */${size}` }).end();
+        return;
+      }
+      if (request.headers.range && !range) log(`feed: multi-range request answered in full: ${request.headers.range.slice(0, 60)}`);
+      response.writeHead(range ? 206 : 200, {
+        "accept-ranges": "bytes",
+        "content-length": end - start + 1,
+        "content-type": "application/octet-stream",
+        ...(range ? { "content-range": `bytes ${start}-${end}/${size}` } : {}),
+      });
       if (request.method === "HEAD") return response.end();
-      createReadStream(file).pipe(response);
+      served.set(name, (served.get(name) ?? 0) + end - start + 1);
+      createReadStream(file, { start, end }).pipe(response);
     });
     server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
   });
@@ -170,8 +200,8 @@ function stopApp() {
 }
 
 async function main() {
-  const installer = path.join(workDir, `omnirush-win-x64-${from}.exe`);
-  await download(`https://github.com/${REPO}/releases/download/v${from}/omnirush-win-x64-${from}.exe`, installer);
+  const installer = fromInstaller ? path.resolve(fromInstaller) : path.join(workDir, `omnirush-win-x64-${from}.exe`);
+  if (!fromInstaller) await download(`https://github.com/${REPO}/releases/download/v${from}/omnirush-win-x64-${from}.exe`, installer);
   execFileSync(installer, ["/S"], { stdio: "inherit" });
   const before = installs();
   log("installed", before);
@@ -217,6 +247,7 @@ async function main() {
   if (!checked?.available || checked.latestVersion !== expect) throw new Error(`the check did not offer ${expect}`);
   const downloaded = await run("download()");
   log("download", downloaded);
+  if (feed) log("feed bytes served", servedReport(path.resolve(feedDir)));
   if (!downloaded?.ok) throw new Error(`download failed: ${downloaded?.reason}`);
   // The app quits into the installer; the answer may never arrive.
   void page.evaluate("window.__OMNIRUSH_ELECTRON__.updater.installAndRestart()", 180_000)

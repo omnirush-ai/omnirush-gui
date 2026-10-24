@@ -85,11 +85,12 @@ test("three successive updates: the installed installers go, a newer downloaded 
   write(path.join(paths.userData, "app-update-installer", "OmniRush.ai-3.6.3-arm64.dmg"), 2 * MB);
   write(path.join(paths.userData, "app-update-installer", "OmniRush.ai-3.6.5-arm64.dmg.part"), MB);
   const dry = await cleanupPass({ paths, currentVersion: "3.6.4", dryRun: true });
-  assert.ok(dry.freed >= 8 * MB, String(dry.freed));
+  assert.ok(dry.freed >= 6 * MB, String(dry.freed));
   assert.ok(fs.existsSync(path.join(paths.updaterCache, "pending")), "dry run removes nothing");
   const pass = await cleanupPass({ paths, currentVersion: "3.6.4" });
   assert.ok(!fs.existsSync(path.join(paths.updaterCache, "pending")));
-  assert.ok(!fs.existsSync(path.join(paths.updaterCache, "installer.exe")));
+  assert.ok(fs.existsSync(path.join(paths.updaterCache, "installer.exe")), "the differential update base stays");
+  assert.ok(fs.existsSync(path.join(paths.updaterCache, "current.blockmap")));
   assert.ok(!fs.existsSync(path.join(paths.userData, "app-update-installer", "OmniRush.ai-3.6.3-arm64.dmg")));
   assert.ok(!fs.existsSync(path.join(paths.userData, "app-update-installer", "OmniRush.ai-3.6.5-arm64.dmg.part")));
   assert.equal(pass.freed, dry.freed);
@@ -178,7 +179,7 @@ test("Windows-locked files are kept and reported as in use, never thrown; the re
   const pass = await cleanupPass({ paths, currentVersion: "3.6.4" });
   fs.chmodSync(path.join(paths.updaterCache, "pending"), 0o700);
   assert.ok(pass.items.some((i) => i.path.endsWith("pending") && i.locked));
-  assert.ok(!fs.existsSync(path.join(paths.updaterCache, "installer.exe")));
+  assert.ok(fs.existsSync(path.join(paths.updaterCache, "installer.exe")));
   assert.equal(pass.locked, 1);
 });
 

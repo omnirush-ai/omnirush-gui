@@ -67,7 +67,8 @@ function resolveAppVersion(app) {
 // The public distribution reads `latest*.yml` from the latest GitHub release.
 // There is no public Alpha feed: the Alpha channel exists only when a
 // distribution ships its own feed directory (see updaterFeedOptions).
-export const STABLE_UPDATER_FEED_URL = "https://github.com/omnirush-ai/omnirush-gui/releases/latest/download";
+const GITHUB_RELEASES_URL = "https://github.com/omnirush-ai/omnirush-gui/releases";
+export const STABLE_UPDATER_FEED_URL = `${GITHUB_RELEASES_URL}/latest/download`;
 
 /**
  * Feed selection shared by every updater IPC handler. `manifestChannel` picks
@@ -291,9 +292,16 @@ async function applyElectronUpdaterFeed(
   // distribution reading latest*.yml and updating itself into the public app.
   // Public builds pass no channel and keep the provider's `latest` default.
   if (updater?.setFeedURL) {
+    // The installed version's blockmap, for a differential download. The public
+    // feed (releases/latest/download) only has the newest release's files.
+    updater.previousBlockmapBaseUrlOverride = state.feedUrl.startsWith(GITHUB_RELEASES_URL)
+      ? `${GITHUB_RELEASES_URL}/download/v${currentVersion}`
+      : null;
     updater.setFeedURL({
       provider: "generic",
       url: state.feedUrl,
+      // GitHub's asset storage answers a multi-range request with 501.
+      useMultipleRangeRequest: false,
       ...(feedOptions.manifestChannel !== "latest" ? { channel: feedOptions.manifestChannel } : {}),
     });
   }
@@ -861,12 +869,13 @@ export function registerUpdaterIpc({
             // after a newer release was published. Quit and restart both go
             // through ensureNewestDownloaded(), which re-checks the feed first.
             autoUpdaterInstance.autoInstallOnAppQuit = false;
-            // Differential (blockmap) downloads reconstruct the update zip from the
-            // installed app + a diff. On macOS that reconstructed bundle is what
-            // feeds Squirrel's fragile move-based install, and is a common trigger
-            // for the "Failed to copy bundle … no such file" abort. Download the
-            // full zip instead — alpha builds are swapped wholesale anyway.
-            autoUpdaterInstance.disableDifferentialDownload = true;
+            // Windows downloads only the blocks of the new installer that changed
+            // since the installed one (NSIS blockmaps, about 10% of the installer
+            // between releases); any failure falls back to the full installer and
+            // the result is sha512-checked either way. macOS keeps the full zip:
+            // the reconstructed zip feeds Squirrel's move-based install, and a
+            // differential would keep a second ~230 MB update.zip in the cache.
+            autoUpdaterInstance.disableDifferentialDownload = platform !== "win32";
             // Make Squirrel.Mac write contents in place rather than moving whole
             // bundles (see enableSquirrelDirectContentsWrite for why).
             await enableSquirrelDirectContentsWrite(shipItDefaultsDomain);

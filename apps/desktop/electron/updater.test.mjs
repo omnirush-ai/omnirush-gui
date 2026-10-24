@@ -885,7 +885,7 @@ describe("release channel changes", () => {
   });
 
   it("normalizes a persisted or requested alpha channel to stable on the public distribution", async () => {
-    const { tempDir, handlers, feeds } = await registerFakeUpdaterIpc({ version: "0.18.0" });
+    const { tempDir, handlers, feeds, updater } = await registerFakeUpdaterIpc({ version: "0.18.0" });
     try {
       const channelPath = path.join(tempDir, "userData", "electron-updater-channel.v1.json");
       await mkdir(path.dirname(channelPath), { recursive: true });
@@ -905,6 +905,10 @@ describe("release channel changes", () => {
       assert.equal(requested.feedUrl, STABLE_FEED);
       assert.equal(feeds.at(-1)?.url, STABLE_FEED);
       assert.ok(feeds.every((feed) => feed.url === STABLE_FEED), "no feed may point at an Alpha release");
+      // Windows differential download: single ranges (GitHub answers multi-range
+      // requests with 501) and the installed version's blockmap from its own release.
+      assert.equal(feeds.at(-1)?.useMultipleRangeRequest, false);
+      assert.equal(updater.previousBlockmapBaseUrlOverride, "https://github.com/omnirush-ai/omnirush-gui/releases/download/v0.17.0");
 
       const selected = await setChannel(null, "alpha");
       assert.equal(selected.channel, "stable");
