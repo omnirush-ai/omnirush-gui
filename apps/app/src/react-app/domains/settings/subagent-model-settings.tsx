@@ -19,7 +19,7 @@ import {
   LayoutSectionItemTitle,
 } from "./settings-layout";
 import {
-  SUBAGENT_MODEL_PINNED_HELP,
+  subagentModelPinnedHelp,
   subagentEffortLabel,
   subagentEffortOptions,
   subagentPinnedSummary,
@@ -53,7 +53,7 @@ export function SubagentModelSettings(props: { client: SubagentModelClient | nul
   const status = policyLocked
     ? t("subagent.policy_lock")
     : state && !state.signedIn
-      ? "Sign in to omnirush.ai to set the sub-agent effort."
+      ? t("subagent.effort_sign_in_hint")
       : error;
 
   return (
@@ -62,12 +62,12 @@ export function SubagentModelSettings(props: { client: SubagentModelClient | nul
         <LayoutSectionItemHeader>
           <LayoutSectionItemTitle>{t("subagent.model_label")}</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>
-            {SUBAGENT_MODEL_PINNED_HELP}
+            {subagentModelPinnedHelp()}
             {status ? <span className="mt-1 block" data-testid="subagent-model-status">{status}</span> : null}
           </LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
             {/* Not a choice: a chat keeps one model, its sub-agents' too (model-modes.ts). */}
-            <span className="w-56 max-w-full text-sm text-muted-foreground" aria-disabled="true" data-testid="settings-subagent-model-pinned">Each chat's own model</span>
+            <span className="w-56 max-w-full text-sm text-muted-foreground" aria-disabled="true" data-testid="settings-subagent-model-pinned">{t("subagent.each_chat_model")}</span>
           </LayoutSectionItemHeaderActions>
         </LayoutSectionItemHeader>
       </LayoutSectionItem>

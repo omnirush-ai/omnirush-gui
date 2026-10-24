@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 import {
-  SUBAGENT_MODEL_PINNED_HELP,
+  subagentModelPinnedHelp,
   subagentEffortLabel,
   subagentEffortOptions,
   subagentPinnedLabel,
@@ -102,7 +102,7 @@ function SubagentModelPicker(props: { client: SubagentModelClient; chatModel: st
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <p className="px-3 py-2 text-xs text-muted-foreground">{SUBAGENT_MODEL_PINNED_HELP}</p>
+        <p className="px-3 py-2 text-xs text-muted-foreground">{subagentModelPinnedHelp()}</p>
         {props.policyLocked ? <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">{t("subagent.policy_lock")}</p> : null}
         {error ? <p role="alert" className="px-3 pb-2 text-xs text-destructive">{error}</p> : null}
       </DropdownMenuContent>

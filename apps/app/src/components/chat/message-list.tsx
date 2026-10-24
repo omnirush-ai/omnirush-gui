@@ -805,11 +805,11 @@ const UserMessage = React.memo(
                     <MessageTimestamp message={message} className="mr-1.5" />
                     <CopyMessageButton messages={[message]} />
                     {messageText ? (
-                      <MessageAction tooltip="Quote">
+                      <MessageAction tooltip={t("message.quote")}>
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="Quote"
+                          aria-label={t("message.quote")}
                           data-testid="quote-message"
                           onClick={() => quoteIntoComposer(sessionId, messageText)}
                         >
@@ -864,7 +864,7 @@ const UserMessage = React.memo(
             {messageText ? (
               <ContextMenuItem onClick={() => quoteIntoComposer(sessionId, window.getSelection()?.toString().trim() || messageText)}>
                 <TextQuote className="size-4" />
-                Quote
+                {t("message.quote")}
               </ContextMenuItem>
             ) : null}
             {messageText ? (
@@ -1503,11 +1503,11 @@ function MessageGroup({
         <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100 md:px-8">
           <MessageActions className="flex gap-0">
             <CopyMessageButton messages={renderableItems.map((item) => item.message)} />
-            <MessageAction tooltip="Quote">
+            <MessageAction tooltip={t("message.quote")}>
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Quote"
+                aria-label={t("message.quote")}
                 data-testid="quote-reply"
                 onClick={() => quoteIntoComposer(sessionId, getMessagesText([lastTextMessage]))}
               >

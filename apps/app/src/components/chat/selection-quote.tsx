@@ -3,6 +3,7 @@ import { createPortal } from "react-dom"
 import { TextQuote } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { t } from "@/i18n"
 
 import { quoteIntoComposer } from "./quote"
 
@@ -60,7 +61,7 @@ export function SelectionQuote({ sessionId, containerRef }: { sessionId: string;
       }}
     >
       <TextQuote className="size-3.5" />
-      Quote
+      {t("message.quote")}
     </Button>,
     document.body,
   )
