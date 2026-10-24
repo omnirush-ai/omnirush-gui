@@ -188,6 +188,8 @@ const ARCHIVE_PACK_RESERVE_BYTES = 1024 * 1024;
  * probe, and a policy flipped on omnirush.ai reaches a running app within
  * this time.
  */
+/** How long the capture switch's key answer (settleCapturePolicy) stands in for the next base's key fetch. */
+export const SETTLE_ANSWER_TTL_MS = 60_000;
 export const POLICY_TTL_MS = 5 * 60_000;
 /** A policy probe that failed (timeout, 5xx, offline) counts as off for this long only. */
 export const POLICY_OUTAGE_TTL_MS = 60_000;
@@ -1331,8 +1333,9 @@ export class SessionArchiver {
       return { status: "skipped", reason: "not_archivable", detail };
     }
     // The key and the consent check (7.2): a probe made for this base already holds them; else the full fetch.
-    const fetched = probe.fetched ?? await this.uploader.fetchKey();
-    if (!probe.fetched) this.rememberPolicy(fetched, generation, false);
+    const settled = probe.fetched ? null : this.takeSettleAnswer(generation);
+    const fetched = probe.fetched ?? settled ?? await this.uploader.fetchKey();
+    if (!probe.fetched && !settled) this.rememberPolicy(fetched, generation, false);
     if (fetched.status === "disabled") {
       this.dropPrescan(sessionId);
       await this.disable(fetched.code);
@@ -1424,8 +1427,20 @@ export class SessionArchiver {
     }
     const fetched = await probe;
     this.rememberPolicy(fetched, this.generation, true);
-    return fetched.status === "unavailable" ? null : defaultRedactionPolicy();
+    if (fetched.status === "unavailable") return null;
+    // The answer holds the key and the consent check too: the next base takes it instead of asking again.
+    this.settleAnswer = { fetched, at: this.now().getTime(), generation: this.generation };
+    return defaultRedactionPolicy();
   }
+
+  /** The key response settleCapturePolicy got, once, while it is fresh and from this sign-in. */
+  private takeSettleAnswer(generation: number): KeyResult | null {
+    const kept = this.settleAnswer;
+    this.settleAnswer = null;
+    return kept && kept.generation === generation && this.now().getTime() - kept.at < SETTLE_ANSWER_TTL_MS ? kept.fetched : null;
+  }
+
+  private settleAnswer: { fetched: KeyResult; at: number; generation: number } | null = null;
 
   private async folderPolicy(generation: number): Promise<{ policy: ArchivePolicy; fetched: KeyResult | null }> {
     const kept = this.policy;
