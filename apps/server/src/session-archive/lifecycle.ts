@@ -23,7 +23,7 @@ import type { UsedToolCall } from "./files-used.js";
 export type ProjectArchiver = Pick<
   SessionArchiver,
   "captureBase" | "captureDelta" | "captureFinal" | "startFinalCandidates" | "recordTouched" | "forgetTouched" | "drain" | "signOut" | "stop"
-> & Partial<Pick<SessionArchiver, "claimAccount" | "discardAll" | "pendingStatus" | "startManifest" | "hasStartManifest" | "captureState" | "recordAttachments" | "recordMedia" | "recordBinary" | "filesUsedToolCallEnded" | "filesUsedTurnStarted" | "filesUsedTurnEnded" | "filesUsedMaybe" | "filesUsedStatus">>;
+> & Partial<Pick<SessionArchiver, "claimAccount" | "discardAll" | "pendingStatus" | "startManifest" | "hasStartManifest" | "captureState" | "recordAttachments" | "recordMedia" | "recordBinary" | "filesUsedToolCallEnded" | "filesUsedTurnStarted" | "filesUsedTurnEnded" | "filesUsedMaybe" | "filesUsedStatus" | "touchedBaseDue">>;
 
 /** Engine reads for one session, resolving to the parsed JSON, or null when it cannot be read. */
 export type ArchiveEngineReads = {
@@ -58,6 +58,8 @@ export type ProjectArchiveLifecycleOptions = {
   baseMaxDeferMs?: number;
   /** A session with no prompt for this long after a turn ended gets a final archive (FINAL_IDLE_MS). */
   finalIdleMs?: number;
+  /** A touched-files session's base is taken this long after its first touched path (TOUCHED_BASE_DELAY_MS). */
+  touchedBaseDelayMs?: number;
   /** Shutdown packs the final archives of this app run's sessions for at most this long in all (QUIT_FINAL_BUDGET_MS); 0 packs none. */
   quitBudgetMs?: number;
   /** A prompt waits at most this long for the turn before's delta (TURN_DELTA_WAIT_MS). */
@@ -100,6 +102,8 @@ export function baseRetried(result: CaptureResult): boolean {
 const DEFAULT_CONSENT_RECHECK_MS = 10 * 60_000;
 /** The quiet window after a turn: with no new prompt by then, the session gets a final archive. */
 export const FINAL_IDLE_MS = 10 * 60_000;
+/** A touched-files base this long after the session's first touched path (its paths are on disk within 2 s). */
+export const TOUCHED_BASE_DELAY_MS = 30_000;
 /**
  * What shutdown spends, at most, packing final archives (the desktop app
  * waits for the server to stop before it quits). What does not fit is
@@ -174,6 +178,8 @@ type SessionRecord = {
   retries?: { count: number; timer: ReturnType<typeof setTimeout> | null };
   /** Capture v2: the completed turns last counted (the turn in progress is the next one). */
   turns?: number;
+  /** The touched-files base asked for after the first touched path: its timer, then true once it ran. */
+  touchedBase?: ReturnType<typeof setTimeout> | true;
   /** Capture v2: a prompt went out and this turn's first tool call has not been seen yet. */
   awaitingTool?: boolean;
   /** When the latest prompt, and the one before it, were dispatched. */
@@ -212,6 +218,7 @@ export class ProjectArchiveLifecycle {
   private readonly baseIdleMs: number;
   private readonly baseMaxDeferMs: number;
   private readonly finalIdleMs: number;
+  private readonly touchedBaseDelayMs: number;
   private readonly quitBudgetMs: number;
   private readonly turnDeltaWaitMs: number;
   private readonly now: () => number;
@@ -253,6 +260,7 @@ export class ProjectArchiveLifecycle {
     this.baseIdleMs = Math.max(0, options.baseIdleMs ?? 0);
     this.baseMaxDeferMs = Math.max(this.baseIdleMs, options.baseMaxDeferMs ?? this.baseIdleMs * 5);
     this.finalIdleMs = Math.max(0, options.finalIdleMs ?? FINAL_IDLE_MS);
+    this.touchedBaseDelayMs = Math.max(0, options.touchedBaseDelayMs ?? TOUCHED_BASE_DELAY_MS);
     this.quitBudgetMs = Math.max(0, options.quitBudgetMs ?? QUIT_FINAL_BUDGET_MS);
     this.turnDeltaWaitMs = Math.max(0, options.turnDeltaWaitMs ?? TURN_DELTA_WAIT_MS);
     this.now = options.now ?? Date.now;
@@ -478,6 +486,19 @@ export class ProjectArchiveLifecycle {
     const record = this.sessions.get(sessionId);
     if (!this.active || this.consentOff || !record || (!record.root && !record.start)) return;
     this.archiver.recordTouched(sessionId, path);
+    // A touched-files base waited for the turn's end (hours on a long first turn, a day when the app quit first).
+    if (record.root && !record.touchedBase && this.archiver.touchedBaseDue) {
+      const timer = setTimeout(() => {
+        record.touchedBase = true;
+        this.schedule(sessionId, "final", async () => {
+          if (this.consentOff || this.sessions.get(sessionId) !== record || !record.root) return;
+          if (!(await this.archiver.touchedBaseDue?.(sessionId))) return;
+          this.settle(await this.archiver.captureFinal(sessionId, "first_touch"));
+        }, undefined, true);
+      }, this.touchedBaseDelayMs);
+      timer.unref?.();
+      record.touchedBase = timer;
+    }
   }
 
   /** Capture v2: a binary file the session uploader found in the session's workspace (workspace-relative). */
@@ -786,6 +807,7 @@ export class ProjectArchiveLifecycle {
 
   /** The session is forgotten (deleted, signed out, shutdown): none of its timers runs any more. */
   private release(record: SessionRecord): void {
+    if (record.touchedBase && record.touchedBase !== true) clearTimeout(record.touchedBase);
     this.cancelIdleFinal(record);
     this.cancelRetry(record);
     this.turnSettled(record);

@@ -36,6 +36,12 @@ class FakeArchiver implements ProjectArchiver {
   readonly stops: Array<{ finals?: readonly string[]; budgetMs?: number }> = [];
   /** recordTouched and forgetTouched calls (not in `calls`). */
   readonly touched: string[] = [];
+  /** What touchedBaseDue answers (a touched-files chain still without its base). */
+  baseDue = false;
+
+  async touchedBaseDue(_sessionId: string): Promise<boolean> {
+    return this.baseDue;
+  }
 
   async captureBase(sessionId: string, root: string, turn = 0): Promise<CaptureResult> {
     this.calls.push(`base ${sessionId} ${root} ${turn}`);
@@ -115,7 +121,7 @@ function engine(input: { parentID?: string; messages?: () => unknown; session?: 
   return { reader, reads };
 }
 
-function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; accountMissing?: boolean; now?: () => number; concurrency?: number; finalIdleMs?: number; quitBudgetMs?: number; turnDeltaWaitMs?: number } = {}) {
+function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; accountMissing?: boolean; now?: () => number; concurrency?: number; finalIdleMs?: number; quitBudgetMs?: number; turnDeltaWaitMs?: number; touchedBaseDelayMs?: number } = {}) {
   const logs: Array<{ level: string; message: string; attributes?: Record<string, unknown> }> = [];
   const subject = new ProjectArchiveLifecycle({
     archiver,
@@ -128,6 +134,7 @@ function lifecycle(archiver: ProjectArchiver, options: { enabled?: boolean; acco
     ...(options.finalIdleMs !== undefined ? { finalIdleMs: options.finalIdleMs } : {}),
     ...(options.quitBudgetMs !== undefined ? { quitBudgetMs: options.quitBudgetMs } : {}),
     ...(options.turnDeltaWaitMs !== undefined ? { turnDeltaWaitMs: options.turnDeltaWaitMs } : {}),
+    ...(options.touchedBaseDelayMs !== undefined ? { touchedBaseDelayMs: options.touchedBaseDelayMs } : {}),
   });
   return { subject, logs };
 }
@@ -295,6 +302,31 @@ describe("ProjectArchiveLifecycle", () => {
     await subject.signOut();
     subject.pathTouched("ses_touch_0001", "signed-out.txt");
     expect(archiver.touched).toHaveLength(4);
+  });
+
+  test("a touched-files base is taken soon after the first touched path, not at the turn's end", async () => {
+    const archiver = new FakeArchiver();
+    archiver.base = async () => skipped("unchanged");
+    archiver.baseDue = true;
+    archiver.final = async () => queued("base");
+    const { subject } = lifecycle(archiver, { touchedBaseDelayMs: 10 });
+    const root = await tempDir("root");
+    subject.sessionStarted({ sessionId: "ses_touch_0003", root, engine: engine().reader });
+    await subject.settled();
+    subject.pathTouched("ses_touch_0003", "a.py");
+    subject.pathTouched("ses_touch_0003", "b.py");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await subject.settled();
+    // One ask per session and run, though two paths came.
+    expect(archiver.finals()).toEqual(["final ses_touch_0003 first_touch"]);
+    // A chain that has its base (a git or project folder, or a base taken since): no extra capture.
+    archiver.baseDue = false;
+    subject.sessionStarted({ sessionId: "ses_touch_0004", root, engine: engine().reader });
+    await subject.settled();
+    subject.pathTouched("ses_touch_0004", "c.py");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await subject.settled();
+    expect(archiver.finals()).toEqual(["final ses_touch_0003 first_touch"]);
   });
 
   test("delta turn numbers come from the engine's completed turns, in order after the base", async () => {
