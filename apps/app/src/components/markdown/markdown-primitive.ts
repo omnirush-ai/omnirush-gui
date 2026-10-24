@@ -171,7 +171,7 @@ function chatCodeBlockHtml(text: string, lang: string | undefined) {
 }
 
 function surfaceCodeBlockHtml(text: string, lang: string | undefined) {
-  return `<pre class="my-4 overflow-x-auto rounded-[18px] border border-dls-border/70 bg-gray-1/80 px-4 py-3 text-xs leading-6 text-muted-foreground"><code${codeLanguageClass(lang)}>${escapeHtml(text)}</code></pre>`;
+  return `<pre data-omnirush-code-block="" class="my-4 overflow-x-auto rounded-[18px] border border-dls-border/70 bg-gray-1/80 px-4 py-3 text-xs leading-6 text-muted-foreground"><code${codeLanguageClass(lang)}>${escapeHtml(text)}</code></pre>`;
 }
 
 function isMermaidLanguage(lang: string | undefined) {
@@ -307,8 +307,8 @@ function markdownProfileForPresentation(presentation: MarkdownPresentation): Mar
       imagePresentation: "simple",
       tableHeaderClassName: "border border-dls-border bg-dls-hover p-2 text-left",
       tableCellClassName: "border border-dls-border p-2 align-top",
-      shikiContainer: `<div data-omnirush-shiki="true" class="my-4 overflow-x-auto rounded-[18px] border border-dls-border/70 bg-gray-1/80 p-4 text-xs leading-6">%s</div>`,
-      shikiTheme: { kind: "single", theme: "github-light" },
+      shikiContainer: `<div data-omnirush-code-block="" data-omnirush-shiki="true" class="my-4 overflow-x-auto rounded-[18px] border border-dls-border/70 bg-gray-1/80 p-4 text-xs leading-6">%s</div>`,
+      shikiTheme: { kind: "dual", light: "github-light", dark: "github-dark" },
     };
   }
 

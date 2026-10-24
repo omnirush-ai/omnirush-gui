@@ -70,15 +70,18 @@ describe("markdown code blocks", () => {
 
   test("renders surface code blocks without chat-only copy controls", async () => {
     const fallbackHtml = renderPrimitiveMarkdownHtml(MARKDOWN, "surface");
+    expect(fallbackHtml).toContain("data-omnirush-code-block");
     expect(fallbackHtml).toContain("border-dls-border/70");
     expect(fallbackHtml).toContain("bg-gray-1/80");
     expect(fallbackHtml).toContain('class="language-ts"');
     expect(fallbackHtml).not.toContain("data-omnirush-code-copy");
 
     const highlightedHtml = await renderPrimitiveHighlightedMarkdownHtml(MARKDOWN, "surface");
+    expect(highlightedHtml).toContain("data-omnirush-code-block");
     expect(highlightedHtml).toContain("data-omnirush-shiki");
     expect(highlightedHtml).toContain("github-light");
-    expect(highlightedHtml).not.toContain("github-dark");
+    expect(highlightedHtml).toContain("github-dark");
+    expect(highlightedHtml).toContain("--shiki-dark");
     expect(highlightedHtml).not.toContain("data-omnirush-code-copy");
   });
 });
