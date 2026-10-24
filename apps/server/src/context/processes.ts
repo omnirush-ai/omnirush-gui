@@ -351,6 +351,14 @@ export type SnapshotScope = {
   rootPid: number;
   /** The project and the outside folders the agent created or worked in (absolute). */
   folders: () => readonly string[];
+  /**
+   * The session the snapshot is for. Only its own processes keep their
+   * command line: those whose environment names it (OMNIRUSH_SESSION, which
+   * the engine sets in each shell call) and what they started. Every other
+   * process (another chat's, the engine shared by chats, one that merely
+   * works in the folder) keeps its name, pid and folder, never its arguments.
+   */
+  sessionId?: string;
 };
 
 export type SnapshotOptions = ProcessTableOptions & {
@@ -363,6 +371,8 @@ export type SnapshotOptions = ProcessTableOptions & {
   scope?: SnapshotScope;
   /** Tests: the working directory of a process (Linux /proc, macOS lsof), null when unknown. */
   cwdOf?: (pids: number[]) => Promise<Map<number, string>>;
+  /** Tests: the OMNIRUSH_SESSION a process runs under (processSessions). */
+  sessionOf?: (pids: number[]) => Promise<Map<number, string>>;
 };
 
 // --- an OmniRush box ------------------------------------------------------------------
@@ -487,6 +497,30 @@ export function descendantsOf(rootPid: number, processes: readonly ProcessInfo[]
   return out;
 }
 
+/**
+ * The session each of `pids` runs under: the OMNIRUSH_SESSION of its
+ * environment (Linux /proc/<pid>/environ; no other variable is kept or
+ * returned). None elsewhere: there a process's ownership is not known.
+ */
+export async function processSessions(pids: number[], options: ProcessTableOptions = {}): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if ((options.platform ?? process.platform) !== "linux") return out;
+  await Promise.all(pids.slice(0, 2_000).map(async (pid) => {
+    try {
+      const environ = await readFile(`/proc/${pid}/environ`, "latin1");
+      const at = environ.indexOf("\0OMNIRUSH_SESSION=");
+      const start = environ.startsWith("OMNIRUSH_SESSION=") ? 0 : at < 0 ? -1 : at + 1;
+      if (start < 0) return;
+      const end = environ.indexOf("\0", start);
+      const value = environ.slice(start + "OMNIRUSH_SESSION=".length, end < 0 ? undefined : end);
+      if (/^[A-Za-z0-9_.:-]{1,200}$/.test(value)) out.set(pid, value);
+    } catch {
+      // Another account's process, or gone.
+    }
+  }));
+  return out;
+}
+
 /** The working directories of `pids`: /proc/<pid>/cwd on Linux, `lsof -d cwd` on macOS, none on Windows. */
 export async function processCwds(pids: number[], options: ProcessTableOptions = {}): Promise<Map<number, string>> {
   const platform = options.platform ?? process.platform;
@@ -548,10 +582,26 @@ export async function processSnapshot(phase: ProcessSnapshot["phase"], turn: num
     return cwd !== undefined && insideAny(cwd, folders);
   }).map((info) => info.pid));
   const ours = processes.filter((info) => (tree.has(info.pid) || inFolders.has(info.pid)) && !isOwnProcess(info, self));
+  // The session's own processes (its environment names it) and their descendants keep their command line.
+  const sessions = scope.sessionId
+    ? await (options.sessionOf ?? ((pids) => processSessions(pids, options)))(ours.map((info) => info.pid)).catch(() => new Map<number, string>())
+    : new Map<number, string>();
+  // A process that names another session is that session's, with everything below it, whatever started it.
+  const own = new Set<number>();
+  const children = new Map<number, number[]>();
+  for (const info of processes) children.set(info.ppid, [...(children.get(info.ppid) ?? []), info.pid]);
+  const queue = [...sessions].filter(([, sessionId]) => sessionId === scope.sessionId).map(([pid]) => pid);
+  while (queue.length > 0 && own.size < 100_000) {
+    const pid = queue.shift()!;
+    const named = sessions.get(pid);
+    if (own.has(pid) || (named !== undefined && named !== scope.sessionId)) continue;
+    own.add(pid);
+    queue.push(...(children.get(pid) ?? []));
+  }
   const kept = ours.slice(0, MAX_PROCESSES).map((info) => ({
     pid: info.pid,
     name: cleanText(baseNameOnly(info.name) ?? info.name, options.privacy, options.scrub),
-    command: cleanCommand(info.command, options.privacy, options.scrub),
+    command: own.has(info.pid) ? cleanCommand(info.command, options.privacy, options.scrub) : "",
     scope: tree.has(info.pid) ? ("session" as const) : ("folder" as const),
     ...(info.cwd ? { cwd: cleanText(info.cwd, options.privacy, options.scrub) } : {}),
   }));

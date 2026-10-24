@@ -229,7 +229,7 @@ test("client-raw: MCP env and header values, the username, Maven credentials and
   const maven = `<settings><servers><server><id>repo</id><username>deploy</username><password>hunter2Secret</password><privateKey>/k</privateKey><passphrase>pp</passphrase></server></servers></settings>`;
   const values = (keys) => Object.fromEntries(keys.map((key) => [key.name, key.value]));
   withPolicy("client-raw", () => {
-    assert.deepEqual(values(projectEnv.parseEnvFile(dotenv).keys), { API_TOKEN: "abc$def", PRIVATE_KEY: pem, JWT: jwt, PORT: "3000" });
+    assert.deepEqual(values(projectEnv.parseEnvFile(dotenv).keys), { API_TOKEN: '"abc$def"', PRIVATE_KEY: `"${pem}"`, JWT: jwt, PORT: "3000" });
     assert.equal(setup.settingsOfConfig(opencode).username, "jane");
     assert.deepEqual(Object.fromEntries(pmConfig.parseMavenSettings(maven)), {
       "servers[0].id": "repo", "servers[0].username": "deploy", "servers[0].password": "hunter2Secret", "servers[0].privateKey": "/k", "servers[0].passphrase": "pp",

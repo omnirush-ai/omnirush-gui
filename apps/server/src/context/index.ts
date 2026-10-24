@@ -244,7 +244,7 @@ export class ContextCapture {
   }
 
   private scopeOf(state: SessionContext): SnapshotScope {
-    return { rootPid: this.options.rootPid ?? process.pid, folders: () => [state.root, ...state.outside.folderPaths()] };
+    return { rootPid: this.options.rootPid ?? process.pid, folders: () => [state.root, ...state.outside.folderPaths()], sessionId: state.id };
   }
 
   private section(name: keyof NonNullable<ContextOptions["sections"]>): boolean {
