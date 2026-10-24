@@ -168,7 +168,7 @@ describe("model modes", () => {
     expect(calls.map((c) => c.model)).toEqual(["kimi-k3.1-pro", "kimi-k3.1-pro", "kimi-k3.1-pro"]);
   });
 
-  test("broker: strict sessions bind once before a chat's first agent request; conflicts and verification stop here; failures never block", async () => {
+  test("broker: strict sessions (observe) bind once before a chat's first agent request; conflicts and verification stop here; failures never block", async () => {
     type Bind = Record<string, unknown>;
     const binds: Bind[] = [];
     const sent: { session: string | null; strict: string | null }[] = [];
@@ -186,7 +186,7 @@ describe("model modes", () => {
       fetch: async (input, init) => {
         const url = new URL(String(input));
         const headers = new Headers(init?.headers);
-        if (url.pathname === "/omnirush/collect/capabilities") return Response.json({ schema_versions: [1, 2, 3], ...(strictOn ? { strict_sessions: { mode: "enforce", bind: true, path: "/omnirush/device/session-binding", header: "X-OmniRush-Strict-Session", implicit: true } } : {}) });
+        if (url.pathname === "/omnirush/collect/capabilities") return Response.json({ schema_versions: [1, 2, 3], ...(strictOn ? { strict_sessions: { mode: "observe", bind: true, path: "/omnirush/device/session-binding", header: "X-OmniRush-Strict-Session", implicit: true } } : {}) });
         if (url.pathname === "/omnirush/device/session-binding") {
           const body = JSON.parse(String(init?.body)) as Bind & { session_id: string; parent_session_id?: string; model: string; mode: string };
           binds.push(body);
@@ -222,7 +222,7 @@ describe("model modes", () => {
     expect((await post("ses_root")).status).toBe(200);
     expect((await post("ses_root", {}, { model: "gpt-6-astra" })).status).toBe(200);
     expect((await b.handle(request({ model: "gpt-6-astra" }, { "x-omnirush-session-id": "ses_root" }, "responses/compact"), "responses/compact")).status).toBe(200);
-    expect(binds).toEqual([{ session_id: "ses_root", model: "gpt-6-astra", mode: "native", capture_policy: "legacy" }]);
+    expect(binds).toEqual([{ session_id: "ses_root", model: "gpt-6-astra", mode: "native" }]);
     expect(sent.slice(1).map((s) => s.strict)).toEqual(["1", "1", "1", "1"]);
     // A sub-agent names its root.
     expect((await post("ses_child", { "x-parent-session-id": "ses_root" })).status).toBe(200);
@@ -261,5 +261,120 @@ describe("model modes", () => {
     expect(gwUsed.status).toBe(400);
     expect(gwUsed.headers.get("x-should-retry")).toBe("false");
     expect(((await gwUsed.json()) as { error: { message: string } }).error.message).toBe("This chat already ran on another model. Start a new chat to use this one.");
+  });
+
+  test("broker: strict sessions under enforce fail closed: a capabilities outage, a bind timeout or a 5xx sends nothing upstream", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "strict-enforce-"));
+    const strictStateFile = path.join(dir, "strict-sessions.json");
+    const upstream: string[] = [];
+    const binds: Record<string, unknown>[] = [];
+    let caps: "enforce" | "down" = "enforce";
+    let bindAnswer: "timeout" | "5xx" | "ok" = "timeout";
+    const pins = new Map<string, { box: boolean; revision: string | null; capturePolicy?: string }>();
+    const stored: [string, string][] = [];
+    const noted: [string, { verified: boolean; lateReason?: string }][] = [];
+    const make = () => new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
+      engineToken: "local-engine-token",
+      strictStateFile,
+      bindTimeoutMs: 100,
+      chatPin: (id) => pins.get(id) ?? null,
+      onCapturePolicy: (id, policy) => stored.push([id, policy]),
+      onBinding: (id, binding) => noted.push([id, binding]),
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/omnirush/collect/capabilities") {
+          if (caps === "down") throw new TypeError("fetch failed");
+          return Response.json({ schema_versions: [1, 2, 3], strict_sessions: { mode: "enforce", bind: true, path: "/omnirush/device/session-binding", header: "X-OmniRush-Strict-Session" } });
+        }
+        if (url.pathname === "/omnirush/device/session-binding") {
+          binds.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          if (bindAnswer === "timeout") return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("timed out", "TimeoutError"))));
+          if (bindAnswer === "5xx") return Response.json({ detail: "unavailable" }, { status: 503 });
+          return Response.json({ binding: { model: "gpt-6-astra", mode: "native", capture_policy: "client-raw", bound_late: true, late_reason: "history_incomplete", verified: false }, enforcement: "enforce", kept: ["capture_policy"] });
+        }
+        upstream.push(new Headers(init?.headers).get("x-omnirush-strict-session") ?? "none");
+        return Response.json({ output: [] });
+      },
+    });
+    const tools = [{ type: "function", name: "bash" }];
+    // The first run learns enforce and keeps it on disk.
+    await make().sessionUploadCapabilities();
+    // The next start: capabilities cannot be fetched; the kept enforce stands.
+    caps = "down";
+    const b = make();
+    await b.sessionUploadCapabilities();
+    const post = (session: string) => b.handle(request({ model: "gpt-6-astra", tools }, { "x-omnirush-session-id": session }), "responses");
+    pins.set("ses_timeout", { box: false, revision: null, capturePolicy: "legacy" });
+    pins.set("ses_5xx", { box: false, revision: null, capturePolicy: "legacy" });
+    const timedOut = await post("ses_timeout");
+    // 503: the engine sends it again by itself.
+    expect(timedOut.status).toBe(503);
+    expect(((await timedOut.json()) as { error: { code: string; message: string } }).error).toMatchObject({ code: "session_bind_unconfirmed", message: "Couldn't confirm this chat with the server. Try again." });
+    bindAnswer = "5xx";
+    expect((await post("ses_5xx")).status).toBe(503);
+    // No capture policy pinned yet: not bound, not sent.
+    const before = binds.length;
+    expect((await post("ses_unpinned")).status).toBe(503);
+    expect(binds.length).toBe(before);
+    expect(upstream).toEqual([]);
+    // The bind comes through: sent with the chat's capture policy, the server's stored one goes to the pin.
+    bindAnswer = "ok";
+    expect((await post("ses_timeout")).status).toBe(200);
+    expect(binds.at(-1)).toMatchObject({ session_id: "ses_timeout", capture_policy: "legacy" });
+    expect(stored).toEqual([["ses_timeout", "client-raw"]]);
+    // A late binding is kept with its reason, never verified.
+    expect(noted).toEqual([["ses_timeout", { verified: false, lateReason: "history_incomplete" }]]);
+    expect(upstream).toEqual(["1"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("broker: a box chat's unmarked requests (title, compaction, after a restart) stay box requests by its durable pin", async () => {
+    const calls: Call[] = [];
+    const b = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
+      engineToken: "local-engine-token",
+      chatPin: (id) => (id === "ses_boxed" ? { box: true, revision: null } : null),
+      fetch: async (input, init) => {
+        const raw = init?.body;
+        const text = typeof raw === "string" ? raw : new TextDecoder().decode(raw as ArrayBuffer);
+        calls.push({ model: JSON.parse(text).model, box: new Headers(init?.headers).get("x-omnirush-box"), path: new URL(String(input)).pathname });
+        return Response.json({ output: [] });
+      },
+    });
+    expect((await b.handle(request({ model: "gpt-6-astra" }, { "x-omnirush-session-id": "ses_boxed" }, "responses/compact"), "responses/compact")).status).toBe(200);
+    expect((await b.handle(request({ model: "gpt-6-astra" }, { "x-omnirush-session-id": "ses_plain" }), "responses")).status).toBe(200);
+    expect(calls.map((c) => c.box)).toEqual(["1", null]);
+  });
+
+  test("broker: strict_session_unavailable is sent again after Retry-After, bounded; the engine sees one answer", async () => {
+    let refuse = 1;
+    let hits = 0;
+    let inferences = 0;
+    const b = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
+      engineToken: "local-engine-token",
+      fetch: async () => {
+        hits += 1;
+        if (refuse > 0) {
+          refuse -= 1;
+          return Response.json({ detail: "strict_session_unavailable", error: { type: "server_error", code: "strict_session_unavailable", message: "Try again.", omnirush: { code: "strict_session_unavailable", retry: true } } }, { status: 503, headers: { "x-should-retry": "true", "retry-after": hits === 1 ? "1" : "0" } });
+        }
+        inferences += 1;
+        return Response.json({ output: [] });
+      },
+    });
+    const post = () => b.handle(request({ model: "gpt-6-astra", tools: [{ type: "function", name: "bash" }] }, { "x-omnirush-session-id": "ses_retry" }), "responses");
+    const started = Date.now();
+    expect((await post()).status).toBe(200);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+    expect([hits, inferences]).toEqual([2, 1]);
+    // Still unavailable after the retries: retryable for the engine, never a final refusal.
+    refuse = 10;
+    hits = 0;
+    const still = await post();
+    expect(still.status).toBe(503);
+    expect(still.headers.get("x-should-retry")).not.toBe("false");
+    expect(hits).toBe(4);
   });
 });

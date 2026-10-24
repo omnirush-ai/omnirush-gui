@@ -1286,6 +1286,15 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     },
     // Strict sessions: a chat's bind names the box revision it started under.
     chatPin: (sessionId) => boxServiceFor(config).chatPin(sessionId),
+    // The capture policy the server stored for a chat: its pin and its uploads keep that one.
+    onCapturePolicy: (sessionId, policy) => {
+      void boxServiceFor(config).setCapturePolicy(sessionId, policy);
+      captureServicesByServer.get(config)?.pinPolicy(sessionId, policy);
+    },
+    // Whether the chat's binding is verified, and why it was bound late (kept in its pin, never shown).
+    onBinding: (sessionId, binding) => { void boxServiceFor(config).updatePin(sessionId, binding); },
+    // The last strict-session switch per server: it stands while capabilities cannot be fetched.
+    strictStateFile: join(runtimeStorageDir(config), "strict-sessions.json"),
     // The desktop's update gate (banner, blocked view); session uploads and
     // project archives go on whatever it says.
     ...(config.omnirushGatewayCredentials?.onUpdateSignal ? { onUpdateSignal: config.omnirushGatewayCredentials.onUpdateSignal } : {}),
@@ -2132,7 +2141,8 @@ export async function proxyOpencodeV2Request(input: {
   const turnsBefore = capture && uploadedSessionId && engine ? await turnsBeforeCapture(capture, uploadedSessionId, engine) : 0;
   // The Linux sandbox (box/): a prompt of a workspace whose box is on starts the box, and takes the turn's checkpoint when it is captured.
   // One pin per chat: a chat that runs in the box is not moved to this computer when its project's box is off.
-  if (promptDispatch && sessionId && await boxServiceFor(input.config).pinnedBoxGone(sessionId, input.workspace)) throw new ApiError(409, "chat_pinned_box", PINNED_BOX_MESSAGE);
+  const pinnedBoxWhy = promptDispatch && sessionId ? await boxServiceFor(input.config).pinnedBoxUnavailable(sessionId, input.workspace) : null;
+  if (pinnedBoxWhy) throw new ApiError(409, "chat_pinned_box", pinnedBoxMessage(pinnedBoxWhy));
   const boxInfo = promptDispatch && sessionId
     ? await boxServiceFor(input.config).beforePrompt(sessionId, input.workspace, { capture: Boolean(uploadedSessionId && engine), turnsBefore, nativeModel: await promptsNativeOnlyModel(input.config, body) })
     : null;
@@ -2150,6 +2160,7 @@ export async function proxyOpencodeV2Request(input: {
     capture.captureSnapshot(uploadedSessionId, "prompt");
     capture.archiveSessionStarted(uploadedSessionId, input.workspace.path, engine);
   }
+  if (promptDispatch && sessionId) void pinChatCapturePolicy(input.config, capture, sessionId);
   // A parallel task's first prompt (routes/workspace-tasks.ts): only task workspaces.
   if (input.workspace.task && promptDispatch && sessionId) {
     await noteTaskPrompt(input.workspace, sessionId, (id, type, data) => recordOpenSessionTrace(input.config, id, type, data));
@@ -2572,7 +2583,8 @@ export async function proxyOpencodeRequest(input: {
   const turnsBefore = capture && captured && uploadedSessionId && workspace && !steer && isUploadPromptDispatch(method, proxyPath)
     ? await turnsBeforeCapture(capture, uploadedSessionId, engineTarget(baseUrl, headers, search))
     : 0;
-  if (workspace && uploadedSessionId && isUploadPromptDispatch(method, proxyPath) && await boxServiceFor(input.config).pinnedBoxGone(uploadedSessionId, workspace)) throw new ApiError(409, "chat_pinned_box", PINNED_BOX_MESSAGE);
+  const pinnedBoxWhy = workspace && uploadedSessionId && isUploadPromptDispatch(method, proxyPath) ? await boxServiceFor(input.config).pinnedBoxUnavailable(uploadedSessionId, workspace) : null;
+  if (pinnedBoxWhy) throw new ApiError(409, "chat_pinned_box", pinnedBoxMessage(pinnedBoxWhy));
   const boxInfo = workspace && uploadedSessionId && isUploadPromptDispatch(method, proxyPath)
     ? await boxServiceFor(input.config).beforePrompt(uploadedSessionId, workspace, { capture: captured && !steer, turnsBefore, nativeModel: await promptsNativeOnlyModel(input.config, body) })
     : null;
@@ -2606,6 +2618,7 @@ export async function proxyOpencodeRequest(input: {
       capture.archiveSessionStarted(uploadedSessionId, workspace.path, engineTarget(baseUrl, headers, search));
     }
   }
+  if (workspace && uploadedSessionId && !steer && isUploadPromptDispatch(method, proxyPath)) void pinChatCapturePolicy(input.config, capture, uploadedSessionId);
   // A parallel task's first prompt (routes/workspace-tasks.ts): only task workspaces.
   if (workspace?.task && uploadedSessionId && !steer && isUploadPromptDispatch(method, proxyPath)) {
     await noteTaskPrompt(workspace, uploadedSessionId, (id, type, data) => recordOpenSessionTrace(input.config, id, type, data));
@@ -7875,7 +7888,25 @@ function parseWorkspaceExportSensitiveMode(input: string | null): WorkspaceExpor
   throw new ApiError(400, "invalid_workspace_export_sensitive_mode", `Invalid workspace export sensitive mode: ${trimmed}`);
 }
 
-const PINNED_BOX_MESSAGE = "This chat runs in the sandbox. Turn the sandbox back on for this project, or start a new chat.";
+/**
+ * The capture policy a chat's uploads keep, in its pin at its first prompt
+ * (the uploader's settled policy, after its startSession); a strict-session
+ * bind sends it. Without a capture service nothing of the chat is uploaded:
+ * "none". Unsettled (null): the pin waits for the next prompt. Never holds the
+ * prompt up: under enforce a model request before it is pinned gets a
+ * retryable local error and goes once it is.
+ */
+async function pinChatCapturePolicy(config: ServerConfig, capture: CaptureService | undefined, sessionId: string): Promise<void> {
+  const boxes = boxServiceFor(config);
+  if (boxes.chatPin(sessionId)?.capturePolicy) return;
+  const policy = capture ? await capture.sessionPolicy(sessionId).catch(() => null) : "none";
+  if (policy) await boxes.setCapturePolicy(sessionId, policy);
+}
+
+/** A chat that started in the box, when the box cannot run now (it never moves to this computer). */
+function pinnedBoxMessage(why: string): string {
+  return `This chat runs in the sandbox, which can't start right now (${why.replace(/\.$/, "")}). Try again, or start a new chat.`;
+}
 
 /**
  * Whether a prompt request names an omnirush.ai model whose new chats start on

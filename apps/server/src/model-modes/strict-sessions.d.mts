@@ -13,13 +13,16 @@ export const MODEL_NOT_BOUND: "model_not_bound";
 export const MODE_NOT_BOUND: "mode_not_bound";
 export const BIND_TIMEOUT_MS: number;
 export const VERIFICATION_MESSAGE: string;
+export const SESSION_BIND_UNCONFIRMED: "session_bind_unconfirmed";
+export const UNCONFIRMED_MESSAGE: string;
 
-export type ChatPin = { model: string; mode: ModelMode; revision?: string | null };
-export type BindChat = ChatPin & { path: string | null; sessionId: string; rootId?: string | null; capturePolicy?: string | null; root?: ChatPin | null };
-export type BindOutcome = { ok: true } | { refused: { code: string; message: string } };
+export type ChatPin = { model: string; mode: ModelMode; revision?: string | null; capturePolicy?: string | null };
+export type BindChat = ChatPin & { path: string | null; enforce?: boolean; sessionId: string; rootId?: string | null; root?: ChatPin | null };
+export type BindOutcome = { ok: true; binding?: Record<string, unknown> } | { refused: { code: string; message: string; retry: boolean } };
+export type StrictSessions = { mode: "observe" | "enforce"; path: string; header: string };
 export type BindPost = (path: string, body: Record<string, unknown>, signal: AbortSignal) => Promise<{ status: number; body: unknown }>;
 
-export function strictSessions(capabilities: unknown): { path: string; header: string } | null;
+export function strictSessions(capabilities: unknown): StrictSessions | null;
 export function bindingConflictMessage(binding: unknown, model: string): string;
 export function modelUsedMessage(modelsUsed: unknown, model: string): string;
 export function sessionBinder(post: BindPost, options?: { timeoutMs?: number }): (chat: BindChat) => Promise<BindOutcome>;
