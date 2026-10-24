@@ -26,10 +26,16 @@
 // `rotate_after_idle_minutes` (default 30) without activity; only then may a
 // new display (and a new placement) come.
 //
+// The turn slot is `turn_footer`; `turn_inline` (the rich card in the
+// transcript) is read as the same slot, so a server without it still fills
+// the card. `domain` is the host of `display_url` (the advertiser's origin
+// when the link is a tracked redirect), else of `url`.
+//
 // Events: { display_id, placement_id, kind, surface } and nothing else, at
 // most one of each kind per display. Kinds: rendered (drawn), viewable (desktop only:
 // the window measured ≥ 50% of the card on screen for one continuous second
-// while focused and visible), click, dismiss. Surfaces: desktop_home,
+// while focused and visible), click, dismiss, report (the user reported the
+// ad; it is hidden like a dismissal). Surfaces: desktop_home,
 // desktop_turn, cli_home, cli_turn. The CLI never sends viewable. Queued in the
 // same file and sent in batches, best effort; a 404 or an answer that says
 // placements are off drops them.
@@ -46,6 +52,10 @@ export const EVENTS_PATH = "/client/placements/events";
 export const STATE_FILE = "placements.json";
 export const SLOTS = Object.freeze(["home_banner", "turn_footer"]);
 export const LABEL = "Sponsored";
+/** "Why am I seeing this": the public measurement and targeting rules. */
+export const WHY_URL = "https://omnirush.ai/advertise/measurement";
+/** Server slot names read as the turn slot. */
+const SLOT_ALIASES = Object.freeze({ turn_inline: "turn_footer" });
 export const LIMITS = Object.freeze({ id: 64, sponsor: 40, title: 60, body: 140, cta_label: 20 });
 export const FETCH_TIMEOUT_MS = 2_000;
 export const MIN_REFRESH_S = 900;
@@ -56,7 +66,7 @@ export const CACHE_MAX_AGE_MS = 24 * 3_600_000;
 export const DEFAULT_SNOOZE_DAYS = 7;
 export const MAX_SNOOZE_DAYS = 365;
 export const MAX_PER_DAY_LIMIT = 24;
-export const EVENT_KINDS = Object.freeze(["rendered", "viewable", "click", "dismiss"]);
+export const EVENT_KINDS = Object.freeze(["rendered", "viewable", "click", "dismiss", "report"]);
 /** Where a display was: `${client}_${home|turn}`. */
 export const SURFACES = Object.freeze(["desktop_home", "desktop_turn", "cli_home", "cli_turn"]);
 /** The surfaces whose displays may be measured viewable (the CLI's never are). */
@@ -124,7 +134,8 @@ function intIn(value, min, max, fallback) {
 export function parsePlacement(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const id = typeof raw.id === "string" && ID_RE.test(raw.id) ? raw.id : null;
-  const slot = SLOTS.includes(raw.slot) ? raw.slot : null;
+  const name = SLOT_ALIASES[raw.slot] ?? raw.slot;
+  const slot = SLOTS.includes(name) ? name : null;
   const sponsor = clampText(raw.sponsor, LIMITS.sponsor);
   const title = clampText(raw.title, LIMITS.title);
   const url = httpsOnly(raw.url);
@@ -144,6 +155,7 @@ export function parsePlacement(raw) {
     ctaLabel: clampText(raw.cta_label, LIMITS.cta_label) || "Learn more",
     url,
     imageUrl: httpsOnly(raw.image_url),
+    domain: hostOf(httpsOnly(raw.display_url) ?? url),
     startsAt,
     endsAt,
     maxPerDay: intIn(raw.max_per_day, 1, MAX_PER_DAY_LIMIT, 1),
@@ -154,6 +166,11 @@ export function parsePlacement(raw) {
     maxPerAdvertiserPerDay: intIn(raw.max_per_advertiser_per_day, 1, MAX_PER_DAY_LIMIT, ADVERTISER_DAILY_CAP),
     rotateAfterIdleMs: intIn(raw.rotate_after_idle_minutes, 1, 1_440, ROTATE_IDLE_MS / 60_000) * 60_000,
   };
+}
+
+/** "acme.cloud" from "https://www.acme.cloud/x". */
+function hostOf(url) {
+  return url ? new URL(url).hostname.replace(/^www\./, "") : "";
 }
 
 function advertiserId(value) {
@@ -223,6 +240,7 @@ export function placementView(placement, display = null) {
     ctaLabel: placement.ctaLabel,
     url: placement.url,
     imageUrl: placement.imageUrl,
+    domain: placement.domain,
     snoozeDays: placement.snoozeDays,
   };
 }
@@ -684,6 +702,13 @@ export function createPlacements({
       state.snoozed[placement.id] = now() + placement.snoozeDays * DAY_MS;
       save();
       return true;
+    },
+    /** Report: counted once per display, then hidden like ×. */
+    report(ref) {
+      const display = displayOf(ref);
+      if (!display) return false;
+      queue(display, "report");
+      return service.dismiss(ref);
     },
     /** Hides every placement for `days` (0 shows them again). */
     hideAll(days = 30) {

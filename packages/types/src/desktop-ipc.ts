@@ -413,10 +413,12 @@ export type OmniRushPlacement = {
   url: string;
   /** https only, or null. */
   imageUrl: string | null;
+  /** The advertiser's host ("acme.cloud"), shown as text; "" when unknown. */
+  domain: string;
   snoozeDays: number;
 };
-/** rendered / viewable / open (the click) / dismiss: about one display; conversation / activity: for the display rotation. */
-export type OmniRushPlacementAction = "rendered" | "viewable" | "open" | "dismiss" | "conversation" | "activity";
+/** rendered / viewable / open (the click) / dismiss / report: about one display; why opens the public measurement page; conversation / activity: for the display rotation. */
+export type OmniRushPlacementAction = "rendered" | "viewable" | "open" | "dismiss" | "report" | "why" | "conversation" | "activity";
 
 /** In-app feedback (apps/desktop/electron/feedback-desktop.mjs and the shared feedback/feedback.mjs). */
 export type OmniRushFeedbackKind = "turn" | "general" | "pulse";

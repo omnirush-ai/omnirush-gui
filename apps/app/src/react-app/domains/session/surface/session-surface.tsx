@@ -3536,6 +3536,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
               askable={!currentSnapshot?.session.parentID && !(currentSnapshot?.session.title ?? "").startsWith("Automation: ")}
               onDone={() => composerShellRef.current?.querySelector<HTMLElement>("[contenteditable=true]")?.focus()}
             />
+            {/* Sponsored card: under the last answer once the turn finished (never while it streams). */}
+            <PlacementTurnFooter
+              sessionId={props.sessionId}
+              turnRunning={chatStreaming || (effectiveActivityStatus !== "idle" && effectiveActivityStatus !== "error")}
+            />
             {admissionOutcomeUnresolved && queuedDrainState.phase.kind !== "admission_unknown" && renderedMessages.length > 0 ? (
               <AdmissionOutcomeUnknownCard
                 resuming={resuming}
@@ -3670,10 +3675,6 @@ export function SessionSurface(props: SessionSurfaceProps) {
           onFinishIt={handleMessageListSetPrompt}
           onAutoRetry={handleAutoRetry}
           client={props.client}
-        />
-        <PlacementTurnFooter
-          sessionId={props.sessionId}
-          turnRunning={chatStreaming || (effectiveActivityStatus !== "idle" && effectiveActivityStatus !== "error")}
         />
         <SideAnswers answers={sideAnswers} onDismiss={(id) => setSideAnswers((list) => list.filter((item) => item.id !== id))} />
         <ReactSessionComposer

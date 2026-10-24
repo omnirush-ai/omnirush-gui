@@ -8,12 +8,14 @@ import {
   loadHomePlacement,
   loadTurnFooter,
   homeCardMounted,
+  explainPlacement,
   openPlacement,
   placementActivity,
   placementConversation,
   placementRendered,
   placementViewable,
   placementViewableSent,
+  reportPlacement,
   setPlacementsBridgeForTests,
   turnJustFinished,
   usePlacementsStore,
@@ -33,6 +35,7 @@ const PLACEMENT = {
   ctaLabel: "Try it",
   url: "https://acme.example/ci",
   imageUrl: null,
+  domain: "acme.example",
   snoozeDays: 7,
 };
 
@@ -60,6 +63,11 @@ afterEach(() => setPlacementsBridgeForTests(null));
 describe("placements: what the window accepts", () => {
   test("a placement from the main process", () => {
     expect(asPlacement(PLACEMENT)?.label).toBe("Sponsored · Acme");
+  });
+
+  test("the domain: as sent, else the link's host (older main processes)", () => {
+    expect(asPlacement({ ...PLACEMENT, domain: "acme.cloud" })?.domain).toBe("acme.cloud");
+    expect(asPlacement({ ...PLACEMENT, domain: undefined, url: "https://www.acme.example/x" })?.domain).toBe("acme.example");
   });
 
   test("the label is always Sponsored · sponsor", () => {
@@ -104,7 +112,7 @@ describe("placements: the home card", () => {
     expect(renderToStaticMarkup(<PlacementHomeCard />)).toBe("");
   });
 
-  test("labelled, title, body, CTA and ×; plain text, no motion", async () => {
+  test("labelled, letter mark, title, body, CTA, domain, … and ×; plain text, no motion", async () => {
     const { asks } = fakeMain();
     await loadHomePlacement();
     const first = usePlacementsStore.getState().home;
@@ -117,15 +125,19 @@ describe("placements: the home card", () => {
     const html = renderToStaticMarkup(<PlacementHomeCardView placement={placement} />);
     expect(html).toContain('data-testid="placement-home"');
     expect(html).toContain(`data-display-id="${DISPLAY}"`);
-    expect(html).toContain("Sponsored · Acme");
+    expect(html).toContain('aria-label="Sponsored · Acme"');
+    expect(html).toContain(">Sponsored</span>");
     expect(html).toContain("Fast CI for your repo");
     expect(html).toContain("Run your tests in half the time.");
     expect(html).toContain("Try it");
+    expect(html).toContain('data-testid="placement-home-letter"');
     expect(html).toContain('aria-label="Hide this sponsored message"');
+    expect(html).toContain('aria-label="Sponsored message options"');
+    expect(html).toContain('aria-label="Open acme.example"');
     expect(html).not.toMatch(/animate-|transition|<a /);
     expect(html).not.toContain("<img");
-    // The link is never in the page: the main process opens it on a click.
-    expect(html).not.toContain("acme.example");
+    // The domain is text only: the link is never in the page, the main process opens it on a click.
+    expect(html).not.toContain("acme.example/ci");
   });
 
   test("an https image only when there is one", async () => {
@@ -155,6 +167,17 @@ describe("placements: the home card", () => {
       { action: "open", id: "plc_abc", displayId: DISPLAY },
       { action: "dismiss", id: "plc_abc", displayId: DISPLAY },
     ]);
+    expect(usePlacementsStore.getState().home).toBeNull();
+  });
+
+  test("the menu: why opens the measurement page (main process), report is counted and hides it", async () => {
+    const { actions } = fakeMain();
+    const placement = await loadHomePlacement();
+    explainPlacement();
+    reportPlacement(placement!);
+    reportPlacement(placement!);
+    await flush();
+    expect(actions).toEqual([{ action: "why" }, { action: "report", id: "plc_abc", displayId: DISPLAY }]);
     expect(usePlacementsStore.getState().home).toBeNull();
   });
 
@@ -209,7 +232,7 @@ describe("placements: the display rotation signals", () => {
   });
 });
 
-describe("placements: the turn line", () => {
+describe("placements: the turn card", () => {
   test("only on the running → done edge of the same session", () => {
     expect(turnJustFinished({ sessionId: "a", running: true }, { sessionId: "a", running: false })).toBe(true);
     expect(turnJustFinished({ sessionId: "a", running: false }, { sessionId: "a", running: false })).toBe(false);
@@ -226,6 +249,8 @@ describe("placements: the turn line", () => {
     const line = renderToStaticMarkup(<PlacementTurnFooterView placement={placement} />);
     expect(line).toContain('data-testid="placement-turn-footer"');
     expect(line).toContain("Sponsored · Acme");
+    expect(line).toContain('data-testid="placement-turn-footer-domain"');
+    expect(line).toContain('data-testid="placement-turn-footer-menu"');
     expect(line).not.toMatch(/animate-|transition|<a /);
     // While a turn runs: nothing (the container's rule, before any state).
     expect(renderToStaticMarkup(<PlacementTurnFooter sessionId="ses_1" turnRunning />)).toBe("");

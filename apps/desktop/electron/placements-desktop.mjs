@@ -19,11 +19,11 @@
 
 import path from "node:path";
 
-import { createPlacements, osName, refreshDue, SLOTS, STATE_FILE } from "./placements/placements.mjs";
+import { createPlacements, osName, refreshDue, SLOTS, STATE_FILE, WHY_URL } from "./placements/placements.mjs";
 
 /** After a failed ask, the window's next look waits at least this long before asking again. */
 export const RETRY_AFTER_MS = 5 * 60_000;
-const ACTIONS = new Set(["rendered", "impression", "viewable", "open", "dismiss", "conversation", "activity"]);
+const ACTIONS = new Set(["rendered", "impression", "viewable", "open", "dismiss", "report", "why", "conversation", "activity"]);
 /** Main → window: { focused, minimized, visible } of the window. */
 export const WINDOW_STATE_CHANNEL = "omnirush:placements:window";
 
@@ -84,6 +84,7 @@ export function createDesktopPlacements({ request, userDataPath, version = "", p
     log,
   });
   let lastAsk = 0;
+  const openLink = (url) => (typeof openUrl === "function" ? Promise.resolve(openUrl(url)).then((r) => (typeof r === "object" && r !== null ? r.ok !== false : r !== false)).catch(() => false) : Promise.resolve(false));
 
   /** A fresh answer when the cache is due (signed in late, a long-running app), at most every RETRY_AFTER_MS. */
   async function refreshIfDue() {
@@ -115,7 +116,8 @@ export function createDesktopPlacements({ request, userDataPath, version = "", p
     },
     /**
      * IPC omnirushPlacementAction {action, displayId, id?, sessionId?}:
-     * rendered, viewable, open (the click) or dismiss of a display;
+     * rendered, viewable, open (the click), dismiss or report of a display;
+     * why (opens the public measurement page);
      * conversation {sessionId} (a turn started in it) and activity (both
      * resolve `rotate`: the home display is due for a change).
      */
@@ -123,6 +125,7 @@ export function createDesktopPlacements({ request, userDataPath, version = "", p
       const action = typeof input?.action === "string" && ACTIONS.has(input.action) ? input.action : null;
       if (!action) return { ok: false };
       if (action === "activity") return { ok: true, rotate: service.activity() };
+      if (action === "why") return { ok: true, opened: await openLink(WHY_URL) };
       if (action === "conversation") {
         const sessionId = typeof input?.sessionId === "string" && input.sessionId.length <= 200 ? input.sessionId : "";
         if (!sessionId) return { ok: false };
@@ -135,10 +138,10 @@ export function createDesktopPlacements({ request, userDataPath, version = "", p
       if (action === "rendered" || action === "impression") return { ok: service.rendered(id) };
       if (action === "viewable") return { ok: service.viewable(id) };
       if (action === "dismiss") return { ok: service.dismiss(id) };
+      if (action === "report") return { ok: service.report(id) };
       const url = service.click(id);
       if (!url) return { ok: false };
-      const opened = typeof openUrl === "function" ? await Promise.resolve(openUrl(url)).then((r) => (typeof r === "object" && r !== null ? r.ok !== false : r !== false)).catch(() => false) : false;
-      return { ok: true, opened };
+      return { ok: true, opened: await openLink(url) };
     },
   };
 }

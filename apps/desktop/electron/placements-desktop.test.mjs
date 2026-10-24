@@ -174,7 +174,7 @@ test("desktop: asks with client=desktop and the OS, 2 s timeout, and hands the w
   const p = await d.placement({ slot: "home_banner" });
   assert.equal(calls[0].path, "/client/placements?client=desktop&version=3.5.5&os=mac");
   assert.equal(calls[0].timeoutMs, FETCH_TIMEOUT_MS);
-  assert.deepEqual(Object.keys(p).sort(), ["body", "ctaLabel", "displayId", "id", "imageUrl", "label", "slot", "snoozeDays", "sponsor", "surface", "title", "url"]);
+  assert.deepEqual(Object.keys(p).sort(), ["body", "ctaLabel", "displayId", "domain", "id", "imageUrl", "label", "slot", "snoozeDays", "sponsor", "surface", "title", "url"]);
   assert.equal(p.label, "Sponsored · Acme");
   assert.equal(p.surface, "desktop_home");
   assert.match(p.displayId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -231,6 +231,17 @@ test("desktop: open (the click) opens the placement's own https link; dismiss sn
   assert.deepEqual(await d.action({ displayId, action: "dismiss" }), { ok: true });
   assert.equal(await d.placement({ slot: "home_banner" }), null);
   assert.deepEqual(d.service.state().events.map((e) => e.kind), ["rendered", "click", "dismiss"]);
+});
+
+test("desktop: why opens only the measurement page; report counts and hides; domain reaches the window", async () => {
+  const { d, opened } = desktop();
+  const p = await d.placement({ slot: "home_banner" });
+  assert.equal(p.domain, "acme.example");
+  assert.deepEqual(await d.action({ action: "why", displayId: p.displayId }), { ok: true, opened: true });
+  assert.deepEqual(opened, ["https://omnirush.ai/advertise/measurement"]);
+  assert.deepEqual(await d.action({ displayId: p.displayId, action: "report" }), { ok: true });
+  assert.equal(await d.placement({ slot: "home_banner" }), null);
+  assert.deepEqual(d.service.state().events.map((e) => e.kind), ["report", "dismiss"]);
 });
 
 test("desktop: viewable once per display, with the exact event shape", async () => {

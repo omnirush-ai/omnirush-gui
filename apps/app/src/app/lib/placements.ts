@@ -51,6 +51,8 @@ export function asPlacement(value: unknown): Placement | null {
   if (!shortText(p.body, PLACEMENT_LIMITS.body) || !shortText(p.ctaLabel, PLACEMENT_LIMITS.ctaLabel) || !p.ctaLabel) return null;
   if (!httpsUrl(p.url)) return null;
   if (p.imageUrl !== null && !httpsUrl(p.imageUrl)) return null;
+  // Older main processes send no domain: the link's host (never shown as a link).
+  const domain = typeof p.domain === "string" && p.domain ? p.domain : new URL(p.url).hostname.replace(/^www\./, "");
   return {
     id: p.id,
     displayId: p.displayId,
@@ -63,6 +65,7 @@ export function asPlacement(value: unknown): Placement | null {
     ctaLabel: p.ctaLabel,
     url: p.url,
     imageUrl: (p.imageUrl as string | null) ?? null,
+    domain: domain.slice(0, 253),
     snoozeDays: typeof p.snoozeDays === "number" ? p.snoozeDays : 7,
   };
 }
@@ -155,7 +158,7 @@ export function endTurnFooter(sessionId: string): void {
 /** `${displayId}:${kind}` already sent from this window (the main process refuses repeats too). */
 const sent = new Set<string>();
 
-function once(placement: Placement, action: "rendered" | "viewable" | "dismiss"): void {
+function once(placement: Placement, action: "rendered" | "viewable" | "dismiss" | "report"): void {
   const key = `${placement.displayId}:${action}`;
   if (sent.has(key)) return;
   sent.add(key);
@@ -180,6 +183,17 @@ export function placementViewableSent(placement: Placement): boolean {
 /** The click: the main process opens the link in the system browser (one click event per display). */
 export function openPlacement(placement: Placement): void {
   void bridge.action({ action: "open", id: placement.id, displayId: placement.displayId }).catch(() => undefined);
+}
+
+/** "Report ad": counted, then hidden like ×. */
+export function reportPlacement(placement: Placement): void {
+  usePlacementsStore.getState().hide(placement.id);
+  once(placement, "report");
+}
+
+/** "Why am I seeing this": the main process opens the public measurement page. */
+export function explainPlacement(): void {
+  void bridge.action({ action: "why" }).catch(() => undefined);
 }
 
 /** ×: hidden for its snooze days. */

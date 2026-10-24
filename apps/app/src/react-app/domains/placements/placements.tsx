@@ -1,21 +1,26 @@
 /** @jsxImportSource react */
-// Sponsored placements (app/lib/placements.ts): a slim, quiet card on the
-// home / new-chat screen and one dim line after a finished turn, once per
-// session. Always labelled "Sponsored · <sponsor>"; plain text, the app's own
-// colours, no motion, no sound, no toast. The link opens in the system
-// browser only on a click; × hides it for the placement's snooze days.
+// Sponsored placements (app/lib/placements.ts): one card on the home /
+// new-chat screen and one in the transcript after a finished turn, once per
+// session. Always labelled (the sponsor and a "Sponsored" badge); plain text,
+// the theme's own colours, no motion, no sound, no toast. The link opens in
+// the system browser only on a click; × or "Hide this ad" hides it for the
+// placement's snooze days; "…" also has "Why am I seeing this?" (the public
+// measurement page) and "Report ad".
 // Nothing renders while the main process has no placement to show.
 //
 // Each display reports rendered when first painted and viewable once it has
 // been ≥ 50% on screen for one continuous second with the window focused and
 // visible (placement-viewability.ts); both once per display id.
 
-import { useEffect, useRef, type RefObject } from "react";
-import { ArrowUpRight, X } from "lucide-react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { ArrowUpRight, Ellipsis, EyeOff, Flag, Info, X } from "lucide-react";
+
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 import {
   dismissPlacement,
   endTurnFooter,
+  explainPlacement,
   homeCardMounted,
   installPlacementActivity,
   loadHomePlacement,
@@ -25,6 +30,7 @@ import {
   placementRendered,
   placementViewable,
   placementViewableSent,
+  reportPlacement,
   turnJustFinished,
   usePlacementsStore,
   type Placement,
@@ -59,11 +65,112 @@ function DismissButton(props: { placement: Placement; testId: string }) {
       aria-label="Hide this sponsored message"
       title={`Hide for ${props.placement.snoozeDays} day${props.placement.snoozeDays === 1 ? "" : "s"}`}
       onClick={() => dismissPlacement(props.placement)}
-      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+      className={ICON_BUTTON}
       data-testid={props.testId}
     >
-      <X className="size-3" aria-hidden="true" />
+      <X className="size-3.5" aria-hidden="true" />
     </button>
+  );
+}
+
+const ICON_BUTTON = "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+/** The sponsor's logo (an https image the server allows), else its first letter. */
+function SponsorMark(props: { placement: Placement; testId: string }) {
+  const [broken, setBroken] = useState(false);
+  if (props.placement.imageUrl && !broken) {
+    return (
+      <img
+        src={props.placement.imageUrl}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        referrerPolicy="no-referrer"
+        onError={() => setBroken(true)}
+        className="size-5 shrink-0 rounded object-cover"
+        data-testid={`${props.testId}-image`}
+      />
+    );
+  }
+  return (
+    <span aria-hidden="true" className="inline-flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[11px] font-semibold text-muted-foreground" data-testid={`${props.testId}-letter`}>
+      {Array.from(props.placement.sponsor)[0]?.toUpperCase()}
+    </span>
+  );
+}
+
+/** "…": hide, why am I seeing this, report. */
+function PlacementMenu(props: { placement: Placement; testId: string }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button type="button" aria-label="Sponsored message options" className={ICON_BUTTON} data-testid={`${props.testId}-menu`}>
+            <Ellipsis className="size-3.5" aria-hidden="true" />
+          </button>
+        }
+      />
+      <DropdownMenuContent align="end" className="min-w-56">
+        <DropdownMenuItem onClick={() => dismissPlacement(props.placement)}><EyeOff />Hide this ad</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => explainPlacement()}><Info />Why am I seeing this?</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => reportPlacement(props.placement)}><Flag />Report ad</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * The card (home screen and in the transcript after a finished turn): the
+ * sponsor's mark and name, a "Sponsored" badge, "…" and ×, then the title,
+ * the body, the call to action and the advertiser's domain. The theme's own
+ * colours (light and dark), no motion.
+ */
+function PlacementCard(props: { placement: Placement; testId: string; measureRef: RefObject<HTMLElement | null> }) {
+  const { placement, testId } = props;
+  return (
+    <aside
+      ref={props.measureRef}
+      aria-label={placement.label}
+      data-testid={testId}
+      data-placement-id={placement.id}
+      data-display-id={placement.displayId}
+      className="rounded-xl border border-border bg-card px-3.5 py-3 text-card-foreground"
+    >
+      <div className="flex items-center gap-2">
+        <SponsorMark placement={placement} testId={testId} />
+        <span className="min-w-0 truncate text-[12px] font-medium text-muted-foreground" data-testid={`${testId}-sponsor`}>{placement.sponsor}</span>
+        <span className="rounded border border-border px-1.5 text-[10px] font-medium leading-4 text-muted-foreground" data-testid={`${testId}-label`}>Sponsored</span>
+        <span className="flex-1" />
+        <PlacementMenu placement={placement} testId={testId} />
+        <DismissButton placement={placement} testId={`${testId}-dismiss`} />
+      </div>
+      <div className="mt-1.5 text-[13.5px] font-semibold leading-5 text-foreground" data-testid={`${testId}-title`}>{placement.title}</div>
+      {placement.body ? (
+        <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[18px] text-muted-foreground" data-testid={`${testId}-body`}>{placement.body}</p>
+      ) : null}
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button
+          type="button"
+          onClick={() => openPlacement(placement)}
+          className="inline-flex h-7 shrink-0 items-center rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+          data-testid={`${testId}-cta`}
+        >
+          {placement.ctaLabel}
+        </button>
+        {placement.domain ? (
+          <button
+            type="button"
+            onClick={() => openPlacement(placement)}
+            aria-label={`Open ${placement.domain}`}
+            className="inline-flex min-w-0 items-center gap-0.5 rounded text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid={`${testId}-domain`}
+          >
+            <span className="truncate">{placement.domain}</span>
+            <ArrowUpRight className="size-3 shrink-0" aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+    </aside>
   );
 }
 
@@ -90,55 +197,18 @@ export function PlacementHomeCard() {
   return <PlacementHomeCardView key={placement.displayId} placement={placement} />;
 }
 
-/** The card itself (tests render it directly). */
+/** The home card itself (tests render it directly). */
 export function PlacementHomeCardView({ placement }: { placement: Placement }) {
   const ref = useRef<HTMLElement | null>(null);
   useDisplayMeasurement(ref, placement);
-  return (
-    <aside
-      ref={ref}
-      aria-label={placement.label}
-      data-testid="placement-home"
-      data-placement-id={placement.id}
-      data-display-id={placement.displayId}
-      className="flex items-center gap-3 rounded-lg border border-border/70 bg-background px-3 py-2"
-    >
-      {placement.imageUrl ? (
-        <img
-          src={placement.imageUrl}
-          alt=""
-          aria-hidden="true"
-          draggable={false}
-          referrerPolicy="no-referrer"
-          className="size-8 shrink-0 rounded-md object-cover"
-          data-testid="placement-home-image"
-        />
-      ) : null}
-      <div className="min-w-0 flex-1">
-        <div className="text-[10.5px] leading-4 text-muted-foreground" data-testid="placement-home-label">{placement.label}</div>
-        <div className="truncate text-[12.5px] font-medium leading-5 text-foreground" data-testid="placement-home-title">{placement.title}</div>
-        {placement.body ? (
-          <div className="line-clamp-2 text-[12px] leading-4 text-muted-foreground" data-testid="placement-home-body">{placement.body}</div>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        onClick={() => openPlacement(placement)}
-        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2.5 text-[12px] font-medium text-foreground hover:bg-accent"
-        data-testid="placement-home-cta"
-      >
-        {placement.ctaLabel}
-        <ArrowUpRight className="size-3.5 text-muted-foreground" aria-hidden="true" />
-      </button>
-      <DismissButton placement={placement} testId="placement-home-dismiss" />
-    </aside>
-  );
+  return <PlacementCard placement={placement} testId="placement-home" measureRef={ref} />;
 }
 
 /**
- * The line after a finished turn, above the composer: asked on the running →
- * done edge of this session's turn, gone when the next turn starts, once per
- * session (the main process remembers it across runs too).
+ * The card in the transcript after a finished turn (the server's turn_inline
+ * or turn_footer entry): asked on the running → done edge of this session's
+ * turn, so it never interrupts a stream; gone when the next turn starts; once
+ * per session (the main process remembers it across runs too).
  */
 export function PlacementTurnFooter(props: { sessionId: string; turnRunning: boolean }) {
   const placement = usePlacementsStore((state) => state.footers[props.sessionId] ?? null);
@@ -161,38 +231,13 @@ export function PlacementTurnFooter(props: { sessionId: string; turnRunning: boo
   return <PlacementTurnFooterView key={placement.displayId} placement={placement} />;
 }
 
-/** The line itself (tests render it directly). */
+/** The card in the transcript, under the last answer (tests render it directly). */
 export function PlacementTurnFooterView({ placement }: { placement: Placement }) {
-  const ref = useRef<HTMLDivElement | null>(null);
+  const ref = useRef<HTMLElement | null>(null);
   useDisplayMeasurement(ref, placement);
   return (
-    <div className="px-4 max-lg:px-3 lg:px-8">
-      <div
-        ref={ref}
-        role="note"
-        aria-label={placement.label}
-        data-testid="placement-turn-footer"
-        data-placement-id={placement.id}
-        data-display-id={placement.displayId}
-        className="mx-auto flex max-w-[800px] items-center gap-2 pb-1 text-[11px] leading-4 text-muted-foreground/80"
-      >
-        <span className="min-w-0 flex-1 truncate">
-          <span>{placement.label}</span>
-          <span aria-hidden="true"> — </span>
-          <span className="text-muted-foreground">{placement.title}</span>
-          {placement.body ? <span> · {placement.body}</span> : null}
-        </span>
-        <button
-          type="button"
-          onClick={() => openPlacement(placement)}
-          className="inline-flex shrink-0 items-center gap-0.5 underline-offset-2 hover:text-foreground hover:underline"
-          data-testid="placement-turn-footer-cta"
-        >
-          {placement.ctaLabel}
-          <ArrowUpRight className="size-3" aria-hidden="true" />
-        </button>
-        <DismissButton placement={placement} testId="placement-turn-footer-dismiss" />
-      </div>
+    <div className="not-prose mt-3 px-2 md:px-10">
+      <PlacementCard placement={placement} testId="placement-turn-footer" measureRef={ref} />
     </div>
   );
 }
