@@ -13,6 +13,7 @@ import {
   CHANGES_EMPTY,
   CHANGES_SOURCE_LABEL,
   changeTotals,
+  mergeTurnChanges,
   normalizeChanges,
   MAX_DIFF_LINES,
   patchLineCount,
@@ -24,6 +25,7 @@ import {
 } from "./changes";
 import { useSessionCommandBridge, useSessionCommandsStore } from "./session-commands-store";
 import { latestUserMessageId, useCachedQueryData, useOpencodeClient, type SessionCommandTarget } from "./use-session-commands";
+import { turnUserMessageIds } from "./turn-messages";
 
 const SOURCES: ChangesSource[] = ["chat", "turn", "tree"];
 
@@ -201,16 +203,24 @@ function ChangesBody(props: SessionCommandTarget & {
   const lastUserId = props.turnId ?? latestUserMessageId(snapshot?.session.id === props.sessionId ? snapshot : null);
   const revertId = snapshot?.session.revert?.messageID ?? null;
   const running = (status?.type ?? "idle") !== "idle";
+  // The whole turn: the person's prompt and the user messages a compaction added in it (turn-messages.ts).
+  const turnIds = useMemo(() => {
+    if (!lastUserId) return [];
+    const ids = turnUserMessageIds(snapshot?.session.id === props.sessionId ? snapshot.messages : [], lastUserId);
+    return ids.length ? ids : [lastUserId];
+  }, [snapshot, props.sessionId, lastUserId]);
 
   const query = useQuery({
-    queryKey: ["session-commands-changes", props.workspaceId, props.sessionId, source, source === "turn" ? lastUserId : null, revertId],
+    queryKey: ["session-commands-changes", props.workspaceId, props.sessionId, source, source === "turn" ? turnIds.join(",") : null, revertId],
     queryFn: async () => {
       if (source === "tree") {
         return normalizeChanges(unwrap(await client.vcs.diff({ mode: "git", directory: props.workspaceRoot || undefined })));
       }
       if (source === "turn") {
         if (!lastUserId) return [];
-        return normalizeChanges(unwrap(await client.session.diff({ sessionID: props.sessionId, messageID: lastUserId })));
+        const parts = await Promise.all(turnIds.map(async (messageID) =>
+          normalizeChanges(unwrap(await client.session.diff({ sessionID: props.sessionId, messageID })))));
+        return mergeTurnChanges(parts);
       }
       return normalizeChanges(unwrap(await client.session.diff({ sessionID: props.sessionId })));
     },

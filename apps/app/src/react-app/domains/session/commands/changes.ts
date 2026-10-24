@@ -38,7 +38,7 @@ export function changeTotals(files: readonly ChangedFile[]) {
 
 export const CHANGES_EMPTY: Record<ChangesSource, string> = {
   chat: "This chat has not changed any files yet.",
-  turn: "The last turn changed no files.",
+  turn: "No files changed in this turn.",
   tree: "No changes.",
 };
 
@@ -125,4 +125,24 @@ export function splitRows(lines: readonly PatchLine[]): SplitRow[] {
   }
   flush();
   return rows;
+}
+
+/**
+ * One turn's changes from the engine's per-message diffs (a turn split by a compaction has one list per user
+ * message, oldest first): a file changed in several parts keeps every part's hunks in order and the summed counts.
+ */
+export function mergeTurnChanges(lists: readonly ChangedFile[][]): ChangedFile[] {
+  const byPath = new Map<string, ChangedFile>();
+  for (const list of lists) {
+    for (const file of list) {
+      const seen = byPath.get(file.path);
+      if (!seen) { byPath.set(file.path, { ...file }); continue; }
+      seen.additions += file.additions;
+      seen.deletions += file.deletions;
+      seen.patch = [seen.patch, file.patch].filter((patch) => patch.trim()).join("\n");
+      // Added earlier in the turn stays added; deleted at the end is deleted.
+      seen.status = seen.status === "added" ? (file.status === "deleted" ? "modified" : "added") : file.status === "deleted" ? "deleted" : "modified";
+    }
+  }
+  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
