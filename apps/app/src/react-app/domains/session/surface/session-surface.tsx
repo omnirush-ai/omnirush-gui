@@ -65,7 +65,7 @@ import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMe
 import { desktopBridge, openDesktopUrl } from "@/app/lib/desktop";
 import { parseSlashCommandInvocation } from "./composer/slash-command";
 import { parseConnectSkillToken } from "./composer/connect-skill-token";
-import { createPastedTextChip, resolvePastedTextPlaceholders, unresolvedPasteLabels } from "./composer/pasted-text";
+import { createPastedTextChip, draftHasLostPaste, LOST_PASTE_MESSAGE, resolvePastedTextPlaceholders, unresolvedPasteLabels } from "./composer/pasted-text";
 import {
   canAdmitNextQueuedItem,
   claimQueuedSend,
@@ -2323,7 +2323,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!text && sourceAttachments.length === 0) return;
     // A placeholder whose pasted text or quote is gone (only its token left) is never sent as the token itself.
     if (unresolvedPasteLabels(text, sourceComposer?.pasteParts ?? getComposerPasteParts(useComposerStateStore.getState(), props.sessionId)).length) {
-      toast.error("A pasted text or quote in this message is no longer available. Remove its chip and paste or quote it again.");
+      toast.error(LOST_PASTE_MESSAGE);
       return;
     }
     const nextDraft = {
@@ -2491,6 +2491,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!text && attachments.length === 0) return;
     const queuedDraft = withoutRevertTarget(buildDraft(text, attachments));
     if (!queuedDraft) return;
+    // Never queued with a lost placeholder (it would reach the model as the bare token): the composer keeps it.
+    if (draftHasLostPaste(queuedDraft)) { toast.error(LOST_PASTE_MESSAGE); return; }
     appendQueuedDraft(props.sessionId, queuedDraft);
     clearComposer();
   }, [appendQueuedDraft, askSideFromDraft, attachments, buildDraft, clearComposer, draft, props.sessionId, sessionOwner]);
@@ -2511,11 +2513,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
   // waiting for the idle drain. Guarded against the drain effect so the same
   // draft cannot be delivered twice.
   const [sendingQueued, setSendingQueued] = useState(false);
+  const lostPasteNoticeRef = useRef<string | null>(null);
   const sendQueuedDraftNow = useCallback(async (id: string) => {
     if (drainingQueueRef.current || sendingQueued) return;
     const item = getComposerQueuedDrafts(useComposerStateStore.getState(), props.sessionId).find((queued) => queued.id === id);
     const target = withoutRevertTarget(item?.draft ?? null);
     if (!item || !target) return;
+    if (draftHasLostPaste(target)) { toast.error(LOST_PASTE_MESSAGE); return; }
     if (revertMessageId && !window.confirm(hiddenDeleteConfirmText(revertedMessageCount))) return;
     if (!claimQueuedSend(props.sessionId, item.id, true)) return;
     const generation = getQueuedSendGeneration(props.sessionId);
@@ -2674,6 +2678,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!nextItem) return;
     const nextDraft = withoutRevertTarget(nextItem.draft);
     if (!nextDraft) return;
+    // A lost placeholder holds the queue (the item stays, to edit or remove), never sent as the bare token.
+    if (draftHasLostPaste(nextDraft)) {
+      if (lostPasteNoticeRef.current !== nextItem.id) { lostPasteNoticeRef.current = nextItem.id; toast.error(LOST_PASTE_MESSAGE); }
+      return;
+    }
     // Claim the send slot atomically BEFORE the send can resolve: the
     // engine's busy status can render before the send promise's continuation
     // runs, and claiming late would erase that observation. The claim is

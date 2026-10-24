@@ -48,6 +48,18 @@ export function unresolvedPasteLabels(text: string, pastedText: readonly Pick<Pa
   return [...text.matchAll(/\[pasted text ([^\]]+)\]/g)].map((match) => match[1] ?? "").filter((label) => !known.has(label));
 }
 
+/**
+ * Whether a built draft still has a `[pasted text …]` placeholder with no part behind it (its text was lost, e.g. a
+ * draft saved by an older version): such a draft is never sent or queued, or the model would get the bare token.
+ */
+export function draftHasLostPaste(draft: { text: string; parts: readonly { type: string; label?: string }[] } | null | undefined): boolean {
+  if (!draft) return false;
+  const known = draft.parts.flatMap((part) => (part.type === "paste" && typeof part.label === "string" ? [{ label: part.label }] : []));
+  return unresolvedPasteLabels(draft.text, known).length > 0;
+}
+
+export const LOST_PASTE_MESSAGE = "A pasted text or quote in this message is no longer available. Remove its chip and paste or quote it again.";
+
 export function splitPastedText(text: string) {
   const segments: PastedTextSegment[] = [];
   for (const part of text.split(/(\r?\n|\t)/)) {
