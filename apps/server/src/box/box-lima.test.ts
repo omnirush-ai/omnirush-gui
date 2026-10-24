@@ -263,6 +263,23 @@ describe("lima: limactl calls", () => {
     let ensured = 0;
     const res = await vmCall(runtime, ["true"], { run: async () => (++n === 1 ? fail("kex_exchange_identification: read: Connection reset by peer", 255) : ok("fine")), ensure: async () => { ensured += 1; return { ok: true }; } });
     expect({ code: res.code, n, ensured }).toEqual({ code: 0, n: 2, ensured: 1 });
+    // Listed as running, but its sshd resets every connection: stopped once (no box runs), started again, the call passes.
+    const home = tmp();
+    const vm = { status: "Running", sshDead: true, stops: 0 };
+    const dead: RunCommand = async (_bin, args) => {
+      if (args.includes("stop")) { vm.stops += 1; vm.status = "Stopped"; vm.sshDead = false; return ok(""); }
+      if (args[0] === "shell") return vm.sshDead || vm.status !== "Running" ? fail("kex_exchange_identification: read: Connection reset by peer", 255) : ok("in");
+      return fail("unexpected");
+    };
+    const lock = async () => () => {};
+    const startIt = async () => { vm.status = "Running"; return { ok: true }; };
+    const healed = await vmCall({ ...runtime, home }, ["true"], { run: dead, ensure: startIt, sleep: async () => {}, lock });
+    expect({ code: healed.code, stops: vm.stops }).toEqual({ code: 0, stops: 1 });
+    // Never while another app's box holds a lease: the error stays (the box keeps running).
+    Object.assign(vm, { sshDead: true, stops: 0 });
+    takeLease(home, "other-box", { pid: process.ppid, client: "cli" });
+    const kept = await vmCall({ ...runtime, home }, ["true"], { run: dead, ensure: startIt, sleep: async () => {}, lock });
+    expect({ code: kept.code, stops: vm.stops }).toEqual({ code: 255, stops: 0 });
     expect(limaError(fail('time="2026" level=fatal msg="failed to start: \\"vz\\" requires macOS 13"'))).toBe('failed to start: "vz" requires macOS 13');
     const gone = await vmRow(runtime, { run: async () => fail('level=warning msg="No instance matching omnirush-box found."\nlevel=fatal msg="unmatched instances"') });
     expect({ row: gone.row, missing: gone.missing }).toEqual({ row: null, missing: true });

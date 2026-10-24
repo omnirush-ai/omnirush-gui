@@ -535,21 +535,47 @@ type Ensure = (() => Promise<{ ok: boolean }>) | null;
 /**
  * Run a command in the VM as root. After a failure that says the VM is away
  * (sleep, a stopped VM, a dead ssh master), the VM is started and the command
- * tried once more.
+ * tried again; a VM listed as running whose ssh still refuses is restarted once.
  */
-export async function vmCall(runtime: LimaRuntime, argv: string[], { run = runCommand, env = process.env, timeoutMs = 60_000, input, ensure = null, sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)), tries = 3, onLine }: { run?: RunCommand; env?: Env; timeoutMs?: number; input?: string; ensure?: Ensure; sleep?: (ms: number) => Promise<void>; tries?: number; onLine?: OnLine } = {}): Promise<RunResult> {
+export async function vmCall(runtime: LimaRuntime, argv: string[], { run = runCommand, env = process.env, timeoutMs = 60_000, input, ensure = null, sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)), tries = 4, onLine, lock = lockVm }: { run?: RunCommand; env?: Env; timeoutMs?: number; input?: string; ensure?: Ensure; sleep?: (ms: number) => Promise<void>; tries?: number; onLine?: OnLine; lock?: typeof lockVm } = {}): Promise<RunResult> {
   const call = () => run(runtime.bin, inVm(runtime, argv), { env: limaEnv(runtime.home, env), timeoutMs, ...(input !== undefined ? { input } : {}), ...(onLine ? { onLine } : {}) });
   let res = await call();
   if (res.code === 0 || !vmAway(res) || !ensure) return res;
-  const started = await ensure();
-  if (!started?.ok) return res;
-  // A VM that is up but whose sshd drops the first connections (just woken, many at once): a few more tries.
-  for (let attempt = 1; attempt <= tries; attempt += 1) {
-    res = await call();
-    if (res.code === 0 || !vmAway(res) || attempt === tries) return res;
-    await sleep(1_000 * attempt);
+  const again = async (): Promise<RunResult> => {
+    const started = await ensure();
+    if (!started?.ok) return res;
+    // A VM that is up but whose sshd drops the first connections (just woken, many at once): a few more tries.
+    for (let attempt = 1; attempt <= tries; attempt += 1) {
+      res = await call();
+      if (res.code === 0 || !vmAway(res) || attempt === tries) return res;
+      await sleep(1_000 * attempt);
+    }
+    return res;
+  };
+  res = await again();
+  // Listed as running but its ssh still refuses (sshd gone after a sleep, an idle stop half done): restart it once.
+  if (res.code === 0 || !vmAway(res) || res.error === "timeout") return res;
+  if (!(await restartVm(runtime, { run, env, lock })).ok) return res;
+  return again();
+}
+
+/**
+ * Stop a VM whose ssh does not answer, under the owner lock, so the next
+ * ensure starts it again; never while a box runs in it.
+ */
+export async function restartVm(runtime: LimaRuntime, { run = runCommand, env = process.env, lock = lockVm, pidAlive = alive }: { run?: RunCommand; env?: Env; lock?: typeof lockVm; pidAlive?: PidAlive } = {}): Promise<{ ok: boolean }> {
+  // Running boxes (another app's, this one's) keep running without ssh (ports go through Lima's agent): never taken down for this.
+  if (liveLeases(runtime.home, { pidAlive, except: process.pid }).length || [...keepers.values()].some((k) => k.child && k.child.exitCode === null)) return { ok: false };
+  const release = await lock(runtime.home, { what: "restart" });
+  if (!release) return { ok: false };
+  try {
+    const check = await run(runtime.bin, inVm(runtime, ["true"]), { env: limaEnv(runtime.home, env), timeoutMs: 30_000 });
+    // ssh answers again (another app restarted it, or the failure was the command's own): nothing to do.
+    if (check.code === 0) return { ok: false };
+    return stopVm(runtime, { run, env });
+  } finally {
+    release();
   }
-  return res;
 }
 
 /** Start the VM (made before). */
