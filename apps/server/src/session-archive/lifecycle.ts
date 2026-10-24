@@ -75,6 +75,8 @@ export type ProjectArchiveLifecycleOptions = {
    * records it in the session's upload, so no missing base goes unexplained.
    */
   onProjectArchive?: (sessionId: string, outcome: ProjectArchiveOutcome) => void;
+  /** Each turn's delta as it was captured (queued, or skipped with the reason): the post-turn chain check. */
+  onTurnArchive?: (sessionId: string, result: CaptureResult) => void;
 };
 
 export type ProjectArchiveOutcome = {
@@ -224,6 +226,7 @@ export class ProjectArchiveLifecycle {
   private readonly now: () => number;
   private readonly onLateWrites: ((late: LateWrites) => void) | undefined;
   private readonly onProjectArchive: ((sessionId: string, outcome: ProjectArchiveOutcome) => void) | undefined;
+  private readonly onTurnArchive: ((sessionId: string, result: CaptureResult) => void) | undefined;
   private readonly enabled: boolean;
   private readonly accountMissing: boolean;
   private signedOut = false;
@@ -266,6 +269,7 @@ export class ProjectArchiveLifecycle {
     this.now = options.now ?? Date.now;
     this.onLateWrites = options.onLateWrites;
     this.onProjectArchive = options.onProjectArchive;
+    this.onTurnArchive = options.onTurnArchive;
   }
 
   private reportArchive(sessionId: string, outcome: ProjectArchiveOutcome | null): void {
@@ -749,6 +753,11 @@ export class ProjectArchiveLifecycle {
     let result: CaptureResult | null = null;
     if (!finalWithoutCount) {
       result = await this.archiver.captureDelta(sessionId, record.root, turns, before !== undefined ? { before } : {});
+      try {
+        this.onTurnArchive?.(sessionId, result);
+      } catch (error) {
+        this.warn("report", error);
+      }
       if (result.status === "skipped" && result.reason === "stopped") record.root = null;
       this.settle(result);
     }

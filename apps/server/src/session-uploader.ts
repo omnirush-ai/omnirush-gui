@@ -4888,6 +4888,30 @@ export class SessionUploader {
     this.permissionModeNow = mode;
   }
 
+  /**
+   * Post-turn check of an upload (context/capture-gaps.ts): an envelope that
+   * went to the spool or was refused is a gap until it is delivered. The same
+   * names as the CLI's (workspace-sync.ts envelopeGap).
+   */
+  private envelopeGap(sessionId: string, type: string, sequence: number, outcome: "sent" | "spooled" | "refused", reason?: string): void {
+    const what = `upload.${type}.${sequence}`;
+    const context = this.contextOf(sessionId);
+    if (outcome === "sent") context?.resolveGap(sessionId, what);
+    else context?.noteGap(sessionId, { what, why: outcome, recovery: outcome === "spooled" ? "spool_retry" : null, detail: reason ?? null });
+  }
+
+  /**
+   * Post-turn check of the project archive chain (lifecycle onTurnArchive):
+   * a turn's delta that could not join the chain is a gap until one does.
+   */
+  archiveTurnChecked(sessionId: string, result: { status: string; reason?: string; detail?: string }): void {
+    const context = this.contextOf(sessionId);
+    if (result.status === "queued") context?.resolveGap(sessionId, "archive.chain");
+    else if (result.status === "skipped" && ["stopped", "failed", "unavailable", "no_base"].includes(result.reason ?? "")) {
+      context?.noteGap(sessionId, { what: "archive.chain", why: result.reason!, recovery: result.reason === "stopped" ? "chain_reopen_next_prompt" : "next_turn", detail: result.detail ?? null });
+    }
+  }
+
   /** Capture context wired to this uploader: its trace, its scrub, the project archive and the archive's exclusions. */
   /** The capture context a chat's events go to (a box chat's own, else this machine's). */
   contextOf(sessionId: string): ContextCapture | null {
@@ -6087,6 +6111,8 @@ export class SessionUploader {
       state.turnWrittenPaths.clear();
       // After the turn's artifact baseline (set just below) is listed.
       this.contextOf(sessionId)?.turnStarted(sessionId, Promise.resolve().then(() => state.artifactBaseline));
+      // Preflight: uploads of earlier turns still waiting go out now, before this turn adds more.
+      if ((this.contextOf(sessionId)?.gaps.openCount(sessionId, "upload.") ?? 0) > 0) void this.drainSpool().catch(() => undefined);
     } else {
       this.contextOf(sessionId)?.turnEnded(sessionId);
     }
@@ -7285,6 +7311,7 @@ export class SessionUploader {
         state.failureCount += 1;
         state.lastFailureAt = new Date().toISOString();
         await this.persistSession(state).catch(() => undefined);
+        this.envelopeGap(state.id, snapshotType, sequence, "spooled");
         this.log("warn", "OmniRush session upload artifact spooled for retry", {
           sessionId: state.id,
           snapshotType,
@@ -7322,6 +7349,7 @@ export class SessionUploader {
         if ((!outcome.retryable || !this.spoolDir) && !account.aborted) {
           // Refused for good: the gap the server will show at this sequence is explained.
           if (!outcome.retryable) state.refused = [...state.refused, `${state.segment}:${sequence}`].slice(-MAX_REFUSED_SEQUENCES);
+          this.envelopeGap(state.id, snapshotType, sequence, "refused", outcome.reason);
           await this.recordLedgerOutcome(state.id, "failure").catch(() => undefined);
           throw new Error(outcome.reason);
         }
@@ -7329,6 +7357,7 @@ export class SessionUploader {
       }
       state.sentBytes += bytes;
       state.lastSuccessAt = new Date().toISOString();
+      this.envelopeGap(state.id, snapshotType, sequence, "sent");
       // The sequence is already on disk; this only records the outcome (stop() waits for it).
       void this.persistSession(state).catch((error: unknown) => {
         this.log("warn", "OmniRush session ledger update failed", {
@@ -8090,6 +8119,7 @@ export class SessionUploader {
       if (outcome.ok) {
         this.ownSpoolEntries.delete(entry.id);
         await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
+        this.envelopeGap(entry.session_id, entry.snapshot_type, entry.sequence, "sent");
         await this.recordLedgerOutcome(entry.session_id, "success").catch(() => undefined);
         this.retryFailures = 0;
         delivered += 1;
@@ -8109,6 +8139,7 @@ export class SessionUploader {
       if (!outcome.retryable) {
         await this.spoolLocked(() => this.removeSpoolEntry(entry.id));
         pending -= 1;
+        this.envelopeGap(entry.session_id, entry.snapshot_type, entry.sequence, "refused", outcome.reason);
         this.log("warn", "OmniRush session upload artifact dropped from spool", {
           sessionId: entry.session_id,
           snapshotType: entry.snapshot_type,
