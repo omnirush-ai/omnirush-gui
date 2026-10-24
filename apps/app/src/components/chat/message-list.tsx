@@ -10,6 +10,7 @@ import {
   CirclePause,
   Copy,
   Download,
+  FileDiff,
   FileIcon,
   FolderOpen,
   LoaderCircle,
@@ -136,7 +137,7 @@ import { DevProfiler } from "@/react-app/shell/dev-profiler"
 import { groupMessages, isMessageGroup, getLastTextPart, getAggregateOnlyParts, getAssistantRenderGroups, getFileTitle, getMediaBadge, getMessageCompleted, getMessageCreated, formatMessageTimestamp, splitTurnAtAnswer, type UIMessageWithIndex, getMessagesText, getSafeFileDownloadUrl, getSafeFileRevealPath } from "./utils"
 import type { AnyToolPart } from "@/lib/tool-aggregate"
 import { commandTemplateLabel, reviewForTurn } from "@/react-app/domains/session/commands/review-message"
-import { useSessionCommandBridge } from "@/react-app/domains/session/commands/session-commands-store"
+import { useSessionCommandBridge, useSessionCommandsStore } from "@/react-app/domains/session/commands/session-commands-store"
 import { ReviewFixBar } from "@/react-app/domains/session/commands/review-fix-bar"
 import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/connector-tool-identity"
 
@@ -1259,6 +1260,16 @@ interface AssistantMessageGroupProps {
   isStreaming: boolean
   /** The text of the user message this group answers (a review turn offers "Fix these"). */
   turnUserText?: string
+  /** The id of that user message (the turn the "Changes in this turn" button opens). */
+  turnUserId?: string
+}
+
+const FILE_CHANGING_TOOLS = new Set(["edit", "write", "apply_patch", "multiedit", "bash"])
+
+/** The turn ran a tool that changes files (the engine records its diff per turn). */
+function changesFiles(items: UIMessageWithIndex[]): boolean {
+  return items.some((item) => item.message.parts.some((part) =>
+    part.type === "dynamic-tool" && FILE_CHANGING_TOOLS.has(part.toolName)))
 }
 
 function collectMcpAppParts(items: UIMessageWithIndex[]): DynamicToolUIPart[] {
@@ -1283,6 +1294,7 @@ function MessageGroup({
   isLastGroup,
   isStreaming,
   turnUserText,
+  turnUserId,
 }: AssistantMessageGroupProps) {
   const { onRevertToUserMessage, onForkAtMessage, showThinking, onRunCommand, sessionId } = useMessageList()
   const commandBridge = useSessionCommandBridge(sessionId)
@@ -1482,6 +1494,19 @@ function MessageGroup({
                     <Undo2 />
                   </Button>
                 </MessageAction>
+                {turnUserId && sessionId && changesFiles(items) ? (
+                  <MessageAction tooltip="Changes in this turn">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Changes in this turn"
+                      data-testid="turn-changes"
+                      onClick={() => useSessionCommandsStore.getState().openChanges(sessionId, turnUserId)}
+                    >
+                      <FileDiff />
+                    </Button>
+                  </MessageAction>
+                ) : null}
               </>
             ) : null}
           </MessageActions>
@@ -1501,6 +1526,7 @@ function sameMessageGroupProps(left: AssistantMessageGroupProps, right: Assistan
   return left.isLastGroup === right.isLastGroup
     && left.isStreaming === right.isStreaming
     && left.turnUserText === right.turnUserText
+    && left.turnUserId === right.turnUserId
     && left.items.length === right.items.length
     && left.items.every((item, index) => (
       item.index === right.items[index]?.index
@@ -1509,6 +1535,14 @@ function sameMessageGroupProps(left: AssistantMessageGroupProps, right: Assistan
 }
 
 const MemoizedMessageGroup = React.memo(MessageGroup, sameMessageGroupProps)
+
+/** The id of the newest user message before `index`. */
+function precedingUserId(messages: UIMessage[], index: number): string | undefined {
+  for (let at = index - 1; at >= 0; at -= 1) {
+    if (messages[at]?.role === "user") return messages[at]?.id
+  }
+  return undefined
+}
 
 /** The text of the newest user message before `index` (the prompt an assistant group answers). */
 function precedingUserText(messages: UIMessage[], index: number): string | undefined {
@@ -1663,6 +1697,7 @@ export function MessageList({ messages, status, activityStatus, retryStatus, syn
               isLastGroup={item.messages.at(-1)?.index === messages.length - 1}
               isStreaming={isStreaming && item.messages.at(-1)?.index === messages.length - 1}
               turnUserText={precedingUserText(messages, item.messages[0]?.index ?? 0)}
+              turnUserId={precedingUserId(messages, item.messages[0]?.index ?? 0)}
             />
           )
         }

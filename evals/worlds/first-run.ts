@@ -327,6 +327,22 @@ export async function artifactCodeBrowserWorld(seed: Seed) {
   if (!isRecord(tabs) || tabs.ok !== true) throw new Error(`Could not seed artifact tabs: ${JSON.stringify(tabs)}`);
   return {
     ...base,
+    async openCodeTarget() {
+      await seed.evalIn(base.app, () => {
+        window.dispatchEvent(new CustomEvent("omnirush-open-accessible-target", { detail: {
+          id: "file:src/omnirush-artifact-proof.ts", kind: "file", value: "src/omnirush-artifact-proof.ts",
+          name: "omnirush-artifact-proof.ts", preview: "code", confidence: 100, reason: "tool output",
+        } }));
+      });
+    },
+    async fileOpenSurface() {
+      return seed.evalIn(base.app, () => ({
+        ide: Boolean(document.querySelector('[data-layout="ide"]')),
+        editorFile: Boolean(document.querySelector('[data-editor-tab="file:src/omnirush-artifact-proof.ts"][aria-selected="true"]')),
+        artifactVisible: [...document.querySelectorAll<HTMLElement>("[data-artifact-code-view]")]
+          .some((node) => node.getBoundingClientRect().height > 0),
+      }));
+    },
     async visibleArtifactCode() {
       return seed.evalIn(base.app, () => {
         const root = document.querySelector<HTMLElement>("[data-artifact-code-view]");

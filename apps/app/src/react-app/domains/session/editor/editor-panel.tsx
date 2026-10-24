@@ -134,6 +134,7 @@ async function loadAgentChanges(input: {
 }): Promise<ReviewData> {
   const { opencodeClient, sessionId, directory, scope, docs } = input;
   const messagesResult = await opencodeClient.session.messages({ sessionID: sessionId, directory });
+  if (messagesResult.error) throw new Error("Could not load this chat's changes. Try Refresh changes.");
   const messages = (messagesResult.data ?? []) as Array<{ info: { id: string; role: string } }>;
   const userIds = messages.filter((message) => message.info.role === "user").map((message) => message.info.id);
   const root = input.workspaceRoot.replace(/[/\\]+$/, "").replace(/\\/g, "/");
@@ -148,6 +149,7 @@ async function loadAgentChanges(input: {
   // Newest first until the scope is filled: the last turn that changed files, or every turn of the chat.
   for (const id of [...userIds].reverse().slice(0, MAX_REVIEW_TURNS)) {
     const result = await opencodeClient.session.diff({ sessionID: sessionId, messageID: id, directory });
+    if (result.error) throw new Error("Could not load this turn's file changes. Try Refresh changes.");
     const changes = ((result.data ?? []) as unknown[])
       .map(turnFileChange)
       .filter((change): change is TurnFileChange => change !== null)
@@ -605,7 +607,8 @@ export default function EditorPanel(props: EditorPanelProps) {
     queryKey: ["editor-changes", workspaceId, sessionId, reviewScope] as const,
     queryFn: () => loadAgentChanges({ opencodeClient: opencodeClient!, sessionId: sessionId!, directory: workspaceRoot, scope: reviewScope, docs, workspaceRoot }),
     enabled: Boolean(opencodeClient && sessionId && !sessionBusy),
-    staleTime: Infinity,
+    // Edits can finish while IDE mode is closed; that mount never observes the busy-to-idle transition.
+    staleTime: 0,
     refetchOnWindowFocus: false,
   });
   const review = changesQuery.data;

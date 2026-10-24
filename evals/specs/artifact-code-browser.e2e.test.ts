@@ -55,4 +55,26 @@ test("artifact editor renders code with Pierre and browses workspace files", asy
       "No error dialog, blank artifact surface, or crash message is visible",
     ]);
   });
+
+  await step("A resolved code target opens in the IDE editor and still previews in Chat layout", async () => {
+    await user.click("IDE");
+    await user.see("Editor views");
+    await world.openCodeTarget();
+    const ide = await eventually(() => world.fileOpenSurface(), {
+      within: 30_000,
+      until: (value) => value.ide && value.editorFile && !value.artifactVisible,
+    });
+    expect(ide).toEqual({ ide: true, editorFile: true, artifactVisible: false });
+    evidence.recordAssertionEvidence("Code file targets use the active IDE editor instead of the artifact side panel", JSON.stringify(ide), true);
+
+    await user.click("Chat");
+    await world.openCodeTarget();
+    const chat = await eventually(() => world.fileOpenSurface(), {
+      within: 30_000,
+      until: (value) => !value.ide && value.artifactVisible,
+    });
+    expect(chat.ide).toBe(false);
+    expect(chat.artifactVisible).toBe(true);
+    evidence.recordAssertionEvidence("Chat layout retains its file preview", JSON.stringify(chat), true);
+  });
 });

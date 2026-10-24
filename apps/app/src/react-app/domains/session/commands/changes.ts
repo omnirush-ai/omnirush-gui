@@ -94,3 +94,35 @@ export function patchLineCount(patch: string): number {
   for (let at = patch.indexOf("\n"); at !== -1; at = patch.indexOf("\n", at + 1)) count += 1;
   return count;
 }
+
+/** One row of a side-by-side diff: the old line on the left, the new one on the right (either may be empty). */
+export type SplitRow =
+  | { kind: "hunk" | "meta"; text: string }
+  | { kind: "line"; left: PatchLine | null; right: PatchLine | null };
+
+/** Display lines as side-by-side rows: context on both sides, a run of removals paired with the additions after it. */
+export function splitRows(lines: readonly PatchLine[]): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let dels: PatchLine[] = [];
+  let adds: PatchLine[] = [];
+  const flush = () => {
+    for (let at = 0; at < Math.max(dels.length, adds.length); at += 1) {
+      rows.push({ kind: "line", left: dels[at] ?? null, right: adds[at] ?? null });
+    }
+    dels = [];
+    adds = [];
+  };
+  for (const line of lines) {
+    if (line.kind === "del") {
+      if (adds.length) flush();
+      dels.push(line);
+    } else if (line.kind === "add") {
+      adds.push(line);
+    } else {
+      flush();
+      rows.push(line.kind === "context" ? { kind: "line", left: line, right: line } : { kind: line.kind, text: line.text });
+    }
+  }
+  flush();
+  return rows;
+}

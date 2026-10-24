@@ -83,14 +83,14 @@ import {
 
 import { isElectronRuntime } from "../../../../app/utils";
 import { isCollectibleArtifactTarget, isLocalhostBrowserTarget, isOpenableFileTarget, type OpenTarget } from "../artifacts/open-target";
-import { resolveCollectibleOpenTarget } from "../artifacts/resolve-open-target";
+import { opensInIdeEditor, resolveCollectibleOpenTarget } from "../artifacts/resolve-open-target";
 import type { OpenTargetOptions } from "@/lib/target-provider";
 import { SidePanel } from "../panel/side-panel";
 import { getSidePanelSessionKey } from "../panel/side-panel-session";
 import { useCreateTab } from "../panel/use-side-panel-tabs";
 import { TerminalDock } from "../terminal/terminal-dock";
 import { LazyEditorPanel } from "../editor/editor-entry";
-import { DEFAULT_IDE_CHAT_WIDTH, useEditorStore, type LayoutMode } from "../editor/editor-store";
+import { DEFAULT_IDE_CHAT_WIDTH, tabId, useEditorStore, type EditorTab, type LayoutMode } from "../editor/editor-store";
 import { ChatPanelButton, ChatSwitcher, LayoutModeToggle, RailDestinations, shortcutLabel, WorkspaceSwitcher, type RailDestination } from "../editor/ide-chrome";
 import { useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
@@ -747,6 +747,18 @@ export function SessionPage(props: SessionPageProps) {
         return;
       }
 
+      if (ideMode && !options?.auto && runtime.runtimeWorkspaceId === props.runtimeWorkspaceId
+        && runtime.runtimeWorkspaceId && runtime.workspaceType !== "remote"
+        && opensInIdeEditor(fileTarget)) {
+        const path = fileTarget.value.replace(/\\/g, "/");
+        const editor = useEditorStore.getState();
+        const tab: EditorTab = { id: tabId({ kind: "file", path }), kind: "file", path };
+        if (editor.focusedGroup === 2 && editor.byWorkspace[runtime.runtimeWorkspaceId]?.group2) editor.openTab2(runtime.runtimeWorkspaceId, tab);
+        else editor.openTab(runtime.runtimeWorkspaceId, tab);
+        setCurrentSidePanel(null);
+        return;
+      }
+
       if (!isCollectibleArtifactTarget(fileTarget)) {
         if (isOpenableFileTarget(fileTarget)) {
           if (runtime.workspaceType === "remote" && runtime.client && runtime.runtimeWorkspaceId) {
@@ -793,7 +805,7 @@ export function SessionPage(props: SessionPageProps) {
     }
 
     openFileTarget(target);
-  }, [activePanelTab?.id, browserUrlForTarget, createBrowserTab, openOwnerSidePanel, openTab, props.selectedSessionId, setCurrentSidePanel]);
+  }, [activePanelTab?.id, browserUrlForTarget, createBrowserTab, ideMode, openOwnerSidePanel, openTab, props.runtimeWorkspaceId, props.selectedSessionId, setCurrentSidePanel]);
   const openTarget = useCallback((target: OpenTarget, options?: OpenTargetOptions, sourceSessionId?: string) => {
     openTargetForRuntime({
       client: props.omnirushServerClient,
