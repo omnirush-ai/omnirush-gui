@@ -933,6 +933,18 @@ export class SessionArchiver {
    * dropped for any other once the gate has run. Cheap: called for every
    * file event.
    */
+  /**
+   * A touched-files chain still waiting for its base: the base comes with the
+   * first capture that finds a touched file, so the lifecycle asks for one
+   * soon after the first touch instead of waiting for the turn to end.
+   */
+  async touchedBaseDue(sessionId: string): Promise<boolean> {
+    if (this.disabled || !SESSION_ID_PATTERN.test(sessionId) || this.stoppedSessions.has(sessionId)) return false;
+    await this.start();
+    const state = await this.loadSession(sessionId);
+    return state?.next_sequence === 0 && state.marker === TOUCHED_MARKER && !state.stopped;
+  }
+
   recordTouched(sessionId: string, path: string): void {
     if (this.disabled || !SESSION_ID_PATTERN.test(sessionId) || this.stoppedSessions.has(sessionId)) return;
     // An absolute path is a file outside the workspace (outside.ts), kept in its normal form.

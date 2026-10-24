@@ -61,7 +61,7 @@ export type ArchiveKind = "base" | "delta";
  */
 export type ArchiveTrigger = "turn" | "final" | "pre_tool";
 /** What prompted a final archive (manifest.json `reason`). */
-export type FinalReason = "idle" | "turn_incomplete" | "session_deleted" | "app_quit" | "app_start";
+export type FinalReason = "idle" | "turn_incomplete" | "session_deleted" | "app_quit" | "app_start" | "first_touch";
 /**
  * manifest.json `reason`: a final archive's, or "late_writes" on a pre_tool
  * state holding files written after the turn before ended (a background
