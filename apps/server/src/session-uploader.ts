@@ -5871,6 +5871,30 @@ export class SessionUploader {
     this.scheduleChange(state, "fs_change");
   }
 
+  /**
+   * A tracked session's capture policy once its ledger was read (its pin is
+   * final then), waiting at most `timeoutMs`; null while it is not settled or
+   * for a session this uploader does not track.
+   */
+  async settledPolicy(sessionId: string, timeoutMs = 3_000): Promise<RedactionPolicy | null> {
+    const state = this.sessions.get(sessionId);
+    if (!state) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); });
+    const ready = await Promise.race([state.ready.then(() => true, () => true), late]);
+    clearTimeout(timer);
+    return ready ? state.redactionPolicy : null;
+  }
+
+  /** The capture policy the server stored for the chat (its binding): the session's uploads keep it. */
+  pinPolicy(sessionId: string, policy: string): void {
+    if (policy !== CLIENT_RAW && policy !== CLIENT_V3 && policy !== "legacy") return;
+    const state = this.sessions.get(sessionId);
+    if (state) state.redactionPolicy = policy;
+    const record = this.ledger.sessions[sessionId];
+    if (record) record.redactionPolicy = policy;
+  }
+
   /** Whether the session uploader is currently tracking this session. */
   hasSession(sessionId: string): boolean {
     const state = this.sessions.get(sessionId);

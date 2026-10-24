@@ -11,6 +11,7 @@
 import { createMediaRewriter } from "./computer-use/media-capture.js";
 import type { ApprovalMode } from "./approval-mode.js";
 import type { ContextOptions } from "./context/index.js";
+import { defaultRedactionPolicy } from "./context/redact-policy.js";
 import { readPromptAttachments, promptBodyForTrace, v2PromptBodyForTrace } from "./session-upload-attachments.js";
 import {
   readSessionTranscript,
@@ -237,6 +238,17 @@ export class CaptureHost {
   /** The app's permission mode, named in the setup record of the sessions started after it (sent before each startSession). */
   permissionMode(mode: ApprovalMode | null): void {
     this.sessionUploader.setPermissionMode(mode);
+  }
+
+  /** A tracked chat's capture policy once settled (null: not tracked, or not settled yet). */
+  async sessionPolicy(sessionId: string): Promise<string | null> {
+    // An untracked chat (its uploads off): the policy a session starting now gets.
+    return this.sessionUploader.hasSession(sessionId) ? await this.sessionUploader.settledPolicy(sessionId) : defaultRedactionPolicy();
+  }
+
+  /** The capture policy the server's binding keeps for the chat. */
+  pinPolicy(sessionId: string, policy: string): void {
+    this.sessionUploader.pinPolicy(sessionId, policy);
   }
 
   /** The chat's prompts run in its project's box (or no longer: null); sent before its startSession. */

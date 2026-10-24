@@ -16,11 +16,13 @@ import { builtinOmniRushModelCatalog, omnirushModelWantsReasoningSummary } from 
 import { RejectedAttachments, isRejectedAttachmentError, type Attachment } from "./rejected-attachments.js";
 import { gatewayUrlAllowed, RELEASE_GATEWAY_ERROR } from "./release-guard.js";
 import { BOX_HEADER, MODEL_NOT_IN_MODE, notInModeMessage, projectMode } from "./model-modes/model-modes.mjs";
-import { MODE_NOT_BOUND, MODEL_NOT_BOUND, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED, sessionBinder, strictSessions } from "./model-modes/strict-sessions.mjs";
-import { redactionPolicy } from "./context/redact-policy.js";
+import { MODE_NOT_BOUND, MODEL_NOT_BOUND, SESSION_BIND_UNCONFIRMED, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED, sessionBinder, strictSessions, type StrictSessions } from "./model-modes/strict-sessions.mjs";
 
 /** A main chat's request on another model than the one it started on (one model per chat). */
 const SESSION_MODEL_FIXED = "session_model_fixed";
+/** The gateway's retryable strict-session refusal (503, Retry-After), and how often the same request is sent again. */
+const STRICT_UNAVAILABLE = "strict_session_unavailable";
+const STRICT_RETRIES = 3;
 /** A chat's title request (opencode-plugins/omnirush-title-recovery.ts marks it) and the chat's own model. */
 const TITLE_HEADER = "x-omnirush-title";
 const CHAT_MODEL_HEADER = "x-omnirush-chat-model";
@@ -94,7 +96,15 @@ type BrokerOptions = {
   /** Hears the gateway's mandatory-update signals (see GatewayUpdateSignal). */
   onUpdateSignal?: (signal: GatewayUpdateSignal) => void;
   /** A chat's box pin ({ box, revision }, box/service.ts chatPin): the revision a strict-session bind names. */
-  chatPin?: (sessionId: string) => { box: boolean; revision: string | null } | null;
+  chatPin?: (sessionId: string) => { box: boolean; revision: string | null; capturePolicy?: string } | null;
+  /** The capture policy the server's binding stored for a chat, when it is not the pinned one: its pin and uploads follow it. */
+  onCapturePolicy?: (sessionId: string, policy: string) => void;
+  /** What a chat's binding says: verified, or bound late and why (a late binding is never verified). */
+  onBinding?: (sessionId: string, binding: { verified: boolean; lateReason?: string }) => void;
+  /** The last strict_sessions answer per server, kept on disk: it stands while capabilities cannot be fetched. */
+  strictStateFile?: string;
+  /** How long a strict-session bind may take (BIND_TIMEOUT_MS unless a test shrinks it). */
+  bindTimeoutMs?: number;
   /**
    * The desktop app's version: every request to omnirush.ai then names it in
    * `X-OmniRush-Client: gui/<version>`, so the backend knows an updated app
@@ -229,7 +239,7 @@ const GATEWAY_ERROR_COPY: Record<string, string> = {
   [SESSION_MODEL_USED]: "this chat already ran on another model. Start a new chat to use this one.",
 };
 /** Refusals whose own message is shown as it is (the server's or the broker's words). */
-const OWN_WORDS = new Set([UPDATE_REQUIRED_CODE, MODEL_NOT_IN_MODE, SESSION_MODEL_FIXED, MODEL_NOT_BOUND, MODE_NOT_BOUND, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED]);
+const OWN_WORDS = new Set([UPDATE_REQUIRED_CODE, MODEL_NOT_IN_MODE, SESSION_MODEL_FIXED, MODEL_NOT_BOUND, MODE_NOT_BOUND, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED, SESSION_BIND_UNCONFIRMED]);
 
 /** Readable copy for a gateway error code, or null for a code it does not know. */
 export function gatewayErrorMessage(code: string, detail?: string | null): string | null {
@@ -956,6 +966,10 @@ function upstreamUrl(gatewayUrl: string, path: string): string {
 }
 
 /** `<gateway root>/<path>`: the gateway URL with its trailing `/` and `/v1` stripped, as for every omnirush.ai API route. */
+function originOf(gatewayUrl: string): string {
+  try { return new URL(gatewayUrl).origin; } catch { return gatewayUrl; }
+}
+
 function apiUrl(gatewayUrl: string, path: string): string {
   const url = new URL(gatewayUrl);
   url.pathname = `${url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "")}/${path}`;
@@ -1277,14 +1291,11 @@ export class OmniRushGatewayBroker {
   private readonly onUpdateSignal?: (signal: GatewayUpdateSignal) => void;
   private readonly chatPin?: BrokerOptions["chatPin"];
   /** The strict sessions ({ path, header }) of the last capabilities answer (null: off, or an older server). */
-  private strictBind: { path: string; header: string } | null = null;
+  private strictBind: StrictSessions | null = null;
+  private readonly strictStateFile?: string;
+  private readonly onCapturePolicy?: BrokerOptions["onCapturePolicy"];
+  private readonly onBinding?: BrokerOptions["onBinding"];
   /** Strict sessions: each chat binds its model and mode once per process (model-modes/strict-sessions.mjs). */
-  private readonly bindSession = sessionBinder((path, payload, signal) => this.withDeviceBearer((state) => this.fetcher(new URL(path, state.gatewayUrl).toString(), {
-    method: "POST",
-    headers: { Authorization: `Bearer ${state.accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(payload),
-    signal,
-  })).then(async (response) => ({ status: response.status, body: await response.json().catch(() => null) })));
   private readonly reasoningSummaryFor: (model: string) => boolean | Promise<boolean>;
   private readonly clientHeader: string | null;
   private refreshInFlight: Promise<boolean> | null = null;
@@ -1299,6 +1310,16 @@ export class OmniRushGatewayBroker {
   private capabilityCache: { gatewayUrl: string; accountKey: string; capabilities: TraceCapabilities; expiresAt: number } | null = null;
   private capabilityProbe: { key: string; promise: Promise<TraceCapabilities | null> } | null = null;
   private capabilityFailure: { gatewayUrl: string; accountKey: string; until: number } | null = null;
+
+  private readonly bindSession: ReturnType<typeof sessionBinder>;
+  private makeBinder(timeoutMs?: number): ReturnType<typeof sessionBinder> {
+    return sessionBinder((path, payload, signal) => this.withDeviceBearer((state) => this.fetcher(new URL(path, state.gatewayUrl).toString(), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${state.accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  })).then(async (response) => ({ status: response.status, body: await response.json().catch(() => null) })), timeoutMs ? { timeoutMs } : {});
+  }
 
   constructor(options: BrokerOptions) {
     const gatewayUrl = options.credentials ? normalizedGatewayUrl(options.credentials.gatewayUrl) : null;
@@ -1337,6 +1358,11 @@ export class OmniRushGatewayBroker {
     this.modelInMode = options.modelInMode;
     this.onUpdateSignal = options.onUpdateSignal;
     this.chatPin = options.chatPin;
+    this.bindSession = this.makeBinder(options.bindTimeoutMs);
+    this.onCapturePolicy = options.onCapturePolicy;
+    this.onBinding = options.onBinding;
+    this.strictStateFile = options.strictStateFile;
+    if (this.state) this.strictBind = this.savedStrict()[originOf(this.state.gatewayUrl)] ?? null;
     this.reasoningSummaryFor = options.reasoningSummaryFor ?? defaultReasoningSummaryFor;
   }
 
@@ -1641,7 +1667,7 @@ export class OmniRushGatewayBroker {
     if (settledKey && this.state?.gatewayUrl === gatewayUrl) {
       this.capabilityFailure = null;
       this.capabilityCache = { gatewayUrl, accountKey: settledKey, capabilities, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
-      this.strictBind = strictSessions(capabilities);
+      this.rememberStrict(gatewayUrl, capabilities);
     }
     return capabilities;
   }
@@ -1987,7 +2013,7 @@ export class OmniRushGatewayBroker {
     if (fixed) return fixed;
     // The last capabilities answer's switch: a model request never waits for one.
     const strict = this.state ? this.strictBind : null;
-    const unbound = strict ? await this.strictBindRefusal(strict.path, request, path, body) : null;
+    const unbound = strict ? await this.strictBindRefusal(strict, request, path, body) : null;
     if (unbound) return unbound;
     const forwardedBody = path === "responses" && body !== undefined
       ? await withReasoningSummary(body, this.reasoningSummaryFor)
@@ -2000,7 +2026,8 @@ export class OmniRushGatewayBroker {
       }
       if (!this.state) break;
       try {
-        return await this.forward(request, path, forwardedBody, attempt === 0 ? accessToken : this.state.accessToken, requestId, strict?.header ?? null);
+        const response = await this.forward(request, path, forwardedBody, attempt === 0 ? accessToken : this.state.accessToken, requestId, strict?.header ?? null);
+        return await this.strictRetry(response, () => this.forward(request, path, forwardedBody, this.state?.accessToken, requestId, strict?.header ?? null), request.signal);
       } catch (error) {
         if (request.signal.aborted) throw error;
         failure = fetchFailure(error);
@@ -2104,7 +2131,7 @@ export class OmniRushGatewayBroker {
    * its main chat. A conflict or a verification refusal is answered here and
    * never sent; anything else goes on (model-modes/strict-sessions.mjs).
    */
-  private async strictBindRefusal(bindPath: string, request: Request, path: string, body: ArrayBuffer | string | undefined): Promise<Response | null> {
+  private async strictBindRefusal(strict: StrictSessions, request: Request, path: string, body: ArrayBuffer | string | undefined): Promise<Response | null> {
     const session = request.headers.get("x-omnirush-session-id");
     if (body === undefined || (path !== "responses" && path !== "responses/compact") || !session) return null;
     let parsed: unknown;
@@ -2118,20 +2145,80 @@ export class OmniRushGatewayBroker {
     const rootId = request.headers.get(PARENT_SESSION_HEADER);
     const rootModel = rootId ? this.sessionModels.get(rootId) : null;
     const rootPin = rootId ? this.chatPin?.(rootId) ?? null : null;
+    const ownPin = this.chatPin?.(session) ?? null;
+    // A sub-agent has no prompt of its own: it takes its main chat's capture policy, as the server does.
+    const capturePolicy = ownPin?.capturePolicy ?? rootPin?.capturePolicy ?? null;
     const outcome = await this.bindSession({
-      path: bindPath,
+      path: strict.path,
+      enforce: strict.mode === "enforce",
       sessionId: session,
       rootId,
       model: this.sessionModels.get(session) ?? model,
       mode: projectMode(this.boxRequest(request)),
-      revision: this.chatPin?.(session)?.revision ?? rootPin?.revision ?? null,
-      capturePolicy: redactionPolicy(),
-      root: rootId && rootModel ? { model: rootModel, mode: projectMode(rootPin?.box ?? this.boxSessions.has(rootId)), revision: rootPin?.revision ?? null } : null,
+      revision: ownPin?.revision ?? rootPin?.revision ?? null,
+      capturePolicy,
+      root: rootId && rootModel ? { model: rootModel, mode: projectMode(rootPin?.box ?? this.boxSessions.has(rootId)), revision: rootPin?.revision ?? null, capturePolicy: rootPin?.capturePolicy ?? null } : null,
     });
+    // The server keeps a chat's first capture policy: its pin and uploads follow the stored one.
+    const stored = "binding" in outcome ? outcome.binding?.capture_policy : undefined;
+    if (typeof stored === "string" && stored && stored !== capturePolicy) {
+      try { this.onCapturePolicy?.(session, stored); } catch { /* a listener never breaks the request */ }
+    }
+    if ("binding" in outcome && outcome.binding) {
+      const binding = outcome.binding;
+      const late = typeof binding.late_reason === "string" && binding.late_reason ? binding.late_reason : binding.bound_late === true ? "bound_late" : null;
+      try { this.onBinding?.(session, { verified: binding.verified === true && !late, ...(late ? { lateReason: late } : {}) }); } catch { /* a listener never breaks the request */ }
+    }
     if (!("refused" in outcome)) return null;
     this.log?.("info", "omnirush.ai refused this chat's binding; not sent", { code: outcome.refused.code });
-    const { code, message } = outcome.refused;
+    const { code, message, retry } = outcome.refused;
+    if (retry) return Response.json({ detail: code, error: { type: "server_error", code, message } }, { status: 503, headers: { "x-should-retry": "true" } });
     return Response.json({ detail: code, error: { type: "invalid_request_error", code, message } }, { status: code === VERIFICATION_REQUIRED ? 403 : 400, headers: { "x-should-retry": "false" } });
+  }
+
+  /**
+   * strict_session_unavailable (503 under enforce: the server could not look up or bind the chat): the same
+   * request again after its Retry-After, at most STRICT_RETRIES times, never on another model or unbound;
+   * the engine gets one answer, so the prompt stays one turn.
+   */
+  private async strictRetry(response: Response, again: () => Promise<Response>, signal: AbortSignal): Promise<Response> {
+    for (let attempt = 0; response.status === 503 && attempt < STRICT_RETRIES; attempt += 1) {
+      const text = await response.clone().text().catch(() => "");
+      if (!text.includes(`"${STRICT_UNAVAILABLE}"`)) break;
+      const after = response.headers.has("retry-after") ? Number(response.headers.get("retry-after")) : Number.NaN;
+      const wait = (Number.isFinite(after) && after >= 0 ? Math.min(after, 30) : 3) * 1000;
+      await response.body?.cancel().catch(() => undefined);
+      this.log?.("info", "omnirush.ai could not confirm this chat yet; the same request again", { attempt: attempt + 1, waitMs: wait });
+      await pause(wait, signal);
+      if (signal.aborted || !this.state) return response;
+      response = await again();
+    }
+    return response;
+  }
+
+  private savedStrict(): Record<string, StrictSessions | null> {
+    if (!this.strictStateFile) return {};
+    try {
+      const saved: unknown = JSON.parse(readFileSync(this.strictStateFile, "utf8"));
+      if (!isRecord(saved)) return {};
+      return Object.fromEntries(Object.entries(saved).map(([origin, value]) => [origin, isRecord(value) ? strictSessions({ strict_sessions: { ...value, bind: true } }) : null]));
+    } catch {
+      return {};
+    }
+  }
+
+  /** A capabilities answer's strict sessions: in force now, and kept on disk for this server. */
+  private rememberStrict(gatewayUrl: string, capabilities: TraceCapabilities): void {
+    this.strictBind = strictSessions(capabilities);
+    if (!this.strictStateFile) return;
+    try {
+      mkdirSync(dirname(this.strictStateFile), { recursive: true, mode: 0o700 });
+      const tmp = `${this.strictStateFile}.${randomUUID()}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ ...this.savedStrict(), [originOf(gatewayUrl)]: this.strictBind }), { mode: 0o600 });
+      renameSync(tmp, this.strictStateFile);
+    } catch {
+      // Kept in memory; the next answer writes again.
+    }
   }
 
   /** Whether a request comes from a box chat: marked so, or from a chat (or its main chat) marked earlier. */
@@ -2145,7 +2232,8 @@ export class OmniRushGatewayBroker {
       while (this.boxSessions.size > 1024) this.boxSessions.delete(this.boxSessions.values().next().value!);
       return true;
     }
-    return sessions.some((id) => this.boxSessions.has(id));
+    // The chat's durable pin (box/service.ts chatPin): a title, a compaction or a request after a restart is unmarked.
+    return sessions.some((id) => this.boxSessions.has(id) || this.chatPin?.(id)?.box === true);
   }
 
   private refresh(expectedAccessToken: string): Promise<boolean> {

@@ -44,6 +44,12 @@ import { layerSizes, pullProgress, type PullProgress } from "./pull-progress.js"
 import { detectRuntime, type BackendAlternative, type DetectOptions, type RuntimeInfo, type RuntimeResult } from "./runtime.js";
 
 /** What the capture side needs of a chat's box (plain data: it crosses to the capture worker). */
+/** A box chat after its project's box was turned off. */
+export const PINNED_BOX_NOTE = "This chat keeps running in the sandbox. New chats follow the new setting.";
+
+/** A chat's pin from its first prompt: where it runs, the local_box revision, the capture policy its uploads keep. */
+export type ChatPin = { box: boolean; revision: string | null; capturePolicy?: string; verified?: boolean; lateReason?: string };
+
 export type BoxCaptureInfo = {
   key: string;
   root: string;
@@ -68,7 +74,7 @@ export type BoxStatus = {
   /** The local_box policy revision new chats pin. */
   revision: string | null;
   /** This chat's pin (asked for one chat): where it runs and the revision it started under; null before its first prompt. */
-  chatPin: { box: boolean; revision: string | null } | null;
+  chatPin: ChatPin | null;
   /** The project's own choice (null: the server's default). */
   mode: ProjectBoxMode;
   serverDefault: ServerBoxDefault;
@@ -236,7 +242,7 @@ export class BoxService {
    * never moves: a box chat whose project's box is turned off is refused
    * (pinnedBoxGone), a chat that ran here stays here. Kept in chat-pins.json.
    */
-  private pins: Map<string, { box: boolean; revision: string | null }> | null = null;
+  private pins: Map<string, ChatPin> | null = null;
   /** Chats whose box.plan event went out in this run. */
   private readonly outcomeSent = new Set<string>();
   private readonly home: string;
@@ -408,6 +414,8 @@ export class BoxService {
    */
   async engineBits(): Promise<{ shell: string; plugin: string } | null> {
     let wanted = this.serverDefault() !== "off" || this.required().required || ["1", "on", "true"].includes(String(this.env.OMNIRUSH_BOX ?? "").trim().toLowerCase());
+    // A chat that started in the box keeps it after its project's box was turned off.
+    wanted ||= [...this.loadPins().values()].some((pin) => pin.box);
     for (const workspace of this.options.workspaces()) {
       if (wanted) break;
       if (workspace.workspaceType !== "local") continue;
@@ -426,7 +434,7 @@ export class BoxService {
    * The project's run when its box is on and can start (planned once, in
    * the background; a downloading image is looked at again later), else null.
    */
-  ensure(workspace: BoxWorkspace): Promise<BoxRun | null> {
+  ensure(workspace: BoxWorkspace, { keep = false }: { keep?: boolean } = {}): Promise<BoxRun | null> {
     if (workspace.workspaceType !== "local") return Promise.resolve(null);
     const root = boxRoot(workspace);
     const key = boxKey(root);
@@ -435,7 +443,8 @@ export class BoxService {
     if (project.planning) return project.planning;
     project.planning = (async () => {
       const { on, hostBuilds: gate } = await this.mode(workspace);
-      if (!on) {
+      // `keep`: a chat that started in the box stays there after its project's box was turned off.
+      if (!on && !keep) {
         if (gate?.native && project.notice !== gate.notice) this.log("info", "box: the server's default not applied, the folder has this computer's builds", { key, things: gate.things });
         this.dropRun(project);
         project.notice = gate?.native ? gate.notice : null;
@@ -669,6 +678,7 @@ export class BoxService {
       container,
       platform: this.platform,
       notice: on ? project?.notice ?? (runtime.ok ? null : `Sandbox off for now: ${runtime.reason}.`)
+        : chatPin?.box ? PINNED_BOX_NOTE
         : gate?.native ? gate.notice
         : hostOnly ? hostOnly.notice
         : lessRepro ? LESS_REPRO_NOTICE
@@ -845,7 +855,9 @@ export class BoxService {
       await this.writeProjects();
       this.log("info", "box: a chat that ran on this machine stays there", { sessionId, turnsBefore, required: true });
     }
-    const run = required && !this.nativeChats.has(sessionId) ? await this.waitForBox(workspace, signal) : await this.ensure(workspace).catch(() => null);
+    // One pin per chat: a chat that started in the box keeps it, whatever the project's setting says now.
+    const keep = this.chatPin(sessionId)?.box === true;
+    const run = required && !this.nativeChats.has(sessionId) ? await this.waitForBox(workspace, signal) : await this.ensure(workspace, { keep }).catch(() => null);
     // The send was stopped while it waited: no checkpoint and no pin, the caller does not dispatch it, and the
     // chat counts as not having run this turn (a retry waits for the box again).
     if (signal?.aborted) {
@@ -853,7 +865,7 @@ export class BoxService {
       return null;
     }
     if (!run || run.native) {
-      if (capture) await this.pin(sessionId, false);
+      await this.pin(sessionId, false);
       return null;
     }
     // A chat with turns but no checkpoint ran on this machine (reopened, or started in this run before the
@@ -866,7 +878,7 @@ export class BoxService {
       this.log("info", "box: a chat that ran on this machine stays there", { sessionId, turnsBefore });
     }
     if (this.nativeChats.has(sessionId) || !capture) {
-      if (capture) await this.pin(sessionId, false);
+      await this.pin(sessionId, false);
       return null;
     }
     this.boxedChats.add(sessionId);
@@ -942,7 +954,7 @@ export class BoxService {
     return join(this.options.stateDir, "chat-pins.json");
   }
 
-  private loadPins(): Map<string, { box: boolean; revision: string | null }> {
+  private loadPins(): Map<string, ChatPin> {
     if (this.pins) return this.pins;
     this.pins = new Map();
     try {
@@ -950,8 +962,14 @@ export class BoxService {
       if (value && typeof value === "object") {
         for (const [id, pin] of Object.entries(value)) {
           if (pin && typeof pin === "object" && typeof (pin as { box?: unknown }).box === "boolean") {
-            const revision = (pin as { revision?: unknown }).revision;
-            this.pins.set(id, { box: (pin as { box: boolean }).box, revision: typeof revision === "string" ? revision : null });
+            const { revision, capturePolicy, verified, lateReason } = pin as { revision?: unknown; capturePolicy?: unknown; verified?: unknown; lateReason?: unknown };
+            this.pins.set(id, {
+              box: (pin as { box: boolean }).box,
+              revision: typeof revision === "string" ? revision : null,
+              ...(typeof capturePolicy === "string" && capturePolicy ? { capturePolicy } : {}),
+              ...(typeof verified === "boolean" ? { verified } : {}),
+              ...(typeof lateReason === "string" && lateReason ? { lateReason } : {}),
+            });
           }
         }
       }
@@ -959,9 +977,23 @@ export class BoxService {
     return this.pins;
   }
 
-  /** A chat's pin ({ box, revision }), or null before its first prompt. */
-  chatPin(sessionId: string): { box: boolean; revision: string | null } | null {
+  /** A chat's pin ({ box, revision, capturePolicy? }), or null before its first prompt. Never evicted. */
+  chatPin(sessionId: string): ChatPin | null {
     return this.loadPins().get(sessionId) ?? null;
+  }
+
+  /** The capture policy a chat's uploads keep: set once at its first prompt, or to the one the server's binding stored. */
+  async setCapturePolicy(sessionId: string, policy: string): Promise<void> {
+    await this.updatePin(sessionId, { capturePolicy: policy });
+  }
+
+  /** What the server's binding says of a chat: whether it is verified, and why it was bound late (never verified then). */
+  async updatePin(sessionId: string, patch: Partial<Pick<ChatPin, "capturePolicy" | "verified" | "lateReason">>): Promise<void> {
+    const pins = this.loadPins();
+    const pin = pins.get(sessionId);
+    if (!pin || Object.entries(patch).every(([key, value]) => pin[key as keyof ChatPin] === value)) return;
+    pins.set(sessionId, { ...pin, ...patch });
+    await writeFileAtomic(this.pinFile(), `${JSON.stringify(Object.fromEntries(pins))}\n`).catch(() => undefined);
   }
 
   private async pin(sessionId: string, box: boolean): Promise<void> {
@@ -969,15 +1001,20 @@ export class BoxService {
     if (pins.has(sessionId)) return;
     const revision = serverLocalBox(this.options.stateDir)?.revision;
     pins.set(sessionId, { box, revision: typeof revision === "string" ? revision : null });
-    while (pins.size > 4000) pins.delete(pins.keys().next().value!);
     await writeFileAtomic(this.pinFile(), `${JSON.stringify(Object.fromEntries(pins))}\n`).catch(() => undefined);
   }
 
-  /** Whether a chat pinned to the box would run on this computer now (its project's box turned off): its prompt is refused. */
-  async pinnedBoxGone(sessionId: string, workspace: BoxWorkspace): Promise<boolean> {
-    if (workspace.workspaceType !== "local" || !this.chatPin(sessionId)?.box) return false;
-    const mode = await this.mode(workspace).catch(() => null);
-    return Boolean(mode && !mode.on);
+  /**
+   * Why a chat pinned to the box cannot run in it now (no backend, an image
+   * that cannot be had), or null: it keeps the box even when its project's
+   * box was turned off since, and is refused only when the box truly cannot run.
+   */
+  async pinnedBoxUnavailable(sessionId: string, workspace: BoxWorkspace): Promise<string | null> {
+    if (workspace.workspaceType !== "local" || !this.chatPin(sessionId)?.box) return null;
+    const run = await this.ensure(workspace, { keep: true }).catch(() => null);
+    if (run && !run.native) return null;
+    const project = this.projects.get(boxKey(boxRoot(workspace)));
+    return project?.waitingImage ? null : project?.notice ?? "the sandbox cannot start on this computer right now";
   }
 
   async planOutcome(sessionId: string, workspace: BoxWorkspace): Promise<BoxPlanOutcome | null> {
