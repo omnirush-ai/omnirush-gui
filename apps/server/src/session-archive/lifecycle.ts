@@ -182,6 +182,8 @@ type SessionRecord = {
   turns?: number;
   /** The touched-files base asked for after the first touched path: its timer, then true once it ran. */
   touchedBase?: ReturnType<typeof setTimeout> | true;
+  /** When the session first touched a path (kept while the start is unresolved; the base's delay counts from it). */
+  firstTouchedAt?: number;
   /** Capture v2: a prompt went out and this turn's first tool call has not been seen yet. */
   awaitingTool?: boolean;
   /** When the latest prompt, and the one before it, were dispatched. */
@@ -490,19 +492,29 @@ export class ProjectArchiveLifecycle {
     const record = this.sessions.get(sessionId);
     if (!this.active || this.consentOff || !record || (!record.root && !record.start)) return;
     this.archiver.recordTouched(sessionId, path);
-    // A touched-files base waited for the turn's end (hours on a long first turn, a day when the app quit first).
-    if (record.root && !record.touchedBase && this.archiver.touchedBaseDue) {
-      const timer = setTimeout(() => {
-        record.touchedBase = true;
-        this.schedule(sessionId, "final", async () => {
-          if (this.consentOff || this.sessions.get(sessionId) !== record || !record.root) return;
-          if (!(await this.archiver.touchedBaseDue?.(sessionId))) return;
-          this.settle(await this.archiver.captureFinal(sessionId, "first_touch"));
-        }, undefined, true);
-      }, this.touchedBaseDelayMs);
-      timer.unref?.();
-      record.touchedBase = timer;
-    }
+    record.firstTouchedAt ??= this.now();
+    this.armTouchedBase(sessionId, record);
+  }
+
+  /**
+   * A touched-files base waited for the turn's end (hours on a long first turn, a day when the app quit first):
+   * it is taken touchedBaseDelayMs after the first touched path, once the session's root is known.
+   */
+  private armTouchedBase(sessionId: string, record: SessionRecord): void {
+    if (!record.root || record.touchedBase || record.firstTouchedAt === undefined || !this.archiver.touchedBaseDue) return;
+    const live = () => this.active && !this.consentOff && this.sessions.get(sessionId) === record && Boolean(record.root);
+    const timer = setTimeout(() => {
+      record.touchedBase = true;
+      this.schedule(sessionId, "final", async () => {
+        if (!live()) return;
+        if (!(await this.archiver.touchedBaseDue?.(sessionId))) return;
+        // Stopped, deleted or consent withdrawn while asking.
+        if (!live()) return;
+        this.settle(await this.archiver.captureFinal(sessionId, "first_touch"));
+      }, undefined, true);
+    }, Math.max(0, this.touchedBaseDelayMs - (this.now() - record.firstTouchedAt)));
+    timer.unref?.();
+    record.touchedBase = timer;
   }
 
   /** Capture v2: a binary file the session uploader found in the session's workspace (workspace-relative). */
@@ -738,6 +750,8 @@ export class ProjectArchiveLifecycle {
     if (result.status === "skipped" && result.reason === "disabled") this.sessions.delete(sessionId);
     if (result.status === "skipped" && (result.reason === "not_archivable" || result.reason === "stopped")) record.root = null;
     this.settle(result);
+    // A path touched while the start was unresolved.
+    this.armTouchedBase(sessionId, record);
     return true;
   }
 

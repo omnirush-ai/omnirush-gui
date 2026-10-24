@@ -329,6 +329,52 @@ describe("ProjectArchiveLifecycle", () => {
     expect(archiver.finals()).toEqual(["final ses_touch_0003 first_touch"]);
   });
 
+  test("a path touched while the start is unresolved gets one base, timed from that touch", async () => {
+    const archiver = new FakeArchiver();
+    archiver.base = async () => skipped("unchanged");
+    archiver.baseDue = true;
+    archiver.final = async () => queued("base");
+    let clock = 1_000;
+    const { subject } = lifecycle(archiver, { touchedBaseDelayMs: 30, now: () => clock });
+    const root = await tempDir("root");
+    let release: () => void = () => {};
+    const slow = new Promise<void>((resolve) => { release = resolve; });
+    subject.sessionStarted({ sessionId: "ses_touch_0005", root, engine: engine({ session: async () => { await slow; return { id: "ses_touch_0005" }; } }).reader });
+    // Exactly one touch while the engine read is pending: no root yet.
+    subject.pathTouched("ses_touch_0005", "early.py");
+    // Resolution comes after the base delay has already passed since that touch.
+    clock += 30;
+    release();
+    await subject.settled();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await subject.settled();
+    expect(archiver.finals()).toEqual(["final ses_touch_0005 first_touch"]);
+  });
+
+  test("a stop or a deletion while the touched-files base is being asked for captures nothing late", async () => {
+    for (const end of ["stop", "deleted"] as const) {
+      const archiver = new FakeArchiver();
+      archiver.base = async () => skipped("unchanged");
+      archiver.final = async () => queued("base");
+      const sessionId = end === "stop" ? "ses_touch_0006" : "ses_touch_0007";
+      const { subject } = lifecycle(archiver, { touchedBaseDelayMs: 5 });
+      let answer: (due: boolean) => void = () => {};
+      let asked = false;
+      archiver.touchedBaseDue = () => { asked = true; return new Promise<boolean>((resolve) => { answer = resolve; }); };
+      const root = await tempDir("root");
+      subject.sessionStarted({ sessionId, root, engine: engine().reader });
+      await subject.settled();
+      subject.pathTouched(sessionId, "a.py");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(asked).toBe(true);
+      if (end === "stop") await subject.stop({ finals: false });
+      else subject.sessionEnded(sessionId);
+      answer(true);
+      await subject.settled();
+      expect(archiver.finals().filter((call) => call.endsWith("first_touch"))).toEqual([]);
+    }
+  });
+
   test("delta turn numbers come from the engine's completed turns, in order after the base", async () => {
     const archiver = new FakeArchiver();
     const { subject } = lifecycle(archiver);
