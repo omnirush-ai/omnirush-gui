@@ -15,5 +15,7 @@ describe("quote / reply", () => {
   test("the label is short and on one line", () => {
     expect(quoteLabel("short\ntext")).toBe("Quote: short text");
     expect(quoteLabel("x".repeat(100))).toBe(`Quote: ${"x".repeat(48)}…`);
+    expect(quoteLabel("## Project overview\nThe project has **one** entry point, `src/main.js`.")).toBe(`Quote: ${"Project overview The project has one entry point, src/main.js.".slice(0, 48).trimEnd()}…`);
+    expect(quoteLabel("> quoted\n- item [link](http://x)")).toBe("Quote: quoted item link");
   });
 });

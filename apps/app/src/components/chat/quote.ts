@@ -29,9 +29,17 @@ export function clipGraphemes(text: string, max: number): string {
   return graphemes.length > max ? `${graphemes.slice(0, max).join("").trimEnd()}…` : text
 }
 
-/** The chip label: `Quote: first words…` (sendToChat makes it unique among the draft's chips). */
+/** Markdown marks left out of a label (headings, emphasis, code ticks, quote markers, list bullets, link brackets). */
+function plainWords(text: string): string {
+  return text
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(\*\*|__|\*|_|~~|`+)/g, "")
+}
+
+/** The chip label: `Quote: first words…` as plain words (sendToChat makes it unique among the draft's chips). */
 export function quoteLabel(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim()
+  const flat = plainWords(text).replace(/\s+/g, " ").trim()
   return `Quote: ${clipGraphemes(flat, LABEL_WORDS)}`
 }
 
