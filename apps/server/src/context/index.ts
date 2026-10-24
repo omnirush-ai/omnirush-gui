@@ -60,6 +60,10 @@ import { collectShellAliases } from "./shell-aliases.js";
 import { systemPackages } from "./system-packages.js";
 import { runCommand, type Runner } from "./exec.js";
 import { arch as osArch, release as osRelease } from "node:os";
+import nodePath, { join } from "node:path";
+import { CAPTURE_GAPS_SCHEMA, CaptureGapLog } from "./capture-gaps.js";
+import { commandProgram, engineShell, EXEC_SCHEMA, shellArgv } from "./exec-witness.js";
+import { resolveCommand } from "../command-guard.js";
 
 export const CONTEXT_SCHEMA = 1;
 const SECTION_TIMEOUT_MS = 30_000;
@@ -77,7 +81,9 @@ export type ContextEventType =
   | "context.outside_file"
   | "context.install"
   | "context.env_turn"
-  | "context.outside_files";
+  | "context.outside_files"
+  | "context.exec"
+  | "context.capture_gaps";
 
 /** Whether capture context is on: OMNIRUSH_CAPTURE_CONTEXT=0 (or false/off/no) turns it off. */
 export function captureContextEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -225,6 +231,9 @@ export class ContextCapture {
   private readonly installReader: InstallLogReader | null;
   private installGate: InstallLogGate = INSTALL_LOG_OFF;
   private installDrainTimer: ReturnType<typeof setTimeout> | null = null;
+  /** What could not be captured, per session, on disk (capture-gaps.ts). */
+  readonly gaps: CaptureGapLog;
+  private gapsPruned = false;
 
   constructor(private readonly options: ContextOptions) {
     this.env = options.env ?? process.env;
@@ -233,6 +242,62 @@ export class ContextCapture {
     this.privacy = options.privacy ?? currentPrivacy();
     this.platform = options.platform ?? process.platform;
     this.installReader = this.enabled && options.installLog ? new InstallLogReader(options.installLog.raw) : null;
+    this.gaps = new CaptureGapLog(this.enabled && options.cacheDir ? join(options.cacheDir, "gaps") : null);
+  }
+
+  /** Something of the session could not be captured: kept on disk, sent with the session's next gap list. */
+  noteGap(sessionId: string, gap: { what: string; why: string; recovery?: string | null; detail?: string | null }): void {
+    if (!this.enabled) return;
+    void this.gaps.note(sessionId, { ...gap, turn: this.sessions.get(sessionId)?.turn ?? null });
+  }
+
+  /** A gap noted earlier is closed (the upload went through after all, the chain moved on). */
+  resolveGap(sessionId: string, what: string): void {
+    if (this.enabled) void this.gaps.resolve(sessionId, what);
+  }
+
+  /** The session's whole gap list (`restored`: read back at a start), when it has any. */
+  private sendGaps(state: SessionContext, restored: boolean): Promise<void> {
+    return this.gaps.take(state.id).then((gaps) => {
+      if (gaps.length > 0) this.emit(state.id, "context.capture_gaps", { schema: CAPTURE_GAPS_SCHEMA, turn: state.turn, restored, open: gaps.filter((gap) => !gap.resolved_at).length, gaps });
+    });
+  }
+
+  /** `context.exec` for a shell call the engine just started (exec-witness.ts). */
+  private emitExec(state: SessionContext, event: ToolEvent, at: number): void {
+    const command = typeof event.command === "string" ? event.command : null;
+    if (!command) return;
+    const boxed = this.boxOf(state) !== null;
+    const workdir = typeof event.workdir === "string" && event.workdir.trim() ? event.workdir.trim() : null;
+    const path = this.platform === "win32" ? nodePath.win32 : nodePath.posix;
+    const cwd = workdir ? (path.isAbsolute(workdir) ? workdir : path.resolve(state.root, workdir)) : state.root;
+    const pathEnv = this.platform === "win32" ? (this.env.Path ?? this.env.PATH) : this.env.PATH;
+    const which = (name: string) => resolveCommand(name, { platform: this.platform, pathEnv: pathEnv ?? "" });
+    const shell = boxed ? { path: "boxsh", name: "boxsh", how: "box" as const } : engineShell({ platform: this.platform, env: this.env, which });
+    const program = boxed ? null : commandProgram(command, this.platform, which);
+    const tilde = (text: string | null) => (text === null ? null : tildeText(text, this.privacy));
+    this.emit(state.id, "context.exec", {
+      schema: EXEC_SCHEMA,
+      turn: state.turn,
+      call: event.callId,
+      tool: event.tool,
+      at: new Date(at).toISOString(),
+      box: boxed,
+      shell: shell ? { path: tilde(shell.path), name: shell.name, how: shell.how } : null,
+      argv: shell ? shellArgv(shell, command, this.platform).map((arg, index) => (index === 0 ? tilde(arg) : arg)) : null,
+      cwd: tilde(cwd),
+      cwd_rel: relativeTo(state.root, cwd, this.platform),
+      program: program ? { word: program.word, path: tilde(program.path) } : null,
+      os: this.platform,
+      arch: osArch(),
+      os_version: (() => {
+        try {
+          return osRelease();
+        } catch {
+          return null;
+        }
+      })(),
+    });
   }
 
   /** The session's processes: the app's process tree, and processes working in the project or its outside folders. */
@@ -253,6 +318,7 @@ export class ContextCapture {
       this.options.record(sessionId, type, this.options.scrub.json(data));
     } catch (error) {
       this.options.log?.("warn", "capture context: event dropped", { type, error: error instanceof Error ? error.message : String(error) });
+      if (type !== "context.capture_gaps") this.noteGap(sessionId, { what: type, why: "dropped", detail: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -305,6 +371,12 @@ export class ContextCapture {
     }
     this.sessions.set(sessionId, state);
     this.refreshInstallGate(state);
+    // What an earlier run of this session could not capture goes out again (a crash, a restart, a resume).
+    this.track(state, this.sendGaps(state, true));
+    if (!this.gapsPruned) {
+      this.gapsPruned = true;
+      void this.gaps.prune();
+    }
     this.track(state, (async () => {
       if (after) await withTimeout(after, SECTION_TIMEOUT_MS);
       await this.collectSessionStart(state);
@@ -591,6 +663,7 @@ export class ContextCapture {
       timings[name] = Math.round(performance.now() - at);
       if ("value" in result) return result.value;
       errors[name] = "timeout" in result ? "timeout" : "failed";
+      this.noteGap(state.id, { what: `context.environment.${name}`, why: errors[name]! });
       return undefined;
     };
     const { privacy } = this;
@@ -735,6 +808,8 @@ export class ContextCapture {
       state.liveCalls.set(event.callId, { callId: event.callId, tool: event.tool, input: {}, status: "running", start: at, end: null, command, cwd: workdir ? workdir : state.root });
       state.observer?.boost();
       if (this.platform === "linux" && state.observer && command) state.socketsAtStart.set(event.callId, socketPairs().catch(() => new Map()));
+      // After the network observer's first sample: the PATH lookups never delay it.
+      this.emitExec(state, event, at);
       return;
     }
     if (!known) return;
@@ -797,6 +872,7 @@ export class ContextCapture {
     if (found && !found.ended) {
       this.installTurnEnded(found);
       this.outsideFilesTurnEnded(found);
+      if (this.gaps.pending(sessionId)) this.track(found, this.sendGaps(found, false));
     }
     runningTurns.delete(sessionId);
     const state = found;

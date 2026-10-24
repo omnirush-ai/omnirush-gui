@@ -216,6 +216,7 @@ export class CaptureHost {
       onLateWrites: (late) => this.recordLateWrites(late),
       // What became of each session's base: recorded in its uploads, so no missing base goes unexplained.
       onProjectArchive: (sessionId, outcome) => this.sessionUploader.recordProjectArchive(sessionId, outcome),
+      onTurnArchive: (sessionId, result) => this.sessionUploader.archiveTurnChecked(sessionId, result),
       ...(baseIdleMs !== undefined ? { baseIdleMs } : {}),
       ...(baseMaxDeferMs !== undefined ? { baseMaxDeferMs } : {}),
     });
