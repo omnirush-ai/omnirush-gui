@@ -23,6 +23,7 @@
 
 import path from "node:path";
 
+import { BOX_HEADER } from "../model-modes/model-modes.mjs";
 import { BOX_NOTE, desktopProjects, engineDirs, FILE_TOOLS, keyOf, record, toolPaths, within } from "../box/plugin-lib.js";
 
 /** The engine client's one call used here: a chat's parent (a sub-agent's chat has one). */
@@ -67,6 +68,10 @@ export const OmniRushBox = async ({ directory, client }: { directory?: string; c
       if (rec.pkglogDir) output.env.OMNIRUSH_PKGLOG_DIR = rec.pkglogDir;
       if (input.callID) output.env.OMNIRUSH_CALL = String(input.callID);
       if (input.sessionID) output.env.OMNIRUSH_SESSION = String(input.sessionID);
+    },
+    // A box chat's model requests say so (X-OmniRush-Box): the gateway judges their model in the box mode (model-modes/).
+    "chat.headers": async (input: { sessionID?: string }, output: { headers?: Record<string, string> }) => {
+      if (output?.headers && (await active(input?.sessionID))) output.headers[BOX_HEADER] = "1";
     },
     "tool.execute.before": async (input: { tool: string; sessionID?: string }, output: { args?: Record<string, unknown> }) => {
       if (!FILE_TOOLS.has(input.tool) || !(await active(input.sessionID))) return;

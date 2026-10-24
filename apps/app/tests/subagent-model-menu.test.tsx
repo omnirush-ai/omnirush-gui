@@ -25,10 +25,11 @@ if (typeof globalThis.window === "undefined" || typeof globalThis.document === "
 }
 Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
 
-const [{ SubagentModelMenu }, { createOmniRushServerClient, OmniRushServerError }, { Popover, PopoverContent, PopoverTrigger }] = await Promise.all([
+const [{ SubagentModelMenu }, { createOmniRushServerClient, OmniRushServerError }, { Popover, PopoverContent, PopoverTrigger }, { SubagentModelSettings }] = await Promise.all([
   import("../src/react-app/domains/session/surface/composer/subagent-model-menu"),
   import("../src/app/lib/omnirush-server"),
   import("../src/components/ui/popover"),
+  import("../src/react-app/domains/settings/subagent-model-settings"),
 ]);
 
 const codex = ["low", "high", "xhigh", "max"];
@@ -85,33 +86,30 @@ function trigger(): HTMLElement | null {
   return document.querySelector('[data-testid="subagent-model-trigger"]');
 }
 
-test("shows 'Sub-agents' by default and saves a picked model from the menu", async () => {
+test("one model per chat: the menu names the chat's model as the sub-agents' (not a choice) and saves only the effort", async () => {
   const { client, saved } = fakeClient({ model: null, effort: null });
-  await mount(<SubagentModelMenu client={client} />);
+  await mount(<SubagentModelMenu client={client} chatModel="gpt-6-sol" />);
   expect(trigger()?.textContent).toBe("Sub-agents");
   expect(trigger()?.getAttribute("aria-label")).toBe("Sub-agents: Same as main agent");
 
   await act(async () => { trigger()!.click(); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-  const sol = document.querySelector<HTMLElement>('[data-testid="subagent-model-gpt-6-sol"]');
-  expect(sol).not.toBeNull();
-  expect(document.querySelector('[data-testid="subagent-model-meta-muse-spark"]')?.textContent).toContain("Meta Muse");
-  await act(async () => { sol!.click(); });
+  expect(document.querySelector('[data-testid="subagent-model-pinned"]')?.textContent).toBe("Sub-agents use this chat's model (GPT 6 Sol)");
+  // No model to pick.
+  for (const id of ["gpt-6-astra", "gpt-6-sol", "meta-muse-spark"]) expect(document.querySelector(`[data-testid="subagent-model-${id}"]`)).toBeNull();
+  const high = document.querySelector<HTMLElement>('[data-testid="subagent-effort-high"]');
+  await act(async () => { high!.click(); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-  expect(saved).toEqual([{ model: "gpt-6-sol", effort: null }]);
-  expect(toasts).toEqual(["success:Sub-agents: GPT 6 Sol. Applies to new tasks."]);
-  expect(trigger()?.textContent).toBe("GPT 6 Sol");
+  expect(saved).toEqual([{ model: null, effort: "high" }]);
+  expect(toasts).toEqual(["success:Sub-agents: Chat's model · High. Applies to new tasks."]);
+  expect(trigger()?.textContent).toBe("Chat's model · High");
 });
 
-test("a picked model and effort show on the trigger; a model outside the catalog is flagged", async () => {
+test("a model saved before (older setting) never shows or applies: the chat's model does", async () => {
   const { client } = fakeClient({ model: "meta-muse-spark", effort: "xhigh" });
-  await mount(<SubagentModelMenu client={client} />);
-  expect(trigger()?.textContent).toBe("Meta Muse Spark · Xhigh");
-
-  const missing = fakeClient({ model: "muse-spark-1.3", effort: null });
-  await mount(<SubagentModelMenu client={missing.client} />);
-  const flagged = document.querySelectorAll('[data-testid="subagent-model-trigger"]')[1] as HTMLElement;
-  expect(flagged.getAttribute("title")).toContain("not available, sub-agents use the main model");
+  await mount(<SubagentModelMenu client={client} chatModel="gpt-6-astra" />);
+  expect(trigger()?.textContent).toBe("Chat's model · Xhigh");
+  expect(trigger()?.getAttribute("title")).toBe("Sub-agents: Chat's model · Xhigh. Sub-agents use this chat's model (GPT 6 Astra).");
 });
 
 test("hidden without an omnirush.ai account", async () => {
@@ -123,26 +121,26 @@ test("hidden without an omnirush.ai account", async () => {
 });
 
 test("a save the server could not write shows its message and keeps the previous setting", async () => {
-  const { client } = fakeClient({ model: "gpt-6-astra", effort: null });
+  const { client } = fakeClient({ model: null, effort: "low" });
   const attempts: OmniRushSubagentModelSetting[] = [];
   client.setSubagentModel = async (next: OmniRushSubagentModelSetting) => {
     attempts.push(next);
     throw new OmniRushServerError(500, "settings_write_failed", "The sub-agent setting could not be saved: EPERM", { code: "EPERM" });
   };
   await mount(<SubagentModelMenu client={client} />);
-  expect(trigger()?.textContent).toBe("GPT 6 Astra");
+  expect(trigger()?.textContent).toBe("Chat's model · Low");
 
   await act(async () => { trigger()!.click(); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-  await act(async () => { document.querySelector<HTMLElement>('[data-testid="subagent-model-gpt-6-sol"]')!.click(); });
+  await act(async () => { document.querySelector<HTMLElement>('[data-testid="subagent-effort-high"]')!.click(); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
 
-  expect(attempts).toEqual([{ model: "gpt-6-sol", effort: null }]);
+  expect(attempts).toEqual([{ model: null, effort: "high" }]);
   expect(toasts).toEqual(["error:The sub-agent setting could not be saved: EPERM"]);
-  // Not shown as saved: the trigger and the checked item stay on the previous model.
-  expect(trigger()?.textContent).toBe("GPT 6 Astra");
-  expect(document.querySelector('[data-testid="subagent-model-gpt-6-astra"]')?.getAttribute("aria-checked")).toBe("true");
-  expect(document.querySelector('[data-testid="subagent-model-gpt-6-sol"]')?.getAttribute("aria-checked")).toBe("false");
+  // Not shown as saved: the trigger and the checked item stay on the previous effort.
+  expect(trigger()?.textContent).toBe("Chat's model · Low");
+  expect(document.querySelector('[data-testid="subagent-effort-low"]')?.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector('[data-testid="subagent-effort-high"]')?.getAttribute("aria-checked")).toBe("false");
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("The sub-agent setting could not be saved: EPERM");
 });
 
@@ -197,15 +195,15 @@ test("in a narrow composer the chip is an icon that still names the setting, and
   // The label only shows once the composer container is wide enough; the
   // icon-only chip keeps the full summary for screen readers and the tooltip.
   const label = document.querySelector('[data-testid="subagent-model-label"]')!;
-  expect(label.textContent).toBe("Meta Muse Spark · Xhigh");
+  expect(label.textContent).toBe("Chat's model · Xhigh");
   expect(label.className.split(" ")).toEqual(expect.arrayContaining(["hidden", "truncate", "@min-[720px]/composer:inline"]));
-  expect(chip.getAttribute("aria-label")).toBe("Sub-agents: Meta Muse Spark · Xhigh");
-  expect(chip.getAttribute("title")).toBe("Sub-agents: Meta Muse Spark · Xhigh");
+  expect(chip.getAttribute("aria-label")).toBe("Sub-agents: Chat's model · Xhigh");
+  expect(chip.getAttribute("title")).toBe("Sub-agents: Chat's model · Xhigh. Sub-agents use this chat's model.");
   // It gives up its width before the model selector does, down to the icon.
   expect(chip.className.split(" ")).toEqual(expect.arrayContaining(["min-w-9", "shrink-[4]", "overflow-hidden"]));
 });
 
-test("the menu lists every model and stays inside the viewport, scrolling instead of running off the top", async () => {
+test("the menu stays inside the viewport, scrolling instead of running off the top", async () => {
   const { client } = fakeClient({ model: "meta-muse-spark", effort: "xhigh" });
   await mount(<SubagentModelMenu client={client} />);
   await act(async () => { trigger()!.click(); });
@@ -216,9 +214,7 @@ test("the menu lists every model and stays inside the viewport, scrolling instea
   expect(content.className).toContain("max-h-[min(560px,var(--available-height))]");
   expect(content.className).toContain("overflow-y-auto");
   expect(content.className).not.toContain("70vh");
-  for (const id of ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "meta-muse-spark", "muse-spark-1.1"]) {
-    expect(document.querySelector(`[data-testid="subagent-model-${id}"]`)).not.toBeNull();
-  }
+  expect(document.querySelector('[data-testid="subagent-model-pinned"]')).not.toBeNull();
 });
 
 test("Escape and an outside click close the menu; opening the model picker leaves only one menu open", async () => {
@@ -261,4 +257,13 @@ test("Escape and an outside click close the menu; opening the model picker leave
   expect(menu()).toBeNull();
   expect(document.querySelector('[data-testid="model-list"]')).not.toBeNull();
   expect(document.querySelectorAll('[data-slot="dropdown-menu-content"], [data-slot="popover-content"]').length).toBe(1);
+});
+
+test("Settings: the sub-agent model is each chat's own (no picker), with the one-model-per-chat note; the effort stays a setting", async () => {
+  const { client } = fakeClient({ model: "gpt-6-sol", effort: null });
+  const container = await mount(<SubagentModelSettings client={client} />);
+  expect(container.querySelector('[data-testid="settings-subagent-model"]')).toBeNull();
+  expect(container.querySelector('[data-testid="settings-subagent-model-pinned"]')?.textContent).toBe("Each chat's own model");
+  expect(container.textContent).toContain("One model per chat: sub-agents always run on their chat's model");
+  expect(container.querySelector('[data-testid="settings-subagent-effort"]')).not.toBeNull();
 });

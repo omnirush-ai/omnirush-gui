@@ -1412,7 +1412,7 @@ describe("OmniRush gateway broker session upload deadline", () => {
   });
 });
 
-describe("OmniRush gateway broker: sub-agent model fallback", () => {
+describe("OmniRush gateway broker: legacy unbound model fallback", () => {
   type Reply = (body: Record<string, unknown>) => Response;
   function fallbackBroker(reply: Reply, refused: (model: string) => boolean = () => false) {
     const calls: UpstreamCall[] = [];
@@ -1435,10 +1435,7 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
   const subagentHeaders = {
     "x-omnirush-subagent-fallback-model": "gpt-6-astra",
     "x-omnirush-subagent-fallback-effort": "max",
-    "x-omnirush-subagent-root": "ses_main",
-    "x-omnirush-session-id": "ses_child",
     "x-omnirush-task-id": "msg_1",
-    "x-parent-session-id": "ses_main",
   };
   const refuse = (status: number, code: string) => Response.json({ detail: code }, { status });
 
@@ -1459,13 +1456,12 @@ describe("OmniRush gateway broker: sub-agent model fallback", () => {
     // The private headers never leave the machine.
     for (const call of calls) {
       expect([...call.headers.keys()].filter((name) => name.startsWith("x-omnirush-subagent"))).toEqual([]);
-      expect(call.headers.get("x-omnirush-session-id")).toBe("ses_child");
-      // The main session goes upstream: the gateway files the request under it.
-      expect(call.headers.get("x-parent-session-id")).toBe("ses_main");
+      expect(call.headers.get("x-omnirush-session-id")).toBe(null);
+      expect(call.headers.get("x-parent-session-id")).toBe(null);
     }
     expect(events).toEqual([expect.objectContaining({
-      sessionId: "ses_child",
-      rootSessionId: "ses_main",
+      sessionId: null,
+      rootSessionId: null,
       messageId: "msg_1",
       requested: "meta-muse-spark",
       used: "gpt-6-astra",

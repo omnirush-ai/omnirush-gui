@@ -73,39 +73,20 @@ describe("sub-agent model routes", () => {
         ["gpt-6.1-sol", "GPT 6.1 Sol", "low,high,xhigh,max"],
         ["gpt-6-sol", "GPT 6 Sol", "low,high,xhigh,max"],
       ]);
-      // A missing preference names GPT-5.6 Sol; a catalog that does not list it keeps the main model and effort.
-      expect(await resolve({ sessionId: "ses_child", rootSessionId: "ses_main", inherited: main, main })).toMatchObject({
-        model: { providerID: "omnirush", modelID: "gpt-6-astra" },
-        variant: "max",
-        fallback: { requested: "gpt-5.6-sol", used: "gpt-6-astra", reason: "not_in_catalog" },
-      });
-      // GPT 6.1 Sol, from the catalog, is a sub-agent model like any other.
+      // One model per chat: a saved sub-agent model never applies (sub-agents run on their chat's model); only the effort does.
+      expect(await resolve({ sessionId: "ses_child", rootSessionId: "ses_main", inherited: main, main })).toEqual({});
       await fetch(`${base}/omnirush/subagent-model`, { method: "PUT", headers: client, body: JSON.stringify({ model: "gpt-6.1-sol", effort: "xhigh" }) });
-      expect(await resolve({ sessionId: "ses_child", rootSessionId: "ses_main", inherited: main, main })).toEqual({
-        model: { providerID: "omnirush", modelID: "gpt-6.1-sol" },
-        variant: "xhigh",
-        gatewayFallback: { model: "gpt-6-astra", effort: "xhigh" },
-      });
+      const pinned = await resolve({ sessionId: "ses_child", rootSessionId: "ses_main", inherited: main, main });
+      expect(pinned).toMatchObject({ model: { providerID: "omnirush", modelID: "gpt-6-astra" }, variant: "xhigh" });
+      expect(pinned.fallback).toBeUndefined();
+      // A model the task asked for does not apply either.
+      expect(await resolve({ sessionId: "ses_child2", rootSessionId: "ses_main", inherited: main, main, requested: { providerID: "omnirush", modelID: "gpt-6-sol" } })).toMatchObject({ model: { providerID: "omnirush", modelID: "gpt-6-astra" } });
 
       const bad = await fetch(`${base}/omnirush/subagent-model`, { method: "PUT", headers: client, body: JSON.stringify({ model: "gpt-6-sol", effort: "turbo" }) });
       expect(bad.status).toBe(400);
-      const put = await fetch(`${base}/omnirush/subagent-model`, { method: "PUT", headers: client, body: JSON.stringify({ model: "gpt-6-sol", effort: "high" }) });
-      expect(await put.json()).toEqual({ ok: true, setting: { model: "gpt-6-sol", effort: "high" } });
-      expect(await readSubagentModelSetting(config)).toEqual({ model: "gpt-6-sol", effort: "high" });
-
-      expect(await resolve({ sessionId: "ses_child", rootSessionId: "ses_main", inherited: main, main })).toEqual({
-        model: { providerID: "omnirush", modelID: "gpt-6-sol" },
-        variant: "high",
-        gatewayFallback: { model: "gpt-6-astra", effort: "high" },
-      });
-
-      // Meta Muse is not in this account's catalog: the sub-agent stays on the main model.
-      await fetch(`${base}/omnirush/subagent-model`, { method: "PUT", headers: client, body: JSON.stringify({ model: "meta-muse-spark", effort: null }) });
-      expect(await resolve({ sessionId: "ses_child", rootSessionId: "ses_main", inherited: main, main })).toMatchObject({
-        model: { providerID: "omnirush", modelID: "gpt-6-astra" },
-        variant: "max",
-        fallback: { requested: "meta-muse-spark", used: "gpt-6-astra", reason: "not_in_catalog" },
-      });
+      const put = await fetch(`${base}/omnirush/subagent-model`, { method: "PUT", headers: client, body: JSON.stringify({ model: "gpt-6-sol", effort: null }) });
+      expect(await put.json()).toEqual({ ok: true, setting: { model: "gpt-6-sol", effort: null } });
+      expect(await resolve({ sessionId: "ses_child", rootSessionId: "ses_main", inherited: main, main })).toEqual({});
 
       // Back to "same as main".
       await fetch(`${base}/omnirush/subagent-model`, { method: "PUT", headers: client, body: JSON.stringify({ model: null, effort: null }) });

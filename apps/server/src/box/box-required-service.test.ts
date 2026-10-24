@@ -150,6 +150,59 @@ describe("required sandbox: the desktop's projects", () => {
     expect(JSON.parse(await readFile(join(home, DESKTOP_PROJECTS_FILE), "utf8")).native_chats).toEqual(["ses_req_old1"]);
   });
 
+  test("a new chat on a model that runs only on this computer stays here, exempt from the required box (native_model)", async () => {
+    const stateDir = await temp("state");
+    const home = await temp("boxhome");
+    const root = await temp("project");
+    const workspace: BoxWorkspace = { id: "ws_nm", path: root, workspaceType: "local" };
+    rememberServerDefault(stateDir, { local_box: { default: "on", required: true } });
+    const boxes = service({ stateDir, workspaces: [workspace], env: { OMNIRUSH_BOX_HOME: home } });
+    const frozen: string[] = [];
+    boxes.ensure = async () => fakeRun(root, frozen);
+    expect(await boxes.beforePrompt("ses_kimi_new", workspace, { nativeModel: true })).toBeNull();
+    // A chat that already ran in the box keeps it (its model never changed).
+    await boxes.beforePrompt("ses_box_first", workspace);
+    await boxes.beforePrompt("ses_box_first", workspace, { nativeModel: true });
+    expect(frozen).toEqual(["ses_box_first turn-1", "ses_box_first turn-2"]);
+    expect(await boxes.planOutcome("ses_kimi_new", workspace)).toEqual({ native: true, source: "model", reason: "native_model", required: true, fallback: "native" });
+    expect(JSON.parse(await readFile(join(home, DESKTOP_PROJECTS_FILE), "utf8")).native_chats).toEqual(["ses_kimi_new"]);
+  });
+
+  test("offer level (backend #505): a chat pins where it started and its revision; a box chat is refused when its project's box goes off; a native chat stays native when it goes on", async () => {
+    const stateDir = await temp("state");
+    const home = await temp("boxhome");
+    const root = await temp("project");
+    const workspace: BoxWorkspace = { id: "ws_pin", path: root, workspaceType: "local" };
+    const LB = { default: "offer", model_start: { "gpt-6-astra": { start: "native", switchable: true }, "kimi-k3.1-pro": { start: "native", switchable: false } }, revision: "lb1:5050a1b2c3d4" };
+    rememberServerDefault(stateDir, { local_box: LB });
+    const settings: Settings = new Map();
+    const boxes = service({ stateDir, workspaces: [workspace], settings, env: { OMNIRUSH_BOX_HOME: home } });
+    const frozen: string[] = [];
+    boxes.ensure = async () => ((await boxes.status(workspace)).on ? fakeRun(root, frozen) : null);
+    // Offer: the project's box is off until the person turns it on.
+    expect(await boxes.beforePrompt("ses_native1", workspace)).toBeNull();
+    expect(boxes.chatPin("ses_native1")).toEqual({ box: false, revision: "lb1:5050a1b2c3d4" });
+    settings.set("ws_pin", { mode: "on", offered: true });
+    await boxes.beforePrompt("ses_box1", workspace);
+    expect(boxes.chatPin("ses_box1")).toEqual({ box: true, revision: "lb1:5050a1b2c3d4" });
+    // Turned on since: the native chat stays native (no checkpoint, kept_old_chat).
+    await boxes.beforePrompt("ses_native1", workspace, { turnsBefore: 1 });
+    expect(frozen).toEqual(["ses_box1 turn-1"]);
+    expect(await boxes.planOutcome("ses_native1", workspace)).toMatchObject({ native: true, reason: "kept_old_chat" });
+    // Turned off since: the box chat is refused, never moved here.
+    settings.set("ws_pin", { mode: "off", offered: true });
+    expect(await boxes.pinnedBoxGone("ses_box1", workspace)).toBe(true);
+    expect(await boxes.pinnedBoxGone("ses_native1", workspace)).toBe(false);
+    // The status names the server's starts, the revision and the chat's pin.
+    const status = await boxes.status(workspace, { sessionId: "ses_box1" });
+    expect(status.modelStart?.["kimi-k3.1-pro"]).toEqual({ start: "native", switchable: false });
+    expect(status.revision).toBe("lb1:5050a1b2c3d4");
+    expect(status.chatPin).toEqual({ box: true, revision: "lb1:5050a1b2c3d4" });
+    // A new service (app restart) reads the pins back.
+    const again = service({ stateDir, workspaces: [workspace], settings, env: { OMNIRUSH_BOX_HOME: home } });
+    expect(again.chatPin("ses_box1")?.box).toBe(true);
+  });
+
   test("the first prompt waits while the image downloads, then runs in the box", async () => {
     const stateDir = await temp("state");
     const root = await temp("project");

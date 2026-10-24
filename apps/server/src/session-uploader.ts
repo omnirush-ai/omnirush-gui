@@ -892,6 +892,8 @@ export type TraceCapabilities = {
   mcp?: Record<string, unknown>;
   /** The model provider lock (provider-lock.ts): the block as the server sent it; absent is locked. */
   providers?: Record<string, unknown>;
+  /** Strict sessions (model-modes/strict-sessions.mjs): the block as the server sent it; absent is no bind. */
+  strict_sessions?: Record<string, unknown>;
 };
 
 

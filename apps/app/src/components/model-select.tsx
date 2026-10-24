@@ -59,6 +59,7 @@ import {
   resolveOmniRushModelGroup,
 } from "@/app/utils";
 import { isSupportedModelProvider, providerCatalogRank } from "@/app/lib/provider-catalog";
+import { useModelModeFilter } from "@/react-app/domains/session/surface/model-modes";
 
 function getProviderDisplayName(providerId: string) {
   return providerId
@@ -260,7 +261,10 @@ export function ModelSelect({
   const denAuth = useDenAuth();
   const favorites = useModelCollectionsStore((state) => state.favorites);
   const recent = useModelCollectionsStore((state) => state.recent);
-  const catalogOptions = useModelOptions(open, fallbackOptions, denAuth.isSignedIn);
+  // Only the models the open project's mode allows (sandbox or not: model-modes.ts).
+  const modeAllows = useModelModeFilter((state) => state.allows);
+  const allOptions = useModelOptions(open, fallbackOptions, denAuth.isSignedIn);
+  const catalogOptions = React.useMemo(() => allOptions.filter((option) => modeAllows(option)), [allOptions, modeAllows]);
   const modelOptions = React.useMemo(
     () => dedupeModelOptions(
       overlaySelectedBehavior(

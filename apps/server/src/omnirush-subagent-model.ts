@@ -317,6 +317,16 @@ export function subagentSettingFor(
   return { model: requested.modelID, effort: parseSubagentEffort(requested.variant) ?? stored.effort };
 }
 
+/**
+ * One model per chat (model-modes/): a chat's model is fixed once its first
+ * prompt is sent, and its sub-agents only start after that, so they always
+ * run on it. Of the setting (or a model a task asked for) only the effort
+ * applies; null when nothing is left to apply.
+ */
+export function pinnedSubagentSetting(setting: SubagentModelSetting | null): SubagentModelSetting | null {
+  return setting?.effort ? { model: null, effort: setting.effort } : null;
+}
+
 /** A readable note for a sub-agent session that runs on the main model instead of the picked one. */
 export function subagentFallbackNote(fallback: NonNullable<SubagentModelResolution["fallback"]> | { requestedName: string; usedName: string; reason: string }): string {
   const why = fallback.reason === "not_in_catalog"

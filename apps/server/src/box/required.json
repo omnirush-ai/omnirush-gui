@@ -11,12 +11,13 @@
     "about": "What client.launch `box` says under required: {required: true, reason, fallback, capable}. In the box: capable true, no fallback. cannot_run: this machine can't run the box (no virtualization, setup not possible or not done yet, a box that failed to start): capable false, fallback native (counted in full). opted_out: it could, but the box was turned off (--no-sandbox / OMNIRUSH_BOX=0) or the setup declined: capable true, fallback = the server's required_fallback. kept: an old chat or a host-only project, on this machine as before: fallback native, capable not checked (absent). Any other reason on this machine reads as cannot_run.",
     "cannot_run": ["cannot_run", "box_failed", "setup_needed"],
     "opted_out": ["env_off", "setup_declined"],
-    "kept": ["kept_old_chat", "host_only"]
+    "kept": ["kept_old_chat", "host_only", "native_model"]
   },
   "reasons": {
     "required": "box",
     "kept_old_chat": "kept_old_chat",
     "host_only": "host_only",
+    "native_model": "native_model",
     "env_off": "env_off",
     "setup_needed": "setup_needed",
     "cannot_run": "cannot_run",
@@ -136,6 +137,7 @@
       "required_line": "This account runs new chats in the OmniRush sandbox, a Linux box set up for you, so sessions can be rebuilt.",
       "opt_out_refused": "The sandbox is required for new chats on this account; chats started before stay as they were.",
       "kept_old_chat": "This chat started on this machine before the sandbox was required, so it stays here.",
+      "native_model": "{model} runs on this machine, not in the sandbox, so this chat stays here.",
       "host_only": "This project only builds on {label} ({things}), so its chats run on {machine}.",
       "shadows": "In the sandbox, {dirs} are the sandbox's own Linux copies; your {label} copies are left as they are. Install dependencies inside as needed.",
       "setup_needed": "Setting up the sandbox ({step})…",

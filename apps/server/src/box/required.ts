@@ -16,7 +16,7 @@ import { HOST_BUILD_RULES, hostBuilds, hostRules } from "./host-builds.js";
 import rules from "./required.json" with { type: "json" };
 
 export type RequiredFallback = "native" | "native_uncounted";
-export type RequiredReason = "box" | "kept_old_chat" | "host_only" | "env_off" | "setup_needed" | "cannot_run" | "setup_declined";
+export type RequiredReason = "box" | "kept_old_chat" | "native_model" | "host_only" | "env_off" | "setup_needed" | "cannot_run" | "setup_declined";
 export type CannotRunWhy = keyof typeof rules.texts.why;
 type HostOnlyPattern = { name?: string; suffix?: string; contains: string };
 type HostOnlyRules = { dirs_suffix: string[]; files: string[]; file_patterns: HostOnlyPattern[] };

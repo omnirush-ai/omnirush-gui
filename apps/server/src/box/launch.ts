@@ -89,10 +89,20 @@ export function serverRequired(stateDir: string): { required: boolean; fallback:
  * meaning (required false; prefetch) are no change, so boxes are not planned
  * again for them.
  */
+/** The server's local_box as last seen (model_start, revision, ...), or null. */
+export function serverLocalBox(stateDir: string): { model_start?: unknown; revision?: unknown } | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path.join(stateDir, "box-server.json"), "utf8"));
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export function rememberServerDefault(stateDir: string, capabilities: { local_box?: unknown } | null | undefined): boolean {
   const block = capabilities?.local_box;
   if (!block || typeof block !== "object") return false;
-  const fields: { default?: unknown; max_turn_bytes?: unknown; backends?: unknown; required?: unknown; required_fallback?: unknown; setup?: unknown } = block;
+  const fields: { default?: unknown; max_turn_bytes?: unknown; backends?: unknown; required?: unknown; required_fallback?: unknown; setup?: unknown; model_start?: unknown; revision?: unknown } = block;
   const value = isMode(fields.default) ? fields.default : "off";
   const backends = Array.isArray(fields.backends) ? fields.backends.filter((b): b is string => typeof b === "string").slice(0, 32) : null;
   const required = fields.required === true;
@@ -105,7 +115,11 @@ export function rememberServerDefault(stateDir: string, capabilities: { local_bo
     // The required keys are written only when the server requires the sandbox, so the file is
     // exactly what it was before them otherwise (the CLI's requiredBlock does the same).
     const extra = required ? { required, required_fallback: fallback, prefetch: setup.prefetch === true } : {};
-    writeFileSync(path.join(stateDir, "box-server.json"), JSON.stringify({ default: value, max_turn_bytes: fields.max_turn_bytes ?? null, backends, ...extra, at: Date.now() }), { mode: 0o600 });
+    // How a new chat on each model starts (model_start, with the policy's revision), as the server said (model-modes/ serverModelStart).
+    const starts = fields.model_start && typeof fields.model_start === "object" && !Array.isArray(fields.model_start)
+      ? { model_start: Object.fromEntries(Object.entries(fields.model_start).slice(0, 64)), ...(typeof fields.revision === "string" ? { revision: fields.revision.slice(0, 32) } : {}) }
+      : {};
+    writeFileSync(path.join(stateDir, "box-server.json"), JSON.stringify({ default: value, max_turn_bytes: fields.max_turn_bytes ?? null, backends, ...extra, ...starts, at: Date.now() }), { mode: 0o600 });
   } catch { /* best effort */ }
   return before !== JSON.stringify([value, backends, required, required ? fallback : null]);
 }

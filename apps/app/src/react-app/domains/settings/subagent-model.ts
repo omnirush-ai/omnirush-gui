@@ -76,6 +76,20 @@ export function subagentModelUnavailable(state: OmniRushSubagentModelState | und
   return !state.signedIn || !state.models.some((entry) => entry.id === setting.model);
 }
 
+/** One model per chat (model-modes.ts): sub-agents always run on their chat's model; only their effort is a setting. */
+export const SUBAGENT_MODEL_PINNED_HELP =
+  "One model per chat: sub-agents always run on their chat's model, at every nesting layer. Only their effort can be set.";
+
+/** "Sub-agents use this chat's model (GPT 6 Astra)". */
+export function subagentPinnedLabel(state: OmniRushSubagentModelState | undefined, chatModel: string | null): string {
+  return chatModel ? `Sub-agents use this chat's model (${subagentModelName(state, chatModel)})` : "Sub-agents use this chat's model";
+}
+
+/** What applies to sub-agents now that their model is the chat's: "Same as main agent" or "Chat's model · Low". */
+export function subagentPinnedSummary(effort: string | null): string {
+  return effort ? `Chat's model · ${formatGenericBehaviorLabel(effort)}` : SAME_AS_MAIN_LABEL;
+}
+
 /** The server's setting and catalog, loaded once per server, and the action that saves a change. */
 export function useSubagentModel(client: SubagentModelClient | null) {
   const queryClient = useQueryClient();

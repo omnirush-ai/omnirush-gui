@@ -209,6 +209,8 @@ import { omnirushMcpPolicyPluginPath } from "./omnirush-extensions-plugin-path.j
 import { isOmniRushUiMcpRegistryEntry } from "./omnirush-ui-mcp-command.js";
 import { describeIgnored, type McpAllowEntry } from "./mcp-allow/mcp-allow.mjs";
 import { omnirushModelWantsReasoningSummary, readOmniRushModelCatalog } from "./omnirush-model-catalog.js";
+import { modelAllowedIn, modelModes, projectMode, serverModelStart } from "./model-modes/model-modes.mjs";
+import { serverLocalBox } from "./box/launch.js";
 import {
   SUBAGENT_MODEL_FALLBACK_TRACE,
   readSubagentModelSetting,
@@ -216,6 +218,7 @@ import {
   sanitizeSubagentModelSetting,
   subagentModelRefusals,
   subagentSettingFor,
+  pinnedSubagentSetting,
   writeSubagentModelSetting,
   type EngineModelRef,
   type SubagentModelSetting,
@@ -1251,6 +1254,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       : undefined
   );
   const gatewayBroker = new OmniRushGatewayBroker({
+    sessionModelsFile: join(runtimeStorageDir(config), "chat-models.json"),
     log: (level, message, attributes) => logger.log(level, message, attributes),
     credentials: gatewayCredentials
       ? {
@@ -1274,6 +1278,14 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     // Reasoning summaries for every reasoning model the account's catalog
     // lists on the Codex route (not a hardcoded pair of ids).
     reasoningSummaryFor: async (model) => omnirushModelWantsReasoningSummary(await readOmniRushModelCatalog(config), model),
+    // A catalog model outside the chat's mode (box or native, model-modes/) is refused before it is sent;
+    // a model the catalog does not list goes to the gateway, which judges.
+    modelInMode: async (model, box) => {
+      const entry = (await readOmniRushModelCatalog(config)).find((candidate) => candidate.id === model);
+      return !entry || modelAllowedIn(entry, projectMode(box));
+    },
+    // Strict sessions: a chat's bind names the box revision it started under.
+    chatPin: (sessionId) => boxServiceFor(config).chatPin(sessionId),
     // The desktop's update gate (banner, blocked view); session uploads and
     // project archives go on whatever it says.
     ...(config.omnirushGatewayCredentials?.onUpdateSignal ? { onUpdateSignal: config.omnirushGatewayCredentials.onUpdateSignal } : {}),
@@ -2119,8 +2131,10 @@ export async function proxyOpencodeV2Request(input: {
   // A reopened chat's turns before this prompt: its turn numbers (uploads and box checkpoints) carry on from them.
   const turnsBefore = capture && uploadedSessionId && engine ? await turnsBeforeCapture(capture, uploadedSessionId, engine) : 0;
   // The Linux sandbox (box/): a prompt of a workspace whose box is on starts the box, and takes the turn's checkpoint when it is captured.
+  // One pin per chat: a chat that runs in the box is not moved to this computer when its project's box is off.
+  if (promptDispatch && sessionId && await boxServiceFor(input.config).pinnedBoxGone(sessionId, input.workspace)) throw new ApiError(409, "chat_pinned_box", PINNED_BOX_MESSAGE);
   const boxInfo = promptDispatch && sessionId
-    ? await boxServiceFor(input.config).beforePrompt(sessionId, input.workspace, { capture: Boolean(uploadedSessionId && engine), turnsBefore })
+    ? await boxServiceFor(input.config).beforePrompt(sessionId, input.workspace, { capture: Boolean(uploadedSessionId && engine), turnsBefore, nativeModel: await promptsNativeOnlyModel(input.config, body) })
     : null;
   if (capture && uploadedSessionId && engine) {
     // The turn before's background processes finish writing (at most 10 s after it ended), its project
@@ -2558,8 +2572,9 @@ export async function proxyOpencodeRequest(input: {
   const turnsBefore = capture && captured && uploadedSessionId && workspace && !steer && isUploadPromptDispatch(method, proxyPath)
     ? await turnsBeforeCapture(capture, uploadedSessionId, engineTarget(baseUrl, headers, search))
     : 0;
+  if (workspace && uploadedSessionId && isUploadPromptDispatch(method, proxyPath) && await boxServiceFor(input.config).pinnedBoxGone(uploadedSessionId, workspace)) throw new ApiError(409, "chat_pinned_box", PINNED_BOX_MESSAGE);
   const boxInfo = workspace && uploadedSessionId && isUploadPromptDispatch(method, proxyPath)
-    ? await boxServiceFor(input.config).beforePrompt(uploadedSessionId, workspace, { capture: captured && !steer, turnsBefore })
+    ? await boxServiceFor(input.config).beforePrompt(uploadedSessionId, workspace, { capture: captured && !steer, turnsBefore, nativeModel: await promptsNativeOnlyModel(input.config, body) })
     : null;
   if (capture && captured && uploadedSessionId && workspace && !steer) {
     const promptDispatch = isUploadPromptDispatch(method, proxyPath);
@@ -4548,6 +4563,8 @@ function createRoutes(
         family: model.family,
         default: model.default,
         efforts: model.reasoning_levels,
+        // Where the model may run: "native" (projects without the sandbox), "box" (sandbox projects).
+        modes: modelModes(model),
       })),
     });
   });
@@ -4593,8 +4610,9 @@ function createRoutes(
     const body = await readJsonBody(ctx.request);
     const inherited = engineModelRef(body.inherited);
     if (!inherited) throw new ApiError(400, "invalid_payload", "inherited model is required");
-    const setting = subagentSettingFor(await readSubagentModelSetting(config), engineModelRef(body.requested));
-    if (!setting || (!setting.model && !setting.effort)) return jsonResponse({});
+    // Sub-agents run on their chat's model (one model per chat): only the effort applies.
+    const setting = pinnedSubagentSetting(subagentSettingFor(await readSubagentModelSetting(config), engineModelRef(body.requested)));
+    if (!setting) return jsonResponse({});
     const refusals = subagentModelRefusals(config);
     const resolution = resolveSubagentModel({
       setting,
@@ -7855,4 +7873,29 @@ function parseWorkspaceExportSensitiveMode(input: string | null): WorkspaceExpor
     return trimmed;
   }
   throw new ApiError(400, "invalid_workspace_export_sensitive_mode", `Invalid workspace export sensitive mode: ${trimmed}`);
+}
+
+const PINNED_BOX_MESSAGE = "This chat runs in the sandbox. Turn the sandbox back on for this project, or start a new chat.";
+
+/**
+ * Whether a prompt request names an omnirush.ai model whose new chats start on
+ * this computer and cannot be switched: the server's local_box.model_start
+ * when it says (start "native", not switchable), else the catalog `modes`
+ * without "box" (Kimi). Such a chat is exempt from the box
+ * (box/service.ts beforePrompt).
+ */
+async function promptsNativeOnlyModel(config: ServerConfig, body: string | ArrayBuffer | undefined): Promise<boolean> {
+  if (body === undefined) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(typeof body === "string" ? body : new TextDecoder().decode(body));
+  } catch {
+    return false;
+  }
+  const model = isRecord(parsed) && isRecord(parsed.model) ? parsed.model : null;
+  if (!model || model.providerID !== "omnirush" || typeof model.modelID !== "string") return false;
+  const start = serverModelStart(serverLocalBox(runtimeStorageDir(config)), model.modelID);
+  if (start) return start.start === "native" && !start.switchable;
+  const entry = (await readOmniRushModelCatalog(config)).find((candidate) => candidate.id === model.modelID);
+  return Boolean(entry?.modes) && !modelAllowedIn(entry, "box") && modelAllowedIn(entry, "native");
 }
