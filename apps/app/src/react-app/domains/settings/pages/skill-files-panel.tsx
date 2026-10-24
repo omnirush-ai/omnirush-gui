@@ -174,7 +174,7 @@ export function SkillFilesPanel(props: SkillFilesPanelProps) {
 
       <div className="max-h-72 overflow-y-auto">
         {!tree ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">{t("common.loading") === "common.loading" ? "Loading…" : t("common.loading")}</p>
+          <p className="px-4 py-3 text-sm text-muted-foreground">{t("common.loading")}</p>
         ) : groups.map((group) => (
           <div key={group.folder || "."}>
             {group.folder ? (

@@ -25,8 +25,8 @@ export function ThemeSection(props: ThemeSectionProps) {
   return (
     <LayoutSectionItem>
       <LayoutSectionItemHeader className="w-full">
-        <LayoutSectionItemTitle>Mode</LayoutSectionItemTitle>
-        <LayoutSectionItemDescription>System follows your computer's light or dark setting.</LayoutSectionItemDescription>
+        <LayoutSectionItemTitle>{t("settings.appearance.mode")}</LayoutSectionItemTitle>
+        <LayoutSectionItemDescription>{t("settings.appearance.mode_desc")}</LayoutSectionItemDescription>
       </LayoutSectionItemHeader>
       <ToggleGroup
         value={[props.themeMode]}
@@ -35,7 +35,7 @@ export function ThemeSection(props: ThemeSectionProps) {
           props.setThemeMode(value[0] as ThemeMode);
         }}
         disabled={props.busy}
-        aria-label="Mode"
+        aria-label={t("settings.appearance.mode")}
         className="w-fit gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
       >
         {items.map((item) => (

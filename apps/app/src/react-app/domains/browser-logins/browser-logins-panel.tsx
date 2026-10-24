@@ -14,6 +14,7 @@ import {
 } from "../settings/settings-layout";
 import { LoginSyncDialog } from "./login-sync-dialog";
 import { getBrowserLoginsBridge, useBrowserLoginSync } from "./use-browser-login-sync";
+import { t } from "@/i18n";
 
 const STATUS_LABELS: Record<BrowserLoginSyncState["status"], string> = {
   policy_off: "Permission off",
@@ -94,16 +95,16 @@ export function BrowserLoginsPanel() {
     <SettingsSection>
       <LayoutSectionItem>
         <LayoutSectionItemHeader>
-          <LayoutSectionItemTitle>Browser login sync</LayoutSectionItemTitle>
+          <LayoutSectionItemTitle>{t("browser_logins.title")}</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>
-            Keep selected sites signed in by reading one browser profile. omnirush.ai never changes the source browser, and sync starts only after you choose sites and enable it.
+            {t("browser_logins.desc")}
           </LayoutSectionItemDescription>
         </LayoutSectionItemHeader>
         <LayoutSectionItemContent className="gap-3">
           <SettingsNotice>
             {loginSync.managedByOrg
-              ? "Browser login sync is not yet available on organization-managed Desktop. No browser login data is read."
-              : "Nothing is read until you choose a profile and exact sites, then confirm continuing sync."}
+              ? t("browser_logins.org_unavailable")
+              : t("browser_logins.nothing_read")}
           </SettingsNotice>
 
           {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
@@ -113,7 +114,7 @@ export function BrowserLoginsPanel() {
           ) : !syncState.configured ? (
             loginSync.policyAllowed ? (
               <div>
-                <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="login-sync-setup">Choose sites</Button>
+                <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="login-sync-setup">{t("browser_logins.choose_sites")}</Button>
               </div>
             ) : null
           ) : (
@@ -260,7 +261,7 @@ export function BrowserLoginsPanel() {
               </ul>
             </div>
           ) : signedInSites ? (
-            <p className="text-xs text-muted-foreground">The built-in browser is not signed in to any site.</p>
+            <p className="text-xs text-muted-foreground">{t("browser_logins.none_signed_in")}</p>
           ) : null}
         </LayoutSectionItemContent>
       </LayoutSectionItem>

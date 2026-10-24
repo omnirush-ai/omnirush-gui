@@ -4,6 +4,7 @@ import { FileText } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { rankPaths } from "./quick-open-rank";
+import { t } from "@/i18n";
 
 type QuickOpenProps = {
   files: readonly string[];
@@ -66,8 +67,8 @@ export function QuickOpen({ files, recent, onOpen, onClose }: QuickOpenProps) {
               if (path) onOpen(path, event.metaKey || event.ctrlKey);
             }
           }}
-          placeholder="Go to file…"
-          aria-label="Go to file"
+          placeholder={t("editor.go_to_file_placeholder")}
+          aria-label={t("editor.go_to_file")}
           className="h-11 w-full border-b border-border bg-transparent px-4 text-sm outline-none placeholder:text-muted-foreground"
         />
         <div ref={listRef} role="listbox" className="min-h-0 flex-1 overflow-y-auto py-1">

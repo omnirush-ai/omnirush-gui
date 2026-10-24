@@ -12,7 +12,6 @@ import { Switch } from "@/components/ui/switch";
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 
 import {
-  LINUX_SANDBOX_HELP,
   linuxSandboxBackendChoices,
   linuxSandboxBackendSummary,
   linuxSandboxView,
@@ -21,6 +20,7 @@ import {
   type LinuxSandboxProblem,
   type LinuxSandboxView,
 } from "./linux-sandbox";
+import { t } from "@/i18n";
 
 export type LinuxSandboxCardProps = {
   box: OmniRushWorkspaceBox | null;
@@ -72,7 +72,7 @@ function CopyCommand({ command }: { command: string }) {
       <Button
         variant="ghost"
         size="icon-xs"
-        aria-label={copied ? "Copied" : "Copy command"}
+        aria-label={copied ? t("config.copied") : t("sandbox.copy_command")}
         onClick={() => void navigator.clipboard?.writeText(command).then(() => setCopied(true)).catch(() => undefined)}
       >
         {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
@@ -96,7 +96,7 @@ function Details({ text }: { text: string }) {
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="mt-1 inline-flex items-center gap-0.5 rounded text-[11px] text-dls-secondary underline-offset-2 hover:text-dls-text hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-dls-border">
         <ChevronRight aria-hidden className={`size-3 motion-safe:transition-transform ${open ? "rotate-90" : ""}`} />
-        {open ? "Hide details" : "Show details"}
+        {open ? t("sandbox.hide_details") : t("sandbox.show_details")}
       </CollapsibleTrigger>
       <CollapsibleContent>
         <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-dls-border bg-dls-hover p-2 font-mono text-[11px] text-dls-secondary" data-testid="linux-sandbox-error-detail">{text}</pre>
@@ -117,7 +117,7 @@ function StatusRow(props: { view: LinuxSandboxView; busy: boolean; onAction: () 
           {view.progress ? (
             <ProgressPrimitive.Root
               value={view.progress.value}
-              aria-label="Sandbox download"
+              aria-label={t("sandbox.download_label")}
               getAriaValueText={() => view.progress?.label ?? ""}
               className="flex h-[18px] items-center gap-2"
               data-testid="linux-sandbox-progress"
@@ -159,14 +159,14 @@ function Advanced(props: { box: OmniRushWorkspaceBox; busy: boolean; defaultOpen
     <Collapsible open={open} onOpenChange={setOpen} className="border-t border-dls-border">
       <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded-b-2xl px-4 py-2.5 text-left text-[12px] text-dls-secondary hover:text-dls-text focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-dls-border" data-testid="linux-sandbox-advanced">
         <ChevronRight aria-hidden className={`size-3.5 motion-safe:transition-transform ${open ? "rotate-90" : ""}`} />
-        <span className="font-medium">Advanced</span>
+        <span className="font-medium">{t("mcp.advanced")}</span>
         <span className={`ml-auto truncate text-[11px] ${open ? "invisible" : ""}`}>{choices.find((choice) => choice.value === box.backendSetting.value)?.label ?? box.backendSetting.value}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="space-y-4 px-4 pb-4 pt-1">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <div className="min-w-0 flex-1">
-              <label htmlFor={selectId} className="text-[12px] font-medium text-dls-text">Backend</label>
+              <label htmlFor={selectId} className="text-[12px] font-medium text-dls-text">{t("sandbox.backend")}</label>
               <div className="text-[11px] text-dls-secondary" data-testid="linux-sandbox-backend">{linuxSandboxBackendSummary(box)}</div>
             </div>
             {props.onBackend ? (
@@ -179,8 +179,8 @@ function Advanced(props: { box: OmniRushWorkspaceBox; busy: boolean; defaultOpen
                   }}
                   disabled={props.busy || lockedByEnv}
                 >
-                  <SelectTrigger id={selectId} className="w-full" aria-label="Sandbox backend">
-                    <SelectValue placeholder="Automatic (recommended)" />
+                  <SelectTrigger id={selectId} className="w-full" aria-label={t("sandbox.backend_label")}>
+                    <SelectValue placeholder={t("sandbox.automatic_recommended")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
@@ -196,13 +196,13 @@ function Advanced(props: { box: OmniRushWorkspaceBox; busy: boolean; defaultOpen
           {required ? <div className="-mt-2 text-[11px] text-dls-secondary" data-testid="linux-sandbox-backend-required">“Off (this computer)”: {box.requiredText?.optOut}</div> : null}
           {others.length ? (
             <div>
-              <div className="text-[11px] font-medium text-dls-secondary">Other backends on this computer</div>
+              <div className="text-[11px] font-medium text-dls-secondary">{t("sandbox.other_backends")}</div>
               <ul className="mt-1 space-y-0.5" data-testid="linux-sandbox-others">
                 {others.map((alt) => (
                   <li key={alt.id} className="flex min-w-0 items-baseline gap-2 text-[11px]">
                     <span aria-hidden className={`size-1.5 shrink-0 translate-y-[-1px] rounded-full ${alt.ok ? "bg-green-9" : "bg-gray-7"}`} />
                     <span className="shrink-0 text-dls-text">{alt.label}</span>
-                    <span className="min-w-0 truncate text-dls-secondary" title={alt.reason ?? undefined}>{alt.ok ? "available" : alt.reason ?? "not available"}</span>
+                    <span className="min-w-0 truncate text-dls-secondary" title={alt.reason ?? undefined}>{alt.ok ? t("sandbox.available") : alt.reason ?? t("sandbox.not_available")}</span>
                   </li>
                 ))}
               </ul>
@@ -210,22 +210,22 @@ function Advanced(props: { box: OmniRushWorkspaceBox; busy: boolean; defaultOpen
           ) : null}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <div className="min-w-0 flex-1">
-              <div className="text-[12px] font-medium text-dls-text">Reset sandbox</div>
+              <div className="text-[12px] font-medium text-dls-text">{t("sandbox.reset_title")}</div>
               <div className="text-[11px] text-dls-secondary">
-                {canReset ? "Removes this project's container and everything installed in it. Your project files are not touched." : "Nothing to reset: this project has no sandbox yet."}
+                {canReset ? t("sandbox.reset_desc") : t("sandbox.reset_nothing")}
               </div>
             </div>
-            <Button variant="destructive" size="xs" disabled={props.busy || !canReset} onClick={() => setConfirmReset(true)}>Reset…</Button>
+            <Button variant="destructive" size="xs" disabled={props.busy || !canReset} onClick={() => setConfirmReset(true)}>{t("sandbox.reset_button")}</Button>
           </div>
         </div>
       </CollapsibleContent>
       <ConfirmModal
         open={confirmReset}
         variant="danger"
-        title="Reset the sandbox?"
-        message="This removes the project's Linux container and everything installed in it. Your project files stay as they are. The next command starts a fresh sandbox."
-        confirmLabel="Reset sandbox"
-        cancelLabel="Cancel"
+        title={t("sandbox.reset_confirm_title")}
+        message={t("sandbox.reset_confirm_message")}
+        confirmLabel={t("sandbox.reset_title")}
+        cancelLabel={t("common.cancel")}
         onCancel={() => setConfirmReset(false)}
         onConfirm={() => {
           setConfirmReset(false);
@@ -263,7 +263,7 @@ export function LinuxSandboxCard(props: LinuxSandboxCardProps) {
   };
   return (
     <section ref={sectionRef} className="scroll-mt-6 space-y-3" id="linux-sandbox" aria-labelledby={`${switchId}-heading`} data-testid="linux-sandbox-card">
-      <div id={`${switchId}-heading`} className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">Linux sandbox</div>
+      <div id={`${switchId}-heading`} className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">{t("sandbox.section_title")}</div>
       <div className="rounded-2xl border border-dls-border bg-dls-surface">
         <div className="flex items-center gap-4 p-4">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
@@ -271,10 +271,10 @@ export function LinuxSandboxCard(props: LinuxSandboxCardProps) {
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <label htmlFor={switchId} className="text-[13px] font-medium text-dls-text">Run commands in a Linux sandbox</label>
-              <span className="rounded-full border border-dls-border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-dls-secondary">Beta</span>
+              <label htmlFor={switchId} className="text-[13px] font-medium text-dls-text">{t("sandbox.run_in_sandbox")}</label>
+              <span className="rounded-full border border-dls-border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-dls-secondary">{t("common.beta")}</span>
             </div>
-            <div id="linux-sandbox-help" className="text-[11px] text-dls-secondary">{LINUX_SANDBOX_HELP}</div>
+            <div id="linux-sandbox-help" className="text-[11px] text-dls-secondary">{t("sandbox.help")}</div>
             {box?.required ? (
               <div className="mt-1 text-[11px] font-medium text-dls-text" data-testid="linux-sandbox-required">{box.requiredText?.optOut}</div>
             ) : null}
@@ -283,7 +283,7 @@ export function LinuxSandboxCard(props: LinuxSandboxCardProps) {
           </div>
           <Switch
             id={switchId}
-            aria-label="Run commands in a Linux sandbox"
+            aria-label={t("sandbox.run_in_sandbox")}
             aria-describedby="linux-sandbox-help"
             aria-busy={busy || undefined}
             checked={checked}
@@ -294,10 +294,10 @@ export function LinuxSandboxCard(props: LinuxSandboxCardProps) {
 
         {showOffer ? (
           <div className="mx-4 mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-dls-border bg-dls-hover px-3 py-2" data-testid="linux-sandbox-offer">
-            <div className="min-w-0 flex-1 text-[11px] text-dls-text">Your omnirush.ai server recommends the sandbox for this project.</div>
+            <div className="min-w-0 flex-1 text-[11px] text-dls-text">{t("sandbox.server_recommends")}</div>
             <div className="flex items-center gap-1.5">
-              <Button size="xs" onClick={() => props.onToggle(true)}>Turn on</Button>
-              <Button size="xs" variant="ghost" onClick={() => setOfferDismissed(true)}>Not now</Button>
+              <Button size="xs" onClick={() => props.onToggle(true)}>{t("sandbox.turn_on")}</Button>
+              <Button size="xs" variant="ghost" onClick={() => setOfferDismissed(true)}>{t("sandbox.not_now")}</Button>
             </div>
           </div>
         ) : null}

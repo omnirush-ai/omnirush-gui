@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useEditorStore } from "./editor-store";
 import { diagnosticCode, problemCounts, useProblemsStore, type LspDiagnostic } from "./lsp";
+import { t } from "@/i18n";
 
 const EMPTY: never[] = [];
 
@@ -44,13 +45,13 @@ export function ProblemsView(props: {
         <span className="flex-1" />
         <label className="flex items-center gap-1" title="Problems, hover, go to definition, rename and outline from the project's language servers">
           <input type="checkbox" checked={languageFeatures} onChange={(event) => setLanguageFeatures(event.target.checked)} data-editor-language-features />
-          Language features
+          {t("settings.editor.language_features")}
         </label>
         <label className="flex items-center gap-1">
           <input type="checkbox" checked={errorsOnly} onChange={(event) => setErrorsOnly(event.target.checked)} />
-          Errors only
+          {t("editor.errors_only")}
         </label>
-        <Button variant="ghost" size="icon-xs" aria-label="Refresh problems" onClick={props.onRefresh}>
+        <Button variant="ghost" size="icon-xs" aria-label={t("editor.refresh_problems")} onClick={props.onRefresh}>
           <RefreshCw className={cn(props.loading && "animate-spin")} />
         </Button>
       </div>

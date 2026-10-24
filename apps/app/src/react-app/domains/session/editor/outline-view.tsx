@@ -7,6 +7,7 @@ import type * as MonacoApi from "monaco-editor/editor/editor.api.js";
 import { cn } from "@/lib/utils";
 import { useEditorStore } from "./editor-store";
 import { documentSymbols, useIsLspActive } from "./lsp";
+import { t } from "@/i18n";
 
 // Monaco SymbolKind (0-based): a short mark per kind.
 const KIND_MARK: Record<number, { mark: string; className: string }> = {
@@ -87,15 +88,15 @@ export function OutlineView(props: { model: MonacoApi.editor.ITextModel | null; 
     <div className={cn("flex min-h-0 flex-col border-t border-border text-xs", open ? "max-h-[45%]" : "")} data-editor-outline>
       <button type="button" className="flex h-7 shrink-0 items-center gap-1 px-2 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-        Outline
+        {t("editor.outline")}
         {props.path ? <span className="truncate normal-case tracking-normal">· {props.path.split("/").pop()}</span> : null}
       </button>
       {open ? (
         <div className="min-h-0 overflow-y-auto px-1 pb-2">
-          {!props.model ? <p className="px-2 text-muted-foreground">Open a file to see its symbols.</p>
-            : !languageFeatures ? <p className="px-2 text-muted-foreground">Language features in the editor are off.</p>
-            : symbols === null ? <p className="px-2 text-muted-foreground">{active ? "Loading symbols…" : "Symbols show once the file has been open a moment."}</p>
-              : symbols.length === 0 ? <p className="px-2 text-muted-foreground">No symbols (no language server for this file, or none found).</p>
+          {!props.model ? <p className="px-2 text-muted-foreground">{t("editor.outline_no_file")}</p>
+            : !languageFeatures ? <p className="px-2 text-muted-foreground">{t("editor.outline_lang_off")}</p>
+            : symbols === null ? <p className="px-2 text-muted-foreground">{active ? t("editor.outline_loading") : t("editor.outline_wait")}</p>
+              : symbols.length === 0 ? <p className="px-2 text-muted-foreground">{t("editor.outline_none")}</p>
                 : symbols.map((symbol, index) => <SymbolRow key={`${symbol.name}:${index}`} symbol={symbol} depth={0} onReveal={props.onReveal} />)}
         </div>
       ) : null}

@@ -4,6 +4,7 @@ import { Box, X } from "lucide-react";
 
 import { toast } from "@/components/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { t } from "@/i18n";
 import { linuxSandboxView, useLinuxSandbox, type LinuxSandboxClient, type LinuxSandboxView } from "@/react-app/domains/settings/linux-sandbox";
 
 type Props = {
@@ -59,17 +60,17 @@ function SandboxChip(props: { client: LinuxSandboxClient; workspaceId: string; s
       return (
         <Tooltip>
           <TooltipTrigger
-            render={<button type="button" aria-label="Linux sandbox: off for this project" data-testid="sandbox-host-builds-chip" className={chip} onClick={props.onOpenSettings} />}
+            render={<button type="button" aria-label={t("sandbox.chip_off_for_project")} data-testid="sandbox-host-builds-chip" className={chip} onClick={props.onOpenSettings} />}
           >
             <span className="relative">
               <Box className="size-4" aria-hidden />
               <span aria-hidden className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-dls-surface ${DOT.off}`} />
             </span>
-            <span className="hidden whitespace-nowrap @min-[760px]/composer:inline">Sandbox off</span>
+            <span className="hidden whitespace-nowrap @min-[760px]/composer:inline">{t("sandbox.chip_off")}</span>
           </TooltipTrigger>
           <TooltipContent>
             <div className="flex max-w-64 flex-col">
-              <span className="font-medium">Linux sandbox: off for this project</span>
+              <span className="font-medium">{t("sandbox.chip_off_for_project")}</span>
               <span>{offWhy}</span>
             </div>
           </TooltipContent>
@@ -86,11 +87,11 @@ function SandboxChip(props: { client: LinuxSandboxClient; workspaceId: string; s
             }
           >
             <Box className="size-4" aria-hidden />
-            <span className="whitespace-nowrap">Use sandbox</span>
+            <span className="whitespace-nowrap">{t("sandbox.chip_use")}</span>
           </TooltipTrigger>
-          <TooltipContent>Your omnirush.ai server recommends running this project's commands in a Linux sandbox. Click to turn it on.</TooltipContent>
+          <TooltipContent>{t("sandbox.chip_offer_hint")}</TooltipContent>
         </Tooltip>
-        <button type="button" aria-label="Not now" className="mr-1 flex size-6 items-center justify-center rounded text-gray-9 hover:bg-gray-3 hover:text-gray-12" onClick={() => setOfferDismissed(true)}>
+        <button type="button" aria-label={t("sandbox.not_now")} className="mr-1 flex size-6 items-center justify-center rounded text-gray-9 hover:bg-gray-3 hover:text-gray-12" onClick={() => setOfferDismissed(true)}>
           <X className="size-3.5" aria-hidden />
         </button>
       </div>
@@ -104,7 +105,7 @@ function SandboxChip(props: { client: LinuxSandboxClient; workspaceId: string; s
         render={
           <button
             type="button"
-            aria-label={`Linux sandbox: ${view.title}`}
+            aria-label={t("sandbox.chip_label", { state: view.title })}
             data-testid="sandbox-status-chip"
             data-tone={view.tone}
             className={chip}
@@ -117,11 +118,11 @@ function SandboxChip(props: { client: LinuxSandboxClient; workspaceId: string; s
           <span aria-hidden className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-dls-surface ${DOT[view.tone]}`} />
         </span>
         {/* An icon (its state in the tooltip and aria-label) until the composer is wide enough. */}
-        <span className="hidden whitespace-nowrap @min-[760px]/composer:inline">Sandbox</span>
+        <span className="hidden whitespace-nowrap @min-[760px]/composer:inline">{t("sandbox.chip")}</span>
       </TooltipTrigger>
       <TooltipContent>
         <div className="flex max-w-64 flex-col">
-          <span className="font-medium">Linux sandbox: {view.title}</span>
+          <span className="font-medium">{t("sandbox.chip_label", { state: view.title })}</span>
           {view.progress ? <span>{view.progress.label}</span> : view.detail ? <span>{view.detail}</span> : null}
           {box.required && box.requiredText ? <span className="mt-1 text-gray-9">{box.requiredText.line}</span> : null}
         </div>

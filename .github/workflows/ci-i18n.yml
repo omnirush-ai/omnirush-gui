@@ -3,9 +3,11 @@ name: i18n Audit
 on:
   pull_request:
     branches:
+      - main
       - dev
   push:
     branches:
+      - main
       - dev
 
 permissions:
@@ -13,7 +15,7 @@ permissions:
 
 jobs:
   i18n-audit:
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout

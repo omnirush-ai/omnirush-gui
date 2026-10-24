@@ -284,7 +284,7 @@ export function AuthorizedFoldersPanel(props: AuthorizedFoldersPanelProps) {
               disabled={authorizedFoldersLoading || authorizedFoldersSaving || !canPickAuthorizedFolder}
             >
               <Plus className="size-4" />
-              Add folder
+              {t("context_panel.add_folder")}
             </Button>
           </LayoutSectionItemHeaderActions>
         ) : null}
@@ -333,7 +333,7 @@ export function AuthorizedFoldersPanel(props: AuthorizedFoldersPanelProps) {
                   disabled={authorizedFoldersLoading || authorizedFoldersSaving || !canPickAuthorizedFolder}
                 >
                   <Plus className="size-4" />
-                  Add folder
+                  {t("context_panel.add_folder")}
                 </Button>
               </EmptyContent>
             ) : null}

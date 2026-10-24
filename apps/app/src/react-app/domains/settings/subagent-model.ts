@@ -13,6 +13,7 @@ import type {
 } from "@/app/lib/omnirush-server";
 import { OMNIRUSH_REASONING_EFFORTS } from "@/app/constants";
 import { formatGenericBehaviorLabel } from "@/app/lib/model-behavior";
+import { t } from "@/i18n";
 
 export type SubagentModelClient = Pick<OmniRushServerClient, "getSubagentModel" | "setSubagentModel"> & {
   /** Keys the shared state; clients without one share a single entry. */
@@ -60,13 +61,13 @@ export function subagentModelName(state: OmniRushSubagentModelState | undefined,
 }
 
 export function subagentEffortLabel(effort: string | null): string {
-  return effort ? formatGenericBehaviorLabel(effort) : SAME_AS_MAIN_LABEL;
+  return effort ? formatGenericBehaviorLabel(effort) : t("subagent.same_as_main");
 }
 
 /** "Same as main agent", "GPT 6 Sol", "GPT 6 Sol · High" or "Main model · Low". */
 export function subagentSummary(state: OmniRushSubagentModelState | undefined, setting: OmniRushSubagentModelSetting): string {
-  if (!setting.model && !setting.effort) return SAME_AS_MAIN_LABEL;
-  const model = setting.model ? subagentModelName(state, setting.model) : "Main model";
+  if (!setting.model && !setting.effort) return t("subagent.same_as_main");
+  const model = setting.model ? subagentModelName(state, setting.model) : t("subagent.main_model");
   return setting.effort ? `${model} · ${formatGenericBehaviorLabel(setting.effort)}` : model;
 }
 

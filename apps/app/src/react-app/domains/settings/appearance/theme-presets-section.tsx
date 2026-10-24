@@ -13,6 +13,7 @@ import {
   LayoutSectionItemTitle,
 } from "../settings-layout";
 import { ThemeVariantThumb } from "./theme-preview";
+import { t } from "@/i18n";
 
 type Props = {
   busy: boolean;
@@ -29,7 +30,7 @@ type Props = {
 };
 
 const modesLabel = (modes: readonly string[]) =>
-  modes.length === 2 ? "Light / Dark" : modes[0] === "dark" ? "Dark only" : "Light only";
+  modes.length === 2 ? t("settings.appearance.light_dark") : modes[0] === "dark" ? t("settings.appearance.dark_only") : t("settings.appearance.light_only");
 
 function swatchesOf(v: ThemeVariant) {
   return [v.accent, v.surface, v.code.string, v.code.function];
@@ -90,18 +91,18 @@ export function ThemePresetsSection(props: Props) {
   return (
     <LayoutSectionItem>
       <LayoutSectionItemHeader className="w-full">
-        <LayoutSectionItemTitle>Theme</LayoutSectionItemTitle>
+        <LayoutSectionItemTitle>{t("settings.theme_title")}</LayoutSectionItemTitle>
         <LayoutSectionItemDescription>
-          Each preset has a light and a dark version (Midnight is dark only); the mode above picks which one you see.
+          {t("settings.appearance.presets_desc")}
         </LayoutSectionItemDescription>
       </LayoutSectionItemHeader>
-      <div role="radiogroup" aria-label="Theme" className="grid grid-cols-2 gap-3 @xl/settings:grid-cols-3 @3xl/settings:grid-cols-4">
+      <div role="radiogroup" aria-label={t("settings.theme_title")} className="grid grid-cols-2 gap-3 @xl/settings:grid-cols-3 @3xl/settings:grid-cols-4">
         {THEME_PRESETS.map((preset) => (
           <Card
             key={preset.id}
             testId={`theme-preset-${preset.id}`}
             selected={props.selectedId === preset.id}
-            label={preset.name}
+            label={preset.id === "default" ? t("settings.appearance.preset_default") : preset.id === "high-contrast" ? t("settings.appearance.preset_high_contrast") : preset.name}
             meta={modesLabel(presetModes(preset))}
             disabled={props.busy}
             onClick={() => props.onPickPreset(preset.id)}
@@ -123,7 +124,7 @@ export function ThemePresetsSection(props: Props) {
                 <button
                   type="button"
                   onClick={() => props.onEditCustom(id)}
-                  aria-label={`Edit ${theme.name}`}
+                  aria-label={t("settings.appearance.edit_theme", { name: theme.name })}
                   data-testid={`theme-edit-${id}`}
                   className="flex size-6 items-center justify-center rounded-md border border-border bg-popover text-foreground shadow-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
                 >
@@ -132,7 +133,7 @@ export function ThemePresetsSection(props: Props) {
                 <button
                   type="button"
                   onClick={() => props.onDeleteCustom(id)}
-                  aria-label={`Delete ${theme.name}`}
+                  aria-label={t("settings.appearance.delete_theme", { name: theme.name })}
                   data-testid={`theme-delete-${id}`}
                   className="flex size-6 items-center justify-center rounded-md border border-border bg-popover text-foreground shadow-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
                 >
@@ -155,13 +156,13 @@ export function ThemePresetsSection(props: Props) {
             <Plus className="size-4" />
           </span>
           <span className="px-1 pb-0.5 font-medium">
-            {props.customThemes.length >= props.maxCustomThemes ? `Up to ${props.maxCustomThemes} custom themes` : "New custom theme"}
+            {props.customThemes.length >= props.maxCustomThemes ? t("settings.appearance.max_custom_themes", { count: props.maxCustomThemes }) : t("settings.appearance.new_custom_theme")}
           </span>
         </button>
       </div>
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="theme-mode-note" role="status">
         <Moon className="size-3 shrink-0" />
-        {props.note ?? "Midnight is dark only. Choosing it while Mode is Light switches Mode to Dark."}
+        {props.note ?? t("settings.appearance.midnight_note")}
       </p>
     </LayoutSectionItem>
   );

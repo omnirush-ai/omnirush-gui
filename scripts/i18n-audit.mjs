@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/i18n-audit.mjs              # full audit (default, excludes --hardcoded, --prune, --sort)
- *   node scripts/i18n-audit.mjs --ci         # same as default but does not fail on missing non-en keys
+ *   node scripts/i18n-audit.mjs --ci         # same as default but only fails on missing keys in COMPLETE_LOCALES
  *   node scripts/i18n-audit.mjs --missing    # missing keys (in EN but not in locale)
  *   node scripts/i18n-audit.mjs --orphan     # orphan keys (in locale but not in EN)
  *   node scripts/i18n-audit.mjs --duplicates # duplicate keys in any locale
@@ -28,6 +28,9 @@ const LOCALES_DIR = join(REPO_ROOT, "apps/app/src/i18n/locales");
 const APP_SRC = join(REPO_ROOT, "apps/app/src");
 
 const LOCALES = ["ja", "zh", "vi", "pt-BR", "th", "fr", "ca", "es", "ru"];
+// Locales that must have every en.ts key: a missing key fails even with --ci.
+// The rest are known gaps (English fallback); add a locale here once it is complete.
+const COMPLETE_LOCALES = ["zh"];
 const EN_FILE = join(LOCALES_DIR, "en.ts");
 
 const PLURAL_SUFFIXES = ["zero", "one", "two", "few", "many", "other"];
@@ -184,10 +187,12 @@ if (shouldRun("--missing")) {
     const missing = [...enKeys].filter((k) => !localeKeys.has(k));
 
     if (missing.length === 0) {
-      console.log(`  ${locale}: ✓ no missing`);
+      console.log(`  ${locale}: ✓ no missing${COMPLETE_LOCALES.includes(locale) ? "" : " (add it to COMPLETE_LOCALES)"}`);
     } else {
-      console.log(`  ${locale}: ✗ ${missing.length} missing`);
-      if (!isCi) exitCode = 1;
+      const required = COMPLETE_LOCALES.includes(locale);
+      console.log(`  ${locale}: ✗ ${missing.length} missing${required ? " (must be complete)" : isCi ? " (known gap, English fallback)" : ""}`);
+      if (!isCi || required) exitCode = 1;
+      if (required) for (const key of missing.slice(0, 50)) console.log(`    - ${key}`);
       if (mode !== "--summary") {
         for (const [prefix, count] of groupByPrefix(missing).slice(0, 15)) {
           console.log(`    ${String(count).padStart(4)}  ${prefix}.*`);

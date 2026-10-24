@@ -82,6 +82,7 @@ import { openDesktopUrl } from "@/app/lib/desktop";
 import { useGroupRef } from "react-resizable-panels";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { t } from "@/i18n";
 
 /** What the main group shows: a text file or diff (Monaco), a Markdown preview, or an image. */
 type PanelSurface = SurfaceDoc | { kind: "preview"; key: string; doc: FileDoc } | { kind: "image"; key: string; path: string };
@@ -322,8 +323,8 @@ function FilesView(props: {
         <InputGroup className="h-7 min-w-0 flex-1 bg-background">
           <InputGroupAddon align="inline-start"><Search /></InputGroupAddon>
           <InputGroupInput
-            aria-label="Filter files"
-            placeholder="Filter files"
+            aria-label={t("editor.filter_files")}
+            placeholder={t("editor.filter_files")}
             value={search.value}
             onChange={(event) => {
               const value = event.target.value;
@@ -332,7 +333,7 @@ function FilesView(props: {
             }}
           />
         </InputGroup>
-        <Button variant="ghost" size="icon-xs" aria-label="Refresh files" onClick={props.onRefresh}>
+        <Button variant="ghost" size="icon-xs" aria-label={t("editor.refresh_files")} onClick={props.onRefresh}>
           <RefreshCw className={cn(props.loading && "animate-spin")} />
         </Button>
       </div>
@@ -341,7 +342,7 @@ function FilesView(props: {
       ) : (
         <FileTree
           model={model}
-          aria-label="Project files"
+          aria-label={t("editor.project_files")}
           className="min-h-0 flex-1 overflow-hidden"
           style={{ ["--trees-fg-override" as string]: "var(--foreground)" }}
         />
@@ -380,12 +381,12 @@ function ChangesView(props: {
               onClick={() => props.onScope(scope)}
               className={cn("whitespace-nowrap rounded-md px-1.5 py-0.5", props.scope === scope ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}
             >
-              {scope === "turn" ? "Last turn" : "All turns"}
+              {scope === "turn" ? t("editor.last_turn") : t("editor.all_turns")}
             </button>
           ))}
         </div>
         <span className="flex-1" />
-        <Button variant="ghost" size="icon-xs" aria-label="Refresh changes" onClick={props.onRefresh}>
+        <Button variant="ghost" size="icon-xs" aria-label={t("editor.refresh_changes")} onClick={props.onRefresh}>
           <RefreshCw className={cn(props.loading && "animate-spin")} />
         </Button>
       </div>
@@ -426,9 +427,9 @@ function ChangesView(props: {
             })}
           </div>
           <div className="flex shrink-0 items-center gap-1.5 border-t border-border p-2">
-            <span className="min-w-0 flex-1 truncate whitespace-nowrap text-muted-foreground">{pending.length ? `${pending.length} left` : "Done"}</span>
-            <Button size="xs" disabled={pending.length === 0} onClick={() => props.onAcceptAll(pending)}>Accept all</Button>
-            <Button size="xs" variant="outline" disabled={pending.length === 0} onClick={() => props.onRejectAll(pending)}>Reject all</Button>
+            <span className="min-w-0 flex-1 truncate whitespace-nowrap text-muted-foreground">{pending.length ? t("editor.left_count", { count: pending.length }) : t("editor.done")}</span>
+            <Button size="xs" disabled={pending.length === 0} onClick={() => props.onAcceptAll(pending)}>{t("editor.accept_all")}</Button>
+            <Button size="xs" variant="outline" disabled={pending.length === 0} onClick={() => props.onRejectAll(pending)}>{t("editor.reject_all")}</Button>
           </div>
         </>
       )}
@@ -500,7 +501,7 @@ function GitView(props: {
         <GitBranch className="size-3.5 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate font-medium" data-editor-branch>{status.branch ?? "detached HEAD"}</span>
         {status.ahead || status.behind ? <span className="text-muted-foreground">↑{status.ahead} ↓{status.behind}</span> : null}
-        <Button variant="ghost" size="icon-xs" aria-label="Refresh git status" onClick={props.onRefresh}>
+        <Button variant="ghost" size="icon-xs" aria-label={t("editor.refresh_git")} onClick={props.onRefresh}>
           <RefreshCw className={cn(props.loading && "animate-spin")} />
         </Button>
       </div>
@@ -514,8 +515,8 @@ function GitView(props: {
               void commit();
             }
           }}
-          placeholder={staged.length ? "Commit message (Cmd/Ctrl+Enter)" : "Stage changes to commit"}
-          aria-label="Commit message"
+          placeholder={staged.length ? t("editor.commit_placeholder") : t("editor.stage_to_commit")}
+          aria-label={t("editor.commit_message")}
           rows={2}
           className="w-full resize-none rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
@@ -525,16 +526,16 @@ function GitView(props: {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
         <div className="flex items-center px-2 pt-1 pb-0.5 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
-          <span className="flex-1">Staged ({staged.length})</span>
-          {staged.length ? <button type="button" className="hover:text-foreground" onClick={() => props.onStage(staged.flatMap((file) => (file.from ? [file.path, file.from] : [file.path])), false)}>Unstage all</button> : null}
+          <span className="flex-1">{t("editor.staged_count", { count: staged.length })}</span>
+          {staged.length ? <button type="button" className="hover:text-foreground" onClick={() => props.onStage(staged.flatMap((file) => (file.from ? [file.path, file.from] : [file.path])), false)}>{t("editor.unstage_all")}</button> : null}
         </div>
         {staged.map((file) => row(file, true))}
         <div className="flex items-center px-2 pt-2 pb-0.5 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
-          <span className="flex-1">Changes ({unstaged.length})</span>
-          {unstaged.length ? <button type="button" className="hover:text-foreground" onClick={() => props.onStage(unstaged.map((file) => file.path), true)}>Stage all</button> : null}
+          <span className="flex-1">{t("editor.changes_count", { count: unstaged.length })}</span>
+          {unstaged.length ? <button type="button" className="hover:text-foreground" onClick={() => props.onStage(unstaged.map((file) => file.path), true)}>{t("editor.stage_all")}</button> : null}
         </div>
         {unstaged.map((file) => row(file, false))}
-        {staged.length === 0 && unstaged.length === 0 ? <p className="px-2 py-1 text-muted-foreground">No changes.</p> : null}
+        {staged.length === 0 && unstaged.length === 0 ? <p className="px-2 py-1 text-muted-foreground">{t("editor.no_changes")}</p> : null}
       </div>
     </div>
   );
@@ -1539,10 +1540,10 @@ export default function EditorPanel(props: EditorPanelProps) {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem disabled={!canMove} onClick={() => moveToOtherGroup(tab, group, false)}>Move to other group</ContextMenuItem>
-          <ContextMenuItem disabled={!canMove} onClick={() => moveToOtherGroup(tab, group, true)}>Open in other group</ContextMenuItem>
+          <ContextMenuItem disabled={!canMove} onClick={() => moveToOtherGroup(tab, group, false)}>{t("editor.move_to_other_group")}</ContextMenuItem>
+          <ContextMenuItem disabled={!canMove} onClick={() => moveToOtherGroup(tab, group, true)}>{t("editor.open_in_other_group")}</ContextMenuItem>
           {isMarkdownPath(tab.path) && tab.kind === "file" ? (
-            <ContextMenuItem onClick={() => openPreview("side")}>Open preview to the side</ContextMenuItem>
+            <ContextMenuItem onClick={() => openPreview("side")}>{t("editor.open_preview_side")}</ContextMenuItem>
           ) : null}
           <ContextMenuItem onClick={close}>Close</ContextMenuItem>
         </ContextMenuContent>
@@ -1555,7 +1556,7 @@ export default function EditorPanel(props: EditorPanelProps) {
     <div className="ms-auto flex shrink-0 items-center gap-0.5 px-1" data-editor-tools>
       {focusedTab && focusedTab.kind === "file" && isMarkdownPath(focusedTab.path) ? (
         <Tooltip>
-          <TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Open preview to the side" onClick={() => openPreview("side")} data-editor-preview-button><Eye /></Button>} />
+          <TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={t("editor.open_preview_side")} onClick={() => openPreview("side")} data-editor-preview-button><Eye /></Button>} />
           <TooltipContent>Open preview to the side ({mac ? "⌘⇧V" : "Ctrl+Shift+V"})</TooltipContent>
         </Tooltip>
       ) : null}
@@ -1565,7 +1566,7 @@ export default function EditorPanel(props: EditorPanelProps) {
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Split editor"
+              aria-label={t("editor.split")}
               aria-disabled={!splitAllowed}
               className={cn(!splitAllowed && "opacity-50")}
               onClick={splitEditor}
@@ -1575,7 +1576,7 @@ export default function EditorPanel(props: EditorPanelProps) {
             </Button>
           )}
         />
-        <TooltipContent>{splitAllowed ? `Split editor (${mac ? "⌘\\" : "Ctrl+\\"})` : "Widen the window or hide the file tree to split"}</TooltipContent>
+        <TooltipContent>{splitAllowed ? `${t("editor.split")} (${mac ? "⌘\\" : "Ctrl+\\"})` : t("editor.split_hint")}</TooltipContent>
       </Tooltip>
     </div>
   );
@@ -1624,7 +1625,7 @@ export default function EditorPanel(props: EditorPanelProps) {
         {state.tabs.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground" data-editor-empty>
             <FileCode2 className="size-8 opacity-40" />
-            <p>Open a file from the tree, or press <kbd className="rounded border border-border px-1 text-xs">{/Mac/i.test(navigator.platform) ? "⌘" : "Ctrl"} P</kbd> to find one.</p>
+            <p>{t("editor.empty_before")}<kbd className="rounded border border-border px-1 text-xs">{/Mac/i.test(navigator.platform) ? "⌘" : "Ctrl"} P</kbd>{t("editor.empty_after")}</p>
             {pendingCount ? (
               <Button size="sm" variant="outline" onClick={() => useEditorStore.getState().setView(workspaceId, "changes")}>Review {pendingCount} changed file{pendingCount === 1 ? "" : "s"}</Button>
             ) : null}
@@ -1680,7 +1681,7 @@ export default function EditorPanel(props: EditorPanelProps) {
                 variant="ghost"
                 size="icon-xs"
                 className="my-auto me-1 shrink-0"
-                aria-label="Close group"
+                aria-label={t("editor.close_group")}
                 onClick={() => {
                   for (const tab of group2.tabs) useEditorStore.getState().closeTab2(workspaceId, tab.id);
                 }}
@@ -1690,7 +1691,7 @@ export default function EditorPanel(props: EditorPanelProps) {
               </Button>
             )}
           />
-          <TooltipContent>Close group (its tabs close; unsaved text stays until you reopen the file)</TooltipContent>
+          <TooltipContent>{t("editor.close_group_hint")}</TooltipContent>
         </Tooltip>
       </div>
       {group2Error ? <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">{group2Error}</div> : null}
@@ -1735,7 +1736,7 @@ export default function EditorPanel(props: EditorPanelProps) {
           {group2View && splitAllowed ? (
             <>
               <ResizableHandle
-                aria-label="Resize editor groups (double-click: equal widths)"
+                aria-label={t("editor.resize_groups")}
                 onDoubleClick={() => splitGroupRef.current?.setLayout({ "editor-group-1": 50, "editor-group-2": 50 })}
               />
               <ResizablePanel id="editor-group-2" minSize={`${MIN_GROUP_PX}px`} className="min-h-0 min-w-0">{group2View}</ResizablePanel>
@@ -1799,11 +1800,11 @@ export default function EditorPanel(props: EditorPanelProps) {
   return (
     <div ref={panelRef} className="relative flex h-full min-h-0 bg-background" data-editor-panel data-editor-layout="ide">
       {/* The activity rail: the side views, quick open, and the app's own destinations at its foot. */}
-      <nav aria-label="Editor views" className="flex w-12 shrink-0 flex-col items-center gap-1 border-e border-border py-2 mac:pt-10" data-editor-rail-views>
-        {railItem("files", "Files", <Files />, mac ? "⌘⇧E" : "Ctrl+Shift+E")}
-        {railItem("changes", "Agent changes", <FileDiff />, null, pendingCount)}
+      <nav aria-label={t("editor.views")} className="flex w-12 shrink-0 flex-col items-center gap-1 border-e border-border py-2 mac:pt-10" data-editor-rail-views>
+        {railItem("files", t("session.files"), <Files />, mac ? "⌘⇧E" : "Ctrl+Shift+E")}
+        {railItem("changes", t("editor.agent_changes"), <FileDiff />, null, pendingCount)}
         {railItem("git", "Git", <GitBranch />, null, gitQuery.data?.repo ? gitQuery.data.files.length : undefined)}
-        {railItem("search", "Search in files", <Search />, mac ? "⌘⇧F" : "Ctrl+Shift+F")}
+        {railItem("search", t("editor.search_in_files"), <Search />, mac ? "⌘⇧F" : "Ctrl+Shift+F")}
         <span className="flex-1" />
         {props.railFoot}
       </nav>
@@ -1814,7 +1815,7 @@ export default function EditorPanel(props: EditorPanelProps) {
         <Tooltip>
           <TooltipTrigger
             render={(
-              <Button variant="ghost" size="icon-sm" aria-label="Go to file" onClick={() => useEditorStore.getState().setQuickOpen(true)}>
+              <Button variant="ghost" size="icon-sm" aria-label={t("editor.go_to_file")} onClick={() => useEditorStore.getState().setQuickOpen(true)}>
                 <FileCode2 />
               </Button>
             )}
@@ -1824,12 +1825,12 @@ export default function EditorPanel(props: EditorPanelProps) {
         <Tooltip>
           <TooltipTrigger
             render={(
-              <Button variant="ghost" size="icon-sm" aria-label={sideOpen ? "Hide side bar" : "Show side bar"} onClick={() => useEditorStore.getState().setSideOpen(!sideOpen)}>
+              <Button variant="ghost" size="icon-sm" aria-label={sideOpen ? t("editor.hide_side_bar") : t("editor.show_side_bar")} onClick={() => useEditorStore.getState().setSideOpen(!sideOpen)}>
                 {sideOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
               </Button>
             )}
           />
-          <TooltipContent>{sideOpen ? "Hide side bar" : "Show side bar"}</TooltipContent>
+          <TooltipContent>{sideOpen ? t("editor.hide_side_bar") : t("editor.show_side_bar")}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger
@@ -1837,7 +1838,7 @@ export default function EditorPanel(props: EditorPanelProps) {
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={props.terminalOpen ? "Hide terminal" : "Show terminal"}
+                aria-label={props.terminalOpen ? t("editor.hide_terminal") : t("editor.show_terminal")}
                 aria-pressed={props.terminalOpen}
                 className={cn(props.terminalOpen && "bg-muted text-foreground")}
                 onClick={props.onToggleTerminal}
@@ -1902,7 +1903,7 @@ export default function EditorPanel(props: EditorPanelProps) {
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label="Close panel"
+                    aria-label={t("editor.close_panel")}
                     onClick={() => {
                       useEditorStore.getState().setProblemsOpen(false);
                       if (props.terminalOpen) props.onToggleTerminal();
@@ -1934,7 +1935,7 @@ export default function EditorPanel(props: EditorPanelProps) {
       <Dialog open={Boolean(formatPrompt)} onOpenChange={(open) => !open && formatPrompt?.answer(null)}>
         <DialogContent className="max-w-lg" data-editor-format-trust>
           <DialogHeader>
-            <DialogTitle>Run this project's formatter?</DialogTitle>
+            <DialogTitle>{t("editor.format_prompt_title")}</DialogTitle>
             <DialogDescription>
               Format on save would run {formatPrompt?.formatter} from this project{formatPrompt?.sandbox ? ", in the project's sandbox" : " on this computer"}. It is the
               project's own code (and its settings and plugins), so only allow it for projects you trust.
@@ -1944,8 +1945,8 @@ export default function EditorPanel(props: EditorPanelProps) {
           <p className="text-xs text-muted-foreground">You are asked again if the formatter or its settings change.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => formatPrompt?.answer("never")}>No</Button>
-            <Button variant="outline" onClick={() => formatPrompt?.answer("once")}>Allow once</Button>
-            <Button onClick={() => formatPrompt?.answer("always")}>Always for this project</Button>
+            <Button variant="outline" onClick={() => formatPrompt?.answer("once")}>{t("editor.allow_once")}</Button>
+            <Button onClick={() => formatPrompt?.answer("always")}>{t("editor.always_for_project")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

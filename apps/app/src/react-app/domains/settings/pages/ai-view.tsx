@@ -82,31 +82,31 @@ export function AiSettingsView(props: AiSettingsViewProps) {
     <LayoutStack>
       <LayoutSection>
         <LayoutSectionHeader>
-          <LayoutSectionTitle>Choose how models run</LayoutSectionTitle>
+          <LayoutSectionTitle>{t("settings.ai.title")}</LayoutSectionTitle>
           <LayoutSectionDescription>
             {providerLock.locked
-              ? "Models run through the omnirush.ai inference proxy. Model names are always shown exactly as reported by their provider."
-              : "Use the omnirush.ai internal proxy or connect a major AI provider. Model names are always shown exactly as reported by their provider."}
+              ? t("settings.ai.desc_locked")
+              : t("settings.ai.desc")}
           </LayoutSectionDescription>
         </LayoutSectionHeader>
 
         <div className={providerLock.locked ? "grid gap-3" : "grid gap-3 lg:grid-cols-2"}>
           <ModelAccessCard
             icon={<ShieldCheck className="size-4" />}
-            title="Internal models"
-            description="Use the omnirush.ai inference proxy and models managed by your organization."
-            status={internalModelsReady ? "Ready" : "Unavailable"}
+            title={t("settings.ai.internal_title")}
+            description={t("settings.ai.internal_desc")}
+            status={internalModelsReady ? t("connect.diagnostics_connection_ready") : t("config.unavailable")}
             tone={internalModelsReady ? "ready" : "neutral"}
           />
           {providerLock.locked ? null : <ModelAccessCard
             icon={<KeyRound className="size-4" />}
-            title="Provider connections"
-            description="Connect OpenAI, Anthropic, Google, or OpenRouter without changing model identities."
-            status={externalProviderCount > 0 ? `${externalProviderCount} connected` : "Optional"}
+            title={t("settings.ai.providers_title")}
+            description={t("settings.ai.providers_desc")}
+            status={externalProviderCount > 0 ? t("settings.ai.connected_count", { count: externalProviderCount }) : t("settings.ai.optional")}
             tone={externalProviderCount > 0 ? "ready" : "neutral"}
             action={props.canAddProviders ? (
               <Button variant="outline" size="sm" onClick={() => void props.onOpenProviderAuth()}>
-                Connect
+                {t("connect.row_action_connect")}
               </Button>
             ) : null}
           />}

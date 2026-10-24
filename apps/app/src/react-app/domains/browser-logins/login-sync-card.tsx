@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 
 import { LoginSyncDialog } from "./login-sync-dialog";
 import { useBrowserLoginSync } from "./use-browser-login-sync";
+import { t } from "@/i18n";
 
 /** One-time offer shown after browser login sync becomes available. */
 export function LoginSyncCard() {
@@ -35,7 +36,7 @@ export function LoginSyncCard() {
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <Button size="sm" variant="ghost" onClick={loginSync.dismissPrompt} data-testid="login-sync-not-now">Not now</Button>
-            <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="login-sync-open">Choose sites</Button>
+            <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="login-sync-open">{t("browser_logins.choose_sites")}</Button>
           </div>
         </div>
       ) : null}

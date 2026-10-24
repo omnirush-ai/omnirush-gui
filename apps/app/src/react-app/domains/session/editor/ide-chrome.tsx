@@ -56,16 +56,16 @@ export function LayoutModeToggle(props: { mode: LayoutMode; onChange: (mode: Lay
         render={(
           <div
             role="radiogroup"
-            aria-label="Layout"
+            aria-label={t("ide.layout")}
             data-layout-mode={props.mode}
             className={cn("flex shrink-0 items-center gap-0.5 rounded-lg bg-muted p-0.5 mac:titlebar-no-drag", props.className)}
           />
         )}
       >
-        {option("chat", "Chat", <MessageSquare />)}
+        {option("chat", t("ide.layout_chat"), <MessageSquare />)}
         {option("ide", "IDE", <Code2 />)}
       </TooltipTrigger>
-      <TooltipContent>Switch layout ({shortcutLabel("Y")})</TooltipContent>
+      <TooltipContent>{t("ide.switch_layout")} ({shortcutLabel("Y")})</TooltipContent>
     </Tooltip>
   );
 }
@@ -79,9 +79,9 @@ export function WorkspaceSwitcher(props: { workspaces: SwitcherWorkspace[]; sele
     <DropdownMenu>
       <DropdownMenuTrigger
         render={(
-          <Button variant="ghost" size="sm" className="h-7 min-w-0 max-w-56 gap-1.5 rounded-lg px-2 text-[12.5px] font-medium" data-workspace-switcher aria-label="Switch workspace">
+          <Button variant="ghost" size="sm" className="h-7 min-w-0 max-w-56 gap-1.5 rounded-lg px-2 text-[12.5px] font-medium" data-workspace-switcher aria-label={t("ide.switch_workspace")}>
             <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{current?.name ?? "Workspace"}</span>
+            <span className="truncate">{current?.name ?? t("settings.section_workspace")}</span>
             <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
           </Button>
         )}
@@ -108,7 +108,7 @@ function StatusDot(props: { status: SwitcherChat["status"] }) {
   if (props.status === "idle") return null;
   return (
     <span
-      aria-label={props.status === "approval" ? "Needs approval" : "Running"}
+      aria-label={props.status === "approval" ? t("ide.needs_approval") : t("ide.running")}
       className={cn("size-1.5 shrink-0 rounded-full", props.status === "approval" ? "bg-amber-9" : "animate-pulse bg-primary")}
     />
   );
@@ -129,11 +129,11 @@ export function ChatSwitcher(props: {
       <DropdownMenu>
         <DropdownMenuTrigger
           render={(
-            <Button variant="ghost" size="sm" className="h-7 min-w-0 max-w-64 shrink gap-1.5 rounded-lg px-2 text-[13px] font-medium" data-chat-switcher aria-label="Switch chat">
+            <Button variant="ghost" size="sm" className="h-7 min-w-0 max-w-64 shrink gap-1.5 rounded-lg px-2 text-[13px] font-medium" data-chat-switcher aria-label={t("ide.switch_chat")}>
               <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="truncate">{props.title}</span>
               {props.chats.length > 1 ? <span className="shrink-0 text-[11px] font-normal text-muted-foreground">{props.chats.length}</span> : null}
-              {running ? <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-label="Another chat is running" /> : null}
+              {running ? <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-label={t("ide.another_chat_running")} /> : null}
               <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
             </Button>
           )}
@@ -141,7 +141,7 @@ export function ChatSwitcher(props: {
         <DropdownMenuContent align="start" className="max-h-[60vh] w-72 overflow-y-auto">
           <DropdownMenuItem onClick={props.onNew} disabled={props.newDisabled} data-chat-switch-new>
             <Plus className="size-4" />
-            New chat
+            {t("ide.new_chat")}
           </DropdownMenuItem>
           {props.chats.length ? <DropdownMenuSeparator /> : null}
           {props.chats.map((chat) => (
@@ -156,12 +156,12 @@ export function ChatSwitcher(props: {
       <Tooltip>
         <TooltipTrigger
           render={(
-            <Button variant="ghost" size="icon-sm" aria-label="New chat" onClick={props.onNew} disabled={props.newDisabled} className="rounded-lg text-muted-foreground">
+            <Button variant="ghost" size="icon-sm" aria-label={t("ide.new_chat")} onClick={props.onNew} disabled={props.newDisabled} className="rounded-lg text-muted-foreground">
               <Plus />
             </Button>
           )}
         />
-        <TooltipContent>New chat</TooltipContent>
+        <TooltipContent>{t("ide.new_chat")}</TooltipContent>
       </Tooltip>
     </div>
   );
@@ -176,7 +176,7 @@ export function ChatPanelButton(props: { open: boolean; attention: "approval" | 
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={props.open ? "Hide chat" : "Show chat"}
+            aria-label={props.open ? t("session.hide_chat") : t("session.show_chat")}
             aria-pressed={props.open}
             data-chat-panel-toggle
             onClick={props.onToggle}
@@ -192,7 +192,7 @@ export function ChatPanelButton(props: { open: boolean; attention: "approval" | 
           </Button>
         )}
       />
-      <TooltipContent>{props.open ? "Hide chat" : "Show chat"} ({shortcutLabel("H")})</TooltipContent>
+      <TooltipContent>{props.open ? t("session.hide_chat") : t("session.show_chat")} ({shortcutLabel("H")})</TooltipContent>
     </Tooltip>
   );
 }
@@ -211,8 +211,8 @@ export function RailDestinations(props: { destinations: RailDestination[]; onOpe
           render={(
             <button
               type="button"
-              aria-label="More: parallel tasks, workflows, library"
-              title="Parallel tasks, workflows, library and more"
+              aria-label={t("ide.rail_more_label")}
+              title={t("ide.rail_more_title")}
               data-rail-more
               className="relative flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground [&_svg]:size-[18px]"
             >
@@ -253,7 +253,7 @@ export function RailDestinations(props: { destinations: RailDestination[]; onOpe
           render={(
             <button
               type="button"
-              aria-label="Settings"
+              aria-label={t("settings.tab_general")}
               onClick={props.onOpenSettings}
               className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground [&_svg]:size-[18px]"
             >
@@ -261,7 +261,7 @@ export function RailDestinations(props: { destinations: RailDestination[]; onOpe
             </button>
           )}
         />
-        <TooltipContent side="right">Settings</TooltipContent>
+        <TooltipContent side="right">{t("settings.tab_general")}</TooltipContent>
       </Tooltip>
     </>
   );

@@ -45,7 +45,7 @@ import {
 import { DiagnosticsSection } from "./diagnostics-section";
 import { FreeSpaceSection } from "./free-space-section";
 import { keptPendingLine, sendPendingBeforeSignOut } from "../sign-out-uploads";
-import { BEST_PRACTICES_HELP, useBestPractices, type BestPracticesClient } from "../best-practices";
+import { useBestPractices, type BestPracticesClient } from "../best-practices";
 import { AGENT_ASSIST_ITEMS, useAgentAssist, type AgentAssistClient } from "../agent-assist";
 import type { OmniRushAgentAssist, OmniRushAgentAssistFeature } from "../../../../app/lib/omnirush-server";
 import { useLinuxSandbox, type LinuxSandboxClient } from "../linux-sandbox";
@@ -81,18 +81,18 @@ type SettingsCardDefinition = { tab: SettingsTab; icon: typeof Sparkles } & (
 );
 
 const workspaceCards: SettingsCardDefinition[] = [
-  { tab: "preferences", icon: Cog, title: "Preferences", desc: "Default model, reasoning, and compaction." },
-  { tab: "permissions", icon: FolderLock, title: "Permissions", desc: "Authorized folders and file access." },
-  { tab: "advanced", icon: Wrench, title: "Advanced", desc: "Runtime, engine, recovery, and developer options." },
+  { tab: "preferences", icon: Cog, titleKey: "settings.tab_preferences", descKey: "settings.card_preferences_desc" },
+  { tab: "permissions", icon: FolderLock, titleKey: "settings.tab_permissions", descKey: "settings.card_permissions_desc" },
+  { tab: "advanced", icon: Wrench, titleKey: "settings.tab_advanced", descKey: "settings.card_advanced_desc" },
 ];
 
 const globalCards: SettingsCardDefinition[] = [
-  { tab: "ai", icon: Sparkles, title: "AI Providers", desc: "Connect services that provide AI models." },
-  { tab: "appearance", icon: Paintbrush, title: "Appearance", desc: "Theme, font size, and display." },
-  { tab: "editor", icon: Code2, title: "Editor", desc: "Code editor text, saving, and keys." },
-  { tab: "voice", icon: Mic, title: "Voice", desc: "Dictation, microphone, and hotkey." },
-  { tab: "environment", icon: Terminal, title: "Environment", desc: "Environment variables and paths." },
-  { tab: "updates", icon: RefreshCcw, title: "Updates", desc: "App version and update channel." },
+  { tab: "ai", icon: Sparkles, titleKey: "settings.tab_ai", descKey: "settings.card_ai_desc" },
+  { tab: "appearance", icon: Paintbrush, titleKey: "settings.tab_appearance", descKey: "settings.card_appearance_desc" },
+  { tab: "editor", icon: Code2, titleKey: "settings.tab_editor", descKey: "settings.card_editor_desc" },
+  { tab: "voice", icon: Mic, titleKey: "settings.tab_voice", descKey: "settings.card_voice_desc" },
+  { tab: "environment", icon: Terminal, titleKey: "settings.tab_environment", descKey: "settings.card_environment_desc" },
+  { tab: "updates", icon: RefreshCcw, titleKey: "settings.tab_updates", descKey: "settings.card_updates_desc" },
 ];
 
 function cardTitle(card: SettingsCardDefinition) {
@@ -138,20 +138,20 @@ export type AccountSignOutOutcome = {
  * says exactly what happened to the remote device session.
  */
 export function accountSignOutMessage(outcome: AccountSignOutOutcome, server?: string | null): string {
-  const host = server?.trim() || "the account server";
+  const host = server?.trim() || t("settings.account_server_fallback");
   switch (outcome.reason) {
     case "revoked":
-      return `Signed out on this device and revoked its device session on ${host}.`;
+      return t("settings.signout_revoked", { host });
     case "already_revoked":
-      return `Signed out on this device. ${host} had already revoked this device session.`;
+      return t("settings.signout_already_revoked", { host });
     case "endpoint_missing":
-      return `Signed out on this device. ${host} has no remote sign-out endpoint, so the device session was not revoked there.`;
+      return t("settings.signout_endpoint_missing", { host });
     case "unreachable":
-      return `Signed out on this device. ${host} could not be reached, so the device session was not revoked there.`;
+      return t("settings.signout_unreachable", { host });
     default:
       return outcome.remoteRevoked
-        ? `Signed out on this device and revoked its device session on ${host}.`
-        : `Signed out on this device. The device session on ${host} could not be revoked.`;
+        ? t("settings.signout_revoked", { host })
+        : t("settings.signout_not_revoked", { host });
   }
 }
 
@@ -159,7 +159,7 @@ export function accountSignOutMessage(outcome: AccountSignOutOutcome, server?: s
 export function accountServerLine(account: Pick<NativeAccountStatus, "connected" | "gatewayHost">): string | null {
   const host = account.gatewayHost?.trim();
   if (!host) return null;
-  return account.connected ? `Connected to ${host}` : `Account server: ${host}`;
+  return account.connected ? t("settings.account_connected_to", { host }) : t("settings.account_server", { host });
 }
 
 /**
@@ -248,20 +248,20 @@ export function BestPracticesCard(props: {
 }) {
   return (
     <div className="space-y-3">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">Best practices</div>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">{t("settings.best_practices_title")}</div>
       <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
           <Sparkles size={17} className="text-dls-secondary" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-dls-text">Best practices</div>
-          <div id="best-practices-help" className="text-[11px] text-dls-secondary">{BEST_PRACTICES_HELP}</div>
+          <div className="text-[13px] font-medium text-dls-text">{t("settings.best_practices_title")}</div>
+          <div id="best-practices-help" className="text-[11px] text-dls-secondary">{t("settings.best_practices_help")}</div>
           {props.status ? (
             <div className="mt-0.5 text-[11px] text-dls-secondary" role="status" data-testid="best-practices-status">{props.status}</div>
           ) : null}
         </div>
         <Switch
-          aria-label="Best practices"
+          aria-label={t("settings.best_practices_title")}
           aria-describedby="best-practices-help"
           checked={props.enabled === true}
           disabled={props.busy || props.enabled === null}
@@ -270,6 +270,19 @@ export function BestPracticesCard(props: {
       </div>
     </div>
   );
+}
+
+function agentAssistText(key: OmniRushAgentAssistFeature): { title: string; help: string } {
+  switch (key) {
+    case "selfCheck":
+      return { title: t("settings.agent_assist.selfCheck_title"), help: t("settings.agent_assist.selfCheck_help") };
+    case "projectNotes":
+      return { title: t("settings.agent_assist.projectNotes_title"), help: t("settings.agent_assist.projectNotes_help") };
+    case "diagnostics":
+      return { title: t("settings.agent_assist.diagnostics_title"), help: t("settings.agent_assist.diagnostics_help") };
+    case "compaction":
+      return { title: t("settings.agent_assist.compaction_title"), help: t("settings.agent_assist.compaction_help") };
+  }
 }
 
 /** Settings > General > Agent: what the agent does on its own (agent-assist-config.ts on the server). */
@@ -281,7 +294,7 @@ export function AgentAssistCard(props: {
 }) {
   return (
     <div className="space-y-3">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">Agent</div>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">{t("composer.agent_label")}</div>
       <div className="rounded-2xl border border-dls-border bg-dls-surface" data-testid="agent-assist-card">
         {AGENT_ASSIST_ITEMS.map((item, index) => {
           const forced = props.setting?.forced.includes(item.key) ?? false;
@@ -295,14 +308,14 @@ export function AgentAssistCard(props: {
                 <div className="h-10 w-10 shrink-0" aria-hidden="true" />
               )}
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-dls-text">{item.title}</div>
+                <div className="text-[13px] font-medium text-dls-text">{agentAssistText(item.key).title}</div>
                 <div id={`agent-assist-${item.key}-help`} className="text-[11px] text-dls-secondary">
-                  {item.help}
-                  {forced ? " Set by the app's environment." : ""}
+                  {agentAssistText(item.key).help}
+                  {forced ? ` ${t("settings.agent_assist.forced")}` : ""}
                 </div>
               </div>
               <Switch
-                aria-label={item.title}
+                aria-label={agentAssistText(item.key).title}
                 aria-describedby={`agent-assist-${item.key}-help`}
                 checked={props.setting?.features[item.key] === true}
                 disabled={props.busy || props.setting === null || forced}
@@ -329,26 +342,26 @@ export function KeepAwakeCard(props: {
   onToggle: (enabled: boolean) => void;
 }) {
   const hint = props.state?.forcedOff
-    ? "Off for this launch: OMNIRUSH_KEEP_AWAKE=0 is set."
+    ? t("settings.keep_awake_forced_off")
     : props.state && !props.state.available
-      ? "Not available in this session (remote login or CI)."
+      ? t("settings.keep_awake_unavailable")
       : null;
   return (
     <div className="space-y-3">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">Power</div>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">{t("settings.power_title")}</div>
       <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
           <Coffee size={17} className="text-dls-secondary" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-dls-text">{KEEP_AWAKE_TITLE}</div>
-          <div id="keep-awake-help" className="text-[11px] text-dls-secondary">{KEEP_AWAKE_HELP}</div>
+          <div className="text-[13px] font-medium text-dls-text">{t("settings.keep_awake_title")}</div>
+          <div id="keep-awake-help" className="text-[11px] text-dls-secondary">{t("settings.keep_awake_help")}</div>
           {hint ? (
             <div className="mt-0.5 text-[11px] text-dls-secondary" role="status" data-testid="keep-awake-status">{hint}</div>
           ) : null}
         </div>
         <Switch
-          aria-label={KEEP_AWAKE_TITLE}
+          aria-label={t("settings.keep_awake_title")}
           aria-describedby="keep-awake-help"
           checked={props.state?.enabled === true}
           disabled={props.busy || props.state === null}
@@ -403,7 +416,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
 
   async function connectAccount() {
     setAccountBusy(true);
-    setAccountMessage("Approve the device link in your browser…");
+    setAccountMessage(t("settings.account_approve_in_browser"));
     try {
       await omnirushAccountConnect();
       captureAnalyticsEvent("device_approved", { method: "device_link" });
@@ -414,9 +427,9 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
         syncAnalyticsAccount(next);
         captureAnalyticsEvent("sign_in_completed", { method: "device_link" });
       }
-      setAccountMessage("Account connected. omnirush.ai models are ready.");
+      setAccountMessage(t("settings.account_connected_ready"));
     } catch (error) {
-      setAccountMessage(error instanceof Error ? error.message : "The account could not be connected.");
+      setAccountMessage(error instanceof Error ? error.message : t("settings.account_connect_failed"));
     } finally {
       setAccountBusy(false);
     }
@@ -436,7 +449,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
       setAccount(next ?? { connected: false, gatewayConfigured: account?.gatewayConfigured ?? false });
       setAccountMessage(kept > 0 ? `${accountSignOutMessage(result, server)} ${keptPendingLine(kept)}` : accountSignOutMessage(result, server));
     } catch (error) {
-      setAccountMessage(error instanceof Error ? error.message : "The account could not be signed out.");
+      setAccountMessage(error instanceof Error ? error.message : t("settings.account_sign_out_failed"));
     } finally {
       setAccountBusy(false);
     }
@@ -450,7 +463,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
       {isElectronRuntime() && account && (
         <div className="space-y-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
-            Account
+            {t("settings.tab_cloud_account")}
           </div>
           <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
@@ -458,7 +471,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
             </div>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-medium text-dls-text">
-                {account.connected ? account.displayName || account.email || "Connected" : "Sign in to your account"}
+                {account.connected ? account.displayName || account.email || t("config.status_connected") : t("settings.account_sign_in_title")}
               </div>
               {account.connected && account.email ? (
                 <div className="truncate text-[11px] text-dls-secondary">{account.email}</div>
@@ -472,22 +485,22 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                 {accountMessage || (account.connected
                   ? usage
                     ? usage.line
-                    : "omnirush.ai models are ready on this Mac."
+                    : t("settings.account_models_ready")
                   : account.gatewayConfigured
                     ? account.reauthorizationRequired
                       ? account.keyringUnavailable
-                        ? "Your system keyring is not available right now. Sign in again to continue."
-                        : "Your session expired. Sign in again to continue."
-                      : "Sign in in your browser, then return here."
-                    : "The omnirush.ai account service has not been configured for this build.")}
+                        ? t("settings.account_keyring_unavailable")
+                        : t("settings.account_session_expired")
+                      : t("settings.account_sign_in_hint")
+                    : t("settings.account_not_configured"))}
               </div>
               {account.connected && account.credentialStorage === "file" ? (
                 <div className="mt-0.5 text-[11px] text-dls-secondary" data-testid="account-credential-storage">
-                  Signed in. No system keyring is available, so the sign-in is kept in a private file on this computer.
+                  {t("settings.account_file_storage")}
                 </div>
               ) : null}
               {usage ? (
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-dls-hover" aria-label={`${Math.round(usage.percent)}% used`}>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-dls-hover" aria-label={t("settings.account_usage_percent", { percent: Math.round(usage.percent) })}>
                   <div
                     className="h-full rounded-full bg-highlight"
                     style={{ width: `${usage.percent}%` }}
@@ -500,11 +513,11 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
             </div>
             {account.connected ? (
               <button type="button" disabled={accountBusy} onClick={() => void signOutAccount()} className="rounded-lg border border-dls-border px-3 py-2 text-[12px] text-dls-secondary hover:bg-dls-hover disabled:opacity-50">
-                Sign out
+                {t("den.sign_out")}
               </button>
             ) : (
               <button type="button" disabled={accountBusy || !account.gatewayConfigured} onClick={() => void connectAccount()} className="rounded-lg bg-dls-text px-3 py-2 text-[12px] font-medium text-dls-background disabled:opacity-50">
-                {accountBusy ? "Waiting…" : "Sign in"}
+                {accountBusy ? t("settings.account_waiting") : t("settings.account_sign_in")}
               </button>
             )}
           </div>
@@ -513,7 +526,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
       {/* Workspace settings */}
       <div className="space-y-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
-          Workspace
+          {t("settings.section_workspace")}
         </div>
         <div className="grid grid-cols-2 gap-2">
           {workspaceCards.map((card) => (
@@ -531,7 +544,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
       {/* Global settings */}
       <div className="space-y-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
-          Global
+          {t("settings.section_global")}
         </div>
         <div className="grid grid-cols-2 gap-2">
           {globalCards.map((card) => (

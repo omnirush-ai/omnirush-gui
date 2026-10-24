@@ -23,6 +23,7 @@ import { contextUse, sandboxLabel, uploadsLine } from "./context-usage";
 import { useSessionCommandsStore } from "./session-commands-store";
 import { chatUndoKey } from "./undo-key";
 import { useCachedQueryData, useUndoRedo, visibleMessages, type SessionCommandTarget } from "./use-session-commands";
+import { t } from "@/i18n";
 
 export type SessionCommandModelProps = {
   selectedModel: ModelRef;
@@ -73,11 +74,11 @@ export function SessionCommandControls(props: SessionCommandControlsProps) {
       event.stopPropagation();
       // The keyboard never stops a turn (a stray Ctrl+Z must not cut the agent off).
       if (running) {
-        toast.info("Stop the turn first (Esc), then undo", { duration: 4000 });
+        toast.info(t("session.undo_stop_first"), { duration: 4000 });
         return;
       }
       // A key press is easy to make by accident: the undo (the turn and its file changes) asks first.
-      if (action === "undo" && !window.confirm("Undo the last turn? Its messages are hidden and its file changes taken back. Redo or Restore brings them back.")) return;
+      if (action === "undo" && !window.confirm(t("session.undo_confirm"))) return;
       void (action === "undo" ? undo() : redo());
     };
     window.addEventListener("keydown", onKey, true);
@@ -94,7 +95,7 @@ export function SessionCommandControls(props: SessionCommandControlsProps) {
               variant="ghost"
               size="icon-sm"
               className={iconButton}
-              aria-label="Undo last turn"
+              aria-label={t("session.undo_last_turn")}
               data-testid="session-undo"
               disabled={!canUndo}
               onClick={() => void undo()}
@@ -103,7 +104,7 @@ export function SessionCommandControls(props: SessionCommandControlsProps) {
             </Button>
           }
         />
-        <TooltipContent>Undo last turn ({mod}Z)</TooltipContent>
+        <TooltipContent>{t("session.undo_last_turn")} ({mod}Z)</TooltipContent>
       </Tooltip>
       {canRedo || commands.busyAction === "redo" ? (
         <Tooltip>
@@ -113,7 +114,7 @@ export function SessionCommandControls(props: SessionCommandControlsProps) {
                 variant="ghost"
                 size="icon-sm"
                 className={iconButton}
-                aria-label="Redo"
+                aria-label={t("session.redo")}
                 data-testid="session-redo"
                 disabled={!canRedo}
                 onClick={() => void redo()}
@@ -122,7 +123,7 @@ export function SessionCommandControls(props: SessionCommandControlsProps) {
               </Button>
             }
           />
-          <TooltipContent>Redo the undone turn ({mod}{isMac() ? "⇧Z" : "Shift+Z"})</TooltipContent>
+          <TooltipContent>{t("session.redo_turn")} ({mod}{isMac() ? "⇧Z" : "Shift+Z"})</TooltipContent>
         </Tooltip>
       ) : null}
       <Tooltip>
@@ -132,7 +133,7 @@ export function SessionCommandControls(props: SessionCommandControlsProps) {
               variant="ghost"
               size="icon-sm"
               className={iconButton}
-              aria-label="Changes"
+              aria-label={t("session.changes")}
               data-testid="session-changes"
               onClick={() => openChanges(props.sessionId)}
             >
@@ -140,7 +141,7 @@ export function SessionCommandControls(props: SessionCommandControlsProps) {
             </Button>
           }
         />
-        <TooltipContent>Changes</TooltipContent>
+        <TooltipContent>{t("session.changes")}</TooltipContent>
       </Tooltip>
       <StatusPopover {...props} />
       <StatusDialog {...props} />
@@ -162,7 +163,7 @@ function StatusDialog(props: SessionCommandControlsProps) {
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) closeStatus(); }}>
       <DialogContent className="max-w-sm gap-0 p-0" data-testid="session-status-dialog">
-        <DialogTitle className="sr-only">Status</DialogTitle>
+        <DialogTitle className="sr-only">{t("session.status")}</DialogTitle>
         {open ? <StatusRows {...props} /> : null}
       </DialogContent>
     </Dialog>
@@ -182,7 +183,7 @@ function StatusPopover(props: SessionCommandControlsProps) {
                   variant="ghost"
                   size="icon-sm"
                   className={cn(iconButton, open && "bg-primary/10 text-link")}
-                  aria-label="Status"
+                  aria-label={t("session.status")}
                   data-testid="session-status"
                 >
                   <Gauge size={16} />
@@ -191,7 +192,7 @@ function StatusPopover(props: SessionCommandControlsProps) {
             />
           }
         />
-        <TooltipContent>Status</TooltipContent>
+        <TooltipContent>{t("session.status")}</TooltipContent>
       </Tooltip>
       <PopoverContent align="end" className="w-[22rem] gap-0 rounded-2xl p-0" data-testid="session-status-popover">
         {open ? <StatusRows {...props} /> : null}

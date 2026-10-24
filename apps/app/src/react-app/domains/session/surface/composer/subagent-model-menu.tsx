@@ -3,6 +3,7 @@ import { useState } from "react";
 import { LoaderCircle, Users } from "lucide-react";
 
 import { toast } from "@/components/ui/sonner";
+import { t } from "@/i18n";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,7 +16,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 import {
-  SAME_AS_MAIN_LABEL,
   SUBAGENT_MODEL_PINNED_HELP,
   subagentEffortLabel,
   subagentEffortOptions,
@@ -55,16 +55,16 @@ function SubagentModelPicker(props: { client: SubagentModelClient; chatModel: st
   const save = (next: { effort?: string | null }) => {
     if (locked) return;
     void change(next)
-      .then((saved) => toast.success(`Sub-agents: ${subagentPinnedSummary(saved.effort)}. Applies to new tasks.`))
-      .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : "The sub-agent setting could not be saved."));
+      .then((saved) => toast.success(t("subagent.saved", { summary: subagentPinnedSummary(saved.effort) })))
+      .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : t("subagent.save_failed")));
   };
 
   return (
     <DropdownMenu open={open} onOpenChange={(next) => { setOpen(next); if (next) void refetch(); }}>
       <DropdownMenuTrigger
         data-testid="subagent-model-trigger"
-        aria-label={`Sub-agents: ${summary}`}
-        title={props.policyLocked ? SUBAGENT_MENU_POLICY_LOCK : `Sub-agents: ${summary}. ${pinned}.`}
+        aria-label={t("subagent.chip_label", { summary })}
+        title={props.policyLocked ? t("subagent.policy_lock") : `${t("subagent.chip_label", { summary })}. ${pinned}.`}
         // An icon (the summary in its tooltip) until the composer is wide
         // enough for the label, so it never squeezes the model selector.
         className={`flex h-9 max-h-9 min-w-9 max-w-64 shrink-[4] items-center justify-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm transition-colors hover:bg-gray-3 @min-[720px]/composer:justify-start ${
@@ -72,21 +72,21 @@ function SubagentModelPicker(props: { client: SubagentModelClient; chatModel: st
         }`}
       >
         {saving ? <LoaderCircle className="size-4 shrink-0 animate-spin" /> : <Users className="size-4 shrink-0" />}
-        <span data-testid="subagent-model-label" className="hidden min-w-0 truncate whitespace-nowrap @min-[720px]/composer:inline">{custom ? summary : "Sub-agents"}</span>
+        <span data-testid="subagent-model-label" className="hidden min-w-0 truncate whitespace-nowrap @min-[720px]/composer:inline">{custom ? summary : t("subagent.title")}</span>
       </DropdownMenuTrigger>
       {/* Capped to the room the positioner measured, so a long menu scrolls inside the viewport instead of running off it. */}
       <DropdownMenuContent side="top" sideOffset={10} className="max-h-[min(560px,var(--available-height))] w-[min(340px,calc(100vw-32px))] overflow-y-auto p-2">
         <DropdownMenuGroup>
-          <DropdownMenuLabel className="px-3 text-sm">Sub-agents: model</DropdownMenuLabel>
+          <DropdownMenuLabel className="px-3 text-sm">{t("subagent.model_label")}</DropdownMenuLabel>
           {/* Not a choice: a chat keeps one model, its sub-agents' too. */}
           <p data-testid="subagent-model-pinned" aria-disabled="true" className="px-3 py-1.5 text-sm text-muted-foreground">{pinned}</p>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuLabel className="px-3 text-sm">Sub-agent effort</DropdownMenuLabel>
+          <DropdownMenuLabel className="px-3 text-sm">{t("subagent.effort_label")}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={setting.effort ?? SAME}>
             <DropdownMenuRadioItem value={SAME} disabled={locked} data-testid="subagent-effort-same" onClick={() => save({ effort: null })}>
-              {SAME_AS_MAIN_LABEL}
+              {t("subagent.same_as_main")}
             </DropdownMenuRadioItem>
             {efforts.map((effort) => (
               <DropdownMenuRadioItem
@@ -103,7 +103,7 @@ function SubagentModelPicker(props: { client: SubagentModelClient; chatModel: st
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <p className="px-3 py-2 text-xs text-muted-foreground">{SUBAGENT_MODEL_PINNED_HELP}</p>
-        {props.policyLocked ? <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">{SUBAGENT_MENU_POLICY_LOCK}</p> : null}
+        {props.policyLocked ? <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">{t("subagent.policy_lock")}</p> : null}
         {error ? <p role="alert" className="px-3 pb-2 text-xs text-destructive">{error}</p> : null}
       </DropdownMenuContent>
     </DropdownMenu>

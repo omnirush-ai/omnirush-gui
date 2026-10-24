@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import type { EditorDocuments } from "./editor-models";
+import { t } from "@/i18n";
 
 type Flags = { regex: boolean; caseSensitive: boolean; wholeWord: boolean };
 
@@ -220,9 +221,9 @@ export function SearchView(props: {
     <div className="flex h-full min-h-0 flex-col text-xs" data-editor-search>
       <ConfirmModal
         open={confirming}
-        title="Replace all?"
+        title={t("editor.replace_all_confirm")}
         message={`Replace ${total} match${total === 1 ? "" : "es"} in ${visible.length} file${visible.length === 1 ? "" : "s"} with "${replace}"? The files are saved; each one can be undone in the editor.`}
-        confirmLabel="Replace all"
+        confirmLabel={t("editor.replace_all")}
         cancelLabel="Cancel"
         onConfirm={confirmReplaceAll}
         onCancel={() => setConfirming(false)}
@@ -231,7 +232,7 @@ export function SearchView(props: {
         <div className="flex items-start gap-1">
           <button
             type="button"
-            aria-label={showReplace ? "Hide replace" : "Show replace"}
+            aria-label={showReplace ? t("editor.hide_replace") : t("editor.show_replace")}
             onClick={() => setShowReplace((value) => !value)}
             className="mt-1 text-muted-foreground hover:text-foreground"
           >
@@ -244,7 +245,7 @@ export function SearchView(props: {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search"
-                aria-label="Search in files"
+                aria-label={t("editor.search_in_files")}
                 className="min-w-0 flex-1 bg-transparent px-2 outline-none placeholder:text-muted-foreground"
                 onKeyDown={(event) => {
                   if (event.altKey && event.key.toLowerCase() === "c") setFlags((value) => ({ ...value, caseSensitive: !value.caseSensitive }));
@@ -252,9 +253,9 @@ export function SearchView(props: {
                   if (event.altKey && event.key.toLowerCase() === "r") setFlags((value) => ({ ...value, regex: !value.regex }));
                 }}
               />
-              {toggle("caseSensitive", "Match case", <CaseSensitive />, mac ? "⌥C" : "Alt+C")}
-              {toggle("wholeWord", "Whole word", <WholeWord />, mac ? "⌥W" : "Alt+W")}
-              {toggle("regex", "Regular expression", <Regex />, mac ? "⌥R" : "Alt+R")}
+              {toggle("caseSensitive", t("editor.match_case"), <CaseSensitive />, mac ? "⌥C" : "Alt+C")}
+              {toggle("wholeWord", t("editor.whole_word"), <WholeWord />, mac ? "⌥W" : "Alt+W")}
+              {toggle("regex", t("editor.regex"), <Regex />, mac ? "⌥R" : "Alt+R")}
             </div>
             {showReplace ? (
               <div className="flex items-center gap-1">
@@ -262,10 +263,10 @@ export function SearchView(props: {
                   value={replace}
                   onChange={(event) => setReplace(event.target.value)}
                   placeholder="Replace"
-                  aria-label="Replace with"
+                  aria-label={t("editor.replace_with")}
                   className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
-                <Button variant="ghost" size="icon-xs" aria-label="Replace all" title="Replace all" disabled={!total} onClick={replaceAll}>
+                <Button variant="ghost" size="icon-xs" aria-label={t("editor.replace_all")} title={t("editor.replace_all")} disabled={!total} onClick={replaceAll}>
                   <ReplaceAll />
                 </Button>
               </div>
@@ -273,7 +274,7 @@ export function SearchView(props: {
           </div>
         </div>
         <button type="button" className="self-end text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setShowFilters((value) => !value)}>
-          {showFilters ? "Hide file filters" : "Files to include / exclude"}
+          {showFilters ? t("editor.hide_file_filters") : t("editor.file_filters")}
         </button>
         {showFilters ? (
           <>

@@ -1,5 +1,6 @@
 import { memo, useCallback } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
+import { t } from "@/i18n";
 
 import {
   selectSessionIsStickyBottom,
@@ -30,8 +31,8 @@ const JumpToStartButton = memo(function JumpToStartButton({
       type="button"
       className="flex items-center gap-1 rounded-full px-3 py-1.5 text-xs text-dls-text transition-colors hover:bg-dls-hover @max-[34rem]/chatpane:p-1.5"
       onClick={handleClick}
-      aria-label="Jump to start"
-      title="Jump to start"
+      aria-label={t("scroll.jump_to_start")}
+      title={t("scroll.jump_to_start")}
     >
       <ArrowUp className="hidden size-4 @max-[34rem]/chatpane:block" aria-hidden="true" />
       <span className="@max-[34rem]/chatpane:hidden">Jump to start</span>
@@ -55,8 +56,8 @@ const JumpToLatestButton = memo(function JumpToLatestButton({
       type="button"
       className="flex items-center gap-1 rounded-full px-3 py-1.5 text-xs text-dls-text transition-colors hover:bg-dls-hover @max-[34rem]/chatpane:p-1.5"
       onClick={handleClick}
-      aria-label="Jump to latest"
-      title="Jump to latest"
+      aria-label={t("scroll.jump_to_latest")}
+      title={t("scroll.jump_to_latest")}
     >
       <ArrowDown className="hidden size-4 @max-[34rem]/chatpane:block" aria-hidden="true" />
       <span className="@max-[34rem]/chatpane:hidden">Jump to latest</span>

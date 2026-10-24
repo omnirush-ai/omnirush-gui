@@ -2578,7 +2578,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             themeMode={themeMode}
             setThemeMode={setThemeModeState}
             language={currentLocale() as Language}
-            setLanguage={setLocale}
+            setLanguage={(next) => {
+              if (next === currentLocale()) return;
+              setLocale(next);
+              // Labels are read at render time across the app; reload so every surface switches at once.
+              window.location.reload();
+            }}
             hideTitlebar={hideTitlebar}
             toggleHideTitlebar={() => setHideTitlebar((current) => !current)}
           />

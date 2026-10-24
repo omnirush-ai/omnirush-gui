@@ -3,6 +3,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 
 import { formatRelativeTime } from "@/app/utils";
+import { t } from "@/i18n";
 import type { SearchableSession } from "@/react-app/domains/session/search/session-search";
 import { homeChatTitle, recentChats, type HomeWorkspace } from "./home-view-model";
 
@@ -65,8 +66,8 @@ export function HomeContinue({ context }: { context: HomeViewContext }) {
   if (!chats.length) return null;
 
   return (
-    <nav aria-label="Recent chats" className="-mt-2 flex h-6 items-center gap-2 pb-1 text-[12px] text-muted-foreground" data-testid="home-continue">
-      <span className="shrink-0">Continue</span>
+    <nav aria-label={t("home.recent_chats")} className="-mt-2 flex h-6 items-center gap-2 pb-1 text-[12px] text-muted-foreground" data-testid="home-continue">
+      <span className="shrink-0">{t("home.continue")}</span>
       <div ref={listRef} className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
         {chats.map((session, index) => {
           const title = homeChatTitle(session.title);
@@ -78,7 +79,7 @@ export function HomeContinue({ context }: { context: HomeViewContext }) {
               className={`group inline-flex h-6 max-w-[180px] shrink-0 items-center gap-1 rounded-md px-2 transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none ${index < fits ? "" : "invisible absolute"}`}
               onClick={() => context.onOpenSession(session.workspaceId, session.sessionId)}
               title={`${title} \u2014 ${session.workspaceTitle} \u00b7 ${formatRelativeTime(session.updatedAt)}`}
-              aria-label={`Continue ${title} in ${session.workspaceTitle}`}
+              aria-label={t("home.continue_chat", { title, workspace: session.workspaceTitle })}
               aria-hidden={index < fits ? undefined : true}
               tabIndex={index < fits ? undefined : -1}
               data-testid="home-chat"
@@ -95,12 +96,12 @@ export function HomeContinue({ context }: { context: HomeViewContext }) {
           type="button"
           className="-mr-2 inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-2 transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none"
           onClick={context.onOpenSearch}
-          aria-label={`Search chats (${searchShortcut()})`}
-          title={`Search chats (${searchShortcut()})`}
+          aria-label={t("home.search_chats", { shortcut: searchShortcut() })}
+          title={t("home.search_chats", { shortcut: searchShortcut() })}
           data-testid="home-search"
         >
           <Search className="size-3" aria-hidden="true" />
-          <span>Search</span>
+          <span>{t("home.search")}</span>
           {/* The short Mac hint only: Ctrl+Shift+F would take a pill's room (it shows on hover). */}
           {isMacPlatform() ? <span className="ml-1.5 text-[11px] opacity-60">⇧⌘F</span> : null}
         </button>
