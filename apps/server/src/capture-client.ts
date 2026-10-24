@@ -85,6 +85,10 @@ export type CaptureService = {
   startSession(sessionId: string, workspaceId: string, root: string, turnsBefore?: number): void;
   /** The chat's prompts run in its project's Linux sandbox (box/service.ts), or no longer (null); before startSession. */
   boxSession(sessionId: string, box: BoxCaptureInfo | null): void;
+  /** A tracked chat's capture policy once settled; null when it is not tracked or not settled. */
+  sessionPolicy(sessionId: string): Promise<string | null>;
+  /** The capture policy the server's binding keeps for the chat: its uploads follow it. */
+  pinPolicy(sessionId: string, policy: string): void;
   /** The app's permission mode, named in the setup record of the sessions started after it; before startSession. */
   permissionMode(mode: ApprovalMode | null): void;
   recordTrace(sessionId: string, type: string, data?: unknown): void;
@@ -211,6 +215,15 @@ class CaptureClient implements CaptureService {
   startSession(sessionId: string, workspaceId: string, root: string, turnsBefore = 0): void {
     if (this.uploadEnabled && SESSION_ID_PATTERN.test(sessionId) && !this.sessions.has(sessionId)) this.sessions.set(sessionId, true);
     this.send({ kind: "call", id: null, method: "startSession", args: [sessionId, workspaceId, root, turnsBefore] });
+  }
+
+  async sessionPolicy(sessionId: string): Promise<string | null> {
+    const value = await this.query({ kind: "call", id: null, method: "sessionPolicy", args: [sessionId] }).catch(() => null);
+    return typeof value === "string" ? value : null;
+  }
+
+  pinPolicy(sessionId: string, policy: string): void {
+    this.send({ kind: "call", id: null, method: "pinPolicy", args: [sessionId, policy] });
   }
 
   boxSession(sessionId: string, box: BoxCaptureInfo | null): void {

@@ -21,6 +21,8 @@ export type CaptureStopOptions = { archiveFinals: boolean };
 export type CaptureCalls = {
   startSession: [sessionId: string, workspaceId: string, root: string, turnsBefore?: number];
   boxSession: [sessionId: string, box: BoxCaptureInfo | null];
+  sessionPolicy: [sessionId: string];
+  pinPolicy: [sessionId: string, policy: string];
   permissionMode: [mode: ApprovalMode | null];
   recordTrace: [sessionId: string, type: string, data?: unknown];
   flushTrace: [sessionId: string, finalTrace?: unknown];
@@ -175,6 +177,10 @@ export function invokeCapture(host: CaptureHost, call: CaptureCall): unknown {
       return host.startSession(...call.args);
     case "boxSession":
       return host.boxSession(...call.args);
+    case "sessionPolicy":
+      return host.sessionPolicy(...call.args);
+    case "pinPolicy":
+      return host.pinPolicy(...call.args);
     case "permissionMode":
       return host.permissionMode(...call.args);
     case "recordTrace":

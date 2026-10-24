@@ -21,7 +21,7 @@
  *
  * Not to be confused with the OpenWork worker sandbox (`sandboxBackend`).
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -33,7 +33,8 @@ import type { BoxEndpoint } from "./client.js";
 import { hostBuilds, hostBuildsNotice, hostBuildThings, hostRules } from "./host-builds.js";
 import { detectStack, imageFor, type BoxImage } from "./images.js";
 import { portLine } from "./ports.js";
-import { askedBackend, boxRun, planBox, pullActivityAt, pullLog, pullMarker, pulling, pullInBackground, setupWait, resolveMode, saveBackend, serverBackends, serverDefault, serverRequired, shimsDir, type BoxRun, type ProjectBoxMode, type ServerBoxDefault } from "./launch.js";
+import { writeFileAtomic } from "../atomic-write.js";
+import { askedBackend, boxRun, planBox, pullActivityAt, pullLog, pullMarker, pulling, pullInBackground, setupWait, resolveMode, saveBackend, serverBackends, serverDefault, serverLocalBox, serverRequired, shimsDir, type BoxRun, type ProjectBoxMode, type ServerBoxDefault } from "./launch.js";
 import { desktopText, hostOnlyProject, requiredLaunch, shadowsApply, shadowsNotice, type RequiredFallback } from "./required.js";
 import { cachedWindowsChecks, classifySetup, linuxAllow, resumeWinSetup, saveSetupState, setupState, windowsInstall, windowsRestart, windowsUpdate, type BoxSetup } from "./setup.js";
 import type { BoxInstallLogPaths } from "./install-log.js";
@@ -43,6 +44,12 @@ import { layerSizes, pullProgress, type PullProgress } from "./pull-progress.js"
 import { detectRuntime, type BackendAlternative, type DetectOptions, type RuntimeInfo, type RuntimeResult } from "./runtime.js";
 
 /** What the capture side needs of a chat's box (plain data: it crosses to the capture worker). */
+/** A box chat after its project's box was turned off. */
+export const PINNED_BOX_NOTE = "This chat keeps running in the sandbox. New chats follow the new setting.";
+
+/** A chat's pin from its first prompt: where it runs, the local_box revision, the capture policy its uploads keep. */
+export type ChatPin = { box: boolean; revision: string | null; capturePolicy?: string; verified?: boolean; lateReason?: string };
+
 export type BoxCaptureInfo = {
   key: string;
   root: string;
@@ -62,6 +69,12 @@ export type BoxCaptureInfo = {
 export type BoxWorkspace = { id: string; path: string; directory?: string; workspaceType: string };
 
 export type BoxStatus = {
+  /** The server's start for a new chat on each model (local_box.model_start); null from an older server. */
+  modelStart: Record<string, { start: "native" | "box"; switchable: boolean }> | null;
+  /** The local_box policy revision new chats pin. */
+  revision: string | null;
+  /** This chat's pin (asked for one chat): where it runs and the revision it started under; null before its first prompt. */
+  chatPin: ChatPin | null;
   /** The project's own choice (null: the server's default). */
   mode: ProjectBoxMode;
   serverDefault: ServerBoxDefault;
@@ -217,8 +230,17 @@ export class BoxService {
   private readonly chatTurns = new Map<string, number>();
   /** Chats (and their project's key) that ran on this machine before the server's default turned the box on: they stay here. */
   private readonly nativeChats = new Map<string, string>();
+  /** Of nativeChats, the ones on a model that runs only on this computer (launch reason native_model). */
+  private readonly nativeModelChats = new Set<string>();
   /** Chats sent to their project's box in this run (a failed checkpoint included). */
   private readonly boxedChats = new Set<string>();
+  /**
+   * Each chat's pin, from its first prompt: whether it runs in the box and the
+   * local_box policy revision it started under (model_start). A started chat
+   * never moves: a box chat whose project's box is turned off is refused
+   * (pinnedBoxGone), a chat that ran here stays here. Kept in chat-pins.json.
+   */
+  private pins: Map<string, ChatPin> | null = null;
   /** Chats whose box.plan event went out in this run. */
   private readonly outcomeSent = new Set<string>();
   private readonly home: string;
@@ -390,6 +412,8 @@ export class BoxService {
    */
   async engineBits(): Promise<{ shell: string; plugin: string } | null> {
     let wanted = this.serverDefault() !== "off" || this.required().required || ["1", "on", "true"].includes(String(this.env.OMNIRUSH_BOX ?? "").trim().toLowerCase());
+    // A chat that started in the box keeps it after its project's box was turned off.
+    wanted ||= [...this.loadPins().values()].some((pin) => pin.box);
     for (const workspace of this.options.workspaces()) {
       if (wanted) break;
       if (workspace.workspaceType !== "local") continue;
@@ -408,7 +432,7 @@ export class BoxService {
    * The project's run when its box is on and can start (planned once, in
    * the background; a downloading image is looked at again later), else null.
    */
-  ensure(workspace: BoxWorkspace): Promise<BoxRun | null> {
+  ensure(workspace: BoxWorkspace, { keep = false }: { keep?: boolean } = {}): Promise<BoxRun | null> {
     if (workspace.workspaceType !== "local") return Promise.resolve(null);
     const root = boxRoot(workspace);
     const key = boxKey(root);
@@ -417,7 +441,8 @@ export class BoxService {
     if (project.planning) return project.planning;
     project.planning = (async () => {
       const { on, hostBuilds: gate } = await this.mode(workspace);
-      if (!on) {
+      // `keep`: a chat that started in the box stays there after its project's box was turned off.
+      if (!on && !keep) {
         if (gate?.native && project.notice !== gate.notice) this.log("info", "box: the server's default not applied, the folder has this computer's builds", { key, things: gate.things });
         this.dropRun(project);
         project.notice = gate?.native ? gate.notice : null;
@@ -580,7 +605,12 @@ export class BoxService {
     const needed = required === true;
     const requiredText = needed ? { line: desktopText("required_line"), optOut: desktopText("opt_out_refused"), keptOldChat: desktopText("kept_old_chat") } : null;
     const chatKept = Boolean(sessionId && this.nativeChats.has(sessionId));
-    const base = { mode: settings.mode, serverDefault: server, on, source, offer, error: null, hostBuilds: gate, boxNotice: null, required: needed, requiredText, hostOnly, setup: null, chatKept, ports: [] as BoxStatus["ports"] };
+    // How a new chat on each model starts (the server's model_start, with its revision), and this chat's pin.
+    const localBox = serverLocalBox(this.options.stateDir);
+    const modelStart = localBox?.model_start && typeof localBox.model_start === "object" ? (localBox.model_start as BoxStatus["modelStart"]) : null;
+    const revision = typeof localBox?.revision === "string" ? localBox.revision : null;
+    const chatPin = sessionId ? this.chatPin(sessionId) : null;
+    const base = { mode: settings.mode, serverDefault: server, on, source, offer, error: null, hostBuilds: gate, boxNotice: null, required: needed, requiredText, hostOnly, setup: null, chatKept: chatKept || chatPin?.box === false, ports: [] as BoxStatus["ports"], modelStart, revision, chatPin };
     const backendSetting = { ...askedBackend({ env: this.env, stateDir: this.options.stateDir }), choices: backendChoices() };
     const setting = { value: backendSetting.backend, source: backendSetting.source, choices: backendSetting.choices };
     if (workspace.workspaceType !== "local") return { ...base, on: false, offer: false, state: "off", runtime: null, backend: null, backendSetting: setting, image: null, progress: null, container: null, platform: this.platform, notice: "The sandbox is for folders on this computer." };
@@ -646,6 +676,7 @@ export class BoxService {
       container,
       platform: this.platform,
       notice: on ? project?.notice ?? (runtime.ok ? null : `Sandbox off for now: ${runtime.reason}.`)
+        : chatPin?.box ? PINNED_BOX_NOTE
         : gate?.native ? gate.notice
         : hostOnly ? hostOnly.notice
         : lessRepro ? LESS_REPRO_NOTICE
@@ -779,8 +810,16 @@ export class BoxService {
    * label returned for its uploads. Null when the chat runs natively. Never
    * throws; waits at most FREEZE_WAIT_MS.
    */
-  async beforePrompt(sessionId: string, workspace: BoxWorkspace, { capture = true, turnsBefore = 0 }: { capture?: boolean; turnsBefore?: number } = {}): Promise<BoxCaptureInfo | null> {
+  async beforePrompt(sessionId: string, workspace: BoxWorkspace, { capture = true, turnsBefore = 0, nativeModel = false }: { capture?: boolean; turnsBefore?: number; nativeModel?: boolean } = {}): Promise<BoxCaptureInfo | null> {
     if (!/^[A-Za-z0-9._:-]{8,128}$/.test(sessionId)) return null;
+    // A chat on a model that runs only on this computer (model-modes/: Kimi) runs here, exempt from
+    // the required sandbox, unless it already ran in the box (a chat's model never changes).
+    if (nativeModel && !this.nativeChats.has(sessionId) && !this.boxedChats.has(sessionId) && !this.turns.has(sessionId) && savedTurns(this.snapshotDir(sessionId)) === 0) {
+      this.nativeChats.set(sessionId, boxKey(boxRoot(workspace)));
+      this.nativeModelChats.add(sessionId);
+      await this.writeProjects();
+      this.log("info", "box: a chat on a model that runs only on this computer stays here", { sessionId });
+    }
     // The chat's own turn number, counted with the box on or off: a chat that ran natively
     // (reopened, or its box turned on mid-chat) has its first checkpoint (turn-1) before a later
     // turn; the checkpoint names it as session_turn (CLI: the same).
@@ -796,18 +835,28 @@ export class BoxService {
       await this.writeProjects();
       this.log("info", "box: a chat that ran on this machine stays there", { sessionId, turnsBefore, required: true });
     }
-    const run = required && !this.nativeChats.has(sessionId) ? await this.waitForBox(workspace) : await this.ensure(workspace).catch(() => null);
-    if (!run || run.native) return null;
+    // One pin per chat: a chat that started in the box keeps it, whatever the project's setting says now.
+    const keep = this.chatPin(sessionId)?.box === true;
+    const run = required && !this.nativeChats.has(sessionId) ? await this.waitForBox(workspace) : await this.ensure(workspace, { keep }).catch(() => null);
+    if (!run || run.native) {
+      await this.pin(sessionId, false);
+      return null;
+    }
     // A chat with turns but no checkpoint ran on this machine (reopened, or started in this run before the
     // server's default reached the app, or while the image downloaded): when only the server's default
     // turned the box on, it goes on here (new chats get the box); a project turned on by its user moves it.
-    if (capture && turnsSoFar > 0 && !this.nativeChats.has(sessionId) && !this.boxedChats.has(sessionId) && !this.turns.has(sessionId) && savedTurns(this.snapshotDir(sessionId)) === 0 && ["server", "buildathon", "required"].includes((await this.mode(workspace)).source)) {
+    // One pin per chat (2026-10-24): it stays here whoever turned the box on since.
+    if (capture && turnsSoFar > 0 && !this.nativeChats.has(sessionId) && !this.boxedChats.has(sessionId) && !this.turns.has(sessionId) && savedTurns(this.snapshotDir(sessionId)) === 0 && !this.chatPin(sessionId)?.box) {
       this.nativeChats.set(sessionId, run.key);
       await this.writeProjects();
       this.log("info", "box: a chat that ran on this machine stays there", { sessionId, turnsBefore });
     }
-    if (this.nativeChats.has(sessionId) || !capture) return null;
+    if (this.nativeChats.has(sessionId) || !capture) {
+      await this.pin(sessionId, false);
+      return null;
+    }
     this.boxedChats.add(sessionId);
+    await this.pin(sessionId, true);
     const turn = (this.turns.get(sessionId) ?? savedTurns(this.snapshotDir(sessionId))) + 1;
     const started = Date.now();
     try {
@@ -864,6 +913,73 @@ export class BoxService {
   }
 
   /** The chat's box.plan outcome, once per chat and app run (null after that, or for a folder not on this computer). */
+  private pinFile(): string {
+    return join(this.options.stateDir, "chat-pins.json");
+  }
+
+  private loadPins(): Map<string, ChatPin> {
+    if (this.pins) return this.pins;
+    this.pins = new Map();
+    try {
+      const value: unknown = JSON.parse(readFileSync(this.pinFile(), "utf8"));
+      if (value && typeof value === "object") {
+        for (const [id, pin] of Object.entries(value)) {
+          if (pin && typeof pin === "object" && typeof (pin as { box?: unknown }).box === "boolean") {
+            const { revision, capturePolicy, verified, lateReason } = pin as { revision?: unknown; capturePolicy?: unknown; verified?: unknown; lateReason?: unknown };
+            this.pins.set(id, {
+              box: (pin as { box: boolean }).box,
+              revision: typeof revision === "string" ? revision : null,
+              ...(typeof capturePolicy === "string" && capturePolicy ? { capturePolicy } : {}),
+              ...(typeof verified === "boolean" ? { verified } : {}),
+              ...(typeof lateReason === "string" && lateReason ? { lateReason } : {}),
+            });
+          }
+        }
+      }
+    } catch { /* none yet */ }
+    return this.pins;
+  }
+
+  /** A chat's pin ({ box, revision, capturePolicy? }), or null before its first prompt. Never evicted. */
+  chatPin(sessionId: string): ChatPin | null {
+    return this.loadPins().get(sessionId) ?? null;
+  }
+
+  /** The capture policy a chat's uploads keep: set once at its first prompt, or to the one the server's binding stored. */
+  async setCapturePolicy(sessionId: string, policy: string): Promise<void> {
+    await this.updatePin(sessionId, { capturePolicy: policy });
+  }
+
+  /** What the server's binding says of a chat: whether it is verified, and why it was bound late (never verified then). */
+  async updatePin(sessionId: string, patch: Partial<Pick<ChatPin, "capturePolicy" | "verified" | "lateReason">>): Promise<void> {
+    const pins = this.loadPins();
+    const pin = pins.get(sessionId);
+    if (!pin || Object.entries(patch).every(([key, value]) => pin[key as keyof ChatPin] === value)) return;
+    pins.set(sessionId, { ...pin, ...patch });
+    await writeFileAtomic(this.pinFile(), `${JSON.stringify(Object.fromEntries(pins))}\n`).catch(() => undefined);
+  }
+
+  private async pin(sessionId: string, box: boolean): Promise<void> {
+    const pins = this.loadPins();
+    if (pins.has(sessionId)) return;
+    const revision = serverLocalBox(this.options.stateDir)?.revision;
+    pins.set(sessionId, { box, revision: typeof revision === "string" ? revision : null });
+    await writeFileAtomic(this.pinFile(), `${JSON.stringify(Object.fromEntries(pins))}\n`).catch(() => undefined);
+  }
+
+  /**
+   * Why a chat pinned to the box cannot run in it now (no backend, an image
+   * that cannot be had), or null: it keeps the box even when its project's
+   * box was turned off since, and is refused only when the box truly cannot run.
+   */
+  async pinnedBoxUnavailable(sessionId: string, workspace: BoxWorkspace): Promise<string | null> {
+    if (workspace.workspaceType !== "local" || !this.chatPin(sessionId)?.box) return null;
+    const run = await this.ensure(workspace, { keep: true }).catch(() => null);
+    if (run && !run.native) return null;
+    const project = this.projects.get(boxKey(boxRoot(workspace)));
+    return project?.waitingImage ? null : project?.notice ?? "the sandbox cannot start on this computer right now";
+  }
+
   async planOutcome(sessionId: string, workspace: BoxWorkspace): Promise<BoxPlanOutcome | null> {
     if (workspace.workspaceType !== "local" || this.outcomeSent.has(sessionId)) return null;
     this.outcomeSent.add(sessionId);
@@ -874,7 +990,7 @@ export class BoxService {
     // on this machine, the fallback in force: `native` where it can't (counted in full), the server's
     // required_fallback where the box was turned off (OMNIRUSH_BOX=0) or the setup declined.
     const native = (reason: string, extra: Partial<BoxPlanOutcome> = {}): BoxPlanOutcome => ({ native: true, source: mode.source, reason, ...(mode.required ? requiredLaunch(reason, { native: true, serverFallback: fallback }) : {}), ...extra });
-    if (this.nativeChats.has(sessionId)) return native("kept_old_chat", { source: "chat" });
+    if (this.nativeChats.has(sessionId)) return this.nativeModelChats.has(sessionId) ? native("native_model", { source: "model" }) : native("kept_old_chat", { source: "chat" });
     if (this.boxedChats.has(sessionId)) return { native: false, source: mode.source, reason: "box", ...(mode.required ? requiredLaunch("box", { native: false }) : {}) };
     if (!mode.on) {
       if (mode.required && mode.source === "env") return native("env_off");

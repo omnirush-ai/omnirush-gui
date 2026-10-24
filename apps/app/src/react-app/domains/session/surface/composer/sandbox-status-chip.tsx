@@ -2,12 +2,17 @@
 import { useState } from "react";
 import { Box, X } from "lucide-react";
 
+import { toast } from "@/components/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { linuxSandboxView, useLinuxSandbox, type LinuxSandboxClient, type LinuxSandboxView } from "@/react-app/domains/settings/linux-sandbox";
 
 type Props = {
   client: LinuxSandboxClient | null;
   workspaceId: string | null;
+  /** The open chat (null: a new chat); a started chat keeps where it runs. */
+  sessionId?: string | null;
+  /** The chat's model (omnirush.ai id): its start decides whether the sandbox can be switched for it. */
+  model?: string | null;
   /** Opens Settings > General at the sandbox card. */
   onOpenSettings?: () => void;
 };
@@ -28,14 +33,22 @@ const DOT: Record<LinuxSandboxView["tone"], string> = {
  */
 export function SandboxStatusChip(props: Props) {
   if (!props.client || !props.workspaceId) return null;
-  return <SandboxChip key={props.workspaceId} client={props.client} workspaceId={props.workspaceId} onOpenSettings={props.onOpenSettings} />;
+  return <SandboxChip key={props.workspaceId} client={props.client} workspaceId={props.workspaceId} sessionId={props.sessionId ?? null} model={props.model ?? null} onOpenSettings={props.onOpenSettings} />;
 }
 
-function SandboxChip(props: { client: LinuxSandboxClient; workspaceId: string; onOpenSettings?: () => void }) {
-  const sandbox = useLinuxSandbox(props.client, props.workspaceId, { fresh: false });
+/** "Turning the sandbox on applies to new chats" note for a chat that already started (it keeps where it runs). */
+export const PINNED_CHAT_TOGGLE_NOTE = "New chats in this project use the sandbox. This chat keeps running where it started.";
+
+function SandboxChip(props: { client: LinuxSandboxClient; workspaceId: string; sessionId: string | null; model: string | null; onOpenSettings?: () => void }) {
+  const sandbox = useLinuxSandbox(props.client, props.workspaceId, { fresh: false, sessionId: props.sessionId });
   const [offerDismissed, setOfferDismissed] = useState(false);
   const box = sandbox.box;
   if (!box) return null;
+  // The server's start for this model (local_box.model_start): a model that cannot be switched (box-only,
+  // native-only) shows no sandbox toggle at all; a started chat keeps its pin.
+  const start = props.model ? box.modelStart?.[props.model] ?? null : null;
+  if (start && !start.switchable) return null;
+  const pinned = Boolean(box.chatPin);
   const chip = "flex h-9 max-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12";
 
   if (!box.on && sandbox.pending !== "on") {
@@ -69,7 +82,7 @@ function SandboxChip(props: { client: LinuxSandboxClient; workspaceId: string; o
         <Tooltip>
           <TooltipTrigger
             render={
-              <button type="button" className={`${chip} h-8 max-h-8 pr-1.5`} onClick={() => void sandbox.setEnabled(true)} data-testid="sandbox-offer-accept" />
+              <button type="button" className={`${chip} h-8 max-h-8 pr-1.5`} onClick={() => { void sandbox.setEnabled(true); if (pinned) toast(PINNED_CHAT_TOGGLE_NOTE); }} data-testid="sandbox-offer-accept" />
             }
           >
             <Box className="size-4" aria-hidden />

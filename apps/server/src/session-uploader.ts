@@ -575,6 +575,8 @@ type SpoolMeta = {
 };
 
 type SessionState = {
+  /** False for a new chat until the server's capture switch answered: its uploads wait, no pin is kept. */
+  policyResolved: boolean;
   /** The upload rules pinned at the chat's start (pinnedPolicy): every redaction and envelope of the chat follows them. */
   redactionPolicy: RedactionPolicy;
   id: string;
@@ -783,6 +785,12 @@ type SessionUploaderOptions = {
    */
   onRecoveredTurn?: (turn: RecoveredTurn) => void;
   /**
+   * The server's capture switch as answered (client-raw, client-v3 or a confirmed legacy), or null while it is
+   * unresolved (no answer, or only an outage). A new chat pins only an answer: until there is one its policy is
+   * unresolved, nothing of it is uploaded and no pin is kept (settledPolicy says null, so a strict bind waits).
+   */
+  settleCapturePolicy?: () => Promise<string | null>;
+  /**
    * The server is missing parts of a chat no spooled upload will fill: the
    * host reads its transcript from the engine (oldest first, in trace-sized
    * parts), null when it cannot. Re-sent once per chat.
@@ -892,6 +900,8 @@ export type TraceCapabilities = {
   mcp?: Record<string, unknown>;
   /** The model provider lock (provider-lock.ts): the block as the server sent it; absent is locked. */
   providers?: Record<string, unknown>;
+  /** Strict sessions (model-modes/strict-sessions.mjs): the block as the server sent it; absent is no bind. */
+  strict_sessions?: Record<string, unknown>;
 };
 
 
@@ -4653,6 +4663,12 @@ const PINNED_CONTEXT_METHODS = ["sessionStarted", "turnStarted", "toolEvent", "t
 /** The public calls that record or send for one session (first argument its id): run under its pinned rules. */
 const PINNED_SESSION_METHODS = ["recordProjectArchive", "recordTrace", "markComputerUse", "recordSessionModel", "recordChildSession", "recordWebVisit", "recordAttachment", "steerTurn", "recordCommand", "captureSnapshot", "finishSession", "flushTrace"] as const;
 
+/** How long a new chat waits for the server's capture switch before it pins its capture policy. */
+/** A new chat's capture switch, asked again after an unanswered try: from this, doubling, to POLICY_RETRY_MAX_MS. */
+export const POLICY_RETRY_MIN_MS = 1_000;
+export const POLICY_RETRY_MAX_MS = 30_000;
+export const POLICY_SETTLE_MS = 5_000;
+
 export class SessionUploader {
   private readonly uploadUrl: string | null;
   private token: string;
@@ -4687,6 +4703,7 @@ export class SessionUploader {
   private readonly accountIdHook?: SessionUploaderOptions["accountId"];
   private readonly sessionIntegrity?: SessionUploaderOptions["sessionIntegrity"];
   private readonly onRecoveredTurn?: SessionUploaderOptions["onRecoveredTurn"];
+  private readonly settleCapturePolicy?: SessionUploaderOptions["settleCapturePolicy"];
   private readonly repairTranscript?: SessionUploaderOptions["repairTranscript"];
   private readonly confirmEnabled: boolean;
   private readonly idleEndMs: number;
@@ -4824,6 +4841,7 @@ export class SessionUploader {
     this.accountIdHook = options.accountId;
     this.sessionIntegrity = options.sessionIntegrity;
     this.onRecoveredTurn = options.onRecoveredTurn;
+    this.settleCapturePolicy = options.settleCapturePolicy;
     this.repairTranscript = options.repairTranscript;
     this.confirmEnabled = options.confirm !== false && Boolean(options.sessionIntegrity);
     this.idleEndMs = options.idleEndMs ?? IDLE_END_MS;
@@ -4994,7 +5012,8 @@ export class SessionUploader {
       ...(state.refused.length > 0 ? { refused: state.refused.slice(-MAX_REFUSED_SEQUENCES) } : {}),
       // A new segment is judged again once it ends.
       ...(state.endedAt ? { endedAt: state.endedAt } : {}),
-      redactionPolicy: state.redactionPolicy,
+      // Never a pin from a guess: an unresolved chat's record has none, so the next start asks the server first.
+      ...(state.policyResolved ? { redactionPolicy: state.redactionPolicy } : {}),
     };
   }
 
@@ -5019,6 +5038,22 @@ export class SessionUploader {
     state.lastFailureAt = previous?.lastFailureAt;
     state.lastSuccessAt = previous?.lastSuccessAt;
     state.refused = [...(previous?.refused ?? [])];
+    // A new chat pins the server's capture switch as answered, never a default from before the first answer:
+    // until there is one its uploads wait here (state.ready), and the switch is asked again with a backoff.
+    if (!previous && this.settleCapturePolicy) {
+      state.policyResolved = false;
+      for (let wait = POLICY_RETRY_MIN_MS; ; wait = Math.min(wait * 2, POLICY_RETRY_MAX_MS)) {
+        const answer = await this.askCapturePolicy();
+        if (answer) {
+          state.redactionPolicy = answer;
+          state.policyResolved = true;
+          break;
+        }
+        if (this.stopped) throw new Error("capture policy unresolved");
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        if (this.stopped) throw new Error("capture policy unresolved");
+      }
+    }
     state.redactionPolicy = pinnedPolicy(previous, state.redactionPolicy);
     // A pending check of the chat's earlier segment is left to this segment's end.
     this.cancelConfirm(state.id);
@@ -5304,6 +5339,7 @@ export class SessionUploader {
   private newSessionState(sessionId: string, workspaceId: string, root: string, cache: Map<string, HashCacheEntry>): SessionState {
     return {
       redactionPolicy: defaultRedactionPolicy(),
+      policyResolved: true,
       id: sessionId,
       root,
       workspaceId,
@@ -5843,6 +5879,43 @@ export class SessionUploader {
     this.markDirty(state, path);
     this.queueChangedPath(state, path);
     this.scheduleChange(state, "fs_change");
+  }
+
+  /**
+   * A tracked session's capture policy once its ledger was read (its pin is
+   * final then), waiting at most `timeoutMs`; null while it is not settled or
+   * for a session this uploader does not track.
+   */
+  async settledPolicy(sessionId: string, timeoutMs = POLICY_SETTLE_MS + 3_000): Promise<RedactionPolicy | null> {
+    const state = this.sessions.get(sessionId);
+    if (!state) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); });
+    const ready = await Promise.race([state.ready.then(() => true, () => true), late]);
+    clearTimeout(timer);
+    // Unresolved (no answer from the server yet): no policy, so no pin and no bind on a guess.
+    return ready && state.policyResolved ? state.redactionPolicy : null;
+  }
+
+  /** One try at the server's capture switch (at most POLICY_SETTLE_MS): the answer, or null when unresolved. */
+  private async askCapturePolicy(): Promise<RedactionPolicy | null> {
+    if (!this.settleCapturePolicy) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answer = await Promise.race([
+      this.settleCapturePolicy().catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), POLICY_SETTLE_MS); }),
+    ]);
+    clearTimeout(timer);
+    return answer === CLIENT_RAW || answer === CLIENT_V3 || answer === "legacy" ? answer : null;
+  }
+
+  /** The capture policy the server stored for the chat (its binding): the session's uploads keep it. */
+  pinPolicy(sessionId: string, policy: string): void {
+    if (policy !== CLIENT_RAW && policy !== CLIENT_V3 && policy !== "legacy") return;
+    const state = this.sessions.get(sessionId);
+    if (state) state.redactionPolicy = policy;
+    const record = this.ledger.sessions[sessionId];
+    if (record) record.redactionPolicy = policy;
   }
 
   /** Whether the session uploader is currently tracking this session. */
@@ -6683,7 +6756,9 @@ export class SessionUploader {
 
   private enqueue(state: SessionState, operation: () => Promise<void>): void {
     // The pin is final once the ledger was read (prepareSession): the operation runs under it.
-    state.tail = state.tail.then(() => state.ready.catch(() => undefined)).then(() => withRedactionPolicy(state.redactionPolicy, operation)).catch((error: unknown) => {
+    // A chat whose capture switch never got an answer (stopped while unresolved) uploads nothing under a guess:
+    // its trace stays in the journal for the next start, which asks the switch first.
+    state.tail = state.tail.then(() => state.ready.catch(() => undefined)).then(() => (state.policyResolved ? withRedactionPolicy(state.redactionPolicy, operation) : undefined)).catch((error: unknown) => {
       this.log("warn", "OmniRush session upload operation failed", {
         sessionId: state.id,
         error: error instanceof Error ? error.message : "unknown",

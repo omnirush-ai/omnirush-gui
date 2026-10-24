@@ -346,7 +346,8 @@ describe("box service", () => {
       boxes.ensure = async () => (on ? run : null);
       return boxes;
     };
-    // Two turns with the box off, a steer (not captured), then the box turned on mid-chat: turn-1 comes before turn 3.
+    // Two turns with the box off, a steer (not captured), then the box turned on mid-chat: one pin per
+    // chat (2026-10-24), it stays on this machine and takes no checkpoint.
     let boxes = start();
     await boxes.beforePrompt("ses_turns_a1", workspace);
     await boxes.beforePrompt("ses_turns_a1", workspace);
@@ -354,12 +355,12 @@ describe("box service", () => {
     on = true;
     await boxes.beforePrompt("ses_turns_a1", workspace);
     await boxes.beforePrompt("ses_turns_a1", workspace);
-    expect(frozen.splice(0)).toEqual(["ses_turns_a1 turn-1 3", "ses_turns_a1 turn-2 4"]);
-    // Reopened after a restart with 4 native turns: before turns 5 and 6.
+    expect(frozen.splice(0)).toEqual([]);
+    // Reopened after a restart with 4 native turns: it stays there too.
     boxes = start();
     await boxes.beforePrompt("ses_turns_b1", workspace, { turnsBefore: 4 });
     await boxes.beforePrompt("ses_turns_b1", workspace);
-    expect(frozen.splice(0)).toEqual(["ses_turns_b1 turn-1 5", "ses_turns_b1 turn-2 6"]);
+    expect(frozen.splice(0)).toEqual([]);
     // Saved checkpoints go on numbering the files; the chat's turn comes from the engine's count.
     await mkdir(join(stateDir, "sandbox", "snapshots", "ses_turns_c1"), { recursive: true });
     await writeFile(join(boxes.snapshotsDir, "ses_turns_c1", "turn-7.json"), "{}");
@@ -367,7 +368,7 @@ describe("box service", () => {
     expect(frozen.splice(0)).toEqual(["ses_turns_c1 turn-8 3"]);
   });
 
-  test("a reopened chat that ran on this machine stays there when only the server's default turned the box on", async () => {
+  test("a reopened chat that ran on this machine stays there, whoever turned the box on", async () => {
     const stateDir = await temp("state");
     const home = await temp("boxhome");
     const root = await temp("project");
@@ -398,15 +399,16 @@ describe("box service", () => {
     await boxes.beforePrompt("ses_native_b1", workspace, { turnsBefore: 3 });
     expect(frozen.splice(0)).toEqual(["ses_native_n1 turn-1", "ses_native_b1 turn-2"]);
     expect(await listed()).toEqual(["ses_native_r1"]);
-    // The user turns the project on: the chat moves to the box.
+    // The user turns the project on: one pin per chat (2026-10-24), the chat stays on this machine;
+    // new chats go in the box.
     boxes.ensure = async () => run;
     await boxes.setMode(workspace, "on");
-    expect(await listed()).toEqual([]);
     await boxes.beforePrompt("ses_native_r1", workspace);
-    expect(frozen.splice(0)).toEqual(["ses_native_r1 turn-1"]);
-    // Turned on by the user before it was reopened: it moves at once.
+    expect(frozen.splice(0)).toEqual([]);
+    expect(await listed()).toEqual(["ses_native_r1"]);
+    // Reopened after the user turned it on: it stays there too.
     await boxes.beforePrompt("ses_native_r2", workspace, { turnsBefore: 4 });
-    expect(frozen.splice(0)).toEqual(["ses_native_r2 turn-1"]);
+    expect(frozen.splice(0)).toEqual([]);
   });
 
   test("the server's default turned on while the app runs: chats that ran on this machine stay there, new ones go in the box", async () => {

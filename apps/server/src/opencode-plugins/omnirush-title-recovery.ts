@@ -162,8 +162,13 @@ export const OmniRushTitleRecovery = async (input: {
   return {
     "chat.headers": async (request: {
       sessionID: string; agent: string; model: { id: string; providerID: string };
+      message?: { model?: { modelID?: string } };
     }, output: { headers: Record<string, string> }) => {
       if (request.agent !== "title") return;
+      // One model per chat: the broker sends the title on the chat's model, not the engine's cheapest.
+      output.headers["x-omnirush-title"] = "1";
+      const chatModel = request.message?.model?.modelID;
+      if (typeof chatModel === "string" && chatModel) output.headers["x-omnirush-chat-model"] = chatModel;
       const id = crypto.randomUUID();
       const diagnostic = {
         sessionID: request.sessionID, providerID: request.model.providerID,

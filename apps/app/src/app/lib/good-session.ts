@@ -804,7 +804,7 @@ function sessionErrorOf(message: UIMessage): Record<string, unknown> | null {
  * final (`"retry": false`). Its messages start with
  * "omnirush.ai: " (and usually end on a console link); retrying cannot help.
  */
-const REFUSAL = /(^|Message: )omnirush\.ai:|daily_grant_exhausted|request_policy_refused|cyber_policy|limit_tokens|limit_session_cap|"retry":\s*false|windows_cutoff|session_quality_cap|update_required|client update required/im;
+const REFUSAL = /(^|Message: )omnirush\.ai:|daily_grant_exhausted|request_policy_refused|cyber_policy|limit_tokens|limit_session_cap|"retry":\s*false|windows_cutoff|session_quality_cap|model_not_in_mode|session_model_fixed|This chat runs on |This model isn't available (?:in sandbox projects|in normal projects|outside the sandbox|in this project)|update_required|client update required/im;
 
 /**
  * How a turn that ended on an error ended. The engine's MessageAbortedError

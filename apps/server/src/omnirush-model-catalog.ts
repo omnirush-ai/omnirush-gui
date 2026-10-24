@@ -21,6 +21,7 @@ import { runtimeStorageDir } from "./runtime-db.js";
 import type { ServerConfig } from "./types.js";
 import { writeFileAtomic } from "./atomic-write.js";
 import { modelHasWebSearch, type WebSearchSwitch } from "./web-search.js";
+import { modelModes, type ModelMode } from "./model-modes/model-modes.mjs";
 
 /** Every effort a catalog model may list, lowest first. */
 export const OMNIRUSH_MODEL_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -49,6 +50,8 @@ export type OmniRushCatalogModel = {
     image_input: boolean;
     file_input: boolean;
   };
+  /** Where the model may run (model-modes/); absent means both. Kept only when the backend lists it. */
+  modes?: ModelMode[];
 };
 
 /** Models in the backend's order, default first. Never empty. */
@@ -156,6 +159,7 @@ function sanitizeModel(raw: unknown): OmniRushCatalogModel | null {
       image_input: flag("image_input"),
       file_input: flag("file_input"),
     },
+    ...(Array.isArray(raw.modes) ? { modes: modelModes(raw) } : {}),
   };
 }
 

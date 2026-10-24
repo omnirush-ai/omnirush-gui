@@ -59,7 +59,7 @@ import {
 } from "./manifest.js";
 import { writeSealedArchive } from "./pack.js";
 import { POLICY_OFF, type ArchivePolicy } from "./policy.js";
-import { CLIENT_RAW, CLIENT_V3, defaultRedactionPolicy, setRedactionPolicy } from "../context/redact-policy.js";
+import { CLIENT_RAW, CLIENT_V3, defaultRedactionPolicy, setRedactionPolicy, type RedactionPolicy } from "../context/redact-policy.js";
 import { SEAL_CONTENT } from "./seal.js";
 import { findLockfiles, scanTouchedFiles, touchedChange, TouchedPathStore, type TouchedScanResult } from "./touched.js";
 import { isOutsideArchivePath, outsideSourcesOf, scanOutsideFiles } from "./outside.js";
@@ -188,6 +188,8 @@ const ARCHIVE_PACK_RESERVE_BYTES = 1024 * 1024;
  * probe, and a policy flipped on omnirush.ai reaches a running app within
  * this time.
  */
+/** How long the capture switch's key answer (settleCapturePolicy) stands in for the next base's key fetch. */
+export const SETTLE_ANSWER_TTL_MS = 60_000;
 export const POLICY_TTL_MS = 5 * 60_000;
 /** A policy probe that failed (timeout, 5xx, offline) counts as off for this long only. */
 export const POLICY_OUTAGE_TTL_MS = 60_000;
@@ -1319,8 +1321,9 @@ export class SessionArchiver {
       return { status: "skipped", reason: "not_archivable", detail };
     }
     // The key and the consent check (7.2): a probe made for this base already holds them; else the full fetch.
-    const fetched = probe.fetched ?? await this.uploader.fetchKey();
-    if (!probe.fetched) this.rememberPolicy(fetched, generation, false);
+    const settled = probe.fetched ? null : this.takeSettleAnswer(generation);
+    const fetched = probe.fetched ?? settled ?? await this.uploader.fetchKey();
+    if (!probe.fetched && !settled) this.rememberPolicy(fetched, generation, false);
     if (fetched.status === "disabled") {
       this.dropPrescan(sessionId);
       await this.disable(fetched.code);
@@ -1391,6 +1394,48 @@ export class SessionArchiver {
    * request per POLICY_TTL_MS, never a retry storm. `fetched` is the probe's
    * answer when this call made one: the base reuses it for its key.
    */
+  /**
+   * The server's capture switch as last answered (GET /archives/key, the folder policy's cached probe): the
+   * policy a chat starting now pins (client-raw, client-v3, or a confirmed legacy when the server answered
+   * without either or turned archiving off). Null while it is unresolved: no answer yet, or only an outage
+   * (timeout, 5xx, offline), which is never taken as an answer.
+   */
+  async settleCapturePolicy(): Promise<RedactionPolicy | null> {
+    const kept = this.policy;
+    if (kept && !kept.outage && this.now().getTime() - kept.at < POLICY_TTL_MS) {
+      // The cached answer's own key response goes to the next base too, so the pin and the base share it.
+      const answer = this.policyAnswer;
+      if (answer && answer.generation === this.generation) this.settleAnswer = { fetched: answer.fetched, at: this.now().getTime(), generation: answer.generation };
+      return defaultRedactionPolicy();
+    }
+    // Not known, or known only as an outage: ask now (one probe shared with the folder policy).
+    let probe = this.policyProbe;
+    if (!probe) {
+      const started = this.uploader.probeKey();
+      probe = started;
+      this.policyProbe = started;
+      void started.finally(() => {
+        if (this.policyProbe === started) this.policyProbe = null;
+      });
+    }
+    const fetched = await probe;
+    this.rememberPolicy(fetched, this.generation, true);
+    if (fetched.status === "unavailable") return null;
+    // The answer holds the key and the consent check too: the next base takes it instead of asking again.
+    this.settleAnswer = { fetched, at: this.now().getTime(), generation: this.generation };
+    return defaultRedactionPolicy();
+  }
+
+  /** The key response settleCapturePolicy got, once, while it is fresh and from this sign-in. */
+  private takeSettleAnswer(generation: number): KeyResult | null {
+    const kept = this.settleAnswer;
+    this.settleAnswer = null;
+    return kept && kept.generation === generation && this.now().getTime() - kept.at < SETTLE_ANSWER_TTL_MS ? kept.fetched : null;
+  }
+
+  private settleAnswer: { fetched: KeyResult; at: number; generation: number } | null = null;
+  private policyAnswer: { fetched: KeyResult; generation: number } | null = null;
+
   private async folderPolicy(generation: number): Promise<{ policy: ArchivePolicy; fetched: KeyResult | null }> {
     const kept = this.policy;
     if (kept && this.now().getTime() - kept.at < POLICY_TTL_MS) return { policy: kept.value, fetched: null };
@@ -1452,6 +1497,8 @@ export class SessionArchiver {
     // without git that starts during a blip is asked again at its next turn instead of going without a base.
     const at = this.now().getTime() - (fetched.status === "unavailable" ? Math.max(0, POLICY_TTL_MS - POLICY_OUTAGE_TTL_MS) : 0);
     this.policy = { value: fetched.status === "ok" ? fetched.policy : POLICY_OFF, at, ...(fetched.status === "unavailable" ? { outage: true } : {}) };
+    // The key response behind a real answer, for a later settleCapturePolicy that finds the policy cached.
+    this.policyAnswer = fetched.status === "unavailable" ? null : { fetched, generation };
     // The uploader's rules follow the server's switch; anything but a yes keeps the old rules.
     const rulesBefore = defaultRedactionPolicy();
     setRedactionPolicy(fetched.status !== "ok" ? "legacy" : fetched.policy.captureRaw === true ? CLIENT_RAW : fetched.policy.redactionV3 === true ? CLIENT_V3 : "legacy");
