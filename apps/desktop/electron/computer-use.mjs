@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, Notification, screen, session } from "electron";
 import { startAgentBrowser } from "./computer-use-agent-browser.mjs";
 import { testAnswersAllowed } from "./computer-use-answers.mjs";
+import { createHostGate } from "./computer-use-gate.mjs";
 import { createComputerUseHost } from "./computer-use-host.mjs";
 import { createComputerPreview } from "./computer-use-preview.mjs";
 
@@ -67,6 +68,8 @@ let deps = null;
 let server = null; // the last /computer-use/state answer
 let host = null;
 let hostPromise = null;
+// Starts in flight go stale on off/stop; older state answers never undo newer ones (computer-use-gate.mjs).
+const gate = createHostGate();
 let listener = null;
 let preview = null;
 let shared = null;
@@ -119,11 +122,16 @@ function supported() {
 function statusNow() {
   // Each session carries its cursor's latest move, so the live view glides it from `from` to `to`.
   const sessions = host ? host.state().map((s) => (cursors.has(s.id) ? { ...s, cursor_move: cursors.get(s.id) } : s)) : [];
+  const device = deviceOn();
   return {
-    enabled: server?.enabled === true,
+    enabled: server?.enabled === true && device,
+    // The person's own on/off for this device (Settings > Computer use; on by default).
+    device_on: device,
     // The agent's own display works without desktop access (no helper, Wayland), so only "off" is unavailable.
     supported: supported(),
-    message: server?.enabled ? (supported() ? null : "Computer use is unavailable on this desktop.") : server?.setting?.message ?? (server ? "Computer use is turned off." : null),
+    message: !device ? "Computer use is turned off on this computer." : server?.enabled ? (supported() ? null : "Computer use is unavailable on this desktop.") : server?.unavailable ?? server?.setting?.message ?? (server ? "Computer use is turned off." : null),
+    // The models that can use it (null: any).
+    models: server?.setting?.models ?? null,
     mode: server?.mode ?? "normal",
     sessions,
   };
@@ -140,6 +148,33 @@ function onCursor(move) {
   cursors.set(move.session_id, { ...move, seq: ++cursorSeq, at: Date.now() });
   pushStatus();
   preview?.cursor(move);
+}
+
+// The person's on/off for computer use on this device (policy.mjs COMPUTER_USE_SETTING, on by default), saved in
+// the profile and set only from the main window. Off: the host stops, so the engine gets no computer-use tools.
+const deviceFile = () => path.join(profileDir(), "computer-use", shared?.policyModule?.COMPUTER_USE_FILE ?? "device.json");
+let deviceSaved; // undefined: not read yet
+function deviceOn() {
+  const policy = shared?.policyModule;
+  if (!policy) return true; // shown only: apply() loads the rules before it starts anything
+  if (deviceSaved === undefined) {
+    try { const value = JSON.parse(readFileSync(deviceFile(), "utf8"))?.[policy.COMPUTER_USE_SETTING]; deviceSaved = typeof value === "boolean" ? value : null; } catch { deviceSaved = null; }
+  }
+  return policy.deviceComputerUse(deviceSaved ?? undefined);
+}
+
+async function setComputerUseOn(on) {
+  if (typeof on !== "boolean") throw new Error("Choose on or off.");
+  const { policyModule } = await sharedModules();
+  const file = deviceFile();
+  mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, JSON.stringify({ [policyModule.COMPUTER_USE_SETTING]: on }), { mode: 0o600 });
+  renameSync(temp, file);
+  deviceSaved = on;
+  // Live: off stops the host now (the engine drops the tools); on starts it with the next state read.
+  await apply(server);
+  return statusNow();
 }
 
 // The person's one-time real-screen setting (policy.mjs REAL_SCREEN_SETTING), saved in the profile, set only
@@ -171,24 +206,33 @@ async function stopRealScreen() {
   else for (const s of host.state()) if (s.display !== "virtual" && s.phase !== "ended") await host.control({ session_id: s.id, action: "stop" }).catch(() => {});
 }
 
+/** Whether the host may run now: the server says on, this OS can, and the person has not turned it off here. */
+function allowedNow() {
+  return server?.enabled === true && supported() && Boolean(shared?.policyModule) && deviceOn();
+}
+
 function hostSettings() {
   const setting = server?.setting ?? {};
-  return { enabled: server?.enabled === true, real_screen: serverRealScreen, real_screen_opt_in: serverRealScreen, real_screen_on: realScreenOn(), virtual_display: setting.virtual_display !== false, limits: setting.limits ?? null, deny_apps: setting.deny_apps ?? [], message: setting.message ?? null };
+  return { enabled: allowedNow(), real_screen: serverRealScreen, real_screen_opt_in: serverRealScreen, real_screen_on: realScreenOn(), virtual_display: setting.virtual_display !== false, limits: setting.limits ?? null, deny_apps: setting.deny_apps ?? [], message: setting.message ?? null };
 }
 
 async function hostContext() {
   const metrics = (() => { try { return app.getAppMetrics().map((m) => m.pid); } catch { return []; } })();
   // The chat now (the one that just called), not the last poll's.
+  const asked = gate.ask();
   const fresh = await serverFetch("/computer-use/state").catch(() => null);
-  if (fresh) server = fresh;
+  if (fresh && gate.fresh(asked)) server = fresh;
   // No fresh answer: no chat, never the last poll's.
   return { ancestors: shared?.ancestors ?? [], self_pids: [process.pid, ...metrics], chat: fresh ? fresh.chat ?? null : null };
 }
 
 /** Before each open: the server's switch and limits read now (not a cached answer). False when unread. */
 async function hostRefresh() {
+  const asked = gate.ask();
   const fresh = await serverFetch("/computer-use/refresh", { method: "POST", body: JSON.stringify({ max_age_ms: 0 }) }).catch(() => null);
   if (!fresh) { serverRealScreen = false; return false; }
+  // An answer older than one already applied cannot give anything back.
+  if (!gate.fresh(asked)) return false;
   server = fresh;
   // Only the server's answer just read can say yes; anything else is no.
   serverRealScreen = fresh.read === true && saysRealScreen(fresh);
@@ -202,7 +246,16 @@ async function reportEvent(event) {
 
 async function startHost() {
   if (hostPromise) return hostPromise;
-  hostPromise = (async () => {
+  const taken = gate.begin();
+  // Turned off (or stopped) while this start was in flight: close what it made, publish nothing.
+  const stale = () => !gate.current(taken) || !allowedNow();
+  const abandon = async (made, madeListener) => {
+    await madeListener?.close().catch(() => {});
+    await made?.stopAll?.("server").catch(() => {});
+    await made?.close?.().catch(() => {});
+    throw Object.assign(new Error("Computer use is turned off."), { code: "computer_use_stale_start" });
+  };
+  const pending = (async () => {
     const { hostModule, mediaModule, policyModule, contractModule, imageModule, virtualModule, virtualWorker } = await sharedModules();
     const spool = server?.spool ? mediaModule.createMediaSpool(server.spool) : null;
     const onState = () => { pushStatus(); scheduleRefresh(); };
@@ -229,6 +282,7 @@ async function startHost() {
       const nativeFactory = () => hostModule.createNativeWorker({ nodePath: process.execPath, nodeEnv: { ELECTRON_RUN_AS_NODE: "1" }, koffiPath: koffiPath() });
       created = await hostModule.createPortableHost({ native: nativeFactory(), nativeFactory, ...callbacks });
     }
+    if (stale()) return abandon(created);
     preview = createComputerPreview();
     preview.bind(created);
     host = created;
@@ -237,18 +291,27 @@ async function startHost() {
       realScreenNoticeShown = true;
       try { if (Notification.isSupported()) new Notification({ title: "Computer use can use your own screen", body: "The agent can click and type in your apps without asking. Stop it any time with Stop; turn it off in Settings > Computer use." }).show(); } catch { /* best effort */ }
     }
-    listener = await created.listen(path.join(profileDir(), "computer-use"));
+    const madeListener = await created.listen(path.join(profileDir(), "computer-use"));
+    // Checked again right before anything is published (host.json, the listener the relays find).
+    if (stale()) { if (host === created) { host = null; preview?.close(); preview = null; } return abandon(created, madeListener); }
+    listener = madeListener;
     const relay = app.isPackaged ? path.join(process.resourcesPath, "computer-use", "relay.mjs") : path.join(__dirname, "computer-use-relay.mjs");
     const command = [process.execPath, relay, listener.discoveryPath];
     const environment = { ELECTRON_RUN_AS_NODE: "1" };
     await serverFetch("/computer-use/host", { method: "POST", headers: secretHeaders, body: JSON.stringify({ command, environment }) });
+    // Off while host.json was being written: take it back now.
+    if (stale()) { await stopHost("server"); throw Object.assign(new Error("Computer use is turned off."), { code: "computer_use_stale_start" }); }
     pushStatus();
     return created;
-  })().catch((error) => { hostPromise = null; host = null; throw error; });
-  return hostPromise;
+  })().catch((error) => { if (hostPromise === pending) { hostPromise = null; host = null; } throw error; });
+  hostPromise = pending;
+  return pending;
 }
 
 async function stopHost(by = "server") {
+  // A start still in flight goes stale and closes what it made (startHost).
+  gate.revoke();
+  hostPromise = null;
   const current = host;
   await serverFetch("/computer-use/host", { method: "POST", headers: secretHeaders, body: JSON.stringify({ host: null }) }).catch(() => {});
   if (!current) return;
@@ -262,15 +325,18 @@ async function stopHost(by = "server") {
 }
 
 async function apply(next) {
+  await sharedModules().catch(() => null);
   server = next;
   // A periodic answer can only take the account's real screen away; a fresh read gives it (hostRefresh).
   if (next?.read === true) serverRealScreen = saysRealScreen(next);
   // A refresh that could not read the server (read false) or a no: no (fail closed).
   else if (next?.read === false || !saysRealScreen(next)) serverRealScreen = false;
   if (!serverRealScreen) await stopRealScreen();
-  if (server?.enabled && supported() && !hostPromise && Date.now() - failedAt < 60_000) { pushStatus(); return; }
-  if (server?.enabled && supported()) await startHost().catch((error) => { failedAt = Date.now(); deps?.log?.("computer use host did not start", error); });
-  else if (host) await stopHost("server");
+  const wanted = server?.enabled && supported() && deviceOn();
+  if (wanted && !hostPromise && Date.now() - failedAt < 60_000) { pushStatus(); return; }
+  // A start made stale by off is no failure (the next on starts at once).
+  if (wanted) await startHost().catch((error) => { if (error?.code === "computer_use_stale_start") return; failedAt = Date.now(); deps?.log?.("computer use host did not start", error); });
+  else if (host || hostPromise) await stopHost("server");
   pushStatus();
 }
 
@@ -280,7 +346,8 @@ function scheduleRefresh() {
   if (open && !refreshTimer) {
     refreshTimer = setInterval(() => {
       // A failed read is a no for the person's screen (fail closed); the agent's own display keeps running.
-      void serverFetch("/computer-use/refresh", { method: "POST", body: "{}" }).then(apply).catch(() => { serverRealScreen = false; void stopRealScreen(); });
+      const asked = gate.ask();
+      void serverFetch("/computer-use/refresh", { method: "POST", body: "{}" }).then((answer) => (gate.fresh(asked) ? apply(answer) : undefined)).catch(() => { serverRealScreen = false; void stopRealScreen(); });
     }, 60_000);
     refreshTimer.unref?.();
   } else if (!open && refreshTimer) {
@@ -291,7 +358,7 @@ function scheduleRefresh() {
 /** Starts following the switch (main.mjs, once the local server runs). */
 export function initComputerUse(options) {
   deps = options;
-  const poll = () => void serverFetch("/computer-use/state").then(apply).catch(() => {});
+  const poll = () => { const asked = gate.ask(); void serverFetch("/computer-use/state").then((answer) => (gate.fresh(asked) ? apply(answer) : undefined)).catch(() => {}); };
   poll();
   // The state route is local: the chat in use and the switch are read every few seconds.
   pollTimer = setInterval(poll, 5_000);
@@ -339,8 +406,12 @@ async function computerUseControl(value) {
 function getComputerUseMcpEnvironment() { return { ELECTRON_RUN_AS_NODE: "1" }; }
 
 async function getComputerUseMcpCommand() {
+  await sharedModules();
+  // The person's off on this device counts as much as the server's: no host, listener or tools.
   if (!server?.enabled) throw new Error(server?.setting?.message ?? "Computer use is turned off.");
+  if (!allowedNow()) throw new Error("Computer use is turned off on this computer.");
   await startHost();
+  if (!listener || !allowedNow()) throw new Error("Computer use is turned off.");
   const relay = app.isPackaged ? path.join(process.resourcesPath, "computer-use", "relay.mjs") : path.join(__dirname, "computer-use-relay.mjs");
   // The copied CLI connection: its own token (cli-connection.json), so its calls belong to no chat of this app.
   // The engine's relay alone reads engine-connection.json.
@@ -473,6 +544,7 @@ export {
   getComputerUseState,
   getComputerUseRealScreen,
   setComputerUseRealScreen,
+  setComputerUseOn,
   computerUseControl,
   getComputerUseMcpEnvironment,
   checkComputerUsePermissions,

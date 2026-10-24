@@ -35,6 +35,7 @@ import {
   computerUseControl,
   getComputerUseRealScreen,
   setComputerUseRealScreen,
+  setComputerUseOn,
   initComputerUse,
   listRunningApps,
   openComputerUseSetupApp,
@@ -2333,6 +2334,10 @@ const desktopCommandHandlers = {
   "setComputerUseRealScreen": async (event, value) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error("Computer use settings require the main OmniRush.ai window.");
     return setComputerUseRealScreen(value);
+  },
+  "setComputerUseOn": async (event, value) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error("Computer use settings require the main OmniRush.ai window.");
+    return setComputerUseOn(value);
   },
   "computerUseControl": async (event, value) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error("Computer use controls require the main OmniRush.ai window.");

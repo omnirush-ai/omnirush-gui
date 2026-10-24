@@ -101,6 +101,7 @@ import { getSessionActivityStatusLabel, useSessionActivityStore, type SessionAct
 import { PermissionApprovalPanel } from "@/react-app/domains/session/chat/permission-approval-modal";
 import { QuestionPanel } from "@/react-app/domains/session/modals/question-modal";
 import { ComputerUseInline, useComputerUseForChat } from "@/react-app/domains/session/surface/computer-use/inline";
+import { useComputerUseHint } from "@/react-app/domains/session/surface/computer-use/setup";
 import { QueuedMessagesPanel } from "@/react-app/domains/session/modals/queued-messages-panel";
 import { GoodSessionChecklistBar, noteUserStop } from "@/react-app/domains/quality/good-session";
 import { PlacementTurnFooter } from "@/react-app/domains/placements/placements";
@@ -1196,6 +1197,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   );
   const draft = useComposerStateStore((state) => getComposerDraft(state, props.sessionId));
   const attachments = useComposerStateStore((state) => getComposerAttachments(state, props.sessionId));
+  const computerUseHint = useComputerUseHint(draft);
   // True while a send with attachments is in flight (compression + inbox
   // upload + prompt POST); drives the uploading overlay on composer chips.
   const [attachmentsUploading, setAttachmentsUploading] = useState(false);
@@ -3746,9 +3748,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
         isRemoteWorkspace={props.isRemoteWorkspace}
           isSandboxWorkspace={props.isSandboxWorkspace}
           onUploadInboxFiles={props.onUploadInboxFiles ?? handleUploadInboxFiles}
-          compactTopSpacing={Boolean(showCompactionProgress || props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0 || hasComputerUse)}
+          compactTopSpacing={Boolean(showCompactionProgress || props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0 || hasComputerUse || computerUseHint !== null)}
           topAccessory={
-            showCompactionProgress || props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0 || hasComputerUse ? (
+            showCompactionProgress || props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0 || hasComputerUse || computerUseHint !== null ? (
               <div>
                 {showCompactionProgress ? <ContextCompactionProgress /> : null}
                 {queuedItems.length > 0 ? (
@@ -3775,6 +3777,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                   <TodoPanel todos={props.todos ?? []} />
                 ) : null}
                 {hasComputerUse ? <ComputerUseInline sessions={computerUse} /> : null}
+                {computerUseHint}
                 {props.activePermission ? (
                   <PermissionApprovalPanel
                     permission={props.activePermission}

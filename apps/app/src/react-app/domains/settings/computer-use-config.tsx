@@ -169,7 +169,7 @@ export function ComputerUseConfig({ connected, connecting, onConnect, onRefresh,
             <p className="text-sm font-medium">Use my own screen</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground" id="computer-use-real-screen-help">
               {realScreen.data?.forced ? "Set by the OMNIRUSH_COMPUTER_USE_REAL_SCREEN environment variable." : "Off by default. When on, the agent sees and uses the apps on your screen without asking. Your own mouse or keyboard pauses it until you choose Continue."}
-              {realScreen.data && !realScreen.data.allowed ? " It also needs your account's yes: turn on \u201cLet the agent use my real screen\u201d in your account at omnirush.ai/console/account. The app cannot turn that on; until then the agent uses its own display." : null}
+              {realScreen.data && !realScreen.data.allowed ? " It is turned off for everyone right now; the agent uses its own display." : null}
             </p>
           </div>
           <Switch

@@ -83,19 +83,23 @@ const OFF = ["0", "off", "false", "no"];
 /**
  * Whether computer use is on for this app. In this order: the environment
  * (OMNIRUSH_COMPUTER_USE=1/on or 0/off; tests and support), then the server's
- * block (`block`, as last seen), else off. `client` is "cli" or "desktop".
+ * block (`block`, as last seen), else off. `client` is "cli" or "desktop". `device`: the person's saved
+ * on/off for this device (deviceComputerUse; off wins over the server).
  * Returns the normalized block plus { enabled, source, reason }.
  */
-export function computerUseSetting({ env = process.env, block, client, platform = process.platform } = {}) {
+export function computerUseSetting({ env = process.env, block, client, platform = process.platform, device } = {}) {
   const server = normalizeComputerUse(block);
   const asked = String(env?.OMNIRUSH_COMPUTER_USE ?? "").trim().toLowerCase();
   if (OFF.includes(asked)) return { ...server, enabled: false, source: "env", reason: "env" };
+  // The person turned it off on this device (/computer off, Settings): no tools, no tips.
+  if (!deviceComputerUse(device)) return { ...server, enabled: false, source: "device", reason: "device" };
   // The environment turns computer use on (tests, support), never the person's real screen: that stays the server's.
   if (ON.includes(asked)) return { ...server, enabled: true, virtual_display: true, source: "env", reason: null };
   if (!isRecord(block)) return { ...server, enabled: false, source: "default", reason: "no_switch" };
-  if (!server.enabled) return { ...server, source: "server", reason: "off" };
+  // Off: say why when the block shows it (this OS or this app not in the rollout), so people get a plain reason.
+  if (!server.enabled) return { ...server, source: "server", reason: server.os && !server.os.includes(osName(platform)) ? "os" : server.clients && client && !server.clients.includes(client) ? "client" : "off", os_name: osName(platform) };
   if (server.clients && client && !server.clients.includes(client)) return { ...server, enabled: false, source: "server", reason: "client" };
-  if (server.os && !server.os.includes(osName(platform))) return { ...server, enabled: false, source: "server", reason: "os" };
+  if (server.os && !server.os.includes(osName(platform))) return { ...server, enabled: false, source: "server", reason: "os", os_name: osName(platform) };
   if (!server.real_screen && !server.virtual_display) return { ...server, enabled: false, source: "server", reason: "no_display" };
   return { ...server, source: "server", reason: null };
 }
@@ -104,6 +108,40 @@ export function computerUseSetting({ env = process.env, block, client, platform 
 export function modelAllowed(setting, modelId) {
   if (!setting?.enabled) return false;
   return !Array.isArray(setting.models) || setting.models.includes(String(modelId ?? ""));
+}
+
+const OS_LABELS = { macos: "macOS", windows: "Windows", linux: "Linux" };
+
+// ------------------------------------------------------------ this device's switch
+
+/** Computer use on this device until the person turns it off (CLI /computer off, desktop Settings). */
+export const COMPUTER_USE_DEFAULT = true;
+/** The key both apps save it under, in <state or profile>/computer-use/device.json. */
+export const COMPUTER_USE_SETTING = "computerUse";
+export const COMPUTER_USE_FILE = "device.json";
+
+/** Whether computer use is on for this device: the person's saved choice, else COMPUTER_USE_DEFAULT. */
+export function deviceComputerUse(saved) {
+  return typeof saved === "boolean" ? saved : COMPUTER_USE_DEFAULT;
+}
+
+/** Why computer use is not available here, in plain words for people; null while it is on. */
+export function unavailableMessage(setting) {
+  if (!setting || setting.enabled) return null;
+  if (setting.reason === "os") return `Computer use is not available on ${OS_LABELS[setting.os_name] ?? "this system"} yet.`;
+  if (setting.reason === "client") return "Computer use is not available in this app yet.";
+  if (setting.reason === "env") return "Computer use is off on this computer (OMNIRUSH_COMPUTER_USE=0).";
+  if (setting.reason === "device") return "Computer use is turned off on this computer.";
+  if (setting.reason === "no_switch") return "Computer use is not ready yet: sign in and stay online once so the app can check your account.";
+  return setting.message ?? "Computer use is turned off right now.";
+}
+
+// Words that ask for something on a screen: a browser, an app, clicks, typing into a window.
+const SCREEN_INTENT = /(?:^|[.,;!]\s*|\b(?:and|then|please|to)\s+)(?:double[- ])?click\b|\b(?:my (?:browser|screen|desktop|mouse|computer)|(?:use|open|launch|start) (?:the |a |my )?(?:browser|chrome|firefox|edge|safari|app|application|program)|screenshot|computer use|take over my|fill (?:in|out) (?:the |this )?form)\b/i;
+
+/** Whether a prompt asks for something done on a screen (use my browser, click, open an app). */
+export function screenIntent(text) {
+  return typeof text === "string" && SCREEN_INTENT.test(text);
 }
 
 /** The message people see when computer use is off. */
@@ -123,11 +161,12 @@ export function serverRealScreen(block) {
 }
 
 /** Said to the agent when the account has not opted in (or the server turned it off). */
-export const REAL_SCREEN_NOT_OPTED_IN_MESSAGE = "Computer use on the person's own screen is not turned on for this account. Work on your own display instead (app_id \"virtual:main\"). Only the person can turn it on, in their account; never try to change it and never ask to.";
+export const REAL_SCREEN_NOT_OPTED_IN_MESSAGE = "Computer use on the person's own screen is turned off for this account right now. Work on your own display instead (app_id \"virtual:main\"). Never try to change it and never ask to.";
 /** Said to the agent when the server could not confirm it just now. */
 export const REAL_SCREEN_UNVERIFIED_MESSAGE = "The person's screen cannot be used right now: the account's setting could not be confirmed with the server. Work on your own display instead (app_id \"virtual:main\").";
 
-/** The person's real screen is off until the person turns it on (Settings / `omnirush computer real-screen on`). */
+/** The person's real screen is off until the person turns it on (Settings / `omnirush computer real-screen on`).
+ * Off by default for privacy; flipping this one value makes it on by default in both apps. */
 export const REAL_SCREEN_DEFAULT = false;
 /** The key both apps save the person's choice under, in <state or profile>/computer-use/real-screen.json. */
 export const REAL_SCREEN_SETTING = "computerUseRealScreen";
@@ -138,12 +177,16 @@ export const REAL_SCREEN_OFF_MESSAGE = "Computer use on the person's own screen 
 
 /**
  * Engine permission rules for every mode (computer use on or off): the agent can neither run the command that
- * turns the real screen on nor write the setting. Appended after the mode's own rules (the last match wins); the
- * engine's matcher treats \\ as / (Windows paths match too).
+ * turns the real screen on nor write the person's settings (real-screen.json, and device.json with the device's
+ * on/off), so it can never undo the person's choice for the next start. Appended after the mode's own rules (the
+ * last match wins); the engine's matcher treats \\ as / (Windows paths match too).
  */
 export const REAL_SCREEN_DENY_RULES = Object.freeze({
-  bash: Object.freeze({ "*computer real-screen*": "deny", "*computerUseRealScreen*": "deny", "*OMNIRUSH_COMPUTER_USE_REAL_SCREEN*": "deny", "*computer-use/real-screen.json*": "deny" }),
-  edit: Object.freeze({ "*computer-use/real-screen.json": "deny" }),
+  bash: Object.freeze({
+    "*computer real-screen*": "deny", "*computerUseRealScreen*": "deny", "*OMNIRUSH_COMPUTER_USE_REAL_SCREEN*": "deny", "*computer-use/real-screen.json*": "deny",
+    "*computer-use*real-screen.json*": "deny", "*computer-use*device.json*": "deny", "*\"computerUse\"*": "deny", "*computerUse\\\"*": "deny",
+  }),
+  edit: Object.freeze({ "*computer-use/real-screen.json": "deny", "*computer-use/device.json": "deny" }),
 });
 
 /**

@@ -23,13 +23,21 @@ export type ComputerUseBlock = {
   ask_send_delete: boolean;
 };
 export type ComputerUseSetting = ComputerUseBlock & {
-  source: "env" | "server" | "default";
-  reason: null | "env" | "no_switch" | "off" | "client" | "os" | "no_display";
+  source: "env" | "server" | "default" | "device";
+  reason: null | "env" | "device" | "no_switch" | "off" | "client" | "os" | "no_display";
+  /** This device's OS (macos, windows, linux) when computer use is off for it. */
+  os_name?: string;
 };
 
 export function normalizeComputerUse(block: unknown): ComputerUseBlock;
-export function computerUseSetting(options?: { env?: Record<string, string | undefined>; block?: unknown; client?: "cli" | "desktop"; platform?: string }): ComputerUseSetting;
+export function computerUseSetting(options?: { env?: Record<string, string | undefined>; block?: unknown; client?: "cli" | "desktop"; platform?: string; device?: boolean | null }): ComputerUseSetting;
 export function modelAllowed(setting: ComputerUseSetting | ComputerUseBlock | null | undefined, modelId: unknown): boolean;
+export const COMPUTER_USE_DEFAULT: boolean;
+export const COMPUTER_USE_SETTING: string;
+export const COMPUTER_USE_FILE: string;
+export function deviceComputerUse(saved: unknown): boolean;
+export function unavailableMessage(setting: { enabled?: boolean; reason?: string | null; os_name?: string; message?: string | null } | null | undefined): string | null;
+export function screenIntent(text: unknown): boolean;
 export function offMessage(setting: { message?: string | null } | null | undefined): string;
 
 export const REAL_SCREEN_DEFAULT: boolean;

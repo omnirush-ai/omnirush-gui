@@ -923,6 +923,10 @@ export type ComputerUseStatus = {
   supported: boolean;
   /** Why it is off or unavailable (people-facing), when it is. */
   message: string | null;
+  /** The person's own on/off for this device (on by default). */
+  device_on?: boolean;
+  /** The models that can use computer use (null: any). */
+  models?: string[] | null;
   mode: "careful" | "normal" | "auto";
   sessions: ComputerUseSessionState[];
 };
@@ -1020,6 +1024,7 @@ export type DesktopCommandMap = {
   getComputerUseState: { args: []; result: ComputerUseStatus };
   getComputerUseRealScreen: { args: []; result: ComputerUseRealScreen };
   setComputerUseRealScreen: { args: [on: boolean]; result: ComputerUseRealScreen };
+  setComputerUseOn: { args: [on: boolean]; result: ComputerUseStatus };
   computerUseControl: { args: [value: { session_id: string; action: ComputerUseControlAction; rect?: ComputerUseButtonRect }]; result: void };
   getOmniRushUiMcpEnvironment: { args: []; result: Record<string, string> };
 

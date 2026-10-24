@@ -51,6 +51,7 @@ import type { OmniRushAgentAssist, OmniRushAgentAssistFeature } from "../../../.
 import { useLinuxSandbox, type LinuxSandboxClient } from "../linux-sandbox";
 import { LinuxSandboxCard } from "../linux-sandbox-card";
 import { BuildathonTrackCard } from "../../buildathon/buildathon";
+import { ComputerUseSettingsCard } from "../../session/surface/computer-use/setup";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
@@ -579,6 +580,8 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
           onToggle={(enabled) => void keepAwake.setEnabled(enabled)}
         />
       ) : null}
+
+      {isElectronRuntime() ? <ComputerUseSettingsCard /> : null}
 
       {props.buildathonProject ? (
         <BuildathonTrackCard projectPath={props.buildathonProject.path} projectName={props.buildathonProject.name} />

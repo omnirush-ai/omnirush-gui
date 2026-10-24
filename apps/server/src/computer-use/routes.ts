@@ -3,7 +3,7 @@
  * loopback): the switch and permission mode it applies, the host file it
  * writes when its host listens, and the `computer.session` events it reports.
  *
- *   GET  /computer-use/state     { enabled, setting, mode, dir, spool, chat }
+ *   GET  /computer-use/state     { enabled, unavailable, setting, mode, dir, spool, chat }
  *   POST /computer-use/refresh   reads /collect/capabilities again (≤ 60 s old), then the state; with `read`
  *                                true, `setting` is the answer just read (held in memory, never re-read from the
  *                                state folder, which the agent's shell can write), so the person's real screen
@@ -13,7 +13,7 @@
  *   POST /computer-use/event     a computer.session event → the chat's trace
  */
 import { addRoute, type Route } from "../routes/registry.js";
-import { computerUseSetting } from "./shared/policy.mjs";
+import { computerUseSetting, unavailableMessage } from "./shared/policy.mjs";
 import {
   computerUseDir,
   computerUseSettingFor,
@@ -66,6 +66,8 @@ export function registerComputerUseRoutes(deps: ComputerUseRouteDeps): void {
     const chat = deps.chats.only(await deps.runningSessions().catch(() => null));
     return {
       enabled: setting.enabled,
+      // Why it is off here, in plain words (macOS, this app, the account), for the app to show.
+      unavailable: unavailableMessage(setting),
       setting: { enabled: setting.enabled, real_screen: setting.real_screen, real_screen_opt_in: setting.real_screen_opt_in, virtual_display: setting.virtual_display, limits: setting.limits, deny_apps: setting.deny_apps, models: setting.models, message: setting.message, ask_send_delete: setting.ask_send_delete === true, reason: setting.reason, source: setting.source },
       mode,
       dir,
