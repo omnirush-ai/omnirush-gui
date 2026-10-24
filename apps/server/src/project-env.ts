@@ -89,15 +89,19 @@ export function safeEnvValue(name: string, raw: string, checks: SecretChecks = {
   return value;
 }
 
-/** client-raw: a dotenv right-hand side as written: a quoted value's text (`$`, `\\` and all), else the text before an inline comment. */
-function rawEnvValue(raw: string): string | undefined {
-  const text = raw.trim();
-  const quote = text[0];
-  if (quote === '"' || quote === "'" || quote === "`") {
-    const end = text.indexOf(quote, 1);
-    return end < 0 ? undefined : text.slice(1, end);
+/** The first `quote` in `text` from `from` that is not escaped (an even run of backslashes before it, none included); -1 when none. */
+function closingQuote(text: string, quote: string, from: number): number {
+  for (let at = text.indexOf(quote, from); at >= 0; at = text.indexOf(quote, at + 1)) {
+    let slashes = 0;
+    while (at - slashes - 1 >= 0 && text[at - slashes - 1] === "\\") slashes += 1;
+    if (slashes % 2 === 0) return at;
   }
-  return text.replace(/\s+#.*$/, "").trim();
+  return -1;
+}
+
+/** client-raw: a dotenv right-hand side byte for byte as written (its quotes, `$`, `\\` and inner quotes included). */
+function rawEnvValue(raw: string): string {
+  return raw.trim();
 }
 
 /** The literal value of a dotenv right-hand side, or undefined when it is not one plain value. */
@@ -129,9 +133,10 @@ export function parseEnvFile(text: string, checks: SecretChecks = {}): { keys: E
   for (const line of text.split(/\r?\n/)) {
     if (openQuote) {
       // Inside a multi-line quoted value (a PEM key): its lines are never keys.
-      const end = line.indexOf(openQuote);
+      const end = raw ? closingQuote(line, openQuote, 0) : line.indexOf(openQuote);
       if (multiline) {
-        multiline.lines.push(end < 0 ? line : line.slice(0, end));
+        // Every line as written, the closing one whole (its quote included).
+        multiline.lines.push(line);
         if (end >= 0) multiline.key.value = multiline.lines.join("\n");
       }
       if (end >= 0) {
@@ -145,7 +150,7 @@ export function parseEnvFile(text: string, checks: SecretChecks = {}): { keys: E
     const name = match[1]!;
     const rhs = match[2]!.trim();
     const quote = rhs[0];
-    if ((quote === '"' || quote === "'" || quote === "`") && rhs.indexOf(quote, 1) < 0) openQuote = quote;
+    if ((quote === '"' || quote === "'" || quote === "`") && (raw ? closingQuote(rhs, quote, 1) : rhs.indexOf(quote, 1)) < 0) openQuote = quote;
     if (seen.has(name)) continue;
     if (keys.length >= MAX_ENV_KEYS_PER_FILE) {
       truncated = true;
@@ -154,7 +159,7 @@ export function parseEnvFile(text: string, checks: SecretChecks = {}): { keys: E
     seen.add(name);
     if (raw && openQuote) {
       const key: EnvKey = { name };
-      multiline = { key, lines: [rhs.slice(1)] };
+      multiline = { key, lines: [rhs] };
       keys.push(key);
       continue;
     }

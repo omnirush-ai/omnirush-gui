@@ -210,10 +210,10 @@ test.skipIf(process.platform !== "linux")("#19 snapshot: dev processes with scru
   const server = net.createServer().listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   const port = server.address().port;
-  const child = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", `--token=${GH_TOKEN}`, `--password`, PASSWORD, `AWS_SECRET_ACCESS_KEY=${AWS_SECRET}`], { stdio: "ignore" });
+  const child = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", `--token=${GH_TOKEN}`, `--password`, PASSWORD, `AWS_SECRET_ACCESS_KEY=${AWS_SECRET}`], { stdio: "ignore", env: { ...process.env, OMNIRUSH_SESSION: "ses_snapshot_own" } });
   try {
     await new Promise((resolve) => setTimeout(resolve, 200));
-    const snapshot = await processes.processSnapshot("turn_start", 3, { privacy: privacy.currentPrivacy(), scrub: SCRUB });
+    const snapshot = await processes.processSnapshot("turn_start", 3, { privacy: privacy.currentPrivacy(), scrub: SCRUB, scope: { rootPid: process.pid, folders: () => [], sessionId: "ses_snapshot_own" } });
     assert.equal(snapshot.phase, "turn_start");
     assert.equal(snapshot.turn, 3);
     const mine = snapshot.processes.find((entry) => entry.pid === child.pid);
@@ -272,7 +272,8 @@ test("#19 in a box: the box's processes and listening ports, through its runner;
   assert.equal(snapshot.method, "box-ps+box-proc");
   assert.deepEqual(snapshot.processes.map((entry) => entry.pid).sort(), [40, 41], "the helper and every OmniRush probe (OMNIRUSH_LEDGER_OFF=1) left out");
   assert.ok(snapshot.processes.every((entry) => entry.scope === "session"));
-  assert.ok(snapshot.processes.find((entry) => entry.pid === 41)!.command.includes("--token=[REDACTED]"));
+  // The box serves every chat of its project: no process there is known to be this session's, so none keeps its arguments.
+  assert.ok(snapshot.processes.every((entry) => entry.command === ""));
   assert.equal(snapshot.processes.find((entry) => entry.pid === 41)!.cwd, "~/app/web", "the working folder, home as ~");
   assertNoSecrets(snapshot);
   const ports = snapshot.listening.map((entry) => [entry.port, "address" in entry ? entry.address : undefined, "pid" in entry ? entry.pid : undefined]);
@@ -942,9 +943,13 @@ test("#19 privacy: only the session's process tree and processes in its folders 
     scrub: SCRUB,
     selfPid: 100,
     precomputed: { processes: table, listening },
-    scope: { rootPid: 100, folders: () => [project] },
+    scope: { rootPid: 100, folders: () => [project], sessionId: "ses_mine" },
     cwdOf: async (pids) => new Map(pids.map((pid) => [pid, pid === 202 ? path.join(project, "web") : "/home/other/telegram-bot"])),
+    // The shell call of this session (OMNIRUSH_SESSION in its environment); the folder's vite is nobody's known.
+    sessionOf: async () => new Map([[102, "ses_mine"]]),
   });
+  assert.equal(snapshot.processes.find((p) => p.pid === 103)!.command, "node server.js", "what the session's call started keeps its command");
+  assert.equal(snapshot.processes.find((p) => p.pid === 202)!.command, "", "a process only working in the folder keeps no arguments");
   assert.deepEqual(snapshot.processes.map((p) => [p.pid, p.scope]), [[102, "session"], [103, "session"], [202, "folder"]]);
   assert.ok(snapshot.processes.find((p) => p.pid === 102).command.includes("--token=[REDACTED]"));
   assert.deepEqual(snapshot.listening, [
@@ -958,11 +963,11 @@ test("#19 privacy: only the session's process tree and processes in its folders 
 });
 
 test.skipIf(process.platform !== "linux")("#19 privacy, live (Linux): the snapshot lists this process's children, never another account's or an unrelated process", async () => {
-  const child = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", "child-marker"], { stdio: "ignore" });
+  const child = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", "child-marker"], { stdio: "ignore", env: { ...process.env, OMNIRUSH_SESSION: "ses_live_own" } });
   const outsider = spawn("/bin/sh", ["-c", "exec sleep 20"], { stdio: "ignore", detached: true });
   try {
     await new Promise((resolve) => setTimeout(resolve, 200));
-    const snapshot = await processes.processSnapshot("turn_start", 1, { privacy: privacy.currentPrivacy(), scrub: SCRUB, scope: { rootPid: process.pid, folders: () => [] } });
+    const snapshot = await processes.processSnapshot("turn_start", 1, { privacy: privacy.currentPrivacy(), scrub: SCRUB, scope: { rootPid: process.pid, folders: () => [], sessionId: "ses_live_own" } });
     assert.ok(snapshot.processes.some((p) => p.pid === child.pid && p.command.includes("child-marker")));
     const pids = new Set(snapshot.processes.map((p) => p.pid));
     const all = await processes.linuxProcesses();
@@ -1113,4 +1118,53 @@ test.skipIf(!hasZstd)("uploader: the turn's last messages (the final flush, not 
   await syncer.stop();
   const tools = traceEventsOf(envelopes).filter((e) => e.type === "context.ephemeral_tool").map((e) => e.data);
   assert.deepEqual(tools.map((t) => [t.tool_call_id, t.package, t.version, t.resolved]), [["call-cow", "cowsay", "1.6.0", "exact"]]);
+});
+
+test("#19 raw: another chat's prompt in an unrelated process's arguments never reaches this session; the session's own call keeps its full command line", { skip: process.platform !== "linux" }, async () => {
+  const rules = await import("./context/redact-policy.js");
+  const leak = `RAWLEAK-${(await import("node:crypto")).randomUUID()}`;
+  const project = tmp("rawleak-proj");
+  const other = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", "--prompt", leak], { stdio: "ignore", cwd: project, env: { ...process.env, OMNIRUSH_SESSION: "ses_other_chat" } });
+  const loose = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", "--prompt", `${leak}-loose`], { stdio: "ignore", cwd: project, detached: true });
+  const own = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", `--token=${GH_TOKEN}`, "own-marker"], { stdio: "ignore", env: { ...process.env, OMNIRUSH_SESSION: "ses_raw_own" } });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const snapshot = await rules.withRedactionPolicy("client-raw", () => processes.processSnapshot("turn_start", 1, {
+      privacy: privacy.currentPrivacy(), scrub: SCRUB, scope: { rootPid: process.pid, folders: () => [project], sessionId: "ses_raw_own" },
+    }));
+    const stored = JSON.stringify(SCRUB.json(snapshot));
+    assert.ok(!stored.includes(leak), "the other chat's prompt is nowhere in the session's data");
+    assert.ok(snapshot.processes.some((p) => p.pid === other.pid && p.command === ""), "another chat's process: name and pid only");
+    const mine = snapshot.processes.find((p) => p.pid === own.pid);
+    assert.ok(mine && mine.command.includes(`--token=${GH_TOKEN} own-marker`), "the session's own call, its full command line as run");
+  } finally {
+    other.kill();
+    loose.kill();
+    own.kill();
+  }
+});
+
+test("#19 raw: a process another session names stays out with its whole subtree, even when this session's own call started it", { skip: process.platform !== "linux" }, async () => {
+  const rules = await import("./context/redact-policy.js");
+  const uuid = (await import("node:crypto")).randomUUID();
+  const secret = `OTHER-CHAT-SECRET-${uuid}`;
+  const deeper = `OTHER-CHAT-DEEPER-${uuid}`;
+  // The other chat's process starts an untagged child of its own (OMNIRUSH_SESSION removed).
+  // The secrets travel in the environment (never captured), so no ancestor's own arguments carry them.
+  const otherScript = `const { spawn } = require("child_process"); const env = { ...process.env }; delete env.OMNIRUSH_SESSION; spawn(process.execPath, ["-e", "setTimeout(()=>{}, 20000)", "--", "--prompt", process.env.NESTED_DEEPER], { env, stdio: "ignore" }); setTimeout(()=>{}, 20000);`;
+  // This session's call starts a process tagged with another chat.
+  const ownScript = `const { spawn } = require("child_process"); spawn(process.execPath, ["-e", process.env.NESTED_SCRIPT, "--", "--prompt", process.env.NESTED_SECRET], { env: { ...process.env, OMNIRUSH_SESSION: "ses_other_nested" }, stdio: "ignore" }); setTimeout(()=>{}, 20000);`;
+  const own = spawn(process.execPath, ["-e", ownScript, "--", "own-nested-marker"], { stdio: "ignore", detached: true, env: { ...process.env, OMNIRUSH_SESSION: "ses_nested_own", NESTED_SCRIPT: otherScript, NESTED_SECRET: secret, NESTED_DEEPER: deeper } });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const snapshot = await rules.withRedactionPolicy("client-raw", () => processes.processSnapshot("turn_start", 1, {
+      privacy: privacy.currentPrivacy(), scrub: SCRUB, scope: { rootPid: process.pid, folders: () => [], sessionId: "ses_nested_own" },
+    }));
+    const stored = JSON.stringify(SCRUB.json(snapshot));
+    assert.ok(stored.includes("own-nested-marker"), "the session's own call keeps its command line");
+    assert.ok(!stored.includes(secret), "a child another session names keeps no arguments");
+    assert.ok(!stored.includes(deeper), "nor does anything below it");
+  } finally {
+    try { process.kill(-own.pid); } catch { /* gone */ }
+  }
 });

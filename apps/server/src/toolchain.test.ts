@@ -665,3 +665,21 @@ test("client-raw: the cache keeps one block per upload rules, and raw keeps valu
     assert.equal(toolchain.parseProbeOutput("tool 1.2 (/home/jane/.local/bin/tool)\n", ""), "tool 1.2 (/home/jane/.local/bin/tool)");
   });
 }, 30_000);
+
+test("client-raw: every dotenv value reaches the toolchain block byte for byte as written, quotes included", async () => {
+  const rules = await import("./context/redact-policy.js");
+  const { redactUploadJson } = await import("./session-uploader.js");
+  const pem = `"-----BEGIN ${"PRIVATE"} KEY-----\nMIIEvQ${"Q".repeat(60)}\n-----END ${"PRIVATE"} KEY-----"`;
+  // Escaped quotes: on the first line, an even run of backslashes before the closing quote, and on a later line of a multi-line value.
+  const multi = '"line one\nsay \\"hi\\" on line two\nend"';
+  const source = { API_TOKEN: '"abc$def"', X: "'it''s'", Y: '"say \\"hi\\""', Z: '"a\\\\"', M: multi, PEM: pem, PORT: "3000" };
+  const dotenv = Object.entries(source).map(([key, value]) => `${key}=${value}`).join("\n") + "\n";
+  const root = tempProject({ "package.json": "{}", ".env": dotenv });
+  const cache = new toolchain.ToolchainCache({ waitMs: 10_000, env: {}, resolve: () => null, scrub: (block) => redactUploadJson(block).value as typeof block });
+  const stored = (block) => JSON.parse(JSON.stringify(redactUploadJson(block).value));
+  const values = (block) => Object.fromEntries((block?.env_files?.[0]?.keys ?? []).map((key) => [key.name, key.value]));
+  const raw = await rules.withRedactionPolicy("client-raw", async () => stored(await cache.get(root)));
+  assert.deepEqual(values(raw), source);
+  const legacy = stored(await cache.get(root));
+  assert.deepEqual(values(legacy), { API_TOKEN: undefined, X: undefined, Y: undefined, Z: undefined, M: undefined, PEM: undefined, PORT: "3000" }, "the old rules unchanged");
+}, 30_000);
