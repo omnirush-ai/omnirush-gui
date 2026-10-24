@@ -11,7 +11,7 @@
 // start-up never waits for it.
 //
 // Local rules, on top of the server's: a placement's window (starts_at,
-// ends_at), `max_per_day` displays per placement per local day, at most
+// ends_at), `max_per_day` displays per placement and slot per local day, at most
 // `max_per_advertiser_per_day` (default 3) displays per `advertiser_id` (else
 // per sponsor name) per local day, `snooze_days` after a dismissal, the turn
 // slot once per session. Copy is plain text,
@@ -359,6 +359,9 @@ export function refreshDue(state, now) {
   return now - state.fetched_at >= every || state.fetched_at - now > DAY_MS;
 }
 
+/** The day's count of a placement is per slot: one id served in both slots has a `max_per_day` in each. */
+export const shownKey = (placement) => `${placement.slot}:${placement.id}`;
+
 /** Whether `placement` may show in `slot` now (window, snooze, the day's counts, hidden). */
 export function eligible(placement, slot, state, now) {
   if (placement.slot !== slot) return false;
@@ -367,7 +370,7 @@ export function eligible(placement, slot, state, now) {
   if (state.hidden_until && now < state.hidden_until) return false;
   const snoozedUntil = state.snoozed[placement.id];
   if (Number.isFinite(snoozedUntil) && now < snoozedUntil) return false;
-  const shown = state.shown[placement.id];
+  const shown = state.shown[shownKey(placement)];
   if (shown && shown.day === localDay(now) && shown.count >= placement.maxPerDay) return false;
   const advertiser = state.advertisers?.[placement.advertiser];
   if (advertiser && advertiser.day === localDay(now) && advertiser.count >= placement.maxPerAdvertiserPerDay) return false;
@@ -489,8 +492,8 @@ export function createPlacements({
     let displayId = String(newDisplayId()).toLowerCase();
     while (Object.hasOwn(state.displays, displayId)) displayId = String(newDisplayId()).toLowerCase();
     const day = localDay(at);
-    const shown = state.shown[placement.id];
-    state.shown[placement.id] = { day, count: shown && shown.day === day ? shown.count + 1 : 1 };
+    const shown = state.shown[shownKey(placement)];
+    state.shown[shownKey(placement)] = { day, count: shown && shown.day === day ? shown.count + 1 : 1 };
     const advertiser = state.advertisers[placement.advertiser];
     state.advertisers[placement.advertiser] = { day, count: advertiser && advertiser.day === day ? advertiser.count + 1 : 1 };
     // Old days are forgotten.

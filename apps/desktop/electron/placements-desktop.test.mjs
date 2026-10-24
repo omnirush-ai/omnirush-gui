@@ -134,16 +134,16 @@ test("shared: caps, snooze and expiry", async () => {
   assert.equal(e.claim("home_banner"), null, "ended");
 });
 
-test("shared: one id in both slots: both entries kept, the count shared by id", async () => {
-  const both = [placement({ id: "plc_both", slot: "home_banner", max_per_day: 2 }), placement({ id: "plc_both", slot: "turn_footer", title: "Turn copy", max_per_day: 2 })];
+test("shared: one id in both slots: both entries kept, a day's count per slot", async () => {
+  const both = [placement({ id: "plc_both", slot: "home_banner", max_per_day: 1 }), placement({ id: "plc_both", slot: "turn_footer", title: "Turn copy", max_per_day: 1 })];
   assert.equal(parseAnswer(answer(both)).placements.length, 2);
   const { d } = desktop({ routes: () => ({ status: 200, data: answer(both) }) });
   assert.equal((await d.placement({ slot: "home_banner" })).slot, "home_banner");
   const turn = await d.placement({ slot: "turn_footer", sessionId: "ses_1" });
   assert.equal(turn.slot, "turn_footer");
   assert.equal(turn.title, "Turn copy");
-  assert.equal(d.service.state().shown.plc_both.count, 2);
-  assert.equal(await d.placement({ slot: "turn_footer", sessionId: "ses_2" }), null, "shared max_per_day");
+  assert.deepEqual([d.service.state().shown["home_banner:plc_both"].count, d.service.state().shown["turn_footer:plc_both"].count], [1, 1], "the home card did not use up the turn line");
+  assert.equal(await d.placement({ slot: "turn_footer", sessionId: "ses_2" }), null, "the turn slot's own max_per_day 1");
   assert.deepEqual(await d.action({ id: "plc_both", action: "dismiss" }), { ok: true });
   assert.equal(d.service.current("turn_footer"), null);
 });
