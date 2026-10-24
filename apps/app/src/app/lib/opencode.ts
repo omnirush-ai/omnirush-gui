@@ -84,6 +84,33 @@ export function isPromptAdmissionUnknown(error: unknown): error is PromptAdmissi
   return error instanceof PromptAdmissionUnknownError;
 }
 
+/** A send its user stopped while the local server held it (sandbox setup): given up on purpose, never replayed. */
+export class SendStoppedError extends Error {
+  constructor() {
+    super("Send cancelled by Stop.");
+    this.name = "SendStoppedError";
+  }
+}
+
+export function isSendStopped(error: unknown): error is SendStoppedError {
+  return error instanceof SendStoppedError;
+}
+
+/** In-flight prompt sends by message ID: Stop gives up a held one (stopHeldSend). */
+const stoppableSends = new Map<string, () => void>();
+
+/**
+ * Gives up the send of `messageID` while its request is still open: the
+ * request is aborted (the local server stops holding it and never dispatches
+ * it) and the send rejects at once with SendStoppedError. False when it is
+ * not in flight.
+ */
+export function stopHeldSend(messageID: string): boolean {
+  const stop = stoppableSends.get(messageID);
+  stop?.();
+  return Boolean(stop);
+}
+
 let lastMessageStamp = 0;
 
 /** Native sortable msg_ format. This identifies a submission, NOT an idempotency key. */
@@ -448,7 +475,7 @@ export function createClient(baseUrl: string, directory?: string, auth?: Opencod
         directory: requestDirectory ?? directory,
         throwOnError: options?.throwOnError,
         signal,
-      }), () => new PromptAdmissionUnknownError({ messageID: parameters.messageID }), () => promptHeldForSandbox(`${baseUrl}/session/`));
+      }), () => new PromptAdmissionUnknownError({ messageID: parameters.messageID }), () => promptHeldForSandbox(`${baseUrl}/session/`), parameters.messageID);
     } catch (error) {
       if (isPromptAdmissionUnknown(error)) {
         throw new PromptAdmissionUnknownError({ cause: error, messageID: parameters.messageID });
@@ -474,19 +501,26 @@ export function createClient(baseUrl: string, directory?: string, auth?: Opencod
 }
 
 /** Includes body consumption: receiving headers alone cannot release a send lock. */
-async function withAdmissionDeadline<T>(timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>, timeoutError: () => Error, holdOn: (() => boolean) | null = null): Promise<T> {
+async function withAdmissionDeadline<T>(timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>, timeoutError: () => Error, holdOn: (() => boolean) | null = null, stopKey?: string): Promise<T> {
   const controller = new AbortController();
   let clearDeadline: (() => void) | undefined;
+  let stop: (() => void) | undefined;
   const deadline = new Promise<never>((_, reject) => {
     clearDeadline = holdingTimeout(timeoutMs, holdOn, () => {
       reject(timeoutError());
       controller.abort();
     });
+    stop = () => {
+      reject(new SendStoppedError());
+      controller.abort();
+    };
   });
+  if (stopKey && stop) stoppableSends.set(stopKey, stop);
   try {
     return await Promise.race([operation(controller.signal), deadline]);
   } finally {
     clearDeadline?.();
+    if (stopKey && stoppableSends.get(stopKey) === stop) stoppableSends.delete(stopKey);
   }
 }
 

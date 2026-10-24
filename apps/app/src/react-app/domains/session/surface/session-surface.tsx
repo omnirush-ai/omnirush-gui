@@ -9,7 +9,7 @@ import { toast } from "@/components/ui/sonner";
 import { captureAnalyticsEvent } from "@/app/lib/analytics";
 import { useUpdateGateBlocked } from "@/app/lib/update-gate";
 import { interruptSessionTurn, sessionNeedsStop, submitAfterInterruption, subscribeSessionInterruption } from "@/app/lib/opencode-interruption";
-import { createClient, createPromptMessageID, hasAcceptedPromptMessage, isPromptAdmissionUnknown, unwrap } from "@/app/lib/opencode";
+import { createClient, createPromptMessageID, hasAcceptedPromptMessage, isPromptAdmissionUnknown, isSendStopped, unwrap } from "@/app/lib/opencode";
 import { compactSession } from "@/app/lib/opencode-session";
 import { createClientV2, isOpencodeV2BaseUrl } from "@/app/lib/opencode-v2-adapter";
 import * as opencodeSessionNative from "@/app/lib/opencode-session-native";
@@ -2266,8 +2266,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
         if (activeSessionOwnerRef.current === sessionOwner) setAwaitingAssistantBaseline(null);
         return { outcome: "unknown" };
       }
-      if (getQueuedSendGeneration(props.sessionId) !== generation) {
+      // Stopped on purpose (or the context moved on): released at once, never sent again.
+      if (isSendStopped(nextError) || getQueuedSendGeneration(props.sessionId) !== generation) {
         dispatchQueuedDrain(props.sessionId, { type: "send_result", itemId, outcome: "cancelled", at: Date.now() });
+        if (activeSessionOwnerRef.current === sessionOwner) setAwaitingAssistantBaseline(null);
         return { outcome: "cancelled", reason: "context_changed" };
       }
       dispatchQueuedDrain(props.sessionId, { type: "send_error", itemId });
