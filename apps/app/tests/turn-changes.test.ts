@@ -51,8 +51,14 @@ describe("mergeTurnChanges", () => {
     expect(merged.find((f) => f.path === "src/new.ts")?.status).toBe("added");
   });
 
-  test("added then deleted in one turn reads as modified; deleted last is deleted", () => {
-    expect(mergeTurnChanges([[file("a", "p1", 1, 0, "added")], [file("a", "p2", 0, 1, "deleted")]])[0]?.status).toBe("modified");
+  test("a file added and deleted in one turn is left out, also with a change in between", () => {
+    expect(mergeTurnChanges([[file("a", "p1", 1, 0, "added")], [file("a", "p2", 0, 1, "deleted")]])).toEqual([]);
+    expect(mergeTurnChanges([[file("a", "p1", 1, 0, "added")], [file("a", "p2", 1, 1)], [file("a", "p3", 0, 1, "deleted")]])).toEqual([]);
+  });
+
+  test("deleted and made again reads as modified; deleted last is deleted; added and changed is added", () => {
+    expect(mergeTurnChanges([[file("r", "p1", 0, 2, "deleted")], [file("r", "p2", 3, 0, "added")]])[0]?.status).toBe("modified");
     expect(mergeTurnChanges([[file("b", "p1", 1, 1)], [file("b", "p2", 0, 3, "deleted")]])[0]?.status).toBe("deleted");
+    expect(mergeTurnChanges([[file("n", "p1", 2, 0, "added")], [file("n", "p2", 1, 1)]])[0]?.status).toBe("added");
   });
 });

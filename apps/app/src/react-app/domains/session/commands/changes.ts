@@ -130,19 +130,28 @@ export function splitRows(lines: readonly PatchLine[]): SplitRow[] {
 /**
  * One turn's changes from the engine's per-message diffs (a turn split by a compaction has one list per user
  * message, oldest first): a file changed in several parts keeps every part's hunks in order and the summed counts.
+ * Its status is the turn's net one: whether it existed at the turn's start (its first part did not add it) and at
+ * its end (its last part did not delete it). A file that existed at neither (added, then deleted) is left out.
  */
 export function mergeTurnChanges(lists: readonly ChangedFile[][]): ChangedFile[] {
-  const byPath = new Map<string, ChangedFile>();
+  const byPath = new Map<string, { file: ChangedFile; atStart: boolean; atEnd: boolean }>();
   for (const list of lists) {
     for (const file of list) {
       const seen = byPath.get(file.path);
-      if (!seen) { byPath.set(file.path, { ...file }); continue; }
-      seen.additions += file.additions;
-      seen.deletions += file.deletions;
-      seen.patch = [seen.patch, file.patch].filter((patch) => patch.trim()).join("\n");
-      // Added earlier in the turn stays added; deleted at the end is deleted.
-      seen.status = seen.status === "added" ? (file.status === "deleted" ? "modified" : "added") : file.status === "deleted" ? "deleted" : "modified";
+      if (!seen) {
+        byPath.set(file.path, { file: { ...file }, atStart: file.status !== "added", atEnd: file.status !== "deleted" });
+        continue;
+      }
+      seen.file.additions += file.additions;
+      seen.file.deletions += file.deletions;
+      seen.file.patch = [seen.file.patch, file.patch].filter((patch) => patch.trim()).join("\n");
+      seen.atEnd = file.status !== "deleted";
     }
   }
-  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+  const out: ChangedFile[] = [];
+  for (const { file, atStart, atEnd } of byPath.values()) {
+    if (!atStart && !atEnd) continue;
+    out.push({ ...file, status: atStart && atEnd ? "modified" : atEnd ? "added" : "deleted" });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
 }
