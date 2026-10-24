@@ -22,6 +22,7 @@ import {
   LayoutSectionItemTitle,
 } from "../settings-layout";
 import { ThemeVariantThumb } from "./theme-preview";
+import { t } from "@/i18n";
 
 export const DISCORD_SHOWCASE_URL = "https://discord.com/channels/1554572994326827069/1556709953916641280";
 export const DISCORD_INVITE_URL = "https://discord.gg/9nu5rMQTDP";
@@ -94,19 +95,19 @@ function ImportPreviewCard(props: Pick<Props, "onKeep" | "onEditFirst" | "onCanc
         {summary.failing.length === 0 ? (
           <>
             <Button size="sm" onClick={props.onKeep} data-testid="theme-import-keep">
-              Keep theme
+              {t("settings.theme_share.keep")}
             </Button>
             <Button size="sm" variant="outline" onClick={props.onEditFirst} data-testid="theme-import-edit">
-              Edit first
+              {t("settings.theme_share.edit_first")}
             </Button>
           </>
         ) : (
           <Button size="sm" onClick={props.onEditFirst} data-testid="theme-import-edit">
-            Fix in editor
+            {t("settings.theme_share.fix_in_editor")}
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={props.onCancelImport} data-testid="theme-import-cancel">
-          Cancel
+          {t("common.cancel")}
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">Keeping it adds it to your custom themes.</p>
@@ -168,26 +169,25 @@ export function ThemeShareSection(props: Props) {
   return (
     <LayoutSectionItem>
       <LayoutSectionItemHeader className="w-full">
-        <LayoutSectionItemTitle>Share and import</LayoutSectionItemTitle>
+        <LayoutSectionItemTitle>{t("settings.theme_share.title")}</LayoutSectionItemTitle>
         <LayoutSectionItemDescription>
-          A theme code holds the whole custom theme: both versions, corner radius and font size. Nothing else from your
-          settings is included.
+          {t("settings.theme_share.desc")}
         </LayoutSectionItemDescription>
       </LayoutSectionItemHeader>
 
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-3">
-        <span className="w-14 text-sm font-medium text-foreground">Export</span>
+        <span className="w-14 text-sm font-medium text-foreground">{t("settings.export")}</span>
         <input
           readOnly
-          aria-label="Theme code"
-          value={code || "Create a custom theme to get a code."}
+          aria-label={t("settings.theme_share.code")}
+          value={code || t("settings.theme_share.no_code")}
           onFocus={(event) => event.currentTarget.select()}
           className="min-w-0 flex-1 truncate rounded-lg border border-border bg-background px-2 py-1.5 font-mono text-xs text-muted-foreground outline-none"
           data-testid="theme-export-code"
         />
         <Button size="sm" disabled={!code} onClick={() => void copy()} data-testid="theme-copy-code">
           {copied ? <Check /> : <Copy />}
-          {copied ? "Copied" : "Copy theme code"}
+          {copied ? t("config.copied") : t("settings.theme_share.copy")}
         </Button>
         <Button
           size="sm"
@@ -201,13 +201,13 @@ export function ThemeShareSection(props: Props) {
           data-testid="theme-save-file"
         >
           <Download />
-          Save file…
+          {t("settings.theme_share.save_file")}
         </Button>
       </div>
 
       <div className="grid gap-3 @2xl/settings:grid-cols-2">
         <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
-          <span className="text-sm font-medium text-foreground">Import</span>
+          <span className="text-sm font-medium text-foreground">{t("den.import_provider")}</span>
           <form
             className="flex gap-2"
             onSubmit={(event) => {
@@ -216,7 +216,7 @@ export function ThemeShareSection(props: Props) {
             }}
           >
             <input
-              aria-label="Paste a theme code"
+              aria-label={t("settings.theme_share.paste")}
               placeholder="omnirush-theme:1:…"
               value={input}
               onChange={(event) => {
@@ -228,14 +228,14 @@ export function ThemeShareSection(props: Props) {
               data-testid="theme-import-input"
             />
             <Button size="sm" variant="outline" type="submit" disabled={!input.trim()} data-testid="theme-import-preview-button">
-              Preview
+{t("settings.theme_share.preview")}
             </Button>
           </form>
           {error ? (
             <p className="flex items-start gap-1.5 text-xs text-destructive" role="alert" data-testid="theme-import-error">
               <AlertTriangle className="mt-0.5 size-3 shrink-0" />
               <span>
-                <b>This isn't a valid theme:</b> {error}. Nothing was changed.
+                <b>{t("settings.theme_share.invalid")}</b> {t("settings.theme_share.invalid_detail", { error })}
               </span>
             </p>
           ) : null}
@@ -253,23 +253,23 @@ export function ThemeShareSection(props: Props) {
             />
             <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
               <Upload />
-              Open file…
+              {t("settings.theme_share.open_file")}
             </Button>
           </div>
           <div className="text-xs text-muted-foreground">
-            <b className="text-foreground">What a theme code can contain</b>
+            <b className="text-foreground">{t("settings.theme_share.rules_title")}</b>
             <ul className="mt-1 list-disc pl-5">
-              <li>Starts with omnirush-theme:1: (version 1)</li>
-              <li>Colours are #rrggbb hex only</li>
-              <li>Unknown keys are rejected, nothing is guessed</li>
-              <li>At most 8 KB once decoded</li>
-              <li>Corner radius 0–16 px, font size 12–16 px</li>
-              <li>One or both modes, listed in modes</li>
+              <li>{t("settings.theme_share.rule_prefix")}</li>
+              <li>{t("settings.theme_share.rule_colours")}</li>
+              <li>{t("settings.theme_share.rule_keys")}</li>
+              <li>{t("settings.theme_share.rule_size")}</li>
+              <li>{t("settings.theme_share.rule_ranges")}</li>
+              <li>{t("settings.theme_share.rule_modes")}</li>
             </ul>
           </div>
         </div>
         <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
-          <span className="text-sm font-medium text-foreground">Preview, then confirm</span>
+          <span className="text-sm font-medium text-foreground">{t("settings.theme_share.preview_confirm")}</span>
           {props.importing ? (
             <ImportPreviewCard
               theme={props.importing.theme}
@@ -280,7 +280,7 @@ export function ThemeShareSection(props: Props) {
             />
           ) : (
             <p className="text-xs text-muted-foreground">
-              Paste a code or open a file. The theme shows in the whole window before you decide to keep it.
+              {t("settings.theme_share.preview_hint")}
             </p>
           )}
         </div>
@@ -295,19 +295,19 @@ export function ThemeShareSection(props: Props) {
             onClick={() => platform.openLink(DISCORD_SHOWCASE_URL)}
             data-testid="theme-discord-showcase"
           >
-            Share your theme in #showcase on Discord
+            {t("settings.theme_share.discord_share")}
           </button>
           <ExternalLink className="size-3" />
         </span>
         <span>
-          Not a member yet?{" "}
+          {t("settings.theme_share.not_member")}{" "}
           <button
             type="button"
             className="text-foreground underline underline-offset-2"
             onClick={() => platform.openLink(DISCORD_INVITE_URL)}
             data-testid="theme-discord-join"
           >
-            Join our Discord
+            {t("settings.theme_share.join_discord")}
           </button>
         </span>
       </p>

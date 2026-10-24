@@ -30,6 +30,7 @@ import {
   LayoutSectionItemTitle,
 } from "../settings-layout";
 import { useActiveTheme, useAppearancePrefs } from "./theme-state";
+import { t } from "@/i18n";
 
 type SectionProps = { busy: boolean };
 
@@ -56,6 +57,14 @@ function Row(props: { label: string; htmlFor?: string; children: ReactNode }) {
       <div className="flex min-w-0 flex-wrap items-center gap-3">{props.children}</div>
     </div>
   );
+}
+
+/** Descriptive font choices are translated; named fonts keep their names. */
+function fontLabel(option: { id: string; label: string }): string {
+  if (option.label === "System default") return t("voice.system_default");
+  if (option.label === "System monospace") return t("settings.appearance.system_monospace");
+  if (option.label === "Same as code font") return t("settings.appearance.same_as_code_font");
+  return option.label;
 }
 
 /** A range input with its value and an optional "Theme default" reset. */
@@ -91,7 +100,7 @@ function Slider(props: {
       </span>
       {props.onReset ? (
         <Button variant="ghost" size="sm" onClick={props.onReset} disabled={props.disabled}>
-          {props.resetLabel ?? "Reset"}
+          {props.resetLabel ?? t("common.reset")}
         </Button>
       ) : null}
     </Row>
@@ -139,19 +148,19 @@ export function AccentSection(props: SectionProps) {
 
   return (
     <Section
-      title="Accent colour"
-      description="Colours buttons, selection, focus rings and links in every theme. Checked for contrast against the current theme."
+      title={t("settings.appearance.accent_title")}
+      description={t("settings.appearance.accent_desc")}
       testId="appearance-accent"
     >
       <div role="radiogroup" aria-label="Accent colour" className="flex flex-wrap items-center gap-2 py-1">
-        {swatch("Theme accent", null, themeAccent)}
+        {swatch(t("settings.appearance.theme_accent"), null, themeAccent)}
         {ACCENT_SWATCHES.map((item) => swatch(item.name, item.hex, item.hex))}
       </div>
-      <Row label="Custom colour" htmlFor={inputId}>
+      <Row label={t("settings.appearance.custom_colour")} htmlFor={inputId}>
         <label className="relative size-7 shrink-0 overflow-hidden rounded-md border border-border" style={{ background: pickerValue }}>
           <input
             type="color"
-            aria-label="Pick a custom accent colour"
+            aria-label={t("settings.appearance.pick_accent")}
             value={pickerValue}
             disabled={props.busy}
             onChange={(event) => setAccent(event.target.value.toLowerCase())}
@@ -183,7 +192,7 @@ export function AccentSection(props: SectionProps) {
           <span className="min-w-0 flex-1 text-foreground">
             {check.uiRatio < 3 ? `Hard to see on this theme: ${ratio(check.uiRatio)} (needs 3:1). ` : ""}
             {check.textRatio < 4.5 ? `Button text on it is ${ratio(check.textRatio)} (needs 4.5:1). ` : ""}
-            Links already use a readable shade.
+            {t("settings.appearance.links_readable")}
           </span>
           {check.suggestion ? (
             <Button size="sm" variant="outline" onClick={() => setAccent(check.suggestion)} data-testid="accent-use-suggestion">
@@ -206,7 +215,7 @@ function FontSelect(props: {
   onChange: (id: string) => void;
   testId: string;
 }) {
-  const items = props.options.map((option) => ({ value: option.id, label: option.label }));
+  const items = props.options.map((option) => ({ value: option.id, label: fontLabel(option) }));
   return (
     <Row label={props.label}>
       <div className="w-64 max-w-full">
@@ -218,7 +227,7 @@ function FontSelect(props: {
             <SelectGroup>
               {props.options.map((option) => (
                 <SelectItem key={option.id} value={option.id} style={{ fontFamily: props.stackOf(option.id) }}>
-                  {option.label}
+                  {fontLabel(option)}
                 </SelectItem>
               ))}
             </SelectGroup>
@@ -236,12 +245,12 @@ export function FontsSection(props: SectionProps) {
   const set = (patch: Partial<AppearancePrefs>) => setAppearancePrefs(patch);
   return (
     <Section
-      title="Fonts and text"
-      description="Pick the interface and code fonts separately. Named code fonts are used when installed on this computer."
+      title={t("settings.appearance.fonts_title")}
+      description={t("settings.appearance.fonts_desc")}
       testId="appearance-fonts"
     >
       <FontSelect
-        label="Interface font"
+        label={t("settings.appearance.interface_font")}
         value={prefs.uiFont}
         options={UI_FONTS}
         stackOf={(id) => uiFontStack({ uiFont: id as AppearancePrefs["uiFont"], codeFont: prefs.codeFont }) ?? undefined}
@@ -250,7 +259,7 @@ export function FontsSection(props: SectionProps) {
         testId="appearance-ui-font"
       />
       <FontSelect
-        label="Code font"
+        label={t("settings.appearance.code_font")}
         value={prefs.codeFont}
         options={CODE_FONTS}
         stackOf={(id) => codeFontStack({ codeFont: id as AppearancePrefs["codeFont"] })}
@@ -259,14 +268,14 @@ export function FontsSection(props: SectionProps) {
         testId="appearance-code-font"
       />
       <Slider
-        label="Text size"
+        label={t("settings.appearance.text_size")}
         value={prefs.fontSizePx ?? active.fontSizePx}
         range={FONT_SIZE_RANGE}
         unit=" px"
         disabled={props.busy}
         onChange={(fontSizePx) => set({ fontSizePx })}
         onReset={prefs.fontSizePx === null ? undefined : () => set({ fontSizePx: null })}
-        resetLabel="Theme default"
+        resetLabel={t("settings.appearance.theme_default")}
         testId="appearance-text-size"
       />
       <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-foreground" data-testid="appearance-font-sample">
@@ -281,8 +290,8 @@ export function LayoutLookSection(props: SectionProps) {
   const prefs = useAppearancePrefs();
   const active = useActiveTheme();
   return (
-    <Section title="Layout" description="Spacing and how rounded panels, buttons and cards are." testId="appearance-layout">
-      <Row label="Density">
+    <Section title={t("ide.layout")} description={t("settings.appearance.layout_desc")} testId="appearance-layout">
+      <Row label={t("settings.appearance.density")}>
         <ToggleGroup
           value={[prefs.density]}
           onValueChange={(value) => value[0] && setAppearancePrefs({ density: value[0] as AppearancePrefs["density"] })}
@@ -297,20 +306,20 @@ export function LayoutLookSection(props: SectionProps) {
               data-testid={`appearance-density-${value}`}
               className="h-7 rounded-md border border-transparent px-3 text-sm text-muted-foreground capitalize aria-pressed:border-foreground/70 aria-pressed:bg-background aria-pressed:font-medium aria-pressed:text-foreground aria-pressed:shadow-xs"
             >
-              {value}
+              {value === "compact" ? t("settings.appearance.density_compact") : t("settings.appearance.density_comfortable")}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
       </Row>
       <Slider
-        label="Corner radius"
+        label={t("settings.appearance.corner_radius")}
         value={prefs.radiusPx ?? active.radiusPx}
         range={RADIUS_RANGE}
         unit=" px"
         disabled={props.busy}
         onChange={(radiusPx) => setAppearancePrefs({ radiusPx })}
         onReset={prefs.radiusPx === null ? undefined : () => setAppearancePrefs({ radiusPx: null })}
-        resetLabel="Theme default"
+        resetLabel={t("settings.appearance.theme_default")}
         testId="appearance-radius"
       />
     </Section>
@@ -354,8 +363,8 @@ export function WallpaperSection(props: SectionProps) {
 
   return (
     <Section
-      title="Wallpaper"
-      description="Put a picture of your own behind the workspace. It stays on this computer."
+      title={t("settings.appearance.wallpaper")}
+      description={t("settings.appearance.wallpaper_desc")}
       testId="appearance-wallpaper"
     >
       <div className="flex flex-wrap items-center gap-2 py-1">
@@ -369,15 +378,15 @@ export function WallpaperSection(props: SectionProps) {
         />
         <Button size="sm" variant="outline" disabled={props.busy || working} onClick={() => fileRef.current?.click()} data-testid="wallpaper-choose">
           <ImagePlus className="size-3.5" />
-          {prefs.wallpaper ? "Change image…" : "Choose image…"}
+          {prefs.wallpaper ? t("settings.appearance.change_image") : t("settings.appearance.choose_image")}
         </Button>
         {prefs.wallpaper ? (
           <Button size="sm" variant="ghost" disabled={props.busy || working} onClick={() => void removeWallpaper()} data-testid="wallpaper-remove">
             <Trash2 className="size-3.5" />
-            Remove
+            {t("common.remove")}
           </Button>
         ) : (
-          <span className="text-xs text-muted-foreground">PNG, JPEG, WebP, AVIF or GIF, up to 8 MB.</span>
+          <span className="text-xs text-muted-foreground">{t("settings.appearance.image_types")}</span>
         )}
       </div>
       {error ? (
@@ -388,7 +397,7 @@ export function WallpaperSection(props: SectionProps) {
       {prefs.wallpaper ? (
         <>
           <Slider
-            label="Dim picture"
+            label={t("settings.appearance.dim_picture")}
             value={prefs.wallpaperDim}
             range={WALLPAPER_DIM_RANGE}
             unit="%"
@@ -397,7 +406,7 @@ export function WallpaperSection(props: SectionProps) {
             testId="wallpaper-dim"
           />
           <Slider
-            label="Panel opacity"
+            label={t("settings.appearance.panel_opacity")}
             value={reduced ? 100 : prefs.panelOpacity}
             range={PANEL_OPACITY_RANGE}
             unit="%"
@@ -406,7 +415,7 @@ export function WallpaperSection(props: SectionProps) {
             testId="wallpaper-opacity"
           />
           <Slider
-            label="Sidebar blur"
+            label={t("settings.appearance.sidebar_blur")}
             value={reduced ? 0 : prefs.panelBlur}
             range={PANEL_BLUR_RANGE}
             unit=" px"
@@ -416,7 +425,7 @@ export function WallpaperSection(props: SectionProps) {
           />
           {reduced ? (
             <p className="text-xs text-muted-foreground" data-testid="wallpaper-reduced">
-              Your system asks for less transparency, so panels stay solid and nothing is blurred.
+              {t("settings.appearance.reduced_transparency")}
             </p>
           ) : null}
         </>

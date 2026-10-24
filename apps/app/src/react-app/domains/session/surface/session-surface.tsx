@@ -1059,7 +1059,7 @@ function SessionErrorCard({ error, developerMode, onDismiss, onChangeModel, onOp
                     onDismiss();
                   }}
                 >
-                  Choose another folder
+                  {t("session.choose_another_folder")}
                 </button>
               </div>
             ) : null}
@@ -1076,7 +1076,7 @@ function SessionErrorCard({ error, developerMode, onDismiss, onChangeModel, onOp
                         onDismiss();
                       }}
                     >
-                      Use {s.providerID}/{s.modelID}
+                      {t("session.use_model", { model: `${s.providerID}/${s.modelID}` })}
                     </button>
                   ))
                 ) : null}
@@ -1088,7 +1088,7 @@ function SessionErrorCard({ error, developerMode, onDismiss, onChangeModel, onOp
                     onDismiss();
                   }}
                 >
-                  Change model
+                  {t("model_select.change_model")}
                 </button>
               </div>
             ) : null}
@@ -1097,7 +1097,7 @@ function SessionErrorCard({ error, developerMode, onDismiss, onChangeModel, onOp
             type="button"
             className="shrink-0 rounded-full p-1 text-red-10 transition-colors hover:bg-red-3 hover:text-red-11"
             onClick={onDismiss}
-            aria-label="Dismiss error"
+            aria-label={t("session.dismiss_error")}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
           </button>

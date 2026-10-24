@@ -3,6 +3,7 @@
 import { useProviderLock } from "@/app/lib/provider-lock";
 import * as React from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Settings2, Star } from "lucide-react";
+import { t } from "@/i18n";
 
 import type { ModelBehaviorOption, ModelOption, ModelRef } from "@/app/types";
 import { getModelBehaviorSummary } from "@/app/lib/model-behavior";
@@ -351,14 +352,14 @@ export function ModelSelect({
     const quickGroups: ModelSelectGroup[] = [];
     if (favoriteOptions.length > 0) {
       quickGroups.push({
-        value: "Favorites",
+        value: t("model_select.favorites"),
         rank: -2,
         items: favoriteOptions.map((option) => ({ id: `favorite:${modelRefKey(option)}`, option })),
       });
     }
     if (recentOptions.length > 0) {
       quickGroups.push({
-        value: "Recent",
+        value: t("model_select.recent"),
         rank: -1,
         items: recentOptions.map((option) => ({ id: `recent:${modelRefKey(option)}`, option })),
       });
@@ -453,7 +454,7 @@ export function ModelSelect({
             <PopoverTrigger
               type="button"
               disabled={disabled}
-              aria-label="Change model"
+              aria-label={t("model_select.change_model")}
               aria-keyshortcuts="Meta+Alt+/"
               data-testid="model-select-trigger"
               // Shrinks (truncating the model name) before it would push into
@@ -465,7 +466,7 @@ export function ModelSelect({
           <span className="flex min-w-0 max-w-64 items-center gap-1.5">
             <span className="min-w-0 truncate">
               {selectedValueHidden || !value.modelID
-                ? "Select model"
+                ? t("model_select.select_model")
                 : selectedModelTitle}
             </span>
             {!selectedValueHidden && value.modelID && selectedProviderTitle ? (
@@ -478,7 +479,7 @@ export function ModelSelect({
           <ChevronDown className="h-3 w-3 shrink-0" />
         </TooltipTrigger>
         <TooltipContent>
-          Change model · Cycle thinking ({shortcutLabel} forward, {reverseShortcutLabel} back)
+          {t("model_select.trigger_tooltip", { forward: shortcutLabel, back: reverseShortcutLabel })}
         </TooltipContent>
       </Tooltip>
       <PopoverContent
@@ -498,9 +499,9 @@ export function ModelSelect({
                 setPane("effort");
               }}
             >
-              <span className="min-w-0 flex-1 font-medium text-foreground">Effort</span>
+              <span className="min-w-0 flex-1 font-medium text-foreground">{t("model_select.effort")}</span>
               <span className="max-w-24 truncate text-muted-foreground">
-                {selectedThinkingOptions.length > 0 ? effectiveBehaviorLabel : "Unavailable"}
+                {selectedThinkingOptions.length > 0 ? effectiveBehaviorLabel : t("config.unavailable")}
               </span>
               <kbd className="hidden shrink-0 rounded border border-border/70 bg-muted/40 px-1.5 py-0.5 font-sans text-[10px] leading-none text-muted-foreground sm:inline-flex">
                 {shortcutLabel}
@@ -513,9 +514,9 @@ export function ModelSelect({
               className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-50"
               onClick={() => setPane("favorites")}
             >
-              <span className="min-w-0 flex-1 font-medium text-foreground">Favorites</span>
+              <span className="min-w-0 flex-1 font-medium text-foreground">{t("model_select.favorites")}</span>
               <span className="max-w-36 truncate text-muted-foreground">
-                {currentFavorite?.title ?? "None"}
+                {currentFavorite?.title ?? t("connect.diagnostics_none")}
               </span>
               <kbd className="hidden shrink-0 rounded border border-border/70 bg-muted/40 px-1.5 py-0.5 font-sans text-[10px] leading-none text-muted-foreground sm:inline-flex">
                 {favoriteShortcutLabel}
@@ -527,7 +528,7 @@ export function ModelSelect({
               className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent"
               onClick={() => setPane("model")}
             >
-              <span className="min-w-0 flex-1 font-medium text-foreground">Model</span>
+              <span className="min-w-0 flex-1 font-medium text-foreground">{t("extensions.detail_fact_model")}</span>
               <span className="max-w-36 truncate text-muted-foreground">
                 {selectedOption?.title ?? resolveModelDisplayName(value.modelID)}
               </span>
@@ -543,7 +544,7 @@ export function ModelSelect({
                 onClick={() => setPane("root")}
               >
                 <ChevronLeft className="size-4 shrink-0 text-muted-foreground" />
-                <span className="text-sm font-medium">Favorites</span>
+                <span className="text-sm font-medium">{t("model_select.favorites")}</span>
               </button>
               <button
                 type="button"
@@ -581,7 +582,7 @@ export function ModelSelect({
             >
               <ChevronLeft className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0">
-                <span className="block truncate text-sm font-medium">Effort</span>
+                <span className="block truncate text-sm font-medium">{t("model_select.effort")}</span>
                 <span className="block truncate text-xs text-muted-foreground">{thinkingFor.title}</span>
               </span>
             </button>
@@ -614,15 +615,15 @@ export function ModelSelect({
               }}
             >
               <ChevronLeft className="size-4 shrink-0 text-muted-foreground" />
-              <span className="text-sm font-medium">Model</span>
+              <span className="text-sm font-medium">{t("extensions.detail_fact_model")}</span>
             </button>
             <Command items={groups} value={search} onValueChange={setSearch}>
               <div className="flex min-h-0 flex-1 flex-col">
               <CommandHeader className="p-1.5 pb-1">
-                <CommandInput ref={searchInputRef} placeholder="Search models..." className="h-9 text-sm" />
+                <CommandInput ref={searchInputRef} placeholder={t("model_select.search_placeholder")} className="h-9 text-sm" />
               </CommandHeader>
               <CommandPanel className="h-0 min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
-                <CommandEmpty>No models found.</CommandEmpty>
+                <CommandEmpty>{t("model_select.no_models")}</CommandEmpty>
                 <CommandList className="not-empty:scroll-py-1 not-empty:p-1">
                   {(group: ModelSelectGroup) => (
                     <CommandGroup key={group.value} items={group.items} className="[[role=group]+&]:mt-1">
@@ -648,7 +649,7 @@ export function ModelSelect({
                               <button
                                 type="button"
                                 className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                                aria-label={favorite ? `Remove ${option.title} from favorites` : `Add ${option.title} to favorites`}
+                                aria-label={favorite ? t("model_select.remove_favorite", { name: option.title }) : t("model_select.add_favorite", { name: option.title })}
                                 onPointerDown={(event) => {
                                   event.preventDefault();
                                   event.stopPropagation();
@@ -673,7 +674,7 @@ export function ModelSelect({
               {canAddProviders ? (
                 <div className="border-t border-border px-2 py-1">
                   <button type="button" className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground" onClick={handleConnectProvider}>
-                    Connect more providers
+                    {t("model_select.connect_more")}
                   </button>
                 </div>
               ) : null}
@@ -689,7 +690,7 @@ export function ModelSelect({
                   }}
                 >
                   <Settings2 className="size-3.5" />
-                  All models
+                  {t("model_select.all_models")}
                 </button>
               </div>
               </div>

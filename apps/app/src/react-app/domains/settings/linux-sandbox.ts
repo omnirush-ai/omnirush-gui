@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { captureAnalyticsEvent, type AnalyticsProperties } from "@/app/lib/analytics";
 import type { OmniRushServerClient, OmniRushWorkspaceBox, OmniRushWorkspaceBoxProgress, OmniRushWorkspaceBoxSetupAction } from "@/app/lib/omnirush-server";
+import { t } from "@/i18n";
 
 export type LinuxSandboxClient = Pick<OmniRushServerClient, "getWorkspaceBox" | "setWorkspaceBox" | "setWorkspaceBoxBackend" | "resetWorkspaceBox" | "retryWorkspaceBox"> & Partial<Pick<OmniRushServerClient, "setupWorkspaceBox">>;
 
@@ -27,7 +28,6 @@ export type LinuxSandboxView = {
 /** A change the user made that the server has not answered yet (the switch already shows it). */
 export type LinuxSandboxPending = "on" | "off" | "backend" | "reset" | "retry" | "setup" | null;
 
-const RUNS_HERE = "Commands run on this computer for now.";
 const LOAD_FAILED = "The sandbox status could not be loaded.";
 
 function runtimeLabel(box: OmniRushWorkspaceBox): string | null {
@@ -46,13 +46,13 @@ function megabytes(bytes: number): string {
 export function linuxSandboxProgress(progress: OmniRushWorkspaceBoxProgress | null | undefined): { value: number | null; label: string } {
   if (progress?.bytesTotal && progress.bytesDone !== null) {
     const value = Math.min(100, Math.round((progress.bytesDone / progress.bytesTotal) * 100));
-    return { value, label: `${megabytes(progress.bytesDone)} of ${megabytes(progress.bytesTotal)} MB · ${value}%` };
+    return { value, label: t("sandbox.progress_mb", { done: megabytes(progress.bytesDone), total: megabytes(progress.bytesTotal), percent: value }) };
   }
   if (progress && progress.layersTotal > 0) {
     const value = Math.min(100, Math.round((progress.layersDone / progress.layersTotal) * 100));
-    return { value, label: `${progress.layersDone} of ${progress.layersTotal} parts · ${value}%` };
+    return { value, label: t("sandbox.progress_parts", { done: progress.layersDone, total: progress.layersTotal, percent: value }) };
   }
-  return { value: null, label: "Starting the download…" };
+  return { value: null, label: t("sandbox.download_starting") };
 }
 
 function commandIn(reason: string | null | undefined): string | null {
@@ -62,19 +62,19 @@ function commandIn(reason: string | null | undefined): string | null {
 /** A short title for a reason the backend probe gave (with its command, when it names one). */
 function stepFor(reason: string, platform: string | undefined): LinuxSandboxNextStep | null {
   const command = commandIn(reason);
-  if (/sandbox enable/.test(reason)) return { title: "Allow the sandbox on this computer", detail: "Ubuntu blocks it until an admin allows it once. Run this in a terminal (OmniRush CLI), then check again.", command };
-  if (/usermod -aG docker/.test(reason)) return { title: "Let this user run Docker", detail: "Run this in a terminal, log out and back in, then check again.", command };
-  if (/wsl --install/.test(reason)) return { title: "Turn on WSL 2", detail: "Run this in PowerShell as administrator, restart the computer, then check again.", command: "wsl --install --no-distribution" };
-  if (/wsl --update/.test(reason)) return { title: "Update WSL", detail: "Run this in PowerShell, then check again.", command };
-  if (/podman machine start/.test(reason)) return { title: "Start the Podman machine", detail: "Run this in a terminal, then check again.", command };
-  if (/apt install bubblewrap/.test(reason)) return { title: "Install bubblewrap", detail: "Run this in a terminal (or use your system's package), then check again.", command };
+  if (/sandbox enable/.test(reason)) return { title: t("sandbox.step_allow"), detail: t("sandbox.step_allow_detail"), command };
+  if (/usermod -aG docker/.test(reason)) return { title: t("sandbox.step_docker_group"), detail: t("sandbox.step_docker_group_detail"), command };
+  if (/wsl --install/.test(reason)) return { title: t("sandbox.step_wsl"), detail: t("sandbox.step_wsl_detail"), command: "wsl --install --no-distribution" };
+  if (/wsl --update/.test(reason)) return { title: t("sandbox.step_wsl_update"), detail: t("sandbox.step_wsl_update_detail"), command };
+  if (/podman machine start/.test(reason)) return { title: t("sandbox.step_podman"), detail: t("sandbox.step_run_terminal"), command };
+  if (/apt install bubblewrap/.test(reason)) return { title: t("sandbox.step_bwrap"), detail: t("sandbox.step_run_terminal_pkg"), command };
   if (/Docker Desktop is installed but not running|Docker is installed but not running/.test(reason)) {
-    return { title: "Start your container app", detail: "Open Docker Desktop, OrbStack or colima, wait until it is running, then check again.", command: null };
+    return { title: t("sandbox.step_container_app"), detail: t("sandbox.step_container_app_detail"), command: null };
   }
   if (/another macOS user/.test(reason)) {
-    return { title: "Start your container app", detail: "Docker here belongs to another account on this Mac. Open Docker Desktop, OrbStack or colima in this account, then check again.", command: null };
+    return { title: t("sandbox.step_container_app"), detail: t("sandbox.step_container_other_account"), command: null };
   }
-  if (/Docker daemon is not running/.test(reason)) return { title: "Start Docker", detail: "Run this in a terminal, then check again.", command: "sudo systemctl start docker" };
+  if (/Docker daemon is not running/.test(reason)) return { title: t("sandbox.step_start_docker"), detail: t("sandbox.step_run_terminal"), command: "sudo systemctl start docker" };
   return null;
 }
 
@@ -90,10 +90,10 @@ export function linuxSandboxNextStep(box: OmniRushWorkspaceBox): LinuxSandboxNex
     const step = stepFor(reason, platform);
     if (step) return step;
   }
-  if (platform === "win32") return { title: "Turn on WSL 2", detail: "Run this in PowerShell as administrator, restart the computer, then check again. Docker Desktop or Podman work too.", command: "wsl --install --no-distribution" };
-  if (platform === "darwin") return { title: "Install a container app", detail: "colima is free and installs with Homebrew; OrbStack and Docker Desktop work too. Then check again.", command: "brew install colima docker && colima start" };
-  if (platform === "linux") return { title: "Install Podman or Docker", detail: "Run this in a terminal (or use your system's package), then check again.", command: "sudo apt install podman" };
-  return { title: "No sandbox backend works here", detail: box.runtime?.reason ?? "No container runtime was found on this computer.", command: null };
+  if (platform === "win32") return { title: t("sandbox.step_wsl"), detail: t("sandbox.step_wsl_detail_alt"), command: "wsl --install --no-distribution" };
+  if (platform === "darwin") return { title: t("sandbox.step_install_container"), detail: t("sandbox.step_install_container_detail"), command: "brew install colima docker && colima start" };
+  if (platform === "linux") return { title: t("sandbox.step_install_podman"), detail: t("sandbox.step_run_terminal_pkg"), command: "sudo apt install podman" };
+  return { title: t("sandbox.step_none"), detail: box.runtime?.reason ?? t("sandbox.step_none_detail"), command: null };
 }
 
 /** A ready box's detail, then one line per server in it open on this computer (Docker/Podman boxes). */
@@ -105,60 +105,60 @@ function withPorts(detail: string, box: OmniRushWorkspaceBox): string {
 /** The status row: what the sandbox is doing now, or why it is not used and what to do. */
 export function linuxSandboxView(box: OmniRushWorkspaceBox, pending: LinuxSandboxPending = null): LinuxSandboxView {
   const base = { progress: null, step: null, action: null, errorDetail: null };
-  if (pending === "on") return { ...base, tone: "busy", title: "Turning on…", detail: RUNS_HERE.replace(" for now", " until the sandbox is ready") };
-  if (pending === "off") return { ...base, tone: "busy", title: "Turning off…", detail: null };
-  if (pending === "reset") return { ...base, tone: "busy", title: "Resetting the sandbox…", detail: "Removing its container and installs." };
-  if (pending === "retry") return { ...base, tone: "busy", title: "Trying again…", detail: null };
-  if (pending === "setup") return { ...base, tone: "busy", title: "Setting up the sandbox…", detail: null };
+  if (pending === "on") return { ...base, tone: "busy", title: t("sandbox.turning_on"), detail: t("sandbox.runs_here_until_ready") };
+  if (pending === "off") return { ...base, tone: "busy", title: t("sandbox.turning_off"), detail: null };
+  if (pending === "reset") return { ...base, tone: "busy", title: t("sandbox.resetting"), detail: t("sandbox.resetting_detail") };
+  if (pending === "retry") return { ...base, tone: "busy", title: t("sandbox.trying_again"), detail: null };
+  if (pending === "setup") return { ...base, tone: "busy", title: t("sandbox.setting_up"), detail: null };
   if (!box.on) {
-    if (box.source === "env") return { ...base, tone: "off", title: "Off for this app", detail: "Set by OMNIRUSH_BOX where the app is launched." };
+    if (box.source === "env") return { ...base, tone: "off", title: t("sandbox.off_for_app"), detail: t("sandbox.off_for_app_detail") };
     // Required, but the project only builds on this OS: its chats run here.
-    if (box.source === "host-only" && box.hostOnly) return { ...base, tone: "attention", title: "Runs on this computer", detail: box.hostOnly.notice };
-    if (box.hostBuilds?.native) return { ...base, tone: "attention", title: "Off for this project", detail: box.hostBuilds.notice };
+    if (box.source === "host-only" && box.hostOnly) return { ...base, tone: "attention", title: t("sandbox.runs_on_computer"), detail: box.hostOnly.notice };
+    if (box.hostBuilds?.native) return { ...base, tone: "attention", title: t("sandbox.off_for_project"), detail: box.hostBuilds.notice };
     // A buildathon project: turned off here (less reproducible), or the event offers the sandbox.
-    if (box.notice) return { ...base, tone: "attention", title: box.source === "project" ? "Off for this project" : "Off", detail: box.notice };
-    return { ...base, tone: "off", title: "Off", detail: "Commands run on this computer." };
+    if (box.notice) return { ...base, tone: "attention", title: box.source === "project" ? t("sandbox.off_for_project") : t("common.off"), detail: box.notice };
+    return { ...base, tone: "off", title: t("common.off"), detail: t("sandbox.runs_here") };
   }
   const using = runtimeLabel(box);
   switch (box.state) {
     case "downloading":
-      return { ...base, tone: "busy", title: "Downloading the sandbox (once)", detail: RUNS_HERE.replace(" for now", " until it is ready"), progress: linuxSandboxProgress(box.progress) };
+      return { ...base, tone: "busy", title: t("sandbox.downloading"), detail: t("sandbox.runs_here_until_it_ready"), progress: linuxSandboxProgress(box.progress) };
     case "starting":
-      return { ...base, tone: "busy", title: "Starting the sandbox…", detail: using ? `Using ${using}. This takes a few seconds.` : "This takes a few seconds." };
+      return { ...base, tone: "busy", title: t("sandbox.starting"), detail: using ? t("sandbox.starting_using", { backend: using }) : t("sandbox.starting_detail") };
     case "ready":
       // On by choice in a folder with this computer's builds: the warning; on macOS / Windows: that chats run in Linux.
-      if (box.hostBuilds && !box.hostBuilds.native) return { ...base, tone: "attention", title: "Ready", detail: withPorts(box.hostBuilds.notice, box) };
-      return { ...base, tone: "ready", title: "Ready", detail: withPorts(box.boxNotice ?? (using ? `Commands run in a Linux container (${using}).` : "Commands run in a Linux container."), box) };
+      if (box.hostBuilds && !box.hostBuilds.native) return { ...base, tone: "attention", title: t("connect.diagnostics_connection_ready"), detail: withPorts(box.hostBuilds.notice, box) };
+      return { ...base, tone: "ready", title: t("connect.diagnostics_connection_ready"), detail: withPorts(box.boxNotice ?? (using ? t("sandbox.runs_in_container_using", { backend: using }) : t("sandbox.runs_in_container")), box) };
     case "failed":
-      return { ...base, tone: "error", title: "The sandbox could not start", detail: RUNS_HERE, action: { kind: "retry", label: "Try again" }, errorDetail: box.error ?? box.notice };
+      return { ...base, tone: "error", title: t("sandbox.could_not_start"), detail: t("sandbox.runs_here_for_now"), action: { kind: "retry", label: t("sandbox.try_again") }, errorDetail: box.error ?? box.notice };
     case "unavailable": {
       if (box.backendSetting.value === "native") {
-        return { ...base, tone: "attention", title: "The backend is set to Off", detail: "Commands run on this computer. Choose Automatic to use the sandbox.", action: { kind: "auto-backend", label: "Use automatic" } };
+        return { ...base, tone: "attention", title: t("sandbox.backend_off"), detail: t("sandbox.backend_off_detail"), action: { kind: "auto-backend", label: t("sandbox.use_automatic") } };
       }
       if (box.runtime?.ok) {
         // A backend works, but this project went on without the box (its helpers, a start that timed out).
-        return { ...base, tone: "attention", title: "The sandbox is not running", detail: RUNS_HERE, action: { kind: "retry", label: "Try again" }, errorDetail: box.notice?.replace(/^Sandbox off for now: /, "").replace(/\.$/, "") ?? box.error };
+        return { ...base, tone: "attention", title: t("sandbox.not_running"), detail: t("sandbox.runs_here_for_now"), action: { kind: "retry", label: t("sandbox.try_again") }, errorDetail: box.notice?.replace(/^Sandbox off for now: /, "").replace(/\.$/, "") ?? box.error };
       }
       const step = linuxSandboxNextStep(box);
-      return { ...base, tone: "attention", title: step.title, detail: RUNS_HERE, step, action: { kind: "check", label: "Check again" }, errorDetail: box.runtime?.reason ?? null };
+      return { ...base, tone: "attention", title: step.title, detail: t("sandbox.runs_here_for_now"), step, action: { kind: "check", label: t("sandbox.check_again") }, errorDetail: box.runtime?.reason ?? null };
     }
     case "off":
-      return { ...base, tone: "off", title: "Off", detail: box.notice ?? "Commands run on this computer." };
+      return { ...base, tone: "off", title: t("common.off"), detail: box.notice ?? t("sandbox.runs_here") };
   }
 }
 
 /** The backend in use and how it was picked, for the Advanced section. */
 export function linuxSandboxBackendSummary(box: OmniRushWorkspaceBox): string {
-  if (box.backendSetting.value === "native") return "Set to Off: commands run on this computer.";
+  if (box.backendSetting.value === "native") return t("sandbox.backend_summary_off");
   const using = runtimeLabel(box);
-  if (!using) return "No backend works on this computer yet.";
-  if (box.backendSetting.source === "env") return `Using ${using} (set by OMNIRUSH_BOX_BACKEND).`;
-  return box.backendSetting.value === "auto" ? `Using ${using}, picked automatically.` : `Using ${using}.`;
+  if (!using) return t("sandbox.backend_summary_none");
+  if (box.backendSetting.source === "env") return t("sandbox.backend_summary_env", { backend: using });
+  return box.backendSetting.value === "auto" ? t("sandbox.backend_summary_auto", { backend: using }) : t("sandbox.backend_summary_using", { backend: using });
 }
 
 /** The backend choices for the picker: "Automatic (recommended)" first. */
 export function linuxSandboxBackendChoices(box: OmniRushWorkspaceBox): Array<{ value: string; label: string }> {
-  return box.backendSetting.choices.map((choice) => ({ value: choice.id, label: choice.id === "auto" ? "Automatic (recommended)" : choice.label }));
+  return box.backendSetting.choices.map((choice) => ({ value: choice.id, label: choice.id === "auto" ? t("sandbox.automatic_recommended") : choice.label }));
 }
 
 /** States that change on their own: asked about again quickly while they last. */

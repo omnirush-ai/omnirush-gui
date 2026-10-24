@@ -106,11 +106,11 @@ export function getSettingsTabIcon(tab: SettingsTab) {
 export function getSettingsTabLabel(tab: SettingsTab) {
   switch (tab) {
     case "ai":
-      return "AI Providers";
+      return t("settings.tab_ai");
     case "preferences":
-      return "Preferences";
+      return t("settings.tab_preferences");
     case "permissions":
-      return "Permissions";
+      return t("settings.tab_permissions");
     case "cloud-account":
       return t("settings.tab_cloud_account");
     case "connect":
@@ -130,9 +130,9 @@ export function getSettingsTabLabel(tab: SettingsTab) {
     case "appearance":
       return t("settings.tab_appearance");
     case "editor":
-      return "Editor";
+      return t("settings.tab_editor");
     case "voice":
-      return "Voice";
+      return t("settings.tab_voice");
     case "updates":
       return t("settings.tab_updates");
     case "recovery":
@@ -140,7 +140,7 @@ export function getSettingsTabLabel(tab: SettingsTab) {
     case "debug":
       return t("settings.tab_debug");
     case "general":
-      return "Settings";
+      return t("settings.tab_general");
     default:
       return t("settings.tab_general");
   }
@@ -149,11 +149,11 @@ export function getSettingsTabLabel(tab: SettingsTab) {
 export function getSettingsTabDescription(tab: SettingsTab) {
   switch (tab) {
     case "ai":
-      return "Connect services that provide AI models";
+      return t("settings.tab_description_ai");
     case "preferences":
-      return "Default model, reasoning, and compaction";
+      return t("settings.tab_description_preferences");
     case "permissions":
-      return "Authorized folders and file access";
+      return t("settings.tab_description_permissions");
     case "cloud-account":
       return t("settings.tab_description_cloud_account");
     case "connect":
@@ -173,9 +173,9 @@ export function getSettingsTabDescription(tab: SettingsTab) {
     case "appearance":
       return t("settings.tab_description_appearance");
     case "editor":
-      return "Code editor: text, saving, language features and keys";
+      return t("settings.tab_description_editor");
     case "voice":
-      return "Dictation, microphone, and hotkey";
+      return t("settings.tab_description_voice");
     case "updates":
       return t("settings.tab_description_updates");
     case "recovery":
@@ -183,7 +183,7 @@ export function getSettingsTabDescription(tab: SettingsTab) {
     case "debug":
       return t("settings.tab_description_debug");
     case "general":
-      return "Overview of all settings";
+      return t("settings.tab_description_overview");
     default:
       return t("settings.tab_description_general");
   }

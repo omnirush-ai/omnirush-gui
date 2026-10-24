@@ -28,6 +28,7 @@ import {
   LayoutSectionTitle,
   LayoutStack,
 } from "../settings-layout";
+import { t } from "@/i18n";
 
 const SEGMENT =
   "h-7 rounded-md border border-transparent px-3 text-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring aria-checked:border-foreground/70 aria-checked:bg-background aria-checked:font-medium aria-checked:text-foreground aria-checked:shadow-xs";
@@ -121,26 +122,26 @@ export function EditorSettingsView(props: { client: OmniRushServerClient | null;
   }, [filter]);
 
   const formatterNote = !props.workspaceId
-    ? "Open a project to see its formatter."
+    ? t("settings.editor.formatter_no_project")
     : formatters === null
-      ? "Looking for the project's formatter…"
+      ? t("settings.editor.formatter_loading")
       : formatters.length
-        ? `This project: ${formatters.join(", ")}.`
-        : "This project: none found. Files are saved as they are.";
+        ? t("settings.editor.formatter_found", { list: formatters.join(", ") })
+        : t("settings.editor.formatter_none");
 
   return (
     <LayoutStack>
       <LayoutSection>
         <LayoutSectionHeader>
-          <LayoutSectionTitle>Text</LayoutSectionTitle>
-          <LayoutSectionDescription>The code editor in the IDE layout, for every project on this computer.</LayoutSectionDescription>
+          <LayoutSectionTitle>{t("settings.editor.text")}</LayoutSectionTitle>
+          <LayoutSectionDescription>{t("settings.editor.text_desc")}</LayoutSectionDescription>
         </LayoutSectionHeader>
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
             <LayoutSectionItemTitle>
-              <label htmlFor="editor-font-size">Font size</label>
+              <label htmlFor="editor-font-size">{t("settings.editor.font_size")}</label>
             </LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>Text size in the editor.</LayoutSectionItemDescription>
+            <LayoutSectionItemDescription>{t("settings.editor.font_size_desc")}</LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
               <select
                 id="editor-font-size"
@@ -156,47 +157,47 @@ export function EditorSettingsView(props: { client: OmniRushServerClient | null;
         </LayoutSectionItem>
         <LayoutSectionItem>
           <LayoutSectionItemHeader className="w-full">
-            <LayoutSectionItemTitle>Tab size</LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>For files without indentation of their own; others keep theirs.</LayoutSectionItemDescription>
+            <LayoutSectionItemTitle>{t("settings.editor.tab_size")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("settings.editor.tab_size_desc")}</LayoutSectionItemDescription>
           </LayoutSectionItemHeader>
           <SegmentedRadio
-            label="Tab size"
+            label={t("settings.editor.tab_size")}
             value={String(settings.tabSize) as "2" | "4" | "8"}
             options={[{ value: "2", label: "2" }, { value: "4", label: "4" }, { value: "8", label: "8" }]}
             onChange={(value) => set("tabSize", Number(value) as EditorSettings["tabSize"])}
           />
         </LayoutSectionItem>
-        <SwitchRow id="editor-word-wrap" title="Word wrap" description="Long lines wrap at the editor's edge." checked={settings.wordWrap} onChange={(value) => set("wordWrap", value)} />
-        <SwitchRow id="editor-minimap" title="Minimap" description="A small overview of the file at the right edge." checked={settings.minimap} onChange={(value) => set("minimap", value)} />
-        <SwitchRow id="editor-sticky-scroll" title="Sticky scroll" description="The first lines of the block you are in stay at the top while you scroll." checked={settings.stickyScroll} onChange={(value) => set("stickyScroll", value)} />
+        <SwitchRow id="editor-word-wrap" title={t("settings.editor.word_wrap")} description={t("settings.editor.word_wrap_desc")} checked={settings.wordWrap} onChange={(value) => set("wordWrap", value)} />
+        <SwitchRow id="editor-minimap" title={t("settings.editor.minimap")} description={t("settings.editor.minimap_desc")} checked={settings.minimap} onChange={(value) => set("minimap", value)} />
+        <SwitchRow id="editor-sticky-scroll" title={t("settings.editor.sticky_scroll")} description={t("settings.editor.sticky_scroll_desc")} checked={settings.stickyScroll} onChange={(value) => set("stickyScroll", value)} />
       </LayoutSection>
 
       <Separator />
 
       <LayoutSection>
         <LayoutSectionHeader>
-          <LayoutSectionTitle>Saving</LayoutSectionTitle>
-          <LayoutSectionDescription>Automatic saves count as your own edits, like Cmd/Ctrl+S. A file the agent changed is never overwritten.</LayoutSectionDescription>
+          <LayoutSectionTitle>{t("settings.editor.saving")}</LayoutSectionTitle>
+          <LayoutSectionDescription>{t("settings.editor.saving_desc")}</LayoutSectionDescription>
         </LayoutSectionHeader>
         <LayoutSectionItem>
           <LayoutSectionItemHeader className="w-full">
-            <LayoutSectionItemTitle>Auto save</LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>After a delay: one second after you stop typing (waits while an agent is working). When focus leaves: when you click away from the editor.</LayoutSectionItemDescription>
+            <LayoutSectionItemTitle>{t("settings.editor.auto_save")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("settings.editor.auto_save_desc")}</LayoutSectionItemDescription>
           </LayoutSectionItemHeader>
           <SegmentedRadio<AutoSave>
-            label="Auto save"
+            label={t("settings.editor.auto_save")}
             value={settings.autoSave}
-            options={[{ value: "off", label: "Off" }, { value: "afterDelay", label: "After a delay" }, { value: "onFocusChange", label: "When focus leaves" }]}
+            options={[{ value: "off", label: t("common.off") }, { value: "afterDelay", label: t("settings.editor.after_delay") }, { value: "onFocusChange", label: t("settings.editor.on_focus_change") }]}
             onChange={(value) => set("autoSave", value)}
           />
         </LayoutSectionItem>
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
             <LayoutSectionItemTitle>
-              <label htmlFor="editor-format-on-save">Format on save</label>
+              <label htmlFor="editor-format-on-save">{t("settings.editor.format_on_save")}</label>
             </LayoutSectionItemTitle>
             <LayoutSectionItemDescription>
-              Runs the project's own formatter (Prettier, gofmt, Ruff, …) when you save with Cmd/Ctrl+S or leave the editor; never a built-in one. It is the project's code: the first time in each project you are shown the exact command and asked (again whenever it changes). With the sandbox on, it runs in the sandbox.
+              {t("settings.editor.format_on_save_desc")}
               {" "}<span data-editor-formatter>{formatterNote}</span>
             </LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
@@ -210,12 +211,12 @@ export function EditorSettingsView(props: { client: OmniRushServerClient | null;
 
       <LayoutSection>
         <LayoutSectionHeader>
-          <LayoutSectionTitle>Language features</LayoutSectionTitle>
+          <LayoutSectionTitle>{t("settings.editor.language_features")}</LayoutSectionTitle>
         </LayoutSectionHeader>
         <SwitchRow
           id="editor-language-features"
-          title="Problems, hover, go to definition, rename and outline"
-          description="From the project's language servers. They start once a file has been open a moment. Same switch as in the Problems panel."
+          title={t("settings.editor.language_features_title")}
+          description={t("settings.editor.language_features_desc")}
           checked={languageFeatures}
           onChange={setLanguageFeatures}
         />
@@ -225,14 +226,14 @@ export function EditorSettingsView(props: { client: OmniRushServerClient | null;
 
       <LayoutSection>
         <LayoutSectionHeader>
-          <LayoutSectionTitle>Keys</LayoutSectionTitle>
+          <LayoutSectionTitle>{t("settings.editor.keys")}</LayoutSectionTitle>
         </LayoutSectionHeader>
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Keyboard shortcuts</LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>VS Code's defaults: Cmd/Ctrl+P, Cmd/Ctrl+Shift+F, F12, F2, Cmd/Ctrl+\ and more.</LayoutSectionItemDescription>
+            <LayoutSectionItemTitle>{t("settings.editor.keyboard_shortcuts")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("settings.editor.keyboard_shortcuts_desc")}</LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
-              <Button variant="outline" size="sm" onClick={() => setKeysOpen(true)} data-editor-shortcuts-open>Show all</Button>
+              <Button variant="outline" size="sm" onClick={() => setKeysOpen(true)} data-editor-shortcuts-open>{t("settings.editor.show_all")}</Button>
             </LayoutSectionItemHeaderActions>
           </LayoutSectionItemHeader>
         </LayoutSectionItem>
@@ -241,18 +242,18 @@ export function EditorSettingsView(props: { client: OmniRushServerClient | null;
       <Dialog open={keysOpen} onOpenChange={setKeysOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Editor shortcuts</DialogTitle>
-            <DialogDescription>VS Code's defaults. On macOS use Cmd, elsewhere Ctrl.</DialogDescription>
+            <DialogTitle>{t("settings.editor.shortcuts_title")}</DialogTitle>
+            <DialogDescription>{t("settings.editor.shortcuts_desc")}</DialogDescription>
           </DialogHeader>
-          <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search shortcuts" aria-label="Search shortcuts" />
-          <ul className="max-h-80 overflow-y-auto text-sm" aria-label="Shortcuts">
+          <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={t("settings.editor.search_shortcuts")} aria-label={t("settings.editor.search_shortcuts")} />
+          <ul className="max-h-80 overflow-y-auto text-sm" aria-label={t("settings.editor.shortcuts")}>
             {shortcuts.map((item) => (
               <li key={item.keys} className="flex items-center justify-between gap-4 border-b border-border py-1.5 last:border-0">
                 <span>{item.action}</span>
                 <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{item.keys}</kbd>
               </li>
             ))}
-            {!shortcuts.length ? <li className="py-2 text-muted-foreground">No shortcut matches.</li> : null}
+            {!shortcuts.length ? <li className="py-2 text-muted-foreground">{t("settings.editor.no_shortcut_matches")}</li> : null}
           </ul>
         </DialogContent>
       </Dialog>

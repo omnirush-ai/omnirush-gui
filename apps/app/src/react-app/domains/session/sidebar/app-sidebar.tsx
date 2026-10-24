@@ -1057,21 +1057,21 @@ function QualitySpinButtons({ quality }: { quality: AccountQuality }) {
     <span className="flex items-center gap-0.5" data-testid="quality-footer-strip">
       <SidebarIconButton
         icon={Gift}
-        label={ready > 0 ? `Spin, ${ready} ready` : "How to earn spins"}
+        label={ready > 0 ? t("quality.spin_ready", { count: ready }) : t("quality.how_to_earn_spins")}
         title={spinRowTitle(quality)}
         onClick={ready > 0 ? openSpin : openPanel}
         data-testid="quality-spin-button"
         data-spins={ready}
         data-client-spins={stars}
         className={cn(ready > 0 && "text-sidebar-foreground")}
-        badge={ready > 0 ? <IconCount value={ready} label={`${ready} ready`} /> : null}
+        badge={ready > 0 ? <IconCount value={ready} label={t("quality.ready_count", { count: ready })} /> : null}
       />
       {progress ? (
         <button
           type="button"
           onClick={openPanel}
           title={goodSessionWording(hint?.text ?? quality.nextTierHint ?? "Quality rewards")}
-          aria-label={`Next spin ${progress}`}
+          aria-label={t("quality.next_spin", { progress })}
           data-testid="quality-footer-next"
           className="flex h-7 items-center gap-1 rounded-md px-1 text-[11px] text-muted-foreground tabular-nums transition hover:bg-sidebar-accent hover:text-foreground"
         >
@@ -1113,8 +1113,8 @@ function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings:
 
   const connected = status?.connected === true;
   const accountLabel = connected
-    ? status?.displayName?.trim() || status?.email?.trim() || "Your account"
-    : "sign in to omnirush.ai";
+    ? status?.displayName?.trim() || status?.email?.trim() || t("sidebar.your_account")
+    : t("sidebar.sign_in_lower");
   const usage = connected && status?.usage ? omnirushUsageSummary(status.usage) : null;
   const quality = connected ? status?.quality ?? null : null;
   // The account server label ("omnirush.ai", "localhost:8090 (local API)")
@@ -1124,16 +1124,16 @@ function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings:
     ? `${usage.short}${serverHost ? ` · ${serverHost}` : ""}`
     : connected
       ? serverHost
-        ? `connected to ${serverHost}`
-        : "omnirush.ai models ready"
+        ? t("sidebar.connected_to", { host: serverHost })
+        : t("sidebar.models_ready")
       : status?.reauthorizationRequired
-        ? "Sign in again to continue"
-        : "Use omnirush.ai models with your account";
+        ? t("sidebar.sign_in_again")
+        : t("sidebar.use_models_with_account");
   const accountTooltip = connected
     ? serverHost
       ? `${accountLabel} · ${serverHost}`
       : accountLabel
-    : "Sign in to omnirush.ai";
+    : t("sidebar.sign_in");
 
   return (
     <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
@@ -1144,7 +1144,7 @@ function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings:
             className={cn("h-auto min-h-12 py-1.5", usage && "pe-7")}
             onClick={onOpenAccountSettings}
             tooltip={accountTooltip}
-            aria-label={connected ? `${accountLabel} account` : "Sign in to omnirush.ai"}
+            aria-label={connected ? t("sidebar.account_label", { name: accountLabel }) : t("sidebar.sign_in")}
             data-testid="native-account-profile"
             data-account-server={serverHost ?? undefined}
           >
@@ -1187,19 +1187,19 @@ function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings:
         </SidebarMenuItem>
       </SidebarMenu>
       {/* Rewards on the left, feedback, release notes and Settings on the right: one row. */}
-      <div role="group" aria-label="Account tools" data-testid="sidebar-footer-tools" className="flex items-center gap-0.5 pe-1.5">
+      <div role="group" aria-label={t("sidebar.account_tools")} data-testid="sidebar-footer-tools" className="flex items-center gap-0.5 pe-1.5">
         {quality ? <QualitySpinButtons quality={quality} /> : null}
         <span className="flex-1" />
         {shellConfig.feedbackButton ? (
           <SidebarIconButton
             icon={MessageCircleMore}
-            label="Send feedback"
+            label={t("session.support_feedback")}
             onClick={() => openFeedbackDialog({ trigger: "menu" })}
             data-testid="sidebar-send-feedback"
           />
         ) : null}
         <WhatsNewIconButton />
-        <SidebarIconButton icon={Settings} label="Settings" onClick={onOpenAccountSettings} data-testid="sidebar-settings" />
+        <SidebarIconButton icon={Settings} label={t("settings.tab_general")} onClick={onOpenAccountSettings} data-testid="sidebar-settings" />
       </div>
     </SidebarFooter>
   );
@@ -1394,7 +1394,7 @@ export function AppSidebar(props: AppSidebarProps) {
           >
             <img
               src={brandLogoUrl}
-              alt="Organization logo"
+              alt={t("sidebar.org_logo")}
               className="max-h-9 w-auto max-w-[140px] object-contain object-left"
             />
           </div>
@@ -1412,14 +1412,14 @@ export function AppSidebar(props: AppSidebarProps) {
           <div
             className="absolute end-1.5 top-2.5 z-50 flex items-center gap-0.5 max-lg:hidden mac:top-[7px] mac:titlebar-no-drag"
             role="group"
-            aria-label="Conversation history controls"
+            aria-label={t("sidebar.history_controls")}
           >
             <Button
               variant="ghost"
               size="icon-xs"
               className="rounded-lg text-sidebar-foreground/60 transition-colors hover:text-sidebar-foreground disabled:opacity-40"
-              aria-label="Back in conversation history"
-              title="Back in conversation history"
+              aria-label={t("sidebar.history_back")}
+              title={t("sidebar.history_back")}
               data-conversation-history-control="back"
               disabled={!props.conversationHistory.canGoBack}
               onClick={() => props.conversationHistory?.onNavigate("back")}
@@ -1430,8 +1430,8 @@ export function AppSidebar(props: AppSidebarProps) {
               variant="ghost"
               size="icon-xs"
               className="rounded-lg text-sidebar-foreground/60 transition-colors hover:text-sidebar-foreground disabled:opacity-40"
-              aria-label="Forward in conversation history"
-              title="Forward in conversation history"
+              aria-label={t("sidebar.history_forward")}
+              title={t("sidebar.history_forward")}
               data-conversation-history-control="forward"
               disabled={!props.conversationHistory.canGoForward}
               onClick={() => props.conversationHistory?.onNavigate("forward")}
@@ -1469,56 +1469,56 @@ export function AppSidebar(props: AppSidebarProps) {
             </SidebarMenuItem>
           </SidebarMenu>
           {/* One row of icons for the places opened now and then, so the chat list keeps the height. */}
-          <div role="group" aria-label="Sidebar tools" data-testid="sidebar-tools" className="flex items-center gap-0.5">
+          <div role="group" aria-label={t("sidebar.tools")} data-testid="sidebar-tools" className="flex items-center gap-0.5">
             <SidebarIconButton
               icon={ShieldCheck}
-              label="Audit trail"
+              label={t("sidebar.audit_trail")}
               data-testid="audit-trail-toggle"
               active={auditOpen}
               aria-expanded={auditOpen}
-              title={`Audit trail${props.selectedWorkspaceId && auditSummary.records.length > 0 ? ` (${auditSummary.records.length})` : ""}: a local activity record reconstructed from this task and workspace. Integrity verification is not enabled in this version.`}
+              title={`${t("sidebar.audit_trail")}${props.selectedWorkspaceId && auditSummary.records.length > 0 ? ` (${auditSummary.records.length})` : ""}${t("sidebar.audit_trail_hint")}`}
               onClick={() => setAuditOpen((value) => !value)}
               badge={auditSummary.records.some((record) => record.status === "failed")
-                ? <IconDot className="bg-destructive" label="Audit trail has a failure" />
+                ? <IconDot className="bg-destructive" label={t("sidebar.audit_trail_failed")} />
                 : auditSummary.records.some((record) => record.status === "waiting")
-                  ? <IconDot className="bg-warning" label="Audit trail is waiting for approval" />
+                  ? <IconDot className="bg-warning" label={t("sidebar.audit_trail_waiting")} />
                   : null}
             />
             <SidebarIconButton
               icon={Workflow}
-              label="Workflows"
+              label={t("sidebar.workflows")}
               data-testid="local-workflows-toggle"
               aria-expanded={localWorkflowsOpen}
-              title="Workflows: build sequential workflows and choose connected models for each step"
+              title={t("sidebar.workflows_hint")}
               onClick={() => setLocalWorkflowsOpen(true)}
             />
             {props.onOpenDashboard ? (
-              <SidebarIconButton icon={Blocks} label="Dashboard" active={props.dashboardActive === true} onClick={props.onOpenDashboard} />
+              <SidebarIconButton icon={Blocks} label={t("sidebar.dashboard")} active={props.dashboardActive === true} onClick={props.onOpenDashboard} />
             ) : null}
             {props.onOpenTasks ? (
               <SidebarIconButton
                 icon={Layers}
-                label="Parallel tasks"
+                label={t("sidebar.parallel_tasks")}
                 data-testid="sidebar-tasks"
                 active={props.tasksActive === true}
                 onClick={props.onOpenTasks}
-                title={props.tasksRunningCount ? `Parallel tasks (${props.tasksRunningCount} running)` : "Parallel tasks"}
+                title={props.tasksRunningCount ? t("sidebar.parallel_tasks_running", { count: props.tasksRunningCount }) : t("sidebar.parallel_tasks")}
                 badge={props.tasksRunningCount ? (
-                  <IconCount value={props.tasksRunningCount} label={`${props.tasksRunningCount} running`} data-testid="sidebar-tasks-running" />
+                  <IconCount value={props.tasksRunningCount} label={t("sidebar.running_count", { count: props.tasksRunningCount })} data-testid="sidebar-tasks-running" />
                 ) : null}
               />
             ) : null}
             {props.onOpenAutomations ? (
               <SidebarIconButton
                 icon={Clock3}
-                label="Automations"
+                label={t("sidebar.automations")}
                 active={props.automationsActive === true}
                 onClick={props.onOpenAutomations}
                 badge={props.automationsNeedAttention ? (
                   <AlertTriangle
                     data-automations-attention-indicator
                     className="absolute -end-0.5 -top-0.5 size-3! text-warning"
-                    aria-label="An Automation needs attention"
+                    aria-label={t("sidebar.automation_attention")}
                   />
                 ) : null}
               />

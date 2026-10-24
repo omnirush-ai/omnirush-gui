@@ -23,11 +23,12 @@ import { MicrophoneSource, listMicrophones, microphoneSettingsUrl, openMicrophon
 import type { VoiceClient } from "./use-voice-dictation";
 import { useVoiceStatus } from "./voice-status";
 import { VOICE_LANGUAGES, useVoiceSettings, voicePrivacyNote, type VoiceMode } from "./voice-settings";
+import { t } from "@/i18n";
 
-const MODES: ReadonlyArray<{ value: VoiceMode; label: string }> = [
-  { value: "both", label: "Hold or tap" },
-  { value: "hold", label: "Hold to talk" },
-  { value: "tap", label: "Tap to start and stop" },
+const voiceModes = (): ReadonlyArray<{ value: VoiceMode; label: string }> => [
+  { value: "both", label: t("voice.mode_both") },
+  { value: "hold", label: t("voice.mode_hold") },
+  { value: "tap", label: t("voice.mode_tap") },
 ];
 const SYSTEM_DEFAULT = "system-default";
 
@@ -58,11 +59,11 @@ function MicTest(props: { deviceId: string | null }) {
   };
   return (
     <div className="flex items-center gap-3">
-      <div className="h-2 w-32 overflow-hidden rounded-full bg-gray-4" aria-label="Microphone level" data-testid="voice-settings-meter">
+      <div className="h-2 w-32 overflow-hidden rounded-full bg-gray-4" aria-label={t("voice.mic_level")} data-testid="voice-settings-meter">
         <div className="h-full rounded-full bg-green-9 transition-[width] duration-75" style={{ width: `${Math.round((level ?? 0) * 100)}%` }} />
       </div>
       <Button variant="outline" size="sm" onClick={() => (level === null ? void start() : stop())}>
-        {level === null ? "Test" : "Stop"}
+        {level === null ? t("voice.test") : t("composer.stop")}
       </Button>
       {error ? <span className="text-xs text-red-11">{error}</span> : null}
     </div>
@@ -104,9 +105,9 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
   const availability = !props.client
     ? null
     : status && !status.signedIn
-      ? "Sign in to omnirush.ai to use voice input."
+      ? t("voice.sign_in_required")
       : status?.available === false
-        ? "Voice input isn't available on your account yet."
+        ? t("voice.not_available")
         : null;
   const deviceKnown = settings.deviceId === null || devices.some((device) => device.deviceId === settings.deviceId);
 
@@ -114,17 +115,17 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
     <LayoutStack>
       <LayoutSection>
         <LayoutSectionHeader>
-          <LayoutSectionTitle>Voice input</LayoutSectionTitle>
+          <LayoutSectionTitle>{t("voice.title")}</LayoutSectionTitle>
           <LayoutSectionDescription>
-            Dictate prompts instead of typing. Your words appear in the composer, where you can edit them before sending.
+            {t("voice.desc")}
           </LayoutSectionDescription>
         </LayoutSectionHeader>
 
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Dictation</LayoutSectionItemTitle>
+            <LayoutSectionItemTitle>{t("voice.dictation")}</LayoutSectionItemTitle>
             <LayoutSectionItemDescription>
-              {availability ?? "Show the microphone button in the composer and listen for the hotkey."}
+              {availability ?? t("voice.dictation_desc")}
             </LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
               <Switch
@@ -142,12 +143,12 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
 
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Hotkey</LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>Works whenever the OmniRush.ai window is focused.</LayoutSectionItemDescription>
+            <LayoutSectionItemTitle>{t("voice.hotkey")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("voice.hotkey_desc")}</LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" data-testid="voice-settings-hotkey" onClick={() => setRecording(true)}>
-                  {recording ? "Press a shortcut…" : formatHotkey(hotkey)}
+                  {recording ? t("voice.press_shortcut") : formatHotkey(hotkey)}
                 </Button>
                 {settings.hotkey ? (
                   <Button variant="ghost" size="sm" onClick={() => settings.update({ hotkey: null })}>
@@ -161,19 +162,19 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
 
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Hold or tap</LayoutSectionItemTitle>
+            <LayoutSectionItemTitle>{t("voice.mode_both")}</LayoutSectionItemTitle>
             <LayoutSectionItemDescription>
-              Hold the hotkey while you talk, or tap it to start and tap again to stop. Esc cancels and restores your prompt.
+              {t("voice.mode_desc")}
             </LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
               <div className="w-56 max-w-full">
-                <Select value={settings.mode} items={MODES} onValueChange={(value) => value && settings.update({ mode: value })}>
-                  <SelectTrigger className="w-full" aria-label="Hold or tap">
+                <Select value={settings.mode} items={voiceModes()} onValueChange={(value) => value && settings.update({ mode: value })}>
+                  <SelectTrigger className="w-full" aria-label={t("voice.mode_both")}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      {MODES.map((mode) => (
+                      {voiceModes().map((mode) => (
                         <SelectItem key={mode.value} value={mode.value}>{mode.label}</SelectItem>
                       ))}
                     </SelectGroup>
@@ -186,27 +187,27 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
 
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Input device</LayoutSectionItemTitle>
+            <LayoutSectionItemTitle>{t("voice.input_device")}</LayoutSectionItemTitle>
             <LayoutSectionItemDescription>
-              {deviceKnown ? "The microphone used for dictation." : "The chosen microphone is not connected; the system default is used."}
+              {deviceKnown ? t("voice.input_device_desc") : t("voice.input_device_missing")}
             </LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
               <div className="flex flex-wrap items-center gap-3">
                 <div className="w-56 max-w-full">
                   <Select
                     value={settings.deviceId ?? SYSTEM_DEFAULT}
-                    items={[{ value: SYSTEM_DEFAULT, label: "System default" }, ...devices.map((device) => ({ value: device.deviceId, label: device.label }))]}
+                    items={[{ value: SYSTEM_DEFAULT, label: t("voice.system_default") }, ...devices.map((device) => ({ value: device.deviceId, label: device.label }))]}
                     onValueChange={(value) => {
                       settings.update({ deviceId: !value || value === SYSTEM_DEFAULT ? null : value });
                       releaseMicrophone();
                     }}
                   >
-                    <SelectTrigger className="w-full" aria-label="Input device">
+                    <SelectTrigger className="w-full" aria-label={t("voice.input_device")}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        <SelectItem value={SYSTEM_DEFAULT}>System default</SelectItem>
+                        <SelectItem value={SYSTEM_DEFAULT}>{t("voice.system_default")}</SelectItem>
                         {devices.map((device) => (
                           <SelectItem key={device.deviceId} value={device.deviceId}>{device.label}</SelectItem>
                         ))}
@@ -222,18 +223,18 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
 
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Language</LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>The language you speak. Automatic detection works for most people.</LayoutSectionItemDescription>
+            <LayoutSectionItemTitle>{t("settings.language")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("voice.language_desc")}</LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
               <div className="w-56 max-w-full">
-                <Select value={settings.language} items={VOICE_LANGUAGES} onValueChange={(value) => value && settings.update({ language: value })}>
-                  <SelectTrigger className="w-full" aria-label="Dictation language">
+                <Select value={settings.language} items={VOICE_LANGUAGES.map((language) => (language.value === "auto" ? { ...language, label: t("voice.detect_automatically") } : language))} onValueChange={(value) => value && settings.update({ language: value })}>
+                  <SelectTrigger className="w-full" aria-label={t("voice.dictation_language")}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {VOICE_LANGUAGES.map((language) => (
-                        <SelectItem key={language.value} value={language.value}>{language.label}</SelectItem>
+                        <SelectItem key={language.value} value={language.value}>{language.value === "auto" ? t("voice.detect_automatically") : language.label}</SelectItem>
                       ))}
                     </SelectGroup>
                   </SelectContent>
@@ -245,10 +246,10 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
 
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Send after dictation</LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>Send the prompt as soon as you stop talking (at least three words). Off: review and edit first.</LayoutSectionItemDescription>
+            <LayoutSectionItemTitle>{t("voice.auto_send")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("voice.auto_send_desc")}</LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
-              <Switch aria-label="Send after dictation" checked={settings.autoSend} onCheckedChange={(autoSend) => settings.update({ autoSend })} />
+              <Switch aria-label={t("voice.auto_send")} checked={settings.autoSend} onCheckedChange={(autoSend) => settings.update({ autoSend })} />
             </LayoutSectionItemHeaderActions>
           </LayoutSectionItemHeader>
         </LayoutSectionItem>
@@ -258,16 +259,16 @@ export function VoiceSettingsView(props: { client: VoiceClient | null }) {
 
       <LayoutSection>
         <LayoutSectionHeader>
-          <LayoutSectionTitle>Privacy</LayoutSectionTitle>
+          <LayoutSectionTitle>{t("voice.privacy")}</LayoutSectionTitle>
           <LayoutSectionDescription data-testid="voice-privacy-note">{voicePrivacyNote(status?.providerRetentionDays)}</LayoutSectionDescription>
         </LayoutSectionHeader>
         {microphoneSettingsUrl() ? <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Microphone permission</LayoutSectionItemTitle>
-            <LayoutSectionItemDescription>If dictation says the microphone is off, allow OmniRush.ai in your system's privacy settings.</LayoutSectionItemDescription>
+            <LayoutSectionItemTitle>{t("voice.mic_permission")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("voice.mic_permission_desc")}</LayoutSectionItemDescription>
             <LayoutSectionItemHeaderActions>
               <Button variant="outline" size="sm" onClick={() => void openMicrophoneSettings()}>
-                Open privacy settings
+                {t("voice.open_privacy")}
               </Button>
             </LayoutSectionItemHeaderActions>
           </LayoutSectionItemHeader>

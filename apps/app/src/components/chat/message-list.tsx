@@ -460,13 +460,13 @@ function FileMessage({ part, tone }: FileMessageProps) {
             {downloadUrl ? (
               <DropdownMenuItem onClick={handleDownload}>
                 <Download />
-                Download
+                {t("message.download")}
               </DropdownMenuItem>
             ) : null}
             {canReveal ? (
               <DropdownMenuItem onClick={handleReveal}>
                 <FolderOpen />
-                Reveal in Finder
+                {t("message.reveal_in_folder")}
               </DropdownMenuItem>
             ) : null}
           </DropdownMenuContent>
@@ -503,11 +503,11 @@ function CopyMessageButton({ messages }: CopyMessageButtonProps) {
   }
 
   return (
-    <MessageAction tooltip={copied ? "Copied!" : "Copy"}>
+    <MessageAction tooltip={copied ? t("message.copied") : t("message.copy_short")}>
       <Button
         variant="ghost"
         size="icon"
-        aria-label="Copy message"
+        aria-label={t("message.copy")}
         onClick={() => void onCopy()}
       >
         {copied ? <Check /> : <Copy />}
@@ -792,32 +792,32 @@ const UserMessage = React.memo(
                     <MessageTimestamp message={message} className="mr-1.5" />
                     <CopyMessageButton messages={[message]} />
                     {messageText ? (
-                      <MessageAction tooltip="Edit message">
+                      <MessageAction tooltip={t("message.edit")}>
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="Edit message"
+                          aria-label={t("message.edit")}
                           onClick={() => onEditUserMessage(message.id, messageText)}
                         >
                           <Pencil />
                         </Button>
                       </MessageAction>
                     ) : null}
-                    <MessageAction tooltip="Branch in new chat">
+                    <MessageAction tooltip={t("message.branch")}>
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label="Branch in new chat"
+                        aria-label={t("message.branch")}
                         onClick={() => onForkAtMessage(message.id)}
                       >
                         <Split className="rotate-90" />
                       </Button>
                     </MessageAction>
-                    <MessageAction tooltip="Revert">
+                    <MessageAction tooltip={t("session.revert_label")}>
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label="Revert"
+                        aria-label={t("session.revert_label")}
                         onClick={() => onRevertToUserMessage(message.id)}
                       >
                         <Undo2 />
@@ -832,22 +832,22 @@ const UserMessage = React.memo(
             {messageText ? (
               <ContextMenuItem onClick={() => onEditUserMessage(message.id, messageText)}>
                 <Pencil className="size-4" />
-                Edit message
+                {t("message.edit")}
               </ContextMenuItem>
             ) : null}
             {messageText ? (
               <ContextMenuItem onClick={() => void navigator.clipboard.writeText(messageText)}>
                 <Copy className="size-4" />
-                Copy
+                {t("message.copy_short")}
               </ContextMenuItem>
             ) : null}
             <ContextMenuItem onClick={() => onForkAtMessage(message.id)}>
               <Split className="size-4 rotate-90" />
-              Branch in new chat
+              {t("message.branch")}
             </ContextMenuItem>
             <ContextMenuItem onClick={() => onRevertToUserMessage(message.id)}>
               <Undo2 className="size-4" />
-              Revert
+              {t("session.revert_label")}
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
@@ -957,8 +957,8 @@ const ReconnectingMessage = React.memo(({ lastConfirmedAt }: { lastConfirmedAt: 
       >
         <WifiOff aria-hidden="true" className="size-4 shrink-0" />
         <span className="min-w-0 truncate">
-          Connection lost — reconnecting…
-          {lastConfirmedLabel ? ` · last update ${lastConfirmedLabel}` : ""}
+          {t("message.reconnecting")}
+          {lastConfirmedLabel ? ` · ${t("message.last_update", { time: lastConfirmedLabel })}` : ""}
         </span>
       </div>
     </Message>
@@ -1036,7 +1036,7 @@ function SessionErrorTechnicalDetails({ details, tone }: { details: string; tone
             className="flex w-fit cursor-pointer items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           >
             {copied ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
-            {copied ? "Copied" : "Copy details"}
+            {copied ? t("config.copied") : t("message.copy_details")}
           </button>
         </div>
       ) : null}
@@ -1169,7 +1169,7 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
             <LoaderCircle size={16} className="mt-0.5 shrink-0 animate-spin text-warning" />
             <div className="min-w-0 space-y-1">
               <p className="whitespace-pre-wrap text-sm font-medium text-amber-12">
-                {freeModelLimit ? "The free starter model is busy right now" : status.message}
+                {freeModelLimit ? t("message.free_model_busy") : status.message}
               </p>
               <p className="text-xs text-amber-12/80">{info}</p>
             </div>
@@ -1177,18 +1177,18 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
           {action ? (
             <div className="ml-6 space-y-1 border-t border-warning/20 pt-2">
               <p className="text-xs font-medium text-amber-12">
-                {freeModelLimit ? "Free model limit reached" : action.title}
+                {freeModelLimit ? t("message.free_model_limit") : action.title}
               </p>
               <p className="text-xs text-amber-12/80">
                 {freeModelLimit
                   ? isProviderLocked()
-                    ? "omnirush.ai will keep retrying."
-                    : "omnirush.ai will keep retrying. To keep working now, connect your own model provider."
+                    ? t("message.will_keep_retrying")
+                    : t("message.will_keep_retrying_connect")
                   : action.message}
               </p>
               {freeModelLimit && !isProviderLocked() ? (
                 <RetryActionButton
-                  label="Connect a model provider"
+                  label={t("message.connect_provider")}
                   onClick={() => dispatchAction({ target: "settings", action: "open", section: "providers" })}
                 />
               ) : action.link ? (
@@ -1462,11 +1462,11 @@ function MessageGroup({
             <CopyMessageButton messages={renderableItems.map((item) => item.message)} />
             {lastRealItem ? (
               <>
-                <MessageAction tooltip="Branch in new chat">
+                <MessageAction tooltip={t("message.branch")}>
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label="Branch in new chat"
+                    aria-label={t("message.branch")}
                     onClick={() => onForkAtMessage(lastRealItem.message.id)}
                   >
                     <Split className="rotate-90" />

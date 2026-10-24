@@ -137,7 +137,7 @@ export function UpdatesView(props: UpdatesViewProps) {
       {props.appVersion ? (
         <LayoutSectionItem>
           <LayoutSectionItemHeader>
-            <LayoutSectionItemTitle>Current version</LayoutSectionItemTitle>
+            <LayoutSectionItemTitle>{t("settings.updates.current_version")}</LayoutSectionItemTitle>
             <LayoutSectionItemDescription className="font-mono">v{props.appVersion}</LayoutSectionItemDescription>
           </LayoutSectionItemHeader>
         </LayoutSectionItem>
@@ -319,9 +319,9 @@ export function UpdatesView(props: UpdatesViewProps) {
           {props.alphaChannelSupported && props.releaseChannel ? (
             <LayoutSectionItem>
               <LayoutSectionItemHeader>
-                <LayoutSectionItemTitle>Release channel</LayoutSectionItemTitle>
+                <LayoutSectionItemTitle>{t("settings.updates.release_channel")}</LayoutSectionItemTitle>
                 <LayoutSectionItemDescription>
-                  Stable gets fully tested releases. Alpha includes the very latest changes but may be less polished.
+                  {t("settings.updates.release_channel_desc")}
                 </LayoutSectionItemDescription>
                 <LayoutSectionItemHeaderActions>
                   <Select
@@ -334,7 +334,7 @@ export function UpdatesView(props: UpdatesViewProps) {
                     }}
                     disabled={!props.onReleaseChannelChange}
                   >
-                    <SelectTrigger aria-label="Release channel" className="w-48">
+                    <SelectTrigger aria-label={t("settings.updates.release_channel")} className="w-48">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

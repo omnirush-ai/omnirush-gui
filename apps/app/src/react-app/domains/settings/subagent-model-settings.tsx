@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
+import { t } from "@/i18n";
 import { useDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 
 import {
@@ -18,9 +19,6 @@ import {
   LayoutSectionItemTitle,
 } from "./settings-layout";
 import {
-  SAME_AS_MAIN_LABEL,
-  SUBAGENT_EFFORT_HELP,
-  SUBAGENT_MODEL_HELP,
   subagentEffortLabel,
   subagentEffortOptions,
   subagentModelName,
@@ -44,36 +42,36 @@ export function SubagentModelSettings(props: { client: SubagentModelClient | nul
   const unavailable = subagentModelUnavailable(state, setting);
   const models = state?.models ?? [];
   const modelItems = [
-    { value: SAME, label: SAME_AS_MAIN_LABEL },
+    { value: SAME, label: t("subagent.same_as_main") },
     ...models.map((model) => ({ value: model.id, label: model.family && model.family !== "OpenAI" ? `${model.name} (${model.family})` : model.name })),
-    ...(setting.model && unavailable ? [{ value: setting.model, label: `${subagentModelName(state, setting.model)} (not available)` }] : []),
+    ...(setting.model && unavailable ? [{ value: setting.model, label: `${subagentModelName(state, setting.model)} ${t("subagent.not_available")}` }] : []),
   ];
   const effortItems = [
-    { value: SAME, label: SAME_AS_MAIN_LABEL },
+    { value: SAME, label: t("subagent.same_as_main") },
     ...subagentEffortOptions(state, setting.model).map((effort) => ({ value: effort, label: subagentEffortLabel(effort) })),
   ];
 
   const save = (next: { model?: string | null; effort?: string | null }) => {
     void change(next)
-      .then((saved) => toast.success(`Sub-agents: ${subagentSummary(state, saved)}. Applies to new tasks.`))
-      .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : "The sub-agent setting could not be saved."));
+      .then((saved) => toast.success(t("subagent.saved", { summary: subagentSummary(state, saved) })))
+      .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : t("subagent.save_failed")));
   };
 
   const status = policyLocked
-    ? "Locked by your organisation: its policy does not allow changing app settings."
+    ? t("subagent.policy_lock")
     : state && !state.signedIn
-      ? "Sign in to omnirush.ai to pick a model for sub-agents."
+      ? t("subagent.sign_in_hint")
       : unavailable
-        ? "This model is not available to your account right now: sub-agents run on the main agent's model."
+        ? t("subagent.model_unavailable")
         : error;
 
   return (
     <>
       <LayoutSectionItem>
         <LayoutSectionItemHeader>
-          <LayoutSectionItemTitle>Sub-agents: model</LayoutSectionItemTitle>
+          <LayoutSectionItemTitle>{t("subagent.model_label")}</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>
-            {SUBAGENT_MODEL_HELP}
+            {t("subagent.model_help")}
             {status ? <span className="mt-1 block" data-testid="subagent-model-status">{status}</span> : null}
           </LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
@@ -86,8 +84,8 @@ export function SubagentModelSettings(props: { client: SubagentModelClient | nul
                 }}
                 disabled={disabled || !state?.signedIn}
               >
-                <SelectTrigger className="w-full" aria-label="Sub-agents: model" data-testid="settings-subagent-model">
-                  <SelectValue placeholder={SAME_AS_MAIN_LABEL} />
+                <SelectTrigger className="w-full" aria-label={t("subagent.model_label")} data-testid="settings-subagent-model">
+                  <SelectValue placeholder={t("subagent.same_as_main")} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -103,8 +101,8 @@ export function SubagentModelSettings(props: { client: SubagentModelClient | nul
       </LayoutSectionItem>
       <LayoutSectionItem>
         <LayoutSectionItemHeader>
-          <LayoutSectionItemTitle>Sub-agent effort</LayoutSectionItemTitle>
-          <LayoutSectionItemDescription>{SUBAGENT_EFFORT_HELP}</LayoutSectionItemDescription>
+          <LayoutSectionItemTitle>{t("subagent.effort_label")}</LayoutSectionItemTitle>
+          <LayoutSectionItemDescription>{t("subagent.effort_help")}</LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
             <div className="w-56 max-w-full">
               <Select
@@ -115,8 +113,8 @@ export function SubagentModelSettings(props: { client: SubagentModelClient | nul
                 }}
                 disabled={disabled || !state?.signedIn}
               >
-                <SelectTrigger className="w-full" aria-label="Sub-agent effort" data-testid="settings-subagent-effort">
-                  <SelectValue placeholder={SAME_AS_MAIN_LABEL} />
+                <SelectTrigger className="w-full" aria-label={t("subagent.effort_label")} data-testid="settings-subagent-effort">
+                  <SelectValue placeholder={t("subagent.same_as_main")} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>

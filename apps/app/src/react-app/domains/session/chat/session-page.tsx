@@ -387,12 +387,12 @@ function UnavailableWorkbenchPane(props: {
     >
       <div className="flex max-w-sm flex-col gap-3 text-center">
         <div>
-          <h2 className="text-sm font-medium text-foreground">{props.workspaceTitle} is unavailable</h2>
+          <h2 className="text-sm font-medium text-foreground">{t("session.pane_unavailable", { name: props.workspaceTitle })}</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.message}</p>
         </div>
         <div className="flex justify-center gap-2">
-          <Button variant="outline" size="sm" onClick={props.onRetry}>Retry connection</Button>
-          <Button variant="ghost" size="sm" onClick={props.onClose}>Close pane</Button>
+          <Button variant="outline" size="sm" onClick={props.onRetry}>{t("session.retry_connection")}</Button>
+          <Button variant="ghost" size="sm" onClick={props.onClose}>{t("session.close_pane")}</Button>
         </div>
       </div>
     </div>
@@ -1127,8 +1127,8 @@ export function SessionPage(props: SessionPageProps) {
   const showSelectedWorkspaceError = Boolean(selectedWorkspaceErrorMessage);
   const selectedWorkspaceErrorTitle =
     props.selectedWorkspaceDisplay.workspaceType === "remote"
-      ? "Remote workspace unavailable"
-      : "omnirush.ai unavailable";
+      ? t("session.remote_workspace_unavailable")
+      : t("session.runtime_unavailable");
 
   const reactSessionBaseUrl = props.opencodeBaseUrl?.trim() ?? "";
   const reactSessionToken =
@@ -1497,12 +1497,12 @@ export function SessionPage(props: SessionPageProps) {
 
   // IDE mode hides the sessions sidebar: its destinations move to the foot of the activity rail.
   const railDestinations: RailDestination[] = [
-    ...(props.sidebar.onOpenTasks ? [{ id: "tasks", label: "Parallel tasks", icon: <Layers className="size-4" />, badge: props.sidebar.tasksRunningCount || undefined, onSelect: props.sidebar.onOpenTasks }] : []),
-    ...(props.sidebar.onOpenSessionSearch ? [{ id: "search", label: "Search sessions", icon: <TextSearch className="size-4" />, onSelect: props.sidebar.onOpenSessionSearch }] : []),
-    ...(props.sidebar.onOpenAutomations ? [{ id: "automations", label: "Automations", icon: <Zap className="size-4" />, badge: props.sidebar.automationsNeedAttention ? 1 : undefined, onSelect: props.sidebar.onOpenAutomations }] : []),
-    ...(props.sidebar.onOpenDashboard ? [{ id: "dashboard", label: "Dashboard", icon: <LayoutGrid className="size-4" />, onSelect: props.sidebar.onOpenDashboard }] : []),
-    { id: "library", label: "Library", icon: <Library className="size-4" />, onSelect: props.onOpenExtensions },
-    { id: "chat-layout", label: "Audit trail and workflows (Chat layout)", icon: <PanelLeft className="size-4" />, onSelect: () => setLayoutMode("chat") },
+    ...(props.sidebar.onOpenTasks ? [{ id: "tasks", label: t("sidebar.parallel_tasks"), icon: <Layers className="size-4" />, badge: props.sidebar.tasksRunningCount || undefined, onSelect: props.sidebar.onOpenTasks }] : []),
+    ...(props.sidebar.onOpenSessionSearch ? [{ id: "search", label: t("workspace_list.search_sessions"), icon: <TextSearch className="size-4" />, onSelect: props.sidebar.onOpenSessionSearch }] : []),
+    ...(props.sidebar.onOpenAutomations ? [{ id: "automations", label: t("sidebar.automations"), icon: <Zap className="size-4" />, badge: props.sidebar.automationsNeedAttention ? 1 : undefined, onSelect: props.sidebar.onOpenAutomations }] : []),
+    ...(props.sidebar.onOpenDashboard ? [{ id: "dashboard", label: t("sidebar.dashboard"), icon: <LayoutGrid className="size-4" />, onSelect: props.sidebar.onOpenDashboard }] : []),
+    { id: "library", label: t("settings.tab_extensions"), icon: <Library className="size-4" />, onSelect: props.onOpenExtensions },
+    { id: "chat-layout", label: t("ide.rail_chat_layout"), icon: <PanelLeft className="size-4" />, onSelect: () => setLayoutMode("chat") },
   ];
 
   // The chat itself: beside the sessions sidebar in Chat mode, docked on the right in IDE mode.
@@ -1537,7 +1537,7 @@ export function SessionPage(props: SessionPageProps) {
                         size="sm"
                         className="h-6 shrink-0 cursor-pointer gap-1 rounded-lg px-1.5 text-[12px] text-gray-10 transition-colors hover:bg-muted hover:text-foreground mac:titlebar-no-drag"
                         data-parent-session-back={parentSessionLink.sessionId}
-                        aria-label={`Back to ${parentSessionLink.title || "parent chat"}`}
+                        aria-label={t("session.back_to", { title: parentSessionLink.title || t("session.parent_chat") })}
                         onClick={() => openSessionTab(parentSessionLink.workspaceId, parentSessionLink.sessionId)}
                       >
                         <ArrowLeft size={14} />
@@ -1547,7 +1547,7 @@ export function SessionPage(props: SessionPageProps) {
                       </Button>
                     }
                   />
-                  <TooltipContent>Back to parent chat</TooltipContent>
+                  <TooltipContent>{t("session.back_to_parent")}</TooltipContent>
                 </Tooltip>
               ) : null}
               <h1 className={cn("min-w-0 truncate text-[13px] font-medium text-dls-text", ideMode && "sr-only")}>
@@ -1615,14 +1615,14 @@ export function SessionPage(props: SessionPageProps) {
                         variant="ghost"
                         size="icon-sm"
                         className="hidden rounded-xl text-gray-10 transition-colors hover:bg-muted hover:text-foreground @min-[40rem]/titlebar:inline-flex"
-                        aria-label="Find in conversation"
+                        aria-label={t("session.find_in_conversation")}
                         onClick={() => useSessionFindStore.getState().openFind({ sessionId: findButtonSessionId })}
                       >
                         <TextSearch size={16} />
                       </Button>
                     }
                   />
-                  <TooltipContent>Find in conversation (⌘F)</TooltipContent>
+                  <TooltipContent>{t("session.find_in_conversation")} (⌘F)</TooltipContent>
                 </Tooltip>
               ) : null}
               <Tooltip>
@@ -1635,7 +1635,7 @@ export function SessionPage(props: SessionPageProps) {
                         "hidden rounded-xl text-gray-10 transition-colors hover:bg-muted hover:text-foreground @min-[40rem]/titlebar:inline-flex",
                         sidePanelOpen && "bg-primary/10 text-link hover:bg-primary/15 hover:text-link",
                       )}
-                      aria-label={sidePanelOpen ? "Close side panel" : "Open side panel"}
+                      aria-label={sidePanelOpen ? t("session.close_side_panel") : t("session.open_side_panel")}
                       aria-pressed={sidePanelOpen}
                       onClick={() => {
                         if (sidePanelOpen) {
@@ -1649,7 +1649,7 @@ export function SessionPage(props: SessionPageProps) {
                     </Button>
                   }
                 />
-                <TooltipContent>{sidePanelOpen ? "Close side panel" : "Open side panel"}</TooltipContent>
+                <TooltipContent>{sidePanelOpen ? t("session.close_side_panel") : t("session.open_side_panel")}</TooltipContent>
               </Tooltip>
               {showCloudSignIn ? (
                 <Button
@@ -1671,7 +1671,7 @@ export function SessionPage(props: SessionPageProps) {
                       variant="ghost"
                       size="icon-sm"
                       className={cn("rounded-xl text-gray-10 transition-colors hover:bg-muted hover:text-foreground", !ideMode && !buildathonMenu.visible && "@min-[40rem]/titlebar:hidden")}
-                      aria-label="More actions"
+                      aria-label={t("session.more_actions")}
                     >
                       <MoreHorizontal size={18} />
                     </Button>
@@ -1681,14 +1681,14 @@ export function SessionPage(props: SessionPageProps) {
                   {editorAvailable && !isMobile ? (
                     <DropdownMenuItem onClick={() => setLayoutMode(ideMode ? "chat" : "ide")} data-menu-layout-toggle>
                       {ideMode ? <MessageSquare className="size-4" /> : <Code2 className="size-4" />}
-                      <span className="flex-1">{ideMode ? "Switch to Chat layout" : "Switch to IDE layout"}</span>
+                      <span className="flex-1">{ideMode ? t("session.switch_to_chat_layout") : t("session.switch_to_ide_layout")}</span>
                       <span className="text-[11px] text-muted-foreground">{shortcutLabel("Y")}</span>
                     </DropdownMenuItem>
                   ) : null}
                   {ideMode ? (
                     <DropdownMenuItem onClick={() => useEditorStore.getState().setIdeChatCollapsed(true)}>
                       <MessageSquareOff className="size-4" />
-                      <span className="flex-1">Hide chat</span>
+                      <span className="flex-1">{t("session.hide_chat")}</span>
                       <span className="text-[11px] text-muted-foreground">{shortcutLabel("H")}</span>
                     </DropdownMenuItem>
                   ) : null}
@@ -1697,31 +1697,31 @@ export function SessionPage(props: SessionPageProps) {
                       onClick={() => useSessionFindStore.getState().openFind({ sessionId: findButtonSessionId })}
                     >
                       <TextSearch className="size-4" />
-                      Find in conversation
+                      {t("session.find_in_conversation")}
                     </DropdownMenuItem>
                   ) : null}
                   {commandSessionId && headerActions ? (
                     <DropdownMenuItem disabled={!headerActions.canUndo} onClick={() => void headerActions.undo()}>
                       <Undo2 className="size-4" />
-                      Undo last turn
+                      {t("session.undo_last_turn")}
                     </DropdownMenuItem>
                   ) : null}
                   {commandSessionId && headerActions?.canRedo ? (
                     <DropdownMenuItem onClick={() => void headerActions.redo()}>
                       <Redo2 className="size-4" />
-                      Redo
+                      {t("session.redo")}
                     </DropdownMenuItem>
                   ) : null}
                   {commandSessionId ? (
                     <DropdownMenuItem onClick={() => openStatusDialog(commandSessionId)}>
                       <Gauge className="size-4" />
-                      Status
+                      {t("session.status")}
                     </DropdownMenuItem>
                   ) : null}
                   {commandSessionId ? (
                     <DropdownMenuItem onClick={() => openChangesPanel(commandSessionId)}>
                       <FileDiff className="size-4" />
-                      Changes
+                      {t("session.changes")}
                     </DropdownMenuItem>
                   ) : null}
                   {commandSessionId ? (
@@ -1730,12 +1730,12 @@ export function SessionPage(props: SessionPageProps) {
                       onClick={() => void commandBridge?.runCommand("/review")}
                     >
                       <ListChecks className="size-4" />
-                      Review changes
+                      {t("session.review_changes")}
                     </DropdownMenuItem>
                   ) : null}
                   <DropdownMenuItem onClick={openArtifactRailPane}>
                     <FileText className="size-4" />
-                    Files{artifactTargetCount > 0 ? ` (${artifactTargetCount})` : ""}
+                    {t("session.files")}{artifactTargetCount > 0 ? ` (${artifactTargetCount})` : ""}
                   </DropdownMenuItem>
                   {buildathonMenu.visible ? (
                     <DropdownMenuItem onClick={buildathonMenu.open} data-menu-buildathon>
@@ -2264,8 +2264,8 @@ export function SessionPage(props: SessionPageProps) {
                 // The folded chat: a thin strip on the right edge brings it back.
                 <button
                   type="button"
-                  aria-label="Show chat"
-                  title={`Show chat (${shortcutLabel("H")})`}
+                  aria-label={t("session.show_chat")}
+                  title={`${t("session.show_chat")} (${shortcutLabel("H")})`}
                   data-chat-strip
                   onClick={() => useEditorStore.getState().setIdeChatCollapsed(false)}
                   className={cn(
@@ -2280,7 +2280,7 @@ export function SessionPage(props: SessionPageProps) {
                       ideChatPanelRef.current?.resize(`${DEFAULT_IDE_CHAT_WIDTH}px`);
                       useEditorStore.getState().setIdeChatWidth(DEFAULT_IDE_CHAT_WIDTH);
                     }}
-                    title="Drag to resize; double-click to reset"
+                    title={t("session.resize_handle_hint")}
                   />
                   <ResizablePanel
                     panelRef={ideChatPanelRef}
@@ -2340,8 +2340,8 @@ export function SessionPage(props: SessionPageProps) {
                 size="icon-sm"
                 className="rounded-xl transition-colors hover:bg-muted hover:text-foreground"
                 onClick={() => setLayoutMode("ide")}
-                title={`Open the IDE layout (${shortcutLabel("Y")})`}
-                aria-label="Open the IDE layout"
+                title={`${t("session.open_ide_layout")} (${shortcutLabel("Y")})`}
+                aria-label={t("session.open_ide_layout")}
                 data-editor-rail
               >
                 <Code2 size={15} />
@@ -2356,8 +2356,8 @@ export function SessionPage(props: SessionPageProps) {
                   panelRailActive && hasBrowserTabs && "bg-primary/10 text-link hover:bg-primary/15 hover:text-link",
                 )}
                 onClick={openBrowserRailPane}
-                title={hasBrowserTabs ? "Browser" : "Browser opens when a page is available"}
-                aria-label={hasBrowserTabs ? "Browser" : "Browser opens when a page is available"}
+                title={hasBrowserTabs ? t("session.browser") : t("session.browser_unavailable")}
+                aria-label={hasBrowserTabs ? t("session.browser") : t("session.browser_unavailable")}
                 aria-pressed={panelRailActive && hasBrowserTabs}
                 disabled={!hasBrowserTabs}
               >
@@ -2372,8 +2372,8 @@ export function SessionPage(props: SessionPageProps) {
                 panelRailActive && "bg-primary/10 text-link hover:bg-primary/15 hover:text-link",
               )}
               onClick={panelRailActive ? closeRightPane : openArtifactRailPane}
-              title={`Files (${artifactTargetCount})`}
-              aria-label={`Files (${artifactTargetCount})`}
+              title={`${t("session.files")} (${artifactTargetCount})`}
+              aria-label={`${t("session.files")} (${artifactTargetCount})`}
               aria-pressed={panelRailActive}
             >
               <FileText size={15} />

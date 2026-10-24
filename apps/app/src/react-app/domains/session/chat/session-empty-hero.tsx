@@ -3,6 +3,8 @@ import { useProviderLock } from "@/app/lib/provider-lock";
 import { useEffect, useState } from "react";
 import { Zap } from "lucide-react";
 
+import { t } from "@/i18n";
+
 import type { ComposerAttachment } from "@/app/types";
 import { useCheckDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 import { BuildathonPromoCard } from "@/react-app/domains/buildathon/buildathon-promo";
@@ -22,35 +24,35 @@ type TimeGreeting = {
 export function greetingForLocalHour(hour: number): TimeGreeting {
   if (hour < 5) {
     return {
-      title: "what would you like to work on?",
-      subtitle: "describe the outcome you need",
+      title: t("home.greeting_night_title"),
+      subtitle: t("home.greeting_night_subtitle"),
     };
   }
 
   if (hour < 12) {
     return {
-      title: "good morning. how can I help?",
-      subtitle: "what are we getting done?",
+      title: t("home.greeting_morning_title"),
+      subtitle: t("home.greeting_subtitle"),
     };
   }
 
   if (hour < 17) {
     return {
-      title: "good afternoon. how can I help?",
-      subtitle: "what should we tackle?",
+      title: t("home.greeting_afternoon_title"),
+      subtitle: t("home.greeting_afternoon_subtitle"),
     };
   }
 
   if (hour < 22) {
     return {
-      title: "good evening. how can I help?",
-      subtitle: "what are we getting done?",
+      title: t("home.greeting_evening_title"),
+      subtitle: t("home.greeting_subtitle"),
     };
   }
 
   return {
-    title: "what would you like to work on?",
-    subtitle: "describe the outcome you need",
+    title: t("home.greeting_night_title"),
+    subtitle: t("home.greeting_night_subtitle"),
   };
 }
 
@@ -108,7 +110,7 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
   return (
     <div className="mx-auto w-full max-w-[640px] space-y-4 px-4 max-lg:px-4 sm:px-6">
       <div className="space-y-1.5 text-center">
-        <h2 className="text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">
+        <h2 className="text-balance break-keep text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">
           {greeting.title}
         </h2>
         <p className="text-[13px] text-muted-foreground">{greeting.subtitle}</p>
@@ -130,9 +132,9 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
         >
           <Zap className="mt-0.5 size-4 shrink-0 text-blue-10" />
           <div>
-            <div className="text-[13px] font-medium text-foreground">connect a model provider</div>
+            <div className="text-[13px] font-medium text-foreground">{t("home.connect_provider_title")}</div>
             <div className="mt-0.5 text-[12px] text-muted-foreground">
-              add an api key for openai, anthropic, google, or openrouter so tasks can run.
+              {t("home.connect_provider_body")}
             </div>
           </div>
         </button>

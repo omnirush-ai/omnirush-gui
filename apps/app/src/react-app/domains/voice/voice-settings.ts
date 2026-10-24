@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { t } from "@/i18n";
 
 /** hold: talk while the hotkey is held. tap: press to start, press again to stop. both: a long press holds, a quick press taps. */
 export type VoiceMode = "both" | "hold" | "tap";
@@ -51,9 +52,9 @@ export const useVoiceSettings = create<VoiceSettingsStore>()(
  */
 export function voicePrivacyNote(providerRetentionDays?: number | null): string {
   const provider = providerRetentionDays
-    ? `omnirush.ai doesn't store your audio; the provider keeps a copy for up to ${providerRetentionDays} days.`
-    : "omnirush.ai doesn't store your audio.";
-  return `Voice is transcribed by our cloud speech provider. ${provider} Nothing is saved on this computer, and only the text you send becomes part of your prompt.`;
+    ? t("voice.privacy_retention", { days: providerRetentionDays })
+    : t("voice.privacy_no_store");
+  return t("voice.privacy_note", { provider });
 }
 
 /** Languages offered as a hint; the service detects the language on its own with "auto". */

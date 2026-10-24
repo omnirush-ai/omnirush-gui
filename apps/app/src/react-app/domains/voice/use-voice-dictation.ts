@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { toast } from "@/components/ui/sonner";
+import { t } from "@/i18n";
 import type { OmniRushServerClient, OmniRushVoiceStatus } from "@/app/lib/omnirush-server";
 import {
   CircuitBreaker,
@@ -41,9 +42,9 @@ const AUTO_SEND_MIN_WORDS = 3;
 
 function availabilityFrom(enabled: boolean, client: VoiceClient | null, status: OmniRushVoiceStatus | null): VoiceAvailability {
   if (!enabled || !client) return { state: "hidden" };
-  if (status && !status.signedIn) return { state: "disabled", reason: "Sign in to omnirush.ai to use voice input." };
+  if (status && !status.signedIn) return { state: "disabled", reason: t("voice.sign_in_required") };
   if (status?.available === false) {
-    return { state: "disabled", reason: "Voice input isn't available on your account yet." };
+    return { state: "disabled", reason: t("voice.not_available") };
   }
   return { state: "ready" };
 }
@@ -53,7 +54,7 @@ function errorToast(error: VoiceError, partial: boolean): void {
     toast.info(error.message);
     return;
   }
-  toast.error(partial ? `Part of the dictation was lost: ${error.message}` : error.message);
+  toast.error(partial ? t("voice.partial_lost", { message: error.message }) : error.message);
 }
 
 export type VoiceDictation = {

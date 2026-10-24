@@ -29,10 +29,10 @@ describe("chat sidebar keeps the height for chats", () => {
     for (const needle of [
       'data-testid="audit-trail-toggle"',
       'data-testid="local-workflows-toggle"',
-      'label="Dashboard"',
+      'label={t("sidebar.dashboard")}',
       'data-testid="sidebar-tasks"',
       'data-testid="sidebar-tasks-running"',
-      'label="Automations"',
+      'label={t("sidebar.automations")}',
       "data-automations-attention-indicator",
       't("settings.tab_extensions")',
       '<NotificationBell variant="sidebar-icon" />',
@@ -41,7 +41,7 @@ describe("chat sidebar keeps the height for chats", () => {
 
   test("the footer is the account row plus one row of rewards, feedback, what's new and Settings", () => {
     const footer = between('data-testid="sidebar-footer-tools"', "</div>");
-    for (const needle of ["<QualitySpinButtons", 'data-testid="sidebar-send-feedback"', "<WhatsNewIconButton />", 'label="Settings"']) {
+    for (const needle of ["<QualitySpinButtons", 'data-testid="sidebar-send-feedback"', "<WhatsNewIconButton />", 'label={t("settings.tab_general")}']) {
       expect(footer).toContain(needle);
     }
     const spin = between("function QualitySpinButtons", "function WhatsNewIconButton");

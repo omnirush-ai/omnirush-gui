@@ -55,6 +55,17 @@ function desktopNotificationPreferenceLabel(value: DesktopNotificationPreference
   }
 }
 
+function desktopNotificationPreferenceDescription(value: DesktopNotificationPreference) {
+  switch (value) {
+    case "important":
+      return t("settings.desktop_notifications.important_desc");
+    case "all":
+      return t("settings.desktop_notifications.all_desc");
+    case "off":
+      return t("settings.desktop_notifications.off_desc");
+  }
+}
+
 export function PreferencesView(props: PreferencesViewProps) {
   const desktopNotificationItems = DESKTOP_NOTIFICATION_PREFERENCE_VALUES.map((value) => ({
     value,
@@ -136,7 +147,7 @@ export function PreferencesView(props: PreferencesViewProps) {
                         <SelectItem key={value} value={value} data-testid={`desktop-notifications-${value}`}>
                           <span className="flex flex-col">
                             <span>{desktopNotificationPreferenceLabel(value)}</span>
-                            <span className="text-xs text-muted-foreground">{t(`settings.desktop_notifications.${value}_desc`)}</span>
+                            <span className="text-xs text-muted-foreground">{desktopNotificationPreferenceDescription(value)}</span>
                           </span>
                         </SelectItem>
                       ))}
