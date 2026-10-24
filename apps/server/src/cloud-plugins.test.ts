@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { installCloudPlugin, readInstalledCloudPlugins, removeCloudPlugin } from "./cloud-plugins.js";
+import { join, posix, win32 } from "node:path";
+import { installCloudPlugin, isWithinWorkspaceRoot, readInstalledCloudPlugins, removeCloudPlugin } from "./cloud-plugins.js";
 import { readRuntimeOpencodeConfig } from "./runtime-opencode-config-store.js";
 import type { ServerConfig } from "./types.js";
 
@@ -283,5 +283,39 @@ describe("cloud plugin installs", () => {
       expect(agentContent).toContain("read: true");
       expect(agentContent).toContain("webfetch: true");
     });
+  });
+});
+
+describe("isWithinWorkspaceRoot", () => {
+  // Issue #127: on Windows, resolve() returns backslash paths, so the old
+  // `${root}/` prefix check rejected every valid install path.
+  test("accepts nested Windows paths", () => {
+    expect(
+      isWithinWorkspaceRoot(
+        "C:\\Users\\test\\workspace",
+        "C:\\Users\\test\\workspace\\.opencode\\skills\\daymade-skills-all-plugin\\auto-repo-setup\\SKILL.md",
+        win32,
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts the root itself", () => {
+    expect(isWithinWorkspaceRoot("C:\\Users\\test\\workspace", "C:\\Users\\test\\workspace", win32)).toBe(true);
+    expect(isWithinWorkspaceRoot("/workspace", "/workspace", posix)).toBe(true);
+  });
+
+  test("accepts nested POSIX paths", () => {
+    expect(isWithinWorkspaceRoot("/workspace", "/workspace/.opencode/skills/a/SKILL.md", posix)).toBe(true);
+  });
+
+  test("rejects paths outside the root", () => {
+    expect(isWithinWorkspaceRoot("C:\\Users\\test\\workspace", "C:\\Users\\test\\other\\x.md", win32)).toBe(false);
+    expect(isWithinWorkspaceRoot("C:\\Users\\test\\workspace", "C:\\Users\\test\\workspace2\\x.md", win32)).toBe(false);
+    expect(isWithinWorkspaceRoot("/workspace", "/workspace2/x.md", posix)).toBe(false);
+    expect(isWithinWorkspaceRoot("/workspace", "/other/x.md", posix)).toBe(false);
+  });
+
+  test("rejects a different drive on Windows", () => {
+    expect(isWithinWorkspaceRoot("C:\\workspace", "D:\\workspace\\.opencode\\x.md", win32)).toBe(false);
   });
 });
