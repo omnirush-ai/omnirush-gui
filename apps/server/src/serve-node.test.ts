@@ -127,8 +127,9 @@ describe("serve", () => {
     });
 
     try {
-      const response = await fetch(`http://127.0.0.1:${server.port}/stream`);
-      await response.text().catch(() => undefined);
+      // The cut body reaches the client as an error, not as a complete "partial".
+      const read = await fetch(`http://127.0.0.1:${server.port}/stream`).then((response) => response.text()).then(() => "complete", () => "cut");
+      expect(read).toBe("cut");
       await delay(25);
 
       expect(uncaught).toEqual([]);

@@ -180,7 +180,9 @@ export async function writeWebResponse(webRes: Response, nodeRes: ServerResponse
     nodeRes.off("close", cancelOnDisconnect);
     if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
-    endResponse(nodeRes);
+    // A body cut short is a broken response, never a shorter complete one (a client would parse half a JSON).
+    if (completed) endResponse(nodeRes);
+    else if (isResponseWritable(nodeRes)) nodeRes.destroy();
   }
 }
 
