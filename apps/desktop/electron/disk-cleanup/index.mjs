@@ -1,6 +1,7 @@
 // What the desktop app lets go of so updates do not keep eating disk space:
 //   - the update installer electron-updater keeps after it was installed
-//     (<cache>/<updaterCacheDirName>/pending, its installer.exe/blockmap copies)
+//     (<cache>/<updaterCacheDirName>/pending; the installed version's installer.exe
+//     and current.blockmap stay as the base of the next differential update)
 //   - our own installer cache (app-update-installer: a macOS DMG/zip) once that
 //     version or a newer one runs
 //   - with "Free up space" only: Linux packages (.deb/.rpm/.pacman) this app
@@ -182,11 +183,8 @@ async function updaterCacheItems({ cacheDir, currentVersion, now, dryRun }) {
     }
     if (old) items.push({ kind: "installer", path: pending, reason: version ? `update ${version} installed` : "old update download", ...(await removeAsync(pending, { dryRun })) });
   }
-  // Differential-download copies (differential downloads are off in this app).
-  for (const name of ["installer.exe", "current.blockmap"]) {
-    const file = path.join(cacheDir, name);
-    if (existsSync(file)) items.push({ kind: "installer", path: file, reason: "old installer copy", ...(await removeAsync(file, { dryRun })) });
-  }
+  // installer.exe and current.blockmap stay: they are the installed version's
+  // installer, the base the next Windows update downloads only the changes against.
   return items;
 }
 
