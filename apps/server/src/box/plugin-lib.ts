@@ -84,6 +84,8 @@ export const BOX_NOTE = (root: string, uid = 0, croot = root, shadows: unknown =
     ? `The project folder ${root} is ${croot} inside the container (the same files); use ${croot} in shell commands. Changes are visible on both sides.`
     : `The project folder ${root} is the same folder inside the container (same path); changes to it are visible on both sides.`,
   "Files outside the project folder (/tmp, HOME, system folders) exist only inside the container: read and change them with shell commands, not with the file tools.",
-  "Install what the task needs with the usual package managers (apt-get, pip, npm, cargo, go, ...); installs persist in this project's container across sessions.",
+  `Install any missing tool yourself, inside the container, and never ask the user to install anything there: run \`${uid === 0 ? "" : "sudo "}apt-get update\` first (package lists are not kept), then \`${uid === 0 ? "" : "sudo "}apt-get install -y --no-install-recommends <package>\`, or pip/uv, npm, cargo, go. Installs persist in this project's container across sessions.`,
+  "For video or audio files, install ffmpeg (it includes ffprobe) and work on the file with shell commands; the browser tool runs in a separate browser that cannot open project files, so do not use it for local media.",
+  "Files the user gives you must be inside the project folder to be visible here (chat attachments are copied into it). If a file is elsewhere on their computer, ask them to copy it into the project folder or attach it to the chat.",
   ...(typeof shadows === "string" && shadows ? [shadows] : []),
 ].join("\n");
