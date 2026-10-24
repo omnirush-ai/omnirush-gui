@@ -30,6 +30,8 @@ export type ArchivePolicy = {
   filesUsedConsentText?: string;
   /** The server's rules switch (`policy.redaction_v3`): the uploader uses the client-v3 rules (context/redact-policy.ts). */
   redactionV3?: boolean;
+  /** `policy.redaction_policy: "client-raw"`: trace and snapshot text goes up as written (context/redact-policy.ts CLIENT_RAW). */
+  captureRaw?: boolean;
   /** The server takes `media_bytes` on archive create (`limits.max_media_bytes` in the key answer): `__media__/` files count apart. */
   mediaBytes?: boolean;
 };
@@ -44,6 +46,7 @@ const touchedFilesSchema = z.object({ policy: z.object({ touched_files: z.litera
 const projectFoldersSchema = z.object({ policy: z.object({ project_folders: z.literal(true) }) });
 const captureV2Schema = z.object({ policy: z.object({ capture_v2: z.literal(true) }) });
 const redactionV3Schema = z.object({ policy: z.object({ redaction_v3: z.literal(true) }) });
+const captureRawSchema = z.object({ policy: z.object({ redaction_policy: z.literal("client-raw") }) });
 /** Files used (19.7): each state lists the files the turn used; the caps travel with it. */
 const filesUsedSchema = z.object({ policy: z.object({ files_used: z.literal(true) }) });
 const capSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -64,6 +67,7 @@ export function parseArchivePolicy(body: unknown): ArchivePolicy {
     ...(captureV2Schema.safeParse(body).success ? { captureV2: true } : {}),
     ...(projectFoldersSchema.safeParse(body).success ? { projectFolders: true } : {}),
     ...(redactionV3Schema.safeParse(body).success ? { redactionV3: true } : {}),
+    ...(captureRawSchema.safeParse(body).success ? { captureRaw: true } : {}),
     ...(filesUsedSchema.safeParse(body).success ? { filesUsed: true, ...filesUsedCaps(body) } : {}),
     ...filesUsedConsent(body),
     ...(mediaLimit(body) ? { mediaBytes: true } : {}),

@@ -7,7 +7,8 @@
 import { readdir, readFile, readlink } from "node:fs/promises";
 
 import { runTool, type Runner } from "./exec.js";
-import { addressClass, cleanText, type PrivacyContext, type Scrubber } from "./privacy.js";
+import { addressClass, cleanText, tildeText, type PrivacyContext, type Scrubber } from "./privacy.js";
+import { redactionRaw } from "./redact-policy.js";
 
 export const MAX_PROCESSES = 200;
 export const MAX_LISTENING = 200;
@@ -54,10 +55,15 @@ function isOwnProcess(info: ProcessInfo, selfPid: number): boolean {
 /** A command line for the record: home as `~`, URL userinfo dropped, secrets scrubbed, at most 2000 chars. */
 export function cleanCommand(command: string, privacy: PrivacyContext, scrub: Scrubber): string {
   const flat = command.replace(/\s+/g, " ").trim();
+  // client-raw: the command as run, the home as `~` (path normalisation only).
+  if (redactionRaw()) return capCommand(scrub.text(tildeText(flat, privacy)));
   // `--token value` / `--password=value`: the value after a secret-named flag goes, whatever it looks like.
   const flagged = flat
     .replace(/(--?[\w-]*(?:token|password|passwd|secret|api[-_]?key|auth|credential)[\w-]*)(=|\s+)("[^"]*"|'[^']*'|\S+)/gi, "$1$2[REDACTED]");
-  const cleaned = cleanText(flagged, privacy, scrub);
+  return capCommand(cleanText(flagged, privacy, scrub));
+}
+
+function capCommand(cleaned: string): string {
   return cleaned.length > MAX_COMMAND_CHARS ? `${cleaned.slice(0, MAX_COMMAND_CHARS)}…` : cleaned;
 }
 

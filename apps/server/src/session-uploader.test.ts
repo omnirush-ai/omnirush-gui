@@ -44,6 +44,7 @@ import {
   stripRemoteUserinfo,
   workspaceRelativePath,
 } from "./session-uploader.js";
+import { setRedactionPolicy } from "./context/redact-policy.js";
 import { SESSION_UPLOAD_BUDGET, sessionUploadTimeoutMs, type SessionUploadBudget } from "./session-upload-budget.js";
 
 /** Schema 1/2 trace uploads carry their events only in files[0] (__omnirush__/trace.json): read them back as `trace`. */
@@ -375,6 +376,60 @@ describe("session uploader privacy", () => {
     expect(trace).toMatchObject({ session_segment: 2, sequence: 6 });
     expect(JSON.stringify(accepted)).toContain("collector.resegmented");
     expect(accepted.map((item) => [item.snapshot_type, item.session_segment, item.sequence])).toEqual([["start", 1, 1], ["trace", 2, 6], ["trace", 2, 7], ["end", 2, 8]]);
+  });
+
+  test("client-raw: a chat keeps the rules pinned at its start; text goes up as written with a credential count", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-upload-raw-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-upload-raw-state-"));
+    roots.push(root, stateDir);
+    const token = "sk-1234567890abcdefghijklmnop";
+    await writeFile(join(root, "app.txt"), `hello ${token} jane.doe@gmail.com\n`);
+    const uploads: Array<{ sessionId: string; envelope: Record<string, unknown> }> = [];
+    const make = () => new SessionUploader({
+      stateDir,
+      upload: async (sessionId, compressed) => {
+        uploads.push({ sessionId, envelope: withTraceEvents(JSON.parse(zstdDecompressSync(compressed).toString("utf8"))) });
+        return Response.json({ ok: true }, { status: 201 });
+      },
+      changeDebounceMs: 10,
+      fallbackScanMs: 60_000,
+    });
+    const raw = "session-raw-12345678";
+    const later = "session-later-12345678";
+    try {
+      setRedactionPolicy("client-raw");
+      const first = make();
+      first.startSession(raw, "workspace-raw", root);
+      // The process switch moves mid-chat (a failed policy fetch falls back to the old rules): this chat keeps its pin.
+      setRedactionPolicy("legacy");
+      first.recordTrace(raw, "tool.call", { token, mail: "jane.doe@gmail.com" });
+      first.flushTrace(raw);
+      first.startSession(later, "workspace-raw", root);
+      await first.stop();
+      // Another process under v3: the reopened chat keeps the rules its ledger record was pinned to.
+      setRedactionPolicy("client-v3");
+      const second = make();
+      second.startSession(raw, "workspace-raw", root);
+      second.recordTrace(raw, "tool.call", { token });
+      second.flushTrace(raw);
+      await second.stop();
+    } finally {
+      setRedactionPolicy("legacy");
+    }
+    const mine = uploads.filter((upload) => upload.sessionId === raw).map((upload) => upload.envelope);
+    expect(mine.some((envelope) => envelope.session_segment === 2)).toBe(true);
+    for (const envelope of mine) {
+      const privacy = envelope.privacy as Record<string, unknown>;
+      expect(privacy.redaction_policy).toBe("client-raw");
+      expect(typeof privacy.credential_count).toBe("number");
+      expect(JSON.stringify(envelope)).not.toContain("[REDACTED");
+    }
+    expect(JSON.stringify(mine)).toContain(token);
+    expect(mine.some((envelope) => ((envelope.privacy as { credential_count: number }).credential_count) > 0)).toBe(true);
+    const other = uploads.filter((upload) => upload.sessionId === later).map((upload) => upload.envelope);
+    expect(other.length).toBeGreaterThan(0);
+    for (const envelope of other) expect((envelope.privacy as Record<string, unknown>).redaction_policy).toBe("legacy");
+    expect(JSON.stringify(other)).not.toContain(token);
   });
 
   test("reads the server's position from an integrity answer", () => {

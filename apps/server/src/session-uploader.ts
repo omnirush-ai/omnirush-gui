@@ -38,7 +38,7 @@ import { engine2ImportedFrom } from "./engine2/imported.js";
 import { ContextCapture, captureContextEnabled, type ContextOptions } from "./context/index.js";
 import { INSTALL_LOG_OFF, installLogGate, type InstallLogGate } from "./context/install-log.js";
 import { UPLOAD_FORMAT_FILE, UploadFormat } from "./context/upload-format.js";
-import { isOpaqueKey, isOpaqueString, isSecretKey, isSecretValue, redactCredentials, redactionPolicy, redactionV3 } from "./context/redact-policy.js";
+import { CLIENT_RAW, CLIENT_V3, countCredentials, defaultRedactionPolicy, isOpaqueKey, isOpaqueString, isSecretKey, isSecretValue, redactCredentials, redactionPolicy, type RedactionPin, type RedactionPolicy, redactionRaw, redactionV3, withRedactionPolicy } from "./context/redact-policy.js";
 import { maskWindowsProfiles } from "./context/privacy.js";
 import bundledBestPractices from "./bundled-best-practices.json" with { type: "json" };
 import serverPackage from "../package.json" with { type: "json" };
@@ -498,6 +498,8 @@ type SessionLedgerRecord = {
   endedAt?: string;
   /** The server's word on the chat (GET /me/sessions/{id}/integrity). */
   confirmation?: SessionConfirmation;
+  /** The upload rules the chat was pinned to at its start (context/redact-policy.ts); never changed after. */
+  redactionPolicy?: string;
 };
 
 /** The integrity check's state for one chat: final once the server says good or not good. */
@@ -573,6 +575,8 @@ type SpoolMeta = {
 };
 
 type SessionState = {
+  /** The upload rules pinned at the chat's start (pinnedPolicy): every redaction and envelope of the chat follows them. */
+  redactionPolicy: RedactionPolicy;
   id: string;
   root: string;
   workspaceId: string;
@@ -1191,6 +1195,7 @@ const PRIVACY_POLICY_BASE = {
  * data is left to the server.
  */
 function privacyPolicy() {
+  if (redactionRaw()) return { ...PRIVACY_POLICY_BASE, redaction: [], manifest_hash_basis: "sha256_of_utf8", redaction_policy: redactionPolicy() };
   return redactionV3()
     ? { ...PRIVACY_POLICY_BASE, redaction: ["provider_secrets", "secret_assignments", "private_keys"], redaction_policy: redactionPolicy() }
     : { ...PRIVACY_POLICY_BASE, redaction_policy: redactionPolicy() };
@@ -1430,7 +1435,8 @@ export function isUploadPathDenied(path: string): boolean {
  * workspace, attachments) keeps to isUploadPathDenied.
  */
 export function isUploadFileDenied(path: string): boolean {
-  return uploadPathDenied(path, true);
+  // client-raw scrubs nothing, so `.env*` templates stay out like every credential file.
+  return uploadPathDenied(path, !redactionRaw());
 }
 
 function uploadPathDenied(path: string, scrubbed: boolean): boolean {
@@ -1720,6 +1726,7 @@ export type RedactUploadTextOptions = {
  * never contains a dangling backslash, so JSON-escaped text stays escapable.
  */
 export function redactUploadText(input: string, options: RedactUploadTextOptions = {}): { text: string; count: number } {
+  if (redactionRaw()) return { text: input, count: 0 };
   // A Windows account name in a profile path (C:\Users\<name>, WSL's /mnt/c/Users/<name>): masked, the path kept, under every rule set.
   const masked = maskWindowsProfiles(input);
   const profiles = masked !== input ? 1 : 0;
@@ -1865,6 +1872,7 @@ function redactJsonValue(
  * The backend's _redact_json_value.
  */
 export function redactUploadJson(value: unknown, options: { fileAware?: boolean } = {}): { value: unknown; count: number } {
+  if (redactionRaw()) return { value, count: 0 };
   const tally: JsonTally = { count: 0, members: 0 };
   return { value: redactJsonValue(value, undefined, tally, 0, false, Infinity, options.fileAware === true), count: tally.count };
 }
@@ -1983,6 +1991,7 @@ function stringifyJsonPairs(value: unknown, indent: string | undefined, current 
  * sanitize_json_file.
  */
 export function redactUploadJsonText(text: string, path?: string): string | null {
+  if (redactionRaw()) return text;
   const raw = redactionV3() ? text : redactAwsSecrets(text, path, { count: 0 });
   let parsed: unknown;
   try {
@@ -2682,6 +2691,7 @@ async function readSessionLedger(path: string | null): Promise<SessionLedger> {
           ...(Array.isArray(record.refused) ? { refused: record.refused.filter((item): item is string => typeof item === "string").slice(-MAX_REFUSED_SEQUENCES) } : {}),
           ...(optionalString(record.endedAt) ? { endedAt: record.endedAt } : {}),
           ...(parseConfirmation(record.confirmation) ? { confirmation: parseConfirmation(record.confirmation)! } : {}),
+          ...(optionalString(record.redactionPolicy) ? { redactionPolicy: record.redactionPolicy } : {}),
         };
         return [[sessionId, cleaned] as const];
       }),
@@ -3065,7 +3075,7 @@ function parseGitRemotes(raw: string): GitRemote[] {
     .slice(0, MAX_GIT_REMOTES)
     .map(([name, url]) => ({
       name: clampUploadText(portablePathForUpload(name), MAX_GIT_REMOTE_NAME_CHARS),
-      url: clampUploadText(portablePathForUpload(stripRemoteUserinfo(url)), MAX_GIT_REMOTE_URL_CHARS),
+      url: clampUploadText(portablePathForUpload(redactionRaw() ? url : stripRemoteUserinfo(url)), MAX_GIT_REMOTE_URL_CHARS),
     }));
 }
 
@@ -3719,13 +3729,37 @@ const FILE_SCAN_IN_FLIGHT = new Map<string, Promise<HashCacheEntry | null>>();
 
 /** Bound metadata retained by long sessions that create and delete many paths. */
 class FileHashCache extends Map<string, HashCacheEntry> {
+  /** The rules each entry was redacted under: a chat pinned to other rules on the same folder never reuses it. */
+  private readonly rules = new Map<string, string>();
+
+  override get(path: string): HashCacheEntry | undefined {
+    const entry = super.get(path);
+    return entry && this.rules.get(path) === redactionPolicy() ? entry : undefined;
+  }
+
   override set(path: string, entry: HashCacheEntry): this {
     if (!this.has(path) && this.size >= MAX_FILES) {
       const oldest = this.keys().next().value;
       if (oldest !== undefined) this.delete(oldest);
     }
+    this.rules.set(path, redactionPolicy());
     return super.set(path, entry);
   }
+
+  override delete(path: string): boolean {
+    this.rules.delete(path);
+    return super.delete(path);
+  }
+}
+
+/**
+ * A chat's rules: the ones its ledger record was pinned to; a chat recorded
+ * before pins existed went up redacted, so it never turns raw; else the
+ * process switch at its start.
+ */
+function pinnedPolicy(record: SessionLedgerRecord | undefined, current: RedactionPolicy): RedactionPolicy {
+  if (record?.redactionPolicy === CLIENT_RAW || record?.redactionPolicy === CLIENT_V3 || record?.redactionPolicy === "legacy") return record.redactionPolicy;
+  return record && current === CLIENT_RAW ? CLIENT_V3 : current;
 }
 
 function scanContext(root: string, cache: Map<string, HashCacheEntry>, texts: RedactedTextCache, metrics: UploadMetrics): ScanContext {
@@ -3783,6 +3817,8 @@ async function inspectFile(context: ScanContext, path: string): Promise<HashCach
     signature.ctimeMs,
     signature.ino,
     signature.dev,
+    // Sessions pinned to other rules never share a scan (FileHashCache).
+    redactionPolicy(),
   ].join("\0");
   const existing = FILE_SCAN_IN_FLIGHT.get(scanKey);
   if (existing) {
@@ -4601,6 +4637,24 @@ const NO_UPLOAD_FEATURES: UploadFeatures = { idempotencyKey: false, integrity: f
 /** What a /collect upload carries besides its body. */
 export type UploadRequestOptions = { idempotencyKey?: string };
 
+/** Wraps `names` (methods whose first argument is a session id) to run under that session's pin. */
+function pinSessionMethods<T extends object>(target: T, names: readonly (keyof T)[], pinOf: (sessionId: string) => RedactionPin | undefined): void {
+  for (const name of names) {
+    const method = target[name] as unknown as (sessionId: string, ...rest: unknown[]) => unknown;
+    Object.defineProperty(target, name, {
+      configurable: true,
+      writable: true,
+      value: (sessionId: string, ...rest: unknown[]) => withRedactionPolicy(pinOf(sessionId), () => method.call(target, sessionId, ...rest)),
+    });
+  }
+}
+
+/** Capture context's calls for one session: its collectors scrub under the session's pin. */
+const PINNED_CONTEXT_METHODS = ["sessionStarted", "turnStarted", "toolEvent", "turnMessages", "turnEnded", "sessionEnded", "settled"] as const;
+
+/** The public calls that record or send for one session (first argument its id): run under its pinned rules. */
+const PINNED_SESSION_METHODS = ["recordProjectArchive", "recordTrace", "markComputerUse", "recordSessionModel", "recordChildSession", "recordWebVisit", "recordAttachment", "steerTurn", "recordCommand", "captureSnapshot", "finishSession", "flushTrace"] as const;
+
 export class SessionUploader {
   private readonly uploadUrl: string | null;
   private token: string;
@@ -4754,6 +4808,8 @@ export class SessionUploader {
       ? migrateLegacyUploadState(stateDir, (message, details) => this.log("warn", message, details))
       : Promise.resolve();
     this.ledgerReady = this.stateMigrated.then(() => this.loadLedger());
+    // A session's work runs under the rules pinned at its start, whatever the process switch says meanwhile.
+    pinSessionMethods(this, PINNED_SESSION_METHODS, (sessionId) => this.pinOf(sessionId));
     this.changeDebounceMs = options.changeDebounceMs ?? CHANGE_DEBOUNCE_MS;
     this.fallbackScanMs = options.fallbackScanMs ?? FALLBACK_SCAN_MS;
     this.appVersion = options.appVersion;
@@ -4885,6 +4941,7 @@ export class SessionUploader {
       ...(installLog ? { installLog: { ...installLog, gate: () => this.installLogGate(), appDirs: stateDir ? [stateDir] : [] } } : {}),
       ...overrides,
     });
+    if (capture.enabled) pinSessionMethods(capture, PINNED_CONTEXT_METHODS, (sessionId) => this.pinOf(sessionId));
     return capture.enabled ? capture : null;
   }
 
@@ -4938,6 +4995,7 @@ export class SessionUploader {
       ...(state.refused.length > 0 ? { refused: state.refused.slice(-MAX_REFUSED_SEQUENCES) } : {}),
       // A new segment is judged again once it ends.
       ...(state.endedAt ? { endedAt: state.endedAt } : {}),
+      redactionPolicy: state.redactionPolicy,
     };
   }
 
@@ -4962,6 +5020,7 @@ export class SessionUploader {
     state.lastFailureAt = previous?.lastFailureAt;
     state.lastSuccessAt = previous?.lastSuccessAt;
     state.refused = [...(previous?.refused ?? [])];
+    state.redactionPolicy = pinnedPolicy(previous, state.redactionPolicy);
     // A pending check of the chat's earlier segment is left to this segment's end.
     this.cancelConfirm(state.id);
     // Events recorded before the ledger loaded take precedence over what the
@@ -5244,6 +5303,7 @@ export class SessionUploader {
 
   private newSessionState(sessionId: string, workspaceId: string, root: string, cache: Map<string, HashCacheEntry>): SessionState {
     return {
+      redactionPolicy: defaultRedactionPolicy(),
       id: sessionId,
       root,
       workspaceId,
@@ -5882,12 +5942,15 @@ export class SessionUploader {
     if (!state || state.finished) return false;
     if (typeof visit.url !== "string" || !isUploadableWebUrl(visit.url)) return false;
     const url = new URL(visit.url);
-    url.username = "";
-    url.password = "";
+    // client-raw: the address as visited.
+    if (!redactionRaw()) {
+      url.username = "";
+      url.password = "";
+    }
     const title = uploadTextForTrace(visit.title ?? null, MAX_WEB_VISIT_TITLE_CHARS * 4);
     const text = uploadTextForTrace(visit.text ?? null, MAX_UPLOAD_WEB_VISIT_TEXT_BYTES);
     this.appendTrace(state, "web.visit", {
-      url: clampUploadText(redactUploadText(url.toString()).text, MAX_WEB_VISIT_URL_CHARS),
+      url: clampUploadText(redactionRaw() ? visit.url : redactUploadText(url.toString()).text, MAX_WEB_VISIT_URL_CHARS),
       title: title.text === null ? null : clampUploadText(title.text, MAX_WEB_VISIT_TITLE_CHARS),
       text: text.text,
       text_truncated: text.truncated,
@@ -6612,8 +6675,15 @@ export class SessionUploader {
     }
   }
 
+  /** A session's live pin (its rules as final once prepareSession read the ledger); none for an unknown session. */
+  private pinOf(sessionId: string): RedactionPin | undefined {
+    const state = this.sessions.get(sessionId);
+    return state && { get policy() { return state.redactionPolicy; } };
+  }
+
   private enqueue(state: SessionState, operation: () => Promise<void>): void {
-    state.tail = state.tail.then(operation).catch((error: unknown) => {
+    // The pin is final once the ledger was read (prepareSession): the operation runs under it.
+    state.tail = state.tail.then(() => state.ready.catch(() => undefined)).then(() => withRedactionPolicy(state.redactionPolicy, operation)).catch((error: unknown) => {
       this.log("warn", "OmniRush session upload operation failed", {
         sessionId: state.id,
         error: error instanceof Error ? error.message : "unknown",
@@ -7134,7 +7204,10 @@ export class SessionUploader {
         ...body.extras,
       });
       await writer.write(`${head.slice(0, -1)},"files":[`);
+      // client-raw: nothing is removed; the envelope says how many credentials it carries.
+      let credentials = 0;
       await body.writeFiles(async (file) => {
+        if (redactionRaw()) credentials += countCredentials(file);
         await writer.write(`${fileCount > 0 ? "," : ""}${JSON.stringify(file)}`);
         fileCount += 1;
       });
@@ -7144,7 +7217,9 @@ export class SessionUploader {
         await writer.write(`${first ? "" : ","}${manifestEntryJson(entry)}`);
         first = false;
       }
-      await writer.write(`],"privacy":${JSON.stringify(body.privacy())}`);
+      if (redactionRaw() && body.trace) credentials += countCredentials(body.trace);
+      const privacy = redactionRaw() ? { ...body.privacy(), credential_count: credentials } : body.privacy();
+      await writer.write(`],"privacy":${JSON.stringify(privacy)}`);
       for (const [key, value] of Object.entries(body.trailer ? await body.trailer() : {})) {
         await writer.write(`,${JSON.stringify(key)}:${JSON.stringify(value)}`);
       }

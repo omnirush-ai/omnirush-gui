@@ -10,25 +10,58 @@
 // backend runs the same vectors (redact-vectors.json) against its port
 // (omnirush/credential_rules.py).
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export const CLIENT_V3 = "client-v3";
-export type RedactionPolicy = "legacy" | typeof CLIENT_V3;
+// Raw capture ("client-raw", the server's `policy.redaction_policy`): trace and
+// snapshot text is uploaded as written, with no credential or personal-data
+// rule and no sandbox mask; each envelope records how many credentials it
+// holds (countCredentials) without changing a byte.
+export const CLIENT_RAW = "client-raw";
+export type RedactionPolicy = "legacy" | typeof CLIENT_V3 | typeof CLIENT_RAW;
 
 // One switch per process, kept on globalThis so every copy of this module
-// (a bundle, a loader without a module cache) reads the same answer.
+// (a bundle, a loader without a module cache) reads the same answer. It is
+// what a session starting now gets; a running session keeps the rules it
+// started with (withRedactionPolicy), whatever the switch says meanwhile.
 const STATE = Symbol.for("omnirush.redactionPolicy");
-type PolicyHolder = { [STATE]?: RedactionPolicy };
+const SCOPE = Symbol.for("omnirush.redactionScope");
+/** A session's pin: read when asked, so work started before its ledger record was read follows the final pin. */
+export type RedactionPin = { readonly policy: RedactionPolicy };
+type PolicyHolder = { [STATE]?: RedactionPolicy; [SCOPE]?: AsyncLocalStorage<RedactionPin> };
+const scope = ((globalThis as PolicyHolder)[SCOPE] ??= new AsyncLocalStorage<RedactionPin>());
 
-/** Switches the uploader's rules; anything but `client-v3` is the old rule set. */
-export function setRedactionPolicy(policy: string | null | undefined): void {
-  (globalThis as PolicyHolder)[STATE] = policy === CLIENT_V3 ? CLIENT_V3 : "legacy";
+function knownPolicy(policy: unknown): RedactionPolicy {
+  return policy === CLIENT_V3 || policy === CLIENT_RAW ? policy : "legacy";
 }
 
+/** Switches the uploader's rules; anything but `client-v3` or `client-raw` is the old rule set. */
+export function setRedactionPolicy(policy: string | null | undefined): void {
+  (globalThis as PolicyHolder)[STATE] = knownPolicy(policy);
+}
+
+/** The process switch: what a session starting now is pinned to. */
+export function defaultRedactionPolicy(): RedactionPolicy {
+  return knownPolicy((globalThis as PolicyHolder)[STATE]);
+}
+
+/** The rules in force here: the running session's pinned ones, else the process switch. */
 export function redactionPolicy(): RedactionPolicy {
-  return (globalThis as PolicyHolder)[STATE] === CLIENT_V3 ? CLIENT_V3 : "legacy";
+  return scope.getStore()?.policy ?? defaultRedactionPolicy();
+}
+
+/** Runs `run` (and everything it schedules) under a session's pinned rules; none given: the caller's. */
+export function withRedactionPolicy<T>(policy: string | RedactionPin | null | undefined, run: () => T): T {
+  if (policy == null) return run();
+  return scope.run(typeof policy === "string" ? { policy: knownPolicy(policy) } : policy, run);
 }
 
 export function redactionV3(): boolean {
   return redactionPolicy() === CLIENT_V3;
+}
+
+export function redactionRaw(): boolean {
+  return redactionPolicy() === CLIENT_RAW;
 }
 
 const REDACTED = "[REDACTED]";
@@ -675,4 +708,20 @@ export function redactCredentials(input: string, options: CredentialOptions = {}
   text = redactAuthorizationHeaders(text, hidden, tally, opaqueSpans(text));
   if (/bearer|basic/i.test(text)) text = redactAuthHeaders(text, hidden, tally, opaqueSpans(text));
   return { text, count: tally.count, rules: tally.rules };
+}
+
+/**
+ * How many credentials `value` holds under these rules, the text untouched:
+ * every string of a JSON value, its key as context (a file entry's `path`
+ * names the file). What `client-raw` records in the envelope's privacy block.
+ */
+export function countCredentials(value: unknown, context?: string, depth = 0): number {
+  if (typeof value === "string") return redactCredentials(value, { context }).count;
+  if (value === null || typeof value !== "object" || depth > 64) return 0;
+  if (Array.isArray(value)) return value.reduce((sum: number, item) => sum + countCredentials(item, context, depth + 1), 0);
+  const record = value as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path : undefined;
+  let sum = 0;
+  for (const [key, item] of Object.entries(record)) sum += countCredentials(item, key === "content" && path ? path : key, depth + 1);
+  return sum;
 }

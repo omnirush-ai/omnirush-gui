@@ -8,6 +8,7 @@
 // the CLI and the desktop app).
 
 import { homedir, userInfo } from "node:os";
+import { redactionRaw } from "./redact-policy.js";
 
 /** The uploader's scrubbers: free text (CONFIG mode) and whole JSON values. */
 export type Scrubber = {
@@ -74,7 +75,8 @@ const WINDOWS_PROFILE = new RegExp(
  * profiles (Public, Default, All Users) are kept.
  */
 export function maskWindowsProfiles(text: string): string {
-  if (!text || !/users|wsl/i.test(text)) return text;
+  // client-raw: account names stay as written.
+  if (!text || redactionRaw() || !/users|wsl/i.test(text)) return text;
   return text.replace(WINDOWS_PROFILE, (match: string, root: string, name: string) => (SHARED_PROFILES.has(name.toLowerCase()) ? match : root + PROFILE_PLACEHOLDER));
 }
 

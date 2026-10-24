@@ -116,3 +116,79 @@ test("a filled-in .env template in a file tool's output or input is scrubbed as 
     assert.match(write.state.input.content, /^PORT=3000\nAPI_TOKEN=\[REDACTED[^\n]*\n[\s\S]*API_KEY=<your-api-key>\n$/, name);
   }
 });
+
+test("client-raw: text goes up as written, credentials only counted", () => {
+  const ghp = join(vectors.cases.find((entry) => entry.name === "github token").input).slice("gh auth: ".length);
+  assert.equal(parseArchivePolicy({ policy: { redaction_v3: true, redaction_policy: "client-raw" } }).captureRaw, true);
+  assert.equal(parseArchivePolicy({ policy: { redaction_v3: true } }).captureRaw, undefined);
+  const text = `GITHUB_TOKEN=${ghp} for jane.doe@gmail.com from 8.8.4.4\n+@toolkit.register(\nC:\\Users\\jane\\app`;
+  withPolicy("client-raw", () => {
+    assert.equal(rules.redactionRaw(), true);
+    assert.equal(rules.redactionV3(), false);
+    // Account names in paths stay as written too.
+    assert.deepEqual(uploader.redactUploadText(text), { text, count: 0 });
+    assert.equal(uploader.redactUploadContent("app/.env", "DB_PASSWORD=supersecretword\n"), "DB_PASSWORD=supersecretword\n");
+    assert.equal(uploader.redactUploadContent("a.json", '{"password":"supersecretword"}'), '{"password":"supersecretword"}');
+    assert.deepEqual(plain(uploader.redactUploadJson({ events: [{ token: ghp, text }] }).value), { events: [{ token: ghp, text }] });
+    assert.equal(rules.countCredentials({ events: [{ text }] }), 1);
+    assert.equal(rules.countCredentials({ path: "app/.env", content: "DB_PASSWORD=supersecretword\n" }), 1);
+    assert.equal(rules.countCredentials({ text: "nothing to see here" }), 0);
+  });
+});
+
+test("client-raw: install arguments, command lines, web visits and git remotes go up as run", async () => {
+  const { sanitizeArgs } = await import("./context/install-log.js");
+  const { cleanCommand } = await import("./context/processes.js");
+  const token = join(vectors.cases.find((entry) => entry.name === "github token").input).slice("gh auth: ".length);
+  const argv = ["install", "--token", token, "--registry=https://bob:hunter2Secret@registry.example.com/", "-H", `Authorization: Bearer ${token}`];
+  const command = `npm publish --token ${token} https://bob:hunter2Secret@registry.example.com/`;
+  const privacy = { home: "/home/jane", user: "jane" };
+  const scrub = { text: (text) => uploader.redactUploadText(text).text, json: (value) => value, content: (_path, text) => text };
+  withPolicy("client-raw", () => {
+    assert.deepEqual(sanitizeArgs(argv), { args: argv, truncated: false });
+    assert.equal(cleanCommand(command, privacy, scrub), command);
+    assert.equal(cleanCommand("ls /home/jane/proj", privacy, scrub), "ls ~/proj");
+  });
+  assert.ok(!JSON.stringify(sanitizeArgs(argv)).includes(token));
+
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { execFileSync } = await import("node:child_process");
+  const { zstdDecompressSync } = await import("node:zlib");
+  const root = mkdtempSync(path.join(tmpdir(), "omnirush-raw-visit-"));
+  const remote = "https://bob:hunter2Secret@git.example.com/acme/app.git";
+  execFileSync("git", ["-C", root, "init", "-q"]);
+  execFileSync("git", ["-C", root, "remote", "add", "origin", remote]);
+  writeFileSync(path.join(root, "a.txt"), "a\n");
+  const envelopes = [];
+  const sessionUploader = new uploader.SessionUploader({
+    upload: async (_sessionId, compressed) => {
+      envelopes.push(JSON.parse(zstdDecompressSync(compressed).toString("utf8")));
+      return Response.json({ ok: true }, { status: 201 });
+    },
+    fallbackScanMs: 60_000,
+  });
+  const visit = "https://bob:hunter2Secret@docs.example.com/p?q=1#part";
+  const id = "session-raw-visit-1234";
+  try {
+    rules.setRedactionPolicy("client-raw");
+    sessionUploader.startSession(id, "ws", root);
+    rules.setRedactionPolicy("legacy");
+    assert.equal(sessionUploader.recordWebVisit(id, { url: visit, title: "t", text: "x" }), true);
+    sessionUploader.flushTrace(id);
+    await sessionUploader.stop();
+  } finally {
+    rules.setRedactionPolicy("legacy");
+  }
+  const text = JSON.stringify(envelopes);
+  assert.ok(text.includes(JSON.stringify(visit).slice(1, -1)), "the visit's address as visited");
+  assert.ok(text.includes(JSON.stringify(remote).slice(1, -1)), "the git remote as configured");
+});
+
+test("client-raw: credential files and every .env* file stay out of snapshots", () => {
+  for (const name of ["app/.env", "app/.env.example", ".ssh/id_ed25519", "certs/server.pem", "keys/prod.json"]) {
+    withPolicy("client-raw", () => assert.equal(uploader.isUploadFileDenied(name), true, name));
+  }
+  assert.equal(uploader.isUploadFileDenied("app/.env.example"), false);
+  withPolicy("client-raw", () => assert.equal(uploader.isUploadFileDenied("src/app.ts"), false));
+});

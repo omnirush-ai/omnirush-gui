@@ -37,7 +37,7 @@ import path from "node:path";
 import { quietEnv, runCommand, type Runner } from "./exec.js";
 import { POSIX_WRAPPER, PYTHON_HOOK, WINDOWS_WRAPPER_BASE64, WINDOWS_WRAPPER_SHA256 } from "./install-log-assets.js";
 import { cleanUrl, isSecretFile, isSecretFolder, isSecretKey, tildeText, type PrivacyContext, type Scrubber } from "./privacy.js";
-import { redactCredentials } from "./redact-policy.js";
+import { redactCredentials, redactionRaw } from "./redact-policy.js";
 
 export const INSTALL_LOG_SCHEMA = "omnirush.install-log.v1";
 export const ENV_TURN_SCHEMA = "omnirush.env-turn.v1";
@@ -726,6 +726,8 @@ function cleanArg(word: string): string {
 
 /** The call's arguments without credentials (a secret flag's value is replaced; capped). */
 export function sanitizeArgs(argv: string[]): { args: string[]; truncated: boolean } {
+  // client-raw: the arguments as run (the cap stays).
+  if (redactionRaw()) return { args: argv.slice(0, MAX_ARGS), truncated: argv.length > MAX_ARGS };
   const out: string[] = [];
   let truncated = argv.length > MAX_ARGS;
   for (let i = 0; i < Math.min(argv.length, MAX_ARGS); i++) {
@@ -1309,11 +1311,11 @@ export async function lineOf(call: RawCall, options: { root: string; turn: numbe
     target: found.target === "global" ? "global" : tilde(found.target),
     target_rel: found.target && found.target !== "global" ? relativeTo(options.root, found.target, options.platform) : null,
     python: found.python,
-    requested: cls.requested.slice(0, 500).map((spec) => options.scrub.text(tildeText(cleanArg(spec), options.privacy))),
-    resolved: found.resolved.map((pkg) => ({ ...pkg, ...(pkg.source ? { source: cleanUrl(pkg.source) } : {}) })),
+    requested: cls.requested.slice(0, 500).map((spec) => options.scrub.text(tildeText(redactionRaw() ? spec : cleanArg(spec), options.privacy))),
+    resolved: found.resolved.map((pkg) => ({ ...pkg, ...(pkg.source && !redactionRaw() ? { source: cleanUrl(pkg.source) } : {}) })),
     removed: found.removed,
     downloads: found.downloads.map((download) => ({
-      url: cleanUrl(download.url),
+      url: redactionRaw() ? download.url : cleanUrl(download.url),
       path: download.path.startsWith("(") ? download.path : tilde(download.path)!,
       path_rel: download.path.startsWith("(") ? null : relativeTo(options.root, download.path, options.platform),
       ...(download.sha256 ? { sha256: download.sha256 } : {}),

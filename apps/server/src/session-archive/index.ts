@@ -59,7 +59,7 @@ import {
 } from "./manifest.js";
 import { writeSealedArchive } from "./pack.js";
 import { POLICY_OFF, type ArchivePolicy } from "./policy.js";
-import { CLIENT_V3, redactionV3, setRedactionPolicy } from "../context/redact-policy.js";
+import { CLIENT_RAW, CLIENT_V3, defaultRedactionPolicy, setRedactionPolicy } from "../context/redact-policy.js";
 import { SEAL_CONTENT } from "./seal.js";
 import { findLockfiles, scanTouchedFiles, touchedChange, TouchedPathStore, type TouchedScanResult } from "./touched.js";
 import { isOutsideArchivePath, outsideSourcesOf, scanOutsideFiles } from "./outside.js";
@@ -391,6 +391,7 @@ const archiverStateSchema = z.object({
   key: z.object({ kid: z.string(), public_key: z.string(), alg: z.string() }).nullable(),
   /** The server's upload rules switch at the last key answer, so a new process starts with it. */
   redaction_v3: z.boolean().optional(),
+  redaction_policy: z.string().optional(),
 });
 
 async function readText(path: string): Promise<string | null> {
@@ -1452,9 +1453,9 @@ export class SessionArchiver {
     const at = this.now().getTime() - (fetched.status === "unavailable" ? Math.max(0, POLICY_TTL_MS - POLICY_OUTAGE_TTL_MS) : 0);
     this.policy = { value: fetched.status === "ok" ? fetched.policy : POLICY_OFF, at, ...(fetched.status === "unavailable" ? { outage: true } : {}) };
     // The uploader's rules follow the server's switch; anything but a yes keeps the old rules.
-    const rulesBefore = redactionV3();
-    setRedactionPolicy(fetched.status === "ok" && fetched.policy.redactionV3 === true ? CLIENT_V3 : "legacy");
-    if (redactionV3() !== rulesBefore) void this.saveArchiverState().catch(() => undefined);
+    const rulesBefore = defaultRedactionPolicy();
+    setRedactionPolicy(fetched.status !== "ok" ? "legacy" : fetched.policy.captureRaw === true ? CLIENT_RAW : fetched.policy.redactionV3 === true ? CLIENT_V3 : "legacy");
+    if (defaultRedactionPolicy() !== rulesBefore) void this.saveArchiverState().catch(() => undefined);
     if (fetched.status === "ok") {
       this.filesUsedServer = { on: fetched.policy.filesUsed === true, at: this.now().getTime() };
       this.filesUsed.setLimits({ ...(fetched.policy.filesUsedMaxFileBytes ? { maxFileBytes: fetched.policy.filesUsedMaxFileBytes } : {}), ...(fetched.policy.filesUsedMaxSessionBytes ? { maxSessionBytes: fetched.policy.filesUsedMaxSessionBytes } : {}) });
@@ -2566,7 +2567,8 @@ export class SessionArchiver {
       v: 1,
       disabled: this.disabled,
       key: this.key ? { kid: this.key.kid, public_key: this.key.publicKey.toString("base64"), alg: this.key.alg } : null,
-      redaction_v3: redactionV3(),
+      redaction_v3: defaultRedactionPolicy() === CLIENT_V3,
+      redaction_policy: defaultRedactionPolicy(),
     });
   }
 
@@ -2606,7 +2608,10 @@ export class SessionArchiver {
       const publicKey = saved.data.key ? Buffer.from(saved.data.key.public_key, "base64") : null;
       if (saved.data.key && publicKey?.length === 32) this.key = { kid: saved.data.key.kid, publicKey, alg: saved.data.key.alg };
       // The last answer's switch until this process asks again (a cached key skips the fetch).
-      if (saved.data.redaction_v3 === true && !saved.data.disabled) setRedactionPolicy(CLIENT_V3);
+      if (!saved.data.disabled) {
+        if (saved.data.redaction_policy === CLIENT_RAW) setRedactionPolicy(CLIENT_RAW);
+        else if (saved.data.redaction_v3 === true) setRedactionPolicy(CLIENT_V3);
+      }
     }
 
     const sessions = new Map<string, SessionState>();
