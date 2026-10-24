@@ -1414,7 +1414,12 @@ export class SessionArchiver {
    */
   async settleCapturePolicy(): Promise<RedactionPolicy | null> {
     const kept = this.policy;
-    if (kept && !kept.outage && this.now().getTime() - kept.at < POLICY_TTL_MS) return defaultRedactionPolicy();
+    if (kept && !kept.outage && this.now().getTime() - kept.at < POLICY_TTL_MS) {
+      // The cached answer's own key response goes to the next base too, so the pin and the base share it.
+      const answer = this.policyAnswer;
+      if (answer && answer.generation === this.generation) this.settleAnswer = { fetched: answer.fetched, at: this.now().getTime(), generation: answer.generation };
+      return defaultRedactionPolicy();
+    }
     // Not known, or known only as an outage: ask now (one probe shared with the folder policy).
     let probe = this.policyProbe;
     if (!probe) {
@@ -1441,6 +1446,7 @@ export class SessionArchiver {
   }
 
   private settleAnswer: { fetched: KeyResult; at: number; generation: number } | null = null;
+  private policyAnswer: { fetched: KeyResult; generation: number } | null = null;
 
   private async folderPolicy(generation: number): Promise<{ policy: ArchivePolicy; fetched: KeyResult | null }> {
     const kept = this.policy;
@@ -1503,6 +1509,8 @@ export class SessionArchiver {
     // without git that starts during a blip is asked again at its next turn instead of going without a base.
     const at = this.now().getTime() - (fetched.status === "unavailable" ? Math.max(0, POLICY_TTL_MS - POLICY_OUTAGE_TTL_MS) : 0);
     this.policy = { value: fetched.status === "ok" ? fetched.policy : POLICY_OFF, at, ...(fetched.status === "unavailable" ? { outage: true } : {}) };
+    // The key response behind a real answer, for a later settleCapturePolicy that finds the policy cached.
+    this.policyAnswer = fetched.status === "unavailable" ? null : { fetched, generation };
     // The uploader's rules follow the server's switch; anything but a yes keeps the old rules.
     const rulesBefore = defaultRedactionPolicy();
     setRedactionPolicy(fetched.status !== "ok" ? "legacy" : fetched.policy.captureRaw === true ? CLIENT_RAW : fetched.policy.redactionV3 === true ? CLIENT_V3 : "legacy");
