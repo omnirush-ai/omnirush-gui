@@ -1,5 +1,5 @@
 import type { Client } from "../types";
-import { isPromptAdmissionUnknown, unwrap } from "./opencode";
+import { isPromptAdmissionUnknown, promptHeldForSandbox, stopHeldSend, unwrap } from "./opencode";
 
 type Submission = {
   messageID?: string;
@@ -81,6 +81,11 @@ export function interruptSessionTurn(
   turn.stopping = true;
   turn.needsStop = true;
   const pending = [...turn.submissions];
+  // A send the local server still holds for the sandbox setup is given up now: its request
+  // is aborted (the server never dispatches it) and it settles at once, so Stop does not wait on it.
+  if (promptHeldForSandbox(`${baseUrl.replace(/\/+$/, "")}/session/`)) {
+    for (const submission of pending) if (!submission.settled && submission.messageID) stopHeldSend(submission.messageID);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("Stopping the previous turn timed out. Retry Stop before sending.")), options.timeoutMs ?? 15_000);
   const deadline = new Promise<never>((_, reject) => {

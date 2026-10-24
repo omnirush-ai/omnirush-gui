@@ -84,6 +84,33 @@ export function isPromptAdmissionUnknown(error: unknown): error is PromptAdmissi
   return error instanceof PromptAdmissionUnknownError;
 }
 
+/** A send its user stopped while the local server held it (sandbox setup): given up on purpose, never replayed. */
+export class SendStoppedError extends Error {
+  constructor() {
+    super("Send cancelled by Stop.");
+    this.name = "SendStoppedError";
+  }
+}
+
+export function isSendStopped(error: unknown): error is SendStoppedError {
+  return error instanceof SendStoppedError;
+}
+
+/** In-flight prompt sends by message ID: Stop gives up a held one (stopHeldSend). */
+const stoppableSends = new Map<string, () => void>();
+
+/**
+ * Gives up the send of `messageID` while its request is still open: the
+ * request is aborted (the local server stops holding it and never dispatches
+ * it) and the send rejects at once with SendStoppedError. False when it is
+ * not in flight.
+ */
+export function stopHeldSend(messageID: string): boolean {
+  const stop = stoppableSends.get(messageID);
+  stop?.();
+  return Boolean(stop);
+}
+
 let lastMessageStamp = 0;
 
 /** Native sortable msg_ format. This identifies a submission, NOT an idempotency key. */
@@ -213,6 +240,42 @@ function resolveOmniRushWorkspaceMount(baseUrl: string): { baseUrl: string; work
   }
 }
 
+/**
+ * Workspaces whose required sandbox is still being set up (its image
+ * downloading, the box starting). The local server holds their prompts until
+ * the box is ready (apps/server/src/box/service.ts waitForBox: at most 60 min,
+ * 15 min without download progress), so a prompt that has not answered yet is
+ * waiting, not lost: its deadline waits on instead of calling it unknown.
+ */
+const sandboxSetupWorkspaces = new Set<string>();
+const SANDBOX_SETUP_HOLD_MAX_MS = 80 * 60_000;
+
+/** The sandbox setup card's state for a workspace (linux-sandbox.ts). */
+export function setSandboxSetupHold(workspaceId: string, held: boolean): void {
+  if (held) sandboxSetupWorkspaces.add(workspaceId);
+  else sandboxSetupWorkspaces.delete(workspaceId);
+}
+
+/** Whether a request URL belongs to a workspace whose sandbox setup holds its prompts. */
+export function promptHeldForSandbox(url: string): boolean {
+  if (sandboxSetupWorkspaces.size === 0) return false;
+  const match = url.match(/\/(?:w|workspace)\/([^/?#]+)\/opencode(?:\/|$)/);
+  if (!match?.[1]) return false;
+  try { return sandboxSetupWorkspaces.has(decodeURIComponent(match[1])); } catch { return false; }
+}
+
+/** setTimeout that, when it is due while `holdOn()`, waits another `ms` (up to the sandbox setup limit). */
+function holdingTimeout(ms: number, holdOn: (() => boolean) | null, fire: () => void): () => void {
+  const startedAt = Date.now();
+  let timer: ReturnType<typeof setTimeout>;
+  const due = () => {
+    if (holdOn?.() && Date.now() - startedAt < SANDBOX_SETUP_HOLD_MAX_MS) timer = setTimeout(due, ms);
+    else fire();
+  };
+  timer = setTimeout(due, ms);
+  return () => clearTimeout(timer);
+}
+
 async function fetchWithTimeout(
   fetchImpl: typeof globalThis.fetch,
   input: RequestInfo | URL,
@@ -228,16 +291,18 @@ async function fetchWithTimeout(
   const signal = controller?.signal;
   const initWithSignal = signal && !init?.signal ? { ...(init ?? {}), signal } : init;
 
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let clearDeadline = (): void => {};
+  const url = getRequestUrl(input);
+  const holdOn = SESSION_PROMPT_ASYNC_URL_RE.test(url) ? () => promptHeldForSandbox(url) : null;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
+    clearDeadline = holdingTimeout(effectiveTimeoutMs, holdOn, () => {
       try {
         controller?.abort();
       } catch {
         // ignore
       }
       reject(new Error("Request timed out."));
-    }, effectiveTimeoutMs);
+    });
   });
 
   try {
@@ -258,7 +323,7 @@ async function fetchWithTimeout(
     }
     throw error;
   } finally {
-    if (timeoutId) clearTimeout(timeoutId);
+    clearDeadline();
   }
 }
 
@@ -410,7 +475,7 @@ export function createClient(baseUrl: string, directory?: string, auth?: Opencod
         directory: requestDirectory ?? directory,
         throwOnError: options?.throwOnError,
         signal,
-      }), () => new PromptAdmissionUnknownError({ messageID: parameters.messageID }));
+      }), () => new PromptAdmissionUnknownError({ messageID: parameters.messageID }), () => promptHeldForSandbox(`${baseUrl}/session/`), parameters.messageID);
     } catch (error) {
       if (isPromptAdmissionUnknown(error)) {
         throw new PromptAdmissionUnknownError({ cause: error, messageID: parameters.messageID });
@@ -436,19 +501,26 @@ export function createClient(baseUrl: string, directory?: string, auth?: Opencod
 }
 
 /** Includes body consumption: receiving headers alone cannot release a send lock. */
-async function withAdmissionDeadline<T>(timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>, timeoutError: () => Error): Promise<T> {
+async function withAdmissionDeadline<T>(timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>, timeoutError: () => Error, holdOn: (() => boolean) | null = null, stopKey?: string): Promise<T> {
   const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let clearDeadline: (() => void) | undefined;
+  let stop: (() => void) | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
+    clearDeadline = holdingTimeout(timeoutMs, holdOn, () => {
       reject(timeoutError());
       controller.abort();
-    }, timeoutMs);
+    });
+    stop = () => {
+      reject(new SendStoppedError());
+      controller.abort();
+    };
   });
+  if (stopKey && stop) stoppableSends.set(stopKey, stop);
   try {
     return await Promise.race([operation(controller.signal), deadline]);
   } finally {
-    clearTimeout(timer);
+    clearDeadline?.();
+    if (stopKey && stoppableSends.get(stopKey) === stop) stoppableSends.delete(stopKey);
   }
 }
 

@@ -483,6 +483,43 @@ describe("workspace OpenCode proxy", () => {
     expect(await readFile(commandPath, "utf8")).toBe(legacyCommand);
   });
 
+  test.serial("a prompt whose request was given up while it was held never reaches the engine", async () => {
+    const workspaceRoot = await createWorkspaceRoot();
+    const engineUrl = "http://127.0.0.1:4333";
+    const workspace: WorkspaceInfo = { id: "ws_stopped", name: "Workspace", path: workspaceRoot, preset: "starter", workspaceType: "local", baseUrl: engineUrl };
+    const config: ServerConfig = {
+      host: "127.0.0.1", port: 0, token: "owt_test_token", hostToken: "owt_host_token",
+      approval: { mode: "auto", timeoutMs: 1_000 }, corsOrigins: ["*"], workspaces: [workspace], authorizedRoots: [workspaceRoot],
+      readOnly: false, startedAt: Date.now(), tokenSource: "cli", hostTokenSource: "cli", logFormat: "pretty", logRequests: false,
+    };
+    const originalFetch = globalThis.fetch;
+    const engineCalls: string[] = [];
+    globalThis.fetch = Object.assign(
+      (input: Parameters<typeof fetch>[0]) => {
+        engineCalls.push(input instanceof Request ? input.url : String(input));
+        return Promise.resolve(new Response(null, { status: 204 }));
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    try {
+      for (const route of ["prompt_async", "command"]) {
+        const proxyPath = `/session/ses_stopped/${route}`;
+        const url = new URL(`http://omnirush.invalid/opencode${proxyPath}`);
+        const stopped = new AbortController();
+        stopped.abort();
+        const response = await proxyOpencodeRequest({
+          config, workspace, proxyPath, url,
+          request: new Request(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messageID: `msg_${route}`, parts: [{ type: "text", text: "hi" }], command: "review", arguments: "" }), signal: stopped.signal }),
+        });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: "send_stopped" });
+      }
+      expect(engineCalls.filter((call) => /prompt_async|\/command/.test(call))).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test.serial("acknowledges proxied session commands before upstream completion and admits each message once", async () => {
     const workspaceRoot = await createWorkspaceRoot();
     const engineUrl = "http://127.0.0.1:4111";

@@ -1954,6 +1954,12 @@ function lateWritesGate(workspace: WorkspaceInfo, enginePids: ReadonlyArray<numb
  * session, captures the prompt snapshot, traces the request and response and
  * observes the turn until it settles. Exported for the mount's tests.
  */
+/** A send its user stopped before it reached the engine (held for the sandbox): never dispatched, and not counted as a turn of its chat. */
+function stoppedSendResponse(config: ServerConfig, sessionId: string | null | undefined): Response {
+  if (sessionId) boxServiceFor(config).promptCancelled(sessionId);
+  return jsonResponse({ code: "send_stopped", message: "The send was stopped before it reached the engine." }, 409);
+}
+
 export async function proxyOpencodeV2Request(input: {
   config: ServerConfig;
   request: Request;
@@ -2120,8 +2126,9 @@ export async function proxyOpencodeV2Request(input: {
   const turnsBefore = capture && uploadedSessionId && engine ? await turnsBeforeCapture(capture, uploadedSessionId, engine) : 0;
   // The Linux sandbox (box/): a prompt of a workspace whose box is on starts the box, and takes the turn's checkpoint when it is captured.
   const boxInfo = promptDispatch && sessionId
-    ? await boxServiceFor(input.config).beforePrompt(sessionId, input.workspace, { capture: Boolean(uploadedSessionId && engine), turnsBefore })
+    ? await boxServiceFor(input.config).beforePrompt(sessionId, input.workspace, { capture: Boolean(uploadedSessionId && engine), turnsBefore, signal: input.request.signal })
     : null;
+  if (promptDispatch && input.request.signal.aborted) return stoppedSendResponse(input.config, sessionId);
   if (capture && uploadedSessionId && engine) {
     // The turn before's background processes finish writing (at most 10 s after it ended), its project
     // delta is taken (at most 5 s more, only when it ended a moment ago), then capture v2's session-start
@@ -2140,6 +2147,7 @@ export async function proxyOpencodeV2Request(input: {
   if (input.workspace.task && promptDispatch && sessionId) {
     await noteTaskPrompt(input.workspace, sessionId, (id, type, data) => recordOpenSessionTrace(input.config, id, type, data));
   }
+  if (promptDispatch && input.request.signal.aborted) return stoppedSendResponse(input.config, sessionId);
   const response = await loopbackFetch(target.toString(), { method, headers, body, signal: input.recoverySignal });
   // The engine has the prompt: its session status says busy from now on.
   turnActivity?.promptDispatched();
@@ -2559,8 +2567,12 @@ export async function proxyOpencodeRequest(input: {
     ? await turnsBeforeCapture(capture, uploadedSessionId, engineTarget(baseUrl, headers, search))
     : 0;
   const boxInfo = workspace && uploadedSessionId && isUploadPromptDispatch(method, proxyPath)
-    ? await boxServiceFor(input.config).beforePrompt(uploadedSessionId, workspace, { capture: captured && !steer, turnsBefore })
+    ? await boxServiceFor(input.config).beforePrompt(uploadedSessionId, workspace, { capture: captured && !steer, turnsBefore, signal: input.request.signal })
     : null;
+  const dispatch = isUploadPromptDispatch(method, proxyPath) || isSessionCommandProxyRequest(method, proxyPath);
+  // The chat whose turn beforePrompt counted for this request (undone when it is stopped before the engine).
+  const boxSession = workspace && uploadedSessionId && isUploadPromptDispatch(method, proxyPath) ? uploadedSessionId : null;
+  if (dispatch && input.request.signal.aborted) return stoppedSendResponse(input.config, boxSession);
   if (capture && captured && uploadedSessionId && workspace && !steer) {
     const promptDispatch = isUploadPromptDispatch(method, proxyPath);
     // The turn before's background processes finish writing (at most 10 s after it ended), its project
@@ -2667,6 +2679,8 @@ export async function proxyOpencodeRequest(input: {
     await reloadOpencodeEngine(input.config, workspace, undefined, { reason: "client_instance_dispose", manual: true });
     return jsonResponse(true);
   }
+  // Checked again right before the engine: a send stopped while it was held never reaches it.
+  if (dispatch && input.request.signal.aborted) return stoppedSendResponse(input.config, boxSession);
   const targetUrl = buildOpencodeProxyUrl(baseUrl, proxyPath, search);
   // The engine that answered: a request an engine rollover cut off is sent again to the engine that took over.
   let served = { baseUrl, headers };

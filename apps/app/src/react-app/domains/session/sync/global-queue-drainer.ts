@@ -2,7 +2,7 @@ import type { SessionStatus } from "@opencode-ai/sdk/v2/client";
 
 import { isSessionReverted } from "./reverted-sessions";
 import { markTaskRunStart } from "@/app/lib/analytics";
-import { createClient, createPromptMessageID, hasAcceptedPromptMessage, isPromptAdmissionUnknown } from "@/app/lib/opencode";
+import { createClient, createPromptMessageID, hasAcceptedPromptMessage, isPromptAdmissionUnknown, isSendStopped } from "@/app/lib/opencode";
 import { shellInSession } from "@/app/lib/opencode-session";
 import { submitAfterInterruption } from "@/app/lib/opencode-interruption";
 import { createClientV2, isOpencodeV2BaseUrl } from "@/app/lib/opencode-v2-adapter";
@@ -380,7 +380,8 @@ async function attemptDrain(sessionId: string) {
         type: "send_unknown", itemId: nextItem.id, messageID: draft.messageId, at: Date.now(),
       });
       draft.attachments.forEach(revokeAttachmentPreview);
-    } else if (getQueuedSendGeneration(sessionId) !== generation) {
+    } else if (isSendStopped(error) || getQueuedSendGeneration(sessionId) !== generation) {
+      // Stopped on purpose (or the context moved on): never sent again.
       dispatchQueuedDrain(sessionId, { type: "send_result", itemId: nextItem.id, outcome: "cancelled", at: Date.now() });
       draft.attachments.forEach(revokeAttachmentPreview);
     } else {
