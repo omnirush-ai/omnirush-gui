@@ -59,7 +59,7 @@ import {
 } from "./manifest.js";
 import { writeSealedArchive } from "./pack.js";
 import { POLICY_OFF, type ArchivePolicy } from "./policy.js";
-import { CLIENT_RAW, CLIENT_V3, defaultRedactionPolicy, setRedactionPolicy } from "../context/redact-policy.js";
+import { CLIENT_RAW, CLIENT_V3, defaultRedactionPolicy, setRedactionPolicy, type RedactionPolicy } from "../context/redact-policy.js";
 import { SEAL_CONTENT } from "./seal.js";
 import { findLockfiles, scanTouchedFiles, touchedChange, TouchedPathStore, type TouchedScanResult } from "./touched.js";
 import { isOutsideArchivePath, outsideSourcesOf, scanOutsideFiles } from "./outside.js";
@@ -1392,12 +1392,27 @@ export class SessionArchiver {
    * answer when this call made one: the base reuses it for its key.
    */
   /**
-   * The server's capture switch read now if it is not known yet (the same cached probe as the folder policy):
-   * afterwards defaultRedactionPolicy() is the server's answer, so a chat starting now pins it, not the
-   * pre-probe "legacy" default.
+   * The server's capture switch as last answered (GET /archives/key, the folder policy's cached probe): the
+   * policy a chat starting now pins (client-raw, client-v3, or a confirmed legacy when the server answered
+   * without either or turned archiving off). Null while it is unresolved: no answer yet, or only an outage
+   * (timeout, 5xx, offline), which is never taken as an answer.
    */
-  async settleCapturePolicy(): Promise<void> {
-    await this.folderPolicy(this.generation);
+  async settleCapturePolicy(): Promise<RedactionPolicy | null> {
+    const kept = this.policy;
+    if (kept && !kept.outage && this.now().getTime() - kept.at < POLICY_TTL_MS) return defaultRedactionPolicy();
+    // Not known, or known only as an outage: ask now (one probe shared with the folder policy).
+    let probe = this.policyProbe;
+    if (!probe) {
+      const started = this.uploader.probeKey();
+      probe = started;
+      this.policyProbe = started;
+      void started.finally(() => {
+        if (this.policyProbe === started) this.policyProbe = null;
+      });
+    }
+    const fetched = await probe;
+    this.rememberPolicy(fetched, this.generation, true);
+    return fetched.status === "unavailable" ? null : defaultRedactionPolicy();
   }
 
   private async folderPolicy(generation: number): Promise<{ policy: ArchivePolicy; fetched: KeyResult | null }> {
