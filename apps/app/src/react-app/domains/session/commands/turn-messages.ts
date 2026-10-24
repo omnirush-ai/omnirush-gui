@@ -48,3 +48,22 @@ export function personUserMessages<T extends MessageLike>(messages: readonly T[]
     return !text || text !== promptText(earlier);
   });
 }
+
+/**
+ * The ids of the user messages that make up the turn `anchorId` belongs to, oldest first: the person's prompt that
+ * started it, then the compaction requests, automatic continues and replays the engine added before the next
+ * person's prompt. Each keeps its own part of the turn's file changes (the engine diffs per user message).
+ * Empty when the anchor is not a user message of `messages`.
+ */
+export function turnUserMessageIds<T extends MessageLike & { info: unknown }>(messages: readonly T[], anchorId: string): string[] {
+  const idOf = (message: T) => (message.info as { id?: unknown } | null)?.id;
+  const users = messages.filter((message) => isUser(message));
+  const at = users.findIndex((message) => idOf(message) === anchorId);
+  if (at < 0) return [];
+  const starts = new Set(personUserMessages(users));
+  let start = at;
+  while (start > 0 && !starts.has(users[start] as T)) start -= 1;
+  let end = at + 1;
+  while (end < users.length && !starts.has(users[end] as T)) end += 1;
+  return users.slice(start, end).map((message) => String(idOf(message)));
+}

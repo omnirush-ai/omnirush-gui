@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { OpenTarget } from "../src/react-app/domains/session/artifacts/open-target";
 import {
   isWorkspaceContainedArtifactTarget,
+  opensInIdeEditor,
   resolveCollectibleOpenTarget,
 } from "../src/react-app/domains/session/artifacts/resolve-open-target";
 
@@ -33,5 +34,15 @@ describe("on-demand artifact target resolution", () => {
     expect(missing).toBeNull();
     expect(isWorkspaceContainedArtifactTarget({ ...target, value: "/tmp/main.ts", exists: true })).toBe(false);
     expect(isWorkspaceContainedArtifactTarget({ ...target, value: "../main.ts", exists: true })).toBe(false);
+  });
+
+  test("the IDE editor opens workspace code, Markdown and HTML; other previews and outside paths keep the panel", () => {
+    const found = { ...target, exists: true };
+    expect(opensInIdeEditor(found)).toBe(true);
+    expect(opensInIdeEditor({ ...found, value: "docs/a.md", preview: "markdown" })).toBe(true);
+    expect(opensInIdeEditor({ ...found, value: "shot.png", preview: "image" } as OpenTarget)).toBe(false);
+    expect(opensInIdeEditor({ ...found, value: "/etc/hosts" })).toBe(false);
+    expect(opensInIdeEditor({ ...found, value: "../x.ts" })).toBe(false);
+    expect(opensInIdeEditor(target)).toBe(false);
   });
 });

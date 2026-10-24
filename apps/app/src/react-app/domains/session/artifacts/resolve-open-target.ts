@@ -13,6 +13,11 @@ export function isWorkspaceContainedArtifactTarget(target: OpenTarget) {
   return normalized.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
+/** A workspace file the IDE editor shows itself (code, Markdown, HTML), rather than the artifact side panel. */
+export function opensInIdeEditor(target: OpenTarget) {
+  return isWorkspaceContainedArtifactTarget(target) && ["code", "markdown", "html"].includes(target.preview);
+}
+
 export async function resolveCollectibleOpenTarget(
   client: ArtifactTargetResolver,
   workspaceId: string,

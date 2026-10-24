@@ -23,12 +23,14 @@ type SessionCommandsStore = {
   bridges: Record<string, SessionCommandBridge>;
   /** The chat whose Changes panel is open, or null. */
   changesOpenFor: string | null;
+  /** The prompt whose turn the open Changes panel shows (a chat's "Changes in this turn"), or null for the last turn. */
+  changesTurn: string | null;
   /** The chat whose Status dialog (header menu) is open, or null. */
   statusOpenFor: string | null;
   headerActions: Record<string, SessionHeaderActions>;
   register: (sessionId: string, bridge: SessionCommandBridge) => () => void;
   setHeaderActions: (sessionId: string, actions: SessionHeaderActions | null) => void;
-  openChanges: (sessionId: string) => void;
+  openChanges: (sessionId: string, turnMessageId?: string | null) => void;
   closeChanges: () => void;
   openStatus: (sessionId: string) => void;
   closeStatus: () => void;
@@ -37,6 +39,7 @@ type SessionCommandsStore = {
 export const useSessionCommandsStore = create<SessionCommandsStore>((set, get) => ({
   bridges: {},
   changesOpenFor: null,
+  changesTurn: null,
   statusOpenFor: null,
   headerActions: {},
   setHeaderActions: (sessionId, actions) => set((state) => {
@@ -56,8 +59,8 @@ export const useSessionCommandsStore = create<SessionCommandsStore>((set, get) =
       });
     };
   },
-  openChanges: (sessionId) => set({ changesOpenFor: sessionId }),
-  closeChanges: () => set({ changesOpenFor: null }),
+  openChanges: (sessionId, turnMessageId = null) => set({ changesOpenFor: sessionId, changesTurn: turnMessageId }),
+  closeChanges: () => set({ changesOpenFor: null, changesTurn: null }),
   openStatus: (sessionId) => set({ statusOpenFor: sessionId }),
   closeStatus: () => set({ statusOpenFor: null }),
 }));

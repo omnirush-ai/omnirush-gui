@@ -38,7 +38,7 @@ export function changeTotals(files: readonly ChangedFile[]) {
 
 export const CHANGES_EMPTY: Record<ChangesSource, string> = {
   chat: "This chat has not changed any files yet.",
-  turn: "The last turn changed no files.",
+  turn: "No files changed in this turn.",
   tree: "No changes.",
 };
 
@@ -93,4 +93,65 @@ export function patchLineCount(patch: string): number {
   let count = 1;
   for (let at = patch.indexOf("\n"); at !== -1; at = patch.indexOf("\n", at + 1)) count += 1;
   return count;
+}
+
+/** One row of a side-by-side diff: the old line on the left, the new one on the right (either may be empty). */
+export type SplitRow =
+  | { kind: "hunk" | "meta"; text: string }
+  | { kind: "line"; left: PatchLine | null; right: PatchLine | null };
+
+/** Display lines as side-by-side rows: context on both sides, a run of removals paired with the additions after it. */
+export function splitRows(lines: readonly PatchLine[]): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let dels: PatchLine[] = [];
+  let adds: PatchLine[] = [];
+  const flush = () => {
+    for (let at = 0; at < Math.max(dels.length, adds.length); at += 1) {
+      rows.push({ kind: "line", left: dels[at] ?? null, right: adds[at] ?? null });
+    }
+    dels = [];
+    adds = [];
+  };
+  for (const line of lines) {
+    if (line.kind === "del") {
+      if (adds.length) flush();
+      dels.push(line);
+    } else if (line.kind === "add") {
+      adds.push(line);
+    } else {
+      flush();
+      rows.push(line.kind === "context" ? { kind: "line", left: line, right: line } : { kind: line.kind, text: line.text });
+    }
+  }
+  flush();
+  return rows;
+}
+
+/**
+ * One turn's changes from the engine's per-message diffs (a turn split by a compaction has one list per user
+ * message, oldest first): a file changed in several parts keeps every part's hunks in order and the summed counts.
+ * Its status is the turn's net one: whether it existed at the turn's start (its first part did not add it) and at
+ * its end (its last part did not delete it). A file that existed at neither (added, then deleted) is left out.
+ */
+export function mergeTurnChanges(lists: readonly ChangedFile[][]): ChangedFile[] {
+  const byPath = new Map<string, { file: ChangedFile; atStart: boolean; atEnd: boolean }>();
+  for (const list of lists) {
+    for (const file of list) {
+      const seen = byPath.get(file.path);
+      if (!seen) {
+        byPath.set(file.path, { file: { ...file }, atStart: file.status !== "added", atEnd: file.status !== "deleted" });
+        continue;
+      }
+      seen.file.additions += file.additions;
+      seen.file.deletions += file.deletions;
+      seen.file.patch = [seen.file.patch, file.patch].filter((patch) => patch.trim()).join("\n");
+      seen.atEnd = file.status !== "deleted";
+    }
+  }
+  const out: ChangedFile[] = [];
+  for (const { file, atStart, atEnd } of byPath.values()) {
+    if (!atStart && !atEnd) continue;
+    out.push({ ...file, status: atStart && atEnd ? "modified" : atEnd ? "added" : "deleted" });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
 }
