@@ -4,7 +4,7 @@
 // agent's own display; the person's own screen is off until they turn it on here (with a confirm).
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MousePointer2, X } from "lucide-react";
+import { Monitor, MousePointer2, X } from "lucide-react";
 
 import type { ComputerUseRealScreen } from "@omnirush/types/desktop-ipc";
 
@@ -107,6 +107,10 @@ export function ComputerUseSettingsCard() {
         </div>
         {setup.enabled ? (
           <div className="flex items-start gap-4 border-t border-dls-border pt-3">
+            {/* The same icon column as the row above, so both rows' text lines up. */}
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
+              <Monitor size={17} className="text-dls-secondary" />
+            </div>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-medium text-dls-text">Use my own screen</div>
               <div id="computer-use-own-screen-help" className="text-[11px] text-dls-secondary">
