@@ -35,7 +35,7 @@ const JumpToStartButton = memo(function JumpToStartButton({
       title={t("scroll.jump_to_start")}
     >
       <ArrowUp className="hidden size-4 @max-[34rem]/chatpane:block" aria-hidden="true" />
-      <span className="@max-[34rem]/chatpane:hidden">Jump to start</span>
+      <span className="@max-[34rem]/chatpane:hidden">{t("scroll.jump_to_start")}</span>
     </button>
   );
 });
@@ -60,7 +60,7 @@ const JumpToLatestButton = memo(function JumpToLatestButton({
       title={t("scroll.jump_to_latest")}
     >
       <ArrowDown className="hidden size-4 @max-[34rem]/chatpane:block" aria-hidden="true" />
-      <span className="@max-[34rem]/chatpane:hidden">Jump to latest</span>
+      <span className="@max-[34rem]/chatpane:hidden">{t("scroll.jump_to_latest")}</span>
     </button>
   );
 });

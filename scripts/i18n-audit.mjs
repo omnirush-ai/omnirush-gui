@@ -182,7 +182,14 @@ if (shouldRun("--missing")) {
   console.log("=== Missing keys (in en.ts but not in locale) ===");
   for (const locale of LOCALES) {
     const file = join(LOCALES_DIR, `${locale}.ts`);
-    if (!existsSync(file)) continue;
+    if (!existsSync(file)) {
+      // A locale that must be complete cannot be missing altogether.
+      if (COMPLETE_LOCALES.includes(locale)) {
+        console.log(`  ${locale}: ✗ ${locale}.ts is missing (must be complete)`);
+        exitCode = 1;
+      }
+      continue;
+    }
     const localeKeys = extractKeys(file);
     const missing = [...enKeys].filter((k) => !localeKeys.has(k));
 

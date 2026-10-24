@@ -1557,7 +1557,7 @@ export default function EditorPanel(props: EditorPanelProps) {
       {focusedTab && focusedTab.kind === "file" && isMarkdownPath(focusedTab.path) ? (
         <Tooltip>
           <TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={t("editor.open_preview_side")} onClick={() => openPreview("side")} data-editor-preview-button><Eye /></Button>} />
-          <TooltipContent>Open preview to the side ({mac ? "⌘⇧V" : "Ctrl+Shift+V"})</TooltipContent>
+          <TooltipContent>{t("editor.open_preview_side")} ({mac ? "⌘⇧V" : "Ctrl+Shift+V"})</TooltipContent>
         </Tooltip>
       ) : null}
       <Tooltip>
