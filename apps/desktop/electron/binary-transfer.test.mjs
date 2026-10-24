@@ -54,7 +54,8 @@ test("Claude archive abort cancels a stalled stream and removes private staging 
   await withWorkspace(async (root, stagingDir) => {
     const controller = new AbortController();
     let streamCancelled = false;
-    let signal;
+    /** @type {{signal?: AbortSignal | null}} */
+    const captured = {};
     const filename = "claude-00000000-0000-4000-8000-000000000001.zip";
     const downloading = downloadClaudeArchive({
       url: "http://127.0.0.1:39876/workspace/project/claude/sessions/00000000-0000-4000-8000-000000000001/export",
@@ -63,7 +64,7 @@ test("Claude archive abort cancels a stalled stream and removes private staging 
       localServerUrl: "http://127.0.0.1:39876", allowedUrlPrefixes: [], stagingDir, signal: controller.signal,
       chooseDestination: async () => path.join(root, filename),
       fetcher: async (_url, init) => {
-        signal = init.signal;
+        captured.signal = init.signal;
         assert.equal(init.headers["X-OmniRush-Host-Token"], "fixture-host");
         return new Response(new ReadableStream({
           start(stream) { stream.enqueue(new Uint8Array([80, 75, 255, 0])); },
@@ -81,7 +82,8 @@ test("Claude archive abort cancels a stalled stream and removes private staging 
     }
     controller.abort();
     await rejected;
-    assert.equal(signal.aborted, true);
+    assert.ok(captured.signal);
+    assert.equal(captured.signal.aborted, true);
     assert.equal(streamCancelled, true);
     assert.deepEqual(await readdir(stagingDir), []);
     assert.deepEqual(await readdir(root), []);
