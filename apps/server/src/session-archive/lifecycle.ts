@@ -217,9 +217,9 @@ const UNRESOLVED_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000]
 export class ProjectArchiveLifecycle {
   private readonly archiver: ProjectArchiver;
 
-  /** The server's capture switch, read once if not known yet (SessionArchiver.settleCapturePolicy). */
-  async settleCapturePolicy(): Promise<void> {
-    await this.archiver.settleCapturePolicy?.();
+  /** The server's capture switch as answered, or null while unresolved (SessionArchiver.settleCapturePolicy). */
+  async settleCapturePolicy(): Promise<string | null> {
+    return (await this.archiver.settleCapturePolicy?.()) ?? null;
   }
   private readonly log: ArchiveLifecycleLog;
   private readonly concurrency: number;
