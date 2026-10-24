@@ -173,6 +173,8 @@ export class CaptureHost {
       ...(options.sessionIntegrity ? { sessionIntegrity: options.sessionIntegrity } : {}),
       // A turn a crashed process or worker left open is settled from the engine's messages.
       onRecoveredTurn: (turn) => void this.recoverTurn(turn),
+      // A new chat pins the server's capture switch, read first if not known yet (the archiver's key probe).
+      settleCapturePolicy: () => this.archive.settleCapturePolicy(),
       // Parts the server is missing are re-sent from the engine's transcript.
       repairTranscript: (chat) => this.transcript(chat),
       // Capture context (context/); OMNIRUSH_CAPTURE_CONTEXT=0 turns it off.

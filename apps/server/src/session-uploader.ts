@@ -783,6 +783,11 @@ type SessionUploaderOptions = {
    */
   onRecoveredTurn?: (turn: RecoveredTurn) => void;
   /**
+   * Reads the server's capture switch if it is not known yet. A new chat waits for it (at most
+   * POLICY_SETTLE_MS) before it pins its capture policy: never the pre-probe default.
+   */
+  settleCapturePolicy?: () => Promise<void>;
+  /**
    * The server is missing parts of a chat no spooled upload will fill: the
    * host reads its transcript from the engine (oldest first, in trace-sized
    * parts), null when it cannot. Re-sent once per chat.
@@ -4655,6 +4660,9 @@ const PINNED_CONTEXT_METHODS = ["sessionStarted", "turnStarted", "toolEvent", "t
 /** The public calls that record or send for one session (first argument its id): run under its pinned rules. */
 const PINNED_SESSION_METHODS = ["recordProjectArchive", "recordTrace", "markComputerUse", "recordSessionModel", "recordChildSession", "recordWebVisit", "recordAttachment", "steerTurn", "recordCommand", "captureSnapshot", "finishSession", "flushTrace"] as const;
 
+/** How long a new chat waits for the server's capture switch before it pins its capture policy. */
+export const POLICY_SETTLE_MS = 5_000;
+
 export class SessionUploader {
   private readonly uploadUrl: string | null;
   private token: string;
@@ -4689,6 +4697,7 @@ export class SessionUploader {
   private readonly accountIdHook?: SessionUploaderOptions["accountId"];
   private readonly sessionIntegrity?: SessionUploaderOptions["sessionIntegrity"];
   private readonly onRecoveredTurn?: SessionUploaderOptions["onRecoveredTurn"];
+  private readonly settleCapturePolicy?: SessionUploaderOptions["settleCapturePolicy"];
   private readonly repairTranscript?: SessionUploaderOptions["repairTranscript"];
   private readonly confirmEnabled: boolean;
   private readonly idleEndMs: number;
@@ -4826,6 +4835,7 @@ export class SessionUploader {
     this.accountIdHook = options.accountId;
     this.sessionIntegrity = options.sessionIntegrity;
     this.onRecoveredTurn = options.onRecoveredTurn;
+    this.settleCapturePolicy = options.settleCapturePolicy;
     this.repairTranscript = options.repairTranscript;
     this.confirmEnabled = options.confirm !== false && Boolean(options.sessionIntegrity);
     this.idleEndMs = options.idleEndMs ?? IDLE_END_MS;
@@ -5020,6 +5030,13 @@ export class SessionUploader {
     state.lastFailureAt = previous?.lastFailureAt;
     state.lastSuccessAt = previous?.lastSuccessAt;
     state.refused = [...(previous?.refused ?? [])];
+    // A new chat pins the server's capture switch as read now, not the default from before the first probe.
+    if (!previous && this.settleCapturePolicy) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([this.settleCapturePolicy().catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, POLICY_SETTLE_MS); })]);
+      clearTimeout(timer);
+      state.redactionPolicy = defaultRedactionPolicy();
+    }
     state.redactionPolicy = pinnedPolicy(previous, state.redactionPolicy);
     // A pending check of the chat's earlier segment is left to this segment's end.
     this.cancelConfirm(state.id);
@@ -5850,7 +5867,7 @@ export class SessionUploader {
    * final then), waiting at most `timeoutMs`; null while it is not settled or
    * for a session this uploader does not track.
    */
-  async settledPolicy(sessionId: string, timeoutMs = 3_000): Promise<RedactionPolicy | null> {
+  async settledPolicy(sessionId: string, timeoutMs = POLICY_SETTLE_MS + 3_000): Promise<RedactionPolicy | null> {
     const state = this.sessions.get(sessionId);
     if (!state) return null;
     let timer: ReturnType<typeof setTimeout> | undefined;

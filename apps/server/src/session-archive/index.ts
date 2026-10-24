@@ -1391,6 +1391,15 @@ export class SessionArchiver {
    * request per POLICY_TTL_MS, never a retry storm. `fetched` is the probe's
    * answer when this call made one: the base reuses it for its key.
    */
+  /**
+   * The server's capture switch read now if it is not known yet (the same cached probe as the folder policy):
+   * afterwards defaultRedactionPolicy() is the server's answer, so a chat starting now pins it, not the
+   * pre-probe "legacy" default.
+   */
+  async settleCapturePolicy(): Promise<void> {
+    await this.folderPolicy(this.generation);
+  }
+
   private async folderPolicy(generation: number): Promise<{ policy: ArchivePolicy; fetched: KeyResult | null }> {
     const kept = this.policy;
     if (kept && this.now().getTime() - kept.at < POLICY_TTL_MS) return { policy: kept.value, fetched: null };
