@@ -5926,10 +5926,12 @@ export class SessionUploader {
    * when the ledger has one; a chat only the server knows went up before pins (never raw); otherwise the
    * server's capture switch as answered now (null while unresolved: nothing goes up on a guess).
    */
-  private async unpinnedPolicy(record: SessionLedgerRecord | undefined, serverOnly: boolean): Promise<RedactionPolicy | null> {
+  private async unpinnedPolicy(record: SessionLedgerRecord | undefined): Promise<RedactionPolicy | null> {
     if (record?.redactionPolicy === CLIENT_RAW || record?.redactionPolicy === CLIENT_V3 || record?.redactionPolicy === "legacy") return record.redactionPolicy;
-    if (serverOnly) return pinnedPolicy(record, defaultRedactionPolicy());
+    // No capture switch to ask (an uploader without the archiver): the process switch, as before.
     if (!this.settleCapturePolicy) return pinnedPolicy(record, defaultRedactionPolicy());
+    // The server's answer, never the default from before it; pinnedPolicy keeps a chat that went up before
+    // pins (a ledger record, or the server's copy of a lost one) off raw.
     const answer = await this.askCapturePolicy();
     return answer ? pinnedPolicy(record, answer) : null;
   }
@@ -7584,7 +7586,7 @@ export class SessionUploader {
     state.endedAt = record.endedAt;
     state.resumed = state.segment > 1;
     // The chat's own rules, whatever this process's switch says now; without a pin, only the server's answer.
-    const policy = await this.unpinnedPolicy(record, false);
+    const policy = await this.unpinnedPolicy(record);
     if (!policy) return false;
     state.redactionPolicy = policy;
     const at = new Date().toISOString();
@@ -7887,7 +7889,7 @@ export class SessionUploader {
       // The chat's own rules, whatever this process's switch says now (a chat the server knows but
       // this ledger lost went up before pins: never raw). Without a pin, only the server's answer counts:
       // no answer, and the journal waits for a later start instead of going up under a guess.
-      const policy = await this.unpinnedPolicy(record ?? (server ? { segment: server.segment, nextSequence: server.sequence, lastSeenAt: "" } : undefined), Boolean(server && !record));
+      const policy = await this.unpinnedPolicy(record ?? (server ? { segment: server.segment, nextSequence: server.sequence, lastSeenAt: "" } : undefined));
       if (!policy) return;
       state.redactionPolicy = policy;
       for (const event of events) {
