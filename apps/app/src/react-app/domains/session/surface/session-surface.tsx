@@ -65,7 +65,7 @@ import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMe
 import { desktopBridge, openDesktopUrl } from "@/app/lib/desktop";
 import { parseSlashCommandInvocation } from "./composer/slash-command";
 import { parseConnectSkillToken } from "./composer/connect-skill-token";
-import { createPastedTextChip, resolvePastedTextPlaceholders } from "./composer/pasted-text";
+import { createPastedTextChip, resolvePastedTextPlaceholders, unresolvedPasteLabels } from "./composer/pasted-text";
 import {
   canAdmitNextQueuedItem,
   claimQueuedSend,
@@ -1244,6 +1244,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       nextScopeKey: persistedDraftKey,
       currentText: currentDraft,
       storedText: nextDraft,
+      pasteParts: getComposerPasteParts(currentState, props.sessionId),
     });
 
     if (needsHydration) {
@@ -2320,6 +2321,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const sourceAttachments = sourceComposer?.attachments ?? attachments;
     const text = originalDraft.trim();
     if (!text && sourceAttachments.length === 0) return;
+    // A placeholder whose pasted text or quote is gone (only its token left) is never sent as the token itself.
+    if (unresolvedPasteLabels(text, sourceComposer?.pasteParts ?? getComposerPasteParts(useComposerStateStore.getState(), props.sessionId)).length) {
+      toast.error("A pasted text or quote in this message is no longer available. Remove its chip and paste or quote it again.");
+      return;
+    }
     const nextDraft = {
       ...buildDraft(text, sourceAttachments, sourceComposer),
       messageId: createPromptMessageID(),
@@ -2721,7 +2727,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const current = useComposerStateStore.getState();
     if (getComposerDraft(current, props.sessionId) !== draft || getComposerAttachments(current, props.sessionId) !== attachments) return;
     const nextDraft = buildDraft(draft, attachments);
-    const persistableText = persistableComposerDraftText(nextDraft.text);
+    const persistableText = persistableComposerDraftText(nextDraft.text, getComposerPasteParts(current, props.sessionId));
     persistDraft({ text: persistableText, mode: nextDraft.mode });
     props.onDraftChange(nextDraft);
   }, [attachments, buildDraft, draft, hydratedDraftScopeKey, persistDraft, persistedDraftKey, props.onDraftChange, props.sessionId]);

@@ -21,10 +21,18 @@ export function unquoteBlock(text: string): string | null {
   return lines.map((line) => line.replace(/^> ?/, "")).join("\n")
 }
 
-/** The chip label: `Quote: first words…`. */
+/** At most `max` user-perceived characters (an emoji or accented letter is never cut in half). */
+export function clipGraphemes(text: string, max: number): string {
+  const graphemes = typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text), (part) => part.segment)
+    : Array.from(text)
+  return graphemes.length > max ? `${graphemes.slice(0, max).join("").trimEnd()}…` : text
+}
+
+/** The chip label: `Quote: first words…` (sendToChat makes it unique among the draft's chips). */
 export function quoteLabel(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim()
-  return `Quote: ${flat.length > LABEL_WORDS ? `${flat.slice(0, LABEL_WORDS).trimEnd()}…` : flat}`
+  return `Quote: ${clipGraphemes(flat, LABEL_WORDS)}`
 }
 
 export function quoteIntoComposer(sessionId: string | null, text: string): ChatHandoffResult {

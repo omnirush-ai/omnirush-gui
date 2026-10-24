@@ -22,7 +22,7 @@ import {
   WifiOff,
 } from "lucide-react"
 import { quoteIntoComposer, unquoteBlock } from "./quote"
-import { SelectionQuote } from "./selection-quote"
+import { SelectionQuote, selectionInMessage } from "./selection-quote"
 import {
   DynamicToolUIPart,
   isFileUIPart,
@@ -862,7 +862,7 @@ const UserMessage = React.memo(
               </ContextMenuItem>
             ) : null}
             {messageText ? (
-              <ContextMenuItem onClick={() => quoteIntoComposer(sessionId, window.getSelection()?.toString().trim() || messageText)}>
+              <ContextMenuItem onClick={() => quoteIntoComposer(sessionId, selectionInMessage(window.getSelection(), message.id) || messageText)}>
                 <TextQuote className="size-4" />
                 {t("message.quote")}
               </ContextMenuItem>

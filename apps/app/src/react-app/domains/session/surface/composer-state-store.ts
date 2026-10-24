@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { createPromptMessageID } from "../../../../app/lib/opencode";
 import type { ComposerAttachment, ComposerDraft } from "../../../../app/types";
 import type { ComposerMentionKind } from "./composer/mention-encoding";
+import { resolvePastedTextPlaceholders, type PastedTextChip } from "./composer/pasted-text";
 
 export type QueuedComposerItem = {
   id: string;
@@ -81,8 +82,12 @@ export function getComposerSessionDraftScope(sessionId: string) {
   return composerSessionDraftScopes.get(sessionId.trim()) ?? null;
 }
 
-export function persistableComposerDraftText(text: string) {
-  return text.replace(/\[attachment [^\]]+\]/g, "");
+/**
+ * The draft text that survives a reload: attachment tokens dropped (their bytes do not persist) and pasted text and
+ * quotes written out in full, since their parts live only in memory (a reload would leave a bare placeholder).
+ */
+export function persistableComposerDraftText(text: string, pasteParts: readonly Pick<PastedTextChip, "label" | "text">[] = []) {
+  return resolvePastedTextPlaceholders(text, pasteParts).replace(/\[attachment [^\]]+\]/g, "");
 }
 
 export function composerDraftNeedsHydration(input: {
@@ -90,9 +95,10 @@ export function composerDraftNeedsHydration(input: {
   nextScopeKey: string;
   currentText: string;
   storedText: string;
+  pasteParts?: readonly Pick<PastedTextChip, "label" | "text">[];
 }) {
   return input.claimedScopeKey !== input.nextScopeKey
-    || persistableComposerDraftText(input.currentText) !== input.storedText;
+    || persistableComposerDraftText(input.currentText, input.pasteParts) !== input.storedText;
 }
 
 function createEmptyComposerSession(): ComposerSessionState {

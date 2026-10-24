@@ -35,12 +35,15 @@ export function sendToChat(sessionId: string | null, instruction: string, chips:
   const state = store.sessions[sessionId];
   const draft = state?.draft ?? "";
   const parts = state?.pasteParts ?? [];
-  const made = chips.map((chip) => ({
-    id: `editor-${Math.random().toString(36).slice(2)}`,
-    label: chip.label.replace(/[[\]]/g, "").slice(0, 120),
-    text: chip.text,
-    lines: chip.text.split(/\r?\n/).length,
-  }));
+  // The label is the chip's key in the draft ([pasted text <label>]): never two chips with one label.
+  const taken = new Set(parts.map((part) => part.label));
+  const made = chips.map((chip) => {
+    const base = Array.from(chip.label.replace(/[[\]]/g, "")).slice(0, 120).join("");
+    let label = base;
+    for (let n = 2; taken.has(label); n += 1) label = `${base} (${n})`;
+    taken.add(label);
+    return { id: `editor-${Math.random().toString(36).slice(2)}`, label, text: chip.text, lines: chip.text.split(/\r?\n/).length };
+  });
   const placeholders = made.map((part) => `[pasted text ${part.label}]`).join(" ");
   const lead = draft.trim() ? `${draft.replace(/\s+$/, "")}\n` : "";
   store.setPasteParts(sessionId, [...parts, ...made]);

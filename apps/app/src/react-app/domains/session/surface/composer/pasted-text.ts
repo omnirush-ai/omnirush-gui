@@ -42,6 +42,12 @@ export function resolvePastedTextPlaceholders(text: string, pastedText: readonly
   return resolved;
 }
 
+/** The labels of `[pasted text …]` placeholders in `text` that no part resolves (lost, e.g. after a reload). */
+export function unresolvedPasteLabels(text: string, pastedText: readonly Pick<PastedTextChip, "label">[]): string[] {
+  const known = new Set(pastedText.map((part) => part.label));
+  return [...text.matchAll(/\[pasted text ([^\]]+)\]/g)].map((match) => match[1] ?? "").filter((label) => !known.has(label));
+}
+
 export function splitPastedText(text: string) {
   const segments: PastedTextSegment[] = [];
   for (const part of text.split(/(\r?\n|\t)/)) {
