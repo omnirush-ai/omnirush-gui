@@ -17,6 +17,7 @@ import {
   sanitizeOmniRushModelCatalog,
   writeOmniRushModelCatalog,
   type OmniRushModelCatalog,
+  omnirushCompactInputLimit,
 } from "./omnirush-model-catalog.js";
 import type { ServerConfig } from "./types.js";
 import { backendCatalogBody } from "./__fixtures__/omnirush-model-catalog.js";
@@ -307,7 +308,7 @@ describe("omnirush engine models from the catalog", () => {
     expect(models["meta-muse-spark"]).toMatchObject({
       name: "Meta Muse Spark",
       family: "Meta Muse",
-      limit: { context: 158_000, output: 32_000 },
+      limit: { context: 158_000, input: 146_000, output: 32_000 },
       modalities: { input: ["text", "image", "pdf"], output: ["text"] },
     });
     expect(models["meta-muse-spark"]!.status).toBeUndefined();
@@ -327,4 +328,17 @@ describe("omnirush engine models from the catalog", () => {
     expect(enabled(engine)).toEqual([]);
     expect(engine.reasoning).toBe(false);
   });
+});
+
+test("compaction input limit: about 245k for a 400k window, never later than the engine's own point for a smaller one", () => {
+  // The engine compacts at input - min(20k, max output) with an input limit, else at context - max output (max output = min(output, 32k)).
+  const compactsAt = (limit: { context: number; output: number; input?: number }) => {
+    const maxOut = Math.min(limit.output, 32_000);
+    return limit.input ? limit.input - Math.min(20_000, maxOut) : limit.context - maxOut;
+  };
+  expect(omnirushCompactInputLimit({ context: 400_000, output: 128_000 })).toBe(265_000);
+  expect(omnirushCompactInputLimit({ context: 128_000, output: 32_000 })).toBe(116_000);
+  for (const limits of [{ context: 128_000, output: 32_000 }, { context: 158_000, output: 32_000 }, { context: 99_000, output: 16_000 }, { context: 296_000, output: 128_000 }, { context: 400_000, output: 128_000 }, { context: 1_000_000, output: 8_000 }]) {
+    expect(compactsAt({ ...limits, input: omnirushCompactInputLimit(limits) })).toBeLessThanOrEqual(compactsAt(limits));
+  }
 });

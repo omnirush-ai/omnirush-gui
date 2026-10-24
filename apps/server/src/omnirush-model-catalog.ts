@@ -28,6 +28,35 @@ export type OmniRushModelEffort = (typeof OMNIRUSH_MODEL_EFFORTS)[number];
 /** The default effort: High, what the desktop picker has always shown for Astra and Sol. */
 export const OMNIRUSH_DEFAULT_EFFORT: OmniRushModelEffort = "high";
 
+/**
+ * The most context a request carries before the engine compacts the chat:
+ * the engine compacts once a step's tokens reach `limit.input` minus its
+ * 20k reserve (session/overflow.ts), so 265k compacts at about 245k, where
+ * Codex compacts these models (90% of a 272k window). Without it the engine
+ * waited until context - 32k (368k of 400k), and long chats past 200k made
+ * far more failed edits and repeated failing calls. The window itself
+ * (`limit.context`, the meter) stays the catalog's.
+ *
+ * PARITY: omnirush-cli src/opencode-config.js COMPACT_INPUT_LIMIT.
+ */
+export const OMNIRUSH_COMPACT_INPUT_LIMIT = 265_000;
+
+/** The engine's own output cap per request (provider/transform.ts OUTPUT_TOKEN_MAX). */
+const ENGINE_OUTPUT_TOKEN_MAX = 32_000;
+
+/**
+ * A model's `limit.input`: OMNIRUSH_COMPACT_INPUT_LIMIT, but never a later
+ * compaction than the engine's own point (context - max output) for a
+ * smaller window. The engine compacts at input - min(20k, max output), so
+ * input = context - maxOut + min(20k, maxOut) keeps that point exactly.
+ *
+ * PARITY: omnirush-cli src/opencode-config.js compactInputLimit.
+ */
+export function omnirushCompactInputLimit(limits: { context: number; output: number }): number {
+  const maxOut = Math.min(limits.output, ENGINE_OUTPUT_TOKEN_MAX) || ENGINE_OUTPUT_TOKEN_MAX;
+  return Math.max(1, Math.min(OMNIRUSH_COMPACT_INPUT_LIMIT, limits.context - maxOut + Math.min(20_000, maxOut)));
+}
+
 const MODEL_STATUSES = ["active", "beta", "deprecated"] as const;
 export type OmniRushModelStatus = (typeof MODEL_STATUSES)[number];
 
@@ -268,7 +297,7 @@ export function engineModelsFromCatalog(catalog: OmniRushModelCatalog, webSearch
           .filter((level) => !model.reasoning_levels.includes(level))
           .map((level) => [level, { disabled: true }])),
       },
-      limit: { context: model.limits.context, output: model.limits.output },
+      limit: { context: model.limits.context, input: omnirushCompactInputLimit(model.limits), output: model.limits.output },
       modalities: {
         input: [
           "text",

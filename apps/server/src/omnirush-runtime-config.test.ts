@@ -702,7 +702,7 @@ function v109OmniRushProvider(baseURL: string) {
       medium: { disabled: true },
     },
     options: { reasoningEffort: "high" },
-    limit: { context: 400_000, output: 128_000 },
+    limit: { context: 400_000, input: 265_000, output: 128_000 },
     modalities: { input: ["text", "image", "pdf"], output: ["text"] },
   });
   return {
@@ -792,7 +792,7 @@ describe("omnirush runtime config from the model catalog", () => {
       temperature: true,
       variants: museVariants,
       options: { reasoningEffort: "high" },
-      limit: { context: 158_000, output: 32_000 },
+      limit: { context: 158_000, input: 146_000, output: 32_000 },
       modalities: { input: ["text", "image", "pdf"], output: ["text"] },
     });
     expect(models["muse-spark-1.3"]).toEqual({
@@ -805,7 +805,7 @@ describe("omnirush runtime config from the model catalog", () => {
       temperature: true,
       variants: museVariants,
       options: { reasoningEffort: "high" },
-      limit: { context: 99_000, output: 16_000 },
+      limit: { context: 99_000, input: 99_000, output: 16_000 },
       modalities: { input: ["text"], output: ["text"] },
     });
     for (const model of Object.values(models)) expect(model.attachment).toBeUndefined();
