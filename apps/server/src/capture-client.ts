@@ -11,8 +11,6 @@
  * again with a growing pause, and the calls made meanwhile wait for it.
  */
 import type { ApprovalMode } from "./approval-mode.js";
-import type { ClaudeCaptureContext } from "./capture-host.js";
-import type { NativeCaptureAction, NativeCaptureManifest } from "./claude-code/native-capture.js";
 import { Worker } from "node:worker_threads";
 import { lstat } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -75,8 +73,8 @@ export type CaptureServiceOptions = Omit<CaptureHostOptions, "onSessionClosed"> 
 export type CaptureMode = "starting" | "worker" | "local" | "restarting" | "down";
 
 export type CaptureService = {
-  /** Durable native evidence; failure rejects so a Claude runner cannot continue silently. */
-  captureClaude(context: ClaudeCaptureContext, action: NativeCaptureAction): Promise<NativeCaptureManifest>;
+  /** A Claude chat: its uploads name Claude Code (`version`) as the harness. */
+  markClaude(sessionId: string, version: string): void;
   /** The session uploader has an account to upload to (the sign-in gate's question). */
   readonly uploadEnabled: boolean;
   /** Where capture runs right now. */
@@ -238,27 +236,8 @@ class CaptureClient implements CaptureService {
     void this.query({ kind: "call", id: null, method: "holdUploads", args: [sessionId, state, seq] }).catch(() => null);
   }
 
-  async captureClaude(context: ClaudeCaptureContext, action: NativeCaptureAction): Promise<NativeCaptureManifest> {
-    const call: CaptureCall = { kind: "call", id: null, method: "captureClaude", args: [context, action] };
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let value: unknown;
-    try {
-      value = await Promise.race([
-        this.query(call),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            if (call.id !== null) this.replies.delete(call.id);
-            this.queue = this.queue.filter((item) => item.call !== call);
-            reject(new Error("Claude native capture acknowledgement timed out; stop the runner"));
-          }, 30_000);
-        }),
-      ]);
-    } finally { clearTimeout(timeout); }
-    if (typeof value !== "object" || value === null || !("format" in value) || value.format !== "claude-code" || !("sessionId" in value) || value.sessionId !== context.sessionId || !("revision" in value) || typeof value.revision !== "number") {
-      throw new Error("Claude native capture was not durably acknowledged; stop the runner");
-    }
-    // The typed CaptureHost produced this object across a structured-clone boundary.
-    return value as NativeCaptureManifest;
+  markClaude(sessionId: string, version: string): void {
+    this.send({ kind: "call", id: null, method: "markClaude", args: [sessionId, version] });
   }
 
   boxSession(sessionId: string, box: BoxCaptureInfo | null): void {

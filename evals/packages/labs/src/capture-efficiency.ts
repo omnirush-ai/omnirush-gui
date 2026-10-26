@@ -11,7 +11,6 @@ import { zstdDecompressSync } from "node:zlib";
 
 import { startCaptureService, type CaptureService } from "../../../../apps/server/src/capture-client.js";
 import type { TraceCapabilities } from "../../../../apps/server/src/session-uploader.js";
-import { NativeCapture } from "../../../../apps/server/src/claude-code/native-capture.js";
 
 const CONTROL_TOKEN = "capture-lab-control";
 const UPLOAD_TOKEN = "capture-lab-upload";
@@ -194,7 +193,6 @@ async function startCaptureEfficiencyLabRuntime(): Promise<CaptureEfficiencyLab>
   let stopped = false;
   let services: CaptureService[] = [];
   const signedIn: Record<Actor, string | null> = { "actor-a": "actor-a", "actor-b": "actor-b" };
-  const nativeContexts = new Map<string, { actor: Actor; configDir: string; source: string; expected: string }>();
 
   const server = createServer((request, response) => {
     void (async () => {
@@ -250,65 +248,6 @@ async function startCaptureEfficiencyLabRuntime(): Promise<CaptureEfficiencyLab>
 
       const body = await readJson(request);
       const requestedSessionId = stringValue(body, "sessionId");
-      if (path.startsWith("/control/native/")) {
-        if (!/^[a-f0-9-]{36}$/.test(requestedSessionId)) throw new Error("invalid native session id");
-        const actor = actorValue(body), index = ACTORS.indexOf(actor);
-        if (path === "/control/native/seed") {
-          const configDir = join(tempRoot, "native-sources", actor, requestedSessionId);
-          const project = join(configDir, "projects", "-fixture-workspace");
-          const source = join(project, `${requestedSessionId}.jsonl`);
-          await mkdir(project, { recursive: true });
-          const records = [
-            { type: "user", uuid: "prompt", parentUuid: null, message: { content: `task for ${actor}` } },
-            { type: "assistant", uuid: "tools", parentUuid: "prompt", futureNativeField: actor, message: { content: [{ type: "thinking", thinking: "Visible summary", signature: "opaque-fixture" }, { type: "tool_use", id: "side-call", name: "Read" }, { type: "tool_use", id: "main-call", name: "Read" }] } },
-            { type: "user", uuid: "side-result", parentUuid: "tools", message: { content: [{ type: "tool_result", tool_use_id: "side-call", content: "side branch" }] } },
-            { type: "user", uuid: "main-result", parentUuid: "tools", message: { content: [{ type: "tool_result", tool_use_id: "main-call", content: "main branch" }] } },
-          ];
-          const expected = records.map((record) => JSON.stringify(record) + "\n").join("");
-          await writeFile(source, expected.slice(0, -3));
-          await writeFile(join(configDir, "credentials.json"), "DO_NOT_EXPORT_AUTH");
-          await writeFile(join(project, "unrelated.jsonl"), "DO_NOT_EXPORT_OTHER_SESSION");
-          const subagents = join(project, requestedSessionId, "subagents"); await mkdir(subagents, { recursive: true });
-          for (let child = 0; child < 5; child++) {
-            await writeFile(join(subagents, `agent-child${child}.jsonl`), JSON.stringify({ type: "user", uuid: `child${child}`, parentUuid: null, message: { content: `child ${child}` } }) + "\n");
-            await writeFile(join(subagents, `agent-child${child}.meta.json`), '{"agentType":"fixture"}');
-          }
-          nativeContexts.set(requestedSessionId, { actor, configDir, source, expected });
-          sendJson(response, 202, { rootSha256: createHash("sha256").update(expected).digest("hex") }); return;
-        }
-        const context = nativeContexts.get(requestedSessionId);
-        if (!context || context.actor !== actor) { sendJson(response, 403, { error: "native owner mismatch" }); return; }
-        const captureContext = { sessionId: requestedSessionId, configDir: context.configDir, producerVersion: "native-lab", transport: "sdk" as const };
-        if (path === "/control/native/account") {
-          signedIn[actor] = isRecord(body) && body.signedIn === null ? null : stringValue(body, "signedIn");
-          sendJson(response, 202, { ok: true }); return;
-        }
-        if (path === "/control/native/repair") {
-          await appendFile(context.source, context.expected.slice(-3)); sendJson(response, 202, { ok: true }); return;
-        }
-        if (path === "/control/native/restart") {
-          await services[index].stop({ archiveFinals: false }); services[index] = makeService(actor);
-          sendJson(response, 202, { ok: true }); return;
-        }
-        if (path === "/control/native/stream") {
-          const text = stringValue(body, "text"), offset = numberValue(body, "offset");
-          if (offset === null) throw new Error("stream offset required");
-          const manifest = await services[index].captureClaude(captureContext, { type: "stream", channel: "sdk", offset, bytes: Buffer.from(text) });
-          sendJson(response, 202, manifest); return;
-        }
-        if (path === "/control/native/finish") {
-          const manifest = await services[index].captureClaude(captureContext, { type: "finish", processStopped: true, successfulResult: true, expectedAgents: ["child0", "child1", "child2", "child3", "child4"] });
-          sendJson(response, 202, manifest); return;
-        }
-        if (path === "/control/native/export") {
-          const capture = new NativeCapture({ ...captureContext, directory: join(stateRoot, actor, "claude-native", requestedSessionId), owner: actor, surface: "gui" });
-          const destination = join(tempRoot, "exports", requestedSessionId);
-          const manifest = capture.exportTo(destination);
-          const files = await Promise.all(manifest.files.map(async (file) => ({ path: file.path, text: await readFile(join(destination, file.path), "utf8") })));
-          sendJson(response, 202, { manifest, files }); return;
-        }
-        throw new Error("unknown native control");
-      }
       if (path === "/control/start") {
         const actor = actorValue(body);
         const workspace = stringValue(body, "workspace");

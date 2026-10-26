@@ -2,6 +2,7 @@
 // src/provider-lock/ and omnirush-gui apps/server/src/provider-lock/; PARITY.sha256).
 
 export const OMNIRUSH_PROVIDER_ID: "omnirush";
+export const APP_PROVIDER_IDS: readonly ["omnirush", "omnirush-claude"];
 export const PROVIDER_LOCK_MESSAGE: string;
 export const PLUGINS_OFF_MESSAGE: string;
 export const PROVIDER_ID_PATTERN: RegExp;

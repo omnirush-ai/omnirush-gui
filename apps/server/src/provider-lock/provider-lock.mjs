@@ -22,6 +22,8 @@
 // so the desktop's bundler and the CLI's plain node both load it as is.
 
 export const OMNIRUSH_PROVIDER_ID = "omnirush";
+/** The app's own providers: the gateway's, and Claude Code in the box (assets/claude-provider). */
+export const APP_PROVIDER_IDS = Object.freeze([OMNIRUSH_PROVIDER_ID, "omnirush-claude"]);
 export const PROVIDER_LOCK_MESSAGE = "Only OmniRush models are available.";
 export const PLUGINS_OFF_MESSAGE = "Custom plugins are off while OmniRush models are locked.";
 export const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -52,7 +54,7 @@ function cleanMessage(value) {
 
 /** The locked policy every missing, failed or malformed answer means. */
 export function lockedProviderPolicy(source = "default") {
-  return { locked: true, allow: [OMNIRUSH_PROVIDER_ID], message: PROVIDER_LOCK_MESSAGE, source };
+  return { locked: true, allow: [...APP_PROVIDER_IDS], message: PROVIDER_LOCK_MESSAGE, source };
 }
 
 /**
@@ -68,7 +70,7 @@ export function providerLockPolicy(capabilities) {
   if (block.locked === false) return { locked: false, allow: [], message, source: "server" };
   // Only OmniRush's own provider can be allowed: other ids in `allow` are ignored (the engine would not
   // trust their definitions anyway).
-  const allow = [OMNIRUSH_PROVIDER_ID];
+  const allow = [...APP_PROVIDER_IDS];
   return { locked: true, allow, message, source: "server" };
 }
 
@@ -140,7 +142,8 @@ export function lockEngineConfig(config, policy) {
     }
     out.provider = kept;
   }
-  out.enabled_providers = [...policy.allow];
+  // The gateway's provider always; another app provider only where this config defines it.
+  out.enabled_providers = policy.allow.filter((id) => id === OMNIRUSH_PROVIDER_ID || (isRecord(out.provider) && id in out.provider));
   if ("disabled_providers" in out) {
     delete out.disabled_providers;
     removed.push("disabled_providers");

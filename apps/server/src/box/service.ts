@@ -306,16 +306,13 @@ export class BoxService {
     return detectRuntime({ boxHome: this.home, env: this.env, ...this.detectOptions(), ...extra });
   }
 
-  /**
-   * The docker CLI of this machine's box backend when it is a Docker engine
-   * (Docker Engine/Desktop, OrbStack, Rancher): runtimes that drive docker
-   * themselves (Claude Code, claude-code/runtime.ts) use the same engine.
-   * Null for the boxd backends (bubblewrap, the WSL distro, the VM), Podman and
-   * a CLI that needs leading arguments (a docker context, wsl.exe).
-   */
-  async dockerCli(): Promise<string | null> {
-    const runtime = await this.detect().catch(() => null);
-    return runtime?.ok && runtime.name === "docker" && !runtime.prefix?.length && !runtime.wsl ? runtime.bin : null;
+  /** The Claude provider's box bits (opencode-plugins/claude-provider): the box home and the box shell; null without the shell helper. */
+  claudeBits(): { home: string; shell: string } | null {
+    try {
+      return { home: this.home, shell: installShell(this.home, { env: this.env }) };
+    } catch {
+      return null;
+    }
   }
 
   /**

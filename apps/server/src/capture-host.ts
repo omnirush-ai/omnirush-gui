@@ -9,7 +9,6 @@
  * cross the thread boundary unchanged.
  */
 import { createMediaRewriter } from "./computer-use/media-capture.js";
-import { NativeCapture, type NativeCaptureOptions, type NativeCaptureAction, type NativeCaptureManifest } from "./claude-code/native-capture.js";
 import type { ApprovalMode } from "./approval-mode.js";
 import type { ContextOptions } from "./context/index.js";
 import { defaultRedactionPolicy } from "./context/redact-policy.js";
@@ -45,7 +44,6 @@ import { SessionUploader, type RecoveredTurn, type TraceCapabilities, type Uploa
 export type { EngineReplacement, EngineTarget } from "./session-upload-observer.js";
 
 export type CaptureLog = ArchiveLifecycleLog;
-export type ClaudeCaptureContext = Pick<NativeCaptureOptions, "sessionId" | "configDir" | "producerVersion" | "transport">;
 
 /** Prompt bodies larger than this are not parsed for the trace (nor for attachments). */
 const MAX_TRACED_REQUEST_BYTES = 4 * 1024 * 1024;
@@ -145,7 +143,6 @@ function requestPayload(body: Uint8Array | null): unknown {
 }
 
 export class CaptureHost {
-  private readonly nativeCaptures = new Map<string, { identity: string; capture: NativeCapture }>();
   private readonly accountId: CaptureHostOptions["accountId"];
   readonly sessionUploader: SessionUploader;
   readonly archive: ProjectArchiveLifecycle;
@@ -243,26 +240,9 @@ export class CaptureHost {
     this.sessionUploader.startSession(sessionId, workspaceId, root, { turnsBefore });
   }
 
-  /** Awaited, durable Claude evidence. Kept outside the lossy display/event queue
-   * and the scrubbed legacy upload format. The runner stops on a missing ack.
-   * configDir is the runner's dedicated persistent volume, never a user home.
-   */
-  async captureClaude(context: ClaudeCaptureContext, action: NativeCaptureAction): Promise<NativeCaptureManifest> {
-    const owner = await this.accountId?.();
-    if (!owner) throw new Error("Claude native capture requires an account owner");
-    const key = `${owner}/${context.sessionId}`;
-    const identity = JSON.stringify(context);
-    let entry = this.nativeCaptures.get(key);
-    if (entry && entry.identity !== identity) throw new Error("Claude capture source or producer changed");
-    if (!entry) {
-      // One immutable owner per native UUID, including across sign-out/restart.
-      // Changing accounts must not silently create a second copy owned by B.
-      entry = { identity, capture: new NativeCapture({ ...context, directory: join(this.stateDir, "claude-native", context.sessionId), owner, surface: "gui" }) };
-      this.nativeCaptures.set(key, entry);
-    }
-    if (action.type === "stream") return entry.capture.recordStream(action.channel, action.bytes, action.offset);
-    if (action.type === "finish") return entry.capture.finish(action);
-    return entry.capture.scan();
+  /** A Claude chat (opencode-plugins/claude-provider): its uploads name Claude Code, run in the box under this engine. */
+  markClaude(sessionId: string, version: string): void {
+    this.sessionUploader.markClaude(sessionId, version);
   }
 
   /** The app's permission mode, named in the setup record of the sessions started after it (sent before each startSession). */

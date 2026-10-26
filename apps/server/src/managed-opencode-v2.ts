@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 import { loopbackFetch } from "./server-fetch.js";
 import { writeFileAtomic } from "./atomic-write.js";
 import { currentProviderLockPolicy, noteEngineStarted, providerAllowed } from "./provider-lock.js";
-import { providerLockEnv } from "./provider-lock/provider-lock.mjs";
+import { APP_PROVIDER_IDS, providerLockEnv } from "./provider-lock/provider-lock.mjs";
 import { gateEnv } from "./engine-gates/engine-gates.mjs";
 import { releaseEngineBinary } from "./release-guard.js";
 
@@ -47,6 +47,8 @@ export interface ManagedOpencodeV2ServerOptions {
   mcpGate?: string[];
   /** The Linux sandbox's engine bits (engine-v2-preview.ts v2BoxBits): the box shell and the 2.x box plugin; null: none. */
   box?: () => Promise<{ shell: string; plugin: string } | null>;
+  /** "omnirush/<default model>": the title agent's model while the Claude provider is listed. */
+  titleModel?: () => Promise<string | null>;
 }
 
 export interface OpencodeV2Health {
@@ -120,9 +122,11 @@ export async function pluginDirectories(root: string, modules: string[]): Promis
  */
 /** The app's gateway provider: the only one the engine may use (its gate, and the config's policies). */
 const GATEWAY_PROVIDER_ID = "omnirush";
+const CLAUDE_PROVIDER_ID = "omnirush-claude";
 
 export function engineV2SpawnEnv(env: Record<string, string>, mcp: readonly string[] = []): Record<string, string> {
-  return assertEngineGates({ ...env, ...gateEnv({ provider: GATEWAY_PROVIDER_ID, mcp }) });
+  // Both app providers pass the gate (a comma list): the gateway's and Claude Code in the box (opencode-plugins/claude-provider).
+  return assertEngineGates({ ...env, ...gateEnv({ provider: GATEWAY_PROVIDER_ID, mcp }), OMNIRUSH_GATE_PROVIDERS: APP_PROVIDER_IDS.join(",") });
 }
 
 export function assertEngineGates(env: Record<string, string | undefined>): Record<string, string> {
@@ -301,6 +305,7 @@ export async function createManagedOpencodeV2Server(
         models,
       };
     }
+    const titleModel = providerConfig[CLAUDE_PROVIDER_ID] ? await options.titleModel?.().catch(() => null) : null;
     const target = join(configDir, "opencode.json");
     // The box shell runs each command in its project's box (boxsh; natively for a project without one).
     const box = await options.box?.().catch(() => null) ?? null;
@@ -310,12 +315,14 @@ export async function createManagedOpencodeV2Server(
       share: "disabled",
       update: "disable",
       providers: providerConfig,
-      // As the CLI's v2 config (engine-v2.js toV2Config): only the app's gateway provider may run a model,
+      // As the CLI's v2 config (engine-v2.js toV2Config): only the app's providers may run a model,
       // beside the engine's gate (OMNIRUSH_GATE_PROVIDERS, engineV2SpawnEnv), which no config can widen.
       policies: [
         { action: "provider.use", resource: "*", effect: "deny" },
-        { action: "provider.use", resource: GATEWAY_PROVIDER_ID, effect: "allow" },
+        ...APP_PROVIDER_IDS.map((id) => ({ action: "provider.use", resource: id, effect: "allow" })),
       ],
+      // Titles on the gateway's default model while Claude is listed: a Claude turn is a Claude Code run, never a title.
+      ...(titleModel ? { agents: { title: { model: titleModel } } } : {}),
       ...(options.permissions ? { permissions: await options.permissions() } : {}),
       // On: the stock websearch tool searches through Exa (the engine's keyless default), like the CLI.
       // Off: no provider is picked (never `false`, which would take the tool out of the stock list).

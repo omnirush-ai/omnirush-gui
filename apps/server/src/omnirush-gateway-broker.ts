@@ -17,8 +17,7 @@ import { RejectedAttachments, isRejectedAttachmentError, type Attachment } from 
 import { gatewayUrlAllowed, RELEASE_GATEWAY_ERROR } from "./release-guard.js";
 import { BOX_HEADER, MODEL_NOT_IN_MODE, notInModeMessage, projectMode } from "./model-modes/model-modes.mjs";
 import { MODE_NOT_BOUND, MODEL_NOT_BOUND, REFUSED_HEADER, SESSION_BIND_UNCONFIRMED, STRICT_SESSION_HEADER, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED, sessionBinder, strictSessions, type StrictSessions } from "./model-modes/strict-sessions.mjs";
-import { ClaudeDeviceAccess, type ClaudeDeviceRequest } from "./claude-code/access.js";
-import type { ClaudeAuthorization } from "./claude-code/runtime.js";
+import { ClaudeDeviceAccess, type ClaudeAuthorization, type ClaudeDeviceRequest } from "./claude-code/access.js";
 
 /** A main chat's request on another model than the one it started on (one model per chat). */
 const SESSION_MODEL_FIXED = "session_model_fixed";
@@ -2028,6 +2027,20 @@ export class OmniRushGatewayBroker {
   }
   revokeClaudeGrant(context: ClaudeAuthorization) { return this.claudeAccessClient().revoke(context); }
 
+  /** A chat's fixed model (one model per chat), null before its first request. */
+  chatModel(session: string): string | null { return this.sessionModels.get(session) ?? null; }
+
+  /** Pins a chat to its first model, kept on disk so a reopened chat keeps it (a Claude chat pins here too). */
+  pinChatModel(session: string, model: string): void {
+    if (this.sessionModelsFile) {
+      mkdirSync(dirname(this.sessionModelsFile), {recursive: true, mode: 0o700});
+      const tmp = `${this.sessionModelsFile}.${randomUUID()}.tmp`;
+      writeFileSync(tmp, JSON.stringify({...Object.fromEntries(this.sessionModels), [session]: model}), {mode: 0o600});
+      renameSync(tmp, this.sessionModelsFile);
+    }
+    this.sessionModels.set(session, model);
+  }
+
   nativeCaptureRequest(owner: string, route: string, init: {method: "GET" | "POST"; body?: string; signal?: AbortSignal; refresh?: false}): Promise<Response> {
     if (route !== "collect/capabilities" && !ARCHIVE_API_PATH.test(route)) return Promise.resolve(new Response(null, {status: 404}));
     return this.withDeviceBearer(async state => {
@@ -2346,14 +2359,7 @@ export class OmniRushGatewayBroker {
     let first: string | undefined;
     for (const pin of pins) if (!(await this.switchable(pin, model))) { first = pin; break; }
     if (!first && !parents.some(id => !this.sessionModels.has(id))) {
-      if (this.sessionModels.has(session)) return null;
-      if (this.sessionModelsFile) {
-        mkdirSync(dirname(this.sessionModelsFile), {recursive: true, mode: 0o700});
-        const tmp = `${this.sessionModelsFile}.${randomUUID()}.tmp`;
-        writeFileSync(tmp, JSON.stringify({...Object.fromEntries(this.sessionModels), [session]: model}), {mode: 0o600});
-        renameSync(tmp, this.sessionModelsFile);
-      }
-      this.sessionModels.set(session, model);
+      if (!this.sessionModels.has(session)) this.pinChatModel(session, model);
       return null;
     }
     this.log?.("info", "omnirush.ai chat model change refused (another provider)", { first, model });

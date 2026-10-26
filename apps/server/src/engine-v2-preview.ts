@@ -21,7 +21,7 @@ import type { EnvService } from "./env-file.js";
 import { selectPrimaryCredentialEnvName } from "./managed-provider-auth.js";
 import { isReleaseBuild } from "./release-guard.js";
 import { webSearchSetting } from "./web-search.js";
-import { buildOmniRushRuntimeConfigObject } from "./omnirush-runtime-config.js";
+import { buildOmniRushRuntimeConfigObject, omnirushTitleModel } from "./omnirush-runtime-config.js";
 import { OMNIRUSH_PROVIDER_ID } from "./provider-lock/provider-lock.mjs";
 import { CLOUD_MCP_NAME, cloudMcpEntry, desiredV2Mcp, v2McpGate } from "./engine-v2-mcp.js";
 import { runtimeMcpMap } from "./runtime-opencode-config-store.js";
@@ -319,7 +319,11 @@ export async function awaitEngineConnection<T>(
   }
 }
 
-export function createEngineV2Preview(options: { config: ServerConfig; env?: Pick<EnvService, "list" | "onChange">; deferStart?: boolean }): EngineV2Preview {
+export function createEngineV2Preview(options: {
+  config: ServerConfig; env?: Pick<EnvService, "list" | "onChange">; deferStart?: boolean;
+  /** The Claude provider's spec (omnirush-runtime-config.ts claudeEngineProvider), null while the account has no Claude catalog. */
+  claude?: () => Promise<OpencodeV2ProviderSpec | null>;
+}): EngineV2Preview {
   const { config } = options;
   const rootDir = engineV2Root(runtimeStorageDir(config));
   const workspaceDir = join(rootDir, "workspace");
@@ -455,6 +459,9 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
       credentials.set(ENGINE_TOKEN_ENV, `{env:${ENGINE_TOKEN_ENV}}`);
     }
     const mapped = mapRuntimeProvidersToV2Specs(providerMap, credentials);
+    // Claude Code under the engine: its own spec (an `aisdk:file://` package the mapping above never takes).
+    const claude = await options.claude?.().catch(() => null);
+    if (claude) mapped.specs.push(claude);
     const nextMirroredProviderIds = mapped.specs.map((spec) => spec.id);
     await active.setProviders(mapped.specs);
     mirroredSpecs = mapped.specs;
@@ -545,6 +552,7 @@ export function createEngineV2Preview(options: { config: ServerConfig; env?: Pic
       webSearch: () => webSearchSetting({ env: process.env, stateDir: runtimeStorageDir(config) }).enabled,
       // The Linux sandbox (box/): the shell and box plugin follow BoxService.engineBits on every config write.
       box: async () => v2BoxBits(await boxServiceFor(config).engineBits()),
+      titleModel: () => omnirushTitleModel(config),
       mcpGate: v2McpGate(runtimeStorageDir(config), { ...process.env, ...computerUseEngineEnv(runtimeStorageDir(config)) }, Boolean(await cloudConnector())),
     });
     sidecar = managed;

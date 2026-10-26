@@ -40,7 +40,7 @@ afterEach(async () => {
 
 describe("provider lock: fails closed", () => {
   test("locked at start, and for every answer that is not a clear `locked: false`", () => {
-    expect(currentProviderLockPolicy()).toMatchObject({ locked: true, allow: ["omnirush"] });
+    expect(currentProviderLockPolicy()).toMatchObject({ locked: true, allow: ["omnirush", "omnirush-claude"] });
     for (const answer of [null, undefined, {}, { schema_versions: [1, 2] }, { providers: null }, { providers: { locked: "false" } }, { providers: { locked: 0 } }, { providers: [] }]) {
       applyProviderLockAnswer(answer);
       expect(currentProviderLockPolicy().locked).toBe(true);
@@ -55,9 +55,10 @@ describe("provider lock: fails closed", () => {
     expect(currentProviderLockPolicy().locked).toBe(true);
   });
 
-  test("the server's message is taken; only omnirush counts as allowed, whatever the list says", () => {
+  test("the server's message is taken; only the app's providers count as allowed, whatever the list says", () => {
     applyProviderLockAnswer({ providers: { locked: true, allow: ["acme", "openai", "BAD ID", 7], message: "Ask your admin." } });
-    expect(currentProviderLockPolicy()).toMatchObject({ locked: true, allow: ["omnirush"], message: "Ask your admin." });
+    expect(currentProviderLockPolicy()).toMatchObject({ locked: true, allow: ["omnirush", "omnirush-claude"], message: "Ask your admin." });
+    expect(providerAllowed("omnirush-claude")).toBe(true);
     expect(providerAllowed("acme")).toBe(false);
     expect(providerAllowed("openai")).toBe(false);
     expect(providerAllowed("omnirush")).toBe(true);
@@ -174,7 +175,7 @@ describe("provider lock: engine environment", () => {
       HOME: "/h",
       OPENCODE_CONFIG_DIR: "/app/dir",
       OMNIRUSH_PROVIDER_LOCK: "1",
-      OMNIRUSH_PROVIDER_ALLOW: "omnirush",
+      OMNIRUSH_PROVIDER_ALLOW: "omnirush,omnirush-claude",
       OMNIRUSH_PROVIDER_LOCK_MESSAGE: "Only OmniRush models are available.",
       OPENCODE_DISABLE_MODELS_FETCH: "1",
     });
@@ -215,7 +216,7 @@ describe("provider lock: engine environment", () => {
         const dumped = JSON.parse(await readFile(dumpPath, "utf8"));
         expect(dumped).toMatchObject({
           OMNIRUSH_PROVIDER_LOCK: "1",
-          OMNIRUSH_PROVIDER_ALLOW: "omnirush",
+          OMNIRUSH_PROVIDER_ALLOW: "omnirush,omnirush-claude",
           OPENCODE_DISABLE_MODELS_FETCH: "1",
           OPENCODE_MODELS_URL: null,
           OPENCODE_CONFIG_CONTENT: null,

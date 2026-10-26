@@ -43,13 +43,14 @@ test("a 1.x store seeds the 2.x store once, keeps a backup and stays untouched",
 
 test("the session plugin names the chat on gateway requests and blanks secrets in shells", async () => {
   const hooks: Record<string, (event: never) => Promise<void> | void> = {};
+  const modelHooks: { providerID?: string; callback: (event: never) => Promise<void> }[] = [];
   process.env.OMNIRUSH_USER_XDG_DATA_HOME = "/home/me/.data";
   process.env.OMNIRUSH_USER_XDG_STATE_HOME = "";
   try {
     await sessionPlugin.setup({
       session: {
-        get: async ({ sessionID }) => ({ id: sessionID, parentID: sessionID === "ses_child" ? "ses_parent" : undefined, model: { id: "gpt-6-astra" } }),
-        hook: async (name, callback) => { hooks[name] = callback as never; },
+        get: async ({ sessionID }) => ({ id: sessionID, parentID: sessionID === "ses_child" ? "ses_parent" : undefined, model: sessionID === "ses_claude" ? { id: "claude-opus-5-5", providerID: "omnirush-claude" } : { id: "gpt-6-astra" }, location: { directory: "/p" } }),
+        hook: async (name, callback, options) => { modelHooks.push({ providerID: options?.providerID, callback: callback as never }); },
       },
       shell: { hook: async (name, callback) => { hooks[name] = callback as never; } },
     });
@@ -57,14 +58,19 @@ test("the session plugin names the chat on gateway requests and blanks secrets i
     delete process.env.OMNIRUSH_USER_XDG_DATA_HOME;
     delete process.env.OMNIRUSH_USER_XDG_STATE_HOME;
   }
-  const request = (sessionID: string, kind: string, providerID = "omnirush") => {
-    const event = { sessionID, kind, model: { id: "cheap", providerID }, headers: {} as Record<string, string> };
-    return (hooks["model.request"] as (e: typeof event) => Promise<void>)(event).then(() => event.headers);
+  const request = async (sessionID: string, kind: string, providerID = "omnirush", agent?: string) => {
+    const event = { sessionID, kind, agent, model: { id: "cheap", providerID }, headers: {} as Record<string, string> };
+    for (const hook of modelHooks) if (!hook.providerID || hook.providerID === providerID) await (hook.callback as (e: typeof event) => Promise<void>)(event);
+    return event.headers;
   };
   expect(await request("ses_main", "primary")).toEqual({ "x-omnirush-session-id": "ses_main" });
   expect(await request("ses_child", "primary")).toEqual({ "x-omnirush-session-id": "ses_child", "x-parent-session-id": "ses_parent" });
   expect(await request("ses_main", "title")).toEqual({ "x-omnirush-session-id": "ses_main", "x-omnirush-title": "1", "x-omnirush-chat-model": "gpt-6-astra" });
   expect(await request("ses_main", "primary", "openai")).toEqual({});
+  // A Claude chat: its turns name its folder and agent; its title (on the gateway's title model) names no chat.
+  expect(await request("ses_claude", "primary", "omnirush-claude", "build")).toEqual({ "x-omnirush-agent": "build", "x-omnirush-directory": "/p" });
+  expect(await request("ses_claude", "compaction", "omnirush-claude", "build")).toMatchObject({ "x-omnirush-agent": "compaction" });
+  expect(await request("ses_claude", "title")).toEqual({});
   const env: Record<string, string | undefined> = { OPENCODE_PASSWORD: "pw", OMNIRUSH_POLICY_TOKEN: "t", XDG_DATA_HOME: "/engine/data", XDG_STATE_HOME: "/engine/state", PATH: "/bin" };
   await (hooks["create.before"] as (e: { env: typeof env }) => void)({ env });
   expect(env).toMatchObject({ OPENCODE_PASSWORD: "", OMNIRUSH_POLICY_TOKEN: "", XDG_DATA_HOME: "/home/me/.data", XDG_STATE_HOME: undefined, PATH: "/bin" });

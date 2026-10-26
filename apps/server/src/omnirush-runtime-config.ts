@@ -17,6 +17,7 @@ import { managedPolicyPluginPath } from "./managed-policy-plugin.js";
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { mergeSkillPaths, userGlobalSkillPaths } from "./user-skill-paths.js";
 import {
   omnirushExtensionsPreviewPluginPath,
@@ -35,6 +36,7 @@ import {
   omnirushPdfAttachmentsPluginPath,
   omnirushPluginPath,
   omnirushAgentAssistPluginPath,
+  omnirushClaudeProviderPath,
 } from "./omnirush-extensions-plugin-path.js";
 import { agentAssistFlags, agentAssistLspConfig, writeAgentAssistFile } from "./agent-assist-config.js";
 import type { ServerConfig } from "./types.js";
@@ -133,6 +135,30 @@ function internalGatewayProvider(runtime: InternalGatewayRuntime, catalog: OmniR
     // never do, so a catalog cannot route the engine past the local broker.
     models: engineModelsFromCatalog(catalog, webSearch),
   };
+}
+
+/**
+ * The Claude provider of the 2.x engine (opencode-plugins/claude-provider, the CLI's assets/claude-provider):
+ * Claude's catalog models, each turn real Claude Code in the project's box, its events the engine's parts.
+ * `entries`: the account's Claude catalog (every entry: picking one the account may not run explains);
+ * `settings`: the provider's options (grantURL, grantKey, shell, boxHome, client, note). Null without entries.
+ */
+export function claudeEngineProvider(entries: { id: string; name: string }[], settings: Record<string, unknown>) {
+  if (!entries.length) return null;
+  return {
+    id: "omnirush-claude",
+    name: "Claude",
+    package: `aisdk:${pathToFileURL(omnirushClaudeProviderPath()).href}`,
+    // Long Claude Code turns: no request timeout (the provider streams until Claude Code ends).
+    settings: { ...settings, timeout: false },
+    apiKey: "unused",
+    models: entries.map((entry) => ({ id: entry.id, name: entry.name, config: { family: "Claude", tool_call: true, limit: { context: 200_000, output: 64_000 }, modalities: { input: ["text", "image"], output: ["text"] } } })),
+  };
+}
+
+/** The title agent's model while Claude is listed: the gateway's default ("omnirush/<id>"). */
+export async function omnirushTitleModel(config: ServerConfig): Promise<string> {
+  return `${INTERNAL_PROVIDER_ID}/${omnirushDefaultModelId(await readOmniRushModelCatalog(config))}`;
 }
 
 export async function buildOmniRushRuntimeConfigObject(

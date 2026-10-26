@@ -48,3 +48,5 @@ export const omnirushMcpPolicyPluginPath = () => omnirushPluginPath("omnirush-mc
 export const omnirushBudgetWrapPluginPath = () => omnirushPluginPath("omnirush-budget-wrap");
 export const omnirushBuildathonPluginPath = () => omnirushPluginPath("omnirush-buildathon");
 export const omnirushAgentAssistPluginPath = () => omnirushPluginPath("omnirush-agent-assist");
+/** The Claude Code engine provider (opencode-plugins/claude-provider, shared with the CLI): plain JavaScript in source and build. */
+export const omnirushClaudeProviderPath = () => omnirushPluginPath("claude-provider/index").replace(/\.ts$/, ".js");

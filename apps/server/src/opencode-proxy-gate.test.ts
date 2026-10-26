@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   assertOpencodeProxyAllowed,
+  engineChatProvider,
   engineHasSession,
   normalizeOpencodeDirectory,
   proxyOpencodeRequest,
@@ -188,4 +189,28 @@ describe("engineHasSession", () => {
       engine.stop(true);
     }
   }, 15_000);
+});
+
+describe("engineChatProvider", () => {
+  test("the 2.x chat's provider from its engine session; null when unreadable", async () => {
+    const engine = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/session/ses_claude") return Response.json({ data: { id: "ses_claude", model: { id: "claude-opus-5-5", providerID: "omnirush-claude" } } });
+        if (url.pathname === "/api/session/ses_astra") return Response.json({ data: { id: "ses_astra", model: { id: "gpt-6-astra", providerID: "omnirush" } } });
+        return Response.json({ name: "NotFoundError" }, { status: 404 });
+      },
+    });
+    try {
+      const target = { baseUrl: `http://127.0.0.1:${engine.port}`, headers: [], search: "", engine: "v2" as const };
+      expect(await engineChatProvider(target, "ses_claude")).toBe("omnirush-claude");
+      expect(await engineChatProvider(target, "ses_astra")).toBe("omnirush");
+      expect(await engineChatProvider(target, "ses_gone")).toBeNull();
+      expect(await engineChatProvider({ ...target, baseUrl: "http://127.0.0.1:1" }, "ses_claude")).toBeNull();
+    } finally {
+      engine.stop(true);
+    }
+  });
 });

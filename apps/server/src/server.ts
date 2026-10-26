@@ -1,5 +1,5 @@
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { managedDesktopPolicy } from "./managed-desktop-policy.js";
-import { uploadClaudeSession } from "./claude-code/transfer.js";
 import { ArchiveUploader } from "./session-archive/upload.js";
 import { SealStream } from "./session-archive/seal.js";
 import { tarMemberHeader } from "./session-archive/pack.js";
@@ -206,7 +206,7 @@ import {
   watchProviderLock,
 } from "./provider-lock.js";
 import { normalizeBackend } from "./box/backends/index.js";
-import { buildOmniRushRuntimeConfigObject, omnirushGatewayConfigured, omnirushRuntimeConfigFilePath, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
+import { buildOmniRushRuntimeConfigObject, claudeEngineProvider, omnirushGatewayConfigured, omnirushRuntimeConfigFilePath, writeOmniRushRuntimeConfigFile } from "./omnirush-runtime-config.js";
 import { assertMcpAllowed, mcpAllowed, mcpDisabledMessage, mcpPolicyForConfig, refuseAccountLinkedMcp } from "./mcp-policy.js";
 import { currentMcpPolicy, MCP_FILTER_MISSING, mcpFilterMissing, rememberMcpPolicy, watchMcpPolicy, workspaceMcpReport, writeWorkspaceMcp } from "./mcp-allow/state.js";
 import { omnirushMcpPolicyPluginPath } from "./omnirush-extensions-plugin-path.js";
@@ -258,8 +258,8 @@ import { GOOD_SESSION_ID_PATTERN, readGoodSession } from "./omnirush-good-sessio
 import { PROJECT_ARCHIVE_BASE_IDLE_MS, PROJECT_ARCHIVE_BASE_MAX_DEFER_MS, projectArchiveSettings } from "./project-archive.js";
 import type { ArchiveApiRequestInit } from "./session-archive/upload.js";
 import { runtimeStorageDir } from "./runtime-db.js";
-import { ClaudeRuntime } from "./claude-code/runtime.js";
-import { registerClaudeRoutes } from "./claude-code/routes.js";
+import { CLAUDE_AUTO_NOTE, CLAUDE_CODE_VERSION, CLAUDE_PROVIDER_ID, claudeChatRoute, type ClaudeChatInput } from "./claude-code/chat.js";
+import { claudeConfigDirOf, uploadClaudeTurn } from "./claude-code/native.js";
 import { prepareDesktopInstallLog } from "./install-log-host.js";
 import pkg from "../package.json" with { type: "json" };
 import constants from "../../../constants.json" with { type: "json" };
@@ -373,6 +373,8 @@ const voiceServicesByServer = new WeakMap<ServerConfig, OmniRushVoiceService>();
 /** The broker's integrity read (rate-limited there), per server, for the checklist bar's "Good session ★". */
 const sessionIntegrityByServer = new WeakMap<ServerConfig, OmniRushGatewayBroker["sessionIntegrity"]>();
 const modelSwitchRefusalsByServer = new WeakMap<ServerConfig, OmniRushGatewayBroker["modelSwitchRefusal"]>();
+/** Each server's Claude turn route (claude-code/chat.ts) and the key its engine's Claude provider sends. */
+const claudeTurnsByServer = new WeakMap<ServerConfig, { key: string; handle: ReturnType<typeof claudeChatRoute> }>();
 
 /** Recent gateway fallbacks per sub-agent session, for the swarm plugin's task-result note. */
 const subagentGatewayFallbacks = new WeakMap<ServerConfig, Map<string, Array<Record<string, unknown>>>>();
@@ -1210,6 +1212,22 @@ export async function engineHasSession(baseUrl: string, auth: string | null, dir
   }
 }
 
+/** The provider a 2.x chat runs on (its engine session's model), or null when unreadable. */
+export async function engineChatProvider(engine: EngineTarget, sessionId: string): Promise<string | null> {
+  try {
+    const response = await loopbackFetch(buildOpencodeProxyUrl(engine.baseUrl, `/api/session/${encodeURIComponent(sessionId)}`, engine.search), { headers: new Headers(engine.headers), signal: AbortSignal.timeout(ENGINE_SESSION_CHECK_TIMEOUT_MS) });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const body: unknown = await response.json();
+    const model = isRecord(body) && isRecord(body.data) && isRecord(body.data.model) ? body.data.model : null;
+    return typeof model?.providerID === "string" ? model.providerID : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The message a chat's undo currently rewinds to (its revert point), or null: read before an undo or redo. */
 async function engineRevertPoint(baseUrl: string, auth: string | null, directory: string | null, sessionId: string): Promise<string | null> {
   const headers = new Headers();
@@ -1594,7 +1612,50 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     // persisted policy at startup; there is no running workspace to reload.
     if (config.workspaces.length > 0) cloudProviderSync.markReloadPending();
   };
-  const engineV2Preview = createEngineV2Preview({ config, env, deferStart: true });
+  // Claude chats (claude-code/chat.ts): the engine's Claude provider asks /omnirush-claude/turn, with this key, for each turn.
+  const claudeKey = randomBytes(24).toString("base64url");
+  const claudeTurn = claudeChatRoute({
+    access: () => gatewayBroker.claudeAccess(),
+    authorize: (context) => gatewayBroker.claudeGrant(context),
+    pin: (sessionId) => gatewayBroker.chatModel(sessionId),
+    setPin: (sessionId, model) => gatewayBroker.pinChatModel(sessionId, model),
+    onClaudeChat: ({ sessionID }) => captureServicesByServer.get(config)?.markClaude(sessionID, CLAUDE_CODE_VERSION),
+    // The turn's native transcript, unchanged, as `claude/` members of the chat's claude_native archive (only a chat whose uploads are on).
+    onTurnEnd: async ({ sessionID, uuid, grant }) => {
+      const capture = captureServicesByServer.get(config);
+      const bits = boxServiceFor(config).claudeBits();
+      const configDir = grant && uuid && bits ? claudeConfigDirOf(bits.home, uuid) : null;
+      if (!grant || !configDir || !capture?.uploadEnabled || !capture.hasSession(sessionID)) return;
+      const uploader = new ArchiveUploader({ fetch: externalFetch, request: (route, init) => gatewayBroker.nativeCaptureRequest(grant.owner, route, init) });
+      const receipt = await uploadClaudeTurn({
+        // The archive names the bare Claude Code version (the collector refuses "claude-code/<v>" there).
+        grant, uuid, configDir, stateDir: runtimeStorageDir(config), engineVersion: CLAUDE_CODE_VERSION,
+        request: (route, init) => gatewayBroker.nativeCaptureRequest(grant.owner, route, init),
+        driver: { fetchKey: (signal) => uploader.fetchKey(signal), upload: (job, persist, signal) => uploader.upload(job, persist, signal), sealer: (options) => new SealStream(options), tarHeader: tarMemberHeader },
+      }).catch((error: unknown) => ({ status: "failed", reason: error instanceof Error ? error.message : String(error) }));
+      logger.log("info", "claude: native transcript upload", { status: receipt.status, native: "native" in receipt ? receipt.native.status : null, code: "native" in receipt ? receipt.native.code ?? null : "reason" in receipt ? receipt.reason : null });
+    },
+    log: (level, message, attributes) => logger.log(level, message, attributes),
+  });
+  claudeTurnsByServer.set(config, { key: claudeKey, handle: claudeTurn });
+  // The Claude models the engine was last given: the status route mirrors again when the account's catalog differs (a sign-in after start).
+  let mirroredClaude: string | null = null;
+  const engineV2Preview = createEngineV2Preview({
+    config, env, deferStart: true,
+    claude: async () => {
+      const bits = boxServiceFor(config).claudeBits();
+      const access = await gatewayBroker.claudeAccess().catch((error: unknown) => {
+        logger.log("info", "claude: no catalog for the engine yet", { error: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
+        throw error;
+      });
+      mirroredClaude = (access.catalog ?? []).map((entry) => entry.id).join(",");
+      return claudeEngineProvider(access.catalog ?? [], {
+        grantURL: `http://127.0.0.1:${config.port}/omnirush-claude/turn`, grantKey: claudeKey,
+        ...(bits ? { shell: bits.shell, boxHome: bits.home } : {}),
+        client: `gui/${config.appVersion?.trim() || SERVER_VERSION}`, note: CLAUDE_AUTO_NOTE,
+      });
+    },
+  });
   engineV2Refreshers.set(config, () => engineV2Preview.refreshProviders());
   engineV2ByServer.set(config, engineV2Preview);
   /** A chat on the 2.x engine, read where it lives (its folder), or null. */
@@ -1642,26 +1703,14 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     bestPracticesReloads,
   );
 
-  // Claude Code drives docker itself: the box backend's Docker engine when it is one, else `docker` on PATH.
-  let claudeDocker: string | undefined;
-  const claudeRuntime = new ClaudeRuntime({
-    get docker() { return claudeDocker; },
-    directory: join(runtimeStorageDir(config), "claude-sessions"), surface: "gui", fetch: externalFetch,
-    access: () => gatewayBroker.claudeAccess(),
-    authorize: context => gatewayBroker.claudeGrant(context),
-    revoke: context => gatewayBroker.revokeClaudeGrant(context),
-  });
-  registerClaudeRoutes({routes, runtime: claudeRuntime,
-    workspace: async ctx => {
-      claudeDocker = (await boxServiceFor(config).dockerCli().catch(() => null)) ?? undefined;
-      return resolveWorkspaceWithoutBootstrap(config, ctx.params.id);
-    },
-    owner: ctx => requireClientScope(ctx, "owner"),
-    writable: () => ensureWritable(config),
-    upload: id => uploadClaudeSession(claudeRuntime, id, (owner, route, init) => gatewayBroker.nativeCaptureRequest(owner, route, init), owner => {
-      const uploader = new ArchiveUploader({fetch: externalFetch, request: (route, init) => gatewayBroker.nativeCaptureRequest(owner, route, init)});
-      return {fetchKey: signal => uploader.fetchKey(signal), upload: (job, persist, signal) => uploader.upload(job, persist, signal), sealer: options => new SealStream(options), tarHeader: tarMemberHeader};
-    }),
+  // The picker's Claude entries (claude-models.ts): the account's Claude catalog and the ids it may run.
+  addRoute(routes, "GET", "/workspace/:id/claude/status", "client", async (ctx) => {
+    requireClientScope(ctx, "owner");
+    const access = await gatewayBroker.claudeAccess().catch(() => null);
+    if (access && (access.catalog ?? []).map((entry) => entry.id).join(",") !== mirroredClaude) void engineV2Preview.refreshProviders().catch(() => undefined);
+    const response = jsonResponse({ allowed: Boolean(access?.models?.length), catalog: access?.catalog ?? [], models: access?.models ?? [], reason: access ? access.reason ?? null : "unavailable" });
+    response.headers.set("cache-control", "no-store");
+    return response;
   });
 
   const serverOptions: {
@@ -1805,6 +1854,20 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
         return finalize(new Response(null, { status: 204 }));
       }
 
+      // The engine's Claude provider (claude-code/chat.ts): its key, never a client token.
+      if (url.pathname === "/omnirush-claude/turn") {
+        authMode = "client";
+        const turn = claudeTurnsByServer.get(config);
+        const key = Buffer.from(request.headers.get("x-omnirush-usage-key") ?? "");
+        if (!turn || request.method !== "POST" || key.length !== Buffer.byteLength(turn.key) || !timingSafeEqual(key, Buffer.from(turn.key))) {
+          return finalize(jsonResponse({ ok: false, message: "forbidden" }, 403));
+        }
+        const input = await request.json().catch(() => null) as ClaudeChatInput | null;
+        const answer = input ? await turn.handle(input).catch((error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) })) : { ok: false, message: "bad request" };
+        const response = jsonResponse(answer);
+        response.headers.set("cache-control", "no-store");
+        return finalize(response);
+      }
       const gatewayMount = url.pathname.match(/^\/omnirush-gateway\/v1\/(.+)$/);
       if (gatewayMount?.[1]) {
         authMode = "client";
@@ -2067,7 +2130,6 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   return {
     ...server,
     stop: async () => {
-      const claudeStopped = claudeRuntime.shutdown();
       // First, and synchronously: a stop is also how a user sign-out reaches
       // this server (the desktop clears the account, then restarts it), so
       // archive part uploads in flight are aborted before anything else runs.
@@ -2075,7 +2137,6 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       // is still stored (an app quit, a restart), never after a sign-out.
       // Before them, each chat in a box gets its last checkpoint (bounded; only when chats ran in a
       // box this run, and the account answers it is still stored within a second).
-      await claudeStopped;
       stopBoxDefaultWatch();
       stopWebSearchWatch();
       stopMcpPolicyWatch();
@@ -2362,6 +2423,8 @@ export async function proxyOpencodeV2Request(input: {
   if (capture && uploadedSessionId && engine && !steer) {
     capture.boxSession(uploadedSessionId, boxInfo);
     capture.permissionMode(await capturePermissionMode(input.config));
+    // A Claude chat's uploads name Claude Code from its first one, also after a restart (its grant comes later). CLI: beforePromptDispatch.
+    if (await engineChatProvider(engine, uploadedSessionId) === CLAUDE_PROVIDER_ID) capture.markClaude(uploadedSessionId, CLAUDE_CODE_VERSION);
     capture.startSession(uploadedSessionId, input.workspace.id, input.workspace.path, turnsBefore);
     // The turn before's background processes finish writing (at most 10 s after it ended), its project
     // delta is taken (at most 5 s more, only when it ended a moment ago), then capture v2's session-start

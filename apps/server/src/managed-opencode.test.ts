@@ -63,7 +63,7 @@ describe("managed OpenCode startup", () => {
     ]);
     const managed = await createManagedOpencodeV2Server({ bin, rootDir: root, env: {} });
     try {
-      expect(await managed.fetchJson("/env")).toEqual({ status: 200, json: { a: null, b: null, gate: "omnirush" } });
+      expect(await managed.fetchJson("/env")).toEqual({ status: 200, json: { a: null, b: null, gate: "omnirush,omnirush-claude" } });
     } finally { await managed.close(); }
   });
 

@@ -2552,6 +2552,51 @@ describe("session uploader trace additions", () => {
     await second.stop();
   });
 
+  test("a Claude chat names Claude Code from its first upload, and after a restart before its next grant", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omnirush-upload-claude-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "omnirush-upload-claude-state-"));
+    roots.push(root, stateDir);
+    await writeFile(join(root, "app.txt"), "hello\n");
+    const { uploads, upload } = makeUploads();
+    const makeUploader = () => new SessionUploader({ stateDir, upload, fallbackScanMs: 60_000 });
+    const sessionId = "session-claude-identity-1";
+    const identity = (item: Envelope) => [item.environment.engine_version, (item.environment.harness as { name?: string }).name];
+
+    // The prompt path marks the chat before its start (server.ts engineChatProvider): no grant yet.
+    const first = makeUploader();
+    first.markClaude(sessionId, "2.1.306");
+    first.startSession(sessionId, "workspace-claude", root);
+    await first.idle(sessionId);
+    first.recordSessionModel(sessionId, { provider_id: "omnirush-claude", model_id: "claude-opus-5-5", variant: null, agent: "build" });
+    first.flushTrace(sessionId);
+    await first.idle(sessionId);
+    await first.stop();
+    expect(uploads.map(identity)).toEqual(uploads.map(() => ["claude-code/2.1.306", "claude-code"]));
+
+    // Reopened in a new process, nothing marked: the stored model still names Claude Code.
+    const before = uploads.length;
+    const second = makeUploader();
+    second.startSession(sessionId, "workspace-claude", root);
+    await second.idle(sessionId);
+    await second.stop();
+    expect(uploads.length).toBeGreaterThan(before);
+    expect(uploads.slice(before).map(identity)).toEqual(uploads.slice(before).map(() => ["claude-code/2.1.306", "claude-code"]));
+
+    // A recovered chat's state is its own (not among the open sessions): its model is passed in.
+    const recovered = makeUploader();
+    const environment = await (recovered as unknown as { sessionEnvironment(root: string, id: string, waitMs?: number, model?: unknown): Promise<{ engine_version: string }> })
+      .sessionEnvironment(root, "session-claude-recovered-1", 0, { provider_id: "omnirush-claude", model_id: "claude-opus-5-5", variant: null, agent: null });
+    expect(environment.engine_version).toBe("claude-code/2.1.306");
+    await recovered.stop();
+
+    // Any other chat keeps the engine's identity.
+    const other = makeUploader();
+    other.startSession("session-astra-identity-1", "workspace-claude", root);
+    await other.idle("session-astra-identity-1");
+    await other.stop();
+    expect(identity(uploads.at(-1)!)[0]).not.toContain("claude-code");
+  });
+
   test("child ids noted while the turn runs are listed at once, deduped, and kept across a restart without a transcript event", async () => {
     const root = await mkdtemp(join(tmpdir(), "omnirush-upload-child-ids-"));
     const stateDir = await mkdtemp(join(tmpdir(), "omnirush-upload-child-ids-state-"));

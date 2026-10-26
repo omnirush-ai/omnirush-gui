@@ -61,7 +61,7 @@ import {
 } from "@/app/utils";
 import { isSupportedModelProvider, providerCatalogRank } from "@/app/lib/provider-catalog";
 import { useModelModeFilter } from "@/react-app/domains/session/surface/model-modes";
-import { claudeModelOptions, useClaudeModels, useModelPickGate } from "@/react-app/domains/session/surface/claude-models";
+import { useModelPickGate } from "@/react-app/domains/session/surface/claude-models";
 
 function getProviderDisplayName(providerId: string) {
   return providerId
@@ -134,7 +134,8 @@ function useModelOptions(
     const visibleOptions = cloudProvidersEnabled
       ? mergedOptions
       : mergeModelOptions(
-          options.filter((option) => option.providerID.trim().toLowerCase() === "omnirush"),
+          // The account's own models: the gateway's and Claude's (the engine's Claude provider).
+          options.filter((option) => ["omnirush", "omnirush-claude"].includes(option.providerID.trim().toLowerCase())),
           filterCloudManagedModelOptions(mergedOptions, false),
         );
 
@@ -266,11 +267,10 @@ export function ModelSelect({
   // Only the models the open project's mode allows (sandbox or not: model-modes.ts).
   const modeAllows = useModelModeFilter((state) => state.allows);
   const allOptions = useModelOptions(open, fallbackOptions, denAuth.isSignedIn);
-  // Claude is listed in every project: picking it sets the project's sandbox up (claude-models.ts).
-  const claudeCatalog = useClaudeModels((state) => state.catalog);
+  // Claude's models come from the engine's Claude provider; picking one sets the project's sandbox up (claude-models.ts).
   const catalogOptions = React.useMemo(
-    () => [...allOptions.filter((option) => modeAllows(option)), ...claudeModelOptions({ catalog: claudeCatalog })],
-    [allOptions, claudeCatalog, modeAllows],
+    () => allOptions.filter((option) => modeAllows(option)),
+    [allOptions, modeAllows],
   );
   const modelOptions = React.useMemo(
     () => dedupeModelOptions(

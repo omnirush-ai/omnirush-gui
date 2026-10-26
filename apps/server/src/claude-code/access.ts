@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto";
-import type { ClaudeAccess, ClaudeAuthorization, ClaudeBudgetSnapshot, ClaudeGrant } from "./runtime.js";
-import { CLAUDE_MODEL_ID } from "./sandbox-assets.js";
-import { SDK_INSTALL_PIN } from "./sandbox-lock.js";
+
+export const CLAUDE_MODEL_ID = /^claude-[a-z0-9][a-z0-9.-]{0,62}$/;
+export type ClaudeBudgetSnapshot = {
+  status: "known" | "unknown"; model: string; revision?: string;
+  asOf?: string; limitTokens?: number | null; remainingTokens?: number | null; resetAt?: string | null;
+  sessionLimitTokens?: number | null; sessionUsedTokens?: number; sessionRemainingTokens?: number | null;
+  accountLimitTokens?: number; accountRemainingTokens?: number; accountScope?: "day" | "week"; accountResetAt?: string;
+};
+export type ClaudeAccess = { owner: string; capabilities?: string[]; budget?: ClaudeBudgetSnapshot; models?: string[]; catalog?: {id: string; name: string}[]; reason?: string | null };
+export type ClaudeAuthorization = { sessionId: string; owner: string; model: string; workspaceId: string; contractSha256: string; refresh?: boolean };
+export type ClaudeGrant = {
+  owner: string; baseUrl: string; token: string; sessionId: string; model: string;
+  upstreamModel: string; client: string; bindingId: string; contractSha256: string; budget: ClaudeBudgetSnapshot;
+};
 
 export type ClaudeDeviceRequest = (route: string, init?: { method: "POST"; body: string }, owner?: string) => Promise<Response>;
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -98,12 +109,10 @@ export class ClaudeDeviceAccess {
           catalog = claudeCatalog(code.catalog);
           const access = record(code.access) ? code.access : {};
           reason = typeof access.reason === "string" ? access.reason : code.enabled === true ? null : "not_allowed";
-          // The runtime supports this exact SDK/Code pair. An enabled relay
-          // with an empty model list is not permission to run it.
-          const pinned = record(code.sdk) && code.sdk.package === SDK_INSTALL_PIN.package && code.sdk.version === SDK_INSTALL_PIN.version
-            && code.sdk.integrity === SDK_INSTALL_PIN.integrity;
-          if (code.enabled === true && pinned && Array.isArray(code.models)) models = [...new Set(code.models.filter((model): model is string => typeof model === "string" && CLAUDE_MODEL_ID.test(model)))];
-          if (code.enabled === true && !models.length) reason = pinned ? "no_models" : "client_outdated";
+          // Claude Code is the provider's own pinned build (assets/claude-provider); the relay checks the client's
+          // version. An enabled relay with an empty model list is not permission to run it.
+          if (code.enabled === true && Array.isArray(code.models)) models = [...new Set(code.models.filter((model): model is string => typeof model === "string" && CLAUDE_MODEL_ID.test(model)))];
+          if (code.enabled === true && !models.length) reason = "no_models";
         }
       } catch { /* Failed eligibility checks deny new sessions, but never hide saved evidence. */ }
       this.capability = {owner: account.id, expiresAt: Date.now() + 30_000, models, catalog, reason: models.length ? null : reason};

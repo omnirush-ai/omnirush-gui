@@ -1196,7 +1196,6 @@ export type DesktopCommandMap = {
   __fetch: { args: [url: string, init?: DesktopFetchInit]; result: DesktopFetchResult };
   __uploadMultipart: { args: [input: DesktopMultipartUploadInput]; result: DesktopFetchResult };
   __downloadBinary: { args: [input: DesktopBinaryDownloadInput]; result: DesktopBinaryDownloadResult };
-  __downloadClaudeArchive: { args: [input: {transferId: string; url: string; headers?: Record<string, string>}]; result: DesktopBinaryDownloadResult | null };
   __cancelTransfer: { args: [transferId: string]; result: boolean };
   __homeDir: { args: []; result: string };
   __joinPath: { args: [...segments: string[]]; result: string };

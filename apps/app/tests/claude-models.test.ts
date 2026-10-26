@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  claudeModelOptions,
   claudeSandboxStep,
   decideModelPick,
   isClaudeModel,
@@ -14,29 +13,19 @@ import { switchableModel } from "../src/react-app/domains/session/surface/model-
 import { switchableModels as sharedSwitchable } from "../../server/src/model-modes/strict-sessions.mjs";
 import { builtinOmniRushModelCatalog } from "../../server/src/omnirush-model-catalog";
 
-const opus = { providerID: "omnirush", modelID: "claude-opus-5-5" };
-const sonnet = { providerID: "omnirush", modelID: "claude-sonnet-5-5" };
+const opus = { providerID: "omnirush-claude", modelID: "claude-opus-5-5" };
+const sonnet = { providerID: "omnirush-claude", modelID: "claude-sonnet-5-5" };
 const astra = { providerID: "omnirush", modelID: "gpt-6-astra" };
 const sol = { providerID: "omnirush", modelID: "gpt-6.1-sol" };
 const catalog = [{ id: opus.modelID, name: "Claude Opus 5.5" }, { id: sonnet.modelID, name: "Claude Sonnet 5.5" }];
 const allowed: ClaudeModelsState = { workspaceId: "w", catalog, models: [opus.modelID, sonnet.modelID], reason: null };
 const denied: ClaudeModelsState = { workspaceId: "w", catalog, models: [], reason: "not_allowed" };
 
-describe("picker entries", () => {
-  test("every catalog model is listed, allowed or not, under Claude", () => {
-    for (const state of [allowed, denied]) {
-      const options = claudeModelOptions(state);
-      expect(options.map((option) => [option.providerID, option.modelID, option.title, option.group])).toEqual([
-        ["omnirush", "claude-opus-5-5", "Claude Opus 5.5", "Claude"],
-        ["omnirush", "claude-sonnet-5-5", "Claude Sonnet 5.5", "Claude"],
-      ]);
-    }
-    expect(claudeModelOptions({ catalog: [] })).toEqual([]);
-  });
-
-  test("only omnirush Claude ids are Claude models", () => {
+describe("Claude models", () => {
+  test("only the engine's Claude provider's models are Claude models", () => {
     expect(isClaudeModel(opus)).toBe(true);
     expect(isClaudeModel(astra)).toBe(false);
+    expect(isClaudeModel({ providerID: "omnirush", modelID: "claude-opus-5-5" })).toBe(false);
     expect(isClaudeModel({ providerID: "anthropic", modelID: "claude-opus-5-5" })).toBe(false);
   });
 
@@ -48,7 +37,7 @@ describe("picker entries", () => {
 });
 
 describe("popup decision", () => {
-  test("a fresh chat just switches, or opens Claude", () => {
+  test("a fresh chat just switches (Claude once its sandbox is set up)", () => {
     expect(decideModelPick({ next: sol, current: astra, started: false, claude: allowed })).toEqual({ kind: "switch" });
     expect(decideModelPick({ next: sonnet, current: astra, started: false, claude: allowed })).toEqual({ kind: "claude" });
     expect(decideModelPick({ next: opus, current: null, started: false, claude: allowed })).toEqual({ kind: "claude" });

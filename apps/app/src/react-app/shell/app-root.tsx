@@ -46,7 +46,6 @@ import {
 } from "./control/control-provider";
 import { OmniRushContextPublisher } from "./omnirush-context-publisher";
 import { SessionRoute } from "./session-route";
-import { ClaudeRoute } from "./claude-route";
 import { DesktopUpdaterProvider } from "../domains/settings/state/desktop-updater-provider";
 import { SyncRestartGate } from "./sync-restart-banner";
 import { UpdateGate } from "./update-gate";
@@ -408,7 +407,6 @@ export function AppRoot() {
                 <CloudWorkspaceStatusProvider>
                   <ComputerUseControls />
                   <Routes>
-              <Route path="/workspace/:workspaceId/claude" element={<ClaudeRoute />} />
               <Route
                 path="/signin"
                 element={

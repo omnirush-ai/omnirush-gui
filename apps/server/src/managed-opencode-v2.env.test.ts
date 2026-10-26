@@ -29,7 +29,7 @@ posix("the v2 engine gets its own empty config home, not the user's global openc
     expect(env).toMatch(/^OMNIRUSH_USER_XDG_CONFIG_HOME=.*user-config$/m);
     // Project config stays on (engine patch 0003 keeps only its descriptive keys); the gates are on.
     expect(env).not.toMatch(/^OPENCODE_DISABLE_PROJECT_CONFIG=/m);
-    expect(env).toMatch(/^OMNIRUSH_GATE_PROVIDERS=omnirush$/m);
+    expect(env).toMatch(/^OMNIRUSH_GATE_PROVIDERS=omnirush,omnirush-claude$/m);
     expect(env).toMatch(/^OMNIRUSH_GATE_MCP=$/m);
     expect(env).toMatch(/^OMNIRUSH_NO_SYSTEM_CONFIG=1$/m);
     expect(env).toMatch(/^OPENCODE_DISABLE_AUTOUPDATE=1$/m);
@@ -41,7 +41,7 @@ posix("the v2 engine gets its own empty config home, not the user's global openc
 
 test("the engine's gates are applied last and a spawn without them is refused", () => {
   const env = engineV2SpawnEnv({ OMNIRUSH_GATE_PROVIDERS: "*", OMNIRUSH_GATE_MCP: "anything", OMNIRUSH_NO_SYSTEM_CONFIG: "0", PATH: "/bin" });
-  expect(env).toMatchObject({ OMNIRUSH_GATE_PROVIDERS: "omnirush", OMNIRUSH_GATE_MCP: "", OMNIRUSH_NO_SYSTEM_CONFIG: "1", PATH: "/bin" });
+  expect(env).toMatchObject({ OMNIRUSH_GATE_PROVIDERS: "omnirush,omnirush-claude", OMNIRUSH_GATE_MCP: "", OMNIRUSH_NO_SYSTEM_CONFIG: "1", PATH: "/bin" });
   expect(() => assertEngineGates({ PATH: "/bin" })).toThrow(/gates are missing/);
   expect(() => assertEngineGates({ OMNIRUSH_GATE_PROVIDERS: "omnirush", OMNIRUSH_NO_SYSTEM_CONFIG: "1" })).toThrow(/gates are missing/);
 });
@@ -58,10 +58,11 @@ posix("the stock websearch tool searches through Exa only while the server's swi
       const config = JSON.parse(await readFile(join(rootDir, "config", "opencode.json"), "utf8"));
       expect(config.websearch).toEqual(on ? { provider: "exa" } : undefined);
       expect(config).toMatchObject({ share: "disabled", update: "disable" });
-      // Only the gateway provider may run a model (the CLI's policies), beside the gate env.
+      // Only the app's providers may run a model (the CLI's policies), beside the gate env.
       expect(config.policies).toEqual([
         { action: "provider.use", resource: "*", effect: "deny" },
         { action: "provider.use", resource: "omnirush", effect: "allow" },
+        { action: "provider.use", resource: "omnirush-claude", effect: "allow" },
       ]);
     }
   } finally {
@@ -94,4 +95,13 @@ posix("the 2.x engine runs the box shell and the 2.x box plugin while a workspac
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("the Claude provider is an AI SDK file package of the catalog's Claude models, with no request timeout", async () => {
+  const { claudeEngineProvider } = await import("./omnirush-runtime-config.js");
+  expect(claudeEngineProvider([], {})).toBeNull();
+  const spec = claudeEngineProvider([{ id: "claude-opus-5-5", name: "Claude Opus 5.5" }], { grantURL: "http://127.0.0.1:1/omnirush-claude/turn", grantKey: "k" });
+  expect(spec).toMatchObject({ id: "omnirush-claude", settings: { grantURL: "http://127.0.0.1:1/omnirush-claude/turn", grantKey: "k", timeout: false } });
+  expect(spec?.package).toMatch(/^aisdk:file:\/\/.*claude-provider\/index\.js$/);
+  expect(spec?.models.map((model) => [model.id, model.name])).toEqual([["claude-opus-5-5", "Claude Opus 5.5"]]);
 });

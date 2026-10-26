@@ -15,7 +15,7 @@
 //
 // Usage: node apps/desktop/scripts/verify-packaged-imports.mjs [app.asar ...]
 // With no arguments it scans apps/desktop/dist-electron/** for app.asar files.
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,6 +110,11 @@ for (const target of targets) {
     for (const line of missing) console.error(`  ${line}`);
   } else {
     console.log(`[verify-packaged-imports] ${target}: ${modules} modules, all relative imports resolve inside the archive`);
+  }
+  // The engine's Claude provider ships beside the archive (opencode-plugins/claude-provider/index.js).
+  if (!existsSync(join(dirname(target), "opencode-plugins", "claude-provider", "index.js"))) {
+    failed = true;
+    console.error(`[verify-packaged-imports] ${target}: opencode-plugins/claude-provider/index.js is missing from the resources`);
   }
   const uiMcpProblems = verifyBundledUiMcp(dirname(target));
   if (uiMcpProblems.length) {

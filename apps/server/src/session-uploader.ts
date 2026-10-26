@@ -44,6 +44,7 @@ import { maskWindowsProfiles } from "./context/privacy.js";
 import bundledBestPractices from "./bundled-best-practices.json" with { type: "json" };
 import serverPackage from "../package.json" with { type: "json" };
 import { BUNDLED_ENGINE_VERSION, BUNDLED_HARNESS, type Harness } from "./engine-identity.js";
+import { CLAUDE_CODE_VERSION, CLAUDE_PROVIDER_ID } from "./claude-code/chat.js";
 import { mcpServersInUse, workspaceMcpReport, type McpServerUse } from "./mcp-allow/state.js";
 import type { ComputerUseEnvironment } from "./computer-use/desktop.js";
 import { gatewayUrlAllowed } from "./release-guard.js";
@@ -4747,6 +4748,8 @@ export class SessionUploader {
   private readonly boxes = new Map<string, BoxCaptureInfo>();
   /** Chats that used computer use, for the envelope's `environment.computer_use`. */
   private readonly computerUse = new Map<string, ComputerUseEnvironment>();
+  /** Claude chats (markClaude): their Claude Code version. */
+  private readonly claudeChats = new Map<string, string>();
   private readonly boxToolchains: ToolchainCache | null;
   private readonly excludedHashes: HashCache = new Map();
   private spoolCounter = 0;
@@ -5262,7 +5265,7 @@ export class SessionUploader {
    * when one was captured, and where the session came from when it was
    * imported from the opencode 2.x engine (engine2/imported.ts).
    */
-  private async sessionEnvironment(root: string, sessionId: string, waitMs?: number): Promise<UploadEnvironment> {
+  private async sessionEnvironment(root: string, sessionId: string, waitMs?: number, model?: UploadSessionModel | null): Promise<UploadEnvironment> {
     const environment = await this.environment();
     const box = this.boxes.get(sessionId) ?? null;
     const toolchains = box ? this.boxToolchains : this.toolchains;
@@ -5275,7 +5278,18 @@ export class SessionUploader {
     const mcpServers = this.stateDir ? mcpServersInUse(workspaceMcpReport(this.stateDir, root)) : null;
     // Only a chat that used computer use gets the field.
     const computerUse = this.computerUse.get(sessionId) ?? null;
-    return { ...environment, ...boxEnvironment(environment, box?.label ?? null), ...(toolchain ? { toolchain } : {}), ...(box ? { sandbox: box.label } : {}), ...(importedFrom ? { imported_from: importedFrom } : {}), ...(mcpServers ? { mcp_servers: mcpServers } : {}), ...(computerUse ? { computer_use: computerUse } : {}) };
+    // A Claude chat: Claude Code is the harness, run in the box under this engine, whose stored events the upload holds (the CLI: the same).
+    // Also a reopened or recovered chat before its next prompt: the model its stored messages name (a recovered state is not among this.sessions).
+    const claude = this.claudeChats.get(sessionId) ?? ((model ?? this.sessions.get(sessionId)?.model)?.provider_id === CLAUDE_PROVIDER_ID ? CLAUDE_CODE_VERSION : undefined);
+    const harness = claude ? { engine_version: `claude-code/${claude}`, harness: { name: "claude-code", engine: "claude-code", version: claude, build_tag: environment.harness.build_tag, host_engine: environment.engine_version, runtime: "box", engine_schema: "opencode-v2" }, engine_schema: "opencode-v2" } as unknown as Partial<UploadEnvironment> : {};
+    return { ...environment, ...harness, ...boxEnvironment(environment, box?.label ?? null), ...(toolchain ? { toolchain } : {}), ...(box ? { sandbox: box.label } : {}), ...(importedFrom ? { imported_from: importedFrom } : {}), ...(mcpServers ? { mcp_servers: mcpServers } : {}), ...(computerUse ? { computer_use: computerUse } : {}) };
+  }
+
+  /** A Claude chat (opencode-plugins/claude-provider) and its Claude Code version. */
+  markClaude(sessionId: string, version: string): void {
+    if (!sessionId || !version) return;
+    this.claudeChats.set(sessionId, version);
+    while (this.claudeChats.size > 512) this.claudeChats.delete(this.claudeChats.keys().next().value as string);
   }
 
   /**
@@ -7025,7 +7039,7 @@ export class SessionUploader {
       const ignoredListing = !(targeted && previous !== null) ? await listGitIgnored(state.root) : null;
       const deniedCount = scan.deniedCount + (ignoredListing ?? []).filter((path) => isUploadPathDenied(path.replace(/\/$/, ""))).length;
       // The last snapshot waits briefly for a collection still running (toolchain.ts).
-      const environment = await this.sessionEnvironment(state.root, state.id, type === "end" ? FINAL_TOOLCHAIN_WAIT_MS : undefined);
+      const environment = await this.sessionEnvironment(state.root, state.id, type === "end" ? FINAL_TOOLCHAIN_WAIT_MS : undefined, state.model);
       const rootName = workspaceRootName(state.root);
       const touchedPaths = this.touchedPathsForUpload(state);
       const metadata = JSON.stringify({
@@ -7192,7 +7206,7 @@ export class SessionUploader {
           schemaVersion: version,
           extras: {
             workspace: { root_name: workspaceRootName(state.root), git: null, ...(await gitSkippedField()) },
-            environment: await this.sessionEnvironment(state.root, state.id),
+            environment: await this.sessionEnvironment(state.root, state.id, undefined, state.model),
             touched_paths: this.touchedPathsForUpload(state),
             files_scope: "full",
           },

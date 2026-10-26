@@ -364,24 +364,3 @@ export async function downloadBinaryToPath(input, options) {
     }
   }
 }
-
-// Native evidence is larger than ordinary inbox files. This separate operation
-// uses the app's save dialog and known server endpoints as its authorities;
-// neither the output path nor the larger limit comes from renderer input.
-export async function downloadClaudeArchive(input, options) {
-  options.signal?.throwIfAborted();
-  const url = new URL(input.url);
-  if (url.username || url.password || url.search || url.hash || !/\/workspace\/[^/]+\/claude\/sessions\/[a-f0-9-]{36}\/export$/.test(url.pathname)) {
-    throw transferError("Invalid Claude archive endpoint.", "unauthorized-url");
-  }
-  const prefixes = [...options.allowedUrlPrefixes, ...(options.localServerUrl ? [options.localServerUrl] : [])];
-  remoteUrl(url.toString(), prefixes, true);
-  const session = url.pathname.split("/").at(-2);
-  const destination = await options.chooseDestination(`claude-${session}.zip`);
-  options.signal?.throwIfAborted();
-  if (!destination) return null;
-  return downloadBinaryToPath({url: url.toString(), destinationPath: destination, headers: input.headers, method: "POST", maxBytes: 2 ** 32 - 1, timeoutMs: 15 * 60_000}, {
-    ...options, allowedUrlPrefixes: prefixes, allowLoopback: true, downloadMaximum: 2 ** 32 - 1,
-    authorizedRoots: [path.dirname(destination)],
-  });
-}

@@ -1,6 +1,5 @@
 /** @jsxImportSource react */
 import * as React from "react";
-import { Link } from "react-router";
 import {
   AlertCircle,
   AlertTriangle,
@@ -56,7 +55,6 @@ import { buildathonProjects, useBuildathonStore } from "../../../../app/lib/buil
 import { OmniRushDenHelpLink } from "../../workspace/omnirush-den-help-link";
 import { NotificationBell } from "../../../shell/notification-center";
 import { useUiStateStore } from "../../../shell/ui-state-store";
-import { useClaudeSurface } from "../../../shell/claude-offer";
 import type {
   WorkspaceConnectionState,
   WorkspaceSessionGroup,
@@ -195,17 +193,6 @@ const SidebarReorderContext = React.createContext<{
   isReordering: boolean;
   setIsReordering: (value: boolean) => void;
 } | null>(null);
-
-/** The workspace menu's Claude Code entry: only while the server offers it, or to reach sessions saved earlier (claude-offer.ts). */
-function ClaudeMenuItem({ workspaceId }: { workspaceId: string }) {
-  const surface = useClaudeSurface(workspaceId);
-  if (surface !== "full" && surface !== "saved") return null;
-  return (
-    <DropdownMenuItem render={<Link to={`/workspace/${workspaceId}/claude`} />}>
-      <Sparkles className="size-4" />{surface === "full" ? "Claude Code" : "Saved sessions"}
-    </DropdownMenuItem>
-  );
-}
 
 function SidebarReorderScope({ children }: { children: React.ReactNode }) {
   const [isReordering, setIsReordering] = React.useState(false);
@@ -737,7 +724,6 @@ function WorkspaceActionsMenu({ workspace, isConnectionActionBusy, canRecover, c
         }
       />
       <DropdownMenuContent align="end" side="bottom" sideOffset={4} className="w-56">
-        <ClaudeMenuItem workspaceId={workspace.id} />
         <DropdownMenuItem onClick={() => ctx.onOpenRenameWorkspace(workspace.id)}>
           <Pencil className="size-4" />
           {t("workspace_list.edit_name")}

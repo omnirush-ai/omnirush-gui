@@ -23,7 +23,7 @@ export type ProviderLockState = {
 
 const LOCKED: ProviderLockState = Object.freeze({
   locked: true,
-  allow: Object.freeze(["omnirush"]) as unknown as string[],
+  allow: Object.freeze(["omnirush", "omnirush-claude"]) as unknown as string[],
   message: PROVIDER_LOCK_DEFAULT_MESSAGE,
 });
 
@@ -39,8 +39,8 @@ export function parseProviderLockState(value: unknown): ProviderLockState {
   if (!isRecord(value)) return LOCKED;
   const message = typeof value.message === "string" && value.message.trim() ? value.message.trim() : PROVIDER_LOCK_DEFAULT_MESSAGE;
   if (value.locked === false) return { locked: false, allow: [], message };
-  // Only OmniRush's own provider counts as allowed, whatever else a server lists.
-  return { locked: true, allow: ["omnirush"], message };
+  // Only OmniRush's own providers (the gateway's, Claude Code in the sandbox) count as allowed, whatever else a server lists.
+  return { locked: true, allow: ["omnirush", "omnirush-claude"], message };
 }
 
 export function providerLockState(): ProviderLockState {

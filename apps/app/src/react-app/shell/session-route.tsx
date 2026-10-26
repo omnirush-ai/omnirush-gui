@@ -142,7 +142,7 @@ import { useSessionFindStore } from "@/react-app/domains/session/surface/find-st
 import { useModelPicker } from "@/react-app/domains/session/modals/use-model-picker";
 import { getSessionModelSelection, resolveSendVariant, useSessionModelStore } from "@/react-app/domains/session/surface/session-model-store";
 import { chatStarted, markChatStarted, useProjectModelModes } from "@/react-app/domains/session/surface/model-modes";
-import { claudeModelName, claudeModelOptions, decideModelPick, isClaudeModel, newChatPrompt, setUpClaudeSandbox, useClaudeModels, useClaudeModelSync, useModelPickGate } from "@/react-app/domains/session/surface/claude-models";
+import { claudeModelName, decideModelPick, isClaudeModel, newChatPrompt, setUpClaudeSandbox, useClaudeModels, useClaudeModelSync, useModelPickGate } from "@/react-app/domains/session/surface/claude-models";
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { useWorkbenchStore } from "@/react-app/domains/session/chat/workbench-store";
 import { resolveWorkbenchPaneEndpoint } from "@/react-app/domains/session/chat/pane-runtime";
@@ -2841,35 +2841,32 @@ export function SessionRoute() {
       })()
     : modelVariantValue;
 
-  // Every list the route shows: the project's allowed models and Claude (listed everywhere).
-  const claudeCatalog = useClaudeModels((state) => state.catalog);
+  // Every list the route shows: the project's allowed models (Claude's come from the engine's Claude provider).
   const pickerOptions = useMemo(
-    () => [...modelPicker.options.filter((option) => modelModes.allowsNew(option)), ...claudeModelOptions({ catalog: claudeCatalog })],
-    [claudeCatalog, modelModes, modelPicker.options],
+    () => modelPicker.options.filter((option) => modelModes.allowsNew(option)),
+    [modelModes, modelPicker.options],
   );
   // A pick the picker should not just switch to (claude-models.ts decideModelPick).
   const [newChatOffer, setNewChatOffer] = useState<{ next: ModelRef; current: ModelRef } | null>(null);
   const modelTitle = (ref: ModelRef) => isClaudeModel(ref)
     ? claudeModelName(useClaudeModels.getState(), ref.modelID)
     : modelPicker.options.find((option) => option.providerID === ref.providerID && option.modelID === ref.modelID)?.title ?? resolveModelDisplayName(ref.modelID);
-  /** Claude: set the project's sandbox up (as the required sandbox does) and open a Claude chat on `model`. */
-  const openClaudeChat = (model: ModelRef) => {
+  /** Claude runs in the sandbox: set the project's sandbox up (as the required sandbox does) before its first turn. */
+  const setUpSandboxForClaude = () => {
     const endpoint = selectedWorkspaceEndpoint;
-    if (!selectedWorkspaceId) return;
-    if (endpoint?.client) {
-      void setUpClaudeSandbox(endpoint.client, endpoint.workspaceId).catch(() => {
-        toast.error("The sandbox could not be set up for Claude. Check Settings > General > Sandbox.", { id: "claude-sandbox" });
-      });
-    }
-    navigate(`/workspace/${encodeURIComponent(selectedWorkspaceId)}/claude?model=${encodeURIComponent(model.modelID)}`);
+    if (!endpoint?.client) return;
+    void setUpClaudeSandbox(endpoint.client, endpoint.workspaceId).catch(() => {
+      toast.error("The sandbox could not be set up for Claude. Check Settings > General > Sandbox.", { id: "claude-sandbox" });
+    });
   };
   const handleModelPick = (next: ModelRef, sessionId: string | null): boolean => {
     const current = sessionId ? getSessionModelSelection(sessionId)?.model ?? null : null;
     const pick = decideModelPick({ next, current, started: Boolean(sessionId && chatStarted(sessionId)), claude: useClaudeModels.getState(), switchable: modelModesRef.current.switchable });
     if (pick.kind === "unavailable") toast(pick.message, { id: `claude-unavailable:${next.modelID}` });
     else if (pick.kind === "new_chat" && current) setNewChatOffer({ next, current });
-    else if (pick.kind === "claude") openClaudeChat(next);
-    return pick.kind !== "switch" && pick.kind !== "same";
+    else if (pick.kind === "claude") setUpSandboxForClaude();
+    // A Claude pick in a fresh chat is a plain switch once the sandbox is on its way.
+    return pick.kind !== "switch" && pick.kind !== "same" && pick.kind !== "claude";
   };
   const modelPickRef = useRef(handleModelPick);
   modelPickRef.current = handleModelPick;
@@ -2881,10 +2878,7 @@ export function SessionRoute() {
     const offer = newChatOffer;
     setNewChatOffer(null);
     if (!offer || !selectedWorkspaceId) return;
-    if (isClaudeModel(offer.next)) {
-      openClaudeChat(offer.next);
-      return;
-    }
+    if (isClaudeModel(offer.next)) setUpSandboxForClaude();
     const sessionId = await handleCreateTaskInWorkspace(selectedWorkspaceId);
     if (!sessionId) return;
     useSessionModelStore.getState().setModel(sessionId, offer.next, null);

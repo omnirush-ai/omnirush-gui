@@ -1,15 +1,15 @@
 // Claude in the model picker. The server's capability `claude_code` lists the
 // Claude models: `catalog` (what every account sees) and `models` (what this
 // account may run); the local server passes both through
-// GET /workspace/:id/claude/status (claude-code/runtime.ts available()).
-// Claude runs only in the sandbox, on its own runtime (claude-code/), never in
-// the chat engine: picking it sets the project's sandbox up and opens a Claude
-// chat. A chat keeps one model; another pick in a chat that already ran offers
-// a new chat instead.
+// GET /workspace/:id/claude/status. Claude is a model of the chat engine's
+// "omnirush-claude" provider: each turn runs Claude Code in the project's
+// sandbox (opencode-plugins/claude-provider), so picking it sets the project's
+// sandbox up first. A chat keeps one model; another pick in a chat that
+// already ran offers a new chat instead.
 import { useEffect } from "react";
 import { create } from "zustand";
 
-import type { ModelOption, ModelRef } from "@/app/types";
+import type { ModelRef } from "@/app/types";
 import type { OmniRushServerClient, OmniRushWorkspaceBox, OmniRushWorkspaceBoxSetupAction } from "@/app/lib/omnirush-server";
 
 export type ClaudeCatalogEntry = { id: string; name: string };
@@ -27,29 +27,15 @@ const EMPTY: ClaudeModelsState = { workspaceId: null, catalog: [], models: [], r
 
 export const useClaudeModels = create<ClaudeModelsState>(() => EMPTY);
 
-/** A Claude model of the picker: the omnirush provider with a Claude catalog id (the chat engine's catalog never has one). */
+export const CLAUDE_PROVIDER_ID = "omnirush-claude";
+
+/** A Claude model of the picker: the engine's Claude provider. */
 export function isClaudeModel(model: ModelRef | null | undefined): boolean {
-  return model?.providerID === "omnirush" && CLAUDE_ID.test(model.modelID);
+  return model?.providerID === CLAUDE_PROVIDER_ID;
 }
 
 export function claudeModelName(state: Pick<ClaudeModelsState, "catalog">, id: string): string {
   return state.catalog.find((entry) => entry.id === id)?.name ?? id;
-}
-
-/** The picker's Claude entries: every catalog model, in every project (allowed or not: picking explains). */
-export function claudeModelOptions(state: Pick<ClaudeModelsState, "catalog">): ModelOption[] {
-  return state.catalog.map((entry) => ({
-    providerID: "omnirush",
-    modelID: entry.id,
-    title: entry.name,
-    description: "Runs in the sandbox",
-    group: "Claude",
-    behaviorTitle: "",
-    behaviorLabel: "",
-    behaviorDescription: "",
-    behaviorValue: null,
-    isFree: false,
-  }));
 }
 
 /** "Claude Sonnet 5.5 isn't available on your account yet." */
@@ -72,8 +58,8 @@ export type ModelPick =
  * already ran (its provider is fixed). An unavailable Claude model is explained
  * first, wherever it is picked; a model of another provider in a started chat
  * offers a new chat, one of its provider (`switchable`, model-modes.ts
- * switchableModel) is switched to; in a fresh chat a Claude model opens Claude
- * and any other model is simply switched to.
+ * switchableModel) is switched to; in a fresh chat a Claude model is switched
+ * to once the project's sandbox is set up, any other model at once.
  */
 export function decideModelPick(input: { next: ModelRef; current: ModelRef | null; started: boolean; claude: ClaudeModelsState; switchable?: (current: ModelRef, next: ModelRef) => boolean }): ModelPick {
   const { next, current, started, claude, switchable } = input;

@@ -120,7 +120,7 @@ describe("global runtime providers", () => {
       const enginePlugin = await fetch(`${base}/opencode/config`, { method: "PATCH", headers: clientHeaders(), body: JSON.stringify({ plugin: ["opencode-wakatime"] }) });
       expect(enginePlugin.status).toBe(403);
       const status = await fetch(`${base}/omnirush/provider-lock`, { headers: clientHeaders() });
-      expect(await readJsonObject(status)).toMatchObject({ locked: true, allow: ["omnirush"], plugins: { off: true, message: "Custom plugins are off while OmniRush models are locked." } });
+      expect(await readJsonObject(status)).toMatchObject({ locked: true, allow: ["omnirush", "omnirush-claude"], plugins: { off: true, message: "Custom plugins are off while OmniRush models are locked." } });
       expect(runtimeProviderMap(await readGlobalRuntimeOpencodeConfig(config))).toEqual({});
     } finally {
       applyProviderLockAnswer({ providers: { locked: false } });

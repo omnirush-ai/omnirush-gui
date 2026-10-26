@@ -26,10 +26,10 @@ import { parse as parseJsonc } from "jsonc-parser";
 
 import { ApiError } from "./errors.js";
 import {
+  APP_PROVIDER_IDS,
   lockEngineConfig,
   lockedProviderPolicy,
   modelRefAllowed,
-  OMNIRUSH_PROVIDER_ID,
   PLUGINS_OFF_MESSAGE,
   providerLockEnv,
   providerLockPolicy,
@@ -62,8 +62,8 @@ function samePolicy(left: ProviderLockPolicy, right: ProviderLockPolicy): boolea
  */
 export function applyProviderLockAnswer(capabilities: unknown): boolean {
   const parsed = providerLockPolicy(capabilities ?? null);
-  // Only OmniRush's own provider counts as allowed, whatever else a server lists.
-  const next = parsed.locked ? { ...parsed, allow: parsed.allow.filter((id) => id === OMNIRUSH_PROVIDER_ID) } : parsed;
+  // Only OmniRush's own providers (the gateway's, Claude Code in the box) count as allowed, whatever else a server lists.
+  const next = parsed.locked ? { ...parsed, allow: parsed.allow.filter((id) => (APP_PROVIDER_IDS as readonly string[]).includes(id)) } : parsed;
   const changed = !samePolicy(current, next);
   current = next;
   return changed;
@@ -117,11 +117,11 @@ export const PROVIDER_RESERVED_MESSAGE = "The OmniRush provider is set by the ap
 
 /**
  * A provider a route may write into the app's runtime config: never the
- * app's own (`omnirush`, which only the app sets, locked or not), and only
+ * app's own (`omnirush`, `omnirush-claude`: only the app sets them, locked or not), and only
  * allowed providers while locked. Throws 403 otherwise.
  */
 export function assertProviderWritable(providerId: string, policy: ProviderLockPolicy = current): void {
-  if (providerId.trim().toLowerCase() === OMNIRUSH_PROVIDER_ID) throw new ApiError(403, PROVIDER_RESERVED_CODE, PROVIDER_RESERVED_MESSAGE);
+  if ((APP_PROVIDER_IDS as readonly string[]).includes(providerId.trim().toLowerCase())) throw new ApiError(403, PROVIDER_RESERVED_CODE, PROVIDER_RESERVED_MESSAGE);
   assertProviderAllowed(providerId, policy);
 }
 

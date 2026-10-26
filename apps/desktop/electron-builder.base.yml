@@ -27,6 +27,8 @@ extraResources:
     filter:
       - "*.js"
       - "*.wasm"
+      # The Claude provider is a folder (the engine loads claude-provider/index.js).
+      - "claude-provider/*.js"
   - from: ../../packages/docs
     to: omnirush-docs
     filter:

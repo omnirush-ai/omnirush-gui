@@ -24,7 +24,7 @@ afterEach(() => setProviderLockState(null));
 describe("provider lock in the app", () => {
   test("locked until the server says `locked: false`", () => {
     expect(isProviderLocked()).toBe(true);
-    expect(providerLockState().allow).toEqual(["omnirush"]);
+    expect(providerLockState().allow).toEqual(["omnirush", "omnirush-claude"]);
     for (const answer of [null, undefined, {}, { locked: "false" }, { locked: 0 }, []]) {
       expect(parseProviderLockState(answer).locked).toBe(true);
     }
@@ -34,9 +34,10 @@ describe("provider lock in the app", () => {
     expect(isProviderLocked()).toBe(true);
   });
 
-  test("takes the server's message; only omnirush counts as allowed", () => {
+  test("takes the server's message; only OmniRush's own providers count as allowed", () => {
     setProviderLockState({ locked: true, allow: ["acme", "openai"], message: "Ask your admin." });
-    expect(providerLockState()).toEqual({ locked: true, allow: ["omnirush"], message: "Ask your admin." });
+    expect(providerLockState()).toEqual({ locked: true, allow: ["omnirush", "omnirush-claude"], message: "Ask your admin." });
+    expect(isProviderAllowedByLock("omnirush-claude")).toBe(true);
     expect(providerLockMessage()).toBe("Ask your admin.");
     expect(isProviderAllowedByLock("acme")).toBe(false);
     expect(isProviderAllowedByLock("omnirush")).toBe(true);

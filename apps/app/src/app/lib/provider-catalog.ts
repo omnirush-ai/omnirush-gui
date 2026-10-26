@@ -11,7 +11,7 @@ const directProviderSet = new Set<string>(DIRECT_PROVIDER_IDS);
 
 export function isInternalModelProvider(providerID: string) {
   const normalized = providerID.trim().toLowerCase();
-  return normalized === "omnirush" || /^lpr_/.test(normalized);
+  return normalized === "omnirush" || normalized === "omnirush-claude" || /^lpr_/.test(normalized);
 }
 
 export function isDirectModelProvider(providerID: string) {

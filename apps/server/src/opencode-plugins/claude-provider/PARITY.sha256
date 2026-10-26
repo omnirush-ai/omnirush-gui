@@ -1,0 +1,3 @@
+# The Claude provider: the same files in omnirush-cli (assets/claude-provider/) and omnirush-gui. A change to one must be ported to the other and this list updated in both.
+e06a1d3a28a663c6f3935dc9d74eb5ce88a83e42f5ad95061d632ca824b211d9  index.js
+3018991c25910011fd1387d311aaf5c128971b0f1ba3f1627c7b0126729d1d2a  map.js
