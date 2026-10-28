@@ -24,12 +24,16 @@ describe("settings default model", () => {
         onToggleAutoCompactContext={() => {}}
         desktopNotifications="important"
         onDesktopNotificationsChange={() => {}}
+        webSearchClient={{ getWebSearch: async () => ({ enabled: true, user: true, serverAllows: true }), setWebSearch: async () => ({ ok: true, enabled: true, user: true, serverAllows: true }) }}
       />
       </QueryClientProvider>,
     );
     expect(markup).toContain("Default model");
     expect(markup).toMatch(/data-testid="settings-default-model">OmniRush - GPT 6 Astra</);
     expect(markup).toMatch(/<button[^>]*data-testid="settings-default-model-change"[^>]*>Change<\/button>/);
+    // Web search sits in the same section, on by default until the server answers.
+    expect(markup).toContain("Web search");
+    expect(markup).toMatch(/data-testid="settings-web-search"/);
   });
 });
 

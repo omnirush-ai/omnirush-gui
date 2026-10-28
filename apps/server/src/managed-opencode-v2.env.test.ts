@@ -105,3 +105,30 @@ test("the Claude provider is an AI SDK file package of the catalog's Claude mode
   expect(spec?.package).toMatch(/^aisdk:file:\/\/.*claude-provider\/index\.js$/);
   expect(spec?.models.map((model) => [model.id, model.name])).toEqual([["claude-opus-5-5", "Claude Opus 5.5"]]);
 });
+
+posix("web search off in Settings: the engine offers no websearch tool, in normal and in stock mode", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "v2-wsoff-"));
+  const farm = process.env.OMNIRUSH_FARM;
+  try {
+    const bin = join(dir, "fake-v2");
+    await writeFile(bin, "#!/bin/sh\nexit 3\n");
+    await chmod(bin, 0o755);
+    const deny = { action: "websearch", resource: "*", effect: "deny" };
+    for (const stock of [false, true]) {
+      if (stock) process.env.OMNIRUSH_FARM = "1"; else delete process.env.OMNIRUSH_FARM;
+      for (const off of [false, true]) {
+        const rootDir = join(dir, `${stock}-${off}`);
+        await createManagedOpencodeV2Server({ bin, rootDir, bootTimeoutMs: 5_000, webSearch: () => true, webSearchOff: () => off, permissions: async () => [{ action: "shell", resource: "rm", effect: "deny" }] })
+          .then((server) => server.close(), () => undefined);
+        const config = JSON.parse(await readFile(join(rootDir, "config", "opencode.json"), "utf8"));
+        // The engine leaves out a tool whose action is denied on "*" (its whollyDisabled), whatever the agent.
+        expect(config.permissions.some((rule: unknown) => JSON.stringify(rule) === JSON.stringify(deny))).toBe(off);
+        expect(config.permissions[0]).toEqual({ action: "shell", resource: "rm", effect: "deny" });
+        expect(config.websearch).toEqual(!off && !stock ? { provider: "exa" } : undefined);
+      }
+    }
+  } finally {
+    if (farm === undefined) delete process.env.OMNIRUSH_FARM; else process.env.OMNIRUSH_FARM = farm;
+    await rm(dir, { recursive: true, force: true });
+  }
+});

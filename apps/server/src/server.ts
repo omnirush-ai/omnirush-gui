@@ -188,7 +188,7 @@ import { boxHome } from "./box/common.js";
 import { buildathonProjectsFile, reproStateFromBody, writeReproState } from "./buildathon-repro.js";
 import { prepareBoxInstallLog } from "./box/install-log.js";
 import { rememberServerDefault, watchServerDefault } from "./box/launch.js";
-import { rememberWebSearchSwitch, watchWebSearchSwitch, webSearchSetting } from "./web-search.js";
+import { rememberWebSearchSwitch, serverWebSearchEnabled, userWebSearchEnabled, watchWebSearchSwitch, webSearchSetting, writeUserWebSearch } from "./web-search.js";
 import { askSideQuestion, brokerSideCall } from "./side-question.js";
 import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/desktop.js";
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
@@ -4906,6 +4906,32 @@ function createRoutes(
       userPlugins = await listPlugins(config, workspace.id, workspace.path, true).then((result) => result.items.length, () => 0);
     }
     return jsonResponse(providerLockStatus(currentProviderLockPolicy(), userPlugins));
+  });
+
+  // The user's web search switch (Settings > Preferences; web-search.ts). Off: no web search tool is offered
+  // (the model's hosted one, or stock OpenCode's in stock mode). The server's switch wins: while it is off
+  // (outside stock mode) the switch shows off and cannot be turned on.
+  const webSearchState = () => {
+    const stateDir = runtimeStorageDir(config);
+    const user = userWebSearchEnabled(stateDir);
+    const serverAllows = stockMode() || serverWebSearchEnabled(stateDir);
+    return { enabled: user && serverAllows, user, serverAllows };
+  };
+  addRoute(routes, "GET", "/omnirush/web-search", "client", async () => jsonResponse(webSearchState()));
+  addRoute(routes, "PUT", "/omnirush/web-search", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const body = await readJsonBody(ctx.request);
+    if (typeof body.enabled !== "boolean") throw new ApiError(400, "invalid_payload", "enabled must be true or false");
+    if (body.enabled && !webSearchState().serverAllows) throw new ApiError(409, "web_search_off_on_server", "Web search is turned off for your account.");
+    try {
+      writeUserWebSearch(runtimeStorageDir(config), body.enabled);
+    } catch (error) {
+      throw new ApiError(500, "settings_write_failed", `The web search setting could not be saved: ${errorCode(error)}`, { code: errorCode(error) });
+    }
+    // The engine config is written again: the next turn has (or lacks) the tool, no restart.
+    await applyBoxEngineConfig(config, "web_search");
+    return jsonResponse({ ok: true, ...webSearchState() });
   });
 
   // Sub-agent model and effort (omnirush-subagent-model.ts). The app reads

@@ -5,7 +5,8 @@
  *
  * Off unless something turns it on, in this order:
  *   1. OMNIRUSH_WEB_SEARCH=1/on or 0/off in the server environment;
- *   2. the server's switch: GET /collect/capabilities `web_search`
+ *   2. the user's Settings switch (<runtimeStorageDir>/web-search-user.json): off is off; on leaves it to the server;
+ *   3. the server's switch: GET /collect/capabilities `web_search`
  *      ({ enabled, search_context_size, models, clients, rollout_percent }),
  *      as last seen (<runtimeStorageDir>/web-search-server.json). No block (an
  *      older server), or enabled false, is off. The server answers for this
@@ -26,13 +27,14 @@ import { join } from "node:path";
 import type { OmniRushCatalogModel } from "./omnirush-model-catalog.js";
 
 export const WEB_SEARCH_SERVER_FILE = "web-search-server.json";
+export const WEB_SEARCH_USER_FILE = "web-search-user.json";
 export const SEARCH_CONTEXT_SIZES = ["low", "medium", "high"] as const;
 export type SearchContextSize = (typeof SEARCH_CONTEXT_SIZES)[number];
 export const DEFAULT_SEARCH_CONTEXT_SIZE: SearchContextSize = "medium";
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export type WebSearchSwitch = { enabled: boolean; searchContextSize: SearchContextSize; models: string[] | null };
-export type WebSearchSetting = WebSearchSwitch & { source: "env" | "server" | "default" };
+export type WebSearchSetting = WebSearchSwitch & { source: "env" | "user" | "server" | "default" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -87,6 +89,23 @@ export function rememberWebSearchSwitch(stateDir: string, capabilities: unknown)
   return JSON.stringify(before ?? webSearchServerSwitch(null)) !== JSON.stringify(value);
 }
 
+/** The user's Settings switch: on unless turned off. */
+export function userWebSearchEnabled(stateDir: string | undefined): boolean {
+  const saved = stateDir ? readJson(join(stateDir, WEB_SEARCH_USER_FILE)) : null;
+  return !(isRecord(saved) && saved.enabled === false);
+}
+
+/** Saves the user's Settings switch (throws when it cannot be written: the app keeps the previous one). */
+export function writeUserWebSearch(stateDir: string, enabled: boolean): void {
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, WEB_SEARCH_USER_FILE), JSON.stringify({ enabled, at: Date.now() }), { mode: 0o600 });
+}
+
+/** The server's switch as last seen (off when never seen). */
+export function serverWebSearchEnabled(stateDir: string | undefined): boolean {
+  return Boolean(stateDir && rememberedSwitch(stateDir)?.enabled);
+}
+
 /** Web search for the engine config; `models` (null: every model with the capability) comes from the server. */
 export function webSearchSetting({ env = process.env, stateDir }: { env?: NodeJS.ProcessEnv; stateDir?: string } = {}): WebSearchSetting {
   const server = stateDir ? rememberedSwitch(stateDir) : null;
@@ -94,6 +113,7 @@ export function webSearchSetting({ env = process.env, stateDir }: { env?: NodeJS
   const asked = String(env.OMNIRUSH_WEB_SEARCH ?? "").trim().toLowerCase();
   if (["0", "off", "false", "no"].includes(asked)) return { enabled: false, source: "env", searchContextSize: size, models: null };
   if (["1", "on", "true", "yes"].includes(asked)) return { enabled: true, source: "env", searchContextSize: size, models: null };
+  if (!userWebSearchEnabled(stateDir)) return { enabled: false, source: "user", searchContextSize: size, models: null };
   if (server) return { ...server, source: "server" };
   return { enabled: false, source: "default", searchContextSize: size, models: null };
 }

@@ -2380,6 +2380,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
               local.setPrefs((previous) => ({ ...previous, desktopNotifications }));
             }}
             subagentModelClient={omnirushClient}
+            webSearchClient={omnirushClient}
           />
         );
       case "extensions":

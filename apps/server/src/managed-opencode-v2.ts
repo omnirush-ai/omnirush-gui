@@ -73,6 +73,8 @@ export interface ManagedOpencodeV2ServerOptions {
   permissions?: () => Promise<EnginePermissionRule[]>;
   /** Whether the server's web-search switch is on (web-search.ts): the stock websearch tool then searches. */
   webSearch?: () => boolean;
+  /** Whether the user turned web search off in Settings (web-search.ts): no websearch tool is offered at all. */
+  webSearchOff?: () => boolean;
   /** The MCP servers the engine's gate allows (engine-v2-mcp.ts); none when absent. */
   mcpGate?: string[];
   /** The Linux sandbox's engine bits (engine-v2-preview.ts v2BoxBits): the box shell and the 2.x box plugin; null: none. */
@@ -159,6 +161,11 @@ export function engineV2SpawnEnv(env: Record<string, string>, mcp: readonly stri
   // Stock mode (stock-mode.mjs): the gateway's only, and no MCP server.
   const stock = stockMode(env);
   return assertEngineGates({ ...env, ...gateEnv({ provider: GATEWAY_PROVIDER_ID, mcp: stock ? [] : mcp }), OMNIRUSH_GATE_PROVIDERS: stock ? STOCK_PROVIDER : APP_PROVIDER_IDS.join(",") });
+}
+
+/** Web search off in Settings: the engine leaves a tool out of the model's list when its action is denied on "*" (stock mode too). */
+export function webSearchOffRules(off: boolean): EnginePermissionRule[] {
+  return off ? [{ action: "websearch", resource: "*", effect: "deny" }] : [];
 }
 
 export function assertEngineGates(env: Record<string, string | undefined>): Record<string, string> {
@@ -323,6 +330,7 @@ export async function createManagedOpencodeV2Server(
         models,
       };
     }
+    const webSearchOff = options.webSearchOff?.() === true;
     const titleModel = providerConfig[CLAUDE_PROVIDER_ID] ? await options.titleModel?.().catch(() => null) : null;
     const target = join(configDir, "opencode.json");
     // The box shell runs each command in its project's box (boxsh; natively for a project without one).
@@ -341,11 +349,11 @@ export async function createManagedOpencodeV2Server(
       ],
       // Titles on the gateway's default model while Claude is listed: a Claude turn is a Claude Code run, never a title.
       ...(titleModel ? { agents: { title: { model: titleModel } } } : {}),
-      ...(options.permissions ? { permissions: await options.permissions() } : {}),
+      ...(options.permissions || webSearchOff ? { permissions: [...(await options.permissions?.() ?? []), ...webSearchOffRules(webSearchOff)] } : {}),
       // On: the stock websearch tool searches through Exa (the engine's keyless default), like the CLI.
       // Off: no provider is picked (never `false`, which would take the tool out of the stock list).
       // shortcut: Exa until the gateway serves a search integration of its own.
-      ...(!stock && options.webSearch?.() ? { websearch: { provider: "exa" } } : {}),
+      ...(!stock && !webSearchOff && options.webSearch?.() ? { websearch: { provider: "exa" } } : {}),
       ...(box ? { shell: box.shell } : {}),
       plugins: await pluginDirectories(join(options.rootDir, "plugins"), [sessionNextPluginPath(), ...(options.env?.OMNIRUSH_SERVER_URL ? [managedPolicyPluginPath(true)] : []), ...(box ? [box.plugin] : [])]),
     }, null, 2)}\n`, (file, text) => writeFileAtomic(file, text, { mode: 0o600 }));

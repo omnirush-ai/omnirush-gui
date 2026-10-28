@@ -30,6 +30,7 @@ import {
 } from "../settings-layout";
 import { DesktopIntegrationSection } from "../desktop-integration-section";
 import { SubagentModelSettings } from "../subagent-model-settings";
+import { WebSearchSetting, type WebSearchClient } from "../web-search-setting";
 import type { SubagentModelClient } from "../subagent-model";
 
 export type PreferencesViewProps = {
@@ -46,6 +47,8 @@ export type PreferencesViewProps = {
   onDesktopNotificationsChange: (value: DesktopNotificationPreference) => void;
   /** The server whose sub-agent model setting the Model section shows; hidden without one. */
   subagentModelClient?: SubagentModelClient | null;
+  /** The server whose web search switch the Model section shows; hidden without one. */
+  webSearchClient?: WebSearchClient | null;
 };
 
 function desktopNotificationPreferenceLabel(value: DesktopNotificationPreference) {
@@ -103,6 +106,9 @@ export function PreferencesView(props: PreferencesViewProps) {
             </LayoutSectionItemHeaderActions>
           </LayoutSectionItemHeader>
         </LayoutSectionItem>
+
+        {/* Web search */}
+        <WebSearchSetting client={props.webSearchClient ?? null} busy={props.busy} />
 
         {/* Show reasoning */}
         <LayoutSectionItem>

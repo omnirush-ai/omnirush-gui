@@ -553,6 +553,7 @@ export function createEngineV2Preview(options: {
       },
       permissions: async () => executionRules((await readGlobalRuntimeOpencodeConfig(config)).managedPolicy?.execution),
       webSearch: () => webSearchSetting({ env: process.env, stateDir: runtimeStorageDir(config) }).enabled,
+      webSearchOff: () => webSearchSetting({ env: process.env, stateDir: runtimeStorageDir(config) }).source === "user",
       // The Linux sandbox (box/): the shell and box plugin follow BoxService.engineBits on every config write.
       box: async () => v2BoxBits(await boxServiceFor(config).engineBits()),
       titleModel: () => omnirushTitleModel(config),

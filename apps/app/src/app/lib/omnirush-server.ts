@@ -607,6 +607,9 @@ export type OmniRushGoodSession = {
   messages?: Record<string, string>;
 };
 
+/** The user's web search switch (GET/PUT /omnirush/web-search): `enabled` = on and allowed by the server. */
+export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAllows: boolean };
+
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
   /** Whether an omnirush.ai account is signed in (its models can run). */
@@ -2260,6 +2263,16 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         hostToken,
         method: "PUT",
         body: setting,
+        timeoutMs: timeouts.config,
+      }),
+    getWebSearch: () =>
+      requestJson<OmniRushWebSearchState>(baseUrl, "/omnirush/web-search", { token, hostToken, timeoutMs: timeouts.config }),
+    setWebSearch: (enabled: boolean) =>
+      requestJson<OmniRushWebSearchState & { ok: boolean }>(baseUrl, "/omnirush/web-search", {
+        token,
+        hostToken,
+        method: "PUT",
+        body: { enabled },
         timeoutMs: timeouts.config,
       }),
     patchConfig: (workspaceId: string, payload: { opencode?: Record<string, unknown>; omnirush?: Record<string, unknown> }) =>

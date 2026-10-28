@@ -17,6 +17,7 @@ import {
   watchWebSearchSwitch,
   webSearchServerSwitch,
   webSearchSetting,
+  writeUserWebSearch,
 } from "./web-search.js";
 
 const dirs: string[] = [];
@@ -128,5 +129,24 @@ describe("engine config", () => {
     }
     const strip = (config: typeof off) => JSON.stringify({ ...config, provider: null });
     expect(strip(on)).toBe(strip(off));
+  });
+});
+
+describe("the user's Settings switch", () => {
+  test("off: no hosted web search on any model even with the server's switch on; on: the server decides", () => {
+    const dir = tmp();
+    rememberWebSearchSwitch(dir, { web_search: { ...serverBlock, enabled: true } });
+    const hosted = (setting: ReturnType<typeof webSearchSetting>) =>
+      Object.entries(engineModelsFromCatalog(catalog, setting)).filter(([, model]) => (model.options as Record<string, unknown> | undefined)?.hostedWebSearch).map(([id]) => id);
+    expect(webSearchSetting({ env: {}, stateDir: dir })).toMatchObject({ enabled: true, source: "server" });
+    expect(hosted(webSearchSetting({ env: {}, stateDir: dir }))).toEqual(serverBlock.models);
+    writeUserWebSearch(dir, false);
+    expect(webSearchSetting({ env: {}, stateDir: dir })).toMatchObject({ enabled: false, source: "user" });
+    expect(hosted(webSearchSetting({ env: {}, stateDir: dir }))).toEqual([]);
+    writeUserWebSearch(dir, true);
+    expect(hosted(webSearchSetting({ env: {}, stateDir: dir }))).toEqual(serverBlock.models);
+    // The server's switch off wins over the user's on.
+    rememberWebSearchSwitch(dir, { web_search: { ...serverBlock, enabled: false } });
+    expect(hosted(webSearchSetting({ env: {}, stateDir: dir }))).toEqual([]);
   });
 });
