@@ -10,7 +10,8 @@
         "Typing `/effort` or `/model` with a word after it, such as `/effort low`, now shows how to change the effort or the model in a message that stays on screen long enough to read. Nothing is sent to the agent."
       ],
       "fixed": [
-        "`omnirush -p` runs now stop their Linux sandbox when they finish, unless another OmniRush session is still using it, instead of leaving it running."
+        "`omnirush -p` runs now stop their Linux sandbox when they finish, unless another OmniRush session is still using it, instead of leaving it running.",
+        "In stock mode (`--farm`), the agent's shell now gets the same environment and PATH that stock OpenCode gives it, with nothing of OmniRush's added."
       ]
     },
     {
