@@ -18,6 +18,9 @@
 //              x-omnirush-directory names it instead (one desktop engine, many projects)
 //   client     "cli/2.7.3" | "gui/3.8.0": X-OmniRush-Client to the relay
 //   note       optional text shown once at a chat's start
+//   runtime    "vm": a lane VM (Windows only for now): Claude Code's own Windows build runs on this machine, no box;
+//              each turn needs the grant's `runtime: "vm"` (the server's lane list), else it is refused.
+//              vmHome is its folder (<vmHome>/bin/<version>, <vmHome>/<key> = the run folder)
 // The relay token lives in the box's run folder, read by Claude Code's
 // apiKeyHelper; nothing else of this machine's env enters the box.
 // Claude's session id is uuidv5(engine session id); its config folder is the
@@ -46,7 +49,14 @@ export const CLAUDE_CODE_BUILDS = {
   x64: { url: `https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${CLAUDE_CODE_VERSION}.tgz`, integrity: "sha512-4gsb0IQhxzi1NhoUETXkNZb1t6wJ9tnfAYBKmb0+NmsAwOG37Dacq7bLqsooEkusaT0PyQRFUMt0SgWxx9LEEA==" },
   arm64: { url: `https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-${CLAUDE_CODE_VERSION}.tgz`, integrity: "sha512-AePKWuymgDSCh7nScJ4dx/pF1Kppzk4IwQuh6JCROiqQdBVGaaHw6jVf/fY5PhbSjy9EQML6yOiUfc50aFpnTA==" },
 };
+// The pinned Windows build (npm @anthropic-ai/claude-code-win32-x64) for a lane VM (`runtime: "vm"`).
+// shortcut: x64 only, the lane's VMs are x64; add win32-arm64 when a lane runs on it.
+export const CLAUDE_CODE_WIN_BUILDS = {
+  x64: { url: `https://registry.npmjs.org/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-${CLAUDE_CODE_VERSION}.tgz`, integrity: "sha512-MpqvdPxktYYaCzTp+Lcvjp5r2fnLWRWxSd7hwilVCUfAvJC6Zm/W+t7TCeEk1xGH++3BWL57FmHDN/w5k9AiiQ==" },
+};
 export const PROVIDER_ID = "omnirush-claude";
+/** A lane-VM turn for an account the server did not put on the lane list. */
+export const NOT_LANE = "Claude runs only in the OmniRush sandbox for this account: this machine's lane mode isn't enabled for it.";
 /** A Claude turn where the sandbox isn't running (off, or it cannot run on this machine). */
 export const NO_BOX = "Claude runs only in the OmniRush sandbox, and the sandbox isn't running for this project, so Claude can't start here.";
 const BOX_RUN = "/run/omnirush";
@@ -75,6 +85,8 @@ export function boxKey(dir) {
 
 /** The contract the relay token is bound to: this Claude Code, this provider, the box. */
 export const CONTRACT = createHash("sha256").update(JSON.stringify({ claude_code: CLAUDE_CODE_VERSION, provider: 1, runtime: "box" })).digest("hex");
+/** The same for a lane VM's turns (`runtime: "vm"`). */
+export const VM_CONTRACT = createHash("sha256").update(JSON.stringify({ claude_code: CLAUDE_CODE_VERSION, provider: 1, runtime: "vm" })).digest("hex");
 
 /** Whether Claude already has a transcript for `uuid` in the config folder (then the turn resumes it). */
 export function hasTranscript(configDir, uuid) {
@@ -126,17 +138,17 @@ export function installLogDir(boxHome, client, env = process.env) {
 }
 
 /** The env Claude Code runs with in the box (passed by boxsh through OMNIRUSH_BOX_PASS_ENV). */
-export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null }) {
+export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null, runtime = "box", configDir = null }) {
   const env = {
-    CLAUDE_CONFIG_DIR: `${BOX_RUN}/claude/config`,
+    CLAUDE_CONFIG_DIR: runtime === "vm" ? configDir : `${BOX_RUN}/claude/config`,
     ANTHROPIC_BASE_URL: baseUrl,
-    ANTHROPIC_CUSTOM_HEADERS: `X-OmniRush-Box: 1\nX-OmniRush-Session-Id: ${sessionID}\nX-OmniRush-Client: ${client}`,
+    ANTHROPIC_CUSTOM_HEADERS: `${runtime === "vm" ? "X-OmniRush-Runtime: vm" : "X-OmniRush-Box: 1"}\nX-OmniRush-Session-Id: ${sessionID}\nX-OmniRush-Client: ${client}`,
     CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(REFRESH_MS),
     // The relay serves the chat's model only: every model Claude Code would pick on its own is that one.
     ANTHROPIC_MODEL: model, ANTHROPIC_SMALL_FAST_MODEL: model, ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: model, ANTHROPIC_DEFAULT_HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model,
     DISABLE_AUTOUPDATER: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
-    // The box is the boundary that makes running without asks acceptable (it runs as root in a container).
+    // The box (or the disposable lane VM) is the boundary that makes running without asks acceptable.
     IS_SANDBOX: "1",
     // The install log: Claude's commands (its sub-agents' too) note installs where the app reads this chat's, and
     // name the chat (the engine names no call of Claude's: the app matches them to the chat's turn).
@@ -144,6 +156,17 @@ export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null 
     ...(pkglogDir ? { OMNIRUSH_PKGLOG_DIR: pkglogDir } : {}),
   };
   return env;
+}
+
+/** This machine's env for a lane VM's Claude Code: the app's own variables (and any Anthropic credential) stay out. */
+export function hostEnv(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !/^(OMNIRUSH_|OPENCODE_|ANTHROPIC_|CLAUDE_)/i.test(name)));
+}
+
+/** Claude Code's apiKeyHelper on a lane VM: node reads the token file (no `cat` outside Git Bash). */
+export function hostKeyHelper(run, node = process.execPath) {
+  const slash = (p) => p.split(path.sep).join("/");
+  return `"${slash(node)}" "${slash(path.join(run, "token-helper.cjs"))}"`;
 }
 
 const lower = (headers) => Object.fromEntries(Object.entries(headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
@@ -204,6 +227,44 @@ function ensureClaude({ shell, env, cwd, home, run }) {
   return installs.get(key);
 }
 
+function exec(bin, args) {
+  return new Promise((resolve) => {
+    const child = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    let err = "";
+    child.stderr.on("data", (d) => { err = (err + d).slice(-2000); });
+    child.on("error", (e) => resolve({ code: 127, err: e.message }));
+    child.on("close", (code) => resolve({ code: code ?? 1, err }));
+  });
+}
+
+/** The pinned Windows build under <vmHome>/bin/<version>: downloaded (sha512-checked) and unpacked once. */
+function ensureHostClaude(vmHome) {
+  const key = `vm:${vmHome}`;
+  if (!installs.has(key)) {
+    installs.set(key, (async () => {
+      const dir = path.join(vmHome, "bin", CLAUDE_CODE_VERSION);
+      const bin = path.join(dir, "claude.exe");
+      if (fs.existsSync(bin)) return bin;
+      const build = CLAUDE_CODE_WIN_BUILDS[os.arch()];
+      if (!build) throw new Error(`Claude Code's lane build isn't pinned for ${os.arch()}`);
+      fs.mkdirSync(dir, { recursive: true });
+      const tgz = path.join(vmHome, "bin", path.basename(new URL(build.url).pathname));
+      if (!fs.existsSync(tgz)) await download(build, tgz);
+      const staged = path.join(vmHome, "bin", `stage-${process.pid}`);
+      fs.rmSync(staged, { recursive: true, force: true });
+      fs.mkdirSync(staged, { recursive: true });
+      try {
+        // Windows 10+ ships bsdtar as tar.exe.
+        const done = await exec("tar", ["-xzf", tgz, "-C", staged]);
+        if (done.code !== 0 || !fs.existsSync(path.join(staged, "package", "claude.exe"))) throw new Error(`Claude Code could not be unpacked (${done.err.trim().split("\n").at(-1) || done.code})`);
+        fs.renameSync(path.join(staged, "package", "claude.exe"), bin);
+      } finally { fs.rmSync(staged, { recursive: true, force: true }); }
+      return bin;
+    })().catch((error) => { installs.delete(key); throw error; }));
+  }
+  return installs.get(key);
+}
+
 class ClaudeCodeModel {
   specificationVersion = "v3";
   provider = PROVIDER_ID;
@@ -240,14 +301,15 @@ class ClaudeCodeModel {
     // first message as a second Claude turn next to the real one ("Session ID … is already in use", two agents).
     if (headers["x-omnirush-title"] === "1" || headers["x-omnirush-agent"] === "title") throw apiError("A Claude chat's title comes from the title model.");
     const compaction = headers["x-omnirush-agent"] === "compaction";
-    const { shell, boxHome, directory, client = "cli", note } = this.settings;
+    const { shell, boxHome, directory, client = "cli", note, vmHome } = this.settings;
+    const vm = this.settings.runtime === "vm" && Boolean(vmHome);
     // One desktop engine serves every project: the request names its folder.
     const root = path.resolve(headers["x-omnirush-directory"] || directory || process.cwd());
     const key = boxKey(root);
-    const record = boxHome ? readRecord(boxHome, key) : null;
+    const record = !vm && boxHome ? readRecord(boxHome, key) : null;
     // `noBox`: the app's own words for where to look (the CLI names its command; the desktop has none).
-    if (!shell || !record || record.state === "off") throw apiError(this.settings.noBox || NO_BOX);
-    const run = path.join(boxHome, "projects", key, "claude");
+    if (!vm && (!shell || !record || record.state === "off")) throw apiError(this.settings.noBox || NO_BOX);
+    const run = vm ? path.join(vmHome, key) : path.join(boxHome, "projects", key, "claude");
     const configDir = path.join(run, "config");
     fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
     const uuid = uuidv5(sessionID);
@@ -257,18 +319,30 @@ class ClaudeCodeModel {
     const earlier = (options.prompt ?? []).some((m) => m?.role === "assistant");
     const ask = { op: "grant", sessionID, model: this.modelId, resume, earlier, directory: root, prompt: lineText(content).slice(0, 4000) };
     let grant = await this.grant(ask);
+    // A lane VM's turn only with the server's word for this account (its lane list), never the machine's own.
+    if (vm && grant.runtime !== "vm") throw apiError(NOT_LANE);
     const tokenFile = path.join(run, "token");
     const writeToken = (token) => { fs.writeFileSync(`${tokenFile}.tmp`, token, { mode: 0o600 }); fs.renameSync(`${tokenFile}.tmp`, tokenFile); };
     writeToken(grant.token);
-    fs.writeFileSync(path.join(configDir, "settings.json"), `${JSON.stringify({ apiKeyHelper: `cat ${BOX_RUN}/claude/token` })}\n`, { mode: 0o600 });
+    if (vm) fs.writeFileSync(path.join(run, "token-helper.cjs"), `process.stdout.write(require("fs").readFileSync(${JSON.stringify(tokenFile)}, "utf8"));\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(configDir, "settings.json"), `${JSON.stringify({ apiKeyHelper: vm ? hostKeyHelper(run) : `cat ${BOX_RUN}/claude/token` })}\n`, { mode: 0o600 });
 
-    const passed = claudeEnv({ model: this.modelId, baseUrl: grant.baseUrl, sessionID, client: grant.client || client, pkglogDir: installLogDir(boxHome, client) });
-    const env = { ...process.env, ...passed, OMNIRUSH_BOX_KEY: key, OMNIRUSH_BOX_HOME: boxHome, OMNIRUSH_BOX_PASS_ENV: Object.keys(passed).join(",") };
-    try { await ensureClaude({ shell, env, cwd: root, home: boxHome, run }); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed in the sandbox."); }
+    const passed = claudeEnv({ model: this.modelId, baseUrl: grant.baseUrl, sessionID, client: grant.client || client, pkglogDir: vm ? null : installLogDir(boxHome, client), runtime: vm ? "vm" : "box", configDir });
+    const env = vm ? { ...hostEnv(process.env), ...passed } : { ...process.env, ...passed, OMNIRUSH_BOX_KEY: key, OMNIRUSH_BOX_HOME: boxHome, OMNIRUSH_BOX_PASS_ENV: Object.keys(passed).join(",") };
+    let hostBin = null;
+    try {
+      if (vm) hostBin = await ensureHostClaude(vmHome);
+      else await ensureClaude({ shell, env, cwd: root, home: boxHome, run });
+    } catch (error) { throw apiError(error?.message || "Claude Code could not be installed in the sandbox."); }
 
     const turnFile = path.join(run, `turn-${uuid}.jsonl`);
-    fs.writeFileSync(turnFile, `${JSON.stringify({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: uuid })}\n`, { mode: 0o600 });
-    const child = spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...claudeArgs({ model: this.modelId })], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    const turnLine = `${JSON.stringify({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: uuid })}\n`;
+    if (!vm) fs.writeFileSync(turnFile, turnLine, { mode: 0o600 });
+    // shortcut: a lane VM runs one chat at a time, so no sweep for an earlier Claude of the chat (LAUNCH's); add one if lanes share a VM.
+    const child = vm
+      ? spawn(hostBin, [...claudeArgs({ model: this.modelId }), ...(resume ? ["--resume", uuid] : ["--session-id", uuid])], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
+      : spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...claudeArgs({ model: this.modelId })], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    if (vm) { child.stdin.on("error", () => undefined); child.stdin.write(turnLine); }
     const mapper = new ClaudeStreamMapper({ compaction });
     let stderr = "";
     let done = false;
