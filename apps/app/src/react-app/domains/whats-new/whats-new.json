@@ -3,6 +3,17 @@
   "schema": 1,
   "cli": [
     {
+      "version": "2.7.6",
+      "date": "2026-10-28",
+      "new": [],
+      "improved": [
+        "Typing `/effort` or `/model` with a word after it, such as `/effort low`, now shows how to change the effort or the model in a message that stays on screen long enough to read. Nothing is sent to the agent."
+      ],
+      "fixed": [
+        "`omnirush -p` runs now stop their Linux sandbox when they finish, unless another OmniRush session is still using it, instead of leaving it running."
+      ]
+    },
+    {
       "version": "2.7.5",
       "date": "2026-10-27",
       "new": [],
