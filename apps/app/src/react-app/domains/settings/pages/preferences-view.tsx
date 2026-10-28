@@ -1,4 +1,5 @@
 /** @jsxImportSource react */
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -33,6 +34,9 @@ import type { SubagentModelClient } from "../subagent-model";
 
 export type PreferencesViewProps = {
   busy: boolean;
+  /** The default model for new chats (what the composer's picker sets) and the picker that changes it. */
+  defaultModelLabel: string;
+  onChangeDefaultModel: () => void;
   showThinking: boolean;
   onToggleShowThinking: () => void;
   autoCompactContext: boolean;
@@ -79,6 +83,26 @@ export function PreferencesView(props: PreferencesViewProps) {
           <LayoutSectionTitle>{t("settings.model_title")}</LayoutSectionTitle>
           <LayoutSectionDescription>{t("settings.model_section_desc")}</LayoutSectionDescription>
         </LayoutSectionHeader>
+
+        {/* Default model */}
+        <LayoutSectionItem>
+          <LayoutSectionItemHeader>
+            <LayoutSectionItemTitle>{t("model_picker.default_model_title")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription><span data-testid="settings-default-model">{props.defaultModelLabel}</span></LayoutSectionItemDescription>
+            <LayoutSectionItemHeaderActions>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={t("model_picker.default_model_title")}
+                disabled={props.busy}
+                onClick={props.onChangeDefaultModel}
+                data-testid="settings-default-model-change"
+              >
+                {t("settings.change")}
+              </Button>
+            </LayoutSectionItemHeaderActions>
+          </LayoutSectionItemHeader>
+        </LayoutSectionItem>
 
         {/* Show reasoning */}
         <LayoutSectionItem>

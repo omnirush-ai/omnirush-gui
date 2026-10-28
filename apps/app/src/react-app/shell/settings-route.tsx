@@ -1845,6 +1845,11 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
         return `${providerLabel} - ${modelLabel}`;
       })()
     : t("session.default_model");
+  const openDefaultModelPicker = () => {
+    modelPicker.setQuery("");
+    modelPicker.setRecentProviderIds(new Set());
+    window.requestAnimationFrame(() => modelPicker.setOpen(true));
+  };
   const defaultModelRef = local.prefs.defaultModel
     ? `${local.prefs.defaultModel.providerID}/${local.prefs.defaultModel.modelID}`
     : t("settings.default_label");
@@ -2361,6 +2366,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
         return (
           <PreferencesView
             busy={busy}
+            defaultModelLabel={defaultModelLabel}
+            onChangeDefaultModel={openDefaultModelPicker}
             showThinking={local.prefs.showThinking}
             onToggleShowThinking={() => {
               local.setPrefs((previous) => ({ ...previous, showThinking: !previous.showThinking }));
@@ -2706,11 +2713,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             : globalExtensionsRoute(section);
           navigate(target);
         }}
-        onOpenModelPicker={() => {
-          modelPicker.setQuery("");
-          modelPicker.setRecentProviderIds(new Set());
-          window.requestAnimationFrame(() => modelPicker.setOpen(true));
-        }}
+        onOpenModelPicker={openDefaultModelPicker}
         selectedModelLabel={defaultModelLabel}
         sessions={paletteSessionOptions}
         extraItems={checkDesktopRestriction({ restriction: "allowControlSettings" }) ? [] : [developerModePaletteItem]}
