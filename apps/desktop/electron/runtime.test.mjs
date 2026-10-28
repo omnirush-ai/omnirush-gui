@@ -9,6 +9,7 @@ import {
   commandMatchesPackagedSidecar,
   createRuntimeManager,
   embeddedServerImportUrl,
+  launchShellPath,
   migrateOmniRushServerTokenStore,
   prepareRuntimeWorkspaceRoot,
   prioritizeWorkspacePaths,
@@ -289,6 +290,16 @@ describe("commandMatchesPackagedSidecar", () => {
       ),
       false,
     );
+  });
+});
+
+describe("launchShellPath (stock mode's agent PATH)", () => {
+  it("keeps the launch PATH; a macOS Finder launch gets the login shell's", () => {
+    const login = () => ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+    assert.equal(launchShellPath("/kit/bin:/usr/bin:/bin", "linux", login), "/kit/bin:/usr/bin:/bin");
+    assert.equal(launchShellPath("/opt/homebrew/bin:/usr/bin:/bin", "darwin", login), "/opt/homebrew/bin:/usr/bin:/bin");
+    assert.equal(launchShellPath("/usr/bin:/bin:/usr/sbin:/sbin", "darwin", login), "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+    assert.equal(launchShellPath("/usr/bin:/bin:/usr/sbin:/sbin", "darwin", () => []), "/usr/bin:/bin:/usr/sbin:/sbin");
   });
 });
 

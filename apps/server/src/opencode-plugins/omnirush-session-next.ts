@@ -1,4 +1,5 @@
 import { SHELL_SECRET_ENV } from "./shell-secret-env.js";
+import { stockMode, stockShellEnv } from "../stock-mode/stock-mode.mjs";
 
 /**
  * 2.x engine plugin: what the 1.x plugins' `chat.headers` and `shell.env` did.
@@ -65,12 +66,15 @@ export default {
     // Captured before any shell runs: the engine's own XDG folders are not the user's.
     const userXdg = Object.fromEntries(["DATA", "STATE", "CONFIG"].map((kind) =>
       [`XDG_${kind}_HOME`, process.env[`OMNIRUSH_USER_XDG_${kind}_HOME`]]));
+    const stock = stockMode(process.env);
     await ctx.shell.hook("create.before", (event) => {
       for (const name of SHELL_SECRET_ENV) event.env[name] = "";
       for (const [name, value] of Object.entries(userXdg)) {
         if (value === undefined) continue;
         event.env[name] = value || undefined;
       }
+      // Stock mode: the agent's shell has stock OpenCode's environment, nothing of the app's.
+      if (stock) stockShellEnv(event.env);
     });
   },
 };

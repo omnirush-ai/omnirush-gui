@@ -4,6 +4,8 @@
 // note, automatic compaction or wrap-up offer, and no install-log wrappers. Sign-in, the gateway broker (auth and
 // routing only), capture and uploads, and the sandbox stay. Uploads keep the exact shape of any 2.x chat.
 
+import { join } from "node:path";
+
 export const STOCK_ENV = "OMNIRUSH_FARM";
 export const STOCK_PROVIDER = "omnirush";
 export const STOCK_MODEL = "gpt-6-astra";
@@ -54,4 +56,27 @@ export function stockProviders(specs) {
     });
     return models.length ? [{ ...spec, models }] : [];
   });
+}
+
+// The PATH and NODE_EXTRA_CA_CERTS the app was launched with (JSON, set by the desktop's runtime.mjs): the app
+// widens both for itself, the agent's shell gets them back in stock mode.
+export const STOCK_SHELL_ENV = "OMNIRUSH_STOCK_SHELL_ENV";
+// What the app puts in its engine's environment that stock OpenCode's has not (managed-opencode-v2.ts).
+const APP_ENGINE_NAME = /^(?:OMNIRUSH_|OPENCODE_(?:PASSWORD|SERVER_PASSWORD|SERVER_USERNAME|DB|CONFIG_DIR|DISABLE_AUTOUPDATE|DISABLE_CLAUDE_CODE)$)/;
+
+/**
+ * Stock mode: turns an agent shell's environment (the engine's, in place) into stock OpenCode's, as the stock run
+ * gets it: no app names, the launch PATH and CA file, and OPENCODE_CONFIG naming the engine's config file.
+ */
+export function stockShellEnv(env, engineEnv = process.env) {
+  for (const name of Object.keys(env)) if (APP_ENGINE_NAME.test(name)) delete env[name];
+  if (engineEnv.OPENCODE_CONFIG_DIR) env.OPENCODE_CONFIG = join(engineEnv.OPENCODE_CONFIG_DIR, "opencode.json");
+  let launch = null;
+  try { launch = JSON.parse(engineEnv[STOCK_SHELL_ENV] ?? "null"); } catch { /* Not set by the desktop: the engine's own. */ }
+  if (!launch || typeof launch !== "object") return env;
+  const pathKey = Object.keys(env).find((name) => name.toUpperCase() === "PATH") ?? "PATH";
+  if (typeof launch.PATH === "string") env[pathKey] = launch.PATH;
+  if (typeof launch.NODE_EXTRA_CA_CERTS === "string") env.NODE_EXTRA_CA_CERTS = launch.NODE_EXTRA_CA_CERTS;
+  else delete env.NODE_EXTRA_CA_CERTS;
+  return env;
 }

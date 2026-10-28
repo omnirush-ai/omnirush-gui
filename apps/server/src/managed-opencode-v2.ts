@@ -14,7 +14,7 @@ import { writeFileAtomic } from "./atomic-write.js";
 import { currentProviderLockPolicy, noteEngineStarted, providerAllowed } from "./provider-lock.js";
 import { APP_PROVIDER_IDS, providerLockEnv } from "./provider-lock/provider-lock.mjs";
 import { gateEnv } from "./engine-gates/engine-gates.mjs";
-import { STOCK_ENV, STOCK_PROVIDER, stockMode, stockProviders } from "./stock-mode/stock-mode.mjs";
+import { STOCK_ENV, STOCK_PROVIDER, STOCK_SHELL_ENV, stockMode, stockProviders } from "./stock-mode/stock-mode.mjs";
 import { releaseEngineBinary } from "./release-guard.js";
 
 export interface OpencodeV2ModelSpec {
@@ -194,11 +194,12 @@ export async function createManagedOpencodeV2Server(
     "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "CI",
     "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
     "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-    "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", STOCK_ENV,
+    "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", STOCK_ENV, STOCK_SHELL_ENV,
   ]) {
     const value = options.env?.[key] ?? process.env[key];
     if (value !== undefined) inherited[key] = value;
   }
+  if (!stockMode(inherited)) delete inherited[STOCK_SHELL_ENV];
   // A caller may deliberately provide a config file; never inherit the server's
   // OPENCODE_CONFIG or OPENCODE_PURE settings implicitly.
   if (options.env?.OPENCODE_CONFIG) inherited.OPENCODE_CONFIG = options.env.OPENCODE_CONFIG;

@@ -674,6 +674,14 @@ export function extraPathEntries() {
   return candidates.filter((entry) => entry && isDirectory(entry));
 }
 
+// The PATH stock OpenCode would see: the launch PATH; for a Finder/Dock launch on macOS (launchd's
+// default PATH) the login shell's, as path_helper gives it to every login shell.
+const LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+export function launchShellPath(launchPath, platform = process.platform, loginShellEntries = pathHelperEntries) {
+  if (platform !== "darwin" || launchPath !== LAUNCHD_PATH) return launchPath;
+  return loginShellEntries().join(path.delimiter) || launchPath;
+}
+
 export function enrichedPath(sidecarDirs, currentPath) {
   const entries = [
     ...sidecarDirs.filter(isDirectory),
@@ -1633,6 +1641,11 @@ export function createRuntimeManager({
       !Object.prototype.hasOwnProperty.call(env, "Path")
         ? "PATH"
         : "Path";
+    // Stock mode (OMNIRUSH_FARM): the agent's shell gets the launch PATH and CA file back (server stock-mode.mjs).
+    env.OMNIRUSH_STOCK_SHELL_ENV = JSON.stringify({
+      PATH: launchShellPath(inheritedProcessEnv[pathKey]),
+      NODE_EXTRA_CA_CERTS: inheritedProcessEnv.NODE_EXTRA_CA_CERTS,
+    });
     const pathEnv = enrichedPath(sidecarDirs, env[pathKey]);
     if (pathEnv) {
       env[pathKey] = pathEnv;
