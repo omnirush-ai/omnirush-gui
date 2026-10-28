@@ -653,6 +653,27 @@ describe("downloaded update lifecycle", () => {
   });
 });
 
+describe("OMNIRUSH_AUTO_UPDATE=0", () => {
+  it("never checks, downloads or installs, quit included", async () => {
+    let loaded = false;
+    const { tempDir, handlers, calls, prepareInstallOnQuit } = await registerFakeUpdaterIpc({
+      version: "0.17.1",
+      env: { OMNIRUSH_AUTO_UPDATE: "0" },
+      loadAutoUpdater: async () => { loaded = true; throw new Error("must not load"); },
+    });
+    try {
+      assert.equal((await handlers.get("omnirush:updater:check")(null, "stable")).available, false);
+      assert.deepEqual(await handlers.get("omnirush:updater:download")(), { ok: false, reason: "unavailable" });
+      assert.equal((await handlers.get("omnirush:updater:installAndRestart")()).ok, false);
+      assert.equal(await prepareInstallOnQuit(), null);
+      assert.equal(loaded, false);
+      assert.deepEqual(calls, []);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("macOS code signature detection", () => {
   it("derives the bundle path from the running executable", () => {
     assert.equal(

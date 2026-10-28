@@ -23,7 +23,7 @@ import { configureFakeMediaForTests, installMediaPermissionHandlers } from "./me
 import { registerMigrationIpc } from "./migration.mjs";
 import { createRuntimeManager, createSystemCaCertificateVerifyProc } from "./runtime.mjs";
 import { installAppRequestSecret } from "./app-request-secret.mjs";
-import { registerUpdaterIpc } from "./updater.mjs";
+import { registerUpdaterIpc, updatesTurnedOff } from "./updater.mjs";
 import { initialWindowSize } from "./window-size.mjs";
 import {
   browserActApproval,
@@ -2686,9 +2686,12 @@ const desktopCommandHandlers = {
   },
   "updaterEnvironment": async (event, ...args) => {
       const executablePath = app.isPackaged ? app.getPath("exe") : process.execPath;
+      const turnedOff = updatesTurnedOff();
       return {
-        supported: app.isPackaged,
-        reason: app.isPackaged ? null : "Updates are unavailable in development builds.",
+        supported: app.isPackaged && !turnedOff,
+        reason: !app.isPackaged
+          ? "Updates are unavailable in development builds."
+          : turnedOff ? "Updates are turned off (OMNIRUSH_AUTO_UPDATE=0)." : null,
         executablePath,
         appBundlePath:
           process.platform === "darwin"

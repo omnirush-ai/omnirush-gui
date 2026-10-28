@@ -495,6 +495,11 @@ async function fileMatchesSha512(filePath, expected) {
   });
 }
 
+// OMNIRUSH_AUTO_UPDATE=0 (as in the CLI) turns the updater off: no check, download or install, quit included.
+export function updatesTurnedOff(env = process.env) {
+  return env.OMNIRUSH_AUTO_UPDATE === "0";
+}
+
 // electron-updater wiring. Packaged-only; dev builds skip this so the
 // updater doesn't try to probe a non-existent release channel.
 export function preventPendingUpdaterInstall(updater) {
@@ -855,7 +860,7 @@ export function registerUpdaterIpc({
   }
 
   async function ensureAutoUpdater() {
-    if (!app.isPackaged) return null;
+    if (!app.isPackaged || updatesTurnedOff(env)) return null;
     if (!autoUpdaterLoadPromise) {
       autoUpdaterLoadPromise = (async () => {
         try {
@@ -1115,6 +1120,7 @@ export function registerUpdaterIpc({
     const id = stableVersion(rawId);
     const release = id ? recoveryReleases.find((candidate) => candidate.id === id) : null;
     if (!release) return { ok: false, reason: "That recovery version is no longer available. Retry the release list." };
+    if (updatesTurnedOff(env)) return { ok: false, reason: "Updates are turned off (OMNIRUSH_AUTO_UPDATE=0)." };
     if (release.eval) {
       if (env.OMNIRUSH_EVAL_RECOVERY_CANDIDATES) {
         recoveryWitness.installRequests.push({ version: release.version, artifactUrl: release.artifact.url });
