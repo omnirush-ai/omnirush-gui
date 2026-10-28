@@ -17,6 +17,7 @@ import {
   watchWebSearchSwitch,
   webSearchServerSwitch,
   webSearchSetting,
+  webSearchToolOff,
   writeUserWebSearch,
 } from "./web-search.js";
 
@@ -151,4 +152,15 @@ describe("the user's Settings switch", () => {
     rememberWebSearchSwitch(dir, { web_search: { ...serverBlock, enabled: false } });
     expect(hosted(webSearchSetting({ env: {}, stateDir: dir }))).toEqual([]);
   });
+});
+
+test("no websearch tool: the user's off in both modes; the account's off outside stock mode only", () => {
+  const dir = tmp();
+  rememberWebSearchSwitch(dir, { web_search: { ...serverBlock, enabled: true } });
+  for (const stock of [false, true]) expect(webSearchToolOff(webSearchSetting({ env: {}, stateDir: dir }), stock)).toBe(false);
+  rememberWebSearchSwitch(dir, { web_search: { ...serverBlock, enabled: false } });
+  expect(webSearchToolOff(webSearchSetting({ env: {}, stateDir: dir }), false)).toBe(true);
+  expect(webSearchToolOff(webSearchSetting({ env: {}, stateDir: dir }), true)).toBe(false);
+  writeUserWebSearch(dir, false);
+  for (const stock of [false, true]) expect(webSearchToolOff(webSearchSetting({ env: {}, stateDir: dir }), stock)).toBe(true);
 });

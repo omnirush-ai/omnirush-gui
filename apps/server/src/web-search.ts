@@ -118,6 +118,14 @@ export function webSearchSetting({ env = process.env, stateDir, user }: { env?: 
   return { enabled: false, source: "default", searchContextSize: size, models: null };
 }
 
+/**
+ * Whether the engine offers no websearch tool at all: the user turned it off, or (outside stock mode, where stock
+ * OpenCode's own tool stays) web search is off for this account, as the Settings switch then shows.
+ */
+export function webSearchToolOff(setting: WebSearchSetting, stock: boolean): boolean {
+  return setting.source === "user" || (!stock && !setting.enabled);
+}
+
 /** Whether `model` (a sanitized catalog entry) gets the tool under `setting`. */
 export function modelHasWebSearch(model: Pick<OmniRushCatalogModel, "id" | "capabilities"> | undefined, setting: WebSearchSwitch | null | undefined): boolean {
   if (!setting?.enabled || !model?.capabilities?.web_search) return false;

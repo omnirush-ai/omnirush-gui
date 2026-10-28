@@ -20,7 +20,7 @@ import {
 import type { EnvService } from "./env-file.js";
 import { selectPrimaryCredentialEnvName } from "./managed-provider-auth.js";
 import { isReleaseBuild } from "./release-guard.js";
-import { webSearchSetting } from "./web-search.js";
+import { webSearchSetting, webSearchToolOff } from "./web-search.js";
 import { buildOmniRushRuntimeConfigObject, omnirushTitleModel } from "./omnirush-runtime-config.js";
 import { OMNIRUSH_PROVIDER_ID } from "./provider-lock/provider-lock.mjs";
 import { CLOUD_MCP_NAME, cloudMcpEntry, desiredV2Mcp, v2McpGate } from "./engine-v2-mcp.js";
@@ -553,7 +553,7 @@ export function createEngineV2Preview(options: {
       },
       permissions: async () => executionRules((await readGlobalRuntimeOpencodeConfig(config)).managedPolicy?.execution),
       webSearch: () => webSearchSetting({ env: process.env, stateDir: runtimeStorageDir(config) }).enabled,
-      webSearchOff: () => webSearchSetting({ env: process.env, stateDir: runtimeStorageDir(config) }).source === "user",
+      webSearchOff: () => webSearchToolOff(webSearchSetting({ env: process.env, stateDir: runtimeStorageDir(config) }), stockMode()),
       // The Linux sandbox (box/): the shell and box plugin follow BoxService.engineBits on every config write.
       box: async () => v2BoxBits(await boxServiceFor(config).engineBits()),
       titleModel: () => omnirushTitleModel(config),
