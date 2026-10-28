@@ -75,4 +75,31 @@ describe("MCP Apps sandbox proxy policy", () => {
     expect(await response.text()).toContain("/mcp-apps/sandbox.js");
     expect((await fetch(`${base}/mcp-apps/sandbox.js`)).headers.get("content-type")).toContain("text/javascript");
   });
+
+  // Regression tests for sandbox postMessage wildcard origin fix (CWE-346)
+  describe("postMessage origin hardening regression", () => {
+    test("proxy script does NOT use wildcard '*' as postMessage target for host messages", () => {
+      // The old code had: hostTargetOrigin = hostOrigin === "null" ? "*" : hostOrigin
+      // The fix removes the "*" fallback entirely
+      expect(MCP_APP_SANDBOX_PROXY_SCRIPT).not.toContain('hostOrigin === "null" ? "*"');
+    });
+
+    test("proxy script rejects null/opaque host origins", () => {
+      // Must throw for null origins instead of falling back to wildcard
+      expect(MCP_APP_SANDBOX_PROXY_SCRIPT).toContain('hostOrigin === "null"');
+      expect(MCP_APP_SANDBOX_PROXY_SCRIPT).toContain("requires a non-opaque host origin");
+    });
+
+    test("inner iframe forwarding uses ownOrigin not wildcard", () => {
+      // The old code had: inner.contentWindow?.postMessage(event.data, "*")
+      // The fix uses: inner.contentWindow?.postMessage(event.data, ownOrigin)
+      expect(MCP_APP_SANDBOX_PROXY_SCRIPT).toContain("postMessage(event.data, ownOrigin)");
+      expect(MCP_APP_SANDBOX_PROXY_SCRIPT).not.toContain('postMessage(event.data, "*")');
+    });
+
+    test("host-targeted messages still use hostTargetOrigin (not wildcard)", () => {
+      // notifyHost still sends to hostTargetOrigin which is now always a real origin
+      expect(MCP_APP_SANDBOX_PROXY_SCRIPT).toContain("postMessage({ method, params }, hostTargetOrigin)");
+    });
+  });
 });

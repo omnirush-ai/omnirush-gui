@@ -71,8 +71,8 @@ export const MCP_APP_SANDBOX_PROXY_SCRIPT = String.raw`
   const referrerOrigin = document.referrer ? new URL(document.referrer).origin : null;
   if (declaredHostOrigin && referrerOrigin && declaredHostOrigin !== referrerOrigin) throw new Error("MCP App sandbox host origin mismatch.");
   const hostOrigin = referrerOrigin || declaredHostOrigin;
-  if (!hostOrigin) throw new Error("MCP App sandbox host origin is unavailable.");
-  const hostTargetOrigin = hostOrigin === "null" ? "*" : hostOrigin;
+  if (!hostOrigin || hostOrigin === "null") throw new Error("MCP App sandbox requires a non-opaque host origin.");
+  const hostTargetOrigin = hostOrigin;
   const ownOrigin = window.location.origin;
   // OmniRush.ai delivery diagnostics are deliberately outside JSON-RPC so the
   // stable MCP Apps transport never mistakes them for protocol messages.
@@ -118,7 +118,7 @@ export const MCP_APP_SANDBOX_PROXY_SCRIPT = String.raw`
         }
         return;
       }
-      inner.contentWindow?.postMessage(event.data, "*");
+      inner.contentWindow?.postMessage(event.data, ownOrigin);
       return;
     }
     if (event.source === inner.contentWindow && event.origin === ownOrigin) {

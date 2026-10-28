@@ -20,6 +20,20 @@ describe("hashToken", () => {
     const hash = hashToken("test");
     expect(hash).toMatch(/^[0-9a-f]+$/);
   });
+
+  // Regression tests for HMAC-SHA-256 pepper fix (CWE-916)
+  test("hash is NOT plain SHA-256 (pepper is applied)", () => {
+    // Plain SHA-256 of "test" is well-known; HMAC with pepper must differ
+    const { createHash } = require("node:crypto");
+    const plainSha256 = createHash("sha256").update("test").digest("hex");
+    const hmacResult = hashToken("test");
+    expect(hmacResult).not.toBe(plainSha256);
+  });
+
+  test("hash length is 64 hex chars (SHA-256 output)", () => {
+    const hash = hashToken("any-token");
+    expect(hash.length).toBe(64);
+  });
 });
 
 describe("shortId", () => {
