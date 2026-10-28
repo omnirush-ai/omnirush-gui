@@ -5,7 +5,9 @@
     {
       "version": "2.7.6",
       "date": "2026-10-28",
-      "new": [],
+      "new": [
+        "You can turn web search off for the agent: `omnirush websearch off` (back on with `omnirush websearch on`), or `--no-web-search` for one run. It applies from the next message, also in an open chat."
+      ],
       "improved": [
         "Typing `/effort` or `/model` with a word after it, such as `/effort low`, now shows how to change the effort or the model in a message that stays on screen long enough to read. Nothing is sent to the agent."
       ],
@@ -362,7 +364,8 @@
       "version": "3.8.2",
       "date": "2026-10-28",
       "new": [
-        "Settings > Preferences now shows the default model for new chats, with a Change button to pick another one."
+        "Settings > Preferences now shows the default model for new chats, with a Change button to pick another one.",
+        "Settings > Preferences has a Web search switch. Turn it off and the agent gets no web search tool from the next message on, also in an open chat. It can still open a web page you give it."
       ],
       "improved": [
         "In stock mode (OMNIRUSH_FARM=1) the agent's commands now run with the same environment and PATH as stock OpenCode, with nothing of OmniRush's added."
