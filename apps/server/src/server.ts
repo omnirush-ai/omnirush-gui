@@ -188,7 +188,7 @@ import { boxHome } from "./box/common.js";
 import { buildathonProjectsFile, reproStateFromBody, writeReproState } from "./buildathon-repro.js";
 import { prepareBoxInstallLog } from "./box/install-log.js";
 import { rememberServerDefault, watchServerDefault } from "./box/launch.js";
-import { rememberWebSearchSwitch, serverWebSearchEnabled, userWebSearchEnabled, watchWebSearchSwitch, webSearchSetting, writeUserWebSearch } from "./web-search.js";
+import { rememberWebSearchSwitch, userWebSearchEnabled, webSearchAllowed, watchWebSearchSwitch, webSearchSetting, writeUserWebSearch } from "./web-search.js";
 import { askSideQuestion, brokerSideCall } from "./side-question.js";
 import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/desktop.js";
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
@@ -4914,7 +4914,7 @@ function createRoutes(
   const webSearchState = () => {
     const stateDir = runtimeStorageDir(config);
     const user = userWebSearchEnabled(stateDir);
-    const serverAllows = stockMode() || serverWebSearchEnabled(stateDir);
+    const serverAllows = stockMode() || webSearchAllowed({ env: process.env, stateDir });
     return { enabled: user && serverAllows, user, serverAllows };
   };
   addRoute(routes, "GET", "/omnirush/web-search", "client", async () => jsonResponse(webSearchState()));

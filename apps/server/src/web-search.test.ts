@@ -143,6 +143,8 @@ describe("the user's Settings switch", () => {
     writeUserWebSearch(dir, false);
     expect(webSearchSetting({ env: {}, stateDir: dir })).toMatchObject({ enabled: false, source: "user" });
     expect(hosted(webSearchSetting({ env: {}, stateDir: dir }))).toEqual([]);
+    // The user's off wins over a test rig's OMNIRUSH_WEB_SEARCH=1 too.
+    expect(webSearchSetting({ env: { OMNIRUSH_WEB_SEARCH: "1" }, stateDir: dir })).toMatchObject({ enabled: false, source: "user" });
     writeUserWebSearch(dir, true);
     expect(hosted(webSearchSetting({ env: {}, stateDir: dir }))).toEqual(serverBlock.models);
     // The server's switch off wins over the user's on.

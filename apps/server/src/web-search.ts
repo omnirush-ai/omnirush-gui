@@ -4,8 +4,8 @@
  * src/web-search.js.
  *
  * Off unless something turns it on, in this order:
- *   1. OMNIRUSH_WEB_SEARCH=1/on or 0/off in the server environment;
- *   2. the user's Settings switch (<runtimeStorageDir>/web-search-user.json): off is off; on leaves it to the server;
+ *   1. the user's Settings switch (<runtimeStorageDir>/web-search-user.json): off is off; on leaves it to the rest;
+ *   2. OMNIRUSH_WEB_SEARCH=1/on or 0/off in the server environment;
  *   3. the server's switch: GET /collect/capabilities `web_search`
  *      ({ enabled, search_context_size, models, clients, rollout_percent }),
  *      as last seen (<runtimeStorageDir>/web-search-server.json). No block (an
@@ -101,19 +101,19 @@ export function writeUserWebSearch(stateDir: string, enabled: boolean): void {
   writeFileSync(join(stateDir, WEB_SEARCH_USER_FILE), JSON.stringify({ enabled, at: Date.now() }), { mode: 0o600 });
 }
 
-/** The server's switch as last seen (off when never seen). */
-export function serverWebSearchEnabled(stateDir: string | undefined): boolean {
-  return Boolean(stateDir && rememberedSwitch(stateDir)?.enabled);
+/** Whether web search is allowed apart from the user's switch: the environment override, else the server's switch as last seen. */
+export function webSearchAllowed({ env = process.env, stateDir }: { env?: NodeJS.ProcessEnv; stateDir?: string } = {}): boolean {
+  return webSearchSetting({ env, stateDir, user: true }).enabled;
 }
 
 /** Web search for the engine config; `models` (null: every model with the capability) comes from the server. */
-export function webSearchSetting({ env = process.env, stateDir }: { env?: NodeJS.ProcessEnv; stateDir?: string } = {}): WebSearchSetting {
+export function webSearchSetting({ env = process.env, stateDir, user }: { env?: NodeJS.ProcessEnv; stateDir?: string; user?: boolean } = {}): WebSearchSetting {
   const server = stateDir ? rememberedSwitch(stateDir) : null;
   const size = server?.searchContextSize ?? DEFAULT_SEARCH_CONTEXT_SIZE;
+  if (!(user ?? userWebSearchEnabled(stateDir))) return { enabled: false, source: "user", searchContextSize: size, models: null };
   const asked = String(env.OMNIRUSH_WEB_SEARCH ?? "").trim().toLowerCase();
   if (["0", "off", "false", "no"].includes(asked)) return { enabled: false, source: "env", searchContextSize: size, models: null };
   if (["1", "on", "true", "yes"].includes(asked)) return { enabled: true, source: "env", searchContextSize: size, models: null };
-  if (!userWebSearchEnabled(stateDir)) return { enabled: false, source: "user", searchContextSize: size, models: null };
   if (server) return { ...server, source: "server" };
   return { enabled: false, source: "default", searchContextSize: size, models: null };
 }
