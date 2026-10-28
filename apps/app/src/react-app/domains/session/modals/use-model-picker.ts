@@ -38,6 +38,26 @@ export type UseModelPickerInput = {
   cloudProvidersEnabled?: boolean;
 };
 
+const ACCOUNT_PROVIDER_IDS = new Set(["omnirush", "omnirush-claude"]);
+
+/**
+ * The picker's models: the engine's and the fallback ones. Without a cloud org sign-in the cloud-managed ones go,
+ * but the account's own models (the gateway's and Claude's) stay, as in the composer's ModelSelect.
+ */
+export function visibleModelOptions(
+  engineOptions: readonly ModelOption[],
+  fallbackOptions: readonly ModelOption[],
+  cloudProvidersEnabled: boolean,
+): ModelOption[] {
+  const merged = mergeModelOptions(engineOptions, fallbackOptions).filter((option) =>
+    isSupportedModelProvider(option.providerID));
+  if (cloudProvidersEnabled) return merged;
+  return mergeModelOptions(
+    engineOptions.filter((option) => ACCOUNT_PROVIDER_IDS.has(option.providerID.trim().toLowerCase())),
+    filterCloudManagedModelOptions(merged, false),
+  );
+}
+
 export function useModelPicker(input: UseModelPickerInput) {
   const {
     client,
@@ -154,11 +174,7 @@ export function useModelPicker(input: UseModelPickerInput) {
         });
       }
     }
-    return filterCloudManagedModelOptions(
-      mergeModelOptions(next, fallbackOptions).filter((option) =>
-        isSupportedModelProvider(option.providerID)),
-      cloudProvidersEnabled,
-    );
+    return visibleModelOptions(next, fallbackOptions, cloudProvidersEnabled);
   }, [cloudProvidersEnabled, fallbackOptions, providerListQuery.data, recentProviderIds]);
 
   // Apply organization restrictions after the product-level provider allowlist.
