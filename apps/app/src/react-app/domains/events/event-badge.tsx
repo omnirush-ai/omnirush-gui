@@ -71,7 +71,7 @@ export function EventBadge({ events, dismissed, onDismiss }: { events: OmniRushA
           <TooltipTrigger
             render={
               <div className="min-w-0 flex-1 cursor-default" tabIndex={0}>
-                <div className="truncate text-xs font-medium leading-5 text-sidebar-foreground" data-testid="event-badge-title">{event.title}</div>
+                <div className="line-clamp-2 break-words text-xs font-medium leading-5 text-sidebar-foreground" data-testid="event-badge-title">{event.title}</div>
                 {/* Two short lines in the narrow sidebar rather than one that breaks at its dot. */}
                 <div className="text-[10.5px] leading-snug text-muted-foreground" data-testid="event-badge-detail">
                   <div>{t("events.participating")}</div>
