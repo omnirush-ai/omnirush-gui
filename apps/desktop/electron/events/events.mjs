@@ -13,6 +13,8 @@
 
 const NAME_MAX = 60;
 
+/** @typedef {{ locale?: string, timeZone?: string }} Local */
+
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const text = (value, max) => (typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null);
 /** An ISO time as ms, null when absent, NaN when present but unreadable. */
@@ -62,6 +64,7 @@ export function eventsRecord(me) {
   return isRecord(me) ? { events: isRecord(me.events) ? me.events : null, stock_mode: isRecord(me.stock_mode) ? me.stock_mode : null } : null;
 }
 
+/** @param {number} at @param {Intl.DateTimeFormatOptions} options @param {Local} [local] */
 function format(at, options, { locale, timeZone } = {}) {
   const zone = timeZone ? { timeZone } : {};
   try {
@@ -77,7 +80,10 @@ function dayNumber(at, timeZone) {
   return Date.UTC(part("year"), part("month") - 1, part("day")) / 86_400_000;
 }
 
-/** "ends today 6:00 PM", "ends tomorrow 6:00 PM", "ends Fri 6:00 PM", "ends Nov 7" (local time). */
+/**
+ * "ends today 6:00 PM", "ends tomorrow 6:00 PM", "ends Fri 6:00 PM", "ends Nov 7" (local time).
+ * @param {number} at @param {number} [now] @param {Local} [local]
+ */
 export function endsLabel(at, now = Date.now(), local = {}) {
   const clock = format(at, { hour: "numeric", minute: "2-digit" }, local);
   const days = dayNumber(at, local.timeZone) - dayNumber(now, local.timeZone);
@@ -87,12 +93,15 @@ export function endsLabel(at, now = Date.now(), local = {}) {
   return `ends ${format(at, { month: "short", day: "numeric" }, local)}`;
 }
 
-/** "Oct 29, 2026" (local date). */
+/** "Oct 29, 2026" (local date). @param {number} at @param {Local} [local] */
 export function dateLabel(at, local = {}) {
   return format(at, { month: "short", day: "numeric", year: "numeric" }, local);
 }
 
-/** The words both apps show for an active event: { title, detail }. */
+/**
+ * The words both apps show for an active event: { title, detail }.
+ * @param {{ name: string, endsAt: number }} event @param {number} [now] @param {Local} [local]
+ */
 export function eventBadge(event, now = Date.now(), local = {}) {
   return { title: `${event.name} hackathon`, detail: `You're participating · ${endsLabel(event.endsAt, now, local)}` };
 }

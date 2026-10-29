@@ -56,8 +56,10 @@ export function applyEventStock(dir, env = process.env, now = Date.now()) {
  * The account status as the window gets it: the profile's raw `eventsRecord` is kept on disk and replaced by
  * `events` ({ active, joined, restart }; empty lists when the account has none; null to show nothing at all). `started` is applyEventStock's answer.
  * `restart`: an event now asks for the mode this run did not start in; it applies from the next start.
+ * @param {any} status
+ * @param {{ dir: string, started?: { stock?: boolean, event?: boolean, asked?: boolean }, now?: number, local?: { locale?: string, timeZone?: string } }} options
  */
-export function accountEvents(status, { dir, started, now = Date.now(), local } = {}) {
+export function accountEvents(status, { dir, started, now = Date.now(), local }) {
   if (!status || typeof status !== "object") return status;
   const { eventsRecord: record, ...rest } = status;
   if (record) saveEventsRecord(dir, record);
