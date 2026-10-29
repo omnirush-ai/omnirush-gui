@@ -587,6 +587,8 @@ export type OmniRushAccountStatus = {
   quality?: OmniRushAccountQuality | null;
   /** Hackathons the account takes part in (events/app-events.mjs); null or absent: show nothing. */
   events?: OmniRushAccountEvents | null;
+  /** Main process only: /device/me's raw events part, kept on disk and replaced by `events` before the window gets the status. */
+  eventsRecord?: unknown;
 };
 
 export type OmniRushAccountEvents = {
