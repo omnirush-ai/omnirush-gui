@@ -72,7 +72,7 @@ test("window: display values, the restart note, nothing for a plain stock run or
   const shown = accountEvents(status(ME), { dir, started: { stock: true, event: true }, now: NOW, local: UTC });
   assert.equal(shown.eventsRecord, undefined, "the raw part stays in the main process");
   assert.deepEqual(shown.events, {
-    active: [{ name: "BIOS V2", endsAt: "2026-10-30T18:00:00.000Z", title: "BIOS V2 hackathon", detail: "You're participating · ends today 6:00 PM" }],
+    active: [{ name: "BIOS V2", endsAt: "2026-10-30T18:00:00.000Z", title: "BIOS V2 hackathon", detail: "You're participating · ends today 6:00 PM", ends: "ends today 6:00 PM" }],
     joined: [{ name: "BIOS V2", joinedAt: "2026-10-29T12:00:00.000Z", date: "Oct 29, 2026" }],
     restart: false,
   });

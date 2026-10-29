@@ -72,7 +72,11 @@ export function EventBadge({ events, dismissed, onDismiss }: { events: OmniRushA
             render={
               <div className="min-w-0 flex-1 cursor-default" tabIndex={0}>
                 <div className="truncate text-xs font-medium leading-5 text-sidebar-foreground" data-testid="event-badge-title">{event.title}</div>
-                <div className="text-[10.5px] leading-snug text-muted-foreground" data-testid="event-badge-detail">{event.detail}</div>
+                {/* Two short lines in the narrow sidebar rather than one that breaks at its dot. */}
+                <div className="text-[10.5px] leading-snug text-muted-foreground" data-testid="event-badge-detail">
+                  <div>{t("events.participating")}</div>
+                  <div className="first-letter:uppercase">{event.ends}</div>
+                </div>
               </div>
             }
           />
@@ -94,9 +98,9 @@ export function EventBadge({ events, dismissed, onDismiss }: { events: OmniRushA
           type="button"
           onClick={() => void relaunchDesktopApp()}
           data-testid="event-badge-restart"
-          className="mt-1.5 ms-8 flex items-center gap-1 text-[10.5px] font-medium text-link hover:underline"
+          className="mt-1.5 ms-8 flex items-start gap-1 text-start text-[10.5px] font-medium leading-snug text-link hover:underline"
         >
-          <RotateCw className="size-3" />
+          <RotateCw className="mt-px size-3 shrink-0" />
           {t("events.restart")}
         </button>
       ) : null}

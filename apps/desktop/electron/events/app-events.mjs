@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { dateLabel, eventBadge, eventsRecord, parseEvents } from "./events.mjs";
+import { dateLabel, endsLabel, eventBadge, eventsRecord, parseEvents } from "./events.mjs";
 
 const FILE = "events.json";
 const STOCK_ENV = "OMNIRUSH_FARM";
@@ -70,7 +70,7 @@ export function accountEvents(status, { dir, started, now = Date.now(), local })
   return {
     ...rest,
     events: {
-      active: parsed.active.map((event) => ({ name: event.name, endsAt: new Date(event.endsAt).toISOString(), ...eventBadge(event, now, local) })),
+      active: parsed.active.map((event) => ({ name: event.name, endsAt: new Date(event.endsAt).toISOString(), ...eventBadge(event, now, local), ends: endsLabel(event.endsAt, now, local) })),
       joined: parsed.history.map((event) => ({ name: event.name, joinedAt: new Date(event.joinedAt).toISOString(), date: dateLabel(event.joinedAt, local) })),
       restart: Boolean(parsed.stock) && !started?.stock,
     },

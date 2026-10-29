@@ -2678,6 +2678,7 @@ export default {
   "settings.appearance.preset_high_contrast": "High contrast",
   "events.counting": "Chats you build in OmniRush while {name} runs count toward the event. There is nothing else to set up.",
   "events.hide": "Hide until tomorrow",
+  "events.participating": "You're participating",
   "events.show": "{name} hackathon: you're participating",
   "events.restart": "Restart OmniRush so your chats count",
   "events.joined_title": "Events you joined",

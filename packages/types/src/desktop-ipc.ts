@@ -590,8 +590,8 @@ export type OmniRushAccountStatus = {
 };
 
 export type OmniRushAccountEvents = {
-  /** Running now, the one ending first first. `title` "BIOS V2 hackathon", `detail` "You're participating · ends Fri 6:00 PM". */
-  active: Array<{ name: string; endsAt: string; title: string; detail: string }>;
+  /** Running now, the one ending first first. `title` "BIOS V2 hackathon", `detail` "You're participating · ends Fri 6:00 PM", `ends` its last part. */
+  active: Array<{ name: string; endsAt: string; title: string; detail: string; ends: string }>;
   /** Joined, newest first; `date` "Oct 29, 2026" (local). */
   joined: Array<{ name: string; joinedAt: string; date: string }>;
   /** The app has to start again for the event (it applies from the next start). */
