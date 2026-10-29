@@ -35,7 +35,7 @@ import {
   Sparkles,
   CircleHelp,
 } from "lucide-react";
-import { CalendarClock, LayoutDashboard, Megaphone, MessageSquareText, Puzzle } from "lucide-react";
+import { CalendarClock, Flag, LayoutDashboard, Megaphone, MessageSquareText, Puzzle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -70,6 +70,7 @@ import { canCreateWorkspaces } from "../../../../app/lib/workspace-creation-poli
 import { useShellConfig } from "../../../shell/shell-config";
 import { openFeedbackDialog } from "../../../../app/lib/in-app-feedback";
 import { openWhatsNew, useWhatsNewUnseen } from "../../whats-new/whats-new";
+import { EventBadge, activeEvent, useEventDismissed } from "../../events/event-badge";
 
 import {
   Sidebar,
@@ -1130,6 +1131,10 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
     : t("sidebar.sign_in_lower");
   const usage = connected && status?.usage ? omnirushUsageSummary(status.usage) : null;
   const quality = connected ? status?.quality ?? null : null;
+  // A hackathon running now: the card above the account, a flag in the tools row once it is hidden for the day.
+  const events = connected ? status?.events ?? null : null;
+  const event = activeEvent(events);
+  const [eventHidden, setEventHidden] = useEventDismissed(event?.name ?? null);
   // The account server label ("omnirush.ai", "localhost:8090 (local API)")
   // only matters while connected; a signed-out footer keeps the sign-in hint.
   const serverHost = connected ? status?.gatewayHost?.trim() || null : null;
@@ -1150,6 +1155,7 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
 
   return (
     <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
+      <EventBadge events={events} dismissed={eventHidden} onDismiss={() => setEventHidden(true)} />
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton
@@ -1224,6 +1230,17 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
       <div role="group" aria-label={t("sidebar.account_tools")} data-testid="sidebar-footer-tools" className="flex items-center gap-0.5 pe-1.5">
         {quality ? <QualitySpinButtons quality={quality} /> : null}
         <span className="flex-1" />
+        {event && eventHidden ? (
+          <SidebarIconButton
+            icon={Flag}
+            label={t("events.show", { name: event.name })}
+            title={`${event.title} · ${event.detail}`}
+            tooltipSide="top"
+            onClick={() => setEventHidden(false)}
+            data-testid="sidebar-event-flag"
+            badge={<span aria-hidden="true" className="absolute end-1 top-1 size-1.5 rounded-full bg-highlight" />}
+          />
+        ) : null}
         <WhatsNewIconButton />
         <SidebarIconButton icon={Settings} label={t("settings.tab_general")} tooltipSide="top" onClick={onOpenAccountSettings} data-testid="sidebar-settings" />
       </div>

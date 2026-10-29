@@ -254,6 +254,22 @@ describe("OmniRush gateway broker", () => {
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer access-token");
   });
 
+  test("every model request says whether the app runs stock (X-OmniRush-Stock 1 or 0)", async () => {
+    const before = process.env.OMNIRUSH_FARM;
+    try {
+      for (const [farm, expected] of [["", "0"], ["1", "1"]] as const) {
+        process.env.OMNIRUSH_FARM = farm;
+        const calls: UpstreamCall[] = [];
+        const response = await capturingBroker(calls).handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }, { "x-omnirush-stock": "spoofed" }), "responses");
+        expect(response.status).toBe(200);
+        expect(calls[0]?.headers.get("x-omnirush-stock")).toBe(expected);
+      }
+    } finally {
+      if (before === undefined) delete process.env.OMNIRUSH_FARM;
+      else process.env.OMNIRUSH_FARM = before;
+    }
+  });
+
   test("forwards the client request id so edge failures can be correlated", async () => {
     const calls: UpstreamCall[] = [];
     const broker = capturingBroker(calls);

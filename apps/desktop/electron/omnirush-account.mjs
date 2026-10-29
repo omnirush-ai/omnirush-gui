@@ -13,6 +13,7 @@ import {
   writePlaintextCredentialFile,
 } from "./plaintext-credential-file.mjs";
 import { CLIENT_HEADER, guiClientHeaderValue, parseClientUpdate } from "./update-gate.mjs";
+import { eventsRecord } from "./events/events.mjs";
 import { desktopBuild, gatewayUrlAllowedForBuild, isReleaseBuild, RELEASE_GATEWAY_ERROR } from "./build-variant.mjs";
 import { buildathonJoinError, buildathonLinkCode, buildathonLinkError, buildathonProjectName, buildathonTrackId, parseBuildathonAnswer, parseBuildathonSessions, parseBuildathonStatus } from "./buildathon.mjs";
 import { parseAccountQuality, parseFailLabels, parseQualitySessions, parseSessionStatus, parseSpinHistory, profileSessionId, parseSpinResult, parseWheelSegments, spinIdempotencyKey, spinRefusal } from "./quality.mjs";
@@ -256,6 +257,8 @@ function accountProfile(value) {
     clientUpdate: parseClientUpdate(value.client_update),
     // Quality rewards (quality.mjs); null while the feature is off.
     quality: parseAccountQuality(value.quality),
+    // Hackathon events (events/app-events.mjs): the raw part, kept on disk and turned into display values in main.mjs.
+    eventsRecord: eventsRecord(value),
   };
 }
 
@@ -1160,6 +1163,7 @@ export function createDesktopOmniRushAccountStore({
         usage: profile?.usage ?? null,
         clientUpdate: profile?.clientUpdate ?? null,
         quality: profile?.quality ?? null,
+        eventsRecord: profile?.eventsRecord ?? null,
       };
     } catch (error) {
       if (error instanceof InvalidAccountCredentialsError) {

@@ -129,6 +129,7 @@ import { createTurnGuard } from "./turn-guard.mjs";
 import { KEEP_AWAKE_FILE, createKeepAwake } from "./keep-awake.mjs";
 import { armQuitWatchdog } from "./quit-watchdog.mjs";
 import { projectChecklist } from "./buildathon-checklist.mjs";
+import { accountEvents, applyEventStock } from "./events/app-events.mjs";
 import {
   createRendererCrashRecovery,
   installSocketTypeOfServiceGuard,
@@ -295,6 +296,9 @@ const userDataPath = BLANK_SLATE_LAUNCH.userDataPath ?? resolveUserDataPath({
   userDataOverride: process.env.OMNIRUSH_ELECTRON_USERDATA,
 });
 app.setPath("userData", userDataPath);
+// A hackathon that runs its chats in stock mode (the last /device/me answer, events/app-events.mjs): on for
+// this run before anything reads OMNIRUSH_FARM, with no opt-out while it runs.
+const EVENT_STOCK = applyEventStock(userDataPath);
 const linuxDesktopIntegration = createLinuxDesktopIntegration({
   app,
   dialog,
@@ -1434,6 +1438,10 @@ const updateGate = createUpdateGate({
   },
 });
 
+/** The account status with the hackathon events as the window shows them (the answer's part kept for the next start). */
+async function accountStatusWithEvents(options) {
+  return accountEvents(await omnirushAccountStore.status(options), { dir: app.getPath("userData"), started: EVENT_STOCK });
+}
 const omnirushAccountStore = createDesktopOmniRushAccountStore({
   filePath: path.join(app.getPath("userData"), "omnirush-account.bin"),
   // Sign-in, device code, token refresh, profile and sign-out.
@@ -2473,7 +2481,7 @@ const desktopCommandHandlers = {
   "omnirushAccountStatus": async (event, ...args) => {
       // Optional `{ sessionId }`: the session open in the app, for the quality hint.
       const input = args[0] && typeof args[0] === "object" ? args[0] : {};
-      return omnirushAccountStore.status({ sessionId: typeof input.sessionId === "string" ? input.sessionId : null });
+      return accountStatusWithEvents({ sessionId: typeof input.sessionId === "string" ? input.sessionId : null });
   },
   // Quality rewards: the wheel's segments and recent sessions, spin totals, and one spin with the device
   // credential (X-OmniRush-Client like every account request). A refusal
@@ -3318,7 +3326,7 @@ ipcMain.handle("omnirush:update-gate:refresh", async () => {
   // The profile is read at launch and every 30 minutes even when no
   // account view is open, so a required update is known before the
   // deadline, not only from the first refused model request.
-  const readProfile = () => { void omnirushAccountStore.status().catch(() => null); };
+  const readProfile = () => { void accountStatusWithEvents().catch(() => null); };
   setTimeout(readProfile, 15_000).unref?.();
   setInterval(readProfile, 30 * 60_000).unref?.();
 }

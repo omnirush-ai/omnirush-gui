@@ -2676,4 +2676,13 @@ export default {
   "settings.appearance.same_as_code_font": "Same as code font",
   "settings.appearance.preset_default": "Default",
   "settings.appearance.preset_high_contrast": "High contrast",
+  "events.counting": "Chats you build in OmniRush while {name} runs count toward the event. There is nothing else to set up.",
+  "events.hide": "Hide until tomorrow",
+  "events.show": "{name} hackathon: you're participating",
+  "events.restart": "Restart OmniRush so your chats count",
+  "events.joined_title": "Events you joined",
+  "events.joined_on": "Joined {date}",
+  "events.live": "Live now",
+  "events.empty_title": "No events yet",
+  "events.empty_detail": "Join a hackathon with an event code and it shows up here.",
 } as const;

@@ -585,6 +585,17 @@ export type OmniRushAccountStatus = {
   clientUpdate?: OmniRushClientUpdate | null;
   /** Quality rewards; null (or absent from an older bridge) while the feature is off. */
   quality?: OmniRushAccountQuality | null;
+  /** Hackathons the account takes part in (events/app-events.mjs); null or absent: show nothing. */
+  events?: OmniRushAccountEvents | null;
+};
+
+export type OmniRushAccountEvents = {
+  /** Running now, the one ending first first. `title` "BIOS V2 hackathon", `detail` "You're participating · ends Fri 6:00 PM". */
+  active: Array<{ name: string; endsAt: string; title: string; detail: string }>;
+  /** Joined, newest first; `date` "Oct 29, 2026" (local). */
+  joined: Array<{ name: string; joinedAt: string; date: string }>;
+  /** The app has to start again for the event (it applies from the next start). */
+  restart: boolean;
 };
 
 export type EngineDoctorResult = {

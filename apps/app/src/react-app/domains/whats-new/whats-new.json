@@ -3,6 +3,15 @@
   "schema": 1,
   "cli": [
     {
+      "version": "2.7.7",
+      "date": "2026-10-30",
+      "new": [
+        "Joined a hackathon with an event code? OmniRush now shows that you're taking part, beside the prompt and in the sidebar, and `/usage` lists the events you've joined."
+      ],
+      "improved": [],
+      "fixed": []
+    },
+    {
       "version": "2.7.6",
       "date": "2026-10-28",
       "new": [
@@ -365,7 +374,8 @@
       "date": "2026-10-28",
       "new": [
         "Settings > Preferences now shows the default model for new chats, with a Change button to pick another one.",
-        "Settings > Preferences has a Web search switch. Turn it off and the agent gets no web search tool from the next message on, also in an open chat. It can still open a web page you give it."
+        "Settings > Preferences has a Web search switch. Turn it off and the agent gets no web search tool from the next message on, also in an open chat. It can still open a web page you give it.",
+        "Joined a hackathon with an event code? The app now shows that you're taking part, above your account in the sidebar, and Settings lists the events you've joined."
       ],
       "improved": [
         "In stock mode (OMNIRUSH_FARM=1) the agent's commands now run with the same environment and PATH as stock OpenCode, with nothing of OmniRush's added."

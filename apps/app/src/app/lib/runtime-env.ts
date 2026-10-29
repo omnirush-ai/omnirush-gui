@@ -13,3 +13,8 @@ export function isDesktopRuntime() {
 export function isStockMode() {
   return isElectronRuntime() && window.__OMNIRUSH_ELECTRON__?.meta?.stockMode === true;
 }
+
+/** Stock mode a hackathon turned on: the app says nothing about the mode itself then. */
+export function isEventMode() {
+  return isElectronRuntime() && window.__OMNIRUSH_ELECTRON__?.meta?.eventMode === true;
+}

@@ -52,6 +52,7 @@ import { useLinuxSandbox, type LinuxSandboxClient } from "../linux-sandbox";
 import { LinuxSandboxCard } from "../linux-sandbox-card";
 import { BuildathonTrackCard } from "../../buildathon/buildathon";
 import { ComputerUseSettingsCard } from "../../session/surface/computer-use/setup";
+import { EventsJoinedList } from "../../events/event-badge";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
@@ -523,6 +524,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
           </div>
         </div>
       )}
+      {isElectronRuntime() && account?.connected && account.events ? <EventsJoinedList events={account.events} /> : null}
       {/* Workspace settings */}
       <div className="space-y-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">

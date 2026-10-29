@@ -365,6 +365,8 @@ declare global {
         version?: string;
         evalFatalBootstrapFailure?: string | null;
         stockMode?: boolean;
+        /** A hackathon turned stock mode on at start (events/app-events.mjs). */
+        eventMode?: boolean;
       };
     };
   }

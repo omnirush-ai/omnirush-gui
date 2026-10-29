@@ -1,0 +1,3 @@
+# Hackathon events: the same file in omnirush-cli (assets/extensions/omnirush/events/)
+# and omnirush-gui (apps/desktop/electron/events/). A change to one must be ported to the other and this list updated in both.
+beb04f48e3fecd9403527677a0407b0671531025dc27ba14d4c0270f400d14a5  events.mjs

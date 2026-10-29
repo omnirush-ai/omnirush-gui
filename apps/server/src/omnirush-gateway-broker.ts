@@ -1996,7 +1996,7 @@ export class OmniRushGatewayBroker {
   modelCatalog(): Promise<Response> {
     return this.withDeviceBearer((state) => this.fetcher(upstreamUrl(state.gatewayUrl, "models"), {
       method: "GET",
-      headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json" },
+      headers: { Authorization: `Bearer ${state.accessToken}`, Accept: "application/json", "X-OmniRush-Stock": stockMode() ? "1" : "0" },
       signal: AbortSignal.timeout(8_000),
     }));
   }
@@ -2303,6 +2303,8 @@ export class OmniRushGatewayBroker {
     if (wrapSession && request.headers.get("x-omnirush-request-kind") === "compaction" && this.contextWrap?.(wrapSession)) headers.set("x-omnirush-context-wrap", "1");
     // A box (sandbox) chat's request: the gateway judges its model in the box mode.
     if (this.boxRequest(request)) headers.set(BOX_HEADER, "1");
+    // Whether this app runs stock (stock-mode.mjs), on every model request: the gateway checks it for event chats.
+    headers.set("X-OmniRush-Stock", stockMode() ? "1" : "0");
     // Strict sessions: every request of a chat says so (the gateway binds it itself if ours failed).
     if (strictHeader && headers.has("x-omnirush-session-id")) headers.set(strictHeader, "1");
     // The engine going away cancels the request, unless its answer already finished (settleOnFinish reads it to its end).
