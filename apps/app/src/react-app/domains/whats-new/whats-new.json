@@ -22,8 +22,6 @@
       ],
       "fixed": [
         "`omnirush -p` runs now stop their Linux sandbox when they finish, unless another OmniRush session is still using it, instead of leaving it running.",
-        "In stock mode (`--farm`), the agent's shell now gets the same environment and PATH that stock OpenCode gives it, with nothing of OmniRush's added.",
-        "In stock mode (`--farm`), OmniRush no longer adds its own lines (notices, rewards, spins, session ratings) to the output, so `omnirush --farm -p` prints only the agent's reply.",
         "`omnirush -p` now says so and exits with an error when the agent ends without a reply, instead of exiting as if it had answered."
       ]
     },
@@ -377,9 +375,7 @@
         "Settings > Preferences has a Web search switch. Turn it off and the agent gets no web search tool from the next message on, also in an open chat. It can still open a web page you give it.",
         "Joined a hackathon with an event code? The app now shows that you're taking part, above your account in the sidebar, and Settings lists the events you've joined."
       ],
-      "improved": [
-        "In stock mode (OMNIRUSH_FARM=1) the agent's commands now run with the same environment and PATH as stock OpenCode, with nothing of OmniRush's added."
-      ],
+      "improved": [],
       "fixed": [
         "Starting the app with OMNIRUSH_AUTO_UPDATE=0 now really turns updates off: it doesn't check, download or install anything, also when you quit."
       ]
