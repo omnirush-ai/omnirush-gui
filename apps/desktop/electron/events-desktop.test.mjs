@@ -41,6 +41,24 @@ test("parse: absent, empty, malformed, not started or ended read as no event", (
   assert.equal(parseEvents(ME, NOW).stock.event, "BIOS V2");
 });
 
+test("the live /device/me shape (+00:00, microseconds) and null blocks", () => {
+  const live = JSON.parse(`{"email": "a@b.c", "events": {"active": [{"name": "BIOS V2", "code": "BIOS10M", "starts_at": "2026-10-29T20:00:00+00:00", "ends_at": "2026-10-31T12:00:00+00:00", "stock_required": true}], "history": [{"name": "BIOS V2", "code": "BIOS10M", "joined_at": "2026-10-29T21:16:44.883717+00:00"}]}, "stock_mode": {"required": true, "reason": "event", "event": "BIOS V2"}}`);
+  const at = Date.parse("2026-10-29T22:00:00Z");
+  const shown = accountEvents(status(live), { dir: tmp(), started: { stock: true, event: true }, now: at, local: UTC });
+  assert.deepEqual(shown.events, {
+    active: [{ name: "BIOS V2", endsAt: "2026-10-31T12:00:00.000Z", title: "BIOS V2 hackathon", detail: "You're participating · ends Sat 12:00 PM", ends: "ends Sat 12:00 PM" }],
+    joined: [{ name: "BIOS V2", joinedAt: "2026-10-29T21:16:44.883Z", date: "Oct 29, 2026" }],
+    restart: false,
+  });
+  const dir = tmp();
+  accountEvents(status(live), { dir, started: { stock: false }, now: at });
+  assert.deepEqual(applyEventStock(dir, {}, at), { asked: false, event: true, stock: true });
+  // No code redeemed: null blocks, nothing kept that turns the mode on.
+  accountEvents(status({ events: null, stock_mode: null }), { dir, started: { stock: true, event: true }, now: at });
+  assert.deepEqual(applyEventStock(dir, {}, at), { asked: false, event: false, stock: false });
+  assert.deepEqual(accountEvents(status({ events: null, stock_mode: null }), { dir, started: { stock: false }, now: at }).events, { active: [], joined: [], restart: false });
+});
+
 test("start: an event's mode is on whatever the launch env says, and off again once the event ends", () => {
   const dir = tmp();
   // Nothing kept: the env decides.
