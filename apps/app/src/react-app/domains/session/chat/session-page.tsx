@@ -1517,7 +1517,7 @@ export function SessionPage(props: SessionPageProps) {
 
   // The chat itself: beside the sessions sidebar in Chat mode, docked on the right in IDE mode.
   const chatPane = (
-              <main data-session-pane className="@container/chatpane flex h-full min-w-0 flex-col overflow-hidden bg-dls-surface max-lg:rounded-none max-lg:border-0 max-lg:shadow-none lg:rounded-[14px] lg:border lg:border-border lg:shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:lg:shadow-[0_10px_30px_rgba(0,0,0,0.45)] mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
+              <main data-session-pane className="@container/chatpane flex h-full min-w-0 flex-col overflow-hidden bg-dls-surface max-lg:rounded-none max-lg:border-0 max-lg:shadow-none lg:rounded-[14px] lg:shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:lg:shadow-[0_10px_30px_rgba(0,0,0,0.45)] mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
           {/* The pane `<main>` above already carries the macOS vibrancy blur. A
               second backdrop filter on the header (or on the transcript surface
               below) is invisible — nothing scrolls beneath either — but each
@@ -2226,7 +2226,7 @@ export function SessionPage(props: SessionPageProps) {
                   useEditorStore.getState().setIdeChatWidth(size.inPixels);
                 }
               }}
-              className="min-h-0 flex-1 overflow-hidden lg:rounded-[14px] lg:border lg:border-border lg:shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:lg:shadow-[0_10px_30px_rgba(0,0,0,0.45)]"
+              className="min-h-0 flex-1 overflow-hidden lg:rounded-[14px] lg:shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:lg:shadow-[0_10px_30px_rgba(0,0,0,0.45)]"
               data-layout="ide"
             >
               <ResizablePanel minSize="420px" className="min-h-0 min-w-0">
@@ -2336,7 +2336,7 @@ export function SessionPage(props: SessionPageProps) {
                   maxSize="70%"
                   className="min-h-0 overflow-hidden pl-2 lg:flex lg:flex-col"
                 >
-                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-border bg-dls-surface shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:shadow-[0_10px_30px_rgba(0,0,0,0.45)] mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
+                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] bg-dls-surface shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:shadow-[0_10px_30px_rgba(0,0,0,0.45)] mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
                     {sidePanelContent}
                   </div>
                 </ResizablePanel>

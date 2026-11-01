@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, HashRouter } from "react-router";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { DesktopTitlebar } from "@/components/desktop-titlebar";
 import { initializeDenBootstrapConfig } from "./app/lib/den";
 import { startWebErrorMonitoring } from "./app/lib/error-monitoring";
 import { getOmniRushDeployment } from "./app/lib/omnirush-deployment";
@@ -50,7 +51,12 @@ ReactDOM.createRoot(root).render(
         <PlatformProvider value={platform}>
           <AppProviders>
             <Router>
-              <AppRoot />
+              <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+                <DesktopTitlebar />
+                <div className="flex-1 min-h-0 w-full overflow-hidden">
+                  <AppRoot />
+                </div>
+              </div>
             </Router>
           </AppProviders>
         </PlatformProvider>

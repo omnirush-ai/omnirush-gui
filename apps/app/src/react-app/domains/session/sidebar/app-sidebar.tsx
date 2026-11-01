@@ -1433,7 +1433,7 @@ export function AppSidebar(props: AppSidebarProps) {
         {brandLogoUrl ? (
           <div
             data-testid="brand-logo"
-            className="flex h-14 shrink-0 items-center px-3 pb-3 pt-2 mac:pt-0"
+            className="flex h-14 shrink-0 items-center px-3 pb-3 pt-2 mac:pt-0 windows:hidden"
           >
             <img
               src={brandLogoUrl}
@@ -1442,7 +1442,7 @@ export function AppSidebar(props: AppSidebarProps) {
             />
           </div>
         ) : (
-          <div data-sidebar-brand className="flex h-11 shrink-0 items-center gap-2 px-4 mac:titlebar-drag">
+          <div data-sidebar-brand className="flex h-11 shrink-0 items-center gap-2 px-4 mac:titlebar-drag windows:hidden">
             <img src={resolveExtensionIconSrc("/omnirush-mark.png")} alt="" className="size-5 shrink-0 object-contain dark:invert" />
             {brandAppName.toLowerCase() === "omnirush.ai" ? (
               <OmniRushWordmark className="truncate text-[15px] font-medium tracking-[-0.4px]" />
@@ -1453,7 +1453,7 @@ export function AppSidebar(props: AppSidebarProps) {
         )}
         {props.conversationHistory ? (
           <div
-            className="absolute end-1.5 top-2.5 z-50 flex items-center gap-0.5 max-lg:hidden mac:top-[7px] mac:titlebar-no-drag"
+            className="absolute end-1.5 top-2.5 z-50 flex items-center gap-0.5 max-lg:hidden mac:top-[7px] mac:titlebar-no-drag windows:hidden"
             role="group"
             aria-label={t("sidebar.history_controls")}
           >
@@ -1483,7 +1483,7 @@ export function AppSidebar(props: AppSidebarProps) {
             </Button>
           </div>
         ) : null}
-        <SidebarHeader className="mb-0 mt-2 gap-1">
+        <SidebarHeader className="mb-0 mt-2 gap-1 windows:mt-0 windows:pt-1.5">
           <SidebarMenu>
             <SidebarMenuItem className="flex items-center gap-0.5">
               <SidebarMenuButton
