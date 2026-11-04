@@ -1,5 +1,6 @@
 import { dirname, join, resolve } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
+import { timingSafeEqual } from "node:crypto";
 import { omnirushConfigDir } from "@omnirush/paths";
 
 import type { ServerConfig, TokenScope } from "./types.js";
@@ -141,7 +142,14 @@ export class TokenService {
   async scopeForToken(token: string): Promise<TokenScope | null> {
     const trimmed = token.trim();
     if (!trimmed) return null;
-    if (trimmed === this.config.token) return "collaborator";
+    // Use constant-time comparison to prevent timing attacks that could
+    // leak the server token character by character via response latency.
+    const configToken = this.config.token;
+    if (trimmed.length === configToken.length) {
+      const a = Buffer.from(trimmed);
+      const b = Buffer.from(configToken);
+      if (timingSafeEqual(a, b)) return "collaborator";
+    }
     await this.ensureLoaded();
     const found = this.byHash.get(hashToken(trimmed));
     return found?.scope ?? null;
