@@ -322,12 +322,12 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   const groups = useSettingsNavGroups(props.developerMode);
 
   return (
-    <Sidebar collapsible="icon" className="mac:**:data-[sidebar=sidebar]:bg-transparent">
+    <Sidebar collapsible="icon" className="border-e-0 group-data-[side=left]:border-e-0 mac:**:data-[sidebar=sidebar]:bg-transparent">
       <div className="hidden h-10 mac:block mac:titlebar-drag" />
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton type="button" onClick={props.onClose}>
+            <SidebarMenuButton type="button" onClick={props.onClose} className="titlebar-no-drag cursor-pointer">
               <ArrowLeft size={14} />
               <span>{t("dashboard.back_to_app")}</span>
             </SidebarMenuButton>
