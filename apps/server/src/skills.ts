@@ -161,7 +161,7 @@ async function parseSkillEntry(
         : extractTriggerFromBody(body);
   try {
     validateSkillName(name);
-    validateDescription(description);
+    if (description) validateDescription(description);
   } catch {
     return null;
   }
