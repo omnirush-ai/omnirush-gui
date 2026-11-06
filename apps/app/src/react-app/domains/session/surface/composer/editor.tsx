@@ -26,7 +26,9 @@ import {
   KEY_ARROW_RIGHT_COMMAND,
   KEY_BACKSPACE_COMMAND,
   KEY_ENTER_COMMAND,
+  KEY_MODIFIER_COMMAND,
   PASTE_COMMAND,
+  SELECT_ALL_COMMAND,
   type SerializedTextNode,
   type Spread,
   TextNode,
@@ -1297,6 +1299,66 @@ function MentionChipNavigationPlugin() {
   return null;
 }
 
+/**
+ * Fixes #285: Cmd/Ctrl+A should select only the prompt text, not attachment
+ * or mention chips. Lexical fires SELECT_ALL_COMMAND for the menu action and
+ * KEY_MODIFIER_COMMAND for the keyboard shortcut. Both are intercepted here at
+ * COMMAND_PRIORITY_CRITICAL so we can build a Lexical RangeSelection from the
+ * very first text offset of the first paragraph to the very last text offset of
+ * the last paragraph, without letting the browser's native select-all touch any
+ * chip DOM nodes that have `contentEditable="false"`.
+ */
+function SelectAllPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    function selectAllPromptText() {
+      const root = $getRoot();
+      const children = root.getChildren();
+      if (children.length === 0) return false;
+      const firstParagraph = children[0];
+      const lastParagraph = children[children.length - 1];
+      if (!$isElementNode(firstParagraph) || !$isElementNode(lastParagraph)) return false;
+      const sel = $createRangeSelection();
+      // Anchor: before the first child of the first paragraph.
+      sel.anchor.set(firstParagraph.getKey(), 0, "element");
+      // Focus: after the last child of the last paragraph.
+      sel.focus.set(lastParagraph.getKey(), lastParagraph.getChildrenSize(), "element");
+      $setSelection(sel);
+      return true;
+    }
+
+    const unregisterSelectAll = editor.registerCommand(
+      SELECT_ALL_COMMAND,
+      () => selectAllPromptText(),
+      COMMAND_PRIORITY_CRITICAL,
+    );
+
+    const unregisterModifier = editor.registerCommand(
+      KEY_MODIFIER_COMMAND,
+      (event: KeyboardEvent) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "a") {
+          event.preventDefault();
+          let handled = false;
+          editor.update(() => {
+            handled = selectAllPromptText();
+          });
+          return handled;
+        }
+        return false;
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    );
+
+    return () => {
+      unregisterSelectAll();
+      unregisterModifier();
+    };
+  }, [editor]);
+
+  return null;
+}
+
 function ImperativeHandlePlugin(props: { editorRef: ForwardedRef<LexicalPromptEditorHandle> }) {
   const [editor] = useLexicalComposerContext();
 
@@ -1455,6 +1517,7 @@ export const LexicalPromptEditor = forwardRef<LexicalPromptEditorHandle, EditorP
         <PastedTextExpandPlugin pastedText={props.pastedText} onExpandPastedText={props.onExpandPastedText} />
         <AttachmentRemovePlugin onRemoveAttachment={props.onRemoveAttachment} />
         <MentionChipNavigationPlugin />
+        <SelectAllPlugin />
         <ImperativeHandlePlugin editorRef={ref} />
       </div>
     </LexicalComposer>
