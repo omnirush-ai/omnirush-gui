@@ -2146,12 +2146,11 @@ function macosVibrancyForCurrentTheme() {
 function applyNativeTheme(mode) {
   nativeTheme.themeSource = mode;
 
-  if (process.platform !== "darwin") {
+  if (process.platform === "darwin") {
+    mainWindow?.setVibrancy(macosVibrancyForCurrentTheme());
+    mainWindow?.setBackgroundColor("#00000001");
     return true;
   }
-
-  mainWindow?.setVibrancy(macosVibrancyForCurrentTheme());
-  mainWindow?.setBackgroundColor("#00000001");
 
   return true;
 }
@@ -3114,6 +3113,10 @@ async function createMainWindow() {
       vibrancy: macosVibrancyForCurrentTheme(),
       visualEffectState: "active",
     });
+  } else if (process.platform === "win32") {
+    Object.assign(windowAppearanceOptions, {
+      frame: false,
+    });
   }
 
   const bootSidecar = await readBrandIconSidecar();
@@ -3173,9 +3176,14 @@ async function createMainWindow() {
   });
   mainWindow.setTitle(currentDisplayAppName);
 
+  mainWindow.on("maximize", () => mainWindow?.webContents.send("omnirush:window:maximized-change", true));
+  mainWindow.on("unmaximize", () => mainWindow?.webContents.send("omnirush:window:maximized-change", false));
+
   mainWindow.once("ready-to-show", () => {
     mainWindow?.setTitle(currentDisplayAppName);
-    if (process.platform === "win32") mainWindow?.setSkipTaskbar(false);
+    if (process.platform === "win32") {
+      mainWindow?.setSkipTaskbar(false);
+    }
     mainWindow?.show();
     flushPendingDeepLinks();
   });
@@ -3306,6 +3314,26 @@ ipcMain.on("omnirush:desktop-bootstrap-sync", (event) => {
 });
 ipcMain.on("omnirush:desktop-distribution-sync", (event) => {
   event.returnValue = DESKTOP_DISTRIBUTION;
+});
+ipcMain.handle("omnirush:window:minimize", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  win?.minimize();
+});
+ipcMain.handle("omnirush:window:maximize", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (win?.isMaximized()) {
+    win.unmaximize();
+  } else {
+    win?.maximize();
+  }
+});
+ipcMain.handle("omnirush:window:close", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  win?.close();
+});
+ipcMain.handle("omnirush:window:isMaximized", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  return win?.isMaximized() ?? false;
 });
 ipcMain.handle("omnirush:desktop", handleDesktopInvoke);
 ipcMain.handle("omnirush:shell:openExternal", async (event, url) => {

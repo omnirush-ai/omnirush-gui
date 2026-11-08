@@ -81,6 +81,25 @@ try {
 }
 
 contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
+  windowControls: {
+    minimize() {
+      return ipcRenderer.invoke("omnirush:window:minimize");
+    },
+    maximize() {
+      return ipcRenderer.invoke("omnirush:window:maximize");
+    },
+    close() {
+      return ipcRenderer.invoke("omnirush:window:close");
+    },
+    isMaximized() {
+      return ipcRenderer.invoke("omnirush:window:isMaximized");
+    },
+    onMaximizedChange(callback) {
+      const handler = (_event, isMax) => callback(isMax);
+      ipcRenderer.on("omnirush:window:maximized-change", handler);
+      return () => ipcRenderer.removeListener("omnirush:window:maximized-change", handler);
+    },
+  },
   invokeDesktop(command, ...args) {
     return ipcRenderer.invoke("omnirush:desktop", command, ...args);
   },

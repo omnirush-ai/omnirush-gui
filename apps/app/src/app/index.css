@@ -902,11 +902,24 @@ select:disabled {
    down by its height: viewport-sized boxes inside it take the shifted box. */
 [data-update-gate-shifted] .h-dvh,
 [data-update-gate-shifted] .h-svh,
-[data-update-gate-shifted] .h-screen {
+[data-update-gate-shifted] .h-screen,
+html.omnirush-electron.omnirush-platform-windows .h-dvh,
+html.omnirush-electron.omnirush-platform-windows .h-svh,
+html.omnirush-electron.omnirush-platform-windows .h-screen {
   height: 100%;
 }
 [data-update-gate-shifted] .min-h-dvh,
 [data-update-gate-shifted] .min-h-svh,
-[data-update-gate-shifted] .min-h-screen {
+[data-update-gate-shifted] .min-h-screen,
+html.omnirush-electron.omnirush-platform-windows .min-h-dvh,
+html.omnirush-electron.omnirush-platform-windows .min-h-svh,
+html.omnirush-electron.omnirush-platform-windows .min-h-screen {
   min-height: 100%;
+}
+
+/* Windows desktop title bar: prevent fixed sidebar from overlapping top 32px (2rem) */
+html.omnirush-electron.omnirush-platform-windows [data-slot="sidebar-container"] {
+  top: 2rem;
+  height: calc(100% - 2rem);
+  height: calc(100dvh - 2rem);
 }

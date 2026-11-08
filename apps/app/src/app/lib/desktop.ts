@@ -183,6 +183,13 @@ declare global {
       select: (id: string) => Promise<unknown>;
     };
     __OMNIRUSH_ELECTRON__?: {
+      windowControls?: {
+        minimize: () => Promise<void>;
+        maximize: () => Promise<void>;
+        close: () => Promise<void>;
+        isMaximized: () => Promise<boolean>;
+        onMaximizedChange?: (callback: (isMax: boolean) => void) => () => void;
+      };
       invokeDesktop?: <C extends DesktopCommandName>(
         command: C,
         ...args: DesktopCommandArgs<C>

@@ -97,7 +97,7 @@ export function SettingsShell(props: SettingsShellProps) {
   }
 
   return (
-    <div className="flex h-dvh min-h-dvh w-full overflow-hidden">
+    <div className="flex h-full min-h-0 w-full overflow-hidden">
       <SidebarProvider defaultOpen className="relative min-h-0 flex-1">
         <SettingsSidebar
           activeTab={props.activeTab}
@@ -110,8 +110,9 @@ export function SettingsShell(props: SettingsShellProps) {
           workspaces={props.workspaces}
           onSelectWorkspace={props.onSelectWorkspace}
         />
-        <SidebarInset className="min-h-0 overflow-hidden bg-background mac:bg-background/80 mac:[&_header]:transition-[padding-left] mac:[&_header]:duration-200 mac:[&_header]:ease-linear mac:peer-data-[state=collapsed]:[&_header]:pl-16 [&_header]:pl-16 lg:[&_header]:pl-6">
-          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <SidebarInset className="min-h-0 overflow-hidden bg-sidebar mac:bg-transparent mac:[&_header]:transition-[padding-left] mac:[&_header]:duration-200 mac:[&_header]:ease-linear mac:peer-data-[state=collapsed]:[&_header]:pl-16 [&_header]:pl-16 lg:[&_header]:pl-6">
+          <div className="flex min-h-0 flex-1 max-lg:p-0 lg:py-2 lg:pl-2 lg:pr-2">
+            <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-dls-surface max-lg:rounded-none max-lg:border-0 max-lg:shadow-none lg:rounded-[14px] mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
             <header className="shrink-0 flex h-10 items-center justify-between border-b border-dls-border px-4 md:px-6 mac:titlebar-drag">
               <div className="flex min-w-0 items-center gap-3">
                 <SidebarTrigger className="mac:titlebar-no-drag lg:hidden" />
@@ -155,6 +156,7 @@ export function SettingsShell(props: SettingsShellProps) {
 
             {props.footer}
           </main>
+          </div>
         </SidebarInset>
       </SidebarProvider>
     </div>
