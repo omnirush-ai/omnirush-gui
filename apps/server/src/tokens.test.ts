@@ -100,4 +100,41 @@ describe("TokenService", () => {
     const list = await service.list();
     expect(list.length).toBe(3);
   });
+
+  // Regression tests for timing-attack fix (CWE-208)
+  // Ensures constant-time comparison via timingSafeEqual works correctly
+  describe("timing-safe token comparison regression", () => {
+    test("exact match of config token returns collaborator", async () => {
+      const scope = await service.scopeForToken("test-client-token");
+      expect(scope).toBe("collaborator");
+    });
+
+    test("wrong token with same length returns null", async () => {
+      // Same length as "test-client-token" (17 chars) but different content
+      const scope = await service.scopeForToken("xxxx-client-token");
+      expect(scope).toBeNull();
+    });
+
+    test("wrong token with different length returns null", async () => {
+      const scope = await service.scopeForToken("short");
+      expect(scope).toBeNull();
+    });
+
+    test("empty token returns null", async () => {
+      const scope = await service.scopeForToken("");
+      expect(scope).toBeNull();
+    });
+
+    test("whitespace-padded config token still matches", async () => {
+      // scopeForToken trims input, so padded version should match
+      const scope = await service.scopeForToken("  test-client-token  ");
+      expect(scope).toBe("collaborator");
+    });
+
+    test("single-character-off token does not match", async () => {
+      // Differs only in the last character
+      const scope = await service.scopeForToken("test-client-tokeN");
+      expect(scope).toBeNull();
+    });
+  });
 });
