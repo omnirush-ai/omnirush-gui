@@ -59,7 +59,7 @@ import {
   resolveModelProviderDisplayName,
   resolveOmniRushModelGroup,
 } from "@/app/utils";
-import { isSupportedModelProvider, providerCatalogRank } from "@/app/lib/provider-catalog";
+import { compareGroupModels, isSupportedModelProvider, providerCatalogRank } from "@/app/lib/provider-catalog";
 import { useModelModeFilter } from "@/react-app/domains/session/surface/model-modes";
 import { useModelPickGate } from "@/react-app/domains/session/surface/claude-models";
 
@@ -181,7 +181,7 @@ function groupByProvider(modelOptions: ModelOption[]): ModelSelectGroup[] {
       value: providerLabel,
       // A family group (Meta Muse) follows its provider's own group.
       rank: Math.min(...options.map(({ option }) => providerCatalogRank(option.providerID) + (option.group ? 0.5 : 0))),
-      items: [...options].sort((a, b) => a.option.title.localeCompare(b.option.title)),
+      items: [...options].sort((a, b) => compareGroupModels(a.option, b.option)),
     }))
     .sort((a, b) => a.rank - b.rank || a.value.localeCompare(b.value));
 }

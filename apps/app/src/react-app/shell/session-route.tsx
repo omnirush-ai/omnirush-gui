@@ -4358,9 +4358,11 @@ export function SessionRoute() {
         try {
           const config = unwrap(await opencodeClient.config.get());
           const current = disabledProvidersFromConfig(config);
+          // The omnirush.ai group also lists Claude's models: switch both providers together.
+          const ids = providerId === "omnirush" ? [providerId, "omnirush-claude"] : [providerId];
           const next = enable
-            ? current.filter((id: string) => id !== providerId)
-            : [...current, providerId];
+            ? current.filter((id: string) => !ids.includes(id))
+            : [...current.filter((id: string) => !ids.includes(id)), ...ids];
           const result = await updateManagedDisabledProviders({
             opencodeClient,
             omnirushClient: selectedWorkspaceEndpoint?.client ?? null,
