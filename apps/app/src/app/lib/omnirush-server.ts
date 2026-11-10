@@ -624,6 +624,8 @@ export type OmniRushWorkConnector = {
   last_sync_at: string | null;
   records: number;
   sync_enabled: boolean;
+  /** A page to finish setup on after consent (GitHub: choose the repositories the App sees). */
+  setup_url?: string;
 };
 /** One source of GET /omnirush/work/health (contract Addendum A1). */
 export type OmniRushWorkHealth = {

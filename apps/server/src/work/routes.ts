@@ -46,6 +46,11 @@ const WORK_ERRORS: Record<string, string> = {
   connector_unavailable: "This connector is not available on this server right now.",
   not_connected: "Connect this source first.",
   omnirush_account_required: "Sign in to omnirush.ai to use Work.",
+  reconnect_required: "Sign-in expired or access was revoked. Reconnect this source.",
+  rate_limited: "The service asked us to slow down. Try again in a minute.",
+  provider_error: "The service returned an error. Try again.",
+  provider_unreachable: "The service could not be reached. Try again.",
+  unreadable_answer: "omnirush.ai answered with something unexpected. Try again.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;

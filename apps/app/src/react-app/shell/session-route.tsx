@@ -122,9 +122,10 @@ import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
 import { useAutomationDeploymentEnabled } from "@/react-app/domains/automations/automation-availability";
 import { automationsStateChangedEvent } from "@/react-app/domains/automations/automation-events";
-import type {
-  NewTaskComposerContext,
-  NewTaskComposerHandoff,
+import {
+  NewTaskComposer,
+  type NewTaskComposerContext,
+  type NewTaskComposerHandoff,
 } from "@/react-app/domains/session/chat/new-task-composer";
 import { isDesktopProviderBlocked } from "@/app/cloud/desktop-app-restrictions";
 import { useCheckDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
@@ -3713,15 +3714,25 @@ export function SessionRoute() {
     }
   }, [client, local, refreshRouteState]);
 
-  const startWorkChat = async (prompt: string) => {
+  const startWorkChat = async (prompt: string, attachments: ComposerAttachment[] = []) => {
     const workspaceId = workWorkspace?.id;
     if (!workspaceId) throw new Error("Work is still getting ready. Try again in a moment.");
     const sessionId = await handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary");
     if (!sessionId) throw new Error("Could not start a chat. Try again in a moment.");
-    saveSessionDraft(sessionDraftScope, workspaceId, sessionId, { text: prompt, mode: "prompt" });
+    // Attachment chips live in memory only, so the stored fallback draft drops their tokens (as Code's new task does).
+    saveSessionDraft(sessionDraftScope, workspaceId, sessionId, { text: prompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
     useComposerStateStore.getState().setDraft(sessionId, prompt);
+    if (attachments.length) useComposerStateStore.getState().setAttachments(sessionId, attachments);
     markComposerAutoSend(sessionId);
   };
+  // The Work home's composer: the new-task composer, on the Work workspace, with Work chat controls.
+  const [workHomeDraft, setWorkHomeDraft] = useState("");
+  const workHomeComposer = useMemo<NewTaskComposerContext | null>(() => newTaskComposerContext && workWorkspace ? {
+    ...newTaskComposerContext,
+    workspaceId: workWorkspace.id,
+    draftOwnerKey: JSON.stringify([sessionDraftScope, "work-home", workWorkspace.id]),
+    projectPicker: undefined,
+  } : null, [newTaskComposerContext, sessionDraftScope, workWorkspace]);
 
   const startAppConversation = async (prompt: string) => {
     const sessionId = await handleCreateTaskInWorkspaceWithOpenMode(selectedWorkspaceId, "primary");
@@ -3860,6 +3871,16 @@ export function SessionRoute() {
             message={workState.data?.message ?? null}
             onStart={startWorkChat}
             onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)}
+            composer={(
+              <NewTaskComposer
+                draft={workHomeDraft}
+                onDraftChange={setWorkHomeDraft}
+                onRunTask={(prompt, attachments) => startWorkChat(prompt, attachments)}
+                busy={!workWorkspace}
+                context={workHomeComposer}
+                workChat
+              />
+            )}
           />
         )
       ) : tasksRouteActive && tasksAvailable ? (
