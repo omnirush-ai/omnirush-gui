@@ -172,6 +172,11 @@ export function workErrorText(code: string | null | undefined): string {
   return WORK_ERROR_COPY[code] ?? "Sync failed. OmniRush retries on its own; reconnect if it keeps failing.";
 }
 
+/** A source in `error`: its sync has stopped (signed out, or too many failures in a row) until it is reconnected. */
+export function sourceErrorText(code: string | null | undefined): string {
+  return code === "reconnect_required" || code === "token_exchange_failed" ? workErrorText(code) : "Sync stopped after repeated errors. Reconnect to start it again.";
+}
+
 /** One source's row of a GET /work/health answer (a list, or `{sources}` / `{items}`); null when absent. */
 export function healthFor(answer: unknown, id: string): OmniRushWorkHealth | null {
   const box = answer && typeof answer === "object" ? (answer as Record<string, unknown>) : null;

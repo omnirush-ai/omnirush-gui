@@ -27,7 +27,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 
 import {
   connectorAccess, connectorLabel, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES,
-  workConnectorsKey, workErrorText, type AppMode, type WorkClient,
+  sourceErrorText, workConnectorsKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
 const CONNECTOR_ICONS: Record<string, LucideIcon> = {
@@ -185,18 +185,19 @@ export function ConnectorRow(props: {
   // Connected and caught up with nothing to read: for GitHub, the App is not installed on any repository yet.
   const needsSetup = Boolean(row.setup_url) && row.status === "connected" && row.records === 0;
   return (
-    <div className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
       <ConnectorIcon id={row.id} />
-      <div className="min-w-0 flex-1">
+      {/* The text keeps at least 16rem; on a narrow window the controls wrap under it instead of squeezing it. */}
+      <div className="min-w-[16rem] flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{name}</span>
           <Badge variant={row.status === "error" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
             {props.connecting ? "Waiting for sign-in…" : STATUS_LABEL[row.status]}
           </Badge>
         </div>
-        <div className={cn("mt-0.5 text-[12px] text-muted-foreground", connected && "truncate")}>
+        <div className={cn("mt-0.5 text-[12px] text-muted-foreground", connected && row.status !== "error" && "truncate")}>
           {row.status === "error"
-            ? workErrorText(row.error)
+            ? sourceErrorText(row.error)
             : connected
               ? [row.account, countLabel(row.records, "record"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
               : connectorAccess(row.id)}
@@ -212,8 +213,9 @@ export function ConnectorRow(props: {
           </div>
         ) : null}
       </div>
+      <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
       {connected ? (
-        <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        <label className="me-2 flex items-center gap-2 text-[12px] text-muted-foreground">
           Data sync
           <Switch
             aria-label={`Data sync for ${name}`}
@@ -237,6 +239,7 @@ export function ConnectorRow(props: {
       ) : (
         <Button size="sm" aria-label={`Connect ${name}`} disabled={props.busy || props.connecting} onClick={props.onConnect}>Connect</Button>
       )}
+      </div>
     </div>
   );
 }

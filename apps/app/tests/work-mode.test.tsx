@@ -128,7 +128,7 @@ describe("Work mode", () => {
   test("errors read as words: known codes get their sentence, internal names never show", () => {
     const sync = renderToStaticMarkup(<ConnectorRow connector={row({ status: "error", error: "KeyError" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
     expect(sync).not.toContain("KeyError");
-    expect(sync).toContain("Sync failed");
+    expect(sync).toContain("Sync stopped after repeated errors");
     expect(workErrorText("provider_unreachable")).toContain("could not be reached");
   });
 
