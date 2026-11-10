@@ -57,6 +57,7 @@ import { SandboxStatusChip } from "./composer/sandbox-status-chip";
 import { SandboxSetupPanel } from "./sandbox-setup-panel";
 import { useSessionCommandsStore } from "@/react-app/domains/session/commands/session-commands-store";
 import { SubagentModelMenu } from "./composer/subagent-model-menu";
+import { WorkConnectorsChip } from "@/react-app/domains/work/work-views";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import type { ModelAvailability } from "./model-availability";
@@ -3698,7 +3699,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}
           fullPermissionsControl={<FullPermissionsToggle client={props.client} workspaceId={props.workspaceId} />}
           sandboxControl={<SandboxStatusChip client={props.client} workspaceId={props.workspaceId} sessionId={props.sessionId ?? null} model={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} onOpenSettings={() => props.onOpenSettingsSection?.("sandbox")} />}
-          subagentModelControl={props.workChat ? undefined : <SubagentModelMenu client={props.client} chatModel={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} />}
+          subagentModelControl={props.workChat ? <WorkConnectorsChip workChat client={props.client} /> : <SubagentModelMenu client={props.client} chatModel={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} />}
           voiceClient={props.client}
           voiceWorkspaceId={props.workspaceId}
           draft={autoSendPayload ? draft : autoSending ? "" : draft}

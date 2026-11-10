@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, WORK_TEMPLATES, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
-import { ConnectorIcon, ConnectorRow, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
+import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, WORK_TEMPLATES, workConnectorsKey, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
@@ -51,6 +53,24 @@ describe("Work mode", () => {
     expect(markup).toContain('data-app-mode="work"');
     expect(markup).toMatch(/aria-checked="true"[^>]*data-app-mode-option="work"/);
     expect(markup).toMatch(/aria-checked="false"[^>]*data-app-mode-option="code"/);
+  });
+
+  test("the composer Connectors chip shows in a Work chat (icons + count, or Connect tools) and not in Code", () => {
+    const client = { baseUrl: "http://chip.test" } as never;
+    const chip = (workChat: boolean, rows: OmniRushWorkConnector[]) => {
+      const queries = new QueryClient();
+      queries.setQueryData(workConnectorsKey(client), rows);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsChip workChat={workChat} client={client} /></MemoryRouter></QueryClientProvider>);
+    };
+    const linked = [row({ status: "connected" }), row({ id: "slack", label: "Slack", status: "syncing" }), row({ id: "notion", label: "Notion" })];
+    const work = chip(true, linked);
+    expect(work).toContain('data-testid="work-connectors-chip"');
+    expect(work).toContain('aria-label="2 connectors"');
+    expect(work).toContain('data-connector-icon="google"');
+    expect(work).toContain('data-connector-icon="slack"');
+    expect(work).not.toContain('data-connector-icon="notion"');
+    expect(chip(true, [row({})])).toContain("Connect tools");
+    expect(chip(false, linked)).toBe("");
   });
 
   test("the home asks what to get done, hosts the chat composer and shows the six template cards on one column", () => {
