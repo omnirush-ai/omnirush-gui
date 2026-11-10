@@ -91,6 +91,8 @@ export type NewTaskComposerProps = {
   /** Disable submission while a default workspace is being prepared. */
   busy: boolean;
   context: NewTaskComposerContext | null;
+  /** A Work chat's composer: no sub-agent model menu (as in the running Work chat). */
+  workChat?: boolean;
 };
 
 export type NewTaskComposerHandoff = {
@@ -469,7 +471,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       runModeControl={<WorkspaceRunModeMenu client={workspaceClient} workspaceId={workspaceId} busy={props.busy} />}
       fullPermissionsControl={<FullPermissionsToggle client={workspaceClient} workspaceId={workspaceId} />}
       sandboxControl={<SandboxStatusChip client={workspaceClient} workspaceId={workspaceId} model={context?.selectedModel?.providerID === "omnirush" ? context.selectedModel.modelID : null} onOpenSettings={() => context?.onOpenSettingsSection?.("sandbox")} />}
-      subagentModelControl={<SubagentModelMenu client={workspaceClient} chatModel={context?.selectedModel?.providerID === "omnirush" ? context.selectedModel.modelID : null} />}
+      subagentModelControl={props.workChat ? undefined : <SubagentModelMenu client={workspaceClient} chatModel={context?.selectedModel?.providerID === "omnirush" ? context.selectedModel.modelID : null} />}
           voiceClient={workspaceClient}
           voiceWorkspaceId={workspaceId}
       draft={props.draft}

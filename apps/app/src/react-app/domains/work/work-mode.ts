@@ -136,6 +136,42 @@ export const CONNECTOR_LABELS: Record<string, string> = {
 };
 export const connectorLabel = (id: string, label?: string | null) => label?.trim() || CONNECTOR_LABELS[id] || id;
 
+/** What each connector lets the agent do, in a line, for the Connectors page (an unknown id gets the generic line). */
+export const CONNECTOR_ACCESS: Record<string, string> = {
+  google: "Reads Gmail, Drive and Calendar. Drafts and sends e-mail and creates events only after you approve.",
+  microsoft: "Reads Outlook, OneDrive, SharePoint and Teams chats (work or school account). Sends and posts only after you approve.",
+  slack: "Reads the channels, DMs and files you can see. Posts as you only after you approve.",
+  hubspot: "Reads contacts, companies, deals and tickets. Adds notes and tasks and updates deals only after you approve.",
+  quickbooks: "Reads customers, invoices, bills and payments. Creates invoice drafts only after you approve.",
+  notion: "Reads only the pages you share with OmniRush when you connect. Creates pages only after you approve.",
+  jira: "Reads issues and comments on the sites you allow. Comments and creates issues only after you approve.",
+  confluence: "Reads pages, spaces and comments on the sites you allow. Creates pages only after you approve.",
+  linear: "Reads issues, projects and comments. Comments and creates issues only after you approve.",
+  github: "Reads issues, pull requests and docs in the repositories you install the OmniRush app on. Comments and creates issues only after you approve.",
+};
+export const connectorAccess = (id: string) => CONNECTOR_ACCESS[id] ?? "Connect to let the agent search and use it. It asks you before it sends or changes anything.";
+
+/** A connector's setup link label: GitHub's is where the user picks repositories. */
+export const setupLabel = (id: string) => (id === "github" ? "Choose repositories" : "Finish setup");
+
+const WORK_ERROR_COPY: Record<string, string> = {
+  reconnect_required: "Sign-in expired or access was revoked. Reconnect.",
+  rate_limited: "The service asked us to slow down. Sync resumes on its own.",
+  provider_error: "The service returned an error. Sync retries on its own.",
+  provider_unreachable: "The service could not be reached. Sync retries on its own.",
+  token_exchange_failed: "The service did not accept the sign-in. Reconnect.",
+  connector_unavailable: "This connector is not available on this server right now.",
+  work_disabled: "Work is turned off for your account.",
+  not_connected: "Not connected.",
+};
+
+/** A server error code (a source's `error`, a health check detail) in words. Unknown codes (internal names such as
+ *  `KeyError`) never reach the screen as they are. */
+export function workErrorText(code: string | null | undefined): string {
+  if (!code) return "Something went wrong. Reconnect.";
+  return WORK_ERROR_COPY[code] ?? "Sync failed. OmniRush retries on its own; reconnect if it keeps failing.";
+}
+
 /** One source's row of a GET /work/health answer (a list, or `{sources}` / `{items}`); null when absent. */
 export function healthFor(answer: unknown, id: string): OmniRushWorkHealth | null {
   const box = answer && typeof answer === "object" ? (answer as Record<string, unknown>) : null;
@@ -143,6 +179,8 @@ export function healthFor(answer: unknown, id: string): OmniRushWorkHealth | nul
   const row = rows.find((item): item is OmniRushWorkHealth => Boolean(item) && typeof item === "object" && (item as { id?: unknown }).id === id);
   return row ?? null;
 }
+
+const CHECK_NAMES: Record<string, string> = { token: "Sign-in", scopes: "Permissions", sync: "Sync" };
 
 /** What a health check says, in a line: missing scopes (reconnect), a failed check or the last error; null when all is well. */
 export function healthProblem(health: OmniRushWorkHealth | null): { text: string; reconnect: boolean } | null {
@@ -153,8 +191,13 @@ export function healthProblem(health: OmniRushWorkHealth | null): { text: string
   }
   if (health.token_ok === false) return { text: "Sign-in expired or revoked. Reconnect.", reconnect: true };
   const failed = (health.checks ?? []).find((check) => !check.ok);
-  if (failed) return { text: `${failed.name} failed${failed.detail ? `: ${failed.detail}` : ""}`, reconnect: false };
-  if (health.last_error) return { text: health.last_error, reconnect: false };
+  if (failed) {
+    const detail = failed.detail?.trim();
+    // A check's detail is either a code (`provider_error`) or already words (`sync off`).
+    const words = detail && /^[a-z]+(_[a-z]+)+$|^[A-Z]\w*Error$/.test(detail) ? workErrorText(detail) : detail;
+    return { text: `${CHECK_NAMES[failed.name] ?? failed.name}: ${words || "failed"}`, reconnect: detail === "reconnect_required" };
+  }
+  if (health.last_error) return { text: workErrorText(health.last_error), reconnect: health.last_error === "reconnect_required" };
   return null;
 }
 
