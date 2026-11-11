@@ -187,14 +187,19 @@ export function healthFor(answer: unknown, id: string): OmniRushWorkHealth | nul
 
 const CHECK_NAMES: Record<string, string> = { token: "Sign-in", scopes: "Permissions", sync: "Sync" };
 
+/** An entity key as shown: an address or domain without its `email:`/`domain:` tag; other keys (hubspot:company:77) as they are. */
+export function keyLabel(key: string): string {
+  return key.replace(/^(email|domain):(?=.)/, "");
+}
+
 /** What a health check says, in a line: missing scopes (reconnect), a failed check or the last error; null when all is well. */
 export function healthProblem(health: OmniRushWorkHealth | null): { text: string; reconnect: boolean } | null {
   if (!health) return null;
   const missing = (health.missing_scopes ?? []).filter(Boolean);
-  if (missing.length || health.scopes_ok === false) {
-    return { text: `Missing permissions${missing.length ? `: ${missing.join(", ")}` : ""}. Reconnect to grant them.`, reconnect: true };
-  }
+  if (missing.length) return { text: `Missing permissions: ${missing.join(", ")}. Reconnect to grant them.`, reconnect: true };
+  // A token that fails says nothing about the scopes (the server reports them as not ok then too).
   if (health.token_ok === false) return { text: "Sign-in expired or revoked. Reconnect.", reconnect: true };
+  if (health.scopes_ok === false) return { text: "Missing permissions. Reconnect to grant them.", reconnect: true };
   const failed = (health.checks ?? []).find((check) => !check.ok);
   if (failed) {
     const detail = failed.detail?.trim();

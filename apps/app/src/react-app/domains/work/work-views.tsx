@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BookOpen, Briefcase, Calculator, CalendarDays, Cloud, Code2, FileText, Github, Handshake, Hash, Inbox, Kanban, LifeBuoy, Mail, Plug,
+  ArrowLeft, BookOpen, Briefcase, Calculator, CalendarDays, Cloud, Code2, FileText, Github, Handshake, Hash, Inbox, Kanban, LifeBuoy, Mail, Plug,
   Receipt, Search, Shapes, Ticket, TrendingUp, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -27,7 +27,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 
 import {
   connectorAccess, connectorLabel, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES,
-  sourceErrorText, workConnectorsKey, type AppMode, type WorkClient,
+  sourceErrorText, workConnectorsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
 const CONNECTOR_ICONS: Record<string, LucideIcon> = {
@@ -195,7 +195,7 @@ export function ConnectorRow(props: {
             {props.connecting ? "Waiting for sign-in…" : STATUS_LABEL[row.status]}
           </Badge>
         </div>
-        <div className={cn("mt-0.5 text-[12px] text-muted-foreground", connected && row.status !== "error" && "truncate")}>
+        <div className="mt-0.5 break-words text-[12px] text-muted-foreground">
           {row.status === "error"
             ? sourceErrorText(row.error)
             : connected
@@ -269,7 +269,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
       toast.error("Sign-in did not finish. Try connecting again.");
     }
   }, [connecting, query.data]);
-  const onError = (reason: unknown) => toast.error(reason instanceof Error ? reason.message : "That did not work. Try again.");
+  const onError = (reason: unknown) => {
+    toast.error(reason instanceof Error ? reason.message : "That did not work. Try again.");
+    // Work was switched off: the app leaves Work now rather than when its switch is next read.
+    if ((reason as { code?: unknown } | null)?.code === "work_disabled") void queryClient.invalidateQueries({ queryKey: workStateKey(props.client) });
+  };
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
   const connect = useMutation({
     mutationFn: (id: string) => props.client!.startWorkConnector(id),
@@ -300,7 +304,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     <div className="h-full overflow-y-auto" data-testid="work-connectors">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-10 pt-10">
         <div>
-          {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}>Back to Work</Button> : null}
+          {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}><ArrowLeft className="size-4" />Back to Work</Button> : null}
           <h1 className="text-xl font-semibold tracking-tight">Connectors</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Connect the tools your business uses. The agent can search and read them in Work chats, and asks you before it sends or changes anything. Data sync keeps a copy up to date; switch it off to stop collecting new data.

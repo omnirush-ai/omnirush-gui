@@ -146,14 +146,14 @@ describe("work prompt and tools", () => {
 
 describe("work routes", () => {
   const json = (data: unknown, status = 200) => Response.json(data, { status });
-  function setup(answer: (path: string, init: { method: string; body?: string; headers?: Record<string, string> }) => Response) {
+  function setup(answer: (path: string, init: { method: string; body?: string; headers?: Record<string, string> }) => Response, capabilities: WorkBroker["capabilities"] = async () => ({ work: { enabled: true, sources: ["mock"] } })) {
     const dir = temp();
     const calls: string[] = [];
     const routes: Route[] = [];
     const broker: WorkBroker = {
       workRequest: async (path, init) => { calls.push(`${init.method} ${path} ${init.body ?? ""}`); return answer(path, init); },
       accountId: async () => "user_1",
-      capabilities: async () => ({ work: { enabled: true, sources: ["mock"] } }),
+      capabilities,
     };
     const config = { workspaces: [] } as unknown as ServerConfig;
     const refreshed: number[] = [];
@@ -223,6 +223,18 @@ describe("work routes", () => {
     const response = await call("GET", "/work/connectors");
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ detail: "work_disabled", code: "work_disabled", message: "Work is turned off for your account." });
+  });
+
+  test("after a work_disabled answer the next state read asks the server again instead of using its cached switch", async () => {
+    const asked: unknown[] = [];
+    let enabled = true;
+    const { call } = setup(() => json({ detail: "work_disabled" }, 404), async (options) => { asked.push(options); return { work: { enabled, sources: ["mock"] } }; });
+    expect((await (await call("GET", "/work/state")).json()).enabled).toBe(true);
+    enabled = false;
+    await call("PATCH", "/work/connectors/mock", { sync_enabled: false });
+    expect((await (await call("GET", "/work/state")).json()).enabled).toBe(false);
+    await call("GET", "/work/state");
+    expect(asked).toEqual([undefined, { maxAgeMs: 0 }, undefined]);
   });
 
   test("the engine's MCP call is forwarded as POST with its MCP headers; GET is 405", async () => {

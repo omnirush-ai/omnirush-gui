@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, shownInMode, visibleConnectors, WORK_TEMPLATES, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, WORK_TEMPLATES, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
 import { ConnectorIcon, ConnectorRow, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
@@ -120,6 +120,10 @@ describe("Work mode", () => {
     expect(healthProblem({ id: "x", checks: [{ name: "sync", ok: false, detail: "provider_error" }] })?.text).toBe("Sync: The service returned an error. Sync retries on its own.");
     expect(healthProblem({ id: "x", checks: [{ name: "sync", ok: false, detail: "sync off" }] })?.text).toBe("Sync: sync off");
     expect(healthProblem({ id: "x", token_ok: false })?.reconnect).toBe(true);
+    // A failing token is the reason even when the scopes are reported not ok with it (none named missing).
+    expect(healthProblem({ id: "x", token_ok: false, scopes_ok: false, missing_scopes: [] })?.text).toBe("Sign-in expired or revoked. Reconnect.");
+    expect(healthProblem({ id: "x", token_ok: true, scopes_ok: false })?.text).toBe("Missing permissions. Reconnect to grant them.");
+    expect(healthProblem({ id: "x", token_ok: false, missing_scopes: ["chat:read"] })?.text).toBe("Missing permissions: chat:read. Reconnect to grant them.");
     expect(healthProblem({ id: "x", last_error: "KeyError" })?.text).not.toContain("KeyError");
     expect(healthProblem({ id: "x", last_error: "rate_limited" })?.text).toContain("slow down");
     expect(healthProblem({ id: "x", token_ok: true, scopes_ok: true })).toBeNull();
@@ -176,6 +180,9 @@ describe("Work mode", () => {
     );
     expect(markup).toContain("Acme Bakery");
     expect(markup).toContain("acme-bakery.test");
+    expect(keyLabel("email:ann@acme.test")).toBe("ann@acme.test");
+    expect(keyLabel("domain:acme.test")).toBe("acme.test");
+    expect(keyLabel("hubspot:company:77")).toBe("hubspot:company:77");
     expect(markup).toContain("Never discount more than 10%.");
     expect(markup).not.toContain("Old address");
     expect(markup).toContain(">Retire<");

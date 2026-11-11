@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, MessageSquarePlus, Search } from "lucide-react";
+import { ArrowLeft, ExternalLink, MessageSquarePlus, Search } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { OmniRushWorkEntityDetail, OmniRushWorkEntityRecord, OmniRushWorkEntitySummary, OmniRushWorkFact } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutPrompt, connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, workEntityKey, type WorkClient } from "./work-mode";
+import { askAboutPrompt, connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, keyLabel, workEntityKey, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
 
 const PAGE = 50;
@@ -171,7 +171,7 @@ export function EntityDetail(props: {
           {entity.sources.map((source) => (
             <Badge key={`s:${source}`} variant="secondary" className="gap-1"><ConnectorIcon id={source} className="size-3" />{connectorLabel(source)}</Badge>
           ))}
-          {entity.keys.map((key) => <Badge key={`k:${key}`} variant="outline" className="font-mono text-[11px]">{key}</Badge>)}
+          {entity.keys.map((key) => <Badge key={`k:${key}`} variant="outline" className="font-mono text-[11px]">{keyLabel(key)}</Badge>)}
         </div>
       ) : null}
 
@@ -260,7 +260,7 @@ export function WorkKnowledgePage(props: {
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="work-knowledge">
       <div className="border-b border-border px-6 pb-4 pt-8">
-        {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}>Back to Work</Button> : null}
+        {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}><ArrowLeft className="size-4" />Back to Work</Button> : null}
         <h1 className="text-xl font-semibold tracking-tight">Knowledge</h1>
         <p className="mt-1 text-sm text-muted-foreground">People, companies and deals found across your connected sources, and what the agent should remember about them.</p>
       </div>
