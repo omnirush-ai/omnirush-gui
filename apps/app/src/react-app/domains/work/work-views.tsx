@@ -26,7 +26,7 @@ import {
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 
 import {
-  connectorAccess, connectorLabel, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES,
   sourceErrorText, workConnectorsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
@@ -89,7 +89,7 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
 
 /** Work home: "What do you want to get done?", the real chat composer (passed in, the same one the running Work chat
  *  uses, so nothing jumps on send) and the template cards, all on one centred column the width of the chat composer. */
-export function WorkHome(props: { composer: ReactNode; onStart: (prompt: string) => Promise<void>; onOpenConnectors: () => void; busy?: boolean; message?: string | null }) {
+export function WorkHome(props: { composer: ReactNode; onStart: (prompt: string) => Promise<void>; busy?: boolean; message?: string | null }) {
   const [starting, setStarting] = useState(false);
   const busy = Boolean(props.busy) || starting;
   const start = async (prompt: string) => {
@@ -113,13 +113,8 @@ export function WorkHome(props: { composer: ReactNode; onStart: (prompt: string)
             <p className="text-[13px] text-muted-foreground">Ask about your email, documents, customers or invoices.</p>
           </div>
           {props.composer}
-          <div className="-mt-1 flex items-center gap-3">
-            <Button type="button" variant="ghost" size="sm" className="-ms-2 text-muted-foreground" onClick={props.onOpenConnectors} data-testid="work-home-connectors">
-              <Plug className="size-4" />
-              Connectors
-            </Button>
-            {props.message ? <p className="min-w-0 flex-1 truncate text-end text-[12px] text-muted-foreground">{props.message}</p> : null}
-          </div>
+          {/* The composer's own Connectors chip opens Work > Connectors (as in a running Work chat). */}
+          {props.message ? <p className="-mt-1 text-center text-[12px] text-muted-foreground">{props.message}</p> : null}
           <div className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="work-templates">
             {WORK_TEMPLATES.map((template) => (
               <button
@@ -369,7 +364,7 @@ function WorkConnectorsChipButton(props: { client: WorkClient | null }) {
       data-testid="work-connectors-chip"
       title={connected.length ? `Connectors: ${connected.map((row) => connectorLabel(row.id, row.label)).join(", ")}` : "Connect tools"}
       aria-label={label}
-      onClick={() => navigate(WORK_CONNECTORS_ROUTE, { state: { from: `${location.pathname}${location.search}` } })}
+      onClick={() => navigate(WORK_CONNECTORS_ROUTE, connectorsBackState(location.pathname, location.search))}
       className="flex h-9 max-h-9 min-w-9 shrink-[4] items-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
     >
       {connected.length ? connected.slice(0, 3).map((row) => <ConnectorIcon key={row.id} id={row.id} className="size-3.5 text-current" />) : <Plug aria-hidden className="size-4 shrink-0" />}

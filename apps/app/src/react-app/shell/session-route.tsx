@@ -3877,7 +3877,6 @@ export function SessionRoute() {
             busy={!workWorkspace}
             message={workState.data?.message ?? null}
             onStart={startWorkChat}
-            onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)}
             composer={(
               <NewTaskComposer
                 draft={workHomeDraft}

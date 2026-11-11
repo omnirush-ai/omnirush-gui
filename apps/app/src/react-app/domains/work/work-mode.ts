@@ -187,6 +187,11 @@ export function healthFor(answer: unknown, id: string): OmniRushWorkHealth | nul
 
 const CHECK_NAMES: Record<string, string> = { token: "Sign-in", scopes: "Permissions", sync: "Sync" };
 
+/** How the composer chip opens Work > Connectors: from a chat its Back returns there; from the Work home it is the usual Back to Work. */
+export function connectorsBackState(pathname: string, search = ""): { state: { from: string } } | undefined {
+  return pathname === WORK_HOME_ROUTE ? undefined : { state: { from: `${pathname}${search}` } };
+}
+
 /** An entity key as shown: an address or domain without its `email:`/`domain:` tag; other keys (hubspot:company:77) as they are. */
 export function keyLabel(key: string): string {
   return key.replace(/^(email|domain):(?=.)/, "");

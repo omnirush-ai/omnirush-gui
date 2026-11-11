@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, WORK_TEMPLATES, workConnectorsKey, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, connectorsBackState, countLabel, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, WORK_TEMPLATES, workConnectorsKey, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
 import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
@@ -71,10 +71,13 @@ describe("Work mode", () => {
     expect(work).not.toContain('data-connector-icon="notion"');
     expect(chip(true, [row({})])).toContain("Connect tools");
     expect(chip(false, linked)).toBe("");
+    // A chat's path also starts with "/work" (/workspace/...): only the Work home itself is not a chat to go back to.
+    expect(connectorsBackState("/work")).toBeUndefined();
+    expect(connectorsBackState("/workspace/ws_1/session/ses_1", "?x=1")).toEqual({ state: { from: "/workspace/ws_1/session/ses_1?x=1" } });
   });
 
   test("the home asks what to get done, hosts the chat composer and shows the six template cards on one column", () => {
-    const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} onOpenConnectors={noop} />);
+    const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} />);
     expect(markup).toContain("What do you want to get done?");
     expect(markup).toContain('data-testid="composer-slot"');
     expect(markup).not.toContain("<textarea");
