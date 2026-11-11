@@ -200,7 +200,8 @@ async function payload(options: NativeUploadOptions, kind: NativeArchivePayload)
         const compressor = createZstdCompress({params: {[zlibConstants.ZSTD_c_compressionLevel]: 3, [zlibConstants.ZSTD_c_checksumFlag]: 1}});
         await pipeline(Readable.from(nativeTar(input, options.driver, options.signal)), compressor, meter, sealer, output, {signal: options.signal});
       } else await pipeline(Readable.from(exactBytes(input[0]!, options.signal)), meter, sealer, output, {signal: options.signal});
-      const handle = await fsp.open(temporary, "r"); try { await handle.sync(); } finally { await handle.close(); }
+      // r+: Windows syncs only a handle that may write (a read-only one fails with EPERM).
+      const handle = await fsp.open(temporary, "r+"); try { await handle.sync(); } finally { await handle.close(); }
       await fsp.rename(temporary, sealedPath);
     } catch (error) { await fsp.rm(temporary, {force: true}); throw error; }
     const sealed = sealer.result();
