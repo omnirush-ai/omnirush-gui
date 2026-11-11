@@ -59,7 +59,7 @@ import {
   resolveModelProviderDisplayName,
   resolveOmniRushModelGroup,
 } from "@/app/utils";
-import { compareGroupModels, isSupportedModelProvider, providerCatalogRank } from "@/app/lib/provider-catalog";
+import { compareGroupModels, isSupportedModelProvider, providerCatalogRank, providerDisplayGroup } from "@/app/lib/provider-catalog";
 import { useModelModeFilter } from "@/react-app/domains/session/surface/model-modes";
 import { useModelPickGate } from "@/react-app/domains/session/surface/claude-models";
 
@@ -590,7 +590,7 @@ export function ModelSelect({
                   className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
                   onClick={() => handleSelect(option)}
                 >
-                  <ProviderIcon providerId={option.providerID} providerName={option.description} className="size-3.5 opacity-70" size={14} />
+                  <ProviderIcon providerId={providerDisplayGroup(option.providerID)} providerName={option.description} className="size-3.5 opacity-70" size={14} />
                   <span className="min-w-0 flex-1 truncate text-foreground">{option.title}</span>
                   {isSameModel(value, option) ? <Check className="size-3.5 shrink-0 text-muted-foreground" /> : null}
                 </button>
@@ -668,7 +668,7 @@ export function ModelSelect({
                               onClick={() => handleSelect(option)}
                               data-checked={isSameModel(value, option)}
                             >
-                              <ProviderIcon providerId={option.providerID} providerName={option.description} className="size-3.5 opacity-70" size={14} />
+                              <ProviderIcon providerId={providerDisplayGroup(option.providerID)} providerName={option.description} className="size-3.5 opacity-70" size={14} />
                               <span className="min-w-0 flex-1">
                                 <span className="block truncate text-foreground">{option.title}</span>
                                 <span className="block truncate text-xs text-muted-foreground">{option.description ?? getProviderDisplayName(option.providerID)}</span>
