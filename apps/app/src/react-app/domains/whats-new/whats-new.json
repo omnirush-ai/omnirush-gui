@@ -3,6 +3,15 @@
   "schema": 1,
   "cli": [
     {
+      "version": "2.9.1",
+      "date": "2026-11-12",
+      "new": [],
+      "improved": [],
+      "fixed": [
+        "`-m` with a model this account doesn't have (also through OMNIRUSH_MODEL) now stops with an error instead of running the default model. An expired sign-in no longer hides newer models at the start of a run, and is refreshed before uploads start."
+      ]
+    },
+    {
       "version": "2.9.0",
       "date": "2026-11-12",
       "new": [],
