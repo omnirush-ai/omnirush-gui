@@ -19,6 +19,7 @@
 //              x-omnirush-directory names it instead (one desktop engine, many projects)
 //   client     "cli/2.7.3" | "gui/3.8.0": X-OmniRush-Client to the relay
 //   note       optional text shown once at a chat's start
+//   keep       the chat's Claude Code stays running in the box between turns (KEEP; the CLI's --farm-new)
 // The relay token lives in the box's run folder, read by Claude Code's
 // apiKeyHelper; nothing else of this machine's env enters the box.
 // Claude's session id is uuidv5(engine session id); its config folder is the
@@ -39,6 +40,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -132,6 +134,103 @@ export const LAUNCH = [
   't=$(mktemp /tmp/omnirush-feed.XXXXXX)',
   'sh -c \'echo $$ > "$1"; cat "$2"; exec cat\' feed "$t" "$f" | { "$bin" "$@"; c=$?; i=0; while [ ! -s "$t" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done; kill "$(cat "$t")" 2>/dev/null; rm -f "$t"; exit $c; }',
 ].join("\n");
+
+/**
+ * Setting `keep` (the CLI's --farm-new): the chat's Claude Code stays running in the box between turns, and a turn is
+ * one more line on its input. A Claude Code resumed for each turn sends the earlier thinking differently on the turn's
+ * first two requests, so the prompt cache was rebuilt twice per turn. In the box: sh -c KEEP <claude> <run folder>
+ * <uuid> <idle seconds> <claudeArgs...>, detached; input keep-<uuid>.in, output keep-<uuid>.out, Claude's pid in
+ * keep-<uuid>.pid. Quiet for <idle seconds> (no turn, no output): its input ends and Claude exits.
+ */
+export const KEEP = [
+  "bin=$0 run=$1 id=$2 idle=$3; shift 3",
+  'in="$run/keep-$id.in" out="$run/keep-$id.out" pid="$run/keep-$id.pid" tl="$run/keep-$id.tail"',
+  'if ls "$CLAUDE_CONFIG_DIR"/projects/*/"$id.jsonl" >/dev/null 2>&1; then set -- "$@" --resume "$id"; else set -- "$@" --session-id "$id"; fi',
+  '( while sleep 30; do now=$(date +%s); q=1; for f in "$in" "$out"; do [ $((now - $(stat -c %Y "$f" 2>/dev/null || echo 0))) -lt "$idle" ] && q=0; done; [ $q = 1 ] && { kill "$(cat "$tl")" 2>/dev/null; exit; }; done ) &',
+  "w=$!",
+  '{ tail -n +1 -f "$in" & echo $! > "$tl"; wait; } | { sh -c \'echo $$ > "$1"; shift; exec "$@"\' keep "$pid" "$bin" "$@" >> "$out" 2>> "$run/keep-$id.err"; rm -f "$pid"; kill "$(cat "$tl")" 2>/dev/null; }',
+  'kill "$w" 2>/dev/null',
+].join("\n");
+export const KEEP_IDLE_S = 1800;
+// shortcut: boxed turns only (the farm's case); a chat without a box still starts Claude Code per turn.
+
+/**
+ * A kept Claude Code's turn, shaped as the turn's child process doStream reads: `line` goes on its input, stdout is
+ * its output from this turn's `system init` on (an interrupted turn's late result never ends the next one), and
+ * `close` comes at the turn's end (stdin.end() after the result, as for a per-turn Claude) or when Claude has gone.
+ */
+async function keptChild({ shell, env, cwd, run, uuid, args, line }) {
+  const at = (name) => path.join(run, `keep-${uuid}.${name}`);
+  const box = (name) => `${BOX_RUN}/claude/keep-${uuid}.${name}`;
+  const alive = async () => (await inBox(shell, env, cwd, 'kill -0 "$(cat "$0")" 2>/dev/null', [box("pid")])).code === 0;
+  if (!(await alive())) {
+    for (const name of ["in", "out", "err", "pid"]) fs.rmSync(at(name), { force: true });
+    fs.writeFileSync(at("in"), "", { mode: 0o600 });
+    fs.writeFileSync(at("out"), "", { mode: 0o600 });
+    const started = await inBox(shell, env, cwd, 'k=$0; S=; command -v setsid >/dev/null 2>&1 && S=setsid; $S sh -c "$k" "$@" </dev/null >/dev/null 2>&1 &',
+      [KEEP, BOX_BIN, `${BOX_RUN}/claude`, uuid, String(KEEP_IDLE_S), ...args]);
+    if (started.code !== 0) throw apiError(`Claude Code could not start in the sandbox (${started.err.trim().split("\n").at(-1) || started.code}).`);
+  }
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  let offset = fs.statSync(at("out")).size;
+  let seen = false;
+  let pending = "";
+  const close = (code) => {
+    if (child.exitCode !== null) return;
+    child.exitCode = code;
+    clearInterval(poll);
+    clearInterval(check);
+    setImmediate(() => child.emit("close", code));
+  };
+  const read = () => {
+    let fd;
+    try { fd = fs.openSync(at("out"), "r"); } catch { return; }
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (size <= offset) return;
+      const chunk = Buffer.alloc(size - offset);
+      fs.readSync(fd, chunk, 0, chunk.length, offset);
+      offset = size;
+      pending += chunk.toString("utf8");
+    } finally { fs.closeSync(fd); }
+    const end = pending.lastIndexOf("\n");
+    if (end < 0) return;
+    const lines = pending.slice(0, end + 1);
+    pending = pending.slice(end + 1);
+    let out = "";
+    for (const text of lines.split("\n")) {
+      if (!seen) {
+        try { const event = JSON.parse(text); seen = event.type === "system" && event.subtype === "init"; } catch { /* not yet */ }
+        if (!seen) continue;
+      }
+      if (text) out += `${text}\n`;
+    }
+    if (out) child.stdout.emit("data", out);
+  };
+  const poll = setInterval(read, 100);
+  const check = setInterval(async () => {
+    if (await alive()) return;
+    read();
+    if (child.exitCode !== null) return;
+    try { child.stderr.emit("data", fs.readFileSync(at("err"), "utf8").slice(-2000)); } catch { /* none */ }
+    close(1);
+  }, 5_000);
+  poll.unref?.();
+  check.unref?.();
+  child.stdin = {
+    write: (text) => { try { fs.appendFileSync(at("in"), text); } catch { /* gone */ } return true; },
+    // The turn is over (its result, or a stop): Claude stays for the next one.
+    end: () => close(0),
+    on: () => child.stdin,
+  };
+  child.kill = (signal = "SIGTERM") => { void inBox(shell, env, cwd, `kill -s ${String(signal).replace(/^SIG/, "")} "$(cat "$0")" 2>/dev/null`, [box("pid")]); close(1); };
+  child.stdin.write(line);
+  return child;
+}
 
 /**
  * The install log's folder for this chat's commands, as the app's box plugin gives the engine's own shell calls:
@@ -360,8 +459,11 @@ class ClaudeCodeModel {
     if (boxed) {
       const env = { ...process.env, ...passed, OMNIRUSH_BOX_KEY: key, OMNIRUSH_BOX_HOME: boxHome, OMNIRUSH_BOX_PASS_ENV: Object.keys(passed).join(",") };
       try { await ensureClaude({ shell, env, cwd: root, home: boxHome, run }); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed in the sandbox."); }
-      fs.writeFileSync(turnFile, firstLine, { mode: 0o600 });
-      child = spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...claudeArgs({ model: this.modelId })], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      if (this.settings.keep) child = await keptChild({ shell, env, cwd: root, run, uuid, args: claudeArgs({ model: this.modelId }), line: firstLine });
+      else {
+        fs.writeFileSync(turnFile, firstLine, { mode: 0o600 });
+        child = spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...claudeArgs({ model: this.modelId })], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      }
     } else {
       let bin;
       try { bin = await ensureHostClaude(boxHome); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed."); }
