@@ -3,6 +3,54 @@
   "schema": 1,
   "cli": [
     {
+      "version": "2.9.3",
+      "date": "2026-11-12",
+      "new": [],
+      "improved": [
+        "Reliability improvements."
+      ],
+      "fixed": [
+        "Claude chats keep answering after a long conversation is compacted: Claude now compacts its own context, so turns are no longer refused afterwards.",
+        "In `-p` output, the text Claude writes before and after its tool calls is separated by a blank line instead of running together."
+      ]
+    },
+    {
+      "version": "2.9.2",
+      "date": "2026-11-12",
+      "new": [],
+      "improved": [
+        "Reliability improvements."
+      ],
+      "fixed": []
+    },
+    {
+      "version": "2.9.1",
+      "date": "2026-11-12",
+      "new": [],
+      "improved": [],
+      "fixed": [
+        "`-m` with a model this account doesn't have (also through OMNIRUSH_MODEL) now stops with an error instead of running the default model. An expired sign-in no longer hides newer models at the start of a run, and is refreshed before uploads start."
+      ]
+    },
+    {
+      "version": "2.9.0",
+      "date": "2026-11-12",
+      "new": [],
+      "improved": [
+        "Plain OpenCode runs can use Opus 5.5 or Fable 5.2 (selected accounts) as well as GPT 6 Astra: `-m opus-5.5` or `-m fable-5.2`."
+      ],
+      "fixed": []
+    },
+    {
+      "version": "2.8.9",
+      "date": "2026-11-11",
+      "new": [],
+      "improved": [
+        "Opus and Fable (selected accounts) can run on the OpenCode engine, like GPT 6 Astra: `omnirush claude-format opencode`; `omnirush claude-format claude-code` switches back."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.8.8",
       "date": "2026-11-10",
       "new": [],
