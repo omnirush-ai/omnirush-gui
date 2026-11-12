@@ -152,7 +152,9 @@ export function claudeEngineProvider(entries: { id: string; name: string }[], se
     // Long Claude Code turns: no request timeout (the provider streams until Claude Code ends).
     settings: { ...settings, timeout: false },
     apiKey: "unused",
-    models: entries.map((entry) => ({ id: entry.id, name: entry.name, config: { family: "Claude", tool_call: true, limit: { context: 200_000, output: 64_000 }, modalities: { input: ["text", "image"], output: ["text"] } } })),
+    // Claude Code compacts its own context (CLAUDE_CODE_AUTO_COMPACT_WINDOW in the provider): the engine never compacts a Claude chat,
+    // its /compact leaves Claude Code 2.1.306 sending requests the upstream refuses (the CLI's src/opencode-config.js the same).
+    models: entries.map((entry) => ({ id: entry.id, name: entry.name, config: { family: "Claude", tool_call: true, limit: { context: 1_000_000, output: 64_000 }, modalities: { input: ["text", "image"], output: ["text"] } } })),
   };
 }
 

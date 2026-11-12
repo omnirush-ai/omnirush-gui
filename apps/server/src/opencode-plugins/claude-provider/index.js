@@ -70,6 +70,7 @@ const BOX_RUN = "/run/omnirush";
 const BOX_BIN = `/opt/omnirush/claude/${CLAUDE_CODE_VERSION}/claude`;
 const STOP_GRACE_MS = 5_000;
 const REFRESH_MS = 60_000;
+const AUTO_COMPACT_WINDOW = 200_000;
 // Claude's session id for an engine chat: uuid v5 of its id in this namespace.
 const NAMESPACE = "6f1c2b8e-4d3a-5f60-9a7b-0c1d2e3f4a5b";
 
@@ -158,6 +159,9 @@ export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null,
     ANTHROPIC_BASE_URL: baseUrl,
     ANTHROPIC_CUSTOM_HEADERS: `${configDir ? "" : "X-OmniRush-Box: 1\n"}X-OmniRush-Session-Id: ${sessionID}\nX-OmniRush-Client: ${client}`,
     CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(REFRESH_MS),
+    // Claude Code compacts on its own at the size the app gives Claude models (the engine never does: its /compact leaves
+    // Claude Code 2.1.306 sending an empty system message the upstream refuses on every later turn).
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(AUTO_COMPACT_WINDOW),
     // The relay serves the chat's model only: every model Claude Code would pick on its own is that one.
     ANTHROPIC_MODEL: model, ANTHROPIC_SMALL_FAST_MODEL: model, ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: model, ANTHROPIC_DEFAULT_HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model,
