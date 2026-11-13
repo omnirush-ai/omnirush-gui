@@ -3894,7 +3894,7 @@ export function SessionRoute() {
             openLink={(url) => platform.openLink(url)}
             backLabel={workConnectorsFrom ? "Back to chat" : undefined}
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
-            notice={hasSampleData(workConnectorRows.data) ? <SampleDataBadge client={client ?? null} /> : null}
+            notice={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
           />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
           <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
@@ -3912,7 +3912,7 @@ export function SessionRoute() {
             message={workState.data?.message ?? null}
             onStart={startWorkChat}
             starters={workStarters}
-            badge={hasSampleData(workConnectorRows.data) ? <SampleDataBadge client={client ?? null} /> : null}
+            badge={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
             checklist={workOrgId ? (
               <>
                 <WorkChecklist client={client ?? null} onboarding={workOnboarding.data} connectors={workConnectorRows.data} orgId={workOrgId} onConnect={() => navigate(WORK_CONNECTORS_ROUTE)} onInvite={() => setWorkInviteOpen(true)} />

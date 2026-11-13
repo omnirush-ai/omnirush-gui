@@ -616,7 +616,7 @@ export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources
 /** The company profile and first-run steps (contract Addendum B2: GET/POST /omnirush/work/onboarding). */
 export type OmniRushWorkOrg = { id: string; name: string; domain?: string | null; size?: string | null; industry?: string | null };
 export type OmniRushWorkStarter = { title: string; prompt: string };
-export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | null; steps?: Partial<Record<"company" | "consent" | "connected" | "first_chat", boolean>> };
+export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | null; steps?: Partial<Record<"company" | "connected" | "first_chat", boolean>>; sample_data?: boolean };
 export type OmniRushWorkOnboardingInput = { company: string; domain?: string; size?: string; industry?: string; role?: string; tools: string[] };
 export type OmniRushWorkOnboardingResult = { org: OmniRushWorkOrg; recommended_sources?: string[]; starters?: OmniRushWorkStarter[] };
 export type OmniRushWorkMember = { id?: string; email: string; name?: string | null; role?: string | null; joined_at?: string | null };
@@ -2378,6 +2378,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<unknown>(baseUrl, "/work/demo", { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
     inviteWorkMember: (email: string) =>
       requestJson<{ link: string }>(baseUrl, "/work/org/invites", { token, hostToken, method: "POST", body: { email }, timeoutMs: timeouts.config }),
+    acceptWorkInvite: (link: string) =>
+      requestJson<{ ok: boolean; org?: OmniRushWorkOrg }>(baseUrl, "/work/org/invites/accept", { token, hostToken, method: "POST", body: { token: link }, timeoutMs: timeouts.config }),
     listWorkMembers: () =>
       requestJson<unknown>(baseUrl, "/work/org/members", { token, hostToken, timeoutMs: timeouts.config }),
     getWebSearch: () =>

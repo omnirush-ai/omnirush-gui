@@ -219,8 +219,8 @@ describe("work routes", () => {
   });
 
   test("the broker reaches only the contract's paths", () => {
-    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "mcp", "enable", "onboarding", "demo", "org/invites", "org/members"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org", "org/../admin", "audit", "data"]) expect(WORK_PATH.test(path)).toBe(false);
+    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members"]) expect(WORK_PATH.test(path)).toBe(true);
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org", "org/../admin", "org/invites/x", "audit", "data"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("tryout, company setup, sample data and invites are checked, then forwarded", async () => {
@@ -239,6 +239,8 @@ describe("work routes", () => {
     await call("DELETE", "/work/demo");
     expect((await call("POST", "/work/org/invites", { email: " dana@acme-bakery.test " })).status).toBe(200);
     expect((await call("POST", "/work/org/invites", { email: "dana" })).status).toBe(400);
+    expect((await call("POST", "/work/org/invites/accept", { token: " https://omnirush.ai/omnirush/work/invite#t=abc " })).status).toBe(200);
+    expect((await call("POST", "/work/org/invites/accept", { token: " " })).status).toBe(400);
     await call("GET", "/work/org/members");
     expect(calls).toEqual([
       "POST enable {}",
@@ -247,6 +249,7 @@ describe("work routes", () => {
       "POST demo {}",
       "DELETE demo ",
       "POST org/invites {\"email\":\"dana@acme-bakery.test\"}",
+      "POST org/invites/accept {\"token\":\"https://omnirush.ai/omnirush/work/invite#t=abc\"}",
       "GET org/members ",
     ]);
   });

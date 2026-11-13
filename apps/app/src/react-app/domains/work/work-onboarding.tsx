@@ -19,11 +19,12 @@ import {
 
 import {
   checklistItems, connectorLabel, connectOrder, DEMO_SOURCE, domainFromEmail, isLinked, useWorkSetupStore, useWorkState,
-  workConnectorsKey, workOnboardingKey, type WorkClient,
+  workConnectorsKey, workOnboardingKey, workStateKey, type WorkClient,
 } from "./work-mode";
 import { CONNECT_POLL_MS, CONNECT_TIMEOUT_MS, ConnectorIcon } from "./work-views";
 
-const SIZES = ["1–10", "11–50", "51–200", "201–1,000", "1,000+"];
+// The server's size values, with how they read.
+const SIZES = [["1", "Just me"], ["2-10", "2–10"], ["11-50", "11–50"], ["51-200", "51–200"], ["201-1000", "201–1,000"], ["1000+", "1,000+"]] as const;
 const errorText = (reason: unknown) => (reason instanceof Error ? reason.message : "That did not work. Try again.");
 
 /** In place of the Code | Work switch while Work is off but the account may try it. */
@@ -120,6 +121,18 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
     onError: (reason) => toast.error(errorText(reason)),
   });
 
+  const [invite, setInvite] = useState("");
+  const join = useMutation({
+    mutationFn: () => props.client!.acceptWorkInvite(invite.trim()),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: workOnboardingKey(props.client) });
+      void queryClient.invalidateQueries({ queryKey: workStateKey(props.client) });
+      toast.success("You joined your team");
+      props.onDone();
+    },
+    onError: (reason) => toast.error(errorText(reason)),
+  });
+
   const rows = connectOrder(connectors.data, recommended);
   const anyLinked = rows.some(isLinked);
   return (
@@ -153,7 +166,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
             <div className="flex flex-col gap-1.5">
               <span className="text-[13px] font-medium">Team size</span>
               <div className="flex flex-wrap gap-2">
-                {SIZES.map((value) => <Chip key={value} selected={size === value} onClick={() => setSize(size === value ? null : value)}>{value}</Chip>)}
+                {SIZES.map(([value, label]) => <Chip key={value} selected={size === value} onClick={() => setSize(size === value ? null : value)}>{label}</Chip>)}
               </div>
             </div>
             {offered.length ? (
@@ -177,6 +190,20 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
               <Button type="submit" disabled={!company.trim() || save.isPending || !props.client} data-testid="work-onboarding-continue">
                 {save.isPending ? "Saving…" : "Continue"}<ArrowRight className="size-4" />
               </Button>
+            </div>
+          </form>
+        ) : null}
+        {step === "company" ? (
+          <form
+            className="flex flex-col gap-1.5 border-t border-border pt-5"
+            data-testid="work-join"
+            onSubmit={(event) => { event.preventDefault(); if (invite.trim() && !join.isPending) join.mutate(); }}
+          >
+            <span className="text-[13px] font-medium">Join a team</span>
+            <span className="text-[12px] text-muted-foreground">Got an invite from a teammate? Paste the link to join their company instead.</span>
+            <div className="flex items-center gap-2">
+              <Input value={invite} onChange={(event) => setInvite(event.target.value)} placeholder="Paste invite link" aria-label="Invite link" data-testid="work-join-link" />
+              <Button type="submit" variant="outline" disabled={!invite.trim() || join.isPending || !props.client} data-testid="work-join-submit">{join.isPending ? "Joining…" : "Join"}</Button>
             </div>
           </form>
         ) : (

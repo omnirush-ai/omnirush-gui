@@ -18,8 +18,8 @@ export const WORK_PRESET = "work";
 export const WORK_SOURCE_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the MCP server, and
- *  the tryout and company setup (enable, onboarding, demo, org invites and members). */
-export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect))?)?|entities(?:\/[A-Za-z0-9_.:-]{1,128})?|facts(?:\/[A-Za-z0-9_.:-]{1,128})?|health|mcp|enable|onboarding|demo|org\/(?:invites|members))$/;
+ *  the tryout and company setup (enable, onboarding, demo, org invites, joining by invite and members). */
+export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect))?)?|entities(?:\/[A-Za-z0-9_.:-]{1,128})?|facts(?:\/[A-Za-z0-9_.:-]{1,128})?|health|mcp|enable|onboarding|demo|org\/(?:invites(?:\/accept)?|members))$/;
 
 /** The hosted server's tools that only read (the contract's table): every other tool asks first, in every mode. */
 export const WORK_READ_TOOLS = [

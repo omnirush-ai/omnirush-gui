@@ -99,9 +99,11 @@ describe("Work mode", () => {
     const rows = [row({ id: "google" }), row({ id: "slack", label: "Slack" }), row({ id: "hubspot", label: "HubSpot" }), row({ id: "demo", label: "Sample", status: "connected" }), row({ id: "mock" })];
     expect(connectOrder(rows, ["hubspot", "slack"]).map((item) => item.id)).toEqual(["hubspot", "slack", "google"]);
     expect(visibleConnectors(rows).map((item) => item.id)).not.toContain("demo");
-    expect(hasSampleData(rows)).toBe(true);
-    expect(hasSampleData([row({ id: "demo" })])).toBe(false);
-    expect(checklistItems({ done: false, org: { id: "o1", name: "Acme" }, steps: { first_chat: false } }, rows).map((item) => [item.id, item.done])).toEqual([["company", true], ["connected", true], ["first_chat", false]]);
+    expect(hasSampleData({ done: true, sample_data: true })).toBe(true);
+    expect(hasSampleData({ done: true, sample_data: false })).toBe(false);
+    expect(hasSampleData(undefined)).toBe(false);
+    expect(checklistItems({ done: false, org: { id: "o1", name: "Acme" }, steps: { first_chat: false }, sample_data: true }, rows).map((item) => [item.id, item.done])).toEqual([["company", true], ["connected", true], ["first_chat", false]]);
+    expect(checklistItems({ done: false, org: { id: "o1", name: "Acme" } }, rows).find((item) => item.id === "connected")?.done).toBe(false);
     expect(checklistItems(undefined, [row({})]).every((item) => !item.done)).toBe(true);
   });
 
@@ -115,6 +117,8 @@ describe("Work mode", () => {
     expect(markup).not.toContain("work-onboarding-tool-demo");
     expect(markup).not.toContain("work-onboarding-tool-mock");
     expect(markup).not.toMatch(/consent|terms/i);
+    expect(markup).toContain('data-testid="work-join-link"');
+    expect(markup).toContain(">Just me<");
   });
 
   test("Try Work and the sample-data badge", () => {

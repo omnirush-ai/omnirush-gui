@@ -24,7 +24,7 @@ export const useWorkModeStore = create<WorkModeStore>()(
 
 export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
   | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact"
-  | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember"> & { baseUrl?: string };
+  | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];
@@ -70,11 +70,12 @@ export const useWorkSetupStore = create<WorkSetupStore>()(
   }), { name: "omnirush.workSetup", storage: createJSONStorage(() => localStorage) }),
 );
 
-/** The sample-data source: seeded by "Try with sample data", read-only, removed in one click. */
+/** The sample-data source: seeded by "Try with sample data", read-only, removed in one click. The server lists it in
+ *  no connector row; GET /work/onboarding says whether it is seeded (`sample_data`). */
 export const DEMO_SOURCE = "demo";
 const LINKED = new Set(["connected", "syncing", "error"]);
 export const isLinked = (row: Pick<OmniRushWorkConnector, "status">) => LINKED.has(row.status);
-export const hasSampleData = (rows: OmniRushWorkConnector[] | null | undefined) => (rows ?? []).some((row) => row.id === DEMO_SOURCE && isLinked(row));
+export const hasSampleData = (onboarding: OmniRushWorkOnboarding | null | undefined) => onboarding?.sample_data === true;
 /** A real (non-sample) source is connected. */
 export const hasRealSource = (rows: OmniRushWorkConnector[] | null | undefined) => visibleConnectors(rows).some((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && isLinked(row));
 
@@ -96,7 +97,7 @@ export function checklistItems(onboarding: OmniRushWorkOnboarding | null | undef
   const steps = onboarding?.steps ?? {};
   return [
     { id: "company", label: "Add your company", done: steps.company === true || Boolean(onboarding?.org) },
-    { id: "connected", label: "Connect a tool or try sample data", done: steps.connected === true || hasRealSource(rows) || hasSampleData(rows) },
+    { id: "connected", label: "Connect a tool or try sample data", done: steps.connected === true || hasRealSource(rows) || hasSampleData(onboarding) },
     { id: "first_chat", label: "Start your first chat", done: steps.first_chat === true },
   ] as const;
 }

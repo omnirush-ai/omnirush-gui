@@ -14,7 +14,7 @@
  *   POST  /work/enable                     turns Work on for the account (the "Try Work" offer, while `available`)
  *   GET   /work/onboarding, POST /work/onboarding {company, domain?, size?, industry?, role?, tools}
  *   POST  /work/demo, DELETE /work/demo    seeds or removes the sample data
- *   POST  /work/org/invites {email}, GET /work/org/members
+ *   POST  /work/org/invites {email}, POST /work/org/invites/accept {token}, GET /work/org/members
  *
  * The engine's hosted MCP calls (POST /omnirush/work/mcp with the engine's token) are forwarded by server.ts.
  */
@@ -51,7 +51,12 @@ const WORK_ERRORS: Record<string, string> = {
   connector_unavailable: "This connector is not available on this server right now.",
   not_connected: "Connect this source first.",
   work_not_available: "Work is not available for your account yet.",
-  consent_required: "Your company has not accepted the data terms for this source yet.",
+  no_org: "Set up your company first.",
+  too_many_invites: "Too many open invites. Wait for some to be accepted.",
+  invite_email_mismatch: "This invite is for another e-mail address. Sign in with the address it was sent to.",
+  unknown_invite: "This invite link is not valid. Ask for a new one.",
+  invite_used: "This invite was already used. Ask for a new one.",
+  invite_expired: "This invite has expired. Ask for a new one.",
   omnirush_account_required: "Sign in to omnirush.ai to use Work.",
   reconnect_required: "Sign-in expired or access was revoked. Reconnect this source.",
   rate_limited: "The service asked us to slow down. Try again in a minute.",
@@ -248,6 +253,15 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     const email = text((await deps.readJsonBody(ctx.request)).email);
     if (!email || email.length > 254 || !EMAIL.test(email)) return invalid("Enter an e-mail address.");
     return forward("org/invites", "POST", { email });
+  });
+
+  // Joining a teammate's company: the pasted link (or its token) as it came; the server reads the token from it.
+  addRoute(routes, "POST", "/work/org/invites/accept", "client", async (ctx) => {
+    const token = text((await deps.readJsonBody(ctx.request)).token);
+    if (!token || token.length > 2048) return invalid("Paste the invite link.");
+    const answer = await forward("org/invites/accept", "POST", { token });
+    if (answer.ok) switchStale = true;
+    return answer;
   });
 
   addRoute(routes, "GET", "/work/org/members", "client", async () => forward("org/members", "GET"));
