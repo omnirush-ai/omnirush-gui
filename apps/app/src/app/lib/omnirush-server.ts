@@ -687,6 +687,23 @@ export type OmniRushWorkEntityDetail = {
   related: { id: string; kind: string; name: string; reason?: string | null }[];
 };
 
+/** GET /omnirush/work/graph and /timeline (contract Addendum B1). Node ids are `e:<id>`, `r:<id>` and `f:<id>`. */
+export type OmniRushWorkGraphNode = {
+  id: string;
+  type: "entity" | "record" | "fact" | string;
+  kind: string;
+  label: string;
+  sub?: string | null;
+  source?: string | null;
+  occurred_at?: string | null;
+  degree: number;
+  url?: string | null;
+};
+export type OmniRushWorkGraphEdge = { a: string; b: string; kind: "mentions" | "link" | "related" | "about" | string; reason?: string | null };
+export type OmniRushWorkGraph = { nodes: OmniRushWorkGraphNode[]; edges: OmniRushWorkGraphEdge[]; counts: Record<string, number>; truncated: boolean };
+export type OmniRushWorkTimelineItem = Omit<OmniRushWorkGraphNode, "degree">;
+export type OmniRushWorkAnswerStyle = "brief" | "detailed";
+
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
   /** Whether an omnirush.ai account is signed in (its models can run). */
@@ -2382,6 +2399,18 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<{ ok: boolean; org?: OmniRushWorkOrg }>(baseUrl, "/work/org/invites/accept", { token, hostToken, method: "POST", body: { token: link }, timeoutMs: timeouts.config }),
     listWorkMembers: () =>
       requestJson<unknown>(baseUrl, "/work/org/members", { token, hostToken, timeoutMs: timeouts.config }),
+    getWorkGraph: (query: { focus?: string; depth?: 1 | 2; kinds?: string; limit?: number } = {}) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
+      return requestJson<OmniRushWorkGraph>(baseUrl, `/work/graph${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    getWorkTimeline: (query: { focus?: string; cursor?: string; limit?: number } = {}) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
+      return requestJson<{ items: OmniRushWorkTimelineItem[]; next_cursor: string | null }>(baseUrl, `/work/timeline${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    getWorkAnswerStyle: () =>
+      requestJson<{ style: OmniRushWorkAnswerStyle }>(baseUrl, "/work/answer-style", { token, hostToken, timeoutMs: timeouts.config }),
+    setWorkAnswerStyle: (style: OmniRushWorkAnswerStyle) =>
+      requestJson<{ style: OmniRushWorkAnswerStyle }>(baseUrl, "/work/answer-style", { token, hostToken, method: "PUT", body: { style }, timeoutMs: timeouts.config }),
     getWebSearch: () =>
       requestJson<OmniRushWebSearchState>(baseUrl, "/omnirush/web-search", { token, hostToken, timeoutMs: timeouts.config }),
     setWebSearch: (enabled: boolean) =>
