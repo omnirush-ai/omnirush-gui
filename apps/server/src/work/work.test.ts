@@ -20,11 +20,16 @@ describe("work switch", () => {
     const dir = temp();
     expect(rememberedWorkSwitch(dir).enabled).toBe(false);
     expect(rememberWorkSwitch(dir, { work: { enabled: true, allow_users: "all", sources: ["google", "mock", "jira", "zendesk", "../x", 7] } })).toBe(true);
-    expect(rememberedWorkSwitch(dir)).toEqual({ enabled: true, sources: ["google", "mock", "jira", "zendesk"], message: null });
+    expect(rememberedWorkSwitch(dir)).toEqual({ enabled: true, available: false, sources: ["google", "mock", "jira", "zendesk"], message: null });
     expect(rememberWorkSwitch(dir, null)).toBe(false);
     expect(rememberedWorkSwitch(dir).enabled).toBe(true);
     expect(rememberWorkSwitch(dir, { schema_versions: [1, 2, 3] })).toBe(true);
     expect(rememberedWorkSwitch(dir).enabled).toBe(false);
+    // The tryout: off but the account may turn it on itself; `available` never shows while it is on.
+    rememberWorkSwitch(dir, { work: { enabled: false, available: true, sources: [] } });
+    expect(rememberedWorkSwitch(dir)).toMatchObject({ enabled: false, available: true });
+    rememberWorkSwitch(dir, { work: { enabled: true, available: true, sources: [] } });
+    expect(rememberedWorkSwitch(dir)).toMatchObject({ enabled: true, available: false });
   });
 });
 
@@ -175,7 +180,7 @@ describe("work routes", () => {
     const { dir, calls, call, refreshed } = setup((path) => path === "connectors"
       ? json([{ id: "mock", label: "Mock", status: "connected", sync_enabled: true, records: 3, last_sync_at: null, scopes: [] }])
       : path.endsWith("/start") ? json({ auth_url: "https://auth.example/x" }) : json({ ok: true, sync_enabled: false }));
-    expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, sources: ["mock"], message: null, workspaceId: null });
+    expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, available: false, sources: ["mock"], message: null, workspaceId: null });
     expect(await (await call("POST", "/work/workspace")).json()).toEqual({ workspaceId: "ws_work", path: join(dir, "user_1") });
     expect((await (await call("GET", "/work/connectors")).json())[0].id).toBe("mock");
     expect(workEnvironment(dir, join(dir, "user_1"))?.work.connectors).toEqual([{ id: "mock", enabled: true }]);
@@ -214,8 +219,36 @@ describe("work routes", () => {
   });
 
   test("the broker reaches only the contract's paths", () => {
-    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "mcp"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", ""]) expect(WORK_PATH.test(path)).toBe(false);
+    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "mcp", "enable", "onboarding", "demo", "org/invites", "org/members"]) expect(WORK_PATH.test(path)).toBe(true);
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org", "org/../admin", "audit", "data"]) expect(WORK_PATH.test(path)).toBe(false);
+  });
+
+  test("tryout, company setup, sample data and invites are checked, then forwarded", async () => {
+    const asked: unknown[] = [];
+    const { calls, call } = setup((path) => json(path === "onboarding" ? { org: { id: "org_1", name: "Acme" }, recommended_sources: ["google"], starters: [] } : { ok: true }), async (options) => { asked.push(options); return { work: { enabled: false, available: true, sources: [] } }; });
+    expect(await (await call("GET", "/work/state")).json()).toMatchObject({ enabled: false, available: true });
+    expect((await call("POST", "/work/enable")).status).toBe(200);
+    await call("GET", "/work/state");
+    expect(asked).toEqual([undefined, { maxAgeMs: 0 }]);
+    expect((await call("POST", "/work/onboarding", { company: "  Acme Bakery ", domain: "https://Acme-Bakery.test/about", size: "11-50", industry: "", tools: ["google", "slack", "google"], extra: 1 })).status).toBe(200);
+    expect((await call("POST", "/work/onboarding", { company: " " })).status).toBe(400);
+    expect((await call("POST", "/work/onboarding", { company: "Acme", domain: "not a domain" })).status).toBe(400);
+    expect((await call("POST", "/work/onboarding", { company: "Acme", tools: ["../x"] })).status).toBe(400);
+    await call("GET", "/work/onboarding");
+    await call("POST", "/work/demo");
+    await call("DELETE", "/work/demo");
+    expect((await call("POST", "/work/org/invites", { email: " dana@acme-bakery.test " })).status).toBe(200);
+    expect((await call("POST", "/work/org/invites", { email: "dana" })).status).toBe(400);
+    await call("GET", "/work/org/members");
+    expect(calls).toEqual([
+      "POST enable {}",
+      "POST onboarding {\"company\":\"Acme Bakery\",\"domain\":\"acme-bakery.test\",\"size\":\"11-50\",\"tools\":[\"google\",\"slack\"]}",
+      "GET onboarding ",
+      "POST demo {}",
+      "DELETE demo ",
+      "POST org/invites {\"email\":\"dana@acme-bakery.test\"}",
+      "GET org/members ",
+    ]);
   });
 
   test("the server's errors reach the app as they came (work_disabled)", async () => {

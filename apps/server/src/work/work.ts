@@ -17,8 +17,9 @@ export const WORK_PRESET = "work";
 /** A connector id as the server names it (google, jira, …): new ids the app does not know yet still work. */
 export const WORK_SOURCE_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 
-/** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health and the MCP server. */
-export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect))?)?|entities(?:\/[A-Za-z0-9_.:-]{1,128})?|facts(?:\/[A-Za-z0-9_.:-]{1,128})?|health|mcp)$/;
+/** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the MCP server, and
+ *  the tryout and company setup (enable, onboarding, demo, org invites and members). */
+export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect))?)?|entities(?:\/[A-Za-z0-9_.:-]{1,128})?|facts(?:\/[A-Za-z0-9_.:-]{1,128})?|health|mcp|enable|onboarding|demo|org\/(?:invites|members))$/;
 
 /** The hosted server's tools that only read (the contract's table): every other tool asks first, in every mode. */
 export const WORK_READ_TOOLS = [
@@ -34,7 +35,8 @@ export const WORK_READ_TOOLS = [
 /** The engine's own tools a Work chat does not get (no shell, no code editing). */
 export const WORK_DISABLED_TOOLS = ["bash", "edit", "write", "patch", "multiedit", "apply_patch", "task", "lsp", "codesearch"];
 
-export type WorkSwitch = { enabled: boolean; sources: string[]; message: string | null };
+/** `available`: Work is off for the account but it can turn it on itself (POST /omnirush/work/enable, the "Try Work" offer). */
+export type WorkSwitch = { enabled: boolean; available: boolean; sources: string[]; message: string | null };
 export type WorkConnectorUse = { id: string; enabled: boolean };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,12 +78,13 @@ export function isWorkRoot(dir: string | null | undefined, root: string | null |
 /** The `work` block of a capabilities answer; a missing or malformed block is off. */
 export function workServerSwitch(capabilities: unknown): WorkSwitch {
   const block = isRecord(capabilities) ? capabilities.work : null;
-  if (!isRecord(block)) return { enabled: false, sources: [], message: null };
+  if (!isRecord(block)) return { enabled: false, available: false, sources: [], message: null };
   const sources = Array.isArray(block.sources)
     ? block.sources.filter((id): id is string => typeof id === "string" && WORK_SOURCE_ID.test(id))
     : [];
   const message = typeof block.message === "string" && block.message.trim() ? block.message.trim().slice(0, 400) : null;
-  return { enabled: block.enabled === true, sources, message };
+  const enabled = block.enabled === true;
+  return { enabled, available: !enabled && block.available === true, sources, message };
 }
 
 /** The switch as last seen (off when never seen). */

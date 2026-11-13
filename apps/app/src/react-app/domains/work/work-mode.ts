@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkHealth, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkHealth, OmniRushWorkOnboarding, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -11,6 +11,7 @@ export const WORK_PRESET = "work";
 export const WORK_HOME_ROUTE = "/work";
 export const WORK_CONNECTORS_ROUTE = "/work/connectors";
 export const WORK_KNOWLEDGE_ROUTE = "/work/knowledge";
+export const WORK_ONBOARDING_ROUTE = "/work/welcome";
 
 type WorkModeStore = { mode: AppMode; setMode: (mode: AppMode) => void };
 
@@ -22,10 +23,12 @@ export const useWorkModeStore = create<WorkModeStore>()(
 );
 
 export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
-  | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact"> & { baseUrl?: string };
+  | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact"
+  | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];
+export const workOnboardingKey = (client: WorkClient | null) => ["omnirush-work-onboarding", client?.baseUrl?.trim() || "default"];
 export const workEntityKey = (client: WorkClient | null, id: string) => ["omnirush-work-entity", client?.baseUrl?.trim() || "default", id];
 
 /** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
@@ -39,14 +42,74 @@ export function useWorkState(client: WorkClient | null) {
   });
 }
 
+/** The company profile and first-run steps; read only while Work is on. */
+export function useWorkOnboarding(client: WorkClient | null, enabled: boolean) {
+  return useQuery<OmniRushWorkOnboarding>({
+    queryKey: workOnboardingKey(client),
+    queryFn: () => client!.getWorkOnboarding(),
+    enabled: Boolean(client) && enabled,
+    retry: false,
+  });
+}
+
+type WorkSetupStore = {
+  /** The tailored first tasks onboarding answered, by org id (only POST /onboarding returns them). */
+  starters: Record<string, OmniRushWorkStarter[]>;
+  /** Orgs whose first-run checklist was dismissed. */
+  checklistHidden: Record<string, true>;
+  setStarters: (org: string, starters: OmniRushWorkStarter[]) => void;
+  hideChecklist: (org: string) => void;
+};
+
+export const useWorkSetupStore = create<WorkSetupStore>()(
+  persist((set) => ({
+    starters: {},
+    checklistHidden: {},
+    setStarters: (org, starters) => set((state) => ({ starters: { ...state.starters, [org]: starters.slice(0, 3) } })),
+    hideChecklist: (org) => set((state) => ({ checklistHidden: { ...state.checklistHidden, [org]: true } })),
+  }), { name: "omnirush.workSetup", storage: createJSONStorage(() => localStorage) }),
+);
+
+/** The sample-data source: seeded by "Try with sample data", read-only, removed in one click. */
+export const DEMO_SOURCE = "demo";
+const LINKED = new Set(["connected", "syncing", "error"]);
+export const isLinked = (row: Pick<OmniRushWorkConnector, "status">) => LINKED.has(row.status);
+export const hasSampleData = (rows: OmniRushWorkConnector[] | null | undefined) => (rows ?? []).some((row) => row.id === DEMO_SOURCE && isLinked(row));
+/** A real (non-sample) source is connected. */
+export const hasRealSource = (rows: OmniRushWorkConnector[] | null | undefined) => visibleConnectors(rows).some((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && isLinked(row));
+
+const PERSONAL_MAIL = new Set(["gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "icloud.com", "me.com", "aol.com", "proton.me", "protonmail.com", "gmx.com", "yandex.com", "qq.com"]);
+/** The company domain an account e-mail suggests; none for personal mail. */
+export function domainFromEmail(email: string | null | undefined): string {
+  const domain = (email ?? "").trim().toLowerCase().split("@")[1] ?? "";
+  return domain && !PERSONAL_MAIL.has(domain) ? domain : "";
+}
+
+/** Sources for the connect step: the recommended ones first (in their order), then the rest; no sample data or test source. */
+export function connectOrder(rows: OmniRushWorkConnector[] | null | undefined, recommended: string[] = []): OmniRushWorkConnector[] {
+  const rank = (id: string) => { const at = recommended.indexOf(id); return at === -1 ? recommended.length : at; };
+  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock").sort((a, b) => rank(a.id) - rank(b.id));
+}
+
+/** The first-run checklist: company, a source connected (or sample data), a first chat. */
+export function checklistItems(onboarding: OmniRushWorkOnboarding | null | undefined, rows: OmniRushWorkConnector[] | null | undefined) {
+  const steps = onboarding?.steps ?? {};
+  return [
+    { id: "company", label: "Add your company", done: steps.company === true || Boolean(onboarding?.org) },
+    { id: "connected", label: "Connect a tool or try sample data", done: steps.connected === true || hasRealSource(rows) || hasSampleData(rows) },
+    { id: "first_chat", label: "Start your first chat", done: steps.first_chat === true },
+  ] as const;
+}
+
 /** Cmd/Ctrl+Shift+K: switch between Code and Work. */
 export function isWorkModeShortcut(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">, mac: boolean): boolean {
   return (mac ? event.metaKey : event.ctrlKey) && event.shiftKey && !event.altKey && event.key?.toLowerCase() === "k";
 }
 
-/** The sources shown on the Connectors page: everything the server offers (an `unavailable` one is hidden). */
+/** The sources shown on the Connectors page: everything the server offers (an `unavailable` one and sample data are hidden). */
 export function visibleConnectors(rows: OmniRushWorkConnector[] | null | undefined): OmniRushWorkConnector[] {
-  return (rows ?? []).filter((row) => row.status !== "unavailable");
+  // Sample data is no tool to connect: it shows as the "Sample data" badge.
+  return (rows ?? []).filter((row) => row.status !== "unavailable" && row.id !== DEMO_SOURCE);
 }
 
 /** A connect in progress is over once the source is connected (or syncing) or reports an error. */
@@ -54,46 +117,6 @@ export function connectSettled(rows: OmniRushWorkConnector[] | null | undefined,
   const row = rows?.find((item) => item.id === id);
   return Boolean(row && (row.status === "connected" || row.status === "syncing" || row.status === "error"));
 }
-
-/** Template cards on the Work home: each starts a chat with its brief. */
-export const WORK_TEMPLATES = [
-  {
-    id: "inbox",
-    title: "Inbox",
-    description: "Triage, draft replies, follow-ups.",
-    prompt: "Go through my inbox from the last few days. Group what needs a reply, what needs a follow-up and what can wait, and draft replies for the urgent ones. Don't send anything.",
-  },
-  {
-    id: "support",
-    title: "Support desk",
-    description: "Answer and route tickets and emails.",
-    prompt: "Look at the open support tickets and customer emails. For each, suggest who should handle it and draft an answer based on how we answered similar questions before.",
-  },
-  {
-    id: "meetings",
-    title: "Meetings",
-    description: "Notes to tasks and CRM updates.",
-    prompt: "Take the notes from my latest meeting, list the action items with owners and dates, and suggest the CRM updates they imply.",
-  },
-  {
-    id: "sales",
-    title: "Sales/CRM",
-    description: "Log leads, follow up, write quotes.",
-    prompt: "Find new leads from my email and chat that are not in the CRM yet, and list who I should follow up with this week and why.",
-  },
-  {
-    id: "search",
-    title: "Company search",
-    description: "\"What did we quote X?\" across mail, Drive and chat.",
-    prompt: "Search my mail, Drive and chat: what did we quote each customer most recently, and when? Link the source for each.",
-  },
-  {
-    id: "backoffice",
-    title: "Back office",
-    description: "Invoices, purchase orders, reconciliation.",
-    prompt: "List unpaid and overdue invoices, and match recent payments and bills against them. Flag anything that doesn't reconcile.",
-  },
-] as const;
 
 /** "1 record", "2 records". */
 export const countLabel = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
@@ -132,7 +155,7 @@ export function workToolPermission(permission: string): { label: string; scope: 
 /** Connector names for ids the server lists without a label; an unknown id shows as it is (with a generic icon). */
 export const CONNECTOR_LABELS: Record<string, string> = {
   google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
-  notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", mock: "Test source",
+  notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", mock: "Test source", demo: "Sample data",
 };
 export const connectorLabel = (id: string, label?: string | null) => label?.trim() || CONNECTOR_LABELS[id] || id;
 

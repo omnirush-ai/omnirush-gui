@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, connectorsBackState, countLabel, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, WORK_TEMPLATES, workConnectorsKey, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
 import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
@@ -76,17 +77,51 @@ describe("Work mode", () => {
     expect(connectorsBackState("/workspace/ws_1/session/ses_1", "?x=1")).toEqual({ state: { from: "/workspace/ws_1/session/ses_1?x=1" } });
   });
 
-  test("the home asks what to get done, hosts the chat composer and shows the six template cards on one column", () => {
-    const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} />);
+  test("the home asks what to get done, has no card grid, and puts the composer where the chat has it, with the starter chips above", () => {
+    const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} starters={[{ title: "Overdue invoices", prompt: "List overdue invoices." }, { title: "Reply to leads", prompt: "x" }, { title: "Weekly summary", prompt: "y" }, { title: "Fourth", prompt: "z" }]} badge={<span data-testid="badge-slot" />} />);
     expect(markup).toContain("What do you want to get done?");
     expect(markup).toContain('data-testid="composer-slot"');
-    expect(markup).not.toContain("<textarea");
-    // One column as wide as the running chat's composer (800 + gutters), cards of equal height.
-    expect(markup).toMatch(/data-testid="work-home-column"/);
-    expect(markup).toContain("max-w-[864px]");
-    expect(markup).toContain("auto-rows-fr");
-    for (const id of ["inbox", "support", "meetings", "sales", "search", "backoffice"]) expect(markup).toContain(`data-work-template="${id}"`);
-    expect(WORK_TEMPLATES.every((template) => template.prompt.length > 20)).toBe(true);
+    expect(markup).toContain('data-testid="badge-slot"');
+    expect(markup).not.toContain("data-work-template");
+    // The chat composer's own column: 800 wide with its gutters and bottom spacing (composer.tsx).
+    expect(markup).toContain("lg:px-8");
+    expect(markup).toContain("max-w-[800px]");
+    expect(markup).toContain("pb-[max(0.5rem,");
+    expect(markup.match(/data-work-starter=/g)?.length).toBe(3);
+    expect(markup.indexOf("data-work-starter")).toBeLessThan(markup.indexOf("composer-slot"));
+    expect(renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} />)).not.toContain("work-starters");
+  });
+
+  test("first run: domain from a work e-mail, recommended sources first, checklist, sample data", () => {
+    expect(domainFromEmail("dana@Acme-Bakery.test")).toBe("acme-bakery.test");
+    expect(domainFromEmail("someone@gmail.com")).toBe("");
+    expect(domainFromEmail(null)).toBe("");
+    const rows = [row({ id: "google" }), row({ id: "slack", label: "Slack" }), row({ id: "hubspot", label: "HubSpot" }), row({ id: "demo", label: "Sample", status: "connected" }), row({ id: "mock" })];
+    expect(connectOrder(rows, ["hubspot", "slack"]).map((item) => item.id)).toEqual(["hubspot", "slack", "google"]);
+    expect(visibleConnectors(rows).map((item) => item.id)).not.toContain("demo");
+    expect(hasSampleData(rows)).toBe(true);
+    expect(hasSampleData([row({ id: "demo" })])).toBe(false);
+    expect(checklistItems({ done: false, org: { id: "o1", name: "Acme" }, steps: { first_chat: false } }, rows).map((item) => [item.id, item.done])).toEqual([["company", true], ["connected", true], ["first_chat", false]]);
+    expect(checklistItems(undefined, [row({})]).every((item) => !item.done)).toBe(true);
+  });
+
+  test("onboarding opens on the company step with the domain prefilled and the offered tools as chips", () => {
+    const markup = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkOnboarding client={null} email="ops@acme-bakery.test" sources={["google", "slack", "demo", "mock"]} openLink={noop} onDone={noop} /></QueryClientProvider>);
+    expect(markup).toContain('data-step="company"');
+    expect(markup).toContain("Step 1 of 2");
+    expect(markup).toContain('value="acme-bakery.test"');
+    expect(markup).toContain('data-testid="work-onboarding-tool-google"');
+    expect(markup).toContain('data-testid="work-onboarding-tool-slack"');
+    expect(markup).not.toContain("work-onboarding-tool-demo");
+    expect(markup).not.toContain("work-onboarding-tool-mock");
+    expect(markup).not.toMatch(/consent|terms/i);
+  });
+
+  test("Try Work and the sample-data badge", () => {
+    expect(renderToStaticMarkup(<WorkTryButton onTry={async () => {}} />)).toContain("Try Work");
+    const badge = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><SampleDataBadge client={null} /></QueryClientProvider>);
+    expect(badge).toContain("Sample data");
+    expect(badge).toContain('data-testid="work-sample-data-remove"');
   });
 
   test("connectors: unavailable sources are hidden; a connect settles on connected, syncing or error", () => {

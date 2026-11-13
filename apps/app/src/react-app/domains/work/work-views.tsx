@@ -1,8 +1,8 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, BookOpen, Briefcase, Calculator, CalendarDays, Cloud, Code2, FileText, Github, Handshake, Hash, Inbox, Kanban, LifeBuoy, Mail, Plug,
-  Receipt, Search, Shapes, Ticket, TrendingUp, type LucideIcon,
+  ArrowLeft, BookOpen, Briefcase, Calculator, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Kanban, Mail, Plug, Shapes, Sparkles, Ticket,
+  type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
-import type { OmniRushWorkConnector, OmniRushWorkHealth } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
 import { useLocation, useNavigate } from "react-router";
@@ -26,13 +26,13 @@ import {
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workConnectorsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
 const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   google: Mail, microsoft: Cloud, slack: Hash, hubspot: Handshake, quickbooks: Calculator, notion: FileText,
-  jira: Ticket, confluence: BookOpen, linear: Kanban, github: Github, mock: Shapes,
+  jira: Ticket, confluence: BookOpen, linear: Kanban, github: Github, mock: Shapes, demo: Database,
 };
 
 /** A connector's icon; an id the app does not know gets the generic plug. */
@@ -40,15 +40,6 @@ export function ConnectorIcon(props: { id: string; className?: string }) {
   const Icon = CONNECTOR_ICONS[props.id] ?? Plug;
   return <Icon aria-hidden className={cn("size-4 shrink-0 text-muted-foreground", props.className)} data-connector-icon={CONNECTOR_ICONS[props.id] ? props.id : "generic"} />;
 }
-
-const TEMPLATE_ICONS: Record<(typeof WORK_TEMPLATES)[number]["id"], ReactNode> = {
-  inbox: <Inbox />,
-  support: <LifeBuoy />,
-  meetings: <CalendarDays />,
-  sales: <TrendingUp />,
-  search: <Search />,
-  backoffice: <Receipt />,
-};
 
 /** The Code | Work switch at the top of the sidebar (Cmd/Ctrl+Shift+K). Shown only while Work is on for the account. */
 export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode) => void; shortcut: string }) {
@@ -87,9 +78,23 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
   );
 }
 
-/** Work home: "What do you want to get done?", the real chat composer (passed in, the same one the running Work chat
- *  uses, so nothing jumps on send) and the template cards, all on one centred column the width of the chat composer. */
-export function WorkHome(props: { composer: ReactNode; onStart: (prompt: string) => Promise<void>; busy?: boolean; message?: string | null }) {
+/** The chat composer's column (composer.tsx): 800 wide, centred, with its gutters and bottom spacing. The Work home puts
+ *  its composer in the same box at the same place, so nothing moves when the first message is sent. */
+export const CHAT_COLUMN = "px-4 max-lg:px-3 lg:px-8";
+export const CHAT_COMPOSER_BOTTOM = "pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))] pt-1";
+
+/** Work home: "What do you want to get done?" and the first-run checklist above the real chat composer (passed in, the
+ *  same one the running Work chat uses), with up to three tailored starter chips from onboarding just above it. */
+export function WorkHome(props: {
+  composer: ReactNode;
+  onStart: (prompt: string) => Promise<void>;
+  busy?: boolean;
+  message?: string | null;
+  starters?: OmniRushWorkStarter[];
+  /** The "Sample data" badge while the demo source is seeded. */
+  badge?: ReactNode;
+  checklist?: ReactNode;
+}) {
   const [starting, setStarting] = useState(false);
   const busy = Boolean(props.busy) || starting;
   const start = async (prompt: string) => {
@@ -103,36 +108,43 @@ export function WorkHome(props: { composer: ReactNode; onStart: (prompt: string)
       setStarting(false);
     }
   };
+  const starters = (props.starters ?? []).slice(0, 3);
   return (
-    <div className="h-full overflow-y-auto" data-testid="work-home">
-      <div className="flex min-h-full items-center justify-center py-10">
-        {/* max-w 800 composer + the chat's lg:px-8 gutters: the box is exactly as wide as in the running chat. */}
-        <div className="mx-auto flex w-full max-w-[864px] flex-col gap-4 px-4 lg:px-8" data-testid="work-home-column">
-          <div className="space-y-1.5 text-center">
-            <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">What do you want to get done?</h1>
-            <p className="text-[13px] text-muted-foreground">Ask about your email, documents, customers or invoices.</p>
+    <div className="flex h-full flex-col" data-testid="work-home">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={cn(CHAT_COLUMN, "flex min-h-full flex-col justify-center py-8")}>
+          <div className="mx-auto flex w-full max-w-[800px] flex-col items-center gap-4" data-testid="work-home-column">
+            <div className="space-y-1.5 text-center">
+              <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">What do you want to get done?</h1>
+              <p className="text-[13px] text-muted-foreground">Ask about your email, documents, customers or invoices.</p>
+            </div>
+            {props.badge}
+            {props.checklist ? <div className="w-full max-w-[420px]">{props.checklist}</div> : null}
           </div>
+        </div>
+      </div>
+      <div className={cn(CHAT_COLUMN, CHAT_COMPOSER_BOTTOM, "shrink-0")}>
+        <div className="mx-auto flex max-w-[800px] flex-col gap-2">
+          {starters.length ? (
+            <div className="flex flex-wrap gap-2" data-testid="work-starters">
+              {starters.map((starter) => (
+                <button
+                  key={starter.title}
+                  type="button"
+                  data-work-starter={starter.title}
+                  title={starter.prompt}
+                  disabled={busy}
+                  onClick={() => void start(starter.prompt)}
+                  className="flex h-8 max-w-full items-center gap-1.5 rounded-full border border-border bg-background px-3 text-[13px] text-foreground transition-colors hover:border-foreground/25 hover:bg-muted disabled:opacity-60"
+                >
+                  <Sparkles aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{starter.title}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           {props.composer}
-          {/* The composer's own Connectors chip opens Work > Connectors (as in a running Work chat). */}
-          {props.message ? <p className="-mt-1 text-center text-[12px] text-muted-foreground">{props.message}</p> : null}
-          <div className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="work-templates">
-            {WORK_TEMPLATES.map((template) => (
-              <button
-                key={template.id}
-                type="button"
-                data-work-template={template.id}
-                disabled={busy}
-                onClick={() => void start(template.prompt)}
-                className="flex h-full min-h-[84px] flex-col items-start gap-1 rounded-xl border border-border bg-background px-4 py-3 text-start transition-colors hover:border-foreground/20 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 [&_svg]:size-4"
-              >
-                <span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
-                  <span className="text-muted-foreground">{TEMPLATE_ICONS[template.id]}</span>
-                  {template.title}
-                </span>
-                <span className="line-clamp-2 text-[12px] leading-[18px] text-muted-foreground">{template.description}</span>
-              </button>
-            ))}
-          </div>
+          {props.message ? <p className="text-center text-[12px] text-muted-foreground">{props.message}</p> : null}
         </div>
       </div>
     </div>
@@ -240,7 +252,7 @@ export function ConnectorRow(props: {
 }
 
 /** Work > Connectors (also reachable from Settings): each source's status, record count, last sync and sync switch. */
-export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string }) {
+export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string; notice?: ReactNode }) {
   const queryClient = useQueryClient();
   const key = workConnectorsKey(props.client);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -304,6 +316,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           <p className="mt-1 text-sm text-muted-foreground">
             Connect the tools your business uses. The agent can search and read them in Work chats, and asks you before it sends or changes anything. Data sync keeps a copy up to date; switch it off to stop collecting new data.
           </p>
+          {props.notice ? <div className="mt-3">{props.notice}</div> : null}
         </div>
         <div className="rounded-xl border border-border bg-background">
           {query.isLoading ? (
