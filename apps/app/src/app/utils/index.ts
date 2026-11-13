@@ -159,6 +159,8 @@ export function resolveModelProviderDisplayName(
   reportedProviderName?: string | null,
   _reportedModelName?: string | null,
 ) {
+  // Claude's models are listed under omnirush.ai (provider-catalog.ts providerDisplayGroup).
+  if (providerID.trim().toLowerCase() === "omnirush-claude") return resolveProviderDisplayName("omnirush");
   return reportedProviderName?.trim() || resolveProviderDisplayName(providerID);
 }
 
