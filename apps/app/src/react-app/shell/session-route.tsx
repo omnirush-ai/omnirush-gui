@@ -553,6 +553,8 @@ export function SessionRoute() {
   const workChatActive = workEnabled && Boolean(selectedWorkspace && selectedWorkspace.preset === WORK_PRESET) && !workRouteRequested;
   const workRouteActive = workEnabled && workRouteRequested;
   const appMode: AppMode = workRouteActive || workChatActive ? "work" : "code";
+  // Set when Work > Connectors was opened from a Work chat (composer chip or sidebar), so Back returns to it.
+  const workConnectorsFrom = (location.state as { from?: string } | null)?.from ?? null;
   const appModeRestored = useRef(false);
   useEffect(() => {
     if (workState.isPending) return;
@@ -3862,7 +3864,12 @@ export function SessionRoute() {
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
-          <WorkConnectorsPage client={client ?? null} openLink={(url) => platform.openLink(url)} onBack={() => navigate(WORK_HOME_ROUTE)} />
+          <WorkConnectorsPage
+            client={client ?? null}
+            openLink={(url) => platform.openLink(url)}
+            backLabel={workConnectorsFrom ? "Back to chat" : undefined}
+            onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
+          />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
           <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : (
@@ -3870,7 +3877,6 @@ export function SessionRoute() {
             busy={!workWorkspace}
             message={workState.data?.message ?? null}
             onStart={startWorkChat}
-            onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)}
             composer={(
               <NewTaskComposer
                 draft={workHomeDraft}
@@ -3928,7 +3934,7 @@ export function SessionRoute() {
       sidebar={{
         workspaceSessionGroups: sidebarWorkspaceSessionGroups,
         modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : undefined,
-        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) } : undefined,
+        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) } : undefined,
         selectedWorkspaceId,
         selectedSessionId,
         developerMode: false,
