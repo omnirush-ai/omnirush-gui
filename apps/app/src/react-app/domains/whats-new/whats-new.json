@@ -3,6 +3,15 @@
   "schema": 1,
   "cli": [
     {
+      "version": "2.9.4",
+      "date": "2026-11-13",
+      "new": [],
+      "improved": [
+        "Claude chats use Claude Code's standard instructions and core tools."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.9.3",
       "date": "2026-11-12",
       "new": [],
