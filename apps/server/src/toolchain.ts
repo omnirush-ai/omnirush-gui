@@ -9,15 +9,20 @@
 // Projects nested in the root (a monorepo's apps/web, a backend/python with
 // its own venv) are found by a bounded manifest search and get their own
 // pip freeze and npm ls, run in their folder.
-// Nothing recorded names an absolute path, a user name, an environment value
-// or a credential: version lines go through `stripPaths`, pip freeze entries
-// through `sanitizeFreezeLines`, and the caller runs the CONFIG scrub over the
-// whole block before it leaves the machine.
+// The machine's own Python is frozen too (`machine_python`), and so are the
+// Python environments the session's commands used outside the project
+// (`outside_python_envs`, from ToolchainCache.hint), each again after an
+// install the session ran.
+// Nothing recorded names a user name, an environment value or a credential:
+// version lines go through `stripPaths`, pip freeze entries through
+// `sanitizeFreezeLines`, an outside environment's folder has the home as `~`,
+// and the caller runs the CONFIG scrub over the whole block before it leaves
+// the machine.
 
 import { spawn } from "node:child_process";
 import { readdirSync, statSync, type Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { constants as osConstants, setPriority } from "node:os";
+import { homedir, constants as osConstants, setPriority } from "node:os";
 import nodePath from "node:path";
 
 import { cltSkipReason, resolveCommand } from "./command-guard.js";
@@ -82,6 +87,10 @@ export type UploadToolchain = {
   python_executable_kind_by_dir?: Record<string, PythonExecutableKind>;
   /** With nested Python projects: the virtual environment's `python --version` per project folder that has one. */
   venv_python_by_dir?: Record<string, string>;
+  /** pip freeze of the interpreter PATH finds (`python3`, else `python`), user-site packages included, whatever the project uses. */
+  machine_python?: PythonEnvFreeze;
+  /** pip freeze of the Python environments the session's commands used outside the project, by folder (home as `~`). */
+  outside_python_envs?: Record<string, PythonEnvFreeze>;
   /**
    * `npm ls --json --depth=0`, reduced to direct dependency versions; only with
    * package.json and node_modules. The root's, or the first nested folder's.
@@ -103,6 +112,8 @@ export type UploadToolchain = {
   env_names_read?: string[];
   env_names_read_truncated?: boolean;
 };
+
+export type PythonEnvFreeze = { kind: PythonExecutableKind; pip_freeze: string[]; pip_freeze_tool: "pip" | "uv"; pip_freeze_truncated?: true };
 
 export type NpmLs = { name?: string; version?: string; dependencies: Record<string, string>; truncated?: boolean };
 export const MAX_NPM_LS_BYTES = 64 * 1024;
@@ -621,7 +632,21 @@ export type CollectOptions = {
   checks?: SecretChecks;
   /** Environment for the shell and version-manager detection (process.env). */
   env?: NodeJS.ProcessEnv;
+  /** Python environments outside the project the session used: folders or interpreters (ToolchainCache.hint). */
+  pythonEnvs?: readonly string[];
+  /** The home folder an outside environment's key names as `~` (os.homedir()). */
+  home?: string | null;
+  isFile?: (path: string) => boolean;
 };
+
+/** `folder` with the home folder as `~`. */
+function tildeFolder(folder: string, home: string | null, platform: NodeJS.Platform): string {
+  const path = platform === "win32" ? nodePath.win32 : nodePath.posix;
+  if (!home) return folder;
+  const rel = path.relative(home, folder);
+  if (rel === "") return "~";
+  return rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) ? folder : `~${path.sep}${rel}`;
+}
 
 /**
  * Probes the toolchain for the project at `root`. Never throws; a probe
@@ -671,21 +696,31 @@ export async function collectToolchain(root: string, options: CollectOptions = {
   });
   const systemPython = where("python3") ?? where("python");
   // `uv pip freeze --python /usr/bin/python3` would run the shim too.
-  const systemSkip = systemPython && pyProjects.some((project) => !project.venvPython)
-    ? cltSkipReason(where("python3") === systemPython ? "python3" : "python", systemPython)
-    : Promise.resolve(null);
-  const interpreters = new Map<string, { cwd: string; venv: boolean }>();
+  const systemSkip = systemPython ? cltSkipReason(where("python3") === systemPython ? "python3" : "python", systemPython) : Promise.resolve(null);
+  // pip first outside a virtual environment: uv leaves the user-site packages out.
+  const interpreters = new Map<string, { cwd: string; venv: boolean; pip: boolean }>();
   for (const project of pyProjects) {
     const python = project.venvPython ?? systemPython;
-    if (python && !interpreters.has(python)) interpreters.set(python, { cwd: abs(project.dir), venv: Boolean(project.venvPython) });
+    if (python && !interpreters.has(python)) interpreters.set(python, { cwd: abs(project.dir), venv: Boolean(project.venvPython), pip: !project.venvPython });
   }
-  const freezes = Promise.all([...interpreters].map(async ([python, { cwd, venv }]) => {
-    const reason = venv ? null : await systemSkip;
+  // The machine's interpreter, whatever the project uses, and the environments the session used outside it.
+  const isFile = options.isFile ?? defaultIsFile;
+  const outsideEnvs = new Map<string, string>();
+  for (const env of options.pythonEnvs ?? []) {
+    const python = /^python[\d.]*(?:\.exe)?$/i.test((platform === "win32" ? nodePath.win32 : nodePath.posix).basename(env)) && isFile(env) ? env : venvInterpreter(env, platform, isFile);
+    if (python && !outsideEnvs.has(python) && outsideEnvs.size < MAX_PROJECT_DIRS) outsideEnvs.set(python, env);
+  }
+  for (const python of [systemPython, ...outsideEnvs.keys()]) {
+    if (python && !interpreters.has(python)) interpreters.set(python, { cwd: root, venv: false, pip: python === systemPython || pythonExecutableKind(python, { isFile }) !== "venv" });
+  }
+  const freezes = Promise.all([...interpreters].map(async ([python, { cwd, pip }]) => {
+    const reason = python === systemPython ? await systemSkip : null;
     if (reason) {
-      skipped.pip_freeze = reason;
+      if (pyProjects.some((project) => !project.venvPython)) skipped.pip_freeze = reason;
+      skipped.machine_python = reason;
       return [python, null] as const;
     }
-    return [python, await freezeRaw(python, cwd, where, run, freezeTimeoutMs)] as const;
+    return [python, await freezeRaw(python, cwd, where, run, freezeTimeoutMs, pip)] as const;
   })).then((entries) => new Map(entries));
   // The project's own interpreter, which PATH does not reach unless the venv is active.
   const venvVersions = Promise.all([...interpreters].filter(([, info]) => info.venv).map(async ([python, { cwd }]) => {
@@ -772,6 +807,21 @@ export async function collectToolchain(root: string, options: CollectOptions = {
     if (Object.keys(kinds).length > 0) toolchain.python_executable_kind_by_dir = kinds;
     if (Object.keys(venvByDir).length > 0) toolchain.venv_python_by_dir = venvByDir;
   }
+  const envFreeze = (python: string): PythonEnvFreeze | null => {
+    const snapshot = frozen.get(python);
+    if (!snapshot) return null;
+    const { lines, truncated } = sanitizeFreezeLines(snapshot.stdout);
+    return { kind: pythonExecutableKind(python, { isFile }), pip_freeze: lines, pip_freeze_tool: snapshot.tool, ...(truncated ? { pip_freeze_truncated: true as const } : {}) };
+  };
+  const machine = systemPython ? envFreeze(systemPython) : null;
+  if (machine) toolchain.machine_python = machine;
+  const home = options.home !== undefined ? options.home : homedir() || null;
+  const envs: Record<string, PythonEnvFreeze> = {};
+  for (const [python, folder] of outsideEnvs) {
+    const freeze = envFreeze(python);
+    if (freeze) envs[tildeFolder(folder, home, platform)] = freeze;
+  }
+  if (Object.keys(envs).length > 0) toolchain.outside_python_envs = envs;
   // A package.json without node_modules: nothing is installed for npm ls to list; say so rather than leave it out silently.
   if (files.nodeDirs.length > 0 && npmDirs.length === 0 && !skipped.npm_ls) skipped.npm_ls = "not_installed";
   const [npmOutputs, system, shell, envFiles, namesRead] = await extras;
@@ -859,24 +909,30 @@ async function npmLsRaw(
   }));
 }
 
-/** `pip freeze` output of `python`, run in `cwd`: through uv when it is on PATH, else `python -m pip`. */
+/**
+ * `pip freeze` output of `python`, run in `cwd`: through uv when it is on PATH, else `python -m pip`;
+ * `pipFirst` (an interpreter outside a virtual environment) the other way round, so user-site packages are listed.
+ */
 async function freezeRaw(
   python: string,
   cwd: string,
   where: (command: string) => string | null,
   run: RunCommand,
   timeoutMs: number,
+  pipFirst = false,
 ): Promise<{ stdout: string; tool: "pip" | "uv" } | null> {
   const options = { cwd, timeoutMs, maxBytes: MAX_PROBE_OUTPUT_BYTES };
   const uv = where("uv");
   // uv is much faster and also reads a uv-made venv, which has no pip.
-  if (uv) {
-    const result = await run(uv, ["pip", "freeze", "--python", python], options).catch(() => null);
-    if (result && result.code === 0) return { stdout: result.stdout, tool: "uv" };
-  }
-  const result = await run(python, ["-m", "pip", "freeze", "--disable-pip-version-check"], options).catch(() => null);
-  if (result && result.code === 0) return { stdout: result.stdout, tool: "pip" };
-  return null;
+  const viaUv = async () => {
+    const result = uv ? await run(uv, ["pip", "freeze", "--python", python], options).catch(() => null) : null;
+    return result && result.code === 0 ? { stdout: result.stdout, tool: "uv" as const } : null;
+  };
+  const viaPip = async () => {
+    const result = await run(python, ["-m", "pip", "freeze", "--disable-pip-version-check"], options).catch(() => null);
+    return result && result.code === 0 ? { stdout: result.stdout, tool: "pip" as const } : null;
+  };
+  return pipFirst ? (await viaPip()) ?? (await viaUv()) : (await viaUv()) ?? (await viaPip());
 }
 
 /**
@@ -926,10 +982,15 @@ function javaWouldPrompt(command: string, file: string): boolean {
 
 type CacheEntry = { signature: string; pending: Promise<UploadToolchain | null>; value: UploadToolchain | null };
 
+/** What a session's commands told about Python: environments they used (folders or interpreters), an install they ran. */
+export type PythonHint = { envs: readonly string[]; installed: boolean };
+/** A hint's collection waits this long for more (a burst of installs collects once). */
+export const HINT_REFRESH_MS = 1_500;
+
 /**
  * One toolchain per project root, collected when a session starts (or at its
  * first upload) and again only when the project's manifest/lockfile set
- * changes. An upload does not wait for a collection in flight: it carries the
+ * changes or a hint came (an install, a new outside environment). An upload does not wait for a collection in flight: it carries the
  * cached block once there is one, so the session's first envelope may go
  * without it and the next ones carry it. `waitMs` bounds a wait: the
  * session's last snapshot waits a little, so a short session still records
@@ -937,20 +998,45 @@ type CacheEntry = { signature: string; pending: Promise<UploadToolchain | null>;
  */
 export class ToolchainCache {
   private readonly entries = new Map<string, CacheEntry>();
+  private readonly hints = new Map<string, { envs: Set<string>; stamp: number; timer?: ReturnType<typeof setTimeout> }>();
   collections = 0;
 
   constructor(private readonly options: CollectOptions & { waitMs?: number; scrub?: (toolchain: UploadToolchain) => UploadToolchain } = {}) {}
 
+  /**
+   * A session in `root` installed Python packages or used an environment outside it: the next get()
+   * collects again, and `refresh` (which calls get under the session's rules) runs after HINT_REFRESH_MS.
+   */
+  hint(root: string, hint: PythonHint, refresh: () => void): void {
+    let entry = this.hints.get(root);
+    if (!entry) this.hints.set(root, (entry = { envs: new Set(), stamp: 0 }));
+    let changed = hint.installed;
+    for (const env of hint.envs) {
+      const rel = nodePath.relative(root, env);
+      const inside = rel === "" || (rel !== ".." && !rel.startsWith(`..${nodePath.sep}`) && !nodePath.isAbsolute(rel));
+      if (inside || entry.envs.has(env) || entry.envs.size >= MAX_PROJECT_DIRS) continue;
+      entry.envs.add(env);
+      changed = true;
+    }
+    if (!changed) return;
+    entry.stamp += 1;
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(refresh, HINT_REFRESH_MS);
+    entry.timer.unref?.();
+  }
+
   async get(root: string, waitMs = this.options.waitMs ?? 0): Promise<UploadToolchain | null> {
     const files = await projectFiles(root);
+    const hints = this.hints.get(root);
+    const signature = `${files.signature}|hint:${hints?.stamp ?? 0}`;
     // One entry per root and upload rules: a block scrubbed under one session's rules never goes out under another's.
     const key = `${root}\0${redactionPolicy()}`;
     let entry = this.entries.get(key);
-    if (!entry || entry.signature !== files.signature) {
+    if (!entry || entry.signature !== signature) {
       const previous = entry?.value ?? null;
       this.collections += 1;
-      const next: CacheEntry = { signature: files.signature, value: previous, pending: Promise.resolve(null) };
-      next.pending = collectToolchain(root, { ...this.options, files })
+      const next: CacheEntry = { signature, value: previous, pending: Promise.resolve(null) };
+      next.pending = collectToolchain(root, { ...this.options, files, pythonEnvs: hints ? [...hints.envs] : [] })
         .then((toolchain) => (this.options.scrub ? this.options.scrub(toolchain) : toolchain))
         .then((toolchain) => {
           next.value = toolchain;

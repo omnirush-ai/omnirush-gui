@@ -22,6 +22,8 @@ import * as ephemeral from "./context/ephemeral.js";
 import * as network from "./context/network.js";
 import * as installLog from "./context/install-log.js";
 import * as context from "./context/index.js";
+import * as outsideFiles from "./context/outside-files.js";
+import * as toolEvents from "./context/tool-events.js";
 import * as uploader from "./session-uploader.js";
 
 // Capture context (capture v2): machine context recorded as trace events —
@@ -1021,6 +1023,12 @@ test("#20 opencode tool events: message.part.updated running and completed (and 
   assert.equal(toolEvents.toolEventOf({ payload: part("pending") }).event.status, "running");
   assert.equal(toolEvents.toolEventOf({ type: "message.part.updated", properties: { part: { type: "text" } } }), null);
   assert.deepEqual(toolEvents.toolEventOf({ type: "session.tool.called", data: { sessionID: "s", callID: "c", tool: "bash", input: { command: "ls" } } }), { sessionId: "s", event: { callId: "c", tool: "bash", status: "running", command: "ls", workdir: null } });
+  // The 2.0.32 engine's own shapes: timed by the envelope, named only by input.started, ended by success.
+  const v2 = (type, data) => toolEvents.toolEventOf({ id: "evt", type, created: 1_700, durable: {}, data: { sessionID: "s", assistantMessageID: "m", id: "toolu_1", ...data } });
+  assert.deepEqual(v2("session.tool.input.started", { name: "shell" }).event, { callId: "toolu_1", tool: "shell", status: "running", command: null, workdir: null, at: 1_700 });
+  assert.deepEqual(v2("session.tool.called", { input: { command: "ls" }, executed: true }).event, { callId: "toolu_1", tool: "", status: "running", command: "ls", workdir: null, at: 1_700 });
+  assert.equal(v2("session.tool.success", { content: [{ type: "text", text: "" }], executed: true }).event.status, "completed");
+  assert.equal(v2("session.tool.failed", { error: { type: "tool.execution", message: "x" }, executed: true }).event.status, "error");
 });
 
 test("#20 the turn's network waits for its last messages: a call known only from the final flush still gets its tool_call_id", async () => {
@@ -1168,3 +1176,137 @@ test("#19 raw: a process another session names stays out with its whole subtree,
     try { process.kill(-own.pid); } catch { /* gone */ }
   }
 });
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("Windows temp (AppData\\Local\\Temp) is scratch space: archived as an outside file, never a settings folder; real settings and credential folders stay out", async () => {
+  assert.equal(privacy.isHomeSettingsFolder("C:\\Users\\a\\AppData\\Local\\Temp\\work2\\provenance.json", "C:\\Users\\a"), false);
+  assert.equal(privacy.isHomeSettingsFolder("c:\\users\\A\\appdata\\local\\temp", "C:\\Users\\a"), false);
+  assert.equal(privacy.isHomeSettingsFolder("C:\\Users\\a\\AppData\\Local\\Microsoft\\Credentials\\x", "C:\\Users\\a"), true);
+  assert.equal(privacy.isHomeSettingsFolder("C:\\Users\\a\\AppData\\Roaming\\app\\settings.json", "C:\\Users\\a"), true);
+  assert.equal(privacy.isHomeSettingsFolder("C:\\Users\\a\\AppData\\Local\\TempX\\x", "C:\\Users\\a"), true);
+  assert.equal(privacy.isHomeSettingsFolder("/h/.config/x", "/h"), true);
+  const archiveOutside = await import("./session-archive/outside.js");
+  const rules = { appDirs: [], home: "/h" };
+  assert.equal(archiveOutside.outsideExclusion("/h/AppData/Local/Temp/work2/provenance.json", rules), null);
+  assert.equal(archiveOutside.outsideExclusion("/h/AppData/Local/Temp/x/id_rsa", rules), "credential");
+  assert.equal(archiveOutside.outsideExclusion("/h/AppData/Roaming/app/state.json", rules), "credential");
+  assert.equal(archiveOutside.outsideExclusion("/h/AppData/Local/npm-cache/x.tgz", rules), "dependency");
+});
+
+
+test("commands: the Python environments a command runs, activates or makes, and whether it installs Python packages", () => {
+  const effects = (command) => {
+    const found = commands.commandEffects(command, "/w", "/home/u");
+    return { envs: found.pythonEnvs, installs: found.pythonInstalls };
+  };
+  assert.deepEqual(effects("/tmp/x/venv/bin/python -m pytest --cov"), { envs: ["/tmp/x/venv"], installs: false });
+  assert.deepEqual(effects("source /tmp/v/bin/activate && pip install pytest-cov"), { envs: ["/tmp/v"], installs: true });
+  assert.deepEqual(effects("python3 -m venv /tmp/e2 && /tmp/e2/bin/pip install -r req.txt"), { envs: ["/tmp/e2", "/tmp/e2"], installs: true });
+  assert.deepEqual(effects("'C:\\Users\\a\\AppData\\Local\\Temp\\w\\venv\\Scripts\\python.exe' -m pip list").envs.length, 1);
+  assert.deepEqual(effects("python -m pip install -U requests"), { envs: [], installs: true });
+  assert.deepEqual(effects("uv pip install ruff"), { envs: [], installs: true });
+  assert.deepEqual(effects("uv add httpx"), { envs: [], installs: true });
+  assert.deepEqual(effects("poetry install"), { envs: [], installs: true });
+  assert.deepEqual(effects("pip freeze; python -m pip list; pip show x"), { envs: [], installs: false });
+  assert.deepEqual(effects("npm install"), { envs: [], installs: false });
+});
+
+
+test("tool calls of the 2.x engine's stored messages: a tool's time.ran and time.completed are its window", () => {
+  const calls = commands.toolCallsOf([
+    { type: "user", id: "u", text: "hi" },
+    { type: "assistant", id: "m", content: [
+      { type: "text", text: "running" },
+      { type: "tool", id: "toolu_1", name: "shell", time: { created: 900, ran: 1000, completed: 4000 }, state: { status: "completed", input: { command: "ls", workdir: "sub" } } },
+      { type: "tool", id: "toolu_2", name: "read", time: { created: 5000 }, state: { status: "streaming", input: "{" } },
+    ] },
+  ], "/w", null);
+  assert.deepEqual(calls.map((call) => [call.callId, call.tool, call.status, call.start, call.end, call.command, call.cwd]), [
+    ["toolu_1", "shell", "completed", 1000, 4000, "ls", "/w/sub"],
+    ["toolu_2", "read", "streaming", 5000, null, null, "/w"],
+  ]);
+});
+
+
+test("outside files on the 2.x engine (Claude Code too): each file gets the shell call it was written in, from the tool events or the stored messages", async () => {
+    const home = tmp("home-v2");
+  const temp = tmp("temp-v2");
+  const root = tmp("ws-v2");
+  const run = async (feed) => {
+    const recorded = [];
+    const capture = new context.ContextCapture({
+      client: "cli", scrub: SCRUB, record: (id, type, data) => recorded.push({ id, type, data }),
+      enabled: true, network: false, privacy: { home, user: null }, platform: "linux", env: { TMPDIR: temp },
+      sections: { system_packages: false, services: false, setup: false, pm_config: false, shell_aliases: false, processes: false },
+    });
+    const id = `ses_v2outside${feed}`;
+    capture.sessionStarted(id, root);
+    capture.turnStarted(id);
+    // The engine's /api/event stream: only input.started names the tool; called carries the command; success ends it.
+    let push;
+    let close;
+    const body = new ReadableStream({ start: (controller) => {
+      push = (frame) => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+      close = () => controller.close();
+    } });
+    const abort = new AbortController();
+    const watching = toolEvents.watchToolEvents({
+      url: "http://engine/api/event", headers: new Headers(), sessionId: id, signal: abort.signal,
+      fetch: async () => new Response(body, { status: 200 }), onEvent: (event) => capture.toolEvent(id, event),
+    });
+    const times = {};
+    const event = (type, data) => feed === "events" && push({ id: `evt_${type}_${data.id}`, type, created: Date.now(), durable: {}, data: { sessionID: id, assistantMessageID: "msg_1", ...data } });
+    for (const call of ["call_a", "call_b"]) {
+      times[call] = { ran: Date.now() };
+      event("session.tool.input.started", { id: call, name: "shell" });
+      event("session.tool.called", { id: call, input: { command: `echo ${call} > ${temp}/${call}.txt` }, executed: true });
+      await sleep(40);
+      fs.writeFileSync(path.join(temp, `${call}.txt`), `${call}\n`);
+      await sleep(40);
+      times[call].completed = Date.now();
+      event("session.tool.success", { id: call, content: [{ type: "text", text: "" }], executed: true });
+      await sleep(40);
+    }
+    await sleep(30);
+    const messages = feed === "messages"
+      ? [{ type: "assistant", id: "msg_1", time: { created: times.call_a.ran }, content: ["call_a", "call_b"].map((call) => ({ type: "tool", id: call, name: "shell", executed: true, time: { created: times[call].ran, ...times[call] }, state: { status: "completed", input: { command: `echo ${call} > ${temp}/${call}.txt` }, content: [] } })) }]
+      : [];
+    capture.turnMessages(id, messages, true);
+    capture.turnEnded(id);
+    await capture.settled(id, 5_000);
+    abort.abort();
+    close();
+    await watching;
+    capture.sessionEnded(id);
+    const outside = recorded.find((item) => item.type === "context.outside_files");
+    return Object.fromEntries(outside.data.files.filter((file) => file.scope === "tmp").map((file) => [path.basename(file.path), file.tool_call_id ?? null]));
+  };
+  assert.deepEqual(await run("events"), { "call_a.txt": "call_a", "call_b.txt": "call_b" }, "from the tool events");
+  assert.deepEqual(await run("messages"), { "call_a.txt": "call_a", "call_b.txt": "call_b" }, "from the 2.x stored messages");
+});
+
+
+test("outside files: a text file up to 1 MiB rides along whole, up to 8 MiB a turn (as written in the event); past that the budget says so", async () => {
+  const temp = tmp("temp-big");
+  const root = tmp("ws-big");
+  const since = Date.now() - 500;
+  const line = "provenance line of text for the replay\n";
+  fs.writeFileSync(path.join(temp, "provenance.json"), line.repeat(Math.floor(200 * 1024 / line.length)));
+  for (let i = 0; i < 9; i += 1) fs.writeFileSync(path.join(temp, `part-${i}.txt`), line.repeat(Math.floor((1024 * 1024 - 64) / line.length)));
+  const event = await outsideFiles.outsideFilesOfTurn({
+    root, turn: 1, since, until: Date.now() + 500, home: tmp("home-big"), platform: "linux", env: {}, privacy: { home: null, user: null }, scrub: SCRUB,
+    exclude: [], commandFolders: [temp], calls: [{ callId: "call_big", start: since, end: Date.now() + 400 }], sharedWindow: false, tmpRoots: [temp], budgetMs: 5_000,
+  });
+  assert.equal(outsideFiles.OUTSIDE_FILE_CONTENT_BYTES, 1024 * 1024);
+  assert.equal(outsideFiles.OUTSIDE_TURN_CONTENT_BYTES, 8 * 1024 * 1024);
+  const files = event.files.filter((file) => file.scope === "tmp" || file.scope === "command_target");
+  assert.ok(files.find((file) => file.path.endsWith("provenance.json")).content.length > 32 * 1024, "past the old 32 KiB cap");
+  const parts = files.filter((file) => /part-\d\.txt$/.test(file.path));
+  assert.equal(parts.length, 9);
+  assert.ok(parts.filter((file) => file.content).length >= 6, "most of the 1 MiB files ride along");
+  assert.ok(parts.some((file) => file.withheld === "budget"), "the 8 MiB turn budget ends it");
+  assert.ok(event.content_bytes <= outsideFiles.OUTSIDE_TURN_CONTENT_BYTES);
+  assert.ok(Buffer.byteLength(JSON.stringify(event)) < 16 * 1024 * 1024, "the event fits one trace upload");
+});
+

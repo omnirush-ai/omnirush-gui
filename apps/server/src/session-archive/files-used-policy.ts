@@ -37,7 +37,7 @@
  * in the CLI (capture/session-archive/) and the desktop app
  * (apps/server/src/session-archive/).
  */
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 
 import { scrubGitConfig } from "./git-scrub.js";
 import { isSecretFile, isSecretFolder } from "../context/privacy.js";
@@ -106,7 +106,7 @@ const WINDOWS_SYSTEM = /^[A-Za-z]:[\\/](?:Windows|Program Files|Program Files \(
 const HOME_CACHE_DIRS = [
   ".cache", ".npm", ".pnpm-store", ".yarn", ".bun/install", ".cargo/registry", ".cargo/git", ".rustup", ".gradle", ".m2", ".nuget",
   ".local/share/pnpm", ".local/share/opencode", ".local/state/opencode", ".config/opencode", ".omnirush", ".pi", ".config/omnirush",
-  ".config/OmniRush", "Library/Application Support/OmniRush", "AppData/Roaming/OmniRush", "Library/Caches", "AppData/Local/Temp",
+  ".config/OmniRush", "Library/Application Support/OmniRush", "AppData/Roaming/OmniRush", "Library/Caches",
   "AppData/Local/npm-cache", "go/pkg/mod", ".pyenv/versions", ".nvm/versions", ".volta/tools", ".local/lib", ".local/pipx", ".conda/pkgs",
   "miniconda3/pkgs", "anaconda3/pkgs", ".vscode-server", ".vscode", ".cursor", ".codex", ".claude", ".agents", ".local/share/Trash",
 ];
@@ -160,6 +160,13 @@ function within(parent: string, child: string): string | null {
 
 function inside(parent: string, child: string): boolean {
   return resolve(parent) === resolve(child) || within(parent, child) !== null;
+}
+
+/** Whether `path` lies below `dir` (not `dir` itself), in the style `dir` is written in: a drive path the Windows way (either slash, any case). */
+export function belowDir(dir: string, path: string): boolean {
+  const style = /^[A-Za-z]:[\\/]/.test(dir) ? win32 : posix;
+  const rel = style.relative(dir, path);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${style.sep}`) && !style.isAbsolute(rel);
 }
 
 const ENV_FILE = /(?:^|\/)\.env(?:\.|$)|(?:^|\/)[^/]*\.env$/i;
@@ -233,13 +240,14 @@ export function classifyUse(absolute: string, context: UseContext): UseClass | n
   const outsideRel = portable.replace(/^[A-Za-z]:/, "").replace(/^\/+/, "");
   const secret = credentials && (isSecretUsePath(absolute) || context.isCredentialPath?.(outsideRel) === true);
   const hold = (scope: FilesUsedScope, reason: FilesUsedReason): UseClass => ({ scope, path: absolute, plan: "hold", reason });
-  if (context.temps.some((temp) => within(temp, absolute) !== null)) {
+  const homeRel = context.home ? within(context.home, absolute) : null;
+  // The Windows temp folder under the home is a temp folder too, whatever spelling of it `temps` has (an 8.3 short name).
+  if (context.temps.some((temp) => within(temp, absolute) !== null) || (homeRel !== null && /^AppData\/Local\/Temp\//i.test(homeRel))) {
     if (secret) return hold("tmp", "denylisted");
     const regenerable = regenerableReason(outsideRel);
     if (regenerable) return hold("tmp", regenerable);
     return archivePath ? { scope: "tmp", path: absolute, plan: "stage", reason: "captured", archivePath } : hold("tmp", "denylisted");
   }
-  const homeRel = context.home ? within(context.home, absolute) : null;
   if (homeRel !== null) {
     if (HOME_SECRET_DIRS.some((dir) => homeRel === dir || homeRel.startsWith(`${dir}/`))) return hold("home", "denylisted");
     const kind = homeConfigKind(homeRel);

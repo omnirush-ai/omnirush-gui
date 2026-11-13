@@ -35,9 +35,9 @@ import { isSecretFile, isSecretFolder, isTextBuffer, tildeText, type PrivacyCont
 
 export const OUTSIDE_FILES_SCHEMA = "omnirush.outside-files.v1";
 /** A text file at most this big rides along whole; a bigger one is listed with its hash only. */
-export const OUTSIDE_FILE_CONTENT_BYTES = 32 * 1024;
-/** Content per turn, in all. */
-export const OUTSIDE_TURN_CONTENT_BYTES = 256 * 1024;
+export const OUTSIDE_FILE_CONTENT_BYTES = 1024 * 1024;
+/** Content per turn, in all, counted as it is written in the event (JSON): half the trace upload cap (16 MiB) at most. */
+export const OUTSIDE_TURN_CONTENT_BYTES = 8 * 1024 * 1024;
 /** Files hashed at most this big. */
 const HASH_MAX_BYTES = 16 * 1024 * 1024;
 const MAX_FILES = 200;
@@ -277,6 +277,7 @@ export async function outsideFilesOfTurn(input: OutsideFilesInput): Promise<Outs
   }
   const files: OutsideFileItem[] = [];
   let contentBytes = 0;
+  let encodedBytes = 0;
   const describe = async (entry: OutsideEntry, scope: OutsideFileScope, shownPath: string): Promise<void> => {
     if (isWithheldPath(entry.absolute)) return;
     const item: OutsideFileItem = { path: shownPath, scope, kind: entry.kind, size: entry.size, sha256: null, mtime: new Date(entry.mtimeMs).toISOString() };
@@ -294,15 +295,20 @@ export async function outsideFilesOfTurn(input: OutsideFilesInput): Promise<Outs
     const agents = during || scope === "command_target" || scope === "project_ignored";
     if (!agents) item.withheld = "not_attributed";
     else if (entry.size > OUTSIDE_FILE_CONTENT_BYTES) item.withheld = "too_large";
-    else if (contentBytes + entry.size > OUTSIDE_TURN_CONTENT_BYTES) item.withheld = "budget";
+    else if (encodedBytes + entry.size > OUTSIDE_TURN_CONTENT_BYTES) item.withheld = "budget";
     else {
       const bytes = await readFile(entry.absolute).catch(() => null);
       if (!bytes) item.withheld = "unreadable";
       else if (!isTextBuffer(bytes)) item.withheld = "binary";
       else {
         const text = tildeText(input.scrub.content(entry.absolute, bytes.toString("utf8")), input.privacy);
-        item.content = text;
-        contentBytes += Buffer.byteLength(text, "utf8");
+        const encoded = Buffer.byteLength(JSON.stringify(text), "utf8");
+        if (encodedBytes + encoded > OUTSIDE_TURN_CONTENT_BYTES) item.withheld = "budget";
+        else {
+          item.content = text;
+          contentBytes += Buffer.byteLength(text, "utf8");
+          encodedBytes += encoded;
+        }
       }
     }
     files.push(item);

@@ -494,3 +494,23 @@ describe("a files-used chain", () => {
     expect(after.members.has(`__outside__${big}`)).toBe(false);
   });
 });
+
+test("Windows temp: files under the home's AppData/Local/Temp are temp files (staged), whatever spelling `temps` has; credentials there still never", () => {
+  expect(classify("/home/u/AppData/Local/Temp/work2/crash-distributed/provenance.json")).toBe("tmp stage captured");
+  expect(classify("/home/u/appdata/local/temp/x/a.txt")).toBe("tmp stage captured");
+  expect(classify("/home/u/AppData/Local/Temp/x/.env")).toBe("tmp hold denylisted");
+  expect(classify("/home/u/AppData/Local/Temp/x/node_modules/a.js")).toBe("tmp hold dependency_dir");
+  expect(classify("/home/u/AppData/Roaming/app/state.json")).toBe("home hold not_allowlisted");
+  expect(classify("/home/u/AppData/Local/npm-cache/x.tgz")).toBe("home hold dependency_dir");
+});
+
+test("belowDir: a drive path compares the Windows way (either slash, any case), a POSIX path the POSIX way", () => {
+  const temp = "C:\\Users\\SNEHAS~1\\AppData\\Local\\Temp";
+  expect(policy.belowDir(temp, "C:\\Users\\SNEHAS~1\\AppData\\Local\\Temp\\run\\out.json")).toBe(true);
+  expect(policy.belowDir(temp, "c:/users/snehas~1/appdata/local/temp/run/out.json")).toBe(true);
+  expect(policy.belowDir(temp, temp)).toBe(false);
+  expect(policy.belowDir(temp, "C:\\Users\\SNEHAS~1\\AppData\\Local\\Temp2\\x")).toBe(false);
+  expect(policy.belowDir("/tmp", "/tmp/x/a")).toBe(true);
+  expect(policy.belowDir("/tmp", "/tmpx/a")).toBe(false);
+  expect(policy.belowDir("/tmp", "/tmp")).toBe(false);
+});
