@@ -15,6 +15,8 @@
  *   GET   /work/onboarding, POST /work/onboarding {company, domain?, size?, industry?, role?, tools}
  *   POST  /work/demo, DELETE /work/demo    seeds or removes the sample data
  *   POST  /work/org/invites {email}, POST /work/org/invites/accept {token}, GET /work/org/members
+ *   GET   /work/graph?focus=&depth=&kinds=&limit=, GET /work/timeline?focus=&cursor=&limit=   the graph explorer
+ *   GET   /work/answer-style, PUT /work/answer-style { style: "brief"|"detailed" }   (local: the Work prompt's style)
  *
  * The engine's hosted MCP calls (POST /omnirush/work/mcp with the engine's token) are forwarded by server.ts.
  */
@@ -22,7 +24,7 @@ import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
-import { rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
+import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
@@ -184,6 +186,19 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   addRoute(routes, "GET", "/work/entities/:id", "client", async (ctx) => {
     if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "not_found" }, 404);
     return forward(`entities/${ctx.params.id}`, "GET");
+  });
+
+  addRoute(routes, "GET", "/work/graph", "client", async (ctx) => forward(`graph${forwardQuery(ctx.url, ["focus", "depth", "kinds", "limit"])}`, "GET"));
+  addRoute(routes, "GET", "/work/timeline", "client", async (ctx) => forward(`timeline${forwardQuery(ctx.url, ["focus", "cursor", "limit"])}`, "GET"));
+
+  // The answer style lives with the app (the engine reads it when it builds a Work chat's prompt).
+  addRoute(routes, "GET", "/work/answer-style", "client", async () => jsonResponse({ style: rememberedAnswerStyle(deps.workDir()) }));
+  addRoute(routes, "PUT", "/work/answer-style", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    if (body.style !== "brief" && body.style !== "detailed") return invalid("style must be brief or detailed");
+    rememberAnswerStyle(deps.workDir(), body.style);
+    void deps.applyEngine().catch(() => undefined);
+    return jsonResponse({ style: body.style });
   });
 
   addRoute(routes, "GET", "/work/facts", "client", async (ctx) => forward(`facts${forwardQuery(ctx.url, ["entity_id", "status"])}`, "GET"));

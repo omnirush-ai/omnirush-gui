@@ -1,7 +1,7 @@
 // Work chats' engine config (Work mode), applied by the MCP plugin (opencode-plugins/omnirush-mcp-policy.ts).
 import { FIRST_PARTY_REMOTE, firstPartyRemote, toolPrefix } from "../mcp-allow/mcp-allow.mjs";
-import { WORK_PROMPT } from "./prompt.js";
-import { isWorkRoot, rememberedWorkConnectors, rememberedWorkSwitch, WORK_DIR_ENV, WORK_DISABLED_TOOLS, WORK_READ_TOOLS } from "./work.js";
+import { workPrompt } from "./prompt.js";
+import { isWorkRoot, rememberedAnswerStyle, rememberedWorkConnectors, rememberedWorkSwitch, WORK_DIR_ENV, WORK_DISABLED_TOOLS, WORK_READ_TOOLS } from "./work.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -33,7 +33,7 @@ export function applyWork(target: Record<string, unknown>, root: string, env: Re
   const main = isRecord(agents.omnirush) ? { ...agents.omnirush } : {};
   // The agent's own rules would otherwise win over the ones above (they are read after the global ones).
   if (isRecord(main.permission)) main.permission = { ...main.permission, ...permission };
-  agents.omnirush = { ...main, prompt: WORK_PROMPT };
+  agents.omnirush = { ...main, prompt: workPrompt(rememberedAnswerStyle(dir)) };
   target.agent = agents;
 }
 

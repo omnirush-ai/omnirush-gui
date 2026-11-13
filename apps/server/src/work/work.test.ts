@@ -7,9 +7,9 @@ import { firstPartyRemote } from "../mcp-allow/mcp-allow.mjs";
 import { applyWork, v2WorkPermissions, withV2WorkPermissions } from "./engine.js";
 import { desiredV2Mcp, v2McpGate } from "../engine-v2-mcp.js";
 import { writeWorkspaceMcp } from "../mcp-allow/state.js";
-import { WORK_PROMPT } from "./prompt.js";
+import { workPrompt } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
-import { isWorkRoot, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
+import { isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
 import type { Route } from "../routes/registry.js";
 import type { ServerConfig } from "../types.js";
 
@@ -83,7 +83,11 @@ describe("work engine config", () => {
     expect(permission.bash).toBe("deny");
     expect((target.tools as Record<string, boolean>).bash).toBe(false);
     const agent = (target.agent as Record<string, Record<string, unknown>>).omnirush;
-    expect(agent?.prompt).toBe(WORK_PROMPT);
+    expect(agent?.prompt).toBe(workPrompt("brief"));
+    rememberAnswerStyle(dir, "detailed");
+    const again: Record<string, unknown> = {};
+    applyWork(again, join(dir, "user_1"), env(dir));
+    expect((again.agent as Record<string, Record<string, unknown>>).omnirush?.prompt).toBe(workPrompt("detailed"));
     expect((agent?.permission as Record<string, string>).bash).toBe("deny");
   });
 
@@ -144,8 +148,22 @@ describe("work prompt and tools", () => {
   test("context tools read without asking; remember and forget ask; the prompt briefs and remembers", () => {
     for (const tool of ["work_context", "work_entity", "jira_search", "github_read"]) expect(WORK_READ_TOOLS).toContain(tool);
     for (const tool of ["work_remember", "work_forget", "jira_comment", "github_create_issue"]) expect(WORK_READ_TOOLS).not.toContain(tool);
-    expect(WORK_PROMPT).toContain("call work_context");
-    expect(WORK_PROMPT).toContain("work_remember once they agree");
+    for (const style of ["brief", "detailed"] as const) {
+      expect(workPrompt(style)).toContain("call work_context once with the task and a budget");
+      expect(workPrompt(style)).toContain("pass max_tokens on searches");
+      expect(workPrompt(style)).toContain("work_remember once they agree");
+    }
+  });
+
+  test("brief by default; each style is one fixed text (prompt caching holds)", () => {
+    expect(workPrompt()).toBe(workPrompt("brief"));
+    expect(workPrompt("brief")).toContain("no restating the question");
+    expect(workPrompt("detailed")).not.toContain("no restating the question");
+    expect(workPrompt("brief")).toBe(workPrompt("brief"));
+    const dir = temp();
+    expect(rememberedAnswerStyle(dir)).toBe("brief");
+    rememberAnswerStyle(dir, "detailed");
+    expect(rememberedAnswerStyle(dir)).toBe("detailed");
   });
 });
 
@@ -218,9 +236,22 @@ describe("work routes", () => {
     ]);
   });
 
+  test("the graph and timeline are forwarded with only their own parameters; the answer style is kept here", async () => {
+    const { dir, calls, call } = setup(() => json({ nodes: [], edges: [], counts: {}, truncated: false }));
+    await call("GET", "/work/graph?focus=e%3A42&depth=1&kinds=entity%3Aperson&limit=500&evil=1");
+    await call("GET", "/work/graph");
+    await call("GET", "/work/timeline?focus=r%3A7&cursor=c2&limit=50&depth=2");
+    expect(calls).toEqual(["GET graph?focus=e%3A42&depth=1&kinds=entity%3Aperson&limit=500 ", "GET graph ", "GET timeline?focus=r%3A7&cursor=c2&limit=50 "]);
+    expect(await (await call("GET", "/work/answer-style")).json()).toEqual({ style: "brief" });
+    expect((await call("PUT", "/work/answer-style", { style: "chatty" })).status).toBe(400);
+    expect(await (await call("PUT", "/work/answer-style", { style: "detailed" })).json()).toEqual({ style: "detailed" });
+    expect(rememberedAnswerStyle(dir)).toBe("detailed");
+    expect(calls.length).toBe(3);
+  });
+
   test("the broker reaches only the contract's paths", () => {
-    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org", "org/../admin", "org/invites/x", "audit", "data"]) expect(WORK_PATH.test(path)).toBe(false);
+    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members"]) expect(WORK_PATH.test(path)).toBe(true);
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org", "org/../admin", "org/invites/x", "audit", "data", "graph/x"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("tryout, company setup, sample data and invites are checked, then forwarded", async () => {

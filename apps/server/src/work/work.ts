@@ -17,9 +17,9 @@ export const WORK_PRESET = "work";
 /** A connector id as the server names it (google, jira, …): new ids the app does not know yet still work. */
 export const WORK_SOURCE_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 
-/** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the MCP server, and
- *  the tryout and company setup (enable, onboarding, demo, org invites, joining by invite and members). */
-export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect))?)?|entities(?:\/[A-Za-z0-9_.:-]{1,128})?|facts(?:\/[A-Za-z0-9_.:-]{1,128})?|health|mcp|enable|onboarding|demo|org\/(?:invites(?:\/accept)?|members))$/;
+/** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the graph, the timeline,
+ *  the MCP server, and the tryout and company setup (enable, onboarding, demo, org invites, joining by invite and members). */
+export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect))?)?|entities(?:\/[A-Za-z0-9_.:-]{1,128})?|facts(?:\/[A-Za-z0-9_.:-]{1,128})?|health|graph|timeline|mcp|enable|onboarding|demo|org\/(?:invites(?:\/accept)?|members))$/;
 
 /** The hosted server's tools that only read (the contract's table): every other tool asks first, in every mode. */
 export const WORK_READ_TOOLS = [
@@ -136,4 +136,17 @@ export function rememberedWorkConnectors(dir: string): WorkConnectorUse[] {
   return isRecord(saved) && Array.isArray(saved.connectors)
     ? saved.connectors.filter((row): row is WorkConnectorUse => isRecord(row) && typeof row.id === "string" && typeof row.enabled === "boolean").map((row) => ({ id: row.id, enabled: row.enabled }))
     : [];
+}
+
+/** How Work answers read (Settings > Work): "brief" (the default) or "detailed". */
+export type WorkAnswerStyle = "brief" | "detailed";
+
+/** The answer style as last chosen; brief when never chosen. */
+export function rememberedAnswerStyle(dir: string): WorkAnswerStyle {
+  const saved = readJson(join(dir, "settings.json"));
+  return isRecord(saved) && saved.answer_style === "detailed" ? "detailed" : "brief";
+}
+
+export function rememberAnswerStyle(dir: string, style: WorkAnswerStyle): void {
+  writeJson(join(dir, "settings.json"), { answer_style: style });
 }

@@ -193,9 +193,9 @@ import { askSideQuestion, brokerSideCall } from "./side-question.js";
 import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/desktop.js";
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
 import { findWorkWorkspace, forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./work/routes.js";
-import { rememberWorkSwitch, workDir } from "./work/work.js";
+import { rememberedAnswerStyle, rememberWorkSwitch, workDir } from "./work/work.js";
 import { isV2WorkRoot, withV2WorkPermissions } from "./work/engine.js";
-import { WORK_PROMPT } from "./work/prompt.js";
+import { workPrompt } from "./work/prompt.js";
 import {
   applyProviderLockAnswer,
   assertConfigWithinLock,
@@ -2379,7 +2379,8 @@ export async function proxyOpencodeV2Request(input: {
       return response.json();
     });
     // Work mode (work/engine.ts): a Work chat's own rules (no shell or code tools, writes ask) and the Work prompt.
-    const workChat = isV2WorkRoot(workDir(runtimeStorageDir(input.config)), input.workspace.path);
+    const workFolder = workDir(runtimeStorageDir(input.config));
+    const workChat = isV2WorkRoot(workFolder, input.workspace.path);
     const workRules = workChat ? withV2WorkPermissions(sessionPermissions) : null;
     if (workRules) {
       const sessionUrl = new URL(target);
@@ -2389,7 +2390,7 @@ export async function proxyOpencodeV2Request(input: {
       });
       if (!patched.ok) throw new ApiError(502, "engine_permission_sync_failed", "Work chat rules could not be applied");
     }
-    const value = workChat ? { ...buildOmniRushV2Instructions(false), operatingInstructions: WORK_PROMPT } : buildOmniRushV2Instructions(false);
+    const value = workChat ? { ...buildOmniRushV2Instructions(false), operatingInstructions: workPrompt(rememberedAnswerStyle(workFolder)) } : buildOmniRushV2Instructions(false);
     const instructionUrl = new URL(target);
     instructionUrl.pathname = `/api/experimental/session/${encodeURIComponent(sessionId)}/instructions/entries/${OMNIRUSH_V2_INSTRUCTION_KEY}`;
     const synced = await loopbackFetch(instructionUrl.toString(), {
