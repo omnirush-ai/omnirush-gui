@@ -506,7 +506,17 @@ export function WorkKnowledgePage(props: {
     queryFn: () => props.client!.listWorkEntities({ q: query, limit: 8 }),
     enabled: Boolean(props.client) && view === "graph" && query.length >= 2,
   });
-  const hits = useMemo(() => (search.trim() ? searchHits(graph, matches, found.data?.items ?? []) : []), [graph, matches, found.data, search]);
+  // shortcut: records are matched among the account's newest 200 only; a server-side record search would reach all.
+  const recent = useQuery({
+    queryKey: ["omnirush-work-timeline-search", base],
+    queryFn: () => props.client!.getWorkTimeline({ limit: 200 }),
+    enabled: Boolean(props.client) && view === "graph" && query.length >= 2,
+    staleTime: 60_000,
+  });
+  const hits = useMemo(
+    () => (search.trim() ? searchHits(graph, matches, found.data?.items ?? [], recent.data?.items ?? [], search) : []),
+    [graph, matches, found.data, recent.data, search],
+  );
   const expand = useMutation({
     mutationFn: (id: string) => props.client!.getWorkGraph({ focus: id, depth: 1 }),
     onSuccess: (answer, id) => {

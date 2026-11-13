@@ -93,15 +93,21 @@ describe("Work graph explorer", () => {
     expect(entityIdOf("r:7")).toBeNull();
   });
 
-  test("search reaches past the loaded hubs: graph matches first (most linked), then server hits not loaded yet", () => {
+  test("search reaches past the loaded hubs: graph matches first (most linked), then server entities and records not loaded yet", () => {
     const graph = { nodes: [
       { id: "e:1", type: "entity" as const, kind: "company", label: "Acme Bakery", degree: 3 },
-      { id: "r:9", type: "record" as const, kind: "invoice", label: "Acme invoice 1001", degree: 8 },
+      { id: "f:9", type: "fact" as const, kind: "policy", label: "Acme pays net 30", degree: 8 },
       { id: "e:2", type: "entity" as const, kind: "person", label: "Dana", degree: 1 },
     ] };
-    const hits = searchHits(graph, matchNodes(graph.nodes, "acme"), [{ id: "1", kind: "company", name: "Acme Bakery" }, { id: "7", kind: "deal", name: "Acme catering 2027" }]);
-    expect(hits.map((hit) => [hit.id, hit.loaded])).toEqual([["r:9", true], ["e:1", true], ["e:7", false]]);
-    expect(searchHits(null, new Set(), [{ id: "7", kind: "deal", name: "Acme" }])).toEqual([{ id: "e:7", type: "entity", kind: "deal", label: "Acme", loaded: false }]);
+    const records = [
+      { id: "r:5", type: "record", kind: "invoice", label: "Invoice 1001", sub: "Acme Bakery" },
+      { id: "r:6", type: "record", kind: "email", label: "Lunch", sub: "Dana" },
+    ];
+    const found = [{ id: "1", kind: "company", name: "Acme Bakery" }, { id: "7", kind: "deal", name: "Acme catering 2027" }];
+    const hits = searchHits(graph, matchNodes(graph.nodes, "acme"), found, records, "acme");
+    expect(hits.map((hit) => [hit.id, hit.loaded])).toEqual([["f:9", true], ["e:1", true], ["e:7", false], ["r:5", false]]);
+    expect(searchHits(null, new Set(), [], records, "invoice 1001").map((hit) => hit.id)).toEqual(["r:5"]);
+    expect(searchHits(graph, new Set(), found, records, "acme", 2)).toHaveLength(2);
   });
 
   test("a long entity name wraps with its full text as a title, and Ask about this keeps its size", () => {

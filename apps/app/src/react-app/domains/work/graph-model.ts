@@ -136,7 +136,7 @@ export function placeLabels<T extends LabelBox>(boxes: T[], gap = 4, blocked: La
 }
 
 /** Nodes whose label, sub-line or kind contains every word of the search. */
-export function matchNodes(nodes: OmniRushWorkGraphNode[], query: string): Set<string> {
+export function matchNodes(nodes: Pick<OmniRushWorkGraphNode, "id" | "kind" | "label" | "sub">[], query: string): Set<string> {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return new Set();
   return new Set(nodes.filter((node) => {
@@ -149,21 +149,31 @@ export type SearchHit = Pick<OmniRushWorkGraphNode, "id" | "type" | "kind" | "la
 
 /**
  * The search's results: matching nodes already on the graph (most linked first), then the server's entity search
- * (the list view's, which reaches past the overview's hubs) for those not loaded yet; picking one of those expands it.
+ * (the list view's, which reaches past the overview's hubs) and the account's newest records (the timeline's) that
+ * match but are not loaded yet; picking one of those expands it into the graph.
  */
 export function searchHits(
   graph: Pick<OmniRushWorkGraph, "nodes"> | null,
   matches: ReadonlySet<string>,
   found: { id: string; kind: string; name: string }[],
+  records: Pick<OmniRushWorkGraphNode, "id" | "type" | "kind" | "label" | "sub">[],
+  query: string,
   max = 8,
 ): SearchHit[] {
   const nodes = graph?.nodes ?? [];
   const loaded = new Set(nodes.map((node) => node.id));
   const onGraph = nodes.filter((node) => matches.has(node.id)).sort((a, b) => b.degree - a.degree)
     .map((node) => ({ id: node.id, type: node.type, kind: node.kind, label: node.label, loaded: true }));
-  const fetched = found.filter((entity) => !loaded.has(`e:${entity.id}`))
-    .map((entity) => ({ id: `e:${entity.id}`, type: "entity" as const, kind: entity.kind, label: entity.name, loaded: false }));
-  return [...onGraph, ...fetched].slice(0, max);
+  const entities = found.map((entity) => ({ id: `e:${entity.id}`, type: "entity" as const, kind: entity.kind, label: entity.name, loaded: false }));
+  const hit = matchNodes(records, query);
+  const fetched = records.filter((record) => hit.has(record.id)).map((record) => ({ id: record.id, type: record.type, kind: record.kind, label: record.label, loaded: false }));
+  const seen = new Set(loaded);
+  const more = [...entities, ...fetched].filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+  return [...onGraph, ...more].slice(0, max);
 }
 
 /** Timeline items by local day, newest day first (items keep the server's order); undated items go last. */
