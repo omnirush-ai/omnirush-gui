@@ -101,16 +101,13 @@ export function hasTranscript(configDir, uuid) {
   } catch { return false; }
 }
 
-/**
- * Claude Code's system prompt (owner 2026-11-09: a minimal one, as the farm's): its own opening line in place of
- * its ~870-word prompt. Claude Code still adds its billing header and Agent SDK line before it.
- */
-export const CLAUDE_SYSTEM_PROMPT = "You are an agent working with the user toward their goals, using your own judgment along the way.";
+/** Claude Code's core tools only: the client's reference harness runs with this set, the same on every OS. */
+export const CLAUDE_TOOLS = "Bash,Read,Edit,Write,Grep,Glob";
 
-/** Claude Code's argv for a turn (LAUNCH adds --resume or --session-id in the box). */
+/** Claude Code's argv for a turn, with its own default system prompt (LAUNCH adds --resume or --session-id in the box). */
 export function claudeArgs({ model }) {
   return ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-    "--model", model, "--permission-mode", "bypassPermissions", "--system-prompt", CLAUDE_SYSTEM_PROMPT];
+    "--model", model, "--permission-mode", "bypassPermissions", "--tools", CLAUDE_TOOLS];
 }
 
 /**
