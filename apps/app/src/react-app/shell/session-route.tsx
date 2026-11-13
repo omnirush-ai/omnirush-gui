@@ -22,7 +22,8 @@ import { trackSessionActive, trackTaskStarted } from "@/app/lib/den-telemetry";
 import { buildDiagnosticsBundleJson } from "@/app/lib/diagnostics-bundle";
 import { downloadTextAsFile } from "@/app/lib/download";
 import { canCreateWorkspaces } from "@/app/lib/workspace-creation-policy";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAccountStatusStore } from "@/app/lib/quality";
 import { isPromptAdmissionUnknown, unwrap } from "@/app/lib/opencode";
 import { createClientV2 } from "@/app/lib/opencode-v2-adapter";
 import { abortSessionSafe, forkSession, listCommands, revertSession, setSessionArchived, shellInSession, unrevertSession } from "@/app/lib/opencode-session";
@@ -114,9 +115,10 @@ import {
   type SessionPagePaneRuntime,
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
-import { isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_PRESET, type AppMode } from "@/react-app/domains/work/work-mode";
+import { hasSampleData, isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_PRESET, workConnectorsKey, workStateKey, type AppMode } from "@/react-app/domains/work/work-mode";
 import { WorkKnowledgePage } from "@/react-app/domains/work/knowledge-views";
 import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
+import { SampleDataBadge, WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -552,6 +554,38 @@ export function SessionRoute() {
   const workWorkspace = workspaces.find((workspace) => workspace.preset === WORK_PRESET && workspace.workspaceType !== "remote") ?? null;
   const workChatActive = workEnabled && Boolean(selectedWorkspace && selectedWorkspace.preset === WORK_PRESET) && !workRouteRequested;
   const workRouteActive = workEnabled && workRouteRequested;
+  // The tryout: Work is off but this account may turn it on ("Try Work"), then onboarding runs.
+  const workAvailable = !workEnabled && workState.data?.available === true;
+  const workOnboarding = useWorkOnboarding(client ?? null, workEnabled);
+  const workOrgId = workOnboarding.data?.org?.id ?? null;
+  const workStarters = useWorkSetupStore((state) => (workOrgId ? state.starters[workOrgId] : undefined));
+  const workConnectorRows = useQuery({ queryKey: workConnectorsKey(client ?? null), queryFn: () => client!.listWorkConnectors(), enabled: Boolean(client) && workRouteActive });
+  const accountEmail = useAccountStatusStore((state) => state.status?.email ?? null);
+  const [workInviteOpen, setWorkInviteOpen] = useState(false);
+  const tryWork = useCallback(async () => {
+    if (!client) throw new Error("Sign in to omnirush.ai to use Work.");
+    await client.enableWork();
+    const next = await queryClient.fetchQuery({ queryKey: workStateKey(client), queryFn: () => client.getWorkState(), staleTime: 0 });
+    if (!next.enabled) throw new Error("Work could not be turned on. Try again in a moment.");
+    useWorkModeStore.getState().setMode("work");
+    appModeRestored.current = true; // the start-up restore must not send this to the Work home first
+    navigate(WORK_ONBOARDING_ROUTE);
+  }, [client, navigate, queryClient]);
+  // Joined from an invite link: Work is on now (the local server re-reads the switch), open the Work home.
+  const joinedWork = useCallback(async () => {
+    if (!client) return;
+    const next = await queryClient.fetchQuery({ queryKey: workStateKey(client), queryFn: () => client.getWorkState(), staleTime: 0 });
+    if (!next.enabled) return;
+    useWorkModeStore.getState().setMode("work");
+    appModeRestored.current = true;
+    navigate(WORK_HOME_ROUTE);
+  }, [client, navigate, queryClient]);
+  // No company yet: the Work home opens onboarding (an old server without onboarding answers an error: no redirect).
+  useEffect(() => {
+    const data = workOnboarding.data;
+    if (!workRouteActive || location.pathname !== WORK_HOME_ROUTE || !data || data.done || data.org || data.steps?.company) return;
+    navigate(WORK_ONBOARDING_ROUTE, { replace: true });
+  }, [location.pathname, navigate, workOnboarding.data, workRouteActive]);
   const appMode: AppMode = workRouteActive || workChatActive ? "work" : "code";
   // Set when Work > Connectors was opened from a Work chat (composer chip or sidebar), so Back returns to it.
   const workConnectorsFrom = (location.state as { from?: string } | null)?.from ?? null;
@@ -3860,7 +3894,7 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? "Welcome" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
@@ -3869,14 +3903,31 @@ export function SessionRoute() {
             openLink={(url) => platform.openLink(url)}
             backLabel={workConnectorsFrom ? "Back to chat" : undefined}
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
+            notice={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
           />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
           <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
+        ) : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? (
+          <WorkOnboarding
+            client={client ?? null}
+            email={accountEmail}
+            sources={workState.data?.sources ?? []}
+            openLink={(url) => platform.openLink(url)}
+            onDone={() => navigate(WORK_HOME_ROUTE, { replace: true })}
+          />
         ) : (
           <WorkHome
             busy={!workWorkspace}
             message={workState.data?.message ?? null}
             onStart={startWorkChat}
+            starters={workStarters}
+            badge={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
+            checklist={workOrgId ? (
+              <>
+                <WorkChecklist client={client ?? null} onboarding={workOnboarding.data} connectors={workConnectorRows.data} orgId={workOrgId} onConnect={() => navigate(WORK_CONNECTORS_ROUTE)} onInvite={() => setWorkInviteOpen(true)} />
+                <WorkInviteDialog client={client ?? null} open={workInviteOpen} onOpenChange={setWorkInviteOpen} />
+              </>
+            ) : null}
             composer={(
               <NewTaskComposer
                 draft={workHomeDraft}
@@ -3933,7 +3984,7 @@ export function SessionRoute() {
       }}
       sidebar={{
         workspaceSessionGroups: sidebarWorkspaceSessionGroups,
-        modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : undefined,
+        modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : workAvailable ? <WorkTryButton onTry={tryWork} /> : undefined,
         workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) } : undefined,
         selectedWorkspaceId,
         selectedSessionId,
@@ -4343,6 +4394,7 @@ export function SessionRoute() {
       selectedAgent={selectedAgent}
       onSelectAgent={setSelectedAgent}
     />
+    <WorkJoinDialog client={client ?? null} onJoined={() => void joinedWork()} />
     <SessionSearchDialog
       open={sessionSearchOpen}
       onClose={() => setSessionSearchOpen(false)}

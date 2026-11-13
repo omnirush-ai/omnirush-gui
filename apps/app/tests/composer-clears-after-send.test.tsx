@@ -83,7 +83,6 @@ test("a new-session send clears the handed-off text and attachment chips, later 
   const fetchStub = async () => new Response("{}", { headers: { "content-type": "application/json" } });
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: fetchStub });
   Object.defineProperty(window, "fetch", { configurable: true, value: fetchStub });
-  window.localStorage.setItem("omnirush.shell-config", JSON.stringify({ starterCards: false }));
   mock.module("@/components/model-select", () => ({ ModelSelect: () => null }));
   mock.module("@/react-app/domains/session/surface/composer/workspace-run-mode-menu", () => ({
     WorkspaceRunModeMenu: () => null,

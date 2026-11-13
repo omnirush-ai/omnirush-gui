@@ -11,6 +11,10 @@
  *   GET   /work/health[?source=]           the sources' health checks
  *   GET   /work/entities?q=&kind=&limit=&cursor=, GET /work/entities/:id   the context graph
  *   GET   /work/facts?entity_id=&status=, POST /work/facts, PATCH /work/facts/:id (retire: status)
+ *   POST  /work/enable                     turns Work on for the account (the "Try Work" offer, while `available`)
+ *   GET   /work/onboarding, POST /work/onboarding {company, domain?, size?, industry?, role?, tools}
+ *   POST  /work/demo, DELETE /work/demo    seeds or removes the sample data
+ *   POST  /work/org/invites {email}, POST /work/org/invites/accept {token}, GET /work/org/members
  *
  * The engine's hosted MCP calls (POST /omnirush/work/mcp with the engine's token) are forwarded by server.ts.
  */
@@ -21,7 +25,7 @@ import type { ServerConfig, WorkspaceInfo } from "../types.js";
 import { rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
-  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
+  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
   accountId: () => Promise<string | null>;
   /** `maxAgeMs`: an answer older than that is asked again. */
   capabilities: (options?: { maxAgeMs?: number }) => Promise<unknown>;
@@ -46,6 +50,13 @@ const WORK_ERRORS: Record<string, string> = {
   unknown_connector: "This connector is not available.",
   connector_unavailable: "This connector is not available on this server right now.",
   not_connected: "Connect this source first.",
+  work_not_available: "Work is not available for your account yet.",
+  no_org: "Set up your company first.",
+  too_many_invites: "Too many open invites. Wait for some to be accepted.",
+  invite_email_mismatch: "This invite is for another e-mail address. Sign in with the address it was sent to.",
+  unknown_invite: "This invite link is not valid. Ask for a new one.",
+  invite_used: "This invite was already used. Ask for a new one.",
+  invite_expired: "This invite has expired. Ask for a new one.",
   omnirush_account_required: "Sign in to omnirush.ai to use Work.",
   reconnect_required: "Sign-in expired or access was revoked. Reconnect this source.",
   rate_limited: "The service asked us to slow down. Try again in a minute.",
@@ -57,6 +68,8 @@ const WORK_ERRORS: Record<string, string> = {
 const CONNECTOR = WORK_SOURCE_ID;
 const RECORD_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const FACT_KINDS = ["decision", "preference", "policy", "fact", "contact_note"];
+const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,189}\.[^\s@]{2,}$/;
 
 /** The query a list route forwards: only the named parameters, each short. */
 function forwardQuery(url: URL, names: string[]): string {
@@ -152,7 +165,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   });
 
   // Connector health, the context graph and saved knowledge (Work > Knowledge): forwarded as they are.
-  const forward = async (path: string, method: "GET" | "POST" | "PATCH", body?: Record<string, unknown>) => {
+  const forward = async (path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: Record<string, unknown>) => {
     const found = deps.broker();
     if (!found) return signedOut();
     return (await pass(await found.workRequest(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) }))).response;
@@ -201,6 +214,57 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     if (Object.keys(patch).length === 0) return invalid("Nothing to change.");
     return forward(`facts/${ctx.params.id}`, "PATCH", patch);
   });
+
+  // The tryout: Work turns on for this account; the next /work/state asks the server again instead of its cached switch.
+  addRoute(routes, "POST", "/work/enable", "client", async () => {
+    const answer = await forward("enable", "POST", {});
+    if (answer.ok) switchStale = true;
+    return answer;
+  });
+
+  // Company setup: the profile, sample data and teammates.
+  addRoute(routes, "GET", "/work/onboarding", "client", async () => forward("onboarding", "GET"));
+
+  addRoute(routes, "POST", "/work/onboarding", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    const company = text(body.company);
+    if (!company || company.length > 200) return invalid("A company name is needed (at most 200 characters).");
+    const out: Record<string, unknown> = { company };
+    const domain = text(body.domain)?.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "") ?? null;
+    if (domain) {
+      if (!DOMAIN.test(domain)) return invalid("The domain is not valid (like example.com).");
+      out.domain = domain;
+    }
+    for (const field of ["size", "industry", "role"] as const) {
+      const value = text(body[field]);
+      if (value && value.length > 100) return invalid(`${field} is too long (at most 100 characters).`);
+      if (value) out[field] = value;
+    }
+    const tools = Array.isArray(body.tools) ? body.tools : [];
+    if (tools.length > 32 || !tools.every((id) => typeof id === "string" && CONNECTOR.test(id))) return invalid("tools must be connector ids");
+    out.tools = [...new Set(tools)];
+    return forward("onboarding", "POST", out);
+  });
+
+  addRoute(routes, "POST", "/work/demo", "client", async () => forward("demo", "POST", {}));
+  addRoute(routes, "DELETE", "/work/demo", "client", async () => forward("demo", "DELETE"));
+
+  addRoute(routes, "POST", "/work/org/invites", "client", async (ctx) => {
+    const email = text((await deps.readJsonBody(ctx.request)).email);
+    if (!email || email.length > 254 || !EMAIL.test(email)) return invalid("Enter an e-mail address.");
+    return forward("org/invites", "POST", { email });
+  });
+
+  // Joining a teammate's company: the pasted link (or its token) as it came; the server reads the token from it.
+  addRoute(routes, "POST", "/work/org/invites/accept", "client", async (ctx) => {
+    const token = text((await deps.readJsonBody(ctx.request)).token);
+    if (!token || token.length > 2048) return invalid("Paste the invite link.");
+    const answer = await forward("org/invites/accept", "POST", { token });
+    if (answer.ok) switchStale = true;
+    return answer;
+  });
+
+  addRoute(routes, "GET", "/work/org/members", "client", async () => forward("org/members", "GET"));
 }
 
 /**

@@ -136,6 +136,13 @@ type ComposerProps = {
   voiceWorkspaceId?: string | null;
 };
 
+/** Where the chat composer sits: its gutters, width and bottom spacing. The homes (Code and Work) put their composer in
+ *  the same place, so nothing moves when the first message is sent. */
+export const COMPOSER_GUTTER = "px-4 max-lg:px-3 lg:px-8";
+export const COMPOSER_WIDTH = "max-w-[800px] mx-auto";
+export const COMPOSER_BOTTOM = "pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))]";
+// The chat surface wraps the composer in a pb-2 shell (session-surface data-composer-shell); homes add mb-2 to match.
+
 const FLUSH_PROMPT_EVENT = "omnirush:flushPromptDraft";
 const FOCUS_PROMPT_EVENT = "omnirush:focusPrompt";
 const DEFAULT_AGENT_NAME = "omnirush";
@@ -1319,7 +1326,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     <DevProfiler id="SessionComposer">
     <div
       ref={rootRef}
-      className={props.flush ? `relative ${toolMenuOpen ? "z-50" : "z-20"}` : `sticky bottom-0 ${toolMenuOpen ? "z-50" : "z-20"} bg-gradient-to-t from-dls-surface via-dls-surface/95 to-transparent px-4 pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))] max-lg:px-3 lg:px-8 ${props.compactTopSpacing ? "pt-0" : "pt-1"}`}
+      className={props.flush ? `relative ${toolMenuOpen ? "z-50" : "z-20"}` : `sticky bottom-0 ${toolMenuOpen ? "z-50" : "z-20"} bg-gradient-to-t from-dls-surface via-dls-surface/95 to-transparent ${COMPOSER_GUTTER} ${COMPOSER_BOTTOM} ${props.compactTopSpacing ? "pt-0" : "pt-1"}`}
       style={{ contain: "layout style" }}
       onKeyDownCapture={handleKeyDownCapture}
       onFocusCapture={voice.claimHotkey}
@@ -1330,7 +1337,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
         imeComposingRef.current = false;
       }}
     >
-      <div className={props.flush ? "" : "max-w-[800px] mx-auto"}>
+      <div className={props.flush ? "" : COMPOSER_WIDTH}>
         {/* Main composer panel */}
         <div
           data-composer-panel

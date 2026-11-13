@@ -107,10 +107,10 @@ test("side chats keep questions, replies, and saved splits attached to their own
     });
   };
   const before = await ids();
-  await step("only a genuinely empty main conversation offers starters", async () => {
+  await step("the empty main conversation loads with no messages", async () => {
     await probe.eventually(() => world.continuity.surfaceState("primary"), {
-      within: 15_000, label: "loaded empty primary offers starters",
-      until: value => value.sessionId === primary && value.starters && value.messages === 0,
+      within: 15_000, label: "loaded empty primary",
+      until: value => value.sessionId === primary && value.messages === 0,
     });
   });
   await user.rightClick({ text: world.session.title });
@@ -121,13 +121,13 @@ test("side chats keep questions, replies, and saved splits attached to their own
   expect(before).not.toContain(first.secondary);
   expect(await ids()).toEqual([...before, first.secondary].sort());
 
-  await step("a new empty side conversation never offers main-conversation starters", async () => {
+  await step("a new empty side conversation stays empty", async () => {
     await probe.eventually(() => emptySide.read(), {
-      within: 10_000, label: "empty side stays free of starters beyond the loading delay",
+      within: 10_000, label: "empty side stays empty beyond the loading delay",
       until: value => value.longSamples > 0,
     });
     expect(await emptySide.read()).toMatchObject({ violations: [], expired: false, text: "" });
-    expect(await world.continuity.surfaceState("secondary")).toMatchObject({ starters: false, messages: 0 });
+    expect(await world.continuity.surfaceState("secondary")).toMatchObject({ messages: 0 });
     expect(await initialCreation.read()).toMatchObject({ workspaceLists: 0, creates: 1, reblocked: false, expired: false });
   });
   await emptySide[Symbol.asyncDispose]();
@@ -283,8 +283,8 @@ test("side chats keep questions, replies, and saved splits attached to their own
     });
     await user.type("composer", "Draft stays editable after creating a conversation", { verify: true });
     await probe.eventually(() => world.continuity.surfaceState("primary"), {
-      within: 15_000, label: "the newly created empty main thread offers starters without a workspace refresh",
-      until: value => value.starters && value.messages === 0,
+      within: 15_000, label: "the newly created empty main thread shows without a workspace refresh",
+      until: value => value.messages === 0,
     });
     await probe.eventually(() => mainCreation.read(), {
       within: 10_000, label: "creation settles without a delayed full refresh or loading hint",
@@ -308,7 +308,7 @@ test("side chats keep questions, replies, and saved splits attached to their own
     await user.screenshot();
   });
 
-  await step("cold history stays free of starters and foreign messages before and after the delayed loader", async () => {
+  await step("cold history stays free of foreign messages before and after the delayed loader", async () => {
     // Reload away from this thread to discard renderer snapshots, not persisted history.
     await reopen(world.switchSession.sessionId);
     await send("primary", world.switchPrompt);

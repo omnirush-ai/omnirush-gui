@@ -611,7 +611,15 @@ export type OmniRushGoodSession = {
 export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAllows: boolean };
 
 /** Work mode (the server's `work` switch, as the local server last read it). */
-export type OmniRushWorkState = { enabled: boolean; sources: string[]; message: string | null; workspaceId: string | null };
+/** `available`: Work is off but the account can try it (POST /work/enable). */
+export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null };
+/** The company profile and first-run steps (contract Addendum B2: GET/POST /omnirush/work/onboarding). */
+export type OmniRushWorkOrg = { id: string; name: string; domain?: string | null; size?: string | null; industry?: string | null };
+export type OmniRushWorkStarter = { title: string; prompt: string };
+export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | null; steps?: Partial<Record<"company" | "connected" | "first_chat", boolean>>; sample_data?: boolean };
+export type OmniRushWorkOnboardingInput = { company: string; domain?: string; size?: string; industry?: string; role?: string; tools: string[] };
+export type OmniRushWorkOnboardingResult = { org: OmniRushWorkOrg; recommended_sources?: string[]; starters?: OmniRushWorkStarter[] };
+export type OmniRushWorkMember = { id?: string; email: string; name?: string | null; role?: string | null; joined_at?: string | null };
 export type OmniRushWorkConnectorStatus = "disconnected" | "connected" | "error" | "syncing" | "unavailable";
 /** One source of GET /omnirush/work/connectors (e2e/work-mode-contract-2026-11-09.md). */
 export type OmniRushWorkConnector = {
@@ -2358,6 +2366,22 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<OmniRushWorkFact>(baseUrl, "/work/facts", { token, hostToken, method: "POST", body: fact, timeoutMs: timeouts.config }),
     updateWorkFact: (id: string, patch: { text?: string; status?: "active" | "retired" }) =>
       requestJson<OmniRushWorkFact>(baseUrl, `/work/facts/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
+    enableWork: () =>
+      requestJson<unknown>(baseUrl, "/work/enable", { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    getWorkOnboarding: () =>
+      requestJson<OmniRushWorkOnboarding>(baseUrl, "/work/onboarding", { token, hostToken, timeoutMs: timeouts.config }),
+    saveWorkOnboarding: (input: OmniRushWorkOnboardingInput) =>
+      requestJson<OmniRushWorkOnboardingResult>(baseUrl, "/work/onboarding", { token, hostToken, method: "POST", body: input, timeoutMs: timeouts.config }),
+    seedWorkDemo: () =>
+      requestJson<unknown>(baseUrl, "/work/demo", { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    removeWorkDemo: () =>
+      requestJson<unknown>(baseUrl, "/work/demo", { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
+    inviteWorkMember: (email: string) =>
+      requestJson<{ link: string }>(baseUrl, "/work/org/invites", { token, hostToken, method: "POST", body: { email }, timeoutMs: timeouts.config }),
+    acceptWorkInvite: (link: string) =>
+      requestJson<{ ok: boolean; org?: OmniRushWorkOrg }>(baseUrl, "/work/org/invites/accept", { token, hostToken, method: "POST", body: { token: link }, timeoutMs: timeouts.config }),
+    listWorkMembers: () =>
+      requestJson<unknown>(baseUrl, "/work/org/members", { token, hostToken, timeoutMs: timeouts.config }),
     getWebSearch: () =>
       requestJson<OmniRushWebSearchState>(baseUrl, "/omnirush/web-search", { token, hostToken, timeoutMs: timeouts.config }),
     setWebSearch: (enabled: boolean) =>

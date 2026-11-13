@@ -202,8 +202,6 @@ describe("session error resilience", () => {
         sessionId="session-1"
         showThinking={false}
         developerMode={false}
-        displaySuggestions={false}
-        providerConnectedCount={1}
         dispatchAction={() => undefined}
         setPrompt={() => undefined}
         onRevertToUserMessage={() => undefined}
@@ -235,8 +233,6 @@ describe("session error resilience", () => {
         sessionId="session-1"
         showThinking={false}
         developerMode={false}
-        displaySuggestions={false}
-        providerConnectedCount={1}
         dispatchAction={() => undefined}
         setPrompt={() => undefined}
         onRevertToUserMessage={() => undefined}
@@ -391,8 +387,6 @@ describe("session error resilience", () => {
             sessionId="session-1"
             showThinking={false}
             developerMode={false}
-            displaySuggestions={false}
-            providerConnectedCount={1}
             dispatchAction={dispatchAction}
             setPrompt={() => undefined}
             onRevertToUserMessage={() => undefined}
@@ -494,8 +488,6 @@ describe("session error technical details", () => {
         sessionId="session-1"
         showThinking={false}
         developerMode={developerMode}
-        displaySuggestions={false}
-        providerConnectedCount={1}
         dispatchAction={() => undefined}
         setPrompt={() => undefined}
         onRevertToUserMessage={() => undefined}

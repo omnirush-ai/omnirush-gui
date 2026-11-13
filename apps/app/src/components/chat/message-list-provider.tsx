@@ -15,8 +15,6 @@ interface MessageListContextValue {
   showThinking: boolean
   highlightQuery?: string
   developerMode: boolean
-  displaySuggestions: boolean
-  providerConnectedCount: number
   connectorIdentities: ConnectorToolIdentity[]
   /**
    * True while the workspace sync layer cannot validate live run status
@@ -62,8 +60,6 @@ interface MessageListProviderProps {
   ) => Promise<ChatToolReconnectResult>
   onMcpReopenAuthorization: (action: ChatToolReconnectAction, authorizeUrl: string) => Promise<void>
   onMcpRetry: (action: ChatToolReconnectAction) => void | Promise<void>
-  displaySuggestions: boolean
-  providerConnectedCount: number
   connectorIdentities?: ConnectorToolIdentity[]
   syncDegraded?: boolean
   dispatchAction: (action: DispatchAction) => void
@@ -84,8 +80,6 @@ export function MessageListProvider({
   showThinking,
   highlightQuery,
   developerMode,
-  displaySuggestions,
-  providerConnectedCount,
   connectorIdentities = [],
   syncDegraded = false,
   dispatchAction,
@@ -168,8 +162,6 @@ export function MessageListProvider({
       showThinking,
       highlightQuery,
       developerMode,
-      displaySuggestions,
-      providerConnectedCount,
       connectorIdentities,
       syncDegraded,
       ...stableHandlers,
@@ -187,8 +179,6 @@ export function MessageListProvider({
       showThinking,
       highlightQuery,
       developerMode,
-      displaySuggestions,
-      providerConnectedCount,
       connectorIdentities,
       syncDegraded,
       stableHandlers,
