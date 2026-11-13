@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, shownInMode, visibleConnectors, WORK_TEMPLATES, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { askAboutPrompt, CONNECTOR_ACCESS, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, WORK_TEMPLATES, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
 import { ConnectorIcon, ConnectorRow, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
@@ -53,9 +53,15 @@ describe("Work mode", () => {
     expect(markup).toMatch(/aria-checked="false"[^>]*data-app-mode-option="code"/);
   });
 
-  test("the home asks what to get done and shows the six template cards", () => {
-    const markup = renderToStaticMarkup(<WorkHome onStart={async () => {}} onOpenConnectors={noop} />);
+  test("the home asks what to get done, hosts the chat composer and shows the six template cards on one column", () => {
+    const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} onOpenConnectors={noop} />);
     expect(markup).toContain("What do you want to get done?");
+    expect(markup).toContain('data-testid="composer-slot"');
+    expect(markup).not.toContain("<textarea");
+    // One column as wide as the running chat's composer (800 + gutters), cards of equal height.
+    expect(markup).toMatch(/data-testid="work-home-column"/);
+    expect(markup).toContain("max-w-[864px]");
+    expect(markup).toContain("auto-rows-fr");
     for (const id of ["inbox", "support", "meetings", "sales", "search", "backoffice"]) expect(markup).toContain(`data-work-template="${id}"`);
     expect(WORK_TEMPLATES.every((template) => template.prompt.length > 20)).toBe(true);
   });
@@ -110,10 +116,42 @@ describe("Work mode", () => {
   test("health answers: a list or {sources}; a failed check or last error is the line shown", () => {
     expect(healthFor({ sources: [{ id: "slack", last_error: "rate_limited" }] }, "slack")?.last_error).toBe("rate_limited");
     expect(healthFor([{ id: "slack" }], "google")).toBeNull();
-    expect(healthProblem({ id: "x", checks: [{ name: "profile", ok: false, detail: "401" }] })).toEqual({ text: "profile failed: 401", reconnect: false });
+    expect(healthProblem({ id: "x", checks: [{ name: "profile", ok: false, detail: "401" }] })).toEqual({ text: "profile: 401", reconnect: false });
+    expect(healthProblem({ id: "x", checks: [{ name: "sync", ok: false, detail: "provider_error" }] })?.text).toBe("Sync: The service returned an error. Sync retries on its own.");
+    expect(healthProblem({ id: "x", checks: [{ name: "sync", ok: false, detail: "sync off" }] })?.text).toBe("Sync: sync off");
     expect(healthProblem({ id: "x", token_ok: false })?.reconnect).toBe(true);
-    expect(healthProblem({ id: "x", last_error: "timeout" })?.text).toBe("timeout");
+    // A failing token is the reason even when the scopes are reported not ok with it (none named missing).
+    expect(healthProblem({ id: "x", token_ok: false, scopes_ok: false, missing_scopes: [] })?.text).toBe("Sign-in expired or revoked. Reconnect.");
+    expect(healthProblem({ id: "x", token_ok: true, scopes_ok: false })?.text).toBe("Missing permissions. Reconnect to grant them.");
+    expect(healthProblem({ id: "x", token_ok: false, missing_scopes: ["chat:read"] })?.text).toBe("Missing permissions: chat:read. Reconnect to grant them.");
+    expect(healthProblem({ id: "x", last_error: "KeyError" })?.text).not.toContain("KeyError");
+    expect(healthProblem({ id: "x", last_error: "rate_limited" })?.text).toContain("slow down");
     expect(healthProblem({ id: "x", token_ok: true, scopes_ok: true })).toBeNull();
+  });
+
+  test("errors read as words: known codes get their sentence, internal names never show", () => {
+    const sync = renderToStaticMarkup(<ConnectorRow connector={row({ status: "error", error: "KeyError" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
+    expect(sync).not.toContain("KeyError");
+    expect(sync).toContain("Sync stopped after repeated errors");
+    expect(workErrorText("provider_unreachable")).toContain("could not be reached");
+  });
+
+  test("a source not connected says what the agent may read and do; buttons name their source", () => {
+    const off = renderToStaticMarkup(<ConnectorRow connector={row({ id: "slack", label: "Slack" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
+    expect(off).toContain(CONNECTOR_ACCESS.slack);
+    expect(off).toContain('aria-label="Connect Slack"');
+    for (const id of ["google", "microsoft", "slack", "hubspot", "quickbooks", "notion", "jira", "confluence", "linear", "github"]) expect(CONNECTOR_ACCESS[id]).toContain("after you approve");
+  });
+
+  test("GitHub with its install link: Choose repositories, and a hint while nothing is visible", () => {
+    const github = (records: number) => renderToStaticMarkup(
+      <ConnectorRow connector={row({ id: "github", label: "GitHub", status: "connected", records, sync_enabled: true, setup_url: "https://github.com/apps/x/installations/new" })}
+        connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onSetup={noop} />,
+    );
+    expect(github(0)).toContain(">Choose repositories<");
+    expect(github(0)).toContain('data-testid="work-connector-setup-hint"');
+    expect(github(12)).toContain(">Choose repositories<");
+    expect(github(12)).not.toContain('data-testid="work-connector-setup-hint"');
   });
 
   test("new connectors get their icon, an unknown id the generic one", () => {
@@ -142,6 +180,9 @@ describe("Work mode", () => {
     );
     expect(markup).toContain("Acme Bakery");
     expect(markup).toContain("acme-bakery.test");
+    expect(keyLabel("email:ann@acme.test")).toBe("ann@acme.test");
+    expect(keyLabel("domain:acme.test")).toBe("acme.test");
+    expect(keyLabel("hubspot:company:77")).toBe("hubspot:company:77");
     expect(markup).toContain("Never discount more than 10%.");
     expect(markup).not.toContain("Old address");
     expect(markup).toContain(">Retire<");

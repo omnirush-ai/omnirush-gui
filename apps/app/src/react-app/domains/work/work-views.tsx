@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowUp, BookOpen, Briefcase, Calculator, CalendarDays, Cloud, Code2, FileText, Github, Handshake, Hash, Inbox, Kanban, LifeBuoy, Mail, Plug,
+  ArrowLeft, BookOpen, Briefcase, Calculator, CalendarDays, Cloud, Code2, FileText, Github, Handshake, Hash, Inbox, Kanban, LifeBuoy, Mail, Plug,
   Receipt, Search, Shapes, Ticket, TrendingUp, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import type { OmniRushWorkConnector, OmniRushWorkHealth } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
@@ -24,9 +23,11 @@ import {
   LayoutSectionItemTitle,
 } from "@/react-app/domains/settings/settings-layout";
 
+import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
+
 import {
-  connectorLabel, connectSettled, countLabel, healthFor, healthProblem, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES, workConnectorsKey,
-  type AppMode, type WorkClient,
+  connectorAccess, connectorLabel, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES,
+  sourceErrorText, workConnectorsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
 const CONNECTOR_ICONS: Record<string, LucideIcon> = {
@@ -86,17 +87,16 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
   );
 }
 
-/** Work home: "What do you want to get done?" and the template cards; every start opens a Work chat. */
-export function WorkHome(props: { onStart: (prompt: string) => Promise<void>; onOpenConnectors: () => void; busy?: boolean; message?: string | null }) {
-  const [text, setText] = useState("");
+/** Work home: "What do you want to get done?", the real chat composer (passed in, the same one the running Work chat
+ *  uses, so nothing jumps on send) and the template cards, all on one centred column the width of the chat composer. */
+export function WorkHome(props: { composer: ReactNode; onStart: (prompt: string) => Promise<void>; onOpenConnectors: () => void; busy?: boolean; message?: string | null }) {
   const [starting, setStarting] = useState(false);
   const busy = Boolean(props.busy) || starting;
   const start = async (prompt: string) => {
-    if (!prompt.trim() || busy) return;
+    if (busy) return;
     setStarting(true);
     try {
-      await props.onStart(prompt.trim());
-      setText("");
+      await props.onStart(prompt);
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : "The chat could not be started.");
     } finally {
@@ -105,54 +105,39 @@ export function WorkHome(props: { onStart: (prompt: string) => Promise<void>; on
   };
   return (
     <div className="h-full overflow-y-auto" data-testid="work-home">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pb-10 pt-16">
-        <h1 className="text-center text-2xl font-semibold tracking-tight">What do you want to get done?</h1>
-        <form
-          className="rounded-2xl border border-border bg-background p-3 shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:shadow-[0_10px_30px_rgba(0,0,0,0.45)]"
-          onSubmit={(event) => { event.preventDefault(); void start(text); }}
-        >
-          <Textarea
-            aria-label="What do you want to get done?"
-            data-testid="work-home-input"
-            placeholder="Ask about your email, documents, customers or invoices…"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                void start(text);
-              }
-            }}
-            className="min-h-20 resize-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
-          />
-          <div className="flex items-center justify-between pt-1">
-            <Button type="button" variant="ghost" size="sm" onClick={props.onOpenConnectors} data-testid="work-home-connectors">
+      <div className="flex min-h-full items-center justify-center py-10">
+        {/* max-w 800 composer + the chat's lg:px-8 gutters: the box is exactly as wide as in the running chat. */}
+        <div className="mx-auto flex w-full max-w-[864px] flex-col gap-4 px-4 lg:px-8" data-testid="work-home-column">
+          <div className="space-y-1.5 text-center">
+            <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">What do you want to get done?</h1>
+            <p className="text-[13px] text-muted-foreground">Ask about your email, documents, customers or invoices.</p>
+          </div>
+          {props.composer}
+          <div className="-mt-1 flex items-center gap-3">
+            <Button type="button" variant="ghost" size="sm" className="-ms-2 text-muted-foreground" onClick={props.onOpenConnectors} data-testid="work-home-connectors">
               <Plug className="size-4" />
               Connectors
             </Button>
-            <Button type="submit" size="icon-sm" aria-label="Start" disabled={busy || !text.trim()}>
-              <ArrowUp className="size-4" />
-            </Button>
+            {props.message ? <p className="min-w-0 flex-1 truncate text-end text-[12px] text-muted-foreground">{props.message}</p> : null}
           </div>
-        </form>
-        {props.message ? <p className="text-center text-sm text-muted-foreground">{props.message}</p> : null}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="work-templates">
-          {WORK_TEMPLATES.map((template) => (
-            <button
-              key={template.id}
-              type="button"
-              data-work-template={template.id}
-              disabled={busy}
-              onClick={() => void start(template.prompt)}
-              className="flex flex-col items-start gap-1.5 rounded-xl border border-border bg-background p-4 text-start transition-colors hover:border-foreground/20 hover:bg-muted disabled:opacity-60 [&_svg]:size-4"
-            >
-              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <span className="text-muted-foreground">{TEMPLATE_ICONS[template.id]}</span>
-                {template.title}
-              </span>
-              <span className="text-[13px] text-muted-foreground">{template.description}</span>
-            </button>
-          ))}
+          <div className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="work-templates">
+            {WORK_TEMPLATES.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                data-work-template={template.id}
+                disabled={busy}
+                onClick={() => void start(template.prompt)}
+                className="flex h-full min-h-[84px] flex-col items-start gap-1 rounded-xl border border-border bg-background px-4 py-3 text-start transition-colors hover:border-foreground/20 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 [&_svg]:size-4"
+              >
+                <span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+                  <span className="text-muted-foreground">{TEMPLATE_ICONS[template.id]}</span>
+                  {template.title}
+                </span>
+                <span className="line-clamp-2 text-[12px] leading-[18px] text-muted-foreground">{template.description}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -173,12 +158,9 @@ function lastSync(value: string | null): string {
   return Number.isNaN(at.getTime()) ? "Not synced yet" : `Last sync ${at.toLocaleString()}`;
 }
 
-function errorText(error: string | undefined): string {
-  return error === "reconnect_required" ? "Sign-in expired: connect again." : error ? `Error: ${error}` : "Something went wrong: connect again.";
-}
-
 export const CONNECT_POLL_MS = 2_000;
-export const CONNECT_TIMEOUT_MS = 60_000;
+// Sign-in with a second factor or an admin prompt often takes over a minute.
+export const CONNECT_TIMEOUT_MS = 180_000;
 
 /** One source on the Connectors page. */
 export function ConnectorRow(props: {
@@ -188,43 +170,55 @@ export function ConnectorRow(props: {
   onConnect: () => void;
   onDisconnect: () => void;
   onSync: (enabled: boolean) => void;
+  /** Opens the connector's `setup_url` (GitHub: choose repositories). */
+  onSetup?: () => void;
   /** The source's last health check (GET /work/health); undefined: not checked yet. */
   health?: OmniRushWorkHealth | null;
   checking?: boolean;
   onCheck?: () => void;
 }) {
   const row = props.connector;
+  const name = connectorLabel(row.id, row.label);
   const connected = row.status === "connected" || row.status === "syncing" || row.status === "error";
   const problem = healthProblem(props.health ?? null);
   const reconnect = row.status === "error" || Boolean(problem?.reconnect);
+  // Connected and caught up with nothing to read: for GitHub, the App is not installed on any repository yet.
+  const needsSetup = Boolean(row.setup_url) && row.status === "connected" && row.records === 0;
   return (
-    <div className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
       <ConnectorIcon id={row.id} />
-      <div className="min-w-0 flex-1">
+      {/* The text keeps at least 16rem; on a narrow window the controls wrap under it instead of squeezing it. */}
+      <div className="min-w-[16rem] flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{connectorLabel(row.id, row.label)}</span>
+          <span className="text-sm font-medium">{name}</span>
           <Badge variant={row.status === "error" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
             {props.connecting ? "Waiting for sign-in…" : STATUS_LABEL[row.status]}
           </Badge>
         </div>
-        <div className="mt-0.5 truncate text-[12px] text-muted-foreground">
+        <div className="mt-0.5 break-words text-[12px] text-muted-foreground">
           {row.status === "error"
-            ? errorText(row.error)
+            ? sourceErrorText(row.error)
             : connected
               ? [row.account, countLabel(row.records, "record"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
-              : "Connect to let the agent search and use it."}
+              : connectorAccess(row.id)}
         </div>
+        {needsSetup ? (
+          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-connector-setup-hint">
+            Nothing to read yet. {setupLabel(row.id)} to pick what OmniRush can see.
+          </div>
+        ) : null}
         {connected && props.health !== undefined ? (
           <div className={cn("mt-0.5 text-[12px]", problem ? "text-destructive" : "text-muted-foreground")} data-testid="work-connector-health">
             {props.health === null ? "No health report for this source yet." : problem ? problem.text : "All checks passed."}
           </div>
         ) : null}
       </div>
+      <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
       {connected ? (
-        <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        <label className="me-2 flex items-center gap-2 text-[12px] text-muted-foreground">
           Data sync
           <Switch
-            aria-label={`Data sync for ${row.label}`}
+            aria-label={`Data sync for ${name}`}
             checked={row.sync_enabled}
             disabled={props.busy}
             onCheckedChange={(checked: boolean) => props.onSync(checked)}
@@ -232,16 +226,20 @@ export function ConnectorRow(props: {
         </label>
       ) : null}
       {connected && props.onCheck ? (
-        <Button variant="ghost" size="sm" disabled={props.checking} onClick={props.onCheck}>{props.checking ? "Checking…" : "Check"}</Button>
+        <Button variant="ghost" size="sm" aria-label={`Check ${name}`} disabled={props.checking} onClick={props.onCheck}>{props.checking ? "Checking…" : "Check"}</Button>
+      ) : null}
+      {connected && row.setup_url && props.onSetup ? (
+        <Button variant={needsSetup ? "default" : "ghost"} size="sm" onClick={props.onSetup}>{setupLabel(row.id)}</Button>
       ) : null}
       {connected && reconnect ? (
-        <Button size="sm" disabled={props.busy || props.connecting} onClick={props.onConnect}>Reconnect</Button>
+        <Button size="sm" aria-label={`Reconnect ${name}`} disabled={props.busy || props.connecting} onClick={props.onConnect}>Reconnect</Button>
       ) : null}
       {connected ? (
-        <Button variant="outline" size="sm" disabled={props.busy} onClick={props.onDisconnect}>Disconnect</Button>
+        <Button variant="outline" size="sm" aria-label={`Disconnect ${name}`} disabled={props.busy} onClick={props.onDisconnect}>Disconnect</Button>
       ) : (
-        <Button size="sm" disabled={props.busy || props.connecting} onClick={props.onConnect}>Connect</Button>
+        <Button size="sm" aria-label={`Connect ${name}`} disabled={props.busy || props.connecting} onClick={props.onConnect}>Connect</Button>
       )}
+      </div>
     </div>
   );
 }
@@ -251,6 +249,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const queryClient = useQueryClient();
   const key = workConnectorsKey(props.client);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState<OmniRushWorkConnector | null>(null);
   const [health, setHealth] = useState<Record<string, OmniRushWorkHealth | null>>({});
   const connectStarted = useRef(0);
   const query = useQuery({
@@ -270,7 +269,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
       toast.error("Sign-in did not finish. Try connecting again.");
     }
   }, [connecting, query.data]);
-  const onError = (reason: unknown) => toast.error(reason instanceof Error ? reason.message : "That did not work. Try again.");
+  const onError = (reason: unknown) => {
+    toast.error(reason instanceof Error ? reason.message : "That did not work. Try again.");
+    // Work was switched off: the app leaves Work now rather than when its switch is next read.
+    if ((reason as { code?: unknown } | null)?.code === "work_disabled") void queryClient.invalidateQueries({ queryKey: workStateKey(props.client) });
+  };
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
   const connect = useMutation({
     mutationFn: (id: string) => props.client!.startWorkConnector(id),
@@ -301,7 +304,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     <div className="h-full overflow-y-auto" data-testid="work-connectors">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-10 pt-10">
         <div>
-          {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}>Back to Work</Button> : null}
+          {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}><ArrowLeft className="size-4" />Back to Work</Button> : null}
           <h1 className="text-xl font-semibold tracking-tight">Connectors</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Connect the tools your business uses. The agent can search and read them in Work chats, and asks you before it sends or changes anything. Data sync keeps a copy up to date; switch it off to stop collecting new data.
@@ -321,8 +324,9 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               connecting={connecting === row.id}
               busy={busy}
               onConnect={() => connect.mutate(row.id)}
-              onDisconnect={() => disconnect.mutate(row.id)}
+              onDisconnect={() => setConfirmDisconnect(row)}
               onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
+              onSetup={row.setup_url ? () => props.openLink(row.setup_url!) : undefined}
               health={health[row.id]}
               checking={check.isPending && check.variables === row.id}
               onCheck={() => check.mutate(row.id)}
@@ -330,6 +334,19 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           ))}
         </div>
       </div>
+      <ConfirmModal
+        open={confirmDisconnect !== null}
+        title={`Disconnect ${confirmDisconnect ? connectorLabel(confirmDisconnect.id, confirmDisconnect.label) : ""}?`}
+        message="OmniRush signs out of it and stops syncing, and Work chats can no longer read or act in it. Records already imported stay in Knowledge and search. To pause collecting new data instead, switch Data sync off."
+        confirmLabel="Disconnect"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => {
+          if (confirmDisconnect) disconnect.mutate(confirmDisconnect.id);
+          setConfirmDisconnect(null);
+        }}
+        onCancel={() => setConfirmDisconnect(null)}
+      />
     </div>
   );
 }

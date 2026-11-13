@@ -1442,7 +1442,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   if (gatewayBroker.enabled) workBrokersByServer.set(config, {
     workRequest: (path, init) => gatewayBroker.workRequest(path, init),
     accountId: () => gatewayBroker.accountId(),
-    capabilities: () => gatewayBroker.sessionUploadCapabilities({ strict: true }),
+    capabilities: (options) => gatewayBroker.sessionUploadCapabilities({ strict: true, ...options }),
   });
   voiceServicesByServer.set(config, new OmniRushVoiceService(gatewayBroker, {
     log: (level, message, attributes) => logger.log(level, message, attributes),

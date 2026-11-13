@@ -23,7 +23,8 @@ import { rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors,
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
   accountId: () => Promise<string | null>;
-  capabilities: () => Promise<unknown>;
+  /** `maxAgeMs`: an answer older than that is asked again. */
+  capabilities: (options?: { maxAgeMs?: number }) => Promise<unknown>;
 };
 
 export type WorkRouteDeps = {
@@ -46,6 +47,11 @@ const WORK_ERRORS: Record<string, string> = {
   connector_unavailable: "This connector is not available on this server right now.",
   not_connected: "Connect this source first.",
   omnirush_account_required: "Sign in to omnirush.ai to use Work.",
+  reconnect_required: "Sign-in expired or access was revoked. Reconnect this source.",
+  rate_limited: "The service asked us to slow down. Try again in a minute.",
+  provider_error: "The service returned an error. Try again.",
+  provider_unreachable: "The service could not be reached. Try again.",
+  unreadable_answer: "omnirush.ai answered with something unexpected. Try again.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
@@ -82,13 +88,22 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
 
 export function registerWorkRoutes(deps: WorkRouteDeps): void {
   const { routes, jsonResponse } = deps;
+  // A work_disabled answer: the switch went off since the capabilities were cached (up to 5 min), so the next
+  // /work/state asks again instead of showing Work until the cache expires.
+  let switchStale = false;
+  const pass = async (response: Response) => {
+    const answer = await passThrough(response, jsonResponse);
+    if ((answer.data as { code?: unknown } | null)?.code === "work_disabled") switchStale = true;
+    return answer;
+  };
   const signedOut = () => jsonResponse({ detail: "omnirush_account_required", code: "omnirush_account_required", message: WORK_ERRORS.omnirush_account_required }, 401);
 
   // The switch, read again from the server (at most as old as the capabilities cache), so the toggle follows it.
   addRoute(routes, "GET", "/work/state", "client", async () => {
     const found = deps.broker();
     if (found) {
-      const capabilities = await found.capabilities().catch(() => null);
+      const capabilities = await found.capabilities(switchStale ? { maxAgeMs: 0 } : undefined).catch(() => null);
+      if (capabilities) switchStale = false;
       if (rememberWorkSwitch(deps.workDir(), capabilities)) void deps.applyEngine().catch(() => undefined);
     }
     const setting = rememberedWorkSwitch(deps.workDir());
@@ -109,7 +124,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   addRoute(routes, "GET", "/work/connectors", "client", async () => {
     const found = deps.broker();
     if (!found) return signedOut();
-    const answer = await passThrough(await found.workRequest("connectors", { method: "GET" }), jsonResponse);
+    const answer = await pass(await found.workRequest("connectors", { method: "GET" }));
     if (answer.status === 200) {
       const ids = (rows: { id: string }[]) => rows.map((row) => row.id).sort().join(",");
       const before = ids(rememberedWorkConnectors(deps.workDir()));
@@ -123,7 +138,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
       if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
       const found = deps.broker();
       if (!found) return signedOut();
-      return (await passThrough(await found.workRequest(`connectors/${ctx.params.id}/${action}`, { method: "POST", body: "{}" }), jsonResponse)).response;
+      return (await pass(await found.workRequest(`connectors/${ctx.params.id}/${action}`, { method: "POST", body: "{}" }))).response;
     });
   }
 
@@ -133,14 +148,14 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     if (typeof body.sync_enabled !== "boolean") return jsonResponse({ detail: "sync_enabled must be true or false" }, 400);
     const found = deps.broker();
     if (!found) return signedOut();
-    return (await passThrough(await found.workRequest(`connectors/${ctx.params.id}`, { method: "PATCH", body: JSON.stringify({ sync_enabled: body.sync_enabled }) }), jsonResponse)).response;
+    return (await pass(await found.workRequest(`connectors/${ctx.params.id}`, { method: "PATCH", body: JSON.stringify({ sync_enabled: body.sync_enabled }) }))).response;
   });
 
   // Connector health, the context graph and saved knowledge (Work > Knowledge): forwarded as they are.
   const forward = async (path: string, method: "GET" | "POST" | "PATCH", body?: Record<string, unknown>) => {
     const found = deps.broker();
     if (!found) return signedOut();
-    return (await passThrough(await found.workRequest(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) }), jsonResponse)).response;
+    return (await pass(await found.workRequest(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) }))).response;
   };
   const invalid = (detail: string) => jsonResponse({ detail, code: "invalid_request", message: detail }, 400);
   const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
