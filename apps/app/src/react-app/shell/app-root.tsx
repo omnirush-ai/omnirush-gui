@@ -485,6 +485,7 @@ export function AppRoot() {
               <Route path="/work" element={<DevProfiler id="WorkRoute"><SessionRoute /></DevProfiler>} />
               <Route path="/work/connectors" element={<DevProfiler id="WorkRoute"><SessionRoute /></DevProfiler>} />
               <Route path="/work/knowledge" element={<DevProfiler id="WorkRoute"><SessionRoute /></DevProfiler>} />
+              <Route path="/work/welcome" element={<DevProfiler id="WorkRoute"><SessionRoute /></DevProfiler>} />
               <Route path="/apps" element={<DevProfiler id="AppsRoute"><SessionRoute /></DevProfiler>} />
               <Route path="/dashboard/apps/:appId" element={<DevProfiler id="DashboardAppRoute"><SessionRoute /></DevProfiler>} />
               <Route path="/apps/:appId" element={<DevProfiler id="AppPreviewRoute"><SessionRoute /></DevProfiler>} />

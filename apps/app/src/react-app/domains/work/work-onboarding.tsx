@@ -170,7 +170,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
               </div>
             ) : null}
             <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-              Your role <span className="font-normal text-muted-foreground">(optional)</span>
+              <span>Your role <span className="font-normal text-muted-foreground">(optional)</span></span>
               <Input maxLength={100} value={role} onChange={(event) => setRole(event.target.value)} placeholder="Operations manager" />
             </label>
             <div className="flex justify-end">

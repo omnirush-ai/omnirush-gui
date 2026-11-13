@@ -2017,7 +2017,7 @@ export function SessionPage(props: SessionPageProps) {
               ) : null}
 
               {!props.primarySlot && !hasMainContentTakeover && !showDelayedSessionLoadingState && !canRenderReactSurface && !showStartupSkeleton ? (
-                <div className="mx-auto h-full w-full max-w-[800px] px-6">
+                <div className="h-full w-full">
                   {props.notFoundMessage ? (
                     <div className="px-6 py-16 text-center">
                       <div className="mx-auto max-w-md rounded-2xl border border-dls-border bg-dls-card px-5 py-6 shadow-[var(--dls-card-shadow)]">
@@ -2028,7 +2028,7 @@ export function SessionPage(props: SessionPageProps) {
                   ) : showWorkspaceSetupEmptyState ? (
                     // Chat-first: no workspace yet — the composer creates a
                     // default chat workspace instead of asking where to put it.
-                    <div className="flex h-full items-center justify-center py-8">
+                    <div className="h-full">
                       <SessionEmptyHero
                         providerCount={providerCount}
                         busy={props.chatFirstBusy}
@@ -2083,7 +2083,7 @@ export function SessionPage(props: SessionPageProps) {
                       {t("session.loading_detail")}
                     </div>
                   ) : (
-                    <div className="flex h-full items-center justify-center py-8">
+                    <div className="h-full">
                       <SessionEmptyHero
                         providerCount={providerCount}
                         onRunTask={(prompt, attachments, handoff) =>

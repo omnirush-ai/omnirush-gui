@@ -568,6 +568,7 @@ export function SessionRoute() {
     const next = await queryClient.fetchQuery({ queryKey: workStateKey(client), queryFn: () => client.getWorkState(), staleTime: 0 });
     if (!next.enabled) throw new Error("Work could not be turned on. Try again in a moment.");
     useWorkModeStore.getState().setMode("work");
+    appModeRestored.current = true; // the start-up restore must not send this to the Work home first
     navigate(WORK_ONBOARDING_ROUTE);
   }, [client, navigate, queryClient]);
   // No company yet: the Work home opens onboarding (an old server without onboarding answers an error: no redirect).
@@ -3884,7 +3885,7 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? "Welcome" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (

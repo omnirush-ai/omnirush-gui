@@ -24,6 +24,7 @@ import {
 } from "@/react-app/domains/settings/settings-layout";
 
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
+import { COMPOSER_BOTTOM, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
   connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
@@ -78,11 +79,6 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
   );
 }
 
-/** The chat composer's column (composer.tsx): 800 wide, centred, with its gutters and bottom spacing. The Work home puts
- *  its composer in the same box at the same place, so nothing moves when the first message is sent. */
-export const CHAT_COLUMN = "px-4 max-lg:px-3 lg:px-8";
-export const CHAT_COMPOSER_BOTTOM = "pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))] pt-1";
-
 /** Work home: "What do you want to get done?" and the first-run checklist above the real chat composer (passed in, the
  *  same one the running Work chat uses), with up to three tailored starter chips from onboarding just above it. */
 export function WorkHome(props: {
@@ -112,7 +108,7 @@ export function WorkHome(props: {
   return (
     <div className="flex h-full flex-col" data-testid="work-home">
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={cn(CHAT_COLUMN, "flex min-h-full flex-col justify-center py-8")}>
+        <div className={cn(COMPOSER_GUTTER, "flex min-h-full flex-col justify-center py-8")}>
           <div className="mx-auto flex w-full max-w-[800px] flex-col items-center gap-4" data-testid="work-home-column">
             <div className="space-y-1.5 text-center">
               <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">What do you want to get done?</h1>
@@ -123,8 +119,8 @@ export function WorkHome(props: {
           </div>
         </div>
       </div>
-      <div className={cn(CHAT_COLUMN, CHAT_COMPOSER_BOTTOM, "shrink-0")}>
-        <div className="mx-auto flex max-w-[800px] flex-col gap-2">
+      <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
+        <div className={cn(COMPOSER_WIDTH, "flex flex-col gap-2")}>
           {starters.length ? (
             <div className="flex flex-wrap gap-2" data-testid="work-starters">
               {starters.map((starter) => (
