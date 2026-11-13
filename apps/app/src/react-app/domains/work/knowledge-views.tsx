@@ -487,7 +487,8 @@ export function WorkKnowledgePage(props: {
   const [expansions, setExpansions] = useState<OmniRushWorkGraph[]>([]);
   const api = useRef<GraphApi | null>(null);
   const base = props.client?.baseUrl?.trim() || "default";
-  const overview = useQuery({ queryKey: ["omnirush-work-graph", base], queryFn: () => props.client!.getWorkGraph({ limit: 500 }), enabled: Boolean(props.client) });
+  const overview = useQuery({ queryKey: ["omnirush-work-graph", base], // The overview is the hubs only (people, companies, deals, saved knowledge); Expand pulls in a hub's records.
+  queryFn: () => props.client!.getWorkGraph({ limit: 500, kinds: "entity,fact" }), enabled: Boolean(props.client) });
   const graph = useMemo(() => (overview.data ? expansions.reduce<OmniRushWorkGraph>(mergeGraph, overview.data) : null), [overview.data, expansions]);
   const shown = useMemo(() => (graph ? visibleGraph(graph, hidden) : { nodes: [], edges: [] }), [graph, hidden]);
   const counts = useMemo(() => (graph ? categoryCounts(graph) : new Map<string, number>()), [graph]);
@@ -546,7 +547,7 @@ export function WorkKnowledgePage(props: {
         <div className="flex min-h-0 flex-1">
           <aside className="flex w-64 shrink-0 flex-col gap-4 overflow-y-auto border-e border-border p-3">
             <p className="rounded-lg bg-muted/60 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
-              Select a node to inspect it. Right-click a node, or use Expand, to pull in its neighbours.
+              Showing the main people, companies and deals. Select one to inspect it; right-click it, or use Expand, to pull in its records.
             </p>
             <CategoryPanel counts={counts} hidden={hidden} dark={dark} onToggle={toggle} />
           </aside>
@@ -573,9 +574,10 @@ export function WorkKnowledgePage(props: {
                   </span>
                   {expand.isPending ? <span className="rounded-md border border-border bg-background/80 px-2 py-1 backdrop-blur">Expanding…</span> : null}
                 </div>
-                <p className="pointer-events-none absolute end-3 top-3 hidden rounded-md border border-border bg-background/80 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground backdrop-blur xl:block">
+                {/* The inspector narrows the canvas: the hint would cover the count. */}
+                {selected ? null : <p className="pointer-events-none absolute end-3 top-3 hidden rounded-md border border-border bg-background/80 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground backdrop-blur xl:block">
                   Click for details · right-click to expand · scroll to zoom · drag to pin
-                </p>
+                </p>}
                 <div className="absolute bottom-3 end-3 flex flex-col overflow-hidden rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur" role="group" aria-label="Zoom">
                   <button type="button" aria-label="Zoom in" className="p-2 hover:bg-muted" onClick={() => api.current?.zoomBy(1.4)}><Plus className="size-4" /></button>
                   <button type="button" aria-label="Zoom out" className="border-t border-border p-2 hover:bg-muted" onClick={() => api.current?.zoomBy(1 / 1.4)}><Minus className="size-4" /></button>

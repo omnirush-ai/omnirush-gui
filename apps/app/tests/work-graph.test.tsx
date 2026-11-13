@@ -84,7 +84,7 @@ describe("Work graph explorer", () => {
 
   test("big entities, small records; search matches every word; entity ids map to the entity routes", () => {
     expect(nodeRadius({ type: "entity", degree: 40 })).toBeGreaterThan(nodeRadius({ type: "entity", degree: 1 }));
-    expect(nodeRadius({ type: "entity", degree: 10_000 })).toBe(24);
+    expect(nodeRadius({ type: "entity", degree: 10_000 })).toBe(30);
     expect(nodeRadius({ type: "record", degree: 50 })).toBe(7);
     const company = full.nodes.find((node) => node.kind === "company")!;
     expect(matchNodes(full.nodes, company.label.toUpperCase()).has(company.id)).toBe(true);

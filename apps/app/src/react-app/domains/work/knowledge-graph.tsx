@@ -243,8 +243,9 @@ export function KnowledgeGraph(props: {
       minY = Math.min(minY, node.y! - node.r);
       maxY = Math.max(maxY, node.y! + node.r + 18);
     }
-    const k = clampK(Math.min(1.6, Math.min((width - 80) / Math.max(1, maxX - minX), (height - 80) / Math.max(1, maxY - minY))));
-    return { k, x: width / 2 - ((minX + maxX) / 2) * k, y: height / 2 - ((minY + maxY) / 2) * k };
+    // 64 px clear at the top for the count and hint overlays.
+    const k = clampK(Math.min(1.6, Math.min((width - 80) / Math.max(1, maxX - minX), (height - 120) / Math.max(1, maxY - minY))));
+    return { k, x: width / 2 - ((minX + maxX) / 2) * k, y: 32 + height / 2 - ((minY + maxY) / 2) * k };
   };
 
   if (props.apiRef) {
@@ -335,11 +336,11 @@ export function KnowledgeGraph(props: {
         .distance((link) => {
           const a = link.source as SimNode;
           const b = link.target as SimNode;
-          return a.type === "entity" && b.type === "entity" ? 50 + a.r + b.r : 10 + a.r + b.r;
+          return a.type === "entity" && b.type === "entity" ? 110 + a.r + b.r : 34 + a.r + b.r;
         })
         .strength((link) => 0.9 / Math.min(near.get((link.source as SimNode).id)?.size ?? 1, near.get((link.target as SimNode).id)?.size ?? 1)))
-      .force("charge", forceManyBody<SimNode>().strength((node) => (node.type === "entity" ? -50 - node.r * 6 : -14)).distanceMax(600).theta(0.9))
-      .force("collide", forceCollide<SimNode>((node) => node.r + 3).iterations(2))
+      .force("charge", forceManyBody<SimNode>().strength((node) => (node.type === "entity" ? -160 - node.r * 10 : -14)).distanceMax(900).theta(0.9))
+      .force("collide", forceCollide<SimNode>((node) => (node.type === "entity" ? node.r + 18 : node.r + 3)).iterations(2))
       .force("x", forceX<SimNode>(0).strength(0.03))
       .force("y", forceY<SimNode>(0).strength(0.03))
       .on("tick", schedule)

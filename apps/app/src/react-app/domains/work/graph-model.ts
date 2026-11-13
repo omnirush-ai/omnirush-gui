@@ -113,7 +113,7 @@ export function visibleGraph(graph: OmniRushWorkGraph, hidden: ReadonlySet<strin
 /** A node's radius in px at zoom 1: entities grow with their links, records and facts stay small. */
 export function nodeRadius(node: Pick<OmniRushWorkGraphNode, "type" | "degree">): number {
   if (node.type !== "entity") return node.type === "fact" ? 8 : 7;
-  return Math.min(24, 9 + 2.4 * Math.sqrt(Math.max(0, node.degree)));
+  return Math.min(30, 12 + 3 * Math.sqrt(Math.max(0, node.degree)));
 }
 
 export type LabelBox = { id: string; x: number; y: number; width: number; height: number; priority: number };
