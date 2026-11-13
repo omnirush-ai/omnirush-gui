@@ -41,8 +41,6 @@ function list(messages: UIMessage[], status: ThreadStatus, syncHealth?: RunSyncH
       sessionId="session"
       showThinking={true}
       developerMode={false}
-      displaySuggestions={false}
-      providerConnectedCount={1}
       syncDegraded={syncHealth?.degraded ?? false}
       dispatchAction={() => {}}
       setPrompt={() => {}}

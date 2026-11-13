@@ -44,8 +44,6 @@ function render(part: TaskToolPart): string {
       sessionId="session-origin"
       showThinking={false}
       developerMode={false}
-      displaySuggestions={false}
-      providerConnectedCount={1}
       dispatchAction={noop}
       setPrompt={noop}
       onRevertToUserMessage={noop}

@@ -100,7 +100,6 @@ test("the composer stays editable when snapshot refresh fails or the model is un
   const fetchStub = async () => new Response("{}", { headers: { "content-type": "application/json" } });
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: fetchStub });
   Object.defineProperty(window, "fetch", { configurable: true, value: fetchStub });
-  window.localStorage.setItem("omnirush.shell-config", JSON.stringify({ starterCards: false }));
   let rejectSnapshot = false;
   let fetchedSnapshot = createSnapshot(sessionId, "Cached transcript remains visible.");
   mock.module("@/components/model-select", () => ({ ModelSelect: () => null }));

@@ -68,12 +68,9 @@ export function chatContinuity(app: Surface, workspaceId: string) {
           state.text = [...(pane?.querySelectorAll<HTMLElement>('[data-message-role]') ?? [])]
             .filter(visible).map(node => node.innerText).join("\n");
           const text = pane?.innerText ?? "";
-          const starters = ["Try one of these:", "Try one of your organization's prompts:", "Connect a model provider to get started:"]
-            .some(label => text.includes(label));
           const loader = text.includes("Opening session") || text.includes("Switching session");
           state.loaderSeen ||= loader;
           const violations = [
-            ...(starters ? ["starters in pending or historical conversation"] : []),
             ...(loader && state.elapsedMs < 1500 ? ["loader appeared before its own delay"] : []),
             ...(expected.forbidden ?? []).filter(text => state.text.includes(text)).map(text => "foreign message: " + text),
             ...(expected.required ?? []).filter(text => !state.text.includes(text)).map(text => "cached message missing: " + text),
@@ -110,7 +107,6 @@ export function chatContinuity(app: Surface, workspaceId: string) {
         const root = document.querySelector<HTMLElement>('[data-workbench-pane="' + pane + '"]');
         return {
           sessionId: root?.querySelector<HTMLElement>('[data-session-surface-id]')?.dataset.sessionSurfaceId,
-          starters: (root?.innerText ?? "").includes("Try one of these:"),
           messages: root?.querySelectorAll('[data-message-role]').length ?? 0,
         };
       }, [pane]));

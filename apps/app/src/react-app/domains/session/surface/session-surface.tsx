@@ -3515,8 +3515,6 @@ export function SessionSurface(props: SessionSurfaceProps) {
                       showThinking={showThinking}
                       highlightQuery={findHighlightQuery}
                       developerMode={props.developerMode}
-                      displaySuggestions={shellConfig.starterCards && snapshot !== null && snapshot.messages.length === 0}
-                      providerConnectedCount={props.providerConnectedCount ?? 0}
                       connectorIdentities={connectorIdentities}
                       syncDegraded={runSyncHealth.degraded}
                       dispatchAction={handleMessageListDispatchAction}

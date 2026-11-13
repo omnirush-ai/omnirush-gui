@@ -105,7 +105,6 @@ test("a lost paste placeholder is never queued, drained or sent now", async () =
   };
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: fetchStub });
   Object.defineProperty(window, "fetch", { configurable: true, value: fetchStub });
-  window.localStorage.setItem("omnirush.shell-config", JSON.stringify({ starterCards: false }));
   let fetchedSnapshot = createSnapshot({ type: "busy" }, 1);
   mock.module("@/components/model-select", () => ({ ModelSelect: () => null }));
   mock.module("@/react-app/domains/session/surface/composer/workspace-run-mode-menu", () => ({ WorkspaceRunModeMenu: () => null }));

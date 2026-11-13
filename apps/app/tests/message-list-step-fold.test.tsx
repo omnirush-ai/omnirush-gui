@@ -54,8 +54,6 @@ function renderList(messages: UIMessage[]) {
       sessionId="session"
       showThinking={true}
       developerMode={false}
-      displaySuggestions={false}
-      providerConnectedCount={1}
       dispatchAction={() => {}}
       setPrompt={() => {}}
       onRevertToUserMessage={() => {}}

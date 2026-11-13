@@ -43,7 +43,6 @@ import {
   writtenLines,
 } from "../src/app/lib/good-session";
 import { GoodSessionGuide } from "../src/react-app/domains/quality/good-session";
-import { CODING_STARTER_CARDS } from "../src/components/chat/task-suggestions";
 
 const ROOT = "/home/dev/projects/todo-api";
 const BODY = Array.from({ length: 20 }, (_, i) => `export const v${i} = ${i};`).join("\n");
@@ -763,16 +762,6 @@ describe("the server's auto-retry and one-more-turn nudge", () => {
     expect(oneMoreTurnHint(serverStatus({ client: { autoRetry: null, finishGuard: true, oneMoreTurn: false } }))).toBeNull();
     expect(oneMoreTurnHint(serverStatus({ checklist: [{ id: "depth", state: "pass", label: "2 turns", hint: "ok" }] }))).toBeNull();
     expect(oneMoreTurnHint(null)).toBeNull();
-  });
-});
-
-describe("coding starter cards", () => {
-  test("six task templates, inserted for the user to fill in", () => {
-    expect(CODING_STARTER_CARDS.map((card) => card.title)).toEqual([
-      "Fix a hard bug", "Make it faster", "Fix the build", "Refactor or migrate", "Build a real feature", "Systems work",
-    ]);
-    expect(CODING_STARTER_CARDS[0]!.prompt).toBe("There's a bug in this project: {describe the symptom}. Reproduce it with a failing test or command first, find the root cause, fix it, and run the tests until they pass.");
-    expect(CODING_STARTER_CARDS.every((card) => card.prompt.includes("this project"))).toBe(true);
   });
 });
 
