@@ -18,7 +18,7 @@ import {
 } from "@/react-app/domains/settings/settings-layout";
 
 import {
-  checklistItems, connectorLabel, connectOrder, DEMO_SOURCE, domainFromEmail, isLinked, useWorkSetupStore, useWorkState,
+  checklistItems, connectorLabel, connectOrder, DEMO_SOURCE, domainFromEmail, isLinked, useWorkInviteStore, useWorkSetupStore, useWorkState,
   workConnectorsKey, workOnboardingKey, workStateKey, type WorkClient,
 } from "./work-mode";
 import { CONNECT_POLL_MS, CONNECT_TIMEOUT_MS, ConnectorIcon } from "./work-views";
@@ -62,6 +62,48 @@ function Chip(props: { selected: boolean; onClick: () => void; children: React.R
       {props.selected ? <Check aria-hidden className="size-3.5" /> : null}
       {props.children}
     </button>
+  );
+}
+
+/** Accepts an invite (the link or its token): the account joins the teammate's company and Work turns on. */
+function useJoinWork(client: WorkClient | null, onDone: () => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (link: string) => client!.acceptWorkInvite(link),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: workOnboardingKey(client) });
+      void queryClient.invalidateQueries({ queryKey: workStateKey(client) });
+      toast.success("You joined your team");
+      onDone();
+    },
+    onError: (reason) => toast.error(errorText(reason)),
+  });
+}
+
+/** Opened by an invite link (`omnirush://work/invite#t=…`): join the teammate's company, also while Work is hidden. */
+export function WorkJoinDialog(props: { client: WorkClient | null; onJoined: () => void }) {
+  const token = useWorkInviteStore((state) => state.token);
+  const setToken = useWorkInviteStore((state) => state.setToken);
+  const join = useJoinWork(props.client, () => { setToken(null); props.onJoined(); });
+  return (
+    <Dialog open={Boolean(token)} onOpenChange={(open) => { if (!open) setToken(null); }}>
+      <DialogContent data-testid="work-join-invite">
+        <DialogHeader>
+          <DialogTitle>Join your team in Work</DialogTitle>
+          <DialogDescription>
+            {props.client
+              ? "A teammate invited you to their company. Each person connects their own tools; nobody sees another person's data."
+              : "Sign in with the e-mail address the invite was sent to, then open the invite link again."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setToken(null)}>Not now</Button>
+          <Button disabled={!props.client || !token || join.isPending} onClick={() => { if (token) join.mutate(token); }} data-testid="work-join-invite-submit">
+            {join.isPending ? "Joining…" : "Join team"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -122,16 +164,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
   });
 
   const [invite, setInvite] = useState("");
-  const join = useMutation({
-    mutationFn: () => props.client!.acceptWorkInvite(invite.trim()),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: workOnboardingKey(props.client) });
-      void queryClient.invalidateQueries({ queryKey: workStateKey(props.client) });
-      toast.success("You joined your team");
-      props.onDone();
-    },
-    onError: (reason) => toast.error(errorText(reason)),
-  });
+  const join = useJoinWork(props.client, props.onDone);
 
   const rows = connectOrder(connectors.data, recommended);
   const anyLinked = rows.some(isLinked);
@@ -197,7 +230,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
           <form
             className="flex flex-col gap-1.5 border-t border-border pt-5"
             data-testid="work-join"
-            onSubmit={(event) => { event.preventDefault(); if (invite.trim() && !join.isPending) join.mutate(); }}
+            onSubmit={(event) => { event.preventDefault(); if (invite.trim() && !join.isPending) join.mutate(invite.trim()); }}
           >
             <span className="text-[13px] font-medium">Join a team</span>
             <span className="text-[12px] text-muted-foreground">Got an invite from a teammate? Paste the link to join their company instead.</span>

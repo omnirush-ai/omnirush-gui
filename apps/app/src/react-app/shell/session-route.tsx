@@ -118,7 +118,7 @@ import { AutomationsPage } from "@/react-app/domains/automations/automations-pag
 import { hasSampleData, isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_PRESET, workConnectorsKey, workStateKey, type AppMode } from "@/react-app/domains/work/work-mode";
 import { WorkKnowledgePage } from "@/react-app/domains/work/knowledge-views";
 import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
-import { SampleDataBadge, WorkChecklist, WorkInviteDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
+import { SampleDataBadge, WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -570,6 +570,15 @@ export function SessionRoute() {
     useWorkModeStore.getState().setMode("work");
     appModeRestored.current = true; // the start-up restore must not send this to the Work home first
     navigate(WORK_ONBOARDING_ROUTE);
+  }, [client, navigate, queryClient]);
+  // Joined from an invite link: Work is on now (the local server re-reads the switch), open the Work home.
+  const joinedWork = useCallback(async () => {
+    if (!client) return;
+    const next = await queryClient.fetchQuery({ queryKey: workStateKey(client), queryFn: () => client.getWorkState(), staleTime: 0 });
+    if (!next.enabled) return;
+    useWorkModeStore.getState().setMode("work");
+    appModeRestored.current = true;
+    navigate(WORK_HOME_ROUTE);
   }, [client, navigate, queryClient]);
   // No company yet: the Work home opens onboarding (an old server without onboarding answers an error: no redirect).
   useEffect(() => {
@@ -4385,6 +4394,7 @@ export function SessionRoute() {
       selectedAgent={selectedAgent}
       onSelectAgent={setSelectedAgent}
     />
+    <WorkJoinDialog client={client ?? null} onJoined={() => void joinedWork()} />
     <SessionSearchDialog
       open={sessionSearchOpen}
       onClose={() => setSessionSearchOpen(false)}

@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission } from "../src/react-app/domains/work/work-mode";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
 import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
@@ -33,6 +33,16 @@ describe("Work mode", () => {
     expect(shownInMode(work, false, "code")).toBe(false);
     expect(shownInMode(work, false, "work")).toBe(false);
     expect(shownInMode(code, false, "code")).toBe(true);
+  });
+
+  test("invite links open Join: the server's link and the app's own scheme, token in the fragment", () => {
+    expect(workInviteToken("https://api.omnirush.ai/omnirush/work/invite#t=abc123")).toBe("abc123");
+    expect(workInviteToken("omnirush://work/invite#t=abc123")).toBe("abc123");
+    expect(workInviteToken("omnirush:///work/invite?t=abc123")).toBe("abc123");
+    expect(workInviteToken("omnirush://work/invite")).toBeNull();
+    expect(workInviteToken("omnirush://connect?token=abc123")).toBeNull();
+    expect(workInviteToken("https://evil.example/work/invites#t=abc")).toBeNull();
+    expect(workInviteToken("not a url")).toBeNull();
   });
 
   test("counts read naturally", () => {

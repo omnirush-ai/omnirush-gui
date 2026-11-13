@@ -13,6 +13,23 @@ export const WORK_CONNECTORS_ROUTE = "/work/connectors";
 export const WORK_KNOWLEDGE_ROUTE = "/work/knowledge";
 export const WORK_ONBOARDING_ROUTE = "/work/welcome";
 
+/**
+ * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own
+ * `omnirush://work/invite#t=…` (same path and fragment), so the invite page can open the app on Join.
+ */
+export function workInviteToken(url: string): string | null {
+  let parsed: URL;
+  try { parsed = new URL(url.trim()); } catch { return null; }
+  if (!/(^|\/)work\/invite\/?$/.test(parsed.host + parsed.pathname)) return null;
+  return (new URLSearchParams(parsed.hash.slice(1)).get("t") ?? parsed.searchParams.get("t"))?.trim() || null;
+}
+
+/** An invite link the app was opened with, waiting for the Join prompt (shown even while Work is off). */
+export const useWorkInviteStore = create<{ token: string | null; setToken: (token: string | null) => void }>()((set) => ({
+  token: null,
+  setToken: (token) => set({ token }),
+}));
+
 type WorkModeStore = { mode: AppMode; setMode: (mode: AppMode) => void };
 
 export const useWorkModeStore = create<WorkModeStore>()(
