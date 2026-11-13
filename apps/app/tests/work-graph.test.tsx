@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
-  categoryColor, categoryCounts, categoryKey, entityIdOf, GRAPH_CATEGORIES, GRAPH_PALETTE, groupByDay, matchNodes, mergeGraph, nodeRadius, placeLabels, visibleGraph,
+  categoryColor, categoryCounts, categoryKey, entityIdOf, GRAPH_CATEGORIES, GRAPH_PALETTE, groupByDay, matchNodes, mergeGraph, nodeRadius, placeLabels, searchHits, visibleGraph,
 } from "../src/react-app/domains/work/graph-model";
-import { CategoryPanel, NodeCard } from "../src/react-app/domains/work/knowledge-views";
+import { CategoryPanel, EntityDetail, NodeCard } from "../src/react-app/domains/work/knowledge-views";
 import { fullWorkGraph, workGraphAnswer, workTimelineAnswer } from "./fixtures/work-graph";
 
 const full = fullWorkGraph();
@@ -91,6 +91,29 @@ describe("Work graph explorer", () => {
     expect(matchNodes(full.nodes, "").size).toBe(0);
     expect(entityIdOf("e:ent_42")).toBe("ent_42");
     expect(entityIdOf("r:7")).toBeNull();
+  });
+
+  test("search reaches past the loaded hubs: graph matches first (most linked), then server hits not loaded yet", () => {
+    const graph = { nodes: [
+      { id: "e:1", type: "entity" as const, kind: "company", label: "Acme Bakery", degree: 3 },
+      { id: "r:9", type: "record" as const, kind: "invoice", label: "Acme invoice 1001", degree: 8 },
+      { id: "e:2", type: "entity" as const, kind: "person", label: "Dana", degree: 1 },
+    ] };
+    const hits = searchHits(graph, matchNodes(graph.nodes, "acme"), [{ id: "1", kind: "company", name: "Acme Bakery" }, { id: "7", kind: "deal", name: "Acme catering 2027" }]);
+    expect(hits.map((hit) => [hit.id, hit.loaded])).toEqual([["r:9", true], ["e:1", true], ["e:7", false]]);
+    expect(searchHits(null, new Set(), [{ id: "7", kind: "deal", name: "Acme" }])).toEqual([{ id: "e:7", type: "entity", kind: "deal", label: "Acme", loaded: false }]);
+  });
+
+  test("a long entity name wraps with its full text as a title, and Ask about this keeps its size", () => {
+    const name = "Northwind Traders International Holdings and Distribution Partners Limited (EMEA)";
+    const markup = renderToStaticMarkup(
+      <EntityDetail busy={false} openLink={() => {}} onAsk={() => {}} onSelect={() => {}} onAddFact={() => {}} onSaveFact={() => {}} onRetireFact={() => {}}
+        detail={{ entity: { id: "ent_1", kind: "company", name, keys: [], record_count: 1, sources: [], last_activity_at: null }, records: [], facts: [], related: [] }} />,
+    );
+    expect(markup).toContain(`title="${name}"`);
+    expect(markup).toMatch(/<h2 class="[^"]*break-words[^"]*"/);
+    expect(markup).not.toMatch(/<h2 class="[^"]*\btruncate\b/);
+    expect(markup).toMatch(/data-testid="work-entity-ask" class="[^"]*\bshrink-0\b/);
   });
 
   test("timeline: newest day first, undated last, the server's order kept within a day", () => {

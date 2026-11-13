@@ -145,6 +145,27 @@ export function matchNodes(nodes: OmniRushWorkGraphNode[], query: string): Set<s
   }).map((node) => node.id));
 }
 
+export type SearchHit = Pick<OmniRushWorkGraphNode, "id" | "type" | "kind" | "label"> & { loaded: boolean };
+
+/**
+ * The search's results: matching nodes already on the graph (most linked first), then the server's entity search
+ * (the list view's, which reaches past the overview's hubs) for those not loaded yet; picking one of those expands it.
+ */
+export function searchHits(
+  graph: Pick<OmniRushWorkGraph, "nodes"> | null,
+  matches: ReadonlySet<string>,
+  found: { id: string; kind: string; name: string }[],
+  max = 8,
+): SearchHit[] {
+  const nodes = graph?.nodes ?? [];
+  const loaded = new Set(nodes.map((node) => node.id));
+  const onGraph = nodes.filter((node) => matches.has(node.id)).sort((a, b) => b.degree - a.degree)
+    .map((node) => ({ id: node.id, type: node.type, kind: node.kind, label: node.label, loaded: true }));
+  const fetched = found.filter((entity) => !loaded.has(`e:${entity.id}`))
+    .map((entity) => ({ id: `e:${entity.id}`, type: "entity" as const, kind: entity.kind, label: entity.name, loaded: false }));
+  return [...onGraph, ...fetched].slice(0, max);
+}
+
 /** Timeline items by local day, newest day first (items keep the server's order); undated items go last. */
 export function groupByDay<T extends { occurred_at?: string | null }>(items: T[]): { day: string; items: T[] }[] {
   const days = new Map<string, T[]>();

@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { askAboutPrompt, connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, keyLabel, workEntityKey, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
 import {
-  categoryColor, categoryCounts, categoryKey, categoryOf, entityIdOf, GRAPH_CATEGORIES, GRAPH_GROUPS, groupByDay, matchNodes, mergeGraph, visibleGraph,
+  categoryColor, categoryCounts, categoryKey, categoryOf, entityIdOf, GRAPH_CATEGORIES, GRAPH_GROUPS, groupByDay, matchNodes, mergeGraph, searchHits, visibleGraph,
 } from "./graph-model";
 import { GRAPH_SURFACE, KnowledgeGraph, type GraphApi } from "./knowledge-graph";
 
@@ -167,10 +167,10 @@ export function EntityDetail(props: {
     <div className="flex flex-col gap-6" data-testid="work-entity-detail" data-entity={entity.id}>
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-xl font-semibold tracking-tight">{entity.name}</h2>
+          <h2 className="line-clamp-3 break-words text-xl font-semibold leading-snug tracking-tight" title={entity.name}>{entity.name}</h2>
           <p className="text-sm text-muted-foreground">{[kindLabel(entity.kind), countLabel(entity.record_count, "record"), when(entity.last_activity_at) && `last activity ${when(entity.last_activity_at)}`].filter(Boolean).join(" · ")}</p>
         </div>
-        <Button size="sm" onClick={props.onAsk} data-testid="work-entity-ask"><MessageSquarePlus className="size-4" />Ask about this</Button>
+        <Button size="sm" className="shrink-0" onClick={props.onAsk} data-testid="work-entity-ask"><MessageSquarePlus className="size-4" />Ask about this</Button>
       </div>
 
       {entity.keys.length || entity.sources.length ? (
@@ -374,7 +374,7 @@ export function NodeCard(props: { node: OmniRushWorkGraphNode; dark: boolean; op
       <div className="flex items-start gap-3">
         <CategorySwatch categoryKey={key} dark={props.dark} className="mt-0.5 size-7 [&_svg]:size-4" />
         <div className="min-w-0 flex-1">
-          <h2 className="text-lg font-semibold leading-snug tracking-tight">{node.label}</h2>
+          <h2 className="break-words text-lg font-semibold leading-snug tracking-tight">{node.label}</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">
             {[node.kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()), node.source ? connectorLabel(node.source) : null, shortDate(node.occurred_at)].filter(Boolean).join(" · ")}
           </p>
@@ -494,6 +494,19 @@ export function WorkKnowledgePage(props: {
   const counts = useMemo(() => (graph ? categoryCounts(graph) : new Map<string, number>()), [graph]);
   const matches = useMemo(() => matchNodes(shown.nodes, search), [shown.nodes, search]);
   const node = graph?.nodes.find((item) => item.id === selected) ?? null;
+  // The search also asks the server (the list view's entity search): the graph holds only the hubs and what was expanded.
+  const [query, setQuery] = useState("");
+  const [hitsOpen, setHitsOpen] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(search.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const found = useQuery({
+    queryKey: ["omnirush-work-entities", base, query, "graph-search"],
+    queryFn: () => props.client!.listWorkEntities({ q: query, limit: 8 }),
+    enabled: Boolean(props.client) && view === "graph" && query.length >= 2,
+  });
+  const hits = useMemo(() => (search.trim() ? searchHits(graph, matches, found.data?.items ?? []) : []), [graph, matches, found.data, search]);
   const expand = useMutation({
     mutationFn: (id: string) => props.client!.getWorkGraph({ focus: id, depth: 1 }),
     onSuccess: (answer, id) => {
@@ -503,6 +516,16 @@ export function WorkKnowledgePage(props: {
     onError: (reason) => toast.error(reason instanceof Error ? reason.message : "Its neighbours could not be loaded."),
   });
   const select = (id: string | null) => setSelected(id);
+  // A hit on the graph is selected and centred; one from the server is expanded (its neighbourhood joins the graph) first.
+  const focusHit = (id: string) => {
+    setHitsOpen(false);
+    if (graph?.nodes.some((item) => item.id === id)) {
+      setSelected(id);
+      api.current?.centerOn(id);
+      return;
+    }
+    expand.mutate(id, { onSuccess: () => setSelected(id) });
+  };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -530,13 +553,28 @@ export function WorkKnowledgePage(props: {
         <div className="relative mx-auto w-full max-w-md">
           <Search className="pointer-events-none absolute start-2.5 top-1/2 z-10 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input aria-label="Search knowledge" placeholder="Search people, companies, deals, records…" value={search} className="h-8 ps-8" data-testid="work-knowledge-search"
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => { setSearch(event.target.value); setHitsOpen(true); }}
+            onFocus={() => setHitsOpen(true)}
+            onBlur={() => setHitsOpen(false)}
             onKeyDown={(event) => {
               if (event.key === "Escape") { event.preventDefault(); setSearch(""); return; }
               if (event.key !== "Enter" || view !== "graph") return;
-              const first = shown.nodes.filter((item) => matches.has(item.id)).sort((a, b) => b.degree - a.degree)[0];
-              if (first) { setSelected(first.id); api.current?.centerOn(first.id); }
+              if (hits[0]) focusHit(hits[0].id);
             }} />
+          {view === "graph" && hitsOpen && hits.length ? (
+            <ul className="absolute inset-x-0 top-full z-20 mt-1 max-h-72 overflow-y-auto rounded-lg border border-border bg-background p-1 shadow-md" data-testid="work-graph-search-hits">
+              {hits.map((hit) => (
+                <li key={hit.id}>
+                  <button type="button" data-search-hit={hit.id} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] hover:bg-muted"
+                    onMouseDown={(event) => event.preventDefault()} onClick={() => focusHit(hit.id)}>
+                    <CategorySwatch categoryKey={categoryKey(hit)} dark={dark} className="size-4 [&_svg]:size-2.5" />
+                    <span className="min-w-0 flex-1 truncate" title={hit.label}>{hit.label}</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">{hit.loaded ? kindLabel(hit.kind) : "Add to graph"}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
         <ViewSwitch value={view} onChange={setView} />
       </div>
