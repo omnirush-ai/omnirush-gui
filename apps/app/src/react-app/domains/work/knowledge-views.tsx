@@ -521,7 +521,9 @@ export function WorkKnowledgePage(props: {
     mutationFn: (id: string) => props.client!.getWorkGraph({ focus: id, depth: 1 }),
     onSuccess: (answer, id) => {
       setExpansions((list) => [...list, answer]);
+      // Once now, again when the layout has settled: new nodes keep moving for a second or so.
       setTimeout(() => api.current?.centerOn(id), 350);
+      setTimeout(() => api.current?.centerOn(id), 1600);
     },
     onError: (reason) => toast.error(reason instanceof Error ? reason.message : "Its neighbours could not be loaded."),
   });
@@ -618,7 +620,7 @@ export function WorkKnowledgePage(props: {
                 <KnowledgeGraph nodes={shown.nodes} edges={shown.edges} dark={dark} selected={selected} matches={matches} onSelect={select} onExpand={(id) => expand.mutate(id)} apiRef={api} />
                 <div className="pointer-events-none absolute start-3 top-3 flex items-center gap-2 text-[12px] text-muted-foreground" data-testid="work-graph-count">
                   <span className="rounded-md border border-border bg-background/80 px-2 py-1 tabular-nums backdrop-blur">
-                    {search.trim() ? `${matches.size.toLocaleString()} matching · ` : ""}{shown.nodes.length.toLocaleString()} shown{total > graph.nodes.length ? ` of ${total.toLocaleString()}` : ""}
+                    {search.trim() && matches.size ? `${matches.size.toLocaleString()} matching · ` : ""}{shown.nodes.length.toLocaleString()} shown{total > graph.nodes.length ? ` of ${total.toLocaleString()}` : ""}
                   </span>
                   {expand.isPending ? <span className="rounded-md border border-border bg-background/80 px-2 py-1 backdrop-blur">Expanding…</span> : null}
                 </div>
