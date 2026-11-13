@@ -2564,14 +2564,14 @@ describe("session uploader trace additions", () => {
 
     // The prompt path marks the chat before its start (server.ts engineChatProvider): no grant yet.
     const first = makeUploader();
-    first.markClaude(sessionId, "2.1.306");
+    first.markClaude(sessionId, "2.1.302");
     first.startSession(sessionId, "workspace-claude", root);
     await first.idle(sessionId);
     first.recordSessionModel(sessionId, { provider_id: "omnirush-claude", model_id: "claude-opus-5-5", variant: null, agent: "build" });
     first.flushTrace(sessionId);
     await first.idle(sessionId);
     await first.stop();
-    expect(uploads.map(identity)).toEqual(uploads.map(() => ["claude-code/2.1.306", "claude-code"]));
+    expect(uploads.map(identity)).toEqual(uploads.map(() => ["claude-code/2.1.302", "claude-code"]));
 
     // Reopened in a new process, nothing marked: the stored model still names Claude Code.
     const before = uploads.length;
@@ -2580,19 +2580,19 @@ describe("session uploader trace additions", () => {
     await second.idle(sessionId);
     await second.stop();
     expect(uploads.length).toBeGreaterThan(before);
-    expect(uploads.slice(before).map(identity)).toEqual(uploads.slice(before).map(() => ["claude-code/2.1.306", "claude-code"]));
+    expect(uploads.slice(before).map(identity)).toEqual(uploads.slice(before).map(() => ["claude-code/2.1.302", "claude-code"]));
 
     // A recovered chat's state is its own (not among the open sessions): its model is passed in.
     const recovered = makeUploader();
     const environment = await (recovered as unknown as { sessionEnvironment(root: string, id: string, waitMs?: number, model?: unknown): Promise<{ engine_version: string }> })
       .sessionEnvironment(root, "session-claude-recovered-1", 0, { provider_id: "omnirush-claude", model_id: "claude-opus-5-5", variant: null, agent: null });
-    expect(environment.engine_version).toBe("claude-code/2.1.306");
+    expect(environment.engine_version).toBe("claude-code/2.1.302");
     await recovered.stop();
 
     // A chat pinned to another provider's model where Claude was picked (refused, a new chat offered): nothing ran
     // on Claude, so its uploads keep the engine's identity, even with Claude as its latest model (CLI 142dec4).
     const refused = makeUploader();
-    refused.markClaude("session-astra-picked-claude-1", "2.1.306");
+    refused.markClaude("session-astra-picked-claude-1", "2.1.302");
     refused.markNotClaude("session-astra-picked-claude-1");
     refused.startSession("session-astra-picked-claude-1", "workspace-claude", root);
     await refused.idle("session-astra-picked-claude-1");

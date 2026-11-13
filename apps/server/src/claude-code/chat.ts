@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import type { ClaudeAccess, ClaudeAuthorization, ClaudeGrant } from "./access.js";
 
 /** The provider's pinned Claude Code (opencode-plugins/claude-provider CLAUDE_CODE_VERSION; claude-chat.test.ts checks both). */
-export const CLAUDE_CODE_VERSION = "2.1.306";
+export const CLAUDE_CODE_VERSION = "2.1.302";
 /** The contract the relay token is bound to: the provider's CONTRACT. */
 export const CLAUDE_CONTRACT = createHash("sha256").update(JSON.stringify({ claude_code: CLAUDE_CODE_VERSION, provider: 1, runtime: "box" })).digest("hex");
 export const CLAUDE_PROVIDER_ID = "omnirush-claude";

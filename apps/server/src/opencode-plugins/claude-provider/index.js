@@ -45,19 +45,19 @@ import path from "node:path";
 
 import { apiError, ClaudeStreamMapper, lastUserContent } from "./map.js";
 
-export const CLAUDE_CODE_VERSION = "2.1.306";
+export const CLAUDE_CODE_VERSION = "2.1.302";
 const build = (target, integrity) => ({ url: `https://registry.npmjs.org/@anthropic-ai/claude-code-${target}/-/claude-code-${target}-${CLAUDE_CODE_VERSION}.tgz`, integrity });
 // The pinned builds (npm @anthropic-ai/claude-code-<platform>-<arch>), each downloaded once per machine: linux-<arch>
 // is installed into the box on first use, this machine's own runs a chat without a box.
 // shortcut: until the box image carries it (box-base 2026.11.x), each box downloads it once (131 MB).
 // shortcut: a musl Linux host (Alpine) gets the glibc build and fails to start it; add the -musl builds if one shows up.
 export const CLAUDE_CODE_BUILDS = {
-  "linux-x64": build("linux-x64", "sha512-4gsb0IQhxzi1NhoUETXkNZb1t6wJ9tnfAYBKmb0+NmsAwOG37Dacq7bLqsooEkusaT0PyQRFUMt0SgWxx9LEEA=="),
-  "linux-arm64": build("linux-arm64", "sha512-AePKWuymgDSCh7nScJ4dx/pF1Kppzk4IwQuh6JCROiqQdBVGaaHw6jVf/fY5PhbSjy9EQML6yOiUfc50aFpnTA=="),
-  "darwin-arm64": build("darwin-arm64", "sha512-rX3L0TI2pZdl/SLmqRucVutnPgByT2ZTwU1+/N19okhd/5Grj7np5xhXNycqpEq9JhNX4/DOujb1TxhHii0agA=="),
-  "darwin-x64": build("darwin-x64", "sha512-Jq9enPwecu+1GUwvjB8vTdjnyzA1CtSsKW9PkP3atjt5kcZrCqjnXPvBT7lVZ1dDjQdqe57fk3m4vY6kqrrDXg=="),
-  "win32-x64": build("win32-x64", "sha512-MpqvdPxktYYaCzTp+Lcvjp5r2fnLWRWxSd7hwilVCUfAvJC6Zm/W+t7TCeEk1xGH++3BWL57FmHDN/w5k9AiiQ=="),
-  "win32-arm64": build("win32-arm64", "sha512-a4AwcYoHKlayAbWivYSBu9CYJVUOGPrtUO/N6RsJXFkzG7BdqNF9K7aAzjfY2ZBpnrKnJl3xzjOt5eBmS6B3FA=="),
+  "linux-x64": build("linux-x64", "sha512-+d4RUq3E3K+3/J4MysB3z4QXA4rkDNt70VYpTLE6kJCnUe/Z6SB8VJsVJG/NV4bECrvkxkLHjXk+vrgBstfZkw=="),
+  "linux-arm64": build("linux-arm64", "sha512-eRgp1cK2oSC7vK1/Dha9EsfSxNb6b/LyduzBxRW02c0X+C6xtyAzeGMmRobQSNuTazRxsr/Cf2/l4Sf/LMgxCA=="),
+  "darwin-arm64": build("darwin-arm64", "sha512-h0MlQtldJnHXdPB6KGQ6rYQocvNTEXBI+NW4791OD2mIZcq6fHrV4PsM+XK297OL0+wVENlDHtlBj1BL/3S52A=="),
+  "darwin-x64": build("darwin-x64", "sha512-8+BmqtIpJ/TLXG/jEkUoHH0obT+YtrI6u5xBhkqpnOB6LGt/DNJ+iWOX/Sc1xebAnyV/rPuhAX0jDbRm/SLYfw=="),
+  "win32-x64": build("win32-x64", "sha512-XvgQZTaVb0uu5bN7ZImXuy0iqolox0Or5yAemsgfKJ87183l2FBosSi7wUhIX5dEsGjN41z0vQ1pvrZ39rV/ZA=="),
+  "win32-arm64": build("win32-arm64", "sha512-SjQvoJOEUnlbjAcFCwwfpF2MkUhxinI1YZze2eQp3qhuMrYtf5vBJcOFurXm/dwftMu/30eFWJxvySFWpJdjsA=="),
 };
 export const PROVIDER_ID = "omnirush-claude";
 /** A Claude turn of a boxed project whose box isn't running, or one the app gave no box folder. */
