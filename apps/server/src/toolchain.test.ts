@@ -107,9 +107,10 @@ test.skipIf(process.platform === "win32")("a probe that hangs is killed at its t
   assert.ok(elapsed < 2_000, `collection settled in ${elapsed} ms`);
 });
 
-test("resolveCommand searches PATH with PATHEXT on Windows and skips relative entries and Store aliases", () => {
+test("resolveCommand searches PATH with PATHEXT on Windows, skips relative entries, and finds Store aliases where PATH has them", () => {
   const files = new Set([
     "C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe",
     "C:\\Program Files\\nodejs\\npm.cmd",
     "C:\\Python312\\python.exe",
     "/usr/local/bin/node",
@@ -117,7 +118,10 @@ test("resolveCommand searches PATH with PATHEXT on Windows and skips relative en
   ]);
   const isFile = (candidate) => files.has(candidate);
   const winPath = "C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps;.\\tools;\"C:\\Program Files\\nodejs\";C:\\Python312";
-  assert.equal(toolchain.resolveCommand("python", { platform: "win32", pathEnv: winPath, pathExt: ".COM;.EXE;.BAT;.CMD;.PS1", isFile }), "C:\\Python312\\python.exe");
+  // The user's shell runs the WindowsApps alias first (winget, Store Python): so does the lookup.
+  assert.equal(toolchain.resolveCommand("python", { platform: "win32", pathEnv: winPath, pathExt: ".COM;.EXE;.BAT;.CMD;.PS1", isFile }), "C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe");
+  assert.equal(toolchain.resolveCommand("winget", { platform: "win32", pathEnv: winPath, isFile }), "C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe");
+  assert.equal(toolchain.resolveCommand("python", { platform: "win32", pathEnv: "C:\\Python312;C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps", isFile }), "C:\\Python312\\python.exe", "PATH order decides");
   assert.equal(toolchain.resolveCommand("npm", { platform: "win32", pathEnv: winPath, pathExt: ".COM;.EXE;.BAT;.CMD", isFile }), "C:\\Program Files\\nodejs\\npm.cmd");
   assert.equal(toolchain.resolveCommand("node", { platform: "linux", pathEnv: "bin:/usr/local/bin", isFile }), "/usr/local/bin/node");
   assert.equal(toolchain.resolveCommand("cargo", { platform: "linux", pathEnv: "/usr/local/bin", isFile }), null);
@@ -381,7 +385,7 @@ test("nested: backend/python with its venv records its manifests, venv interpret
     env: {},
     resolve: (command) => (["python3", "npm"].includes(command) ? `/usr/bin/${command}` : null),
     run: fakeRun({
-      python3: ok("Python 3.10.12\n"),
+      python3: (args) => (args[0] === "-m" ? ok("pytest-cov==6.1.1\n") : ok("Python 3.10.12\n")),
       python: (args) => (args[0] === "--version" ? ok("Python 3.12.3\n") : ok("fastapi==0.115.0\nuvicorn==0.30.6\n")),
       npm: (args) => (args[0] === "ls" ? npmTree("frontend", { react: "18.3.1" }) : ok("10.8.2\n")),
     }, calls),
@@ -402,11 +406,11 @@ test("nested: backend/python with its venv records its manifests, venv interpret
   assert.deepEqual(result.npm_ls_by_dir, { frontend: { name: "frontend", version: "1.0.0", dependencies: { react: "18.3.1" } } });
   assert.equal(result.skipped, undefined);
   const venvPython = path.join(root, "backend", "python", "venv", "bin", "python");
-  const freeze = calls.find((call) => call.args[0] === "-m");
-  assert.equal(freeze.file, venvPython);
+  const freeze = calls.find((call) => call.args[0] === "-m" && call.file === venvPython);
   assert.equal(freeze.cwd, path.join(root, "backend", "python"));
   assert.equal(calls.find((call) => call.args[0] === "ls").cwd, path.join(root, "frontend"));
-  assert.ok(!calls.some((call) => call.file === "/usr/bin/python3" && call.args[0] === "-m"), "the system interpreter is not frozen for a project with its own venv");
+  // The machine's interpreter is frozen too, though the project has its own venv (pip: user-site packages included).
+  assert.deepEqual(result.machine_python, { kind: "system", pip_freeze: ["pytest-cov==6.1.1"], pip_freeze_tool: "pip" });
   assert.ok(!JSON.stringify(result).includes(root), "no absolute path is recorded");
 
   // Without node_modules the nested package.json says why there is no npm ls.
@@ -434,11 +438,11 @@ test("nested: a monorepo with apps/web and apps/api; a venv above a project is f
     env: {},
     resolve: (command) => (["python3", "npm", "uv"].includes(command) ? `/usr/bin/${command}` : null),
     run: fakeRun({
-      python3: ok("Python 3.11.9\n"),
+      python3: (args) => (args[0] === "-m" ? ok("ruff==0.6.9\n") : ok("Python 3.11.9\n")),
       python: ok("Python 3.12.3\n"),
       uv: (args) => {
         if (args[0] !== "pip") return ok("uv 0.5.0\n");
-        return args[3].includes(".venv") ? ok("fastapi==0.115.0\n") : ok("ruff==0.6.9\n");
+        return args[3].includes(".venv") ? ok("fastapi==0.115.0\n") : ok("wrong==1\n");
       },
       npm: (args) => {
         if (args[0] !== "ls") return ok("10.8.2\n");
@@ -452,7 +456,8 @@ test("nested: a monorepo with apps/web and apps/api; a venv above a project is f
   assert.equal(result.pip_freeze_dir, "tools");
   assert.deepEqual(result.pip_freeze, ["ruff==0.6.9"]);
   assert.equal(result.python_executable_kind, "system");
-  assert.equal(result.pip_freeze_tool, "uv");
+  // The system interpreter through pip first (uv leaves user-site packages out); the venv through uv.
+  assert.equal(result.pip_freeze_tool, "pip");
   assert.deepEqual(result.pip_freeze_by_dir, {
     tools: ["ruff==0.6.9"],
     "apps/api": ["fastapi==0.115.0"],
@@ -460,8 +465,8 @@ test("nested: a monorepo with apps/web and apps/api; a venv above a project is f
   });
   assert.deepEqual(result.python_executable_kind_by_dir, { tools: "system", "apps/api": "venv", "apps/api/worker": "venv" });
   assert.deepEqual(result.venv_python_by_dir, { "apps/api": "Python 3.12.3", "apps/api/worker": "Python 3.12.3" });
-  const freezes = calls.filter((call) => call.args[0] === "pip");
-  assert.equal(freezes.length, 2, "apps/api and its worker share the .venv: frozen once");
+  const freezes = calls.filter((call) => call.args[0] === "pip" || call.args[0] === "-m");
+  assert.equal(freezes.length, 2, "apps/api and its worker share the .venv: frozen once; the system interpreter once");
   assert.equal(result.npm_ls_dir, ".");
   assert.deepEqual(result.npm_ls.dependencies, { turbo: "2.1.0" });
   assert.deepEqual(Object.keys(result.npm_ls_by_dir), [".", "apps/web"]);
@@ -683,3 +688,75 @@ test("client-raw: every dotenv value reaches the toolchain block byte for byte a
   const legacy = stored(await cache.get(root));
   assert.deepEqual(values(legacy), { API_TOKEN: undefined, X: undefined, Y: undefined, Z: undefined, M: undefined, PEM: undefined, PORT: "3000" }, "the old rules unchanged");
 }, 30_000);
+
+test("outside Python environments the session used are frozen by folder (home as ~), venvs through uv, the machine one through pip", async () => {
+  const root = tempProject({ "requirements.txt": "attrs\n" });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "omnirush-home-"));
+  const venv = path.join(home, "AppData", "Local", "Temp", "work", "venv");
+  fs.mkdirSync(path.join(venv, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(venv, "bin", "python"), "");
+  fs.writeFileSync(path.join(venv, "pyvenv.cfg"), "home = /usr/bin\n");
+  const calls = [];
+  const result = await toolchain.collectToolchain(root, {
+    env: {},
+    home,
+    pythonEnvs: [venv, path.join(home, "nowhere")],
+    resolve: (command) => (["python3", "uv"].includes(command) ? `/usr/bin/${command}` : null),
+    run: fakeRun({
+      python3: (args) => (args[0] === "-m" ? ok("attrs==24.2.0\npytest-cov==6.1.1\n") : ok("Python 3.12.3\n")),
+      uv: (args) => (args[0] === "pip" ? (args[3] === path.join(venv, "bin", "python") ? ok("pytest==8.3.3\n") : { code: 1, stdout: "", stderr: "" }) : ok("uv 0.5.0\n")),
+    }, calls),
+  });
+  assert.deepEqual(result.pip_freeze, ["attrs==24.2.0", "pytest-cov==6.1.1"]);
+  assert.deepEqual(result.machine_python, { kind: "system", pip_freeze: ["attrs==24.2.0", "pytest-cov==6.1.1"], pip_freeze_tool: "pip" });
+  assert.deepEqual(result.outside_python_envs, { [`~${path.sep}${path.join("AppData", "Local", "Temp", "work", "venv")}`]: { kind: "venv", pip_freeze: ["pytest==8.3.3"], pip_freeze_tool: "uv" } });
+  assert.ok(!JSON.stringify(result).includes(home), "the home folder is ~");
+  assert.equal(calls.filter((call) => call.file === "/usr/bin/python3" && call.args[0] === "-m").length, 1, "the machine interpreter is frozen once");
+
+  // Windows: a venv's Scripts\python.exe, or the interpreter named directly.
+  const winFiles = new Set(["C:\\Users\\a\\AppData\\Local\\Temp\\x\\venv\\Scripts\\python.exe", "C:\\Python312\\python.exe"]);
+  const winCalls = [];
+  const win = await toolchain.collectToolchain(root, {
+    env: {},
+    platform: "win32",
+    home: "C:\\Users\\a",
+    isFile: (file) => winFiles.has(file),
+    pythonEnvs: ["C:\\Users\\a\\AppData\\Local\\Temp\\x\\venv", "C:\\Python312\\python.exe"],
+    resolve: () => null,
+    probes: [],
+    run: async (file, args, options) => {
+      winCalls.push({ file, args, cwd: options.cwd });
+      return file.startsWith("C:\\Users") ? ok("requests==2.32.3\n") : ok("numpy==2.1.0\n");
+    },
+  });
+  assert.deepEqual(Object.keys(win.outside_python_envs), ["~\\AppData\\Local\\Temp\\x\\venv", "C:\\Python312\\python.exe"]);
+  assert.deepEqual(win.outside_python_envs["~\\AppData\\Local\\Temp\\x\\venv"].pip_freeze, ["requests==2.32.3"]);
+  assert.deepEqual(win.outside_python_envs["C:\\Python312\\python.exe"].pip_freeze, ["numpy==2.1.0"]);
+});
+
+test("the cache collects again after a hint: an install, or an outside environment it did not know (never one inside the project)", async () => {
+  const root = tempProject({ "requirements.txt": "attrs\n" });
+  let freezes = 0;
+  const cache = new toolchain.ToolchainCache({
+    waitMs: 10_000,
+    env: {},
+    resolve: (command) => (command === "python3" ? "/usr/bin/python3" : null),
+    run: async (_file, args) => (args[0] === "-m" ? ok(`attrs==24.${++freezes}.0\n`) : ok("Python 3.12.3\n")),
+  });
+  assert.deepEqual((await cache.get(root)).machine_python.pip_freeze, ["attrs==24.1.0"]);
+  let refreshed = 0;
+  const refresh = () => (refreshed += 1);
+  cache.hint(root, { envs: [path.join(root, ".venv")], installed: false }, refresh);
+  await cache.get(root);
+  assert.equal(cache.collections, 1, "an environment inside the project is the project's own (its scan finds it)");
+  cache.hint(root, { envs: [], installed: true }, refresh);
+  assert.deepEqual((await cache.get(root)).machine_python.pip_freeze, ["attrs==24.2.0"], "a pip install that touched no manifest still collects again");
+  assert.equal(cache.collections, 2);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "omnirush-venv-"));
+  cache.hint(root, { envs: [outside], installed: false }, refresh);
+  cache.hint(root, { envs: [outside], installed: false }, refresh);
+  await cache.get(root);
+  assert.equal(cache.collections, 3, "a new outside environment collects again, once");
+  await new Promise((resolve) => setTimeout(resolve, toolchain.HINT_REFRESH_MS + 200));
+  assert.equal(refreshed, 1, "a burst of hints refreshes once");
+});

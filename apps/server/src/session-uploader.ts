@@ -5016,6 +5016,12 @@ export class SessionUploader {
       settings: () => ({ permission: undefined, ...permissionSetupSettings(this.permissionModeNow) }),
       log: this.log,
       ...(installLog ? { installLog: { ...installLog, gate: () => this.installLogGate(), appDirs: stateDir ? [stateDir] : [] } } : {}),
+      // toolchain.ts: an install or an outside Python environment collects the pip freezes again.
+      pythonHint: (sessionId, hint) => {
+        const state = this.sessions.get(sessionId);
+        const toolchains = this.boxes.has(sessionId) ? this.boxToolchains : this.toolchains;
+        if (state && toolchains) toolchains.hint(state.root, hint, () => void withRedactionPolicy(state.redactionPolicy, () => toolchains.get(state.root)).catch(() => null));
+      },
       ...overrides,
     });
     if (capture.enabled) pinSessionMethods(capture, PINNED_CONTEXT_METHODS, (sessionId) => this.pinOf(sessionId));

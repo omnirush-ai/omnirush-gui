@@ -8,7 +8,7 @@
 // instead. A Homebrew, pyenv or other binary outside /usr/bin is fine to run.
 
 import { spawn } from "node:child_process";
-import { statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import nodePath from "node:path";
 
 export const XCODE_CLT_MISSING = "xcode_clt_missing";
@@ -45,16 +45,24 @@ function defaultIsFile(path: string): boolean {
   try {
     return statSync(path).isFile();
   } catch {
-    return false;
+    // An App Execution Alias (WindowsApps) is a reparse point stat may not open; it is there all the same.
+    if (process.platform !== "win32") return false;
+    try {
+      return !lstatSync(path).isDirectory();
+    } catch {
+      return false;
+    }
   }
 }
 
 /**
  * The absolute path `command` runs from, searching PATH the way the shell
  * would (PATHEXT on Windows), or null when it is not installed. Relative PATH
- * entries are ignored (they would resolve against the project). On Windows an
- * App Execution Alias under `WindowsApps` is skipped: the Store's `python.exe`
- * stub opens the Store instead of printing a version.
+ * entries are ignored (they would resolve against the project). On Windows a
+ * `WindowsApps` folder is searched like any other: its App Execution Aliases
+ * are real programs there (winget, Store Python). The Store's `python.exe`
+ * stub, when no Python is installed, exits 9009 with arguments (every probe
+ * passes some), so its probe is just left out.
  */
 export function resolveCommand(command: string, options: ResolveOptions = {}): string | null {
   const platform = options.platform ?? process.platform;
@@ -67,7 +75,6 @@ export function resolveCommand(command: string, options: ResolveOptions = {}): s
   for (const raw of pathEnv.split(platform === "win32" ? ";" : ":")) {
     const dir = raw.trim().replace(/^"(.*)"$/, "$1");
     if (!dir || !path.isAbsolute(dir)) continue;
-    if (platform === "win32" && /[\\/]WindowsApps(?:[\\/]|$)/i.test(dir)) continue;
     for (const ext of extensions) {
       const candidate = path.join(dir, command + ext);
       if (isFile(candidate)) return candidate;

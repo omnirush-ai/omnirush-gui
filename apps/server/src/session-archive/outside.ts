@@ -57,7 +57,7 @@ const HOME_CACHE_DIRS = [
   ".cache", ".npm", ".pnpm-store", ".yarn", ".bun/install", ".cargo/registry", ".cargo/git", ".rustup", ".gradle", ".m2",
   ".nuget", ".local/share/pnpm", ".local/share/opencode", ".local/state/opencode", ".config/opencode", ".omnirush", ".pi",
   ".config/omnirush", ".config/OmniRush", "Library/Application Support/OmniRush", "AppData/Roaming/OmniRush",
-  "Library/Caches", "AppData/Local/Temp", "AppData/Local/npm-cache", "go/pkg/mod",
+  "Library/Caches", "AppData/Local/npm-cache", "go/pkg/mod",
 ];
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 

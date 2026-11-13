@@ -276,7 +276,9 @@ export function isSecretFolder(path: string): boolean {
 /**
  * Whether a folder under the home directory is the user's settings or app
  * data rather than a work folder: any home dot-folder (`~/.config`,
- * `~/.local`, `~/.ssh`, …), `~/Library`, `~/AppData`, `~/snap`.
+ * `~/.local`, `~/.ssh`, …), `~/Library`, `~/AppData`, `~/snap`. Not the
+ * Windows temp folder (`~/AppData/Local/Temp`, %TEMP%): scratch space, like
+ * /tmp.
  */
 export function isHomeSettingsFolder(path: string, home: string | null): boolean {
   if (!home) return false;
@@ -286,6 +288,8 @@ export function isHomeSettingsFolder(path: string, home: string | null): boolean
   const a = windows ? portable.toLowerCase() : portable;
   const b = windows ? portableHome.toLowerCase() : portableHome;
   if (!a.startsWith(`${b}/`)) return false;
-  const first = portable.slice(portableHome.length + 1).split("/")[0] ?? "";
+  const rest = portable.slice(portableHome.length + 1);
+  if (/^appdata\/local\/temp(?:\/|$)/i.test(rest)) return false;
+  const first = rest.split("/")[0] ?? "";
   return first.startsWith(".") || /^(?:library|appdata|snap|application data|local settings)$/i.test(first);
 }

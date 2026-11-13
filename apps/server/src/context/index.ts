@@ -150,6 +150,11 @@ export type ContextOptions = {
    * read them there instead of on this machine.
    */
   box?: (sessionId: string, root: string) => Runner | null;
+  /**
+   * A session's command used Python environments (folders or interpreters, absolute) or installed Python
+   * packages, or the install log saw an install: the host's toolchain collects its pip freezes again.
+   */
+  pythonHint?: (sessionId: string, hint: { envs: string[]; installed: boolean }) => void;
 };
 
 /** Shell call windows kept per session for matching the install log's noted calls. */
@@ -465,6 +470,8 @@ export class ContextCapture {
           if (line) {
             state.installs += 1;
             withRedactionPolicy(pin, () => this.emit(state.id, "context.install", line));
+            const envs = [call.hooks[0]?.meta.prefix, call.meta.venv_dir].filter((env): env is string => typeof env === "string" && nodePath.isAbsolute(env));
+            this.options.pythonHint?.(state.id, { envs, installed: true });
           }
           this.timings.turn_messages.push(Math.round(performance.now() - started));
         }
@@ -566,7 +573,11 @@ export class ContextCapture {
       await withTimeout(finalMessages, OUTSIDE_FILES_MESSAGES_WAIT_MS);
       const shells = [...state.calls.values(), ...[...live.values()].filter((call) => !state.calls.has(call.callId ?? ""))]
         .filter((call) => toolKind(call.tool) === "shell");
-      const calls = shells.map((call) => ({ callId: call.callId, start: call.start, end: call.end }));
+      // A message's call takes the tool events' start and end when it has none (not stored yet).
+      const calls = shells.map((call) => {
+        const seen = call.callId ? live.get(call.callId) : undefined;
+        return { callId: call.callId, start: call.start ?? seen?.start ?? null, end: call.end ?? seen?.end ?? null };
+      });
       const effects = shells.filter((call) => call.command).map((call) => {
         try {
           return commandEffects(call.command!, call.cwd ?? state.root, this.privacy.home);
@@ -809,11 +820,18 @@ export class ContextCapture {
       }
     }
     if (event.status === "running") {
-      if (known) return;
       const command = typeof event.command === "string" ? event.command : null;
       const workdir = typeof event.workdir === "string" && event.workdir.trim() ? event.workdir.trim() : null;
-      state.liveCalls.set(event.callId, { callId: event.callId, tool: event.tool, input: {}, status: "running", start: at, end: null, command, cwd: workdir ? workdir : state.root });
-      state.observer?.boost();
+      if (known) {
+        // The command comes with the call's second event (2.x: called after input.started), when it starts running.
+        if (known.command || !command) return;
+        known.command = command;
+        known.start = at;
+        if (workdir) known.cwd = workdir;
+      } else {
+        state.liveCalls.set(event.callId, { callId: event.callId, tool: event.tool, input: {}, status: "running", start: at, end: null, command, cwd: workdir ? workdir : state.root });
+        state.observer?.boost();
+      }
       if (this.platform === "linux" && state.observer && command) state.socketsAtStart.set(event.callId, socketPairs().catch(() => new Map()));
       // After the network observer's first sample: the PATH lookups never delay it.
       this.emitExec(state, event, at);
@@ -858,7 +876,9 @@ export class ContextCapture {
       for (const file of outside.files) this.emit(sessionId, "context.outside_file", file);
       for (const call of fresh) {
         if (toolKind(call.tool) !== "shell" || !call.command) continue;
-        for (const tool of commandEffects(call.command, call.cwd, this.privacy.home).ephemeral) {
+        const effects = commandEffects(call.command, call.cwd, this.privacy.home);
+        if (effects.pythonEnvs.length > 0 || effects.pythonInstalls) this.options.pythonHint?.(sessionId, { envs: effects.pythonEnvs, installed: effects.pythonInstalls });
+        for (const tool of effects.ephemeral) {
           if (state.ephemeral >= MAX_EPHEMERAL_PER_SESSION) break;
           state.ephemeral += 1;
           const runner = tool.runner === "bun x" ? "bunx" : tool.runner;

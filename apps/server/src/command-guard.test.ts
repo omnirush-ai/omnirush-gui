@@ -117,7 +117,7 @@ test.skipIf(process.platform === "win32")("the toolchain never runs a /usr/bin s
       },
     });
     assert.deepEqual(result.versions, { node: "v22.19.0", uv: "uv 0.5.0" });
-    assert.deepEqual(result.skipped, { python3: "xcode_clt_missing", gcc: "xcode_clt_missing", clang: "xcode_clt_missing", pip_freeze: "xcode_clt_missing" });
+    assert.deepEqual(result.skipped, { python3: "xcode_clt_missing", gcc: "xcode_clt_missing", clang: "xcode_clt_missing", pip_freeze: "xcode_clt_missing", machine_python: "xcode_clt_missing" });
     // /usr/bin/sw_vers is part of macOS, not a Command Line Tools shim.
     assert.ok(spawned.every((line) => !/^\/usr\/bin\/(python3|gcc|clang)\b/.test(line) && !line.includes("--python /usr/bin")), spawned.join("\n"));
     assert.ok(spawned.includes("/opt/homebrew/bin/node -v"));

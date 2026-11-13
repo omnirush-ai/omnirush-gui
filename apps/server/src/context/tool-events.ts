@@ -3,7 +3,10 @@
 // stream (v1 `/event` `message.part.updated`; v2 `/api/event`
 // `session.tool.*`). A shell call's start reaches ContextCapture.toolEvent
 // before its process is spawned, so the network observer can sample it from
-// its first milliseconds. Identical in the CLI and the desktop app.
+// its first milliseconds. A 2.x event is timed by its envelope's `created`;
+// only `session.tool.input.started` names the tool, so a later event of the
+// call (called, success, failed) gets its name from that one
+// (watchToolEvents). Identical in the CLI and the desktop app.
 
 import { sseFrames } from "../session-archive/tool-start.js";
 import type { ToolEvent } from "./index.js";
@@ -47,17 +50,19 @@ export function toolEventOf(payload: unknown): { sessionId: string; event: ToolE
     const at = status === "running" ? (typeof time.start === "number" ? time.start : undefined) : typeof time.end === "number" ? time.end : undefined;
     return { sessionId, event: { callId, tool, status, command: text(input.command), workdir: text(input.workdir) ?? text(input.cwd), ...(at !== undefined ? { at } : {}) } };
   }
-  const v2 = /^session\.(?:next\.)?tool\.(input\.started|called|completed|failed|error|result)$/.exec(type);
+  const v2 = /^session\.(?:next\.)?tool\.(input\.started|called|success|completed|failed|error|result)$/.exec(type);
   if (v2) {
     const data = isRecord(payload.data) ? payload.data : isRecord(payload.properties) ? payload.properties : null;
     if (!data) return null;
     const sessionId = text(data.sessionID);
     const callId = text(data.callID) ?? text(data.toolCallID) ?? text(data.id);
-    const tool = text(data.tool) ?? text(data.name);
-    if (!sessionId || !callId || !tool) return null;
+    // "": not named in this event (watchToolEvents fills it in from the call's input.started).
+    const tool = text(data.tool) ?? text(data.name) ?? "";
+    if (!sessionId || !callId) return null;
     const input = isRecord(data.input) ? data.input : {};
-    const status = v2[1] === "input.started" || v2[1] === "called" ? "running" : v2[1] === "completed" || v2[1] === "result" ? "completed" : "error";
-    return { sessionId, event: { callId, tool, status, command: text(input.command), workdir: text(input.workdir) ?? text(input.cwd) } };
+    const status = v2[1] === "input.started" || v2[1] === "called" ? "running" : v2[1] === "success" || v2[1] === "completed" || v2[1] === "result" ? "completed" : "error";
+    const at = typeof payload.created === "number" ? payload.created : undefined;
+    return { sessionId, event: { callId, tool, status, command: text(input.command), workdir: text(input.workdir) ?? text(input.cwd), ...(at !== undefined ? { at } : {}) } };
   }
   return null;
 }
@@ -67,6 +72,8 @@ export type ToolEventFetch = (url: string, init: { headers: Headers; signal: Abo
 const MAX_FRAME_CHARS = 4 * 1024 * 1024;
 /** Sessions followed at most per stream (the root and its sub-agents). */
 const MAX_FAMILY = 512;
+/** Running calls whose tool name is kept for their later events. */
+const MAX_NAMED_CALLS = 4096;
 
 /**
  * Follows the event stream until `signal` aborts, handing each tool event of
@@ -85,6 +92,7 @@ export async function watchToolEvents(input: {
 }): Promise<void> {
   if (input.signal.aborted) return;
   const family = new Set([input.sessionId, ...(input.known ?? [])]);
+  const names = new Map<string, string>();
   try {
     const headers = new Headers(input.headers);
     headers.set("accept", "text/event-stream");
@@ -113,8 +121,13 @@ export async function watchToolEvents(input: {
         if (session?.parentId && family.has(session.parentId) && family.size < MAX_FAMILY) family.add(session.id);
         const found = toolEventOf(payload);
         if (found && family.has(found.sessionId)) {
+          const { callId } = found.event;
+          const tool = found.event.tool || names.get(callId);
+          if (found.event.status !== "running") names.delete(callId);
+          else if (found.event.tool && names.size < MAX_NAMED_CALLS) names.set(callId, found.event.tool);
+          if (!tool) continue;
           try {
-            input.onEvent(found.event);
+            input.onEvent({ ...found.event, tool });
           } catch {
             // Capture never stops the stream.
           }

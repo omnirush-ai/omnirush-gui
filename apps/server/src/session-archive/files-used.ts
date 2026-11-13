@@ -18,6 +18,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { stateKey } from "./files.js";
 import { HASH_READ_BYTES, OPEN_ENTRY_FLAGS, isArchiveCredentialPath, statFields, type ScannedEntry } from "./manifest.js";
 import {
+  belowDir,
   BUILD_OUTPUT_DIR_NAMES,
   classifyUse,
   DEPENDENCY_DIR_NAMES,
@@ -730,7 +731,7 @@ export class FilesUsedTracker {
     const out = [...uses];
     const seen = new Set(uses.map((use) => use.path));
     const end = call.end ?? this.now();
-    const inTemp = (path: string) => context.temps.some((temp) => path !== temp && path.startsWith(`${temp}/`));
+    const inTemp = (path: string) => context.temps.some((temp) => belowDir(temp, path));
     const containerDirs: string[] = [];
     for (const use of uses) {
       if (!this.isLocal(use.path, sandbox)) {

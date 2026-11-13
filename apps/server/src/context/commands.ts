@@ -51,19 +51,25 @@ export function expandHome(path: string, home: string | null): string | null {
   return path;
 }
 
-/** The tool calls of a turn's messages, in the order they started. */
+/**
+ * The tool calls of a turn's messages, in the order they started: 1.x `parts`, or a 2.x engine assistant
+ * message's `content` (its tool's time.ran is when it started running, time.completed when it ended).
+ */
 export function toolCallsOf(messages: unknown, root: string, home: string | null): ToolCall[] {
   const list = Array.isArray(messages) ? messages : isRecord(messages) && Array.isArray(messages.messages) ? messages.messages : [];
   const out: ToolCall[] = [];
   for (const message of list) {
-    if (!isRecord(message) || !Array.isArray(message.parts)) continue;
-    for (const part of message.parts) {
+    if (!isRecord(message)) continue;
+    const parts = Array.isArray(message.parts) ? message.parts : message.type === "assistant" && Array.isArray(message.content) ? message.content : null;
+    if (!parts) continue;
+    for (const part of parts) {
       if (!isRecord(part) || part.type !== "tool") continue;
       const tool = typeof part.tool === "string" ? part.tool : typeof part.name === "string" ? part.name : "";
       if (!tool) continue;
       const state = isRecord(part.state) ? part.state : {};
       const input = isRecord(state.input) ? state.input : isRecord(part.input) ? part.input : {};
-      const time = isRecord(state.time) ? state.time : {};
+      const v2 = isRecord(part.time) ? part.time : {};
+      const time = isRecord(state.time) ? state.time : { start: v2.ran ?? v2.created, end: v2.completed };
       const workdir = ["workdir", "cwd", "directory", "working_directory"].map((key) => input[key]).find((value) => typeof value === "string" && value.trim()) as string | undefined;
       const expanded = workdir ? expandHome(workdir.trim(), home) : null;
       const rawCommand = input.command ?? input.cmd ?? input.script;
@@ -242,6 +248,10 @@ export type CommandEffects = {
   named: string[];
   /** On-the-fly tools. */
   ephemeral: Array<{ runner: string; package: string; requested: string | null }>;
+  /** Python environments it runs, activates or makes (a `bin`/`Scripts` interpreter, pip or activate by path, `-m venv`). */
+  pythonEnvs: string[];
+  /** It installs or removes Python packages (pip, uv, poetry, pipenv, pdm, conda). */
+  pythonInstalls: boolean;
 };
 
 const INTERPRETERS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish", "python", "python2", "python3", "node", "nodejs", "ruby", "perl", "php", "tsx", "ts-node", "pwsh", "powershell", "Rscript", "lua", "osascript", "groovy"]);
@@ -266,7 +276,7 @@ export function cloneDirName(url: string): string | null {
  * (which `cd` moves for the rest of an `&&`/`;` chain).
  */
 export function commandEffects(command: string, cwd: string, home: string | null): CommandEffects {
-  const effects: CommandEffects = { folders: [], writes: [], executed: [], named: [], ephemeral: [] };
+  const effects: CommandEffects = { folders: [], writes: [], executed: [], named: [], ephemeral: [], pythonEnvs: [], pythonInstalls: false };
   let dir = cwd;
   const abs = (value: string): string | null => {
     const expanded = expandHome(value, home);
@@ -315,6 +325,21 @@ export function commandEffects(command: string, cwd: string, home: string | null
         if (path) effects.named.push(path);
       }
     }
+    for (const word of words) {
+      const env = /^(.+)[\\/](?:bin|Scripts)[\\/](?:python[\d.]*|pip[\d.]*|activate(?:\.bat|\.ps1|\.fish|\.csh)?)(?:\.exe)?$/i.exec(word)?.[1];
+      const path = env ? abs(env) : null;
+      if (path) effects.pythonEnvs.push(path);
+    }
+    const python = /^(?:python[\d.]*|py)$/i.test(head);
+    const made = python && words[1] === "-m" && words[2] === "venv" ? nonFlags(words, 3)[0] : head === "virtualenv" ? nonFlags(words, 1)[0] : head === "uv" && words[1] === "venv" ? nonFlags(words, 2)[0] ?? ".venv" : undefined;
+    const madePath = made ? abs(made) : null;
+    if (madePath) effects.pythonEnvs.push(madePath);
+    const pipArgs = /^pip[\d.]*$/i.test(head) ? words.slice(1) : python && words[1] === "-m" && words[2] === "pip" ? words.slice(3) : head === "uv" && words[1] === "pip" ? words.slice(2) : null;
+    const sub = words[1] ?? "";
+    if ((pipArgs && /^(?:un)?install$/.test(pipArgs.find((word) => !word.startsWith("-")) ?? ""))
+      || (head === "uv" && ["add", "remove", "sync"].includes(sub))
+      || (["poetry", "pipenv", "pdm"].includes(head) && ["add", "remove", "install", "sync"].includes(sub))
+      || (["conda", "mamba", "micromamba"].includes(head) && ["install", "remove", "update"].includes(sub))) effects.pythonInstalls = true;
     const spec = packageOfCommand(words);
     if (spec) {
       const runner = words[0] && ["pnpm", "yarn", "npm", "bun", "pipx", "uv"].includes(head) ? `${head} ${words[1]}` : head;
