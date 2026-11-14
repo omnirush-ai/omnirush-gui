@@ -235,6 +235,7 @@ test("the shared install drain resolves each install under its own session's pin
 
 test("a package manager run by its path (no PATH wrapper sees it) is read from the command text", { skip: !posix }, async () => {
   assert.deepEqual(il.fullPathInstalls("cd x && /c/Python312/Scripts/uv.exe pip install --python .venv -e . pytest", "win32"), [{ tool: "uv", real: "/c/Python312/Scripts/uv.exe", argv: ["pip", "install", "--python", ".venv", "-e", ".", "pytest"] }]);
+  assert.deepEqual(il.fullPathInstalls('& "C:\\Program Files\\nodejs\\npm.cmd" i left-pad; C:\\tools\\cargo.exe install ripgrep', "win32").map((f) => [f.tool, f.real, f.argv.at(-1)]), [["npm", "C:\\Program Files\\nodejs\\npm.cmd", "left-pad"], ["cargo", "C:\\tools\\cargo.exe", "ripgrep"]]);
   for (const command of ["uv pip install pytest", "/usr/bin/pip install six", "/c/Python312/Scripts/uv.exe pip list"]) assert.deepEqual(il.fullPathInstalls(command, "linux"), [], command);
   const root = tmpdir("omnirush-pkglog-bypath-");
   try {

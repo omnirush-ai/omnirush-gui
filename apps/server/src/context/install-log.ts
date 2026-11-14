@@ -34,7 +34,7 @@ import { createReadStream, promises as fs } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
-import { simpleCommands } from "./commands.js";
+import { shellPath, simpleCommands } from "./commands.js";
 import { quietEnv, runCommand, type Runner } from "./exec.js";
 import { POSIX_WRAPPER, PYTHON_HOOK, WINDOWS_WRAPPER_BASE64, WINDOWS_WRAPPER_SHA256 } from "./install-log-assets.js";
 import { cleanUrl, isSecretFile, isSecretFolder, isSecretKey, tildeText, type PrivacyContext, type Scrubber } from "./privacy.js";
@@ -963,7 +963,7 @@ async function resolveCall(call: RawCall, cls: Classified, tool: string, ctx: Re
         // pip --target/--prefix/--root: that folder, not the interpreter's.
         const into = cls.scope === "target" ? flagValue(call.argv, "--target", "-t", "--prefix", "--root") : null;
         if (into) target = path.resolve(cwd, into);
-        const venv = call.meta.venv_dir || (call.meta.via === "command" ? await commandVenv(call.argv, cwd, ctx.platform) : null);
+        const venv = call.meta.venv_dir || (call.meta.via === "command" ? await commandVenv(call.argv, cwd, ctx) : null);
         if (venv) target ??= venv;
         if (!reports.length) {
           const diff = distDiff(await read("b.dist"), await read("a.dist"));
@@ -1353,10 +1353,10 @@ const BY_PATH_TOOLS = new Set<string>([...POSIX_TOOLS, ...WINDOWS_TOOLS].filter(
  * the shell runs it without looking on PATH, so no wrapper notes it. Read from the command text instead.
  */
 export function fullPathInstalls(command: string, platform: NodeJS.Platform = process.platform): Array<{ tool: string; real: string; argv: string[] }> {
-  // shortcut: Windows backslashes read as separators here; drop once commands.ts tokenize() takes the platform (cap-paths work).
-  const text = platform === "win32" ? command.replace(/\\\r?\n/g, " ").replace(/\\/g, "/") : command;
+  // Line continuations joined first: tokenize() keeps a backslash before a line end.
+  const text = platform === "win32" ? command.replace(/\\\r?\n/g, " ") : command;
   const out: Array<{ tool: string; real: string; argv: string[] }> = [];
-  for (const { words } of simpleCommands(text)) {
+  for (const { words } of simpleCommands(text, platform)) {
     const [first = "", ...argv] = words;
     if (!/[\\/]/.test(first) || first.includes("pkglog-wrappers")) continue;
     const tool = (first.split(/[\\/]/).at(-1) ?? "").toLowerCase().replace(/\.(?:exe|cmd|bat|ps1)$/, "");
@@ -1366,10 +1366,9 @@ export function fullPathInstalls(command: string, platform: NodeJS.Platform = pr
 }
 
 /** The Python environment a command-text pip call works on: `--python`/`-p` (a venv or its interpreter), else a `.venv` up from cwd (as the wrapper looks). */
-async function commandVenv(argv: string[], cwd: string, platform: NodeJS.Platform): Promise<string | null> {
-  // shortcut: Git Bash drive paths only (/c/...); commands.ts shellPath() covers more once it lands.
+async function commandVenv(argv: string[], cwd: string, ctx: ResolveContext): Promise<string | null> {
   const value = flagValue(argv, "--python", "-p");
-  const named = value && platform === "win32" ? value.replace(/^\/([A-Za-z])\//, "$1:/") : value;
+  const named = value && shellPath(value, ctx.home, ctx.env, ctx.platform);
   const candidates = named ? [path.resolve(cwd, named), path.dirname(path.dirname(path.resolve(cwd, named)))] : [];
   for (let dir = cwd; ; dir = path.dirname(dir)) {
     candidates.push(path.join(dir, ".venv"));
