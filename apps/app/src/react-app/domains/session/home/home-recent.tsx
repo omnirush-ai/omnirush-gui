@@ -36,7 +36,9 @@ function searchShortcut(): string {
 export function HomeContinue({ context }: { context: HomeViewContext }) {
   const chats = useMemo(() => {
     const tasks = new Set(context.workspaces.filter((workspace) => workspace.task).map((workspace) => workspace.id));
-    return recentChats(context.sessions.filter((session) => !tasks.has(session.workspaceId)), HOME_CONTINUE_CHATS);
+    // Untitled chats all read the same, so they are left out; the search still finds them.
+    const titled = context.sessions.filter((session) => !tasks.has(session.workspaceId) && homeChatTitle(session.title) !== "Untitled chat");
+    return recentChats(titled, HOME_CONTINUE_CHATS);
   }, [context.sessions, context.workspaces]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [fits, setFits] = useState(HOME_CONTINUE_CHATS);

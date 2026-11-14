@@ -115,7 +115,7 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={cn(COMPOSER_GUTTER, "flex min-h-full flex-col justify-center py-8")}>
+        <div className={cn(COMPOSER_GUTTER, "flex min-h-full flex-col justify-end pb-6 pt-8")}>
           <div className={cn(COMPOSER_WIDTH, "w-full space-y-4")}>
             <div className="space-y-1.5 text-center">
               <h2 className="text-balance break-keep text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">

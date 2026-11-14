@@ -36,12 +36,13 @@ describe("home view model", () => {
 
   test("titles read like the CLI's: the engine's default title is an untitled chat", () => {
     expect(homeChatTitle("New session - 2026-10-19T10:00:00.000Z")).toBe("Untitled chat");
+    expect(homeChatTitle("New session")).toBe("Untitled chat");
     expect(homeChatTitle("  Fix   it ")).toBe("Fix it");
   });
 });
 
 describe("start screen row", () => {
-  test("a quiet row: at most three recent chats to continue (task copies left out) and the chat search", async () => {
+  test("a quiet row: at most three recent titled chats to continue (task copies and untitled chats left out) and the chat search", async () => {
     const opened: string[] = [];
     let searched = 0;
     document.body.innerHTML = "<div id=root></div>";
@@ -56,13 +57,14 @@ describe("start screen row", () => {
     const chats = [...document.querySelectorAll<HTMLButtonElement>("[data-testid=home-chat]")];
     expect(chats.map((c) => c.textContent)).toEqual([
       expect.stringContaining("Fix the login redirect"),
-      expect.stringContaining("Untitled chat"),
       expect.stringContaining("Older chat"),
     ]);
+    // Untitled chats all read the same, so the row leaves them out.
+    expect(chats.some((c) => c.textContent?.includes("Untitled chat"))).toBe(false);
     expect(chats[0]!.textContent).toContain("app");
     expect(chats[0]!.getAttribute("aria-label")).toBe("Continue Fix the login redirect in app");
     await act(async () => { chats[1]!.click(); });
-    expect(opened).toEqual(["ws_site/ses_s1"]);
+    expect(opened).toEqual(["ws_app/ses_a0"]);
     await act(async () => { document.querySelector<HTMLButtonElement>("[data-testid=home-search]")!.click(); });
     expect(searched).toBe(1);
     await act(async () => root.unmount());
