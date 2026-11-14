@@ -3,6 +3,15 @@
   "schema": 1,
   "cli": [
     {
+      "version": "3.0.1",
+      "date": "2026-11-14",
+      "new": [],
+      "improved": [
+        "Reliability improvements."
+      ],
+      "fixed": []
+    },
+    {
       "version": "3.0.0",
       "date": "2026-11-14",
       "new": [],
@@ -573,7 +582,7 @@
   "desktop": [
     {
       "version": "3.8.5",
-      "date": "2026-11-13",
+      "date": "2026-11-14",
       "new": [
         "Work: a quick setup for your company (name, website, team size and the tools you use), then connect your tools or try Work with sample data. Sample data carries a badge and can be removed in one click.",
         "Work: invite teammates from the Work home or Settings and share the link with them.",
@@ -585,7 +594,8 @@
         "The chat bar sits in the same place on the home screen and in chats.",
         "New chats open without the suggestion cards.",
         "Work > Connectors shows clearer connection status and asks before disconnecting a tool.",
-        "Claude chats use Claude Code's standard instructions and core tools, and compact long conversations on their own."
+        "Claude chats use Claude Code's standard instructions and core tools, and compact long conversations on their own.",
+        "Reliability improvements on Windows."
       ],
       "fixed": []
     },
