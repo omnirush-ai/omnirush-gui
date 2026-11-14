@@ -28,7 +28,9 @@
  * whether each is a file is checked later. Nothing here touches the disk.
  * Identical in the CLI and the desktop app.
  */
-import { isAbsolute, join, resolve } from "node:path";
+import { join, posix, win32 } from "node:path";
+
+import { shellPath } from "../context/commands.js";
 
 export type ShellUseOp = "read" | "write" | "exec";
 /** `implicit`: the program reads it without naming it (a config it always loads): not listed when it is not there. */
@@ -45,9 +47,10 @@ const isWord = (token: Token | undefined): token is { word: string } => token !=
 /**
  * Shell tokens: words (quotes and escapes resolved) and operators. Heredoc
  * bodies come back as a `heredoc` operator followed by one word holding the
- * body. A word holding `$` or a backtick substitution keeps it as text.
+ * body. A word holding `$` or a backtick substitution keeps it as text. On Windows a backslash before a
+ * name character is a path separator (`%TEMP%\\a`), not an escape.
  */
-export function shellTokens(command: string): Token[] {
+export function shellTokens(command: string, platform: NodeJS.Platform = process.platform): Token[] {
   const text = command.length > MAX_COMMAND_CHARS ? command.slice(0, MAX_COMMAND_CHARS) : command;
   const tokens: Token[] = [];
   const heredocs: Array<{ delimiter: string; strip: boolean }> = [];
@@ -81,6 +84,12 @@ export function shellTokens(command: string): Token[] {
       continue;
     }
     if (char === "\\" && next !== undefined) {
+      if (platform === "win32" && /[\w.%~-]/.test(next)) {
+        word += char;
+        started = true;
+        index += 1;
+        continue;
+      }
       if (next !== "\n") {
         word += next;
         started = true;
@@ -308,8 +317,12 @@ function interpreterName(word: string): string | null {
   return null;
 }
 
-/** The files a shell command uses, absolute (see the module comment). Never throws. */
-export function shellCommandUses(command: string, cwd: string, home: string | null = null): ShellUse[] {
+/**
+ * The files a shell command uses, absolute (see the module comment). Its words are read the way the
+ * session's shell reads them (context/commands.ts shellPath: `env` and `platform` are the session's). Never throws.
+ */
+export function shellCommandUses(command: string, cwd: string, home: string | null = null, env: Record<string, string | undefined> = process.env, platform: NodeJS.Platform = process.platform): ShellUse[] {
+  const { isAbsolute, resolve } = platform === "win32" ? win32 : posix;
   const out: ShellUse[] = [];
   const seen = new Set<string>();
   try {
@@ -329,7 +342,10 @@ export function shellCommandUses(command: string, cwd: string, home: string | nu
       seen.add(key);
       out.push(implicit ? { path, op, implicit: true } : { path, op });
     };
-    const tokens = shellTokens(command);
+    const tokens = shellTokens(command, platform).map((token, index, all) => {
+      const before = all[index - 1];
+      return isWord(token) && !(before && "op" in before && before.op === "heredoc") ? { word: shellPath(token.word, home, env, platform) } : token;
+    });
     // Simple commands between control operators.
     const commands: Array<{ words: string[]; redirects: Array<{ op: string; word: string }>; heredoc: string | null; separator: string | null }> = [];
     let current: (typeof commands)[number] = { words: [], redirects: [], heredoc: null, separator: null };
@@ -447,7 +463,7 @@ export function shellCommandUses(command: string, cwd: string, home: string | nu
       if (SHELLS.has(name)) {
         const c = args.indexOf("-c");
         if (c >= 0 && args[c + 1] !== undefined) {
-          for (const use of shellCommandUses(args[c + 1]!, commandDir, home)) {
+          for (const use of shellCommandUses(args[c + 1]!, commandDir, home, env, platform)) {
             const key = `${use.op}\0${use.path}`;
             if (!seen.has(key) && out.length < MAX_USES) {
               seen.add(key);
@@ -459,7 +475,7 @@ export function shellCommandUses(command: string, cwd: string, home: string | nu
         const rest = operands(args);
         if (rest[0]) add(rest[0], "exec", commandDir);
         for (const word of rest.slice(1)) if (looksLikePath(word)) add(word, "read", commandDir);
-        if (item.heredoc && !rest[0]) for (const use of shellCommandUses(item.heredoc, commandDir, home)) add(use.path, use.op, commandDir);
+        if (item.heredoc && !rest[0]) for (const use of shellCommandUses(item.heredoc, commandDir, home, env, platform)) add(use.path, use.op, commandDir);
         continue;
       }
       const interpreter = interpreterName(head);

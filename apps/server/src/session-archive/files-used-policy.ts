@@ -96,6 +96,8 @@ export const DEPENDENCY_DIR_NAMES = new Set([
   "node_modules", ".venv", "venv", "__pycache__", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".turbo", ".parcel-cache",
   ".cache", ".gradle", ".dart_tool", "Pods", "vendor", "bower_components", "site-packages", "dist-packages", ".pnpm-store", ".yarn",
 ]);
+/** A project's own yarn release or plugin (`.yarn/releases/yarn-3.3.1.cjs`), the one exception to `.yarn`. */
+export const YARN_OWN = /^(?:[^/]+\/)*\.yarn\/(?:releases|plugins)\/[^/]/;
 /** Build output folders (any path component): hash only. */
 export const BUILD_OUTPUT_DIR_NAMES = new Set(["dist", "build", "target", "out", ".next", ".nuxt", ".svelte-kit", "DerivedData"]);
 
@@ -232,7 +234,8 @@ export function classifyUse(absolute: string, context: UseContext): UseClass | n
     const rel = within(root, absolute);
     if (rel === null) continue;
     if (credentials && (isSecretUsePath(absolute) || context.isCredentialPath?.(rel) === true)) return { scope: "project", path: rel, plan: "hold", reason: "denylisted" };
-    const regenerable = regenerableReason(rel);
+    // The yarn release and plugins a project's .yarnrc.yml names (files-used.ts adds them): yarn cannot start without them.
+    const regenerable = YARN_OWN.test(rel) ? null : regenerableReason(rel);
     if (regenerable) return { scope: "project", path: rel, plan: "hold", reason: regenerable };
     return { scope: "project", path: rel, plan: "scan", reason: "captured" };
   }

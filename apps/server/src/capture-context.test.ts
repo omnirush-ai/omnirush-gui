@@ -683,6 +683,46 @@ test("#21 temp files: written by one call and read or run by a later one are inl
   assert.equal(outside.isTempPath("/private/var/folders/ab/cdefg/T/x.py", []), true);
 });
 
+test("commands: temp and home variables, Git Bash /tmp and /c/ paths read with the session's env and platform", () => {
+  const env = { TEMP: "C:\\Users\\a\\AppData\\Local\\Temp", TMP: "C:\\Users\\a\\AppData\\Local\\Temp", USERPROFILE: "C:\\Users\\a", LOCALAPPDATA: "C:\\Users\\a\\AppData\\Local", APPDATA: "C:\\Users\\a\\AppData\\Roaming" };
+  const win = (command) => commands.commandEffects(command, "C:\\w", "C:\\Users\\a", env, "win32");
+  const file = "C:\\Users\\a\\AppData\\Local\\Temp\\a\\b\\c\\x.txt";
+  const folder = "C:\\Users\\a\\AppData\\Local\\Temp\\a\\b\\c";
+  for (const [dir, target] of [["$TEMP/a/b/c", "$TEMP/a/b/c/x.txt"], ["${TMP}/a/b/c", "${TMPDIR}/a/b/c/x.txt"], ["%TEMP%\\a\\b\\c", "%Temp%\\a\\b\\c\\x.txt"], ["$env:TEMP\\a\\b\\c", "${env:temp}\\a\\b\\c\\x.txt"], ["/tmp/a/b/c", "/tmp/a/b/c/x.txt"], ["/c/Users/a/AppData/Local/Temp/a/b/c", "/c/Users/a/AppData/Local/Temp/a/b/c/x.txt"], ["%LOCALAPPDATA%\\Temp\\a\\b\\c", "$USERPROFILE/AppData/Local/Temp/a/b/c/x.txt"]]) {
+    const effects = win(`mkdir -p ${dir} && echo x > ${target}`);
+    assert.deepEqual(effects.folders.map((entry) => entry.path), [folder], dir);
+    assert.deepEqual(effects.writes, [file], target);
+  }
+  assert.deepEqual(win("cat $APPDATA/x/c.json").named, ["C:\\Users\\a\\AppData\\Roaming\\x\\c.json"]);
+  assert.deepEqual(win("echo x > $NOPE/y.txt; cp a.txt %NOPE%/b.txt").writes, ["C:\\w\\$NOPE\\y.txt", "C:\\w\\%NOPE%\\b.txt"], "an unknown variable is not expanded");
+  // Linux and macOS: TMPDIR and HOME only, nothing else changes.
+  const linux = commands.commandEffects("echo x > $TMPDIR/a/x.txt; echo y > ${HOME}/y.txt; echo z > $TEMP/z.txt; echo w > /tmp/w.txt", "/w", "/home/u", { TMPDIR: "/var/folders/ab/T", TEMP: "/nope" }, "linux");
+  assert.deepEqual(linux.writes, ["/var/folders/ab/T/a/x.txt", "/home/u/y.txt", "/w/$TEMP/z.txt", "/tmp/w.txt"]);
+  assert.equal(commands.shellPath("$TMPDIR/x", null, {}, "darwin"), "$TMPDIR/x", "an unset TMPDIR stays");
+  assert.equal(commands.shellPath("/tmp/x", null, { TEMP: "C:\\T" }, "linux"), "/tmp/x");
+  assert.equal(commands.shellPath("/c", null, env, "win32"), "/c", "cmd's /c switch is not a drive");
+});
+
+test("outside: an 8.3 short name compares as its long name against the temp roots (mocked realpath)", () => {
+  const long = "C:\\Users\\Sneha Sharma\\AppData\\Local\\Temp";
+  const short = "C:\\Users\\SNEHAS~1\\AppData\\Local\\Temp";
+  const real = (value) => {
+    if (value.toUpperCase().startsWith(short.toUpperCase())) return long + value.slice(short.length);
+    throw new Error("ENOENT");
+  };
+  assert.equal(outside.longPath(`${short}\\work2\\crash\\provenance.json`, (value) => {
+    // Only the folder exists: the rest is appended.
+    if (value === short || value === `${short}\\work2`) return real(value);
+    throw new Error("ENOENT");
+  }), `${long}\\work2\\crash\\provenance.json`);
+  assert.equal(outside.longPath("C:\\Users\\a\\x.txt", () => { throw new Error("not called"); }), "C:\\Users\\a\\x.txt");
+  assert.equal(outside.longPath("/tmp/a~1/x", () => { throw new Error("not called"); }), "/tmp/a~1/x");
+  // The root as given (long) and a path in short form; the root in short form and a path in long form.
+  assert.equal(outside.isTempPath(`${short}\\work2\\provenance.json`, [long], real), true);
+  assert.equal(outside.isTempPath(`${long}\\work2\\provenance.json`, outside.tempRoots({ TEMP: short }, "win32", real).filter((root) => root.includes("\\")), real), true);
+  assert.equal(outside.isTempPath(`C:\\Users\\SNEHAS~1\\Documents\\x.txt`, [long], real), false);
+});
+
 // --- #22 ephemeral tools --------------------------------------------------------------------------
 
 test("#22 on-the-fly tools: exact versions, cache lookups per runner, registry fallback only without a cache hit", async () => {

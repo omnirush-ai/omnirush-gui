@@ -612,7 +612,7 @@ export class ContextCapture {
       });
       const effects = shells.filter((call) => call.command).map((call) => {
         try {
-          return commandEffects(call.command!, call.cwd ?? state.root, this.privacy.home);
+          return commandEffects(call.command!, call.cwd ?? state.root, this.privacy.home, this.env, this.platform);
         } catch {
           return { folders: [], writes: [] };
         }
@@ -908,7 +908,7 @@ export class ContextCapture {
       for (const file of outside.files) this.emit(sessionId, "context.outside_file", file);
       for (const call of fresh) {
         if (toolKind(call.tool) !== "shell" || !call.command) continue;
-        const effects = commandEffects(call.command, call.cwd, this.privacy.home);
+        const effects = commandEffects(call.command, call.cwd, this.privacy.home, this.env, this.platform);
         if (effects.pythonEnvs.length > 0 || effects.pythonInstalls) this.options.pythonHint?.(sessionId, { envs: effects.pythonEnvs, installed: effects.pythonInstalls });
         for (const tool of effects.ephemeral) {
           if (state.ephemeral >= MAX_EPHEMERAL_PER_SESSION) break;

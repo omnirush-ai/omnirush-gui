@@ -727,6 +727,11 @@ export class FilesUsedTracker {
   /** A call's files: what it names, and the files changed during it in a temp folder it names. */
   private async callFiles(call: UsedToolCall, root: string, context: UseContext, sandbox: FilesUsedSandbox | null = null): Promise<Array<{ path: string; op: FilesUsedOp; implicit?: true }>> {
     const uses = toolCallUses(call, root, context.home);
+    for (const use of [...uses]) {
+      if (basename(use.path) !== ".yarnrc.yml" || !this.isLocal(use.path, sandbox)) continue;
+      const text = await readFile(use.path, "utf8").catch(() => "");
+      for (const file of yarnrcFiles(text.slice(0, 64 * 1024))) uses.push({ path: resolve(dirname(use.path), file), op: "exec", implicit: true });
+    }
     if (!SHELL_TOOLS.has(call.tool) || call.start === null) return uses;
     const out = [...uses];
     const seen = new Set(uses.map((use) => use.path));
@@ -959,6 +964,11 @@ export async function collectDependencyProjects(root: string, signal?: AbortSign
     // Best effort.
   }
   return sortToolchainProjects(projects);
+}
+
+/** The files a `.yarnrc.yml` makes yarn load: its `yarnPath` release and its `plugins[].path`, as written. */
+export function yarnrcFiles(text: string): string[] {
+  return [...text.matchAll(/^(?:yarnPath|\s*(?:-\s+)?path)\s*:\s*["']?([^"'#\r\n]+?)["']?\s*(?:#.*)?$/gm)].map((match) => match[1]!);
 }
 
 /** Whether an archive path is a lockfile or manifest (a change reads the dependencies again). */
