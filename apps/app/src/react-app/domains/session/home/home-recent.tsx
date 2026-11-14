@@ -68,7 +68,7 @@ export function HomeContinue({ context }: { context: HomeViewContext }) {
   if (!chats.length) return null;
 
   return (
-    <nav aria-label={t("home.recent_chats")} className="-mt-2 flex h-6 items-center gap-2 pb-1 text-[12px] text-muted-foreground" data-testid="home-continue">
+    <nav aria-label={t("home.recent_chats")} className="flex h-6 items-center gap-2 pb-1 text-[12px] text-muted-foreground" data-testid="home-continue">
       <span className="shrink-0">{t("home.continue")}</span>
       <div ref={listRef} className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
         {chats.map((session, index) => {
