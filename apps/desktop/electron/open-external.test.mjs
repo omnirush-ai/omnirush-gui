@@ -104,4 +104,77 @@ describe("openExternalUrl", () => {
     assert.equal(opened, false);
     assert.equal(spawnCalled, false);
   });
+
+  it("refuses schemes that are not web links or settings panes", async () => {
+    const refused = [
+      "file:///C:/Windows/System32/calc.exe",
+      "ms-msdt:/id PCWDiagnostic",
+      "search-ms:query=x",
+      "smb://host/share",
+      "javascript:alert(1)",
+      "C:\\Windows\\System32\\calc.exe",
+      "",
+    ];
+    for (const url of refused) {
+      let opened = false;
+      let spawnCalled = false;
+      const result = await openExternalUrl(url, {
+        env: {},
+        openExternal: async () => {
+          opened = true;
+        },
+        platform: "win32",
+        spawnProcess: () => {
+          spawnCalled = true;
+          return { unref() {} };
+        },
+        timeoutMs: 20,
+      });
+
+      assert.equal(result.ok, false, url);
+      assert.equal(opened, false, url);
+      assert.equal(spawnCalled, false, url);
+    }
+  });
+
+  it("opens mailto links and the microphone settings panes", async () => {
+    const allowed = [
+      "mailto:info@example.com",
+      "ms-settings:privacy-microphone",
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+    ];
+    for (const url of allowed) {
+      let openedUrl = "";
+      const result = await openExternalUrl(url, {
+        env: {},
+        openExternal: async (target) => {
+          openedUrl = target;
+        },
+        platform: "linux",
+        timeoutMs: 20,
+      });
+
+      assert.deepEqual(result, { ok: true }, url);
+      assert.equal(openedUrl, url);
+    }
+  });
+
+  it("keeps non-web links away from the rundll32 fallback", async () => {
+    let spawnCalled = false;
+    const result = await openExternalUrl("mailto:info@example.com", {
+      env: {},
+      openExternal: async () => {
+        throw new Error("no mail client");
+      },
+      platform: "win32",
+      spawnProcess: () => {
+        spawnCalled = true;
+        return { unref() {} };
+      },
+      timeoutMs: 20,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(spawnCalled, false);
+  });
 });

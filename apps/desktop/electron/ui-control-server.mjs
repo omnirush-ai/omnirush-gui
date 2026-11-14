@@ -3,7 +3,7 @@
 // and /command surface. Dispatched to the renderer's window.__omnirushControl.
 // Extracted from main.mjs; state and lifecycle live in this factory
 // (createRuntimeManager pattern).
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { chmod, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -56,8 +56,9 @@ export function createUiControlServer({
   }
 
   function authorizedUiControlRequest(request) {
-    const auth = request.headers.authorization ?? "";
-    return auth === `Bearer ${uiControlToken}`;
+    const supplied = Buffer.from(request.headers.authorization ?? "");
+    const expected = Buffer.from(`Bearer ${uiControlToken}`);
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
   }
 
   function jsonForJavaScript(value) {

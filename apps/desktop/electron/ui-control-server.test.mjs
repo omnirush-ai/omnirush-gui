@@ -18,6 +18,32 @@ test("UI control commands never activate the desktop window implicitly", async (
   ));
 });
 
+test("UI control requests need the exact bridge token", async () => {
+  const userData = await mkdtemp(path.join(os.tmpdir(), "omnirush-ui-control-"));
+  const server = createUiControlServer({
+    app: { getPath: () => userData },
+    appName: "OmniRush.ai",
+    appIdentifier: "ai.omnirush.desktop",
+    getWindow: async () => { throw new Error("window not needed"); },
+    listWebMcpTools: () => ({ ok: false, error: "The built-in browser is not ready." }),
+    executeWebMcpTool: () => ({ ok: false, error: "The built-in browser is not ready." }),
+  });
+
+  try {
+    await server.start();
+    const discovery = JSON.parse(await readFile(path.join(userData, "omnirush-ui-control.json"), "utf8"));
+    const wrong = `${discovery.token.slice(0, -1)}${discovery.token.endsWith("0") ? "1" : "0"}`;
+    for (const headers of [{}, { Authorization: `Bearer ${wrong}` }, { Authorization: `Bearer ${discovery.token}x` }]) {
+      const response = await fetch(`${discovery.baseUrl}/snapshot`, { headers });
+      assert.equal(response.status, 401);
+      assert.deepEqual(await response.json(), { ok: false, error: "Unauthorized" });
+    }
+  } finally {
+    await server.stop();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
 test("UI control failures are logged locally without exposing exception details", async () => {
   const userData = await mkdtemp(path.join(os.tmpdir(), "omnirush-ui-control-"));
   const failure = new Error("private renderer failure");
