@@ -56,7 +56,10 @@ export type UploadToolchain = {
   duration_ms: number;
   /** Tool name to its version line, e.g. `"node": "v22.19.0"`. */
   versions: Record<string, string>;
-  /** Tools on PATH that were deliberately not run, and why (`xcode_clt_missing`). */
+  /**
+   * Tools on PATH that were deliberately not run, and why (`xcode_clt_missing`); `freeze_failed` on
+   * `pip_freeze`, `pip_freeze_by_dir`, `machine_python` or `outside_python_envs` when an interpreter was there but its packages could not be listed.
+   */
   skipped?: Record<string, string>;
   /** Of the interpreter the top-level pip_freeze came from. */
   python_executable_kind?: PythonExecutableKind;
@@ -75,7 +78,7 @@ export type UploadToolchain = {
    * one (`pip_freeze_dir` then names it).
    */
   pip_freeze?: string[];
-  pip_freeze_tool?: "pip" | "uv";
+  pip_freeze_tool?: FreezeTool;
   pip_freeze_truncated?: boolean;
   /** With nested Python projects: the folder (`.` for the root) the top-level pip_freeze describes. */
   pip_freeze_dir?: string;
@@ -113,7 +116,10 @@ export type UploadToolchain = {
   env_names_read_truncated?: boolean;
 };
 
-export type PythonEnvFreeze = { kind: PythonExecutableKind; pip_freeze: string[]; pip_freeze_tool: "pip" | "uv"; pip_freeze_truncated?: true };
+/** `importlib`: pip (and, in a virtual environment, uv) could not list the interpreter, so its installed distributions were read directly. */
+export type FreezeTool = "pip" | "uv" | "importlib";
+
+export type PythonEnvFreeze = { kind: PythonExecutableKind; pip_freeze: string[]; pip_freeze_tool: FreezeTool; pip_freeze_truncated?: true };
 
 export type NpmLs = { name?: string; version?: string; dependencies: Record<string, string>; truncated?: boolean };
 export const MAX_NPM_LS_BYTES = 64 * 1024;
@@ -774,6 +780,7 @@ export async function collectToolchain(root: string, options: CollectOptions = {
   const primaryKind = kindOf(primaryVenv);
   if (primaryKind) toolchain.python_executable_kind = primaryKind;
   const primarySnapshot = primary ? frozen.get(primaryVenv ?? systemPython ?? "") : null;
+  if (primary && !primarySnapshot && (primaryVenv ?? systemPython) && !skipped.pip_freeze) skipped.pip_freeze = "freeze_failed";
   if (primarySnapshot) {
     const { lines, truncated } = sanitizeFreezeLines(primarySnapshot.stdout);
     toolchain.pip_freeze = lines;
@@ -797,8 +804,12 @@ export async function collectToolchain(root: string, options: CollectOptions = {
       if (kind) kinds[project.dir] = kind;
       const version = project.venvPython ? venvVersion.get(project.venvPython) : null;
       if (version) venvByDir[project.dir] = version;
-      const lines = capped.get(project.venvPython ?? systemPython ?? "");
-      if (!lines) continue;
+      const python = project.venvPython ?? systemPython;
+      const lines = capped.get(python ?? "");
+      if (!lines) {
+        if (python && !skipped.pip_freeze) skipped.pip_freeze_by_dir = "freeze_failed";
+        continue;
+      }
       byDir[project.dir] = lines.lines;
       if (lines.truncated) truncatedDirs.push(project.dir);
     }
@@ -815,11 +826,13 @@ export async function collectToolchain(root: string, options: CollectOptions = {
   };
   const machine = systemPython ? envFreeze(systemPython) : null;
   if (machine) toolchain.machine_python = machine;
+  else if (systemPython && !skipped.machine_python) skipped.machine_python = "freeze_failed";
   const home = options.home !== undefined ? options.home : homedir() || null;
   const envs: Record<string, PythonEnvFreeze> = {};
   for (const [python, folder] of outsideEnvs) {
     const freeze = envFreeze(python);
     if (freeze) envs[tildeFolder(folder, home, platform)] = freeze;
+    else skipped.outside_python_envs = "freeze_failed";
   }
   if (Object.keys(envs).length > 0) toolchain.outside_python_envs = envs;
   // A package.json without node_modules: nothing is installed for npm ls to list; say so rather than leave it out silently.
@@ -910,8 +923,10 @@ async function npmLsRaw(
 }
 
 /**
- * `pip freeze` output of `python`, run in `cwd`: through uv when it is on PATH, else `python -m pip`;
- * `pipFirst` (an interpreter outside a virtual environment) the other way round, so user-site packages are listed.
+ * `pip freeze` output of `python`, run in `cwd`: through uv when it is on PATH, else `python -m pip`,
+ * then importlib.metadata (Debian's python3 ships without pip). `pipFirst` (an interpreter outside a virtual
+ * environment): pip, importlib, then uv, which reads only the interpreter's own site-packages and so prints
+ * nothing, exit 0, for Debian's /usr/lib/python3/dist-packages and the user site.
  */
 async function freezeRaw(
   python: string,
@@ -920,7 +935,7 @@ async function freezeRaw(
   run: RunCommand,
   timeoutMs: number,
   pipFirst = false,
-): Promise<{ stdout: string; tool: "pip" | "uv" } | null> {
+): Promise<{ stdout: string; tool: FreezeTool } | null> {
   const options = { cwd, timeoutMs, maxBytes: MAX_PROBE_OUTPUT_BYTES };
   const uv = where("uv");
   // uv is much faster and also reads a uv-made venv, which has no pip.
@@ -932,8 +947,23 @@ async function freezeRaw(
     const result = await run(python, ["-m", "pip", "freeze", "--disable-pip-version-check"], options).catch(() => null);
     return result && result.code === 0 ? { stdout: result.stdout, tool: "pip" as const } : null;
   };
-  return pipFirst ? (await viaPip()) ?? (await viaUv()) : (await viaUv()) ?? (await viaPip());
+  // -I: nothing from the project folder or PYTHON* variables is imported; the user site is added back by hand.
+  const viaImportlib = async () => {
+    const result = await run(python, ["-I", "-c", IMPORTLIB_FREEZE], options).catch(() => null);
+    return result && result.code === 0 ? { stdout: result.stdout, tool: "importlib" as const } : null;
+  };
+  return pipFirst ? (await viaPip()) ?? (await viaImportlib()) ?? (await viaUv()) : (await viaUv()) ?? (await viaPip()) ?? (await viaImportlib());
 }
+
+/** `name==version` per installed distribution, as pip freeze prints them: one per normalised name, sorted. */
+const IMPORTLIB_FREEZE = [
+  "import importlib.metadata as m, re, site, sys",
+  "seen = {}",
+  "for d in m.distributions(path=sys.path + [site.getusersitepackages()]):",
+  "    name, version = d.metadata['Name'], d.version",
+  "    if name and version: seen.setdefault(re.sub(r'[-_.]+', '-', name).lower(), name + '==' + version)",
+  "print('\\n'.join(sorted(seen.values(), key=str.lower)))",
+].join("\n");
 
 /**
  * Splits `total` between items that want `wants[i]` each: the smaller wants

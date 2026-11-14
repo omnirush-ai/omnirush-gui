@@ -233,6 +233,79 @@ test("a script-only Python project (main.py, no manifest) still records pip free
   assert.deepEqual(result.manifests, []);
 });
 
+test("an interpreter without pip is listed through importlib.metadata before uv, and says so when nothing works", async () => {
+  const root = tempProject({ "main.py": "print('hi')\n" });
+  const fail = { code: 1, stdout: "", stderr: "No module named pip" };
+  const calls = [];
+  // Debian's python3 in the box: no pip; uv exits 0 with nothing, as it skips /usr/lib/python3/dist-packages.
+  const result = await toolchain.collectToolchain(root, {
+    env: {},
+    resolve: (command) => (["python3", "uv"].includes(command) ? `/usr/bin/${command}` : null),
+    run: fakeRun({
+      python3: (args) => (args[0] === "-m" ? fail : args[0] === "-I" ? ok("attrs==23.2.0\nrequests==2.28.1\n") : ok("Python 3.11.2\n")),
+      uv: (args) => (args[0] === "pip" ? ok("") : ok("uv 0.13.0\n")),
+    }, calls),
+  });
+  assert.deepEqual(result.machine_python, { kind: "system", pip_freeze: ["attrs==23.2.0", "requests==2.28.1"], pip_freeze_tool: "importlib" });
+  assert.equal(result.pip_freeze_tool, "importlib");
+  assert.deepEqual(result.pip_freeze, ["attrs==23.2.0", "requests==2.28.1"]);
+  assert.equal(result.skipped, undefined);
+  assert.equal(calls.find((call) => call.args[0] === "-I").args[1], "-c");
+  assert.ok(!calls.some((call) => call.args[0] === "pip"), "uv is not asked once importlib answered");
+
+  const failed = await toolchain.collectToolchain(root, {
+    env: {},
+    resolve: (command) => (command === "python3" ? "/usr/bin/python3" : null),
+    run: fakeRun({ python3: (args) => (args[0] === "--version" ? ok("Python 3.11.2\n") : fail) }),
+  });
+  assert.equal(failed.machine_python, undefined);
+  assert.equal(failed.pip_freeze, undefined);
+  assert.deepEqual(failed.skipped, { machine_python: "freeze_failed", pip_freeze: "freeze_failed" });
+});
+
+test("host and box on Linux, macOS and Windows: no pip falls back to importlib, and a failed list is named in skipped", async () => {
+  const fail = { code: 1, stdout: "", stderr: "No module named pip" };
+  // Host runs resolve to a path; box and engine-sandbox runs pass the bare name to the box.
+  const cases = [
+    ["linux", "host", "/usr/bin/python3", "/usr/local/bin/uv"],
+    ["linux", "box", "python3", "uv"],
+    ["darwin", "host", "/opt/homebrew/bin/python3", "/opt/homebrew/bin/uv"],
+    ["win32", "host", "C:\\Python312\\python.exe", "C:\\Users\\a\\.local\\bin\\uv.exe"],
+  ];
+  for (const [platform, mode, python, uv] of cases) {
+    const label = `${platform} ${mode}`;
+    const root = tempProject({ "main.py": "x = 1\n", "svc/requirements.txt": "attrs\n" });
+    const envPython = platform === "win32" ? "C:\\Users\\a\\work\\venv\\Scripts\\python.exe" : "/home/a/work/venv/bin/python";
+    const base = {
+      env: {},
+      platform,
+      home: platform === "win32" ? "C:\\Users\\a" : "/home/a",
+      pythonEnvs: [platform === "win32" ? "C:\\Users\\a\\work\\venv" : "/home/a/work/venv"],
+      isFile: (file) => file === envPython || file.replace(/\\/g, "/").endsWith("work/venv/pyvenv.cfg"),
+      resolve: (command) => (command === "python3" || (platform === "win32" && command === "python") ? python : command === "uv" ? uv : null),
+    };
+    const run = (importlib) => async (file, args) => {
+      if (file === uv) return args[0] === "pip" ? ok("") : ok("uv 0.13.0\n");
+      if (file !== python && file !== envPython) return null;
+      if (args[0] === "--version") return ok("Python 3.11.2\n");
+      return args[0] === "-I" && importlib ? ok("PyYAML==6.0\n") : fail;
+    };
+    const listed = await toolchain.collectToolchain(root, { ...base, run: run(true) });
+    assert.deepEqual(listed.machine_python?.pip_freeze, ["PyYAML==6.0"], label);
+    assert.equal(listed.machine_python.pip_freeze_tool, "importlib", label);
+    assert.deepEqual(listed.pip_freeze_by_dir, { ".": ["PyYAML==6.0"], svc: ["PyYAML==6.0"] }, label);
+    // The outside venv: uv answers first there, empty but a real answer for a venv.
+    assert.deepEqual(Object.values(listed.outside_python_envs ?? {}).map((env) => env.pip_freeze_tool), ["uv"], label);
+    assert.equal(listed.skipped, undefined, label);
+
+    const failed = await toolchain.collectToolchain(root, { ...base, run: async (file, args) => (file === uv ? (args[0] === "pip" ? fail : ok("uv 0.13.0\n")) : (await run(false)(file, args))) });
+    assert.equal(failed.machine_python, undefined, label);
+    assert.equal(failed.pip_freeze, undefined, label);
+    assert.equal(failed.outside_python_envs, undefined, label);
+    assert.deepEqual(failed.skipped, { machine_python: "freeze_failed", pip_freeze: "freeze_failed", outside_python_envs: "freeze_failed" }, label);
+  }
+});
+
 test("the cache collects once per project and again only when its manifest/lockfile set changes", async () => {
   const root = tempProject({ "package.json": "{}" });
   let runs = 0;
