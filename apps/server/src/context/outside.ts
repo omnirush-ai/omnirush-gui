@@ -16,11 +16,13 @@
 //     per file, 4 MiB per session) and reported to the archive too.
 
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 
 import { commandEffects, toolKind, toolPaths, type FolderVia, type ToolCall } from "./commands.js";
+import { belowDir } from "../session-archive/files-used-policy.js";
 import { capUtf8, isHomeSettingsFolder, isSecretFile, isSecretFolder, isTextBuffer, tildePath, tildeText, type PrivacyContext, type Scrubber } from "./privacy.js";
 
 export const MAX_OUTSIDE_FOLDER_TOTAL_BYTES = 200 * 1024 * 1024;
@@ -61,11 +63,23 @@ export type OutsideFileEvent = {
   truncated?: true;
 };
 
-/** The temp folders of this machine (as given and as real paths). */
-export function tempRoots(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+/** The real path (Windows: long names for 8.3 short ones like `SNEHAS~1`); throws when it is not there. */
+type RealPath = (path: string) => string;
+
+/** The temp folders of this machine (as given, and on Windows as real paths). */
+export function tempRoots(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, real: RealPath = realpathSync.native): string[] {
   const roots = new Set<string>();
+  const path = platform === "win32" ? win32 : posix;
   const add = (value: string | undefined) => {
-    if (value && isAbsolute(value)) roots.add(resolve(value));
+    if (!value || !path.isAbsolute(value)) return;
+    roots.add(path.resolve(value));
+    // Windows: the long form too (TEMP is often written with an 8.3 short name, the paths with the long one).
+    if (platform !== "win32") return;
+    try {
+      roots.add(real(value));
+    } catch {
+      // Not on this machine.
+    }
   };
   add(tmpdir());
   add(env.TMPDIR);
@@ -87,10 +101,29 @@ function within(parent: string, child: string): boolean {
   return rel === "" || (!!rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
-/** macOS per-user temp folders: /private/var/folders/xx/yyyy/T (and /var/folders/…). */
-export function isTempPath(path: string, roots: readonly string[]): boolean {
+/**
+ * A Windows path with an 8.3 short name in it (`C:\\Users\\SNEHAS~1\\...`) in long form: its deepest existing
+ * folder's real path with the rest appended. Any other path as it is.
+ */
+export function longPath(path: string, real: RealPath = realpathSync.native): string {
+  if (!/^[A-Za-z]:[\\/]/.test(path) || !/~\d/.test(path)) return path;
+  for (let head = path, rest = ""; ; ) {
+    try {
+      return rest ? win32.join(real(head), rest) : real(head);
+    } catch {
+      const parent = win32.dirname(head);
+      if (parent === head) return path;
+      rest = win32.join(win32.basename(head), rest);
+      head = parent;
+    }
+  }
+}
+
+/** macOS per-user temp folders: /private/var/folders/xx/yyyy/T (and /var/folders/…). Short names compare as long ones. */
+export function isTempPath(path: string, roots: readonly string[], real: RealPath = realpathSync.native): boolean {
   if (/^(?:\/private)?\/var\/folders\/[^/]+\/[^/]+\/T(?:\/|$)/.test(path)) return true;
-  return roots.some((root) => within(root, path) && path !== root);
+  const long = longPath(path, real);
+  return roots.some((root) => belowDir(root, path) || (long !== path && belowDir(root, long)));
 }
 
 export type OutsideOptions = {

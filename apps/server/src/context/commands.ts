@@ -7,7 +7,7 @@
 // Nothing is executed; the parse errs on the side of naming too much (each
 // path is checked on disk later).
 
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, posix, resolve, win32 } from "node:path";
 
 import { packageOfCommand } from "./setup.js";
 
@@ -49,6 +49,45 @@ export function expandHome(path: string, home: string | null): string | null {
   for (const prefix of ["$HOME/", "${HOME}/"]) if (path.startsWith(prefix)) return home ? join(home, path.slice(prefix.length)) : null;
   if (path.startsWith("~")) return null;
   return path;
+}
+
+type Env = Record<string, string | undefined>;
+const WINDOWS_PATH_VARS = new Set(["TEMP", "TMP", "TMPDIR", "USERPROFILE", "HOME", "LOCALAPPDATA", "APPDATA"]);
+const WINDOWS_VAR = /\$\{?env:([A-Za-z_]\w*)\}?|\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/g;
+const POSIX_VAR = /\$\{(TMPDIR|HOME)\}|\$(TMPDIR|HOME)(?!\w)/g;
+
+/**
+ * A path word as the shell saw it, before it is parsed: the temp and home variables expanded with this
+ * session's values (`$X`, `${X}`; on Windows also `%X%` and `$env:X`, any case: TEMP, TMP, TMPDIR,
+ * USERPROFILE, HOME, LOCALAPPDATA, APPDATA; elsewhere TMPDIR and HOME), and on Windows Git Bash's
+ * `/tmp` (its fstab mounts the user's %TEMP% there) and `/c/...` drive paths in Windows form.
+ * A variable without a value stays as written. Quoting is not known here: a single-quoted `$TEMP` expands too.
+ */
+export function shellPath(word: string, home: string | null, env: Env = process.env, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") {
+    if (!word.includes("$")) return word;
+    return word.replace(POSIX_VAR, (match, braced: string | undefined, bare: string | undefined) => {
+      const name = braced ?? bare;
+      const value = name === "HOME" ? home ?? env.HOME : env.TMPDIR;
+      return value || match;
+    });
+  }
+  const get = (name: string): string | undefined => {
+    const key = Object.keys(env).find((candidate) => candidate.toUpperCase() === name);
+    return key ? env[key] || undefined : undefined;
+  };
+  // Git Bash sets TMPDIR to TMP and HOME to USERPROFILE when the Windows environment has none.
+  const value = (name: string): string | undefined =>
+    name === "HOME" ? home ?? get("HOME") ?? get("USERPROFILE") : name === "TMPDIR" ? get("TMPDIR") ?? get("TMP") ?? get("TEMP") : get(name);
+  let out = !/[$%]/.test(word) ? word : word.replace(WINDOWS_VAR, (match, ps?: string, braced?: string, bare?: string, cmd?: string) => {
+    const name = (ps ?? braced ?? bare ?? cmd ?? "").toUpperCase();
+    return (WINDOWS_PATH_VARS.has(name) && value(name)) || match;
+  });
+  const temp = get("TEMP") ?? get("TMP");
+  if (temp && /^\/tmp(?:\/|$)/.test(out)) out = `${temp}${out.slice(4)}`;
+  const drive = /^\/([A-Za-z])(\/.*)?$/.exec(out);
+  if (drive && drive[2] !== undefined) out = `${drive[1]!.toUpperCase()}:${drive[2]}`;
+  return out;
 }
 
 /**
@@ -110,8 +149,11 @@ export function toolPaths(call: ToolCall, home: string | null): string[] {
 
 export type Token = { word: string } | { op: string };
 
-/** Words and control/redirection operators; quotes and backslashes honoured; heredoc bodies skipped. */
-export function tokenize(command: string): Token[] {
+/**
+ * Words and control/redirection operators; quotes and backslashes honoured; heredoc bodies skipped.
+ * On Windows a backslash before a name character is a path separator (`%TEMP%\\a`), not an escape.
+ */
+export function tokenize(command: string, platform: NodeJS.Platform = process.platform): Token[] {
   const text = command.length > MAX_COMMAND_CHARS ? command.slice(0, MAX_COMMAND_CHARS) : command;
   const tokens: Token[] = [];
   let word = "";
@@ -142,7 +184,7 @@ export function tokenize(command: string): Token[] {
       continue;
     }
     if (char === "\\" && text[i + 1] !== undefined && text[i + 1] !== "\n") {
-      word += text[++i]!;
+      word += platform === "win32" && /[\w.%~-]/.test(text[i + 1]!) ? char : text[++i]!;
       started = true;
       continue;
     }
@@ -207,11 +249,11 @@ const SEPARATORS = new Set([";", "&&", "||", "|", "&", "\n", "(", ")", "`"]);
 const REDIRECT_WRITE = new Set([">", ">>", "2>", "2>>", "&>", "&>>", ">|"]);
 
 /** Simple commands: words, the files they redirect into, and the operator before each. */
-export function simpleCommands(command: string): Array<{ words: string[]; writes: string[]; reads: string[]; after: string | null }> {
+export function simpleCommands(command: string, platform: NodeJS.Platform = process.platform): Array<{ words: string[]; writes: string[]; reads: string[]; after: string | null }> {
   const out: Array<{ words: string[]; writes: string[]; reads: string[]; after: string | null }> = [];
   let current = { words: [] as string[], writes: [] as string[], reads: [] as string[], after: null as string | null };
   let pending: "write" | "read" | "skip" | null = null;
-  for (const token of tokenize(command)) {
+  for (const token of tokenize(command, platform)) {
     if ("op" in token) {
       if (SEPARATORS.has(token.op)) {
         if (current.words.length || current.writes.length) out.push(current);
@@ -273,15 +315,17 @@ export function cloneDirName(url: string): string | null {
 
 /**
  * What a shell command does to the file system, resolved against `cwd`
- * (which `cd` moves for the rest of an `&&`/`;` chain).
+ * (which `cd` moves for the rest of an `&&`/`;` chain). Paths are read the way the session's shell
+ * reads them (shellPath: `env` and `platform` are the session's).
  */
-export function commandEffects(command: string, cwd: string, home: string | null): CommandEffects {
+export function commandEffects(command: string, cwd: string, home: string | null, env: Env = process.env, platform: NodeJS.Platform = process.platform): CommandEffects {
+  const paths = platform === "win32" ? win32 : posix;
   const effects: CommandEffects = { folders: [], writes: [], executed: [], named: [], ephemeral: [], pythonEnvs: [], pythonInstalls: false };
   let dir = cwd;
   const abs = (value: string): string | null => {
     const expanded = expandHome(value, home);
     if (!expanded || expanded.includes("\0")) return null;
-    return isAbsolute(expanded) ? resolve(expanded) : resolve(dir, expanded);
+    return paths.isAbsolute(expanded) ? paths.resolve(expanded) : paths.resolve(dir, expanded);
   };
   const folder = (value: string | undefined, via: FolderVia, created: boolean) => {
     if (!value || value.startsWith("-")) return;
@@ -301,7 +345,9 @@ export function commandEffects(command: string, cwd: string, home: string | null
     }
     return out;
   };
-  for (const simple of simpleCommands(command)) {
+  for (const parsed of simpleCommands(command, platform)) {
+    const expand = (word: string) => shellPath(word, home, env, platform);
+    const simple = { ...parsed, words: parsed.words.map(expand), writes: parsed.writes.map(expand), reads: parsed.reads.map(expand) };
     for (const target of simple.writes) {
       const path = abs(target);
       if (path) effects.writes.push(path);

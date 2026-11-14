@@ -83,9 +83,26 @@ describe("shell command parsing (shared with the CLI)", () => {
   });
 
   test("variables, globs, URLs and options are never paths", () => {
-    expect(uses("curl -s https://example.com/a.json -o $OUT; ls *.py; echo $HOME/x")).toEqual([]);
+    expect(uses("curl -s https://example.com/a.json -o $OUT; ls *.py; echo $USER/x")).toEqual([]);
     // A commit message is no path (git's own config reads are the only uses).
     expect(uses("git commit -m 'fix: a.b'")).toEqual(["read /home/u/.config/git/config", "read /home/u/.gitconfig"]);
+  });
+
+  test("temp and home variables expand with the session's values; Windows reads Git Bash, cmd and PowerShell forms", () => {
+    const linux = (command: string, env: Record<string, string> = { TMPDIR: "/var/tmpx", HOME: "/home/env" }) => shell.shellCommandUses(command, "/w", "/home/u", env, "linux").map((use) => `${use.op} ${use.path}`).sort();
+    expect(linux("cat $TMPDIR/a/b.txt ${TMPDIR}/c.txt; cat $HOME/x.txt ${HOME}/y.txt")).toEqual(["read /home/u/x.txt", "read /home/u/y.txt", "read /var/tmpx/a/b.txt", "read /var/tmpx/c.txt"]);
+    // Linux and macOS: only TMPDIR and HOME; an unset variable stays unread.
+    expect(linux("cat $TEMP/a.txt $TMPDIR/b.txt", {})).toEqual([]);
+    const env = { TEMP: "C:\\Users\\a\\AppData\\Local\\Temp", TMP: "C:\\Users\\a\\AppData\\Local\\Temp", USERPROFILE: "C:\\Users\\a", LOCALAPPDATA: "C:\\Users\\a\\AppData\\Local", APPDATA: "C:\\Users\\a\\AppData\\Roaming" };
+    const win = (command: string) => shell.shellCommandUses(command, "C:\\w", "C:\\Users\\a", env, "win32").map((use) => `${use.op} ${use.path}`);
+    const temp = "C:\\Users\\a\\AppData\\Local\\Temp\\a\\b\\c\\x.txt";
+    for (const form of ["$TEMP/a/b/c/x.txt", "${TEMP}/a/b/c/x.txt", "$TMP/a/b/c/x.txt", "$TMPDIR/a/b/c/x.txt", "%TEMP%\\a\\b\\c\\x.txt", "%temp%/a/b/c/x.txt", "$env:TEMP\\a\\b\\c\\x.txt", "${env:TEMP}/a/b/c/x.txt", "/tmp/a/b/c/x.txt", "/c/Users/a/AppData/Local/Temp/a/b/c/x.txt", "$LOCALAPPDATA/Temp/a/b/c/x.txt", "%USERPROFILE%\\AppData\\Local\\Temp\\a\\b\\c\\x.txt", "$HOME/AppData/Local/Temp/a/b/c/x.txt"]) {
+      expect(win(`echo x > ${form}`)).toEqual([`write ${temp}`]);
+    }
+    expect(win("cat $APPDATA/app/c.json")).toEqual(["read C:\\Users\\a\\AppData\\Roaming\\app\\c.json"]);
+    expect(win("cd $TEMP/run && cat out.json")).toEqual(["read C:\\Users\\a\\AppData\\Local\\Temp\\run\\out.json"]);
+    // Other variables stay as they were.
+    expect(win("cat $OUT/x.txt")).toEqual([]);
   });
 });
 
@@ -502,6 +519,22 @@ test("Windows temp: files under the home's AppData/Local/Temp are temp files (st
   expect(classify("/home/u/AppData/Local/Temp/x/node_modules/a.js")).toBe("tmp hold dependency_dir");
   expect(classify("/home/u/AppData/Roaming/app/state.json")).toBe("home hold not_allowlisted");
   expect(classify("/home/u/AppData/Local/npm-cache/x.tgz")).toBe("home hold dependency_dir");
+});
+
+test("files used: the yarn release and plugins .yarnrc.yml names are kept, the rest of .yarn is not", () => {
+  expect(used.yarnrcFiles("yarnPath: .yarn/releases/yarn-3.3.1.cjs\nplugins:\n  - path: .yarn/plugins/@yarnpkg/plugin-workspace-tools.cjs\n    spec: \"@yarnpkg/plugin-workspace-tools\"\nnodeLinker: node-modules\n")).toEqual([".yarn/releases/yarn-3.3.1.cjs", ".yarn/plugins/@yarnpkg/plugin-workspace-tools.cjs"]);
+  expect(used.yarnrcFiles("yarnPath: \"./.yarn/releases/yarn-4.0.2.cjs\" # pinned\n")).toEqual(["./.yarn/releases/yarn-4.0.2.cjs"]);
+  const context = { roots: ["/w"], home: "/home/u", temps: ["/tmp"], appDirs: [] };
+  const kind = (absolute: string) => {
+    const value = policy.classifyUse(absolute, context)!;
+    return `${value.plan} ${value.reason}`;
+  };
+  expect(kind("/w/.yarn/releases/yarn-3.3.1.cjs")).toBe("scan captured");
+  expect(kind("/w/.yarn/plugins/@yarnpkg/plugin-workspace-tools.cjs")).toBe("scan captured");
+  expect(kind("/w/packages/app/.yarn/releases/yarn-3.3.1.cjs")).toBe("scan captured");
+  expect(kind("/w/.yarn/cache/lodash-npm-4.17.21-6382451519-eb835a2e51.zip")).toBe("hold dependency_dir");
+  expect(kind("/w/.yarn/unplugged/esbuild/node_modules/esbuild/bin/esbuild")).toBe("hold dependency_dir");
+  expect(kind("/w/.yarn/install-state.gz")).toBe("hold dependency_dir");
 });
 
 test("belowDir: a drive path compares the Windows way (either slash, any case), a POSIX path the POSIX way", () => {
