@@ -30,6 +30,7 @@ import { OutsideTracker } from "./outside.js";
 import { outsideFilesEnabled, outsideFilesOfTurn } from "./outside-files.js";
 import {
   envFingerprint,
+  fullPathInstalls,
   inInstallLogSample,
   INSTALL_LOG_OFF,
   InstallLogReader,
@@ -50,6 +51,7 @@ import {
   type InstallLine,
   type InstallLogGate,
   type InstallLogHost,
+  type RawCall,
 } from "./install-log.js";
 import { collectPmConfig } from "./pm-config.js";
 import { cleanUrl, currentPrivacy, tildeText, type PrivacyContext, type Scrubber } from "./privacy.js";
@@ -480,7 +482,10 @@ export class ContextCapture {
     });
   }
 
-  /** PowerShell downloads and Gallery installs of the turn's calls (cmdlets are not programs: no PATH wrapper sees them). */
+  /**
+   * PowerShell downloads and Gallery installs of the turn's calls (cmdlets are not programs: no PATH wrapper sees them),
+   * and package managers run by their path (the shell never looks on PATH for them).
+   */
   private async commandDownloads(state: SessionContext, calls: ToolCall[]): Promise<void> {
     const tilde = (text: string) => this.options.scrub.text(tildeText(text, this.privacy));
     const os = this.platform === "win32" ? "windows" : this.platform === "darwin" ? "darwin" : "linux";
@@ -551,6 +556,33 @@ export class ContextCapture {
           requested: found.names.map((name) => (found.version ? `${name}@${found.version}` : name)),
           resolved,
         }));
+      }
+      for (const found of fullPathInstalls(call.command, this.platform)) {
+        const raw: RawCall = {
+          dir: "",
+          meta: { tool: found.tool, real: found.real, cwd, via: "command" },
+          hooks: [],
+          argv: found.argv,
+          exit: call.status === "completed" ? 0 : null,
+          start: call.start ?? Date.now(),
+          end: call.end,
+          complete: true,
+        };
+        const pin = this.options.pin?.(state.id);
+        const installed = await withRedactionPolicy(pin, () => lineOf(raw, {
+          root: state.root,
+          turn: state.turn,
+          callId: call.callId,
+          command: call.command,
+          privacy: this.privacy,
+          scrub: this.options.scrub,
+          platform: this.platform,
+          env: this.env,
+          run: this.options.installRun ?? runCommand,
+        })).catch(() => null);
+        if (!installed) continue;
+        state.installs += 1;
+        withRedactionPolicy(pin, () => this.emit(state.id, "context.install", installed));
       }
     }
   }

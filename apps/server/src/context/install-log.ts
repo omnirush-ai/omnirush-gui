@@ -34,6 +34,7 @@ import { createReadStream, promises as fs } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
+import { simpleCommands } from "./commands.js";
 import { quietEnv, runCommand, type Runner } from "./exec.js";
 import { POSIX_WRAPPER, PYTHON_HOOK, WINDOWS_WRAPPER_BASE64, WINDOWS_WRAPPER_SHA256 } from "./install-log-assets.js";
 import { cleanUrl, isSecretFile, isSecretFolder, isSecretKey, tildeText, type PrivacyContext, type Scrubber } from "./privacy.js";
@@ -500,7 +501,7 @@ export type InstallLine = {
 /** Flags whose value is the next word, per tool family (so values never count as package names). */
 const VALUE_FLAGS: Record<string, Set<string>> = {
   npm: new Set(["--prefix", "-C", "--cwd", "--dir", "--registry", "--cache", "--userconfig", "--tag", "-w", "--workspace", "--filter", "-F", "--save-prefix", "--omit", "--include", "--install-strategy", "--loglevel", "--network-concurrency", "--modules-folder", "--global-folder", "--cwd", "--config"]),
-  pip: new Set(["-r", "--requirement", "-c", "--constraint", "-i", "--index-url", "--extra-index-url", "-f", "--find-links", "-t", "--target", "--prefix", "--root", "--platform", "--python-version", "--implementation", "--abi", "--src", "--upgrade-strategy", "--report", "--log", "--cache-dir", "--trusted-host", "--progress-bar", "--python", "-p", "--group", "--extra", "--index", "--default-index", "--project", "--directory", "--with", "--from", "--source", "--suffix", "--pip-args", "--spec", "--include-deps"]),
+  pip: new Set(["-r", "--requirement", "-c", "--constraint", "-i", "--index-url", "--extra-index-url", "-f", "--find-links", "-t", "--target", "--prefix", "--root", "--platform", "--python-version", "--implementation", "--abi", "--src", "--upgrade-strategy", "--report", "--log", "--cache-dir", "--trusted-host", "--progress-bar", "--python", "-p", "--group", "--extra", "--index", "--default-index", "--project", "--directory", "--with", "--from", "--source", "--suffix", "--pip-args", "--spec", "--include-deps", "--only-binary", "--no-binary"]),
   cargo: new Set(["--version", "--vers", "--git", "--branch", "--tag", "--rev", "--path", "--root", "--features", "-F", "--bin", "--example", "--registry", "--index", "--target", "--profile", "-j", "--jobs", "--manifest-path", "--package", "-p", "--rename"]),
   go: new Set(["-tags", "-ldflags", "-gcflags", "-mod", "-modfile", "-o", "-C", "-pgo", "-overlay", "-p"]),
   gem: new Set(["-v", "--version", "-s", "--source", "-i", "--install-dir", "-n", "--bindir", "--platform", "-g", "--file", "--gemfile", "--path", "--group", "--without", "--with", "-j", "--jobs"]),
@@ -932,7 +933,8 @@ async function distVersion(sitePackages: string[], name: string): Promise<string
 async function resolveCall(call: RawCall, cls: Classified, tool: string, ctx: ResolveContext): Promise<{
   resolved: Package[]; removed: Array<{ name: string; version?: string }>; downloads: Download[]; target: string | null; python: string | null; lockfile: string | null;
 }> {
-  const read = (name: string) => readText(path.join(call.dir, name));
+  // A call read from its command text (fullPathInstalls) has no folder.
+  const read = (name: string) => (call.dir ? readText(path.join(call.dir, name)) : Promise.resolve(null));
   let resolved: Package[] = [];
   let removed: Array<{ name: string; version?: string }> = [];
   const downloads: Download[] = [];
@@ -958,13 +960,24 @@ async function resolveCall(call: RawCall, cls: Classified, tool: string, ctx: Re
           target = hook.meta.prefix || null;
           python = hook.meta.version || null;
         }
-        const venv = call.meta.venv_dir || null;
+        // pip --target/--prefix/--root: that folder, not the interpreter's.
+        const into = cls.scope === "target" ? flagValue(call.argv, "--target", "-t", "--prefix", "--root") : null;
+        if (into) target = path.resolve(cwd, into);
+        const venv = call.meta.venv_dir || (call.meta.via === "command" ? await commandVenv(call.argv, cwd, ctx.platform) : null);
         if (venv) target ??= venv;
         if (!reports.length) {
           const diff = distDiff(await read("b.dist"), await read("a.dist"));
           if (diff.resolved.length || diff.removed.length) {
             resolved = diff.resolved;
             removed = diff.removed.length ? diff.removed : removed;
+          }
+        }
+        // Read from the command text (no before/after): what the environment holds now.
+        if (!resolved.length && venv && call.meta.via === "command") {
+          const site = await pythonSitePackages(venv, ctx.platform);
+          for (const name of names) {
+            const version = await distVersion(site, name);
+            if (version) resolved.push({ name: normPy(name), version });
           }
         }
         // pipx / uv tool: the tool's own environment.
@@ -1299,7 +1312,7 @@ export async function lineOf(call: RawCall, options: { root: string; turn: numbe
     turn: options.turn,
     call: options.callId,
     tool,
-    via: call.meta.via === "python-hook" ? "python-hook" : "shim",
+    via: call.meta.via === "python-hook" || call.meta.via === "command" ? call.meta.via : "shim",
     real: tilde(call.meta.real || hook?.meta.python || null),
     argv: args.map((arg) => options.scrub.text(tildeText(arg, options.privacy))),
     cwd: tilde(cwd)!,
@@ -1327,6 +1340,43 @@ export async function lineOf(call: RawCall, options: { root: string; turn: numbe
     ...(truncated || found.resolved.length >= MAX_PACKAGES ? { truncated: true } : {}),
   };
   return line;
+}
+
+// --- package managers run by path (no PATH wrapper sees them) -------------------------
+
+// pip (any pip runs Python, where the hook sees it) and pipx (it runs pip) are left out; so are curl and wget.
+const BY_PATH_TOOLS = new Set<string>([...POSIX_TOOLS, ...WINDOWS_TOOLS].filter((tool) => !/^pip3?$|^pipx$|^curl$|^wget$/.test(tool)));
+
+/**
+ * The package-manager installs of a shell command that names the program by its path
+ * (`/c/Python312/Scripts/uv.exe pip install ...`, `./node_modules/.bin/pnpm add x`, `C:\tools\npm.cmd i`):
+ * the shell runs it without looking on PATH, so no wrapper notes it. Read from the command text instead.
+ */
+export function fullPathInstalls(command: string, platform: NodeJS.Platform = process.platform): Array<{ tool: string; real: string; argv: string[] }> {
+  // shortcut: Windows backslashes read as separators here; drop once commands.ts tokenize() takes the platform (cap-paths work).
+  const text = platform === "win32" ? command.replace(/\\\r?\n/g, " ").replace(/\\/g, "/") : command;
+  const out: Array<{ tool: string; real: string; argv: string[] }> = [];
+  for (const { words } of simpleCommands(text)) {
+    const [first = "", ...argv] = words;
+    if (!/[\\/]/.test(first) || first.includes("pkglog-wrappers")) continue;
+    const tool = (first.split(/[\\/]/).at(-1) ?? "").toLowerCase().replace(/\.(?:exe|cmd|bat|ps1)$/, "");
+    if (BY_PATH_TOOLS.has(tool) && classifyCall(tool, argv)) out.push({ tool, real: first, argv });
+  }
+  return out;
+}
+
+/** The Python environment a command-text pip call works on: `--python`/`-p` (a venv or its interpreter), else a `.venv` up from cwd (as the wrapper looks). */
+async function commandVenv(argv: string[], cwd: string, platform: NodeJS.Platform): Promise<string | null> {
+  // shortcut: Git Bash drive paths only (/c/...); commands.ts shellPath() covers more once it lands.
+  const value = flagValue(argv, "--python", "-p");
+  const named = value && platform === "win32" ? value.replace(/^\/([A-Za-z])\//, "$1:/") : value;
+  const candidates = named ? [path.resolve(cwd, named), path.dirname(path.dirname(path.resolve(cwd, named)))] : [];
+  for (let dir = cwd; ; dir = path.dirname(dir)) {
+    candidates.push(path.join(dir, ".venv"));
+    if ((await exists(path.join(dir, "pyproject.toml"))) || path.dirname(dir) === dir) break;
+  }
+  for (const dir of candidates) if (await exists(path.join(dir, "pyvenv.cfg"))) return dir;
+  return null;
 }
 
 // --- PowerShell downloads (cmdlets no PATH wrapper sees) ----------------------------

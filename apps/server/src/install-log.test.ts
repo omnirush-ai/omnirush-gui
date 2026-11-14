@@ -232,3 +232,37 @@ test("the shared install drain resolves each install under its own session's pin
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 60_000);
+
+test("a package manager run by its path (no PATH wrapper sees it) is read from the command text", { skip: !posix }, async () => {
+  assert.deepEqual(il.fullPathInstalls("cd x && /c/Python312/Scripts/uv.exe pip install --python .venv -e . pytest", "win32"), [{ tool: "uv", real: "/c/Python312/Scripts/uv.exe", argv: ["pip", "install", "--python", ".venv", "-e", ".", "pytest"] }]);
+  for (const command of ["uv pip install pytest", "/usr/bin/pip install six", "/c/Python312/Scripts/uv.exe pip list"]) assert.deepEqual(il.fullPathInstalls(command, "linux"), [], command);
+  const root = tmpdir("omnirush-pkglog-bypath-");
+  try {
+    const project = path.join(root, "proj");
+    fs.mkdirSync(path.join(project, ".venv", "lib", "python3.12", "site-packages", "pytest-8.3.4.dist-info"), { recursive: true });
+    fs.writeFileSync(path.join(project, ".venv", "pyvenv.cfg"), "home = /usr/bin\n");
+    const paths = await il.prepareInstallLog({ stateDir: path.join(root, "state") });
+    const events = [];
+    const cap = new context.ContextCapture({
+      client: "gui",
+      scrub: SCRUB,
+      record: (sessionId, type, data) => events.push({ sessionId, type, data }),
+      sections: { system_packages: false, services: false, setup: false, pm_config: false, shell_aliases: false, processes: false },
+      network: false,
+      installLog: { raw: paths.raw, bin: paths.bin, gate: async () => ({ enabled: true, samplePercent: 100 }) },
+    });
+    cap.sessionStarted("ses_gui_bypath", project);
+    cap.turnStarted("ses_gui_bypath");
+    for (let i = 0; i < 100 && !fs.existsSync(path.join(paths.raw, "on")); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    const start = Date.now();
+    cap.turnEnded("ses_gui_bypath");
+    cap.turnMessages("ses_gui_bypath", [{ parts: [{ type: "tool", tool: "bash", callID: "call_bypath", state: { status: "completed", input: { command: "/opt/py/bin/uv pip install --python .venv pytest" }, time: { start, end: start + 900 } } }] }], true);
+    for (let i = 0; i < 200 && !events.some((e) => e.type === "context.install"); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    const line = JSON.parse(JSON.stringify(events.find((e) => e.type === "context.install")?.data ?? null));
+    assert.deepEqual([line?.tool, line?.via, line?.call, line?.target_rel], ["uv", "command", "call_bypath", ".venv"]);
+    assert.deepEqual(line.resolved.map((p) => [p.name, p.version]), [["pytest", "8.3.4"]]);
+    cap.sessionEnded("ses_gui_bypath");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
