@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, BookOpen, Briefcase, Calculator, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, Plug, Shapes, Sparkles, Ticket,
+  ArrowLeft, BookOpen, Briefcase, Calculator, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, MessageSquare, Plug, Shapes, Sparkles, Ticket,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -11,6 +11,9 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
+import { desktopBridge } from "@/app/lib/desktop";
+import { isDesktopRuntime } from "@/app/lib/runtime-env";
+import { isMacPlatform } from "@/app/utils";
 import { cn } from "@/lib/utils";
 
 import { useLocation, useNavigate } from "react-router";
@@ -283,6 +286,95 @@ export function ConnectorRow(props: {
   );
 }
 
+const IMESSAGE_FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
+
+function imessageRowidKey(client: WorkClient | null) {
+  return `omnirush-imessage-rowid:${client?.baseUrl?.trim() || "default"}`;
+}
+
+/** iMessage has no API and nothing on a server: it is read only from the
+ *  Mac's local Messages database, after the user grants Full Disk Access.
+ *  macOS desktop only. */
+export function IMessageCard(props: { client: WorkClient | null; openLink: (url: string) => void }) {
+  const queryClient = useQueryClient();
+  const supported = isDesktopRuntime() && isMacPlatform();
+  const [fdaNeeded, setFdaNeeded] = useState(false);
+  const countKey = ["omnirush-imessage-count", props.client?.baseUrl?.trim() || "default"];
+  const count = useQuery({
+    queryKey: countKey,
+    queryFn: () => props.client!.getIMessageCount(),
+    enabled: Boolean(props.client) && supported,
+  });
+  const run = useMutation({
+    mutationFn: async () => {
+      const since = Number(localStorage.getItem(imessageRowidKey(props.client))) || 0;
+      const result = await desktopBridge.workImessageRead(since);
+      if (result.status === "error") {
+        setFdaNeeded(result.code === "fda_required");
+        throw new Error(
+          result.code === "no_messages_db"
+            ? "No Messages database was found on this Mac."
+            : result.code === "unsupported_os"
+              ? "Reading iMessage is only possible on macOS."
+              : "OmniRush needs Full Disk Access to read Messages.",
+        );
+      }
+      setFdaNeeded(false);
+      if (result.records.length > 0) await props.client!.importIMessage(result.records);
+      if (result.lastRowid > since) {
+        localStorage.setItem(imessageRowidKey(props.client), String(result.lastRowid));
+      }
+      return result;
+    },
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: countKey });
+      toast.success(result.records.length > 0 ? `Imported ${result.messageCount} messages.` : "No new messages.");
+    },
+    onError: (reason) => toast.error(reason instanceof Error ? reason.message : "That did not work. Try again."),
+  });
+  const records = count.data?.records ?? 0;
+  return (
+    <div className="rounded-xl border border-border bg-background p-4" data-work-connector="imessage" data-testid="work-imessage-card">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <MessageSquare aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">iMessage</span>
+            <Badge variant="secondary">Local import</Badge>
+          </div>
+          <div className="mt-0.5 text-[12px] text-muted-foreground">
+            {supported
+              ? records > 0
+                ? `${records.toLocaleString()} ${records === 1 ? "chat" : "chats"} imported`
+                : "Read your Mac's Messages and keep a copy for Work chats."
+              : "Available in the macOS desktop app."}
+          </div>
+        </div>
+        {supported ? (
+          <Button type="button" variant="outline" size="sm" disabled={run.isPending} onClick={() => run.mutate()} data-testid="work-imessage-import">
+            {run.isPending ? "Reading…" : records > 0 ? "Sync new messages" : "Import iMessage"}
+          </Button>
+        ) : null}
+      </div>
+      {fdaNeeded ? (
+        <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3 text-[12px]" data-testid="work-imessage-fda">
+          <p className="text-muted-foreground">
+            To read Messages, turn on Full Disk Access for OmniRush in System Settings, then try again.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => props.openLink(IMESSAGE_FDA_URL)}>
+              Open System Settings
+            </Button>
+            <Button type="button" variant="ghost" size="sm" disabled={run.isPending} onClick={() => run.mutate()}>
+              Try again
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** Work > Connectors (also reachable from Settings): each source's status, record count, last sync and sync switch. */
 export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string; notice?: ReactNode }) {
   const queryClient = useQueryClient();
@@ -383,6 +475,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
             />
           ))}
         </div>
+        <IMessageCard client={props.client} openLink={props.openLink} />
       </div>
       <ConfirmModal
         open={confirmDisconnect !== null}

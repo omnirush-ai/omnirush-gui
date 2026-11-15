@@ -45,7 +45,8 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWork
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
-  | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"> & { baseUrl?: string };
+  | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
+  | "importIMessage" | "getIMessageCount"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];

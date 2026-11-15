@@ -658,6 +658,18 @@ export type OmniRushWorkConnector = {
   coverage?: { records: number; by_kind?: Record<string, number> } | null;
   skipped_records?: number;
 };
+/** One chat-per-day record the desktop reads from the Mac's local chat.db
+ *  and pushes to POST /omnirush/work/imessage (contract Addendum D5). */
+export type OmniRushIMessageRecord = {
+  chat_key: string;
+  chat_name: string | null;
+  is_group: boolean;
+  day: string;
+  occurred_at: string;
+  text: string;
+  participants: { name: string | null; handle: string; service: string | null }[];
+};
+export type OmniRushIMessageImport = { imported: number; skipped: number; total: number };
 /** One source of GET /omnirush/work/health (contract Addendum A1). */
 export type OmniRushWorkHealth = {
   id: string;
@@ -2396,6 +2408,11 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<{ ok: boolean; sync_enabled: boolean }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: { sync_enabled: syncEnabled }, timeoutMs: timeouts.config }),
     getWorkHealth: (source?: string) =>
       requestJson<unknown>(baseUrl, `/work/health${source ? `?source=${encodeURIComponent(source)}` : ""}`, { token, hostToken, timeoutMs: timeouts.config }),
+    /** Push iMessage records the desktop read from the Mac's local chat.db. */
+    importIMessage: (records: OmniRushIMessageRecord[]) =>
+      requestJson<OmniRushIMessageImport>(baseUrl, "/work/imessage", { token, hostToken, method: "POST", body: { records }, timeoutMs: timeouts.activateWorkspace }),
+    getIMessageCount: () =>
+      requestJson<{ records: number }>(baseUrl, "/work/imessage", { token, hostToken, timeoutMs: timeouts.config }),
     listWorkEntities: (query: { q?: string; kind?: string; limit?: number; cursor?: string } = {}) => {
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
       return requestJson<{ items: OmniRushWorkEntitySummary[]; next_cursor: string | null }>(baseUrl, `/work/entities${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
