@@ -612,7 +612,23 @@ export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAl
 
 /** Work mode (the server's `work` switch, as the local server last read it). */
 /** `available`: Work is off but the account can try it (POST /work/enable). */
-export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null };
+/** `autopilot`/`writes_paused`/`full_access`: F action-layer capabilities, carried by /work/state (contract Work Addendum F). */
+export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null; autopilot?: boolean; writes_paused?: boolean; full_access?: boolean };
+/** F action-layer: the user's automation settings (GET/PATCH /omnirush/work/settings). `full_access` implies `autopilot`. */
+export type OmniRushWorkSettings = { autopilot: boolean; full_access: boolean; writes_paused: boolean };
+/** One row of the Work activity log (GET /omnirush/work/actions): a write the agent made in a connected app. */
+export type OmniRushWorkActionResult = "done" | "failed" | "undone";
+export type OmniRushWorkAction = {
+  id: string;
+  source: string;
+  tool: string;
+  target: string;
+  summary: string;
+  result: OmniRushWorkActionResult;
+  undoable: boolean;
+  created_at: string;
+  undone_at: string | null;
+};
 /** GET /omnirush/work/org/insights (owner only): aggregate team activity + smart alerts, never message content. */
 export type OmniRushWorkInsightsAlert = { kind: string; level: "warn" | "serious"; text: string };
 export type OmniRushWorkInsightsMember = {
@@ -2500,6 +2516,14 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
       return requestJson<{ items: OmniRushWorkTimelineItem[]; next_cursor: string | null }>(baseUrl, `/work/timeline${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
     },
+    getWorkSettings: () =>
+      requestJson<OmniRushWorkSettings>(baseUrl, "/work/settings", { token, hostToken, timeoutMs: timeouts.config }),
+    setWorkSettings: (patch: Partial<OmniRushWorkSettings>) =>
+      requestJson<OmniRushWorkSettings>(baseUrl, "/work/settings", { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
+    listWorkActions: (limit = 50) =>
+      requestJson<{ actions: OmniRushWorkAction[] }>(baseUrl, `/work/actions?limit=${limit}`, { token, hostToken, timeoutMs: timeouts.config }),
+    undoWorkAction: (id: string) =>
+      requestJson<{ ok: true }>(baseUrl, `/work/actions/${encodeURIComponent(id)}/undo`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
     getWorkAnswerStyle: () =>
       requestJson<{ style: OmniRushWorkAnswerStyle }>(baseUrl, "/work/answer-style", { token, hostToken, timeoutMs: timeouts.config }),
     setWorkAnswerStyle: (style: OmniRushWorkAnswerStyle) =>

@@ -115,9 +115,10 @@ import {
   type SessionPagePaneRuntime,
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
-import { hasRealSource, hasSampleData, isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_PRESET, workConnectorsKey, workMembersKey, workStateKey, type AppMode } from "@/react-app/domains/work/work-mode";
+import { hasRealSource, hasSampleData, isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, workAutopilotActive, workToolPermission, WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_PRESET, workConnectorsKey, workMembersKey, workStateKey, type AppMode } from "@/react-app/domains/work/work-mode";
 import { WorkOrganizationPage } from "@/react-app/domains/work/work-org";
 import { WorkInsightsPage } from "@/react-app/domains/work/work-insights";
+import { WorkAutomationPage } from "@/react-app/domains/work/work-activity";
 import { WorkToday } from "@/react-app/domains/work/work-today";
 import { WorkKnowledgePage } from "@/react-app/domains/work/knowledge-views";
 import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
@@ -1374,6 +1375,15 @@ export function SessionRoute() {
     );
     return String(source?.title ?? source?.slug ?? "").trim() || t("session.subagent_task");
   }, [activePermission, selectedSessionId, selectedWorkspaceId, sessionsByWorkspaceId]);
+  // F action-layer (Autopilot): with autopilot on and writes not paused, auto-approve Work connector write tools only
+  // (workToolPermission matches just the `omnirush-work_` tools that reach a prompt — never general/other tools). When
+  // autopilot is off or paused, this does nothing and the prompt is shown as usual.
+  const workAutopilot = workAutopilotActive(workState.data);
+  useEffect(() => {
+    if (!workAutopilot || !activePermission || permissionReplyBusy) return;
+    if (!workToolPermission(activePermission.permission)) return;
+    void respondPermission(activePermission.id, "once");
+  }, [workAutopilot, activePermission, permissionReplyBusy, respondPermission]);
   const modelUnavailableMessage = organizationModelsEmpty
     ? t("models.organization_models_empty")
     : selectedModelUnavailable
@@ -3912,7 +3922,7 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_ORG_ROUTE) ? "Organization" : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? "Team insights" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? "Welcome" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_ORG_ROUTE) ? "Organization" : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? "Team insights" : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? "Automation" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? "Welcome" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
@@ -3932,6 +3942,8 @@ export function SessionRoute() {
           />
         ) : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? (
           workIsOwner ? <WorkInsightsPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} /> : null
+        ) : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? (
+          <WorkAutomationPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
           <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? (
@@ -4018,7 +4030,7 @@ export function SessionRoute() {
       sidebar={{
         workspaceSessionGroups: sidebarWorkspaceSessionGroups,
         modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : workAvailable ? <WorkTryButton onTry={tryWork} /> : undefined,
-        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE), ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}) } : undefined,
+        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE), onOpenActivity: () => navigate(WORK_ACTIVITY_ROUTE), activityActive: location.pathname.startsWith(WORK_ACTIVITY_ROUTE), ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}) } : undefined,
         selectedWorkspaceId,
         selectedSessionId,
         developerMode: false,

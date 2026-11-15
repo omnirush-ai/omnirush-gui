@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -14,6 +14,7 @@ export const WORK_KNOWLEDGE_ROUTE = "/work/knowledge";
 export const WORK_ONBOARDING_ROUTE = "/work/welcome";
 export const WORK_ORG_ROUTE = "/work/organization";
 export const WORK_INSIGHTS_ROUTE = "/work/insights";
+export const WORK_ACTIVITY_ROUTE = "/work/activity";
 
 /**
  * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own
@@ -47,6 +48,7 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
+  | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
   | "importIMessage" | "getIMessageCount"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
@@ -57,6 +59,8 @@ export const workFeedKey = (client: WorkClient | null, source: string | null) =>
 export const workMembersKey = (client: WorkClient | null) => ["omnirush-work-members", client?.baseUrl?.trim() || "default"];
 export const workChatToolsKey = (client: WorkClient | null) => ["omnirush-work-chat-tools", client?.baseUrl?.trim() || "default"];
 export const workInsightsKey = (client: WorkClient | null, days: number) => ["omnirush-work-insights", client?.baseUrl?.trim() || "default", days];
+export const workSettingsKey = (client: WorkClient | null) => ["omnirush-work-settings", client?.baseUrl?.trim() || "default"];
+export const workActionsKey = (client: WorkClient | null) => ["omnirush-work-actions", client?.baseUrl?.trim() || "default"];
 
 /** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
 export function useWorkState(client: WorkClient | null) {
@@ -87,6 +91,31 @@ export function useWorkOnboarding(client: WorkClient | null, enabled: boolean) {
     enabled: Boolean(client) && enabled,
     retry: false,
   });
+}
+
+/** The user's automation settings (F action-layer); read only while Work is on. */
+export function useWorkSettings(client: WorkClient | null, enabled: boolean) {
+  return useQuery<OmniRushWorkSettings>({
+    queryKey: workSettingsKey(client),
+    queryFn: () => client!.getWorkSettings(),
+    enabled: Boolean(client) && enabled,
+    retry: false,
+  });
+}
+
+/** The newest-first activity log of writes the agent made in connected apps; read only while Work is on. */
+export function useWorkActions(client: WorkClient | null, enabled: boolean) {
+  return useQuery<{ actions: OmniRushWorkAction[] }>({
+    queryKey: workActionsKey(client),
+    queryFn: () => client!.listWorkActions(),
+    enabled: Boolean(client) && enabled,
+    retry: false,
+  });
+}
+
+/** Whether autopilot auto-approves Work connector writes right now: on, and not paused. */
+export function workAutopilotActive(state: OmniRushWorkState | null | undefined): boolean {
+  return Boolean(state?.enabled) && state?.autopilot === true && state?.writes_paused !== true;
 }
 
 type WorkInviteLinks = { links: Record<string, string>; remember: (id: string, link: string) => void };

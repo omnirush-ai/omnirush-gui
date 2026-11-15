@@ -35,7 +35,7 @@ import {
   Sparkles,
   CircleHelp,
 } from "lucide-react";
-import { Activity, CalendarClock, Flag, Home, LayoutDashboard, Library, Megaphone, MessageSquareText, Plug, Puzzle } from "lucide-react";
+import { Activity, CalendarClock, Flag, Home, LayoutDashboard, Library, Megaphone, MessageSquareText, Plug, Puzzle, Zap } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -931,7 +931,7 @@ export type AppSidebarProps = {
   /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
   modeToggle?: React.ReactNode;
   /** In Work: Home, Knowledge and Connectors take the place of the Code tools row. */
-  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean; onOpenInsights?: () => void; insightsActive?: boolean };
+  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean; onOpenActivity: () => void; activityActive: boolean; onOpenInsights?: () => void; insightsActive?: boolean };
   sessionNumberShortcuts: SessionNumberShortcutsState;
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
@@ -1521,6 +1521,7 @@ export function AppSidebar(props: AppSidebarProps) {
             <div role="group" aria-label="Work" data-testid="sidebar-work-tools" className="flex items-center gap-0.5">
               <SidebarIconButton icon={Home} label="Work home" onClick={props.workNavigation.onOpenHome} />
               <SidebarIconButton icon={Library} label="Knowledge" active={props.workNavigation.knowledgeActive} onClick={props.workNavigation.onOpenKnowledge} data-testid="sidebar-work-knowledge" />
+              <SidebarIconButton icon={Zap} label="Automation" active={props.workNavigation.activityActive} onClick={props.workNavigation.onOpenActivity} data-testid="sidebar-work-automation" />
               {props.workNavigation.onOpenInsights ? (
                 <SidebarIconButton icon={Activity} label="Team insights" active={props.workNavigation.insightsActive} onClick={props.workNavigation.onOpenInsights} data-testid="sidebar-work-insights" />
               ) : null}
