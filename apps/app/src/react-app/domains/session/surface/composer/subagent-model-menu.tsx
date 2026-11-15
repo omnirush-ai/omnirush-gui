@@ -72,7 +72,7 @@ function SubagentModelPicker(props: { client: SubagentModelClient; chatModel: st
         }`}
       >
         {saving ? <LoaderCircle className="size-4 shrink-0 animate-spin" /> : <Users className="size-4 shrink-0" />}
-        <span data-testid="subagent-model-label" className="hidden min-w-0 truncate whitespace-nowrap @min-[720px]/composer:inline">{custom ? summary : t("subagent.title")}</span>
+        <span data-testid="subagent-model-label" className="hidden min-w-0 truncate whitespace-nowrap @min-[720px]/composer:inline">{custom ? t("subagent.chip_effort", { effort: subagentEffortLabel(setting.effort) }) : t("subagent.title")}</span>
       </DropdownMenuTrigger>
       {/* Capped to the room the positioner measured, so a long menu scrolls inside the viewport instead of running off it. */}
       <DropdownMenuContent side="top" sideOffset={10} className="max-h-[min(560px,var(--available-height))] w-[min(340px,calc(100vw-32px))] overflow-y-auto p-2">

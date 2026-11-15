@@ -2352,6 +2352,7 @@ export default {
   "subagent.chip_label": "子智能体：{summary}",
   "subagent.unavailable_suffix": "（不可用，子智能体将使用主模型）",
   "subagent.title": "子智能体",
+  "subagent.chip_effort": "子代理 · {effort}",
   "subagent.model_label": "子智能体：模型",
   "subagent.not_available": "（不可用）",
   "subagent.effort_label": "子智能体推理强度",

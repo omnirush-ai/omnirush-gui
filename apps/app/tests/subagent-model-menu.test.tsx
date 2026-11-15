@@ -102,13 +102,13 @@ test("one model per chat: the menu names the chat's model as the sub-agents' (no
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
   expect(saved).toEqual([{ model: null, effort: "high" }]);
   expect(toasts).toEqual(["success:Sub-agents: Chat's model · High. Applies to new tasks."]);
-  expect(trigger()?.textContent).toBe("Chat's model · High");
+  expect(trigger()?.textContent).toBe("Sub-agents · High");
 });
 
 test("a model saved before (older setting) never shows or applies: the chat's model does", async () => {
   const { client } = fakeClient({ model: "meta-muse-spark", effort: "xhigh" });
   await mount(<SubagentModelMenu client={client} chatModel="gpt-6-astra" />);
-  expect(trigger()?.textContent).toBe("Chat's model · Xhigh");
+  expect(trigger()?.textContent).toBe("Sub-agents · Xhigh");
   expect(trigger()?.getAttribute("title")).toBe("Sub-agents: Chat's model · Xhigh. Sub-agents use this chat's model (GPT 6 Astra).");
 });
 
@@ -128,7 +128,7 @@ test("a save the server could not write shows its message and keeps the previous
     throw new OmniRushServerError(500, "settings_write_failed", "The sub-agent setting could not be saved: EPERM", { code: "EPERM" });
   };
   await mount(<SubagentModelMenu client={client} />);
-  expect(trigger()?.textContent).toBe("Chat's model · Low");
+  expect(trigger()?.textContent).toBe("Sub-agents · Low");
 
   await act(async () => { trigger()!.click(); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
@@ -138,7 +138,7 @@ test("a save the server could not write shows its message and keeps the previous
   expect(attempts).toEqual([{ model: null, effort: "high" }]);
   expect(toasts).toEqual(["error:The sub-agent setting could not be saved: EPERM"]);
   // Not shown as saved: the trigger and the checked item stay on the previous effort.
-  expect(trigger()?.textContent).toBe("Chat's model · Low");
+  expect(trigger()?.textContent).toBe("Sub-agents · Low");
   expect(document.querySelector('[data-testid="subagent-effort-low"]')?.getAttribute("aria-checked")).toBe("true");
   expect(document.querySelector('[data-testid="subagent-effort-high"]')?.getAttribute("aria-checked")).toBe("false");
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("The sub-agent setting could not be saved: EPERM");
@@ -195,7 +195,7 @@ test("in a narrow composer the chip is an icon that still names the setting, and
   // The label only shows once the composer container is wide enough; the
   // icon-only chip keeps the full summary for screen readers and the tooltip.
   const label = document.querySelector('[data-testid="subagent-model-label"]')!;
-  expect(label.textContent).toBe("Chat's model · Xhigh");
+  expect(label.textContent).toBe("Sub-agents · Xhigh");
   expect(label.className.split(" ")).toEqual(expect.arrayContaining(["hidden", "truncate", "@min-[720px]/composer:inline"]));
   expect(chip.getAttribute("aria-label")).toBe("Sub-agents: Chat's model · Xhigh");
   expect(chip.getAttribute("title")).toBe("Sub-agents: Chat's model · Xhigh. Sub-agents use this chat's model.");
