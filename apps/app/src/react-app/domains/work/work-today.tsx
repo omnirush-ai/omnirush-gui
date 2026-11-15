@@ -2,7 +2,7 @@
 // The Work home's Today view (contract Addendum C2): the connected sources as a strip, then Needs you / Today / FYI
 // from GET /work/feed, with per-source filters. Each row opens at its source or starts a Work chat about it.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, MessageSquare, Plus, RotateCw } from "lucide-react";
+import { MessageSquare, Plus, RotateCw } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -38,37 +38,39 @@ function localZone(): string | undefined {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; }
 }
 
-/** The connected sources, each with its status and, when it has a problem, the fix inline. */
-export function SourceStrip(props: { sources: FeedSource[]; busy: string | null; onReconnect: (id: string) => void; onRetry: (id: string) => void; onAdd: () => void; onSetup: () => void }) {
+/** One row: an "All" chip and one chip per source that shows its status dot and filters the feed. Add sits at the end. */
+export function SourceStrip(props: { sources: FeedSource[]; selected: string | null; onSelect: (id: string | null) => void; onAdd: () => void }) {
+  const chip = (active: boolean) => cn(
+    "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[12px] transition-colors",
+    active ? "bg-foreground text-background" : "border border-border bg-background text-foreground hover:bg-muted",
+  );
   return (
-    <div className="flex flex-wrap items-center gap-2" data-testid="work-source-strip">
-      {props.sources.map((source) => {
-        const dot = sourceDot(source);
-        const action = source.attention?.action ?? null;
-        return (
-          <div
-            key={source.id}
-            data-work-source={source.id}
-            data-dot={dot}
-            title={source.attention?.message ?? DOT_LABEL[dot]}
-            className="flex h-8 items-center gap-1.5 rounded-full border border-border bg-background ps-2.5 pe-1 text-[12px] text-foreground"
-          >
-            <ConnectorIcon id={source.id} className="size-3.5" />
-            <span className="max-w-[10rem] truncate">{connectorLabel(source.id, source.label)}</span>
-            <span aria-label={DOT_LABEL[dot]} role="img" className={cn("mx-1 size-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
-            {action === "reconnect" || action === "retry" || action === "setup" ? (
-              <button
-                type="button"
-                disabled={props.busy === source.id}
-                onClick={() => (action === "reconnect" ? props.onReconnect(source.id) : action === "retry" ? props.onRetry(source.id) : props.onSetup())}
-                className="rounded-full px-2 py-0.5 font-medium text-foreground hover:bg-muted disabled:opacity-60"
-              >
-                {action === "reconnect" ? "Reconnect" : action === "retry" ? "Retry" : "Fix"}
-              </button>
-            ) : <span className="w-1" />}
-          </div>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-1.5" data-testid="work-source-strip">
+      <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Filter by source">
+        <button type="button" role="radio" aria-checked={props.selected === null} data-feed-filter="all" onClick={() => props.onSelect(null)} className={chip(props.selected === null)}>All</button>
+        {props.sources.map((source) => {
+          const dot = sourceDot(source);
+          const active = props.selected === source.id;
+          return (
+            <button
+              key={source.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              data-work-source={source.id}
+              data-dot={dot}
+              data-feed-filter={source.id}
+              title={source.attention?.message ?? DOT_LABEL[dot]}
+              onClick={() => props.onSelect(source.id)}
+              className={chip(active)}
+            >
+              <ConnectorIcon id={source.id} className="size-3.5 text-current" />
+              <span className="max-w-[10rem] truncate">{connectorLabel(source.id, source.label)}</span>
+              <span aria-label={DOT_LABEL[dot]} role="img" className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
+            </button>
+          );
+        })}
+      </div>
       <button
         type="button"
         onClick={props.onAdd}
@@ -82,28 +84,60 @@ export function SourceStrip(props: { sources: FeedSource[]; busy: string | null;
   );
 }
 
-/** One feed row: source, title, who and when, why it is here, Open and Ask about this. */
+/** A compact line per source that needs a fix (reconnect, retry or setup), kept out of the chip row above. */
+export function SourceAttention(props: { sources: FeedSource[]; busy: string | null; onReconnect: (id: string) => void; onRetry: (id: string) => void; onSetup: (id: string) => void }) {
+  const needs = props.sources.filter((source) => { const a = source.attention?.action; return a === "reconnect" || a === "retry" || a === "setup"; });
+  if (!needs.length) return null;
+  return (
+    <div className="flex flex-col divide-y divide-border rounded-xl border border-border" data-testid="work-source-attention">
+      {needs.map((source) => {
+        const action = source.attention!.action!;
+        const label = action === "reconnect" ? "Reconnect" : action === "retry" ? "Retry" : "Fix";
+        return (
+          <div key={source.id} data-work-attention={source.id} className="flex items-center justify-between gap-3 px-3 py-2">
+            <span className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
+              <ConnectorIcon id={source.id} className="size-3.5 shrink-0" />
+              <span className="truncate">{source.attention!.message}</span>
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={props.busy === source.id}
+              onClick={() => (action === "reconnect" ? props.onReconnect(source.id) : action === "retry" ? props.onRetry(source.id) : props.onSetup(source.id))}
+            >
+              {label}
+            </Button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One feed row: source, title, who and when, why it is here. The whole row opens the item; Ask is the one side action. */
 export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy: boolean; onOpen: (url: string) => void; onAsk: (item: OmniRushWorkFeedItem) => void }) {
   const item = props.item;
   const when = relativeTime(item.starts_at ?? item.due_at ?? item.at, props.now);
+  const open = item.url ? () => props.onOpen(item.url!) : null;
   return (
-    <li className="group flex items-center gap-3 border-b border-border px-3 py-2.5 last:border-b-0" data-feed-item={item.id} data-source={item.source}>
+    <li
+      data-feed-item={item.id}
+      data-source={item.source}
+      {...(open ? { role: "button", tabIndex: 0, "aria-label": `Open ${item.title}`, onClick: open, onKeyDown: (event: React.KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } } } : {})}
+      className={cn(
+        "group flex items-center gap-3 border-b border-border px-3 py-2.5 last:border-b-0",
+        open && "cursor-pointer outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+    >
       <ConnectorIcon id={item.source} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-medium text-foreground" title={item.title}>{item.title}</div>
         <div className="truncate text-[12px] text-muted-foreground">{[item.who, when].filter(Boolean).join(" · ")}</div>
       </div>
       {item.reason ? <Badge variant="secondary" className="hidden shrink-0 sm:inline-flex" data-testid="work-feed-reason">{item.reason}</Badge> : null}
-      <div className="flex shrink-0 items-center gap-1">
-        {item.url ? (
-          <Button variant="ghost" size="sm" aria-label={`Open ${item.title}`} onClick={() => props.onOpen(item.url!)}>
-            <ExternalLink className="size-3.5" />Open
-          </Button>
-        ) : null}
-        <Button variant="ghost" size="sm" aria-label={`Ask about ${item.title}`} disabled={props.busy} onClick={() => props.onAsk(item)}>
-          <MessageSquare className="size-3.5" />Ask about this
-        </Button>
-      </div>
+      <Button variant="ghost" size="sm" className="shrink-0" aria-label={`Ask about ${item.title}`} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onAsk(item); }}>
+        <MessageSquare className="size-3.5" />Ask
+      </Button>
     </li>
   );
 }
@@ -176,38 +210,17 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
         </div>
         {props.badge}
       </div>
+      {sources.length ? <SourceStrip sources={sources} selected={source} onSelect={setSource} onAdd={props.onOpenConnectors} /> : null}
       {sources.length ? (
-        <SourceStrip
+        <SourceAttention
           sources={sources}
           busy={reconnect.isPending ? reconnect.variables ?? null : retry.isPending ? retry.variables ?? null : null}
           onReconnect={(id) => reconnect.mutate(id)}
           onRetry={(id) => retry.mutate(id)}
-          onAdd={props.onOpenConnectors}
           onSetup={props.onOpenConnectors}
         />
       ) : null}
       {props.checklist}
-      {sources.length > 1 ? (
-        <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Filter by source" data-testid="work-feed-filters">
-          {[null, ...sources.map((item) => item.id)].map((id) => (
-            <button
-              key={id ?? "all"}
-              type="button"
-              role="radio"
-              aria-checked={source === id}
-              data-feed-filter={id ?? "all"}
-              onClick={() => setSource(id)}
-              className={cn(
-                "flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] transition-colors",
-                source === id ? "bg-foreground text-background" : "bg-muted text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {id ? <ConnectorIcon id={id} className="size-3 text-current" /> : null}
-              {id ? connectorLabel(id, sources.find((item) => item.id === id)?.label) : "All"}
-            </button>
-          ))}
-        </div>
-      ) : null}
       {feed.isLoading ? <FeedSkeleton /> : feed.error && !feed.data ? (
         <div className="flex flex-col items-start gap-2 rounded-xl border border-border px-4 py-4" data-testid="work-feed-error">
           <span className="text-[13px] text-muted-foreground">{feed.error instanceof Error ? feed.error.message : "Today could not be loaded."}</span>

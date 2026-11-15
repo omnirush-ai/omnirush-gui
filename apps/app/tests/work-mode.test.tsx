@@ -6,7 +6,7 @@ import { MemoryRouter } from "react-router";
 import type { OmniRushWorkConnector, OmniRushWorkFeed, OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
 import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
   askAboutItemPrompt, coverageLine, relativeTime, workChatToolsKey, workFeedKey, workMembersKey, workToolNotices } from "../src/react-app/domains/work/work-mode";
-import { SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
+import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
 import { leaveState, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
 import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
@@ -296,16 +296,23 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     },
   };
 
-  test("source pills: a dot per state and the fix inline", () => {
+  test("source chips: one row, a dot per state and a filter each; fixes sit in the attention line", () => {
     expect(sourceDot(feed.sources[0]!)).toBe("error");
     expect(sourceDot(feed.sources[2]!)).toBe("attention");
     expect(sourceDot(feed.sources[3]!)).toBe("syncing");
     expect(sourceDot({ status: "connected", attention: null })).toBe("ok");
-    const strip = renderToStaticMarkup(<SourceStrip sources={feed.sources} busy={null} onReconnect={noop} onRetry={noop} onAdd={noop} onSetup={noop} />);
+    const strip = renderToStaticMarkup(<SourceStrip sources={feed.sources} selected={null} onSelect={noop} onAdd={noop} />);
     expect(strip).toMatch(/data-work-source="github"[^>]*data-dot="error"/);
-    expect(strip).toContain(">Retry<");
-    expect(strip).toContain(">Reconnect<");
+    expect(strip).toMatch(/data-work-source="github"[^>]*data-feed-filter="github"/);
+    expect(strip).toContain('data-feed-filter="all"');
     expect(strip).toContain('data-testid="work-source-add"');
+    expect(strip).not.toContain(">Retry<");
+    expect(strip).not.toContain(">Reconnect<");
+    const attention = renderToStaticMarkup(<SourceAttention sources={feed.sources} busy={null} onReconnect={noop} onRetry={noop} onSetup={noop} />);
+    expect(attention).toContain('data-testid="work-source-attention"');
+    expect(attention).toContain(">Retry<");
+    expect(attention).toContain(">Reconnect<");
+    expect(attention).toContain(">Fix<");
   });
 
   test("Today: three sections with counts, rows with reason, Open only with a link, Ask about this; skeleton while loading", () => {
@@ -321,8 +328,8 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(markup).toContain("Review requested");
     expect(markup).toContain('aria-label="Open Fix invoice rounding"');
     expect(markup).not.toContain('aria-label="Open Supplier call"');
-    expect(markup.match(/Ask about this/g)?.length).toBe(2);
-    expect(markup).toContain('data-testid="work-feed-filters"');
+    expect(markup.match(/aria-label="Ask about /g)?.length).toBe(2);
+    expect(markup).toContain('data-testid="work-source-strip"');
     expect(markup).toContain("Nothing new in the last 7 days.");
     expect(render()).not.toContain('data-testid="work-feed"');
     expect(markup).not.toMatch(/—|farm|stock/i);
