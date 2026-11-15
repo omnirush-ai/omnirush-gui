@@ -132,6 +132,10 @@ describe("Work mode", () => {
     expect(markup).not.toMatch(/consent|terms/i);
     expect(markup).toContain('data-testid="work-join-link"');
     expect(markup).toContain(">Just me<");
+    expect(markup).toContain('data-testid="work-trust-badge"');
+    expect(markup).toContain(">In progress<");
+    expect(markup).toContain('aria-label="SOC 2 Type II audit in progress"');
+    expect(markup).toContain("How we protect your data");
   });
 
   test("Try Work and the sample-data badge", () => {
@@ -375,7 +379,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     const render = (data: OmniRushWorkMembers) => {
       const queries = new QueryClient();
       queries.setQueryData(workMembersKey(client), data);
-      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} onBack={noop} /></MemoryRouter></QueryClientProvider>);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} openLink={noop} onBack={noop} /></MemoryRouter></QueryClientProvider>);
     };
     const owner = render(members("owner"));
     expect(owner).toContain('value="Acme Bakery"');
@@ -385,6 +389,8 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(owner).toContain('data-work-invite="inv_1"');
     expect(owner).toContain(">Cancel<");
     expect(owner).toContain("Make someone else the owner before you leave.");
+    expect(owner).toContain('data-testid="work-org-security"');
+    expect(owner).toContain(">Trust page<");
     const member = render(members("member"));
     expect(member).not.toContain('data-testid="work-org-save"');
     expect(member).not.toContain(">Make owner<");

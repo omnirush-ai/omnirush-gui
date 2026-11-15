@@ -3916,6 +3916,7 @@ export function SessionRoute() {
         ) : location.pathname.startsWith(WORK_ORG_ROUTE) ? (
           <WorkOrganizationPage
             client={client ?? null}
+            openLink={(url) => platform.openLink(url)}
             backLabel={workConnectorsFrom ? "Back" : undefined}
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
           />

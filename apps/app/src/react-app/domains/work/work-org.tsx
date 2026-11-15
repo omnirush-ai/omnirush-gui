@@ -17,7 +17,7 @@ import {
 } from "@/react-app/domains/settings/settings-layout";
 
 import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkState, workMembersKey, workOnboardingKey, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
-import { Chip, SIZES, WorkInviteDialog } from "./work-onboarding";
+import { Chip, SIZES, TRUST_URL, TrustBadge, WorkInviteDialog } from "./work-onboarding";
 import { ConnectorIcon } from "./work-views";
 
 const errorText = (reason: unknown) => (reason instanceof Error ? reason.message : "That did not work. Try again.");
@@ -64,7 +64,7 @@ function ToolChips(props: { offered: string[]; selected: string[]; onChange: (to
 }
 
 /** Work > Organization (opened from Settings and the home checklist). */
-export function WorkOrganizationPage(props: { client: WorkClient | null; onBack: () => void; backLabel?: string }) {
+export function WorkOrganizationPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack: () => void; backLabel?: string }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const state = useWorkState(props.client);
@@ -241,6 +241,16 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; onBack:
                 </ul>
               </Section>
             ) : null}
+
+            <Section title="Security" testId="work-org-security">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <TrustBadge />
+                  <span className="text-[13px] text-muted-foreground">SOC 2 Type II audit in progress</span>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => props.openLink(TRUST_URL)} data-testid="work-org-trust">Trust page</Button>
+              </div>
+            </Section>
 
             <Section title="Leave organization" testId="work-org-leave">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">

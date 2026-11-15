@@ -2,7 +2,7 @@
 // Work first run (contract Addendum B3): Try Work, the company step, the connect step, the home checklist, invites
 // and the sample-data badge. Shown only while capabilities.work is enabled (or `available`, for Try Work).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Briefcase, Building2, Check, Copy, Database, UserPlus, X } from "lucide-react";
+import { ArrowRight, Briefcase, Building2, Check, Copy, Database, ShieldCheck, UserPlus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -100,6 +100,23 @@ export function WorkJoinDialog(props: { client: WorkClient | null; onJoined: () 
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+export const TRUST_URL = "https://omnirush.ai/trust";
+// Our own SOC 2 badge (contract D7); a release flips it when the CPA report arrives. Never "certified" before that.
+export const SOC2_STATUS = { title: "SOC 2 Type II", status: "In progress", alt: "SOC 2 Type II audit in progress" };
+
+/** The SOC 2 status badge: outlined, neutral, the words "In progress" on the badge itself. */
+export function TrustBadge() {
+  return (
+    <span role="img" aria-label={SOC2_STATUS.alt} title={SOC2_STATUS.alt} className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-foreground" data-testid="work-trust-badge">
+      <ShieldCheck className="size-4 shrink-0" aria-hidden />
+      <span className="flex flex-col leading-tight">
+        <span className="text-[12px] font-semibold">{SOC2_STATUS.title}</span>
+        <span className="text-[11px] text-muted-foreground">{SOC2_STATUS.status}</span>
+      </span>
+    </span>
   );
 }
 
@@ -235,6 +252,12 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
               <Button type="submit" variant="outline" disabled={!invite.trim() || join.isPending || !props.client} data-testid="work-join-submit">{join.isPending ? "Joining…" : "Join"}</Button>
             </div>
           </form>
+        ) : null}
+        {step === "company" ? (
+          <div className="flex flex-wrap items-center gap-3" data-testid="work-onboarding-trust">
+            <TrustBadge />
+            <Button variant="link" size="sm" className="px-0" onClick={() => props.openLink(TRUST_URL)}>How we protect your data</Button>
+          </div>
         ) : (
           <div className="flex flex-col gap-4">
             <div className="rounded-xl border border-border bg-background">
