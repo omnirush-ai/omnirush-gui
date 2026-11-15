@@ -21,6 +21,7 @@ import { globalOpencodeConfigDir, workspaceOpencodeConfigCandidates } from "@omn
 
 import { configureFakeMediaForTests, installMediaPermissionHandlers } from "./media-permissions.mjs";
 import { registerMigrationIpc } from "./migration.mjs";
+import { readIMessage, IMessageError } from "./work-imessage.mjs";
 import { createRuntimeManager, createSystemCaCertificateVerifyProc } from "./runtime.mjs";
 import { installAppRequestSecret } from "./app-request-secret.mjs";
 import { registerUpdaterIpc, updatesTurnedOff } from "./updater.mjs";
@@ -2177,6 +2178,19 @@ const openLogsFolder = createOpenLogsFolderHandler({
 // typecheck:electron`.
 /** @type {import("@omnirush/types/desktop-ipc").DesktopCommandHandlers<import("electron").IpcMainInvokeEvent>} */
 const desktopCommandHandlers = {
+  // Read the Mac's local Messages database (iMessage has no API). Returns
+  // the records for the renderer to push; a tagged code (fda_required,
+  // no_messages_db, unsupported_os) drives the Connectors-page step.
+  "workImessageRead": async (event, ...args) => {
+      const sinceRowid = Number(args[0]) || 0;
+      try {
+        const { records, lastRowid, messageCount } = readIMessage({ sinceRowid });
+        return { status: "ok", records, lastRowid, messageCount };
+      } catch (error) {
+        if (error instanceof IMessageError) return { status: "error", code: error.code };
+        throw error;
+      }
+  },
   "workspaceBootstrap": async (event, ...args) => {
       return workspaceStore.readWorkspaceState();
   },

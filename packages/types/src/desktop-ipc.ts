@@ -952,7 +952,23 @@ export type ComputerUseRealScreen = { on: boolean; forced: boolean; allowed: boo
 // The command map
 // ---------------------------------------------------------------------------
 
+export type IMessageReadResult =
+  | { status: "ok"; records: IMessageRecordInput[]; lastRowid: number; messageCount: number }
+  | { status: "error"; code: "fda_required" | "no_messages_db" | "unsupported_os" };
+
+export type IMessageRecordInput = {
+  chat_key: string;
+  chat_name: string | null;
+  is_group: boolean;
+  day: string;
+  occurred_at: string;
+  text: string;
+  participants: { name: string | null; handle: string; service: string | null }[];
+};
+
 export type DesktopCommandMap = {
+  // Read a copy of the Mac's local Messages database (iMessage has no API).
+  workImessageRead: { args: [sinceRowid?: number]; result: IMessageReadResult };
   // Workspace state
   workspaceBootstrap: { args: []; result: WorkspaceList };
   workspaceSetSelected: { args: [workspaceId: string]; result: WorkspaceList };

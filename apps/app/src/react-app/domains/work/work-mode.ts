@@ -22,7 +22,8 @@ export const useWorkModeStore = create<WorkModeStore>()(
 );
 
 export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
-  | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact"> & { baseUrl?: string };
+  | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact"
+  | "importIMessage" | "getIMessageCount"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];
