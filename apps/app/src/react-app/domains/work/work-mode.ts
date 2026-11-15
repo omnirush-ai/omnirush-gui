@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkOnboarding, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -13,6 +13,7 @@ export const WORK_CONNECTORS_ROUTE = "/work/connectors";
 export const WORK_KNOWLEDGE_ROUTE = "/work/knowledge";
 export const WORK_ONBOARDING_ROUTE = "/work/welcome";
 export const WORK_ORG_ROUTE = "/work/organization";
+export const WORK_INSIGHTS_ROUTE = "/work/insights";
 
 /**
  * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own
@@ -40,7 +41,7 @@ export const useWorkModeStore = create<WorkModeStore>()(
   }),
 );
 
-export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
+export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrgInsights" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
   | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact" | "getWorkGraph" | "getWorkTimeline"
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
@@ -55,6 +56,7 @@ export const workEntityKey = (client: WorkClient | null, id: string) => ["omniru
 export const workFeedKey = (client: WorkClient | null, source: string | null) => ["omnirush-work-feed", client?.baseUrl?.trim() || "default", source ?? "all"];
 export const workMembersKey = (client: WorkClient | null) => ["omnirush-work-members", client?.baseUrl?.trim() || "default"];
 export const workChatToolsKey = (client: WorkClient | null) => ["omnirush-work-chat-tools", client?.baseUrl?.trim() || "default"];
+export const workInsightsKey = (client: WorkClient | null, days: number) => ["omnirush-work-insights", client?.baseUrl?.trim() || "default", days];
 
 /** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
 export function useWorkState(client: WorkClient | null) {
@@ -63,6 +65,16 @@ export function useWorkState(client: WorkClient | null) {
     queryFn: () => client!.getWorkState(),
     enabled: Boolean(client),
     refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/** The owner's team insights (aggregate activity + alerts) for the chosen window; read only when owner opens the page. */
+export function useWorkOrgInsights(client: WorkClient | null, days: number, enabled: boolean) {
+  return useQuery<OmniRushWorkInsights>({
+    queryKey: workInsightsKey(client, days),
+    queryFn: () => client!.getWorkOrgInsights(days),
+    enabled: Boolean(client) && enabled,
     retry: false,
   });
 }

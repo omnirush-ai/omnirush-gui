@@ -613,6 +613,35 @@ export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAl
 /** Work mode (the server's `work` switch, as the local server last read it). */
 /** `available`: Work is off but the account can try it (POST /work/enable). */
 export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null };
+/** GET /omnirush/work/org/insights (owner only): aggregate team activity + smart alerts, never message content. */
+export type OmniRushWorkInsightsAlert = { kind: string; level: "warn" | "serious"; text: string };
+export type OmniRushWorkInsightsMember = {
+  user_id: string;
+  email: string;
+  role: string | null;
+  job_role: string | null;
+  activity: number;
+  prev_activity: number;
+  /** Signed percent change vs the previous window. */
+  trend: number;
+  active_days: number;
+  last_active: string | null;
+  meetings: number;
+  /** Already sorted desc by the server. */
+  by_source: Record<string, number>;
+  by_kind: Record<string, number>;
+  /** Top work areas as [label, count], highest first. */
+  focus: [string, number][];
+  /** One point per day in the window, chronological (length === range.days). */
+  daily: { d: string; n: number }[];
+  alerts: OmniRushWorkInsightsAlert[];
+};
+export type OmniRushWorkInsights = {
+  org: { id: string; name: string };
+  range: { days: number; from: string; to: string };
+  team: { members: number; active_members: number; total_activity: number; meetings: number; alerts: number };
+  members: OmniRushWorkInsightsMember[];
+};
 /** The company profile and first-run steps (contract Addendum B2: GET/POST /omnirush/work/onboarding). */
 export type OmniRushWorkOrg = { id: string; name: string; domain?: string | null; size?: string | null; industry?: string | null; tools?: string[] | null };
 export type OmniRushWorkStarter = { title: string; prompt: string };
@@ -2396,6 +2425,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       }),
     getWorkState: () =>
       requestJson<OmniRushWorkState>(baseUrl, "/work/state", { token, hostToken, timeoutMs: timeouts.config }),
+    getWorkOrgInsights: (days?: number) =>
+      requestJson<OmniRushWorkInsights>(baseUrl, `/work/org/insights${days ? `?days=${days}` : ""}`, { token, hostToken, timeoutMs: timeouts.config }),
     ensureWorkWorkspace: () =>
       requestJson<{ workspaceId: string; path: string }>(baseUrl, "/work/workspace", { token, hostToken, method: "POST", timeoutMs: timeouts.activateWorkspace }),
     listWorkConnectors: () =>
