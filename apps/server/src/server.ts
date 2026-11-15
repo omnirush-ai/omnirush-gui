@@ -193,7 +193,7 @@ import { askSideQuestion, brokerSideCall } from "./side-question.js";
 import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/desktop.js";
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
 import { findWorkWorkspace, forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./work/routes.js";
-import { rememberedAnswerStyle, rememberWorkSwitch, workDir } from "./work/work.js";
+import { isWorkRoot, rememberedAnswerStyle, rememberedWorkSwitch, rememberWorkSwitch, workDir } from "./work/work.js";
 import { isV2WorkRoot, withV2WorkPermissions } from "./work/engine.js";
 import { workPrompt } from "./work/prompt.js";
 import {
@@ -215,7 +215,7 @@ import { assertMcpAllowed, mcpAllowed, mcpDisabledMessage, mcpPolicyForConfig, r
 import { currentMcpPolicy, MCP_FILTER_MISSING, mcpFilterMissing, rememberMcpPolicy, watchMcpPolicy, workspaceMcpReport, writeWorkspaceMcp } from "./mcp-allow/state.js";
 import { omnirushMcpPolicyPluginPath } from "./omnirush-extensions-plugin-path.js";
 import { isOmniRushUiMcpRegistryEntry } from "./omnirush-ui-mcp-command.js";
-import { describeIgnored, type McpAllowEntry } from "./mcp-allow/mcp-allow.mjs";
+import { describeIgnored, FIRST_PARTY_REMOTE, type McpAllowEntry } from "./mcp-allow/mcp-allow.mjs";
 import { omnirushModelWantsReasoningSummary, readOmniRushModelCatalog } from "./omnirush-model-catalog.js";
 import { modelAllowedIn, modelModes, projectMode, serverModelStart } from "./model-modes/model-modes.mjs";
 import { switchableModels } from "./model-modes/strict-sessions.mjs";
@@ -349,6 +349,45 @@ function computerUseChats(config: ServerConfig): ReturnType<typeof createChatTra
     computerUseChatsByServer.set(config, chats);
   }
   return chats;
+}
+
+/**
+ * A capabilities answer's Work switch, remembered (<appData>/work/server.json). A change restarts the 1.x projects and
+ * applies the Work folder's 2.x MCP servers again (they are applied once per location, so a switch that came on later
+ * would otherwise leave Work chats without the hosted tools).
+ */
+function workSwitchSeen(config: ServerConfig, capabilities: unknown): void {
+  if (!rememberWorkSwitch(workDir(runtimeStorageDir(config)), capabilities)) return;
+  void applyComputerUseEngine(config, "work").catch(() => undefined);
+  refreshWorkMcp(config);
+}
+
+function refreshWorkMcp(config: ServerConfig): Promise<void> {
+  const workspace = findWorkWorkspace(config.workspaces);
+  return workspace ? engineV2ByServer.get(config)?.refreshWorkspaceMcp(workspace.path, workspace.id) ?? Promise.resolve() : Promise.resolve();
+}
+
+/** Whether the Work folder's engine has the hosted Work server (the chat banner's check); `fix` re-reads the switch and re-applies first. */
+async function workChatTools(config: ServerConfig, fix: boolean, log: (message: string, attributes: Record<string, unknown>) => void): Promise<{ attached: boolean; reason: string | null }> {
+  const dir = workDir(runtimeStorageDir(config));
+  if (fix) await workBrokersByServer.get(config)?.capabilities({ maxAgeMs: 0 }).then((capabilities) => workSwitchSeen(config, capabilities)).catch(() => undefined);
+  const workspace = findWorkWorkspace(config.workspaces);
+  const engine = engineV2ByServer.get(config);
+  const missing = (reason: string, detail: string) => {
+    log("work chat tools missing", { reason: detail });
+    return { attached: false, reason };
+  };
+  if (!rememberedWorkSwitch(dir).enabled) return missing("Work is off for your account.", "work switch off in server.json");
+  // Nothing to check: no Work folder yet, or no 2.x engine (the 1.x engine gets the server from its config).
+  if (!workspace || !engine) return { attached: true, reason: null };
+  if (fix) await engine.refreshWorkspaceMcp(workspace.path, workspace.id);
+  const servers = await engine.mcpStatus(workspace.path);
+  // The engine is not up (or not answering): unknown, so no banner.
+  if (!servers) return { attached: true, reason: null };
+  const work = servers.find((server) => server.name === FIRST_PARTY_REMOTE.work.id);
+  if (!work) return missing("Work tools were not added to this chat.", "omnirush-work not in the engine's MCP list");
+  if (work.status === "connected" || work.status === "pending") return { attached: true, reason: null };
+  return missing("Work tools could not connect.", `omnirush-work ${work.status}${work.error ? `: ${work.error.slice(0, 200)}` : ""}`);
 }
 
 /** Restarts the engine's projects (when idle) so they pick up the built-in computer use server. */
@@ -1353,6 +1392,8 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   // The quota wrap on the 2.x engine (engine-v2-budget-wrap.ts): set once the engine below exists.
   let budgetWrap: ReturnType<typeof createV2BudgetWrap> | undefined;
   const gatewayBroker = new OmniRushGatewayBroker({
+    // Every fresh capabilities answer refreshes the remembered Work switch, so a stale "off" can't hide the Work tools.
+    onCapabilities: (capabilities) => workSwitchSeen(config, capabilities),
     onModelResponse: (sessionId, headers) => budgetWrap?.noteResponse(sessionId, headers),
     contextWrap: (sessionId) => budgetWrap?.contextWrap(sessionId) ?? false,
     sessionModelsFile: join(runtimeStorageDir(config), "chat-models.json"),
@@ -1551,10 +1592,10 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberComputerUseSwitch(runtimeStorageDir(config), capabilities) ? applyComputerUseEngine(config) : undefined)).catch(() => undefined);
     // Work mode (work/work.ts): remembered from the same answer; a change restarts the engine's projects so the
     // Work folder's hosted server comes or goes.
-    void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberWorkSwitch(workDir(runtimeStorageDir(config)), capabilities) ? applyComputerUseEngine(config, "work") : undefined)).catch(() => undefined);
+    void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => workSwitchSeen(config, capabilities)).catch(() => undefined);
     const computerUseTimer = setInterval(() => {
       void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberComputerUseSwitch(runtimeStorageDir(config), capabilities) ? applyComputerUseEngine(config) : undefined)).catch(() => undefined);
-      void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberWorkSwitch(workDir(runtimeStorageDir(config)), capabilities) ? applyComputerUseEngine(config, "work") : undefined)).catch(() => undefined);
+      void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => workSwitchSeen(config, capabilities)).catch(() => undefined);
     }, BOX_DEFAULT_REFRESH_MS);
     computerUseTimer.unref?.();
     stopComputerUseWatch = () => clearInterval(computerUseTimer);
@@ -1844,6 +1885,12 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
           // The project's allowed MCP servers reach the engine before the next call (engine-v2-mcp.ts);
           // a write first refreshes the app-added entries the filter reads.
           if (request.method !== "GET" && request.method !== "HEAD") await writeWorkspaceMcpFile(config, workspace);
+          // A Work folder chat while the remembered switch says off: ask the server again (at most once a minute)
+          // before its MCP servers are applied, and say so when Work really is off.
+          if (request.method !== "GET" && request.method !== "HEAD" && isWorkRoot(workDir(runtimeStorageDir(config)), workspace.path) && !rememberedWorkSwitch(workDir(runtimeStorageDir(config))).enabled) {
+            await workBrokersByServer.get(config)?.capabilities({ maxAgeMs: 60_000 }).then((capabilities) => workSwitchSeen(config, capabilities)).catch(() => undefined);
+            if (!rememberedWorkSwitch(workDir(runtimeStorageDir(config))).enabled) logger.log("warn", "work chat without work tools", { reason: "work switch off" });
+          }
           await engineV2Preview.syncWorkspaceMcp(workspace.id, workspace.path);
           const send = () => proxyOpencodeV2Request({
             config,
@@ -5500,11 +5547,12 @@ function createRoutes(
       onWorkspacesChanged();
       return workspace;
     },
-    applyEngine: () => applyComputerUseEngine(config, "work"),
-    refreshMcp: () => {
-      const workspace = findWorkWorkspace(config.workspaces);
-      if (workspace) engineV2ByServer.get(config)?.refreshWorkspaceMcp(workspace.path);
+    applyEngine: () => {
+      void refreshWorkMcp(config);
+      return applyComputerUseEngine(config, "work");
     },
+    refreshMcp: () => void refreshWorkMcp(config),
+    chatTools: (fix) => workChatTools(config, fix, (message, attributes) => createServerLogger(config).log("warn", message, attributes)),
   });
 
   // Computer use (computer-use/routes.ts): for Electron main, which runs the host.

@@ -32,7 +32,7 @@ import { DesktopIntegrationSection } from "../desktop-integration-section";
 import { SubagentModelSettings } from "../subagent-model-settings";
 import { WebSearchSetting, type WebSearchClient } from "../web-search-setting";
 import { WorkConnectorsSetting } from "@/react-app/domains/work/work-views";
-import { WorkInviteSetting } from "@/react-app/domains/work/work-onboarding";
+import { WorkOrganizationSetting } from "@/react-app/domains/work/work-org";
 import { WorkAnswerStyleSetting } from "@/react-app/domains/work/answer-style";
 import type { WorkClient } from "@/react-app/domains/work/work-mode";
 import type { SubagentModelClient } from "../subagent-model";
@@ -116,7 +116,7 @@ export function PreferencesView(props: PreferencesViewProps) {
         {/* Web search */}
         <WebSearchSetting client={props.webSearchClient ?? null} busy={props.busy} />
         {props.workClient ? <WorkConnectorsSetting client={props.workClient} /> : null}
-        {props.workClient ? <WorkInviteSetting client={props.workClient} /> : null}
+        {props.workClient ? <WorkOrganizationSetting client={props.workClient} /> : null}
         {props.workClient ? <WorkAnswerStyleSetting client={props.workClient} /> : null}
 
         {/* Show reasoning */}

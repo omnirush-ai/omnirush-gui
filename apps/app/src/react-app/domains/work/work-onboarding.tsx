@@ -2,7 +2,7 @@
 // Work first run (contract Addendum B3): Try Work, the company step, the connect step, the home checklist, invites
 // and the sample-data badge. Shown only while capabilities.work is enabled (or `available`, for Try Work).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Briefcase, Check, Copy, Database, UserPlus, X } from "lucide-react";
+import { ArrowRight, Briefcase, Building2, Check, Copy, Database, UserPlus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,17 +14,13 @@ import type { OmniRushWorkConnector } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
 import {
-  LayoutSectionItem, LayoutSectionItemDescription, LayoutSectionItemHeader, LayoutSectionItemHeaderActions, LayoutSectionItemTitle,
-} from "@/react-app/domains/settings/settings-layout";
-
-import {
-  checklistItems, connectorLabel, connectOrder, DEMO_SOURCE, domainFromEmail, isLinked, useWorkInviteStore, useWorkSetupStore, useWorkState,
+  checklistItems, connectorLabel, connectOrder, DEMO_SOURCE, domainFromEmail, isLinked, useWorkInviteLinks, useWorkInviteStore, useWorkSetupStore,
   workConnectorsKey, workOnboardingKey, workStateKey, type WorkClient,
 } from "./work-mode";
 import { CONNECT_POLL_MS, CONNECT_TIMEOUT_MS, ConnectorIcon } from "./work-views";
 
 // The server's size values, with how they read.
-const SIZES = [["1", "Just me"], ["2-10", "2–10"], ["11-50", "11–50"], ["51-200", "51–200"], ["201-1000", "201–1,000"], ["1000+", "1,000+"]] as const;
+export const SIZES = [["1", "Just me"], ["2-10", "2–10"], ["11-50", "11–50"], ["51-200", "51–200"], ["201-1000", "201–1,000"], ["1000+", "1,000+"]] as const;
 const errorText = (reason: unknown) => (reason instanceof Error ? reason.message : "That did not work. Try again.");
 
 /** In place of the Code | Work switch while Work is off but the account may try it. */
@@ -47,7 +43,7 @@ export function WorkTryButton(props: { onTry: () => Promise<void> }) {
   );
 }
 
-function Chip(props: { selected: boolean; onClick: () => void; children: React.ReactNode; testId?: string }) {
+export function Chip(props: { selected: boolean; onClick: () => void; children: React.ReactNode; testId?: string }) {
   return (
     <button
       type="button"
@@ -273,7 +269,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
 }
 
 /** The home's small first-run checklist (company, connected, first chat), until dismissed or done. */
-export function WorkChecklist(props: { client: WorkClient | null; onboarding: Parameters<typeof checklistItems>[0]; connectors: OmniRushWorkConnector[] | undefined; orgId: string; onConnect: () => void; onInvite: () => void }) {
+export function WorkChecklist(props: { client: WorkClient | null; onboarding: Parameters<typeof checklistItems>[0]; connectors: OmniRushWorkConnector[] | undefined; orgId: string; onConnect: () => void; onInvite: () => void; onOrganization?: () => void }) {
   const hidden = useWorkSetupStore((state) => Boolean(state.checklistHidden[props.orgId]));
   const hide = useWorkSetupStore((state) => state.hideChecklist);
   const items = checklistItems(props.onboarding, props.connectors);
@@ -299,6 +295,12 @@ export function WorkChecklist(props: { client: WorkClient | null; onboarding: Pa
           <UserPlus aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onInvite} data-testid="work-checklist-invite">Invite teammates</button>
         </li>
+        {props.onOrganization ? (
+          <li className="flex items-center gap-2 text-[13px]">
+            <Building2 aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onOrganization} data-testid="work-checklist-organization">Organization settings</button>
+          </li>
+        ) : null}
       </ul>
     </div>
   );
@@ -308,9 +310,13 @@ export function WorkChecklist(props: { client: WorkClient | null; onboarding: Pa
 export function WorkInviteDialog(props: { client: WorkClient | null; open: boolean; onOpenChange: (open: boolean) => void }) {
   const [email, setEmail] = useState("");
   const [link, setLink] = useState<string | null>(null);
+  const rememberLink = useWorkInviteLinks((state) => state.remember);
   const invite = useMutation({
     mutationFn: () => props.client!.inviteWorkMember(email.trim()),
-    onSuccess: (answer) => setLink(answer.link),
+    onSuccess: (answer) => {
+      setLink(answer.link);
+      if (answer.id) rememberLink(answer.id, answer.link);
+    },
     onError: (reason) => toast.error(errorText(reason)),
   });
   const close = (open: boolean) => {
@@ -364,24 +370,5 @@ export function SampleDataBadge(props: { client: WorkClient | null }) {
         {remove.isPending ? "Removing…" : "Remove"}
       </button>
     </span>
-  );
-}
-
-/** Settings > Preferences: invite teammates to the company, while Work is on for the account. */
-export function WorkInviteSetting(props: { client: WorkClient | null }) {
-  const state = useWorkState(props.client);
-  const [open, setOpen] = useState(false);
-  if (!state.data?.enabled) return null;
-  return (
-    <LayoutSectionItem>
-      <LayoutSectionItemHeader>
-        <LayoutSectionItemTitle>Work teammates</LayoutSectionItemTitle>
-        <LayoutSectionItemDescription>Invite people from your company to Work. Each person connects their own tools.</LayoutSectionItemDescription>
-        <LayoutSectionItemHeaderActions>
-          <Button variant="outline" size="sm" data-testid="settings-work-invite" onClick={() => setOpen(true)}>Invite</Button>
-        </LayoutSectionItemHeaderActions>
-      </LayoutSectionItemHeader>
-      <WorkInviteDialog client={props.client} open={open} onOpenChange={setOpen} />
-    </LayoutSectionItem>
   );
 }

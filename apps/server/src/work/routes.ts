@@ -15,6 +15,11 @@
  *   GET   /work/onboarding, POST /work/onboarding {company, domain?, size?, industry?, role?, tools}
  *   POST  /work/demo, DELETE /work/demo    seeds or removes the sample data
  *   POST  /work/org/invites {email}, POST /work/org/invites/accept {token}, GET /work/org/members
+ *   PATCH /work/org, PATCH /work/org/me, DELETE /work/org/invites/:id, DELETE /work/org/members/:id,
+ *   POST  /work/org/transfer {user_id}, POST /work/org/leave                   the organization (contract Addendum C1)
+ *   GET   /work/feed?source=&tz=&limit=    the Today home's feed
+ *   POST  /work/connectors/:id/sync        a sync now (429 too_soon within a minute)
+ *   GET   /work/chat-tools, POST /work/chat-tools/fix   whether the Work chats' engine has the hosted tools; fix re-reads the switch and re-syncs
  *   GET   /work/graph?focus=&depth=&kinds=&limit=, GET /work/timeline?focus=&cursor=&limit=   the graph explorer
  *   GET   /work/answer-style, PUT /work/answer-style { style: "brief"|"detailed" }   (local: the Work prompt's style)
  *
@@ -45,6 +50,8 @@ export type WorkRouteDeps = {
   applyEngine: () => Promise<unknown>;
   /** The engine lists the hosted server's tools again (a source was connected or disconnected). */
   refreshMcp?: () => void;
+  /** Whether the Work folder's engine has the hosted server; `fix` re-reads the switch and re-syncs first. */
+  chatTools?: (fix: boolean) => Promise<{ attached: boolean; reason: string | null }>;
 };
 
 const WORK_ERRORS: Record<string, string> = {
@@ -60,6 +67,10 @@ const WORK_ERRORS: Record<string, string> = {
   invite_used: "This invite was already used. Ask for a new one.",
   invite_expired: "This invite has expired. Ask for a new one.",
   omnirush_account_required: "Sign in to omnirush.ai to use Work.",
+  not_owner: "Only the organization's owner can do that.",
+  cannot_remove_self: "You can't remove yourself. Leave the organization instead.",
+  transfer_first: "Make someone else the owner before you leave.",
+  too_soon: "A sync just ran. Try again in a minute.",
   reconnect_required: "Sign-in expired or access was revoked. Reconnect this source.",
   rate_limited: "The service asked us to slow down. Try again in a minute.",
   provider_error: "The service returned an error. Try again.",
@@ -148,7 +159,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     return answer.response;
   });
 
-  for (const action of ["start", "disconnect"] as const) {
+  for (const action of ["start", "disconnect", "sync"] as const) {
     addRoute(routes, "POST", `/work/connectors/:id/${action}`, "client", async (ctx) => {
       if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
       const found = deps.broker();
@@ -240,25 +251,85 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   // Company setup: the profile, sample data and teammates.
   addRoute(routes, "GET", "/work/onboarding", "client", async () => forward("onboarding", "GET"));
 
+  /** The company fields of a body, checked (an error's text, or what to forward); `tools` only when sent unless `toolsAlways`. */
+  const orgFields = (body: Record<string, unknown>, fields: readonly string[], toolsAlways: boolean): string | Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    const domain = text(body.domain)?.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "") ?? null;
+    if (domain) {
+      if (!DOMAIN.test(domain)) return "The domain is not valid (like example.com).";
+      out.domain = domain;
+    }
+    for (const field of fields) {
+      const value = text(body[field]);
+      if (value && value.length > 100) return `${field} is too long (at most 100 characters).`;
+      if (value) out[field] = value;
+    }
+    if (toolsAlways || body.tools !== undefined) {
+      const tools = Array.isArray(body.tools) ? body.tools : [];
+      if (tools.length > 32 || !tools.every((id) => typeof id === "string" && CONNECTOR.test(id))) return "tools must be connector ids";
+      out.tools = [...new Set(tools)];
+    }
+    return out;
+  };
+
   addRoute(routes, "POST", "/work/onboarding", "client", async (ctx) => {
     const body = await deps.readJsonBody(ctx.request);
     const company = text(body.company);
     if (!company || company.length > 200) return invalid("A company name is needed (at most 200 characters).");
-    const out: Record<string, unknown> = { company };
-    const domain = text(body.domain)?.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "") ?? null;
-    if (domain) {
-      if (!DOMAIN.test(domain)) return invalid("The domain is not valid (like example.com).");
-      out.domain = domain;
-    }
-    for (const field of ["size", "industry", "role"] as const) {
-      const value = text(body[field]);
-      if (value && value.length > 100) return invalid(`${field} is too long (at most 100 characters).`);
-      if (value) out[field] = value;
-    }
-    const tools = Array.isArray(body.tools) ? body.tools : [];
-    if (tools.length > 32 || !tools.every((id) => typeof id === "string" && CONNECTOR.test(id))) return invalid("tools must be connector ids");
-    out.tools = [...new Set(tools)];
-    return forward("onboarding", "POST", out);
+    const fields = orgFields(body, ["size", "industry", "role"], true);
+    if (typeof fields === "string") return invalid(fields);
+    return forward("onboarding", "POST", { company, ...fields });
+  });
+
+  // The organization (Settings > Work > Organization): the owner edits it, every member their own role and tools.
+  addRoute(routes, "PATCH", "/work/org", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    const name = body.name === undefined ? null : text(body.name);
+    if (body.name !== undefined && (!name || name.length > 200)) return invalid("A company name is needed (at most 200 characters).");
+    const fields = orgFields(body, ["size", "industry"], false);
+    if (typeof fields === "string") return invalid(fields);
+    return forward("org", "PATCH", { ...(name ? { name } : {}), ...fields });
+  });
+
+  addRoute(routes, "PATCH", "/work/org/me", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    const fields = orgFields({ job_role: body.job_role, tools: body.tools }, ["job_role"], false);
+    if (typeof fields === "string") return invalid(fields);
+    // An emptied role is sent as "" so it can be cleared.
+    if (body.job_role !== undefined && !("job_role" in fields)) fields.job_role = "";
+    return forward("org/me", "PATCH", fields);
+  });
+
+  addRoute(routes, "DELETE", "/work/org/invites/:id", "client", async (ctx) => {
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_invite", code: "unknown_invite", message: WORK_ERRORS.unknown_invite }, 404);
+    return forward(`org/invites/${ctx.params.id}`, "DELETE");
+  });
+
+  addRoute(routes, "DELETE", "/work/org/members/:id", "client", async (ctx) => {
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "not_found" }, 404);
+    return forward(`org/members/${ctx.params.id}`, "DELETE");
+  });
+
+  addRoute(routes, "POST", "/work/org/transfer", "client", async (ctx) => {
+    const userId = text((await deps.readJsonBody(ctx.request)).user_id);
+    if (!userId || !RECORD_ID.test(userId)) return invalid("user_id is not valid");
+    return forward("org/transfer", "POST", { user_id: userId });
+  });
+
+  addRoute(routes, "POST", "/work/org/leave", "client", async () => forward("org/leave", "POST", {}));
+
+  // The Today home: the server's feed for the person's local day.
+  addRoute(routes, "GET", "/work/feed", "client", async (ctx) => {
+    const source = ctx.url.searchParams.get("source");
+    if (source && !CONNECTOR.test(source)) return jsonResponse({ detail: "unknown_connector" }, 404);
+    return forward(`feed${forwardQuery(ctx.url, ["source", "tz", "limit"])}`, "GET");
+  });
+
+  // A Work chat without the hosted tools: the banner asks here, its Fix posts.
+  addRoute(routes, "GET", "/work/chat-tools", "client", async () => jsonResponse(deps.chatTools ? await deps.chatTools(false) : { attached: true, reason: null }));
+  addRoute(routes, "POST", "/work/chat-tools/fix", "client", async () => {
+    switchStale = true;
+    return jsonResponse(deps.chatTools ? await deps.chatTools(true) : { attached: true, reason: null });
   });
 
   addRoute(routes, "POST", "/work/demo", "client", async () => forward("demo", "POST", {}));

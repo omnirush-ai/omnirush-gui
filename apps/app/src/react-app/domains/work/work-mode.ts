@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkHealth, OmniRushWorkOnboarding, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkOnboarding, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -12,6 +12,7 @@ export const WORK_HOME_ROUTE = "/work";
 export const WORK_CONNECTORS_ROUTE = "/work/connectors";
 export const WORK_KNOWLEDGE_ROUTE = "/work/knowledge";
 export const WORK_ONBOARDING_ROUTE = "/work/welcome";
+export const WORK_ORG_ROUTE = "/work/organization";
 
 /**
  * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own
@@ -42,12 +43,17 @@ export const useWorkModeStore = create<WorkModeStore>()(
 export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
   | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact" | "getWorkGraph" | "getWorkTimeline"
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
-  | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"> & { baseUrl?: string };
+  | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
+  | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
+  | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];
 export const workOnboardingKey = (client: WorkClient | null) => ["omnirush-work-onboarding", client?.baseUrl?.trim() || "default"];
 export const workEntityKey = (client: WorkClient | null, id: string) => ["omnirush-work-entity", client?.baseUrl?.trim() || "default", id];
+export const workFeedKey = (client: WorkClient | null, source: string | null) => ["omnirush-work-feed", client?.baseUrl?.trim() || "default", source ?? "all"];
+export const workMembersKey = (client: WorkClient | null) => ["omnirush-work-members", client?.baseUrl?.trim() || "default"];
+export const workChatToolsKey = (client: WorkClient | null) => ["omnirush-work-chat-tools", client?.baseUrl?.trim() || "default"];
 
 /** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
 export function useWorkState(client: WorkClient | null) {
@@ -69,6 +75,16 @@ export function useWorkOnboarding(client: WorkClient | null, enabled: boolean) {
     retry: false,
   });
 }
+
+type WorkInviteLinks = { links: Record<string, string>; remember: (id: string, link: string) => void };
+
+/** Invite links made on this device, by invite id: the server keeps only a hash, so only these can be copied again. */
+export const useWorkInviteLinks = create<WorkInviteLinks>()(
+  persist((set) => ({ links: {}, remember: (id, link) => set((state) => ({ links: { ...state.links, [id]: link } })) }), {
+    name: "omnirush.workInviteLinks",
+    storage: createJSONStorage(() => localStorage),
+  }),
+);
 
 type WorkSetupStore = {
   /** The tailored first tasks onboarding answered, by org id (only POST /onboarding returns them). */
@@ -278,4 +294,57 @@ export const FACT_KINDS = [
 /** "Ask about this": the brief a Work chat starts with, so the agent calls work_context on the entity first. */
 export function askAboutPrompt(entity: Pick<OmniRushWorkEntitySummary, "id" | "kind" | "name">): string {
   return `Brief me on ${entity.name} (${entity.kind}). Call work_context for "${entity.name}" first (entity id ${entity.id}), then summarise who or what this is, our recent history across every source, open items and anything we decided or agreed to remember, with links to the sources.`;
+}
+
+/** "1,992 emails · 573 files · 1 event": a source's coverage by kind, most first; null without one. */
+export function coverageLine(coverage: OmniRushWorkConnector["coverage"]): string | null {
+  const kinds = Object.entries(coverage?.by_kind ?? {}).filter(([, count]) => typeof count === "number" && count > 0).sort((a, b) => b[1] - a[1]);
+  if (!kinds.length) return null;
+  const plural = (noun: string, count: number) => (count === 1 ? noun : /(s|x|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`);
+  return kinds.map(([kind, count]) => `${count.toLocaleString()} ${plural(kind.replace(/_/g, " "), count)}`).join(" · ");
+}
+
+/** "5 min ago", "in 2 h", "Yesterday", "Tue": short, for feed rows. */
+export function relativeTime(value: string | null | undefined, now = Date.now()): string {
+  if (!value) return "";
+  const at = new Date(value).getTime();
+  if (Number.isNaN(at)) return "";
+  const minutes = Math.round((at - now) / 60_000);
+  const abs = Math.abs(minutes);
+  const say = (amount: string) => (minutes < 0 ? `${amount} ago` : `in ${amount}`);
+  if (abs < 1) return "now";
+  if (abs < 60) return say(`${abs} min`);
+  if (abs < 24 * 60) return say(`${Math.round(abs / 60)} h`);
+  if (minutes < 0 && abs < 48 * 60) return "Yesterday";
+  if (minutes > 0 && abs < 48 * 60) return "Tomorrow";
+  return new Date(at).toLocaleDateString(undefined, abs < 7 * 24 * 60 ? { weekday: "short" } : { month: "short", day: "numeric" });
+}
+
+/** "Ask about this" on a feed item: the brief a Work chat starts with. */
+export function askAboutItemPrompt(item: Pick<OmniRushWorkFeedItem, "id" | "source" | "kind" | "title" | "url">): string {
+  const source = connectorLabel(item.source);
+  return `Help me with this ${item.kind.replace(/_/g, " ")} from ${source}: "${item.title}"${item.url ? ` (${item.url})` : ""}, source id ${item.id}. Look it up first, then tell me what it is, what is needed from me and anything related, with links.`;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function noticesIn(value: unknown, depth = 0): string[] {
+  if (typeof value === "string") {
+    if (depth > 1 || value.length > 256 * 1024 || !value.includes("notices")) return [];
+    try { return noticesIn(JSON.parse(value), depth + 1); } catch { return []; }
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => (isObject(item) && typeof item.text === "string" ? noticesIn(item.text, depth) : []));
+  if (!isObject(value)) return [];
+  if (Array.isArray(value.notices)) return value.notices.filter((notice): notice is string => typeof notice === "string" && Boolean(notice.trim())).map((notice) => notice.trim().slice(0, 400));
+  return [...noticesIn(value.structuredContent, depth), ...noticesIn(value.content, depth)];
+}
+
+/** The `notices` a Work tool result carries (contract Addendum C1): from the kept MCP result, or the output text. */
+export function workToolNotices(part: { toolName: string; output?: unknown; callProviderMetadata?: unknown }): string[] {
+  if (!part.toolName.startsWith(WORK_TOOL_PREFIX)) return [];
+  const omnirush = isObject(part.callProviderMetadata) && isObject(part.callProviderMetadata.omnirush) ? part.callProviderMetadata.omnirush : null;
+  const kept = omnirush && isObject(omnirush.mcpResult) ? noticesIn(omnirush.mcpResult) : [];
+  return [...new Set(kept.length ? kept : noticesIn(part.output))];
 }

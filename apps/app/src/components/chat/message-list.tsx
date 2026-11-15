@@ -97,6 +97,8 @@ import { CapabilityCallLine } from "@/components/chat/capability-call-line"
 import { CodeModeTool } from "@/components/chat/code-mode-tool"
 import { codeModeToolCalls } from "@/lib/code-mode-tools"
 import { hasPreservedMcpAppResult, McpAppFrame } from "@/components/chat/mcp-app-frame"
+import { workToolNotices } from "@/react-app/domains/work/work-mode"
+import { WorkToolNotices } from "@/react-app/domains/work/work-views"
 import { ReasoningBlock } from "@/components/chat/reasoning-block"
 import { SubagentRunLine } from "@/components/chat/subagent-run-line"
 import { ToolAggregateGroup } from "@/components/chat/tool-aggregate-group"
@@ -1319,6 +1321,18 @@ function collectMcpAppParts(items: UIMessageWithIndex[]): DynamicToolUIPart[] {
   return [...parts.values()]
 }
 
+/** The notices this turn's Work tool results carried, each once (contract Addendum C1). */
+function collectWorkNotices(items: UIMessageWithIndex[]): string[] {
+  const notices = new Set<string>()
+  for (const item of items) {
+    if (item.message.role !== "assistant" || isSessionErrorMessage(item.message)) continue
+    for (const part of item.message.parts) {
+      if (part.type === "dynamic-tool" && part.state === "output-available") for (const notice of workToolNotices(part)) notices.add(notice)
+    }
+  }
+  return [...notices]
+}
+
 function MessageGroup({
   items,
   isLastGroup,
@@ -1342,6 +1356,7 @@ function MessageGroup({
   const renderableItems = getRenderableMessages(items)
   const lastTextMessage = getLastTextPart(lastItem.message)
   const mcpAppParts = collectMcpAppParts(items)
+  const workNotices = collectWorkNotices(items)
   // A review reply with issues (the engine's review layout) offers "Fix these" while it is the newest reply.
   const lastTextPart = lastTextMessage?.parts[0]
   const review = onRunCommand && isLastGroup && !isStreaming && lastItem.message.role === "assistant" && lastTextPart?.type === "text"
@@ -1497,6 +1512,11 @@ function MessageGroup({
           <McpAppFrame part={part} />
         </Message>
       ))}
+      {workNotices.length ? (
+        <Message className="mx-auto flex w-full max-w-3xl flex-col px-2 @min-[40rem]/chatpane:px-10">
+          <WorkToolNotices notices={workNotices} />
+        </Message>
+      ) : null}
       {renderItems(proseItems, stepItems.length, collapseSteps)}
       {lastTextMessage && !isStreaming && (
         <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100 md:px-8">

@@ -3,10 +3,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 
-import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import type { OmniRushWorkConnector, OmniRushWorkFeed, OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
+import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
+  askAboutItemPrompt, coverageLine, relativeTime, workChatToolsKey, workFeedKey, workMembersKey, workToolNotices } from "../src/react-app/domains/work/work-mode";
+import { SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
+import { leaveState, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
-import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
+import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
@@ -270,5 +273,146 @@ describe("Work mode", () => {
     expect(prompt).toContain("work_context");
     expect(prompt).toContain("Acme Bakery");
     expect(prompt).toContain("ent_1");
+  });
+});
+
+describe("Work Today, connectors attention, organization, tools (Addendum C)", () => {
+  const feed: OmniRushWorkFeed = {
+    generated_at: "2026-11-15T09:00:00Z",
+    sources: [
+      { id: "github", label: "GitHub", status: "error", attention: { kind: "failing", message: "GitHub sync keeps failing.", action: "retry", since: null } },
+      { id: "google", label: "Google", status: "connected", attention: { kind: "reconnect", message: "Google needs reconnecting.", action: "reconnect", since: null } },
+      { id: "notion", label: "Notion", status: "connected", attention: { kind: "coverage", message: "Notion sees 1 page.", action: "setup", since: null } },
+      { id: "slack", label: "Slack", status: "syncing", attention: null },
+    ],
+    groups: {
+      needs_you: [{ id: "github:pr:12", source: "github", kind: "pull_request", title: "Fix invoice rounding", who: "Dana", at: "2026-11-15T08:00:00Z", url: "https://github.test/pr/12", reason: "Review requested" }],
+      today: [{ id: "calendar:e1", source: "google", kind: "event", title: "Supplier call", at: null, starts_at: "2026-11-15T14:00:00Z", url: null, reason: null }],
+      fyi: [],
+    },
+  };
+
+  test("source pills: a dot per state and the fix inline", () => {
+    expect(sourceDot(feed.sources[0]!)).toBe("error");
+    expect(sourceDot(feed.sources[2]!)).toBe("attention");
+    expect(sourceDot(feed.sources[3]!)).toBe("syncing");
+    expect(sourceDot({ status: "connected", attention: null })).toBe("ok");
+    const strip = renderToStaticMarkup(<SourceStrip sources={feed.sources} busy={null} onReconnect={noop} onRetry={noop} onAdd={noop} onSetup={noop} />);
+    expect(strip).toMatch(/data-work-source="github"[^>]*data-dot="error"/);
+    expect(strip).toContain(">Retry<");
+    expect(strip).toContain(">Reconnect<");
+    expect(strip).toContain('data-testid="work-source-add"');
+  });
+
+  test("Today: three sections with counts, rows with reason, Open only with a link, Ask about this; skeleton while loading", () => {
+    const client = { baseUrl: "http://today.test" } as never;
+    const render = (data?: OmniRushWorkFeed) => {
+      const queries = new QueryClient();
+      if (data) queries.setQueryData(workFeedKey(client, null), data);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkToday client={client} openLink={noop} onAsk={async () => {}} onOpenConnectors={noop} /></QueryClientProvider>);
+    };
+    const markup = render(feed);
+    expect(markup.match(/data-feed-section=/g)?.length).toBe(3);
+    expect(markup).toContain("Needs you");
+    expect(markup).toContain("Review requested");
+    expect(markup).toContain('aria-label="Open Fix invoice rounding"');
+    expect(markup).not.toContain('aria-label="Open Supplier call"');
+    expect(markup.match(/Ask about this/g)?.length).toBe(2);
+    expect(markup).toContain('data-testid="work-feed-filters"');
+    expect(markup).toContain("Nothing new in the last 7 days.");
+    expect(render()).not.toContain('data-testid="work-feed"');
+    expect(markup).not.toMatch(/—|farm|stock/i);
+    const prompt = askAboutItemPrompt(feed.groups.needs_you[0]!);
+    expect(prompt).toContain("Fix invoice rounding");
+    expect(prompt).toContain("github:pr:12");
+  });
+
+  test("the home shows Today in place of the empty column once something is connected", () => {
+    const home = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} today={<div data-testid="today-slot" />} onConnect={noop} />);
+    expect(home).toContain("today-slot");
+    expect(home).not.toContain("What do you want to get done?");
+    expect(home.indexOf("today-slot")).toBeLessThan(home.indexOf("composer-slot"));
+    const empty = renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} onConnect={noop} />);
+    expect(empty).toContain('data-testid="work-home-connect"');
+  });
+
+  test("relative times read short", () => {
+    const now = Date.parse("2026-11-15T12:00:00Z");
+    expect(relativeTime("2026-11-15T11:55:00Z", now)).toBe("5 min ago");
+    expect(relativeTime("2026-11-15T14:00:00Z", now)).toBe("in 2 h");
+    expect(relativeTime("2026-11-14T08:00:00Z", now)).toBe("Yesterday");
+    expect(relativeTime(null, now)).toBe("");
+  });
+
+  test("connectors: attention message and its button, coverage by kind, skipped records", () => {
+    expect(coverageLine({ records: 2566, by_kind: { file: 573, email: 1992, event: 1, match: 0 } })).toBe("1,992 emails · 573 files · 1 event");
+    expect(coverageLine(null)).toBeNull();
+    const failing = renderToStaticMarkup(<ConnectorRow connector={row({ id: "github", label: "GitHub", status: "error", records: 40, coverage: { records: 40, by_kind: { pull_request: 40 } }, skipped_records: 3, attention: { kind: "failing", message: "GitHub sync keeps failing: a record could not be read.", action: "retry", since: null } })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onRetry={noop} />);
+    expect(failing).toContain("GitHub sync keeps failing");
+    expect(failing).toContain(">Retry sync<");
+    expect(failing).not.toContain(">Reconnect<");
+    expect(failing).toContain("40 pull requests");
+    expect(failing).toContain("3 items could not be imported and were skipped.");
+    const coverage = renderToStaticMarkup(<ConnectorRow connector={row({ id: "notion", label: "Notion", status: "connected", records: 1, setup_url: "https://notion.test/setup", attention: { kind: "coverage", message: "Notion sees 1 page. Share more pages with Omnirush AI.", action: "setup", since: null } })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onSetup={noop} />);
+    expect(coverage).toContain(">Open setup<");
+    expect(coverage).toMatch(/data-testid="work-connector-attention" data-kind="coverage"/);
+    const reconnect = renderToStaticMarkup(<ConnectorRow connector={row({ status: "connected", attention: { kind: "reconnect", message: "Google needs reconnecting.", action: "reconnect", since: null } })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
+    expect(reconnect).toContain(">Reconnect<");
+    expect(reconnect).toContain("Needs attention");
+  });
+
+  test("organization: owner and member views, leave rules", () => {
+    const client = { baseUrl: "http://org.test" } as never;
+    const members = (you_role: "owner" | "member"): OmniRushWorkMembers => ({
+      org: { id: "org_1", name: "Acme Bakery", domain: "acme-bakery.test", size: "11-50", tools: ["google"] },
+      you_role,
+      members: [
+        { user_id: "u1", email: "owner@acme-bakery.test", role: "owner", you: you_role === "owner" },
+        { user_id: "u2", email: "dana@acme-bakery.test", role: "member", job_role: "Ops", you: you_role === "member" },
+      ],
+      invites: [{ id: "inv_1", email: "sam@acme-bakery.test", expires_at: "2026-11-29T00:00:00Z" }],
+    });
+    const render = (data: OmniRushWorkMembers) => {
+      const queries = new QueryClient();
+      queries.setQueryData(workMembersKey(client), data);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} onBack={noop} /></MemoryRouter></QueryClientProvider>);
+    };
+    const owner = render(members("owner"));
+    expect(owner).toContain('value="Acme Bakery"');
+    expect(owner).toContain('data-testid="work-org-save"');
+    expect(owner).toContain(">Make owner<");
+    expect(owner).toContain(">Remove<");
+    expect(owner).toContain('data-work-invite="inv_1"');
+    expect(owner).toContain(">Cancel<");
+    expect(owner).toContain("Make someone else the owner before you leave.");
+    const member = render(members("member"));
+    expect(member).not.toContain('data-testid="work-org-save"');
+    expect(member).not.toContain(">Make owner<");
+    expect(member).toContain('data-testid="work-org-me-save"');
+    expect(member).toContain("Only the owner can change these.");
+    expect(leaveState({ you_role: "owner", members: [{ user_id: "u1", email: "a", role: "owner", you: true }] }).message).toContain("deleted");
+    expect(leaveState(members("member")).blocked).toBe(false);
+  });
+
+  test("Work tool notices: from the kept MCP result or the output text, Work tools only, each once", () => {
+    expect(workToolNotices({ toolName: "omnirush-work_work_search", output: '{"items":[],"notices":["Google needs reconnecting in Work > Connectors."]}' })).toEqual(["Google needs reconnecting in Work > Connectors."]);
+    expect(workToolNotices({ toolName: "omnirush-work_gmail_search", callProviderMetadata: { omnirush: { mcpResult: { content: [{ type: "text", text: "{}" }], notices: ["A", "A"] } } } })).toEqual(["A"]);
+    expect(workToolNotices({ toolName: "omnirush-work_gmail_search", output: { content: [{ type: "text", text: '{"notices":["B"]}' }] } })).toEqual(["B"]);
+    expect(workToolNotices({ toolName: "bash", output: '{"notices":["x"]}' })).toEqual([]);
+    expect(workToolNotices({ toolName: "omnirush-work_work_search", output: "plain text" })).toEqual([]);
+    expect(renderToStaticMarkup(<WorkToolNotices notices={["Google needs reconnecting."]} />)).toContain("Google needs reconnecting.");
+  });
+
+  test("the tools banner shows only in a Work chat whose engine lacks the Work tools", () => {
+    const client = { baseUrl: "http://tools.test" } as never;
+    const render = (workChat: boolean, attached: boolean) => {
+      const queries = new QueryClient();
+      queries.setQueryData(workChatToolsKey(client), { attached, reason: attached ? null : "Work tools were not added to this chat." });
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkToolsBanner workChat={workChat} client={client} /></QueryClientProvider>);
+    };
+    expect(render(true, false)).toContain("Work tools aren&#x27;t connected in this chat");
+    expect(render(true, false)).toContain('data-testid="work-tools-fix"');
+    expect(render(true, true)).toBe("");
+    expect(render(false, false)).toBe("");
   });
 });

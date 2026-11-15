@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, BookOpen, Briefcase, Calculator, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Kanban, Mail, Plug, Shapes, Sparkles, Ticket,
+  ArrowLeft, BookOpen, Briefcase, Calculator, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, Plug, Shapes, Sparkles, Ticket,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -27,8 +27,8 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
-  sourceErrorText, workConnectorsKey, workStateKey, type AppMode, type WorkClient,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageLine, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  sourceErrorText, workChatToolsKey, workConnectorsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
 const CONNECTOR_ICONS: Record<string, LucideIcon> = {
@@ -79,8 +79,9 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
   );
 }
 
-/** Work home: "What do you want to get done?" and the first-run checklist above the real chat composer (passed in, the
- *  same one the running Work chat uses), with up to three tailored starter chips from onboarding just above it. */
+/** Work home: the Today view once a source is connected (or sample data is in), otherwise "What do you want to get
+ *  done?", the first-run checklist and a connect button; above the real chat composer (passed in, the same one the
+ *  running Work chat uses), with up to three tailored starter chips from onboarding just above it. */
 export function WorkHome(props: {
   composer: ReactNode;
   onStart: (prompt: string) => Promise<void>;
@@ -90,6 +91,9 @@ export function WorkHome(props: {
   /** The "Sample data" badge while the demo source is seeded. */
   badge?: ReactNode;
   checklist?: ReactNode;
+  /** The Today view (work-today.tsx); null while nothing is connected. */
+  today?: ReactNode;
+  onConnect?: () => void;
 }) {
   const [starting, setStarting] = useState(false);
   const busy = Boolean(props.busy) || starting;
@@ -108,6 +112,11 @@ export function WorkHome(props: {
   return (
     <div className="flex h-full flex-col" data-testid="work-home">
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {props.today ? (
+          <div className={cn(COMPOSER_GUTTER, "py-8")}>
+            <div className="mx-auto w-full max-w-[800px]" data-testid="work-home-column">{props.today}</div>
+          </div>
+        ) : (
         <div className={cn(COMPOSER_GUTTER, "flex min-h-full flex-col justify-center py-8")}>
           <div className="mx-auto flex w-full max-w-[800px] flex-col items-center gap-4" data-testid="work-home-column">
             <div className="space-y-1.5 text-center">
@@ -116,8 +125,12 @@ export function WorkHome(props: {
             </div>
             {props.badge}
             {props.checklist ? <div className="w-full max-w-[420px]">{props.checklist}</div> : null}
+            {props.onConnect ? (
+              <Button variant="outline" size="sm" onClick={props.onConnect} data-testid="work-home-connect"><Plug className="size-4" />Connect your tools</Button>
+            ) : null}
           </div>
         </div>
+        )}
       </div>
       <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
         <div className={cn(COMPOSER_WIDTH, "flex flex-col gap-2")}>
@@ -179,14 +192,20 @@ export function ConnectorRow(props: {
   health?: OmniRushWorkHealth | null;
   checking?: boolean;
   onCheck?: () => void;
+  /** Clears the backoff and syncs now (an `attention` with action `retry`). */
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   const row = props.connector;
   const name = connectorLabel(row.id, row.label);
   const connected = row.status === "connected" || row.status === "syncing" || row.status === "error";
   const problem = healthProblem(props.health ?? null);
-  const reconnect = row.status === "error" || Boolean(problem?.reconnect);
+  // The server's own account of a problem (contract Addendum C1) decides the button when it sends one.
+  const attention = connected ? row.attention ?? null : null;
+  const reconnect = attention ? attention.action === "reconnect" || Boolean(problem?.reconnect) : row.status === "error" || Boolean(problem?.reconnect);
   // Connected and caught up with nothing to read: for GitHub, the App is not installed on any repository yet.
-  const needsSetup = Boolean(row.setup_url) && row.status === "connected" && row.records === 0;
+  const needsSetup = !attention && Boolean(row.setup_url) && row.status === "connected" && row.records === 0;
+  const coverage = coverageLine(row.coverage);
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
       <ConnectorIcon id={row.id} />
@@ -194,17 +213,31 @@ export function ConnectorRow(props: {
       <div className="min-w-[16rem] flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{name}</span>
-          <Badge variant={row.status === "error" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
-            {props.connecting ? "Waiting for sign-in…" : STATUS_LABEL[row.status]}
+          <Badge variant={row.status === "error" || attention?.kind === "reconnect" || attention?.kind === "failing" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
+            {props.connecting ? "Waiting for sign-in…" : attention ? STATUS_LABEL.error : STATUS_LABEL[row.status]}
           </Badge>
         </div>
         <div className="mt-0.5 break-words text-[12px] text-muted-foreground">
-          {row.status === "error"
+          {row.status === "error" && !attention
             ? sourceErrorText(row.error)
             : connected
-              ? [row.account, countLabel(row.records, "record"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
+              ? [row.account, coverage ?? countLabel(row.records, "record"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
               : connectorAccess(row.id)}
         </div>
+        {attention ? (
+          <div
+            className={cn("mt-0.5 break-words text-[12px]", attention.kind === "reconnect" || attention.kind === "failing" ? "text-destructive" : "text-amber-11")}
+            data-testid="work-connector-attention"
+            data-kind={attention.kind}
+          >
+            {attention.message}
+          </div>
+        ) : null}
+        {connected && (row.skipped_records ?? 0) > 0 ? (
+          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-connector-skipped">
+            {countLabel(row.skipped_records ?? 0, "item")} could not be imported and {row.skipped_records === 1 ? "was" : "were"} skipped.
+          </div>
+        ) : null}
         {needsSetup ? (
           <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-connector-setup-hint">
             Nothing to read yet. {setupLabel(row.id)} to pick what OmniRush can see.
@@ -231,8 +264,11 @@ export function ConnectorRow(props: {
       {connected && props.onCheck ? (
         <Button variant="ghost" size="sm" aria-label={`Check ${name}`} disabled={props.checking} onClick={props.onCheck}>{props.checking ? "Checking…" : "Check"}</Button>
       ) : null}
+      {connected && attention?.action === "retry" && props.onRetry ? (
+        <Button size="sm" aria-label={`Retry sync for ${name}`} disabled={props.retrying} onClick={props.onRetry}>{props.retrying ? "Starting…" : "Retry sync"}</Button>
+      ) : null}
       {connected && row.setup_url && props.onSetup ? (
-        <Button variant={needsSetup ? "default" : "ghost"} size="sm" onClick={props.onSetup}>{setupLabel(row.id)}</Button>
+        <Button variant={needsSetup || attention?.action === "setup" ? "default" : "ghost"} size="sm" onClick={props.onSetup}>{attention?.action === "setup" ? "Open setup" : setupLabel(row.id)}</Button>
       ) : null}
       {connected && reconnect ? (
         <Button size="sm" aria-label={`Reconnect ${name}`} disabled={props.busy || props.connecting} onClick={props.onConnect}>Reconnect</Button>
@@ -301,6 +337,14 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     onSuccess: refresh,
     onError,
   });
+  const retry = useMutation({
+    mutationFn: (id: string) => props.client!.syncWorkConnector(id),
+    onSuccess: () => {
+      toast.success("Sync started");
+      void refresh();
+    },
+    onError,
+  });
   const rows = visibleConnectors(query.data);
   const busy = connect.isPending || disconnect.isPending || sync.isPending;
   return (
@@ -334,6 +378,8 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               health={health[row.id]}
               checking={check.isPending && check.variables === row.id}
               onCheck={() => check.mutate(row.id)}
+              retrying={retry.isPending && retry.variables === row.id}
+              onRetry={() => retry.mutate(row.id)}
             />
           ))}
         </div>
@@ -397,5 +443,51 @@ export function WorkConnectorsSetting(props: { client: WorkClient | null }) {
         </LayoutSectionItemHeaderActions>
       </LayoutSectionItemHeader>
     </LayoutSectionItem>
+  );
+}
+
+/** A Work chat whose engine has no hosted Work tools (the agent would only see local files): says so, with Fix. */
+export function WorkToolsBanner(props: { workChat?: boolean; client: WorkClient | null }) {
+  return props.workChat && props.client ? <WorkToolsBannerCheck client={props.client} /> : null;
+}
+
+function WorkToolsBannerCheck(props: { client: WorkClient }) {
+  const queryClient = useQueryClient();
+  const key = workChatToolsKey(props.client);
+  const query = useQuery({ queryKey: key, queryFn: () => props.client.getWorkChatTools(), refetchInterval: 60_000, retry: false });
+  const fix = useMutation({
+    mutationFn: () => props.client.fixWorkChatTools(),
+    onSuccess: (answer) => {
+      queryClient.setQueryData(key, answer);
+      if (answer.attached) toast.success("Work tools are connected");
+      else toast.error(answer.reason ?? "Work tools are still not connected.");
+    },
+    onError: (reason) => toast.error(reason instanceof Error ? reason.message : "That did not work. Try again."),
+  });
+  if (!query.data || query.data.attached) return null;
+  return (
+    <div role="status" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-amber-7/50 bg-amber-2/50 px-3 py-2 text-[13px] text-amber-11" data-testid="work-tools-banner">
+      <Plug aria-hidden className="size-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <span className="font-medium">Work tools aren't connected in this chat</span>
+        {query.data.reason ? <span className="text-amber-11/80"> {query.data.reason}</span> : null}
+      </div>
+      <Button size="sm" variant="outline" disabled={fix.isPending} onClick={() => fix.mutate()} data-testid="work-tools-fix">{fix.isPending ? "Fixing…" : "Fix"}</Button>
+    </div>
+  );
+}
+
+/** The `notices` Work tool results carried in this turn (e.g. a source that needs reconnecting), each once. */
+export function WorkToolNotices(props: { notices: string[] }) {
+  if (!props.notices.length) return null;
+  return (
+    <div className="flex flex-col gap-1" data-testid="work-tool-notices">
+      {props.notices.map((notice) => (
+        <div key={notice} className="flex items-start gap-2 rounded-lg bg-amber-2/50 px-2.5 py-1.5 text-[12px] text-amber-11">
+          <Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          <span>{notice}</span>
+        </div>
+      ))}
+    </div>
   );
 }

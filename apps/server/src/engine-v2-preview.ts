@@ -80,8 +80,11 @@ export interface EngineV2Preview {
   refreshProviders(): Promise<void>;
   ensureWorkspaceReady(directory: string): Promise<void>;
   syncWorkspaceMcp(workspaceId: string, directory: string): Promise<void>;
-  /** Applies a location's MCP servers again (they changed outside the runtime config: Work's connected sources). */
-  refreshWorkspaceMcp(directory: string): void;
+  /** Applies a location's MCP servers again (they changed outside the runtime config: Work's connected sources or switch);
+   *  resolves once applied (a failure lands in the status' lastError). `workspaceId` for a location not synced yet. */
+  refreshWorkspaceMcp(directory: string, workspaceId?: string): Promise<void>;
+  /** A location's MCP servers as the engine reports them; null when it is not running or does not answer. */
+  mcpStatus(directory: string): Promise<{ name: string; status: string; error?: string }[] | null>;
   /** Whether a chat came from the 1.x store (engine-v2-migration.ts). */
   migratedFromV1(sessionId: string): boolean;
   stop(): Promise<void>;
@@ -712,13 +715,25 @@ export function createEngineV2Preview(options: {
     if (enabled) void start().catch(recordStartError);
   }
   if (!options.deferStart) startWhenReady();
-  function refreshWorkspaceMcp(directory: string): void {
+  async function refreshWorkspaceMcp(directory: string, workspaceId?: string): Promise<void> {
     mcpCleaned.delete(directory);
-    const id = mcpWorkspaces.get(directory);
-    if (id && sidecar) void syncWorkspaceMcp(id, directory).catch((error) => {
+    const id = mcpWorkspaces.get(directory) ?? workspaceId;
+    if (id && sidecar) await syncWorkspaceMcp(id, directory).catch((error) => {
       if (sidecar) lastError = `MCP: ${errorMessage(error)}`;
     });
   }
 
-  return { start: startWhenReady, status, setEnabled, setChatRouting, connection, awaitConnection, refreshProviders, ensureWorkspaceReady, syncWorkspaceMcp, refreshWorkspaceMcp, migratedFromV1: (id) => migrated.has(id), stop };
+  async function mcpStatus(directory: string): Promise<{ name: string; status: string; error?: string }[] | null> {
+    const active = sidecar;
+    if (!active) return null;
+    const answer = await active.fetchJson("/api/mcp", { directory, timeoutMs: 5_000 }).catch(() => null);
+    if (!answer || answer.status !== 200 || !isRecord(answer.json) || !Array.isArray(answer.json.data)) return null;
+    return answer.json.data.flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.name !== "string") return [];
+      const state = isRecord(entry.status) ? entry.status : {};
+      return [{ name: entry.name, status: typeof state.status === "string" ? state.status : "unknown", ...(typeof state.error === "string" ? { error: state.error } : {}) }];
+    });
+  }
+
+  return { start: startWhenReady, status, setEnabled, setChatRouting, connection, awaitConnection, refreshProviders, ensureWorkspaceReady, syncWorkspaceMcp, refreshWorkspaceMcp, mcpStatus, migratedFromV1: (id) => migrated.has(id), stop };
 }

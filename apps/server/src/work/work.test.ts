@@ -250,8 +250,9 @@ describe("work routes", () => {
   });
 
   test("the broker reaches only the contract's paths", () => {
-    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org", "org/../admin", "org/invites/x", "audit", "data", "graph/x"]) expect(WORK_PATH.test(path)).toBe(false);
+    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
+      "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2"]) expect(WORK_PATH.test(path)).toBe(true);
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("tryout, company setup, sample data and invites are checked, then forwarded", async () => {
@@ -283,6 +284,37 @@ describe("work routes", () => {
       "POST org/invites/accept {\"token\":\"https://omnirush.ai/omnirush/work/invite#t=abc\"}",
       "GET org/members ",
     ]);
+  });
+
+  test("the organization, the feed and a sync now are checked, then forwarded (Addendum C)", async () => {
+    const { calls, call } = setup(() => json({ ok: true }));
+    expect((await call("PATCH", "/work/org", { name: " Acme ", domain: "https://acme.test/x", size: "11-50", tools: ["google"], evil: 1 })).status).toBe(200);
+    expect((await call("PATCH", "/work/org", { name: " " })).status).toBe(400);
+    expect((await call("PATCH", "/work/org", { domain: "nope" })).status).toBe(400);
+    expect((await call("PATCH", "/work/org/me", { job_role: "Ops", tools: ["slack"] })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/me", { job_role: "" })).status).toBe(200);
+    expect((await call("DELETE", "/work/org/invites/inv_1")).status).toBe(200);
+    expect((await call("DELETE", "/work/org/members/user_2")).status).toBe(200);
+    expect((await call("POST", "/work/org/transfer", { user_id: "user_2" })).status).toBe(200);
+    expect((await call("POST", "/work/org/transfer", { user_id: "../x" })).status).toBe(400);
+    await call("POST", "/work/org/leave");
+    await call("GET", "/work/feed?source=github&tz=Europe%2FBerlin&limit=60&evil=1");
+    expect((await call("GET", "/work/feed?source=../x")).status).toBe(404);
+    await call("POST", "/work/connectors/github/sync");
+    expect(calls).toEqual([
+      "PATCH org {\"name\":\"Acme\",\"domain\":\"acme.test\",\"size\":\"11-50\",\"tools\":[\"google\"]}",
+      "PATCH org/me {\"job_role\":\"Ops\",\"tools\":[\"slack\"]}",
+      "PATCH org/me {\"job_role\":\"\"}",
+      "DELETE org/invites/inv_1 ",
+      "DELETE org/members/user_2 ",
+      "POST org/transfer {\"user_id\":\"user_2\"}",
+      "POST org/leave {}",
+      "GET feed?source=github&tz=Europe%2FBerlin&limit=60 ",
+      "POST connectors/github/sync {}",
+    ]);
+    // The owner-only answers read in words.
+    const { call: denied } = setup(() => json({ detail: "transfer_first" }, 409));
+    expect(await (await denied("POST", "/work/org/leave")).json()).toMatchObject({ code: "transfer_first", message: "Make someone else the owner before you leave." });
   });
 
   test("the server's errors reach the app as they came (work_disabled)", async () => {

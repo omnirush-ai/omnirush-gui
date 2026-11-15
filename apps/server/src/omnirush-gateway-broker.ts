@@ -66,6 +66,8 @@ export type SubagentModelFallbackEvent = {
 };
 
 type BrokerOptions = {
+  /** Every capabilities answer the server gave (not a cached one), so switches read from it never go stale (Work mode). */
+  onCapabilities?: (capabilities: TraceCapabilities) => void;
   /** Every model response forwarded for a chat (the 2.x engine's quota wrap, engine-v2-budget-wrap.ts). */
   onModelResponse?: (sessionId: string, headers: Headers) => void;
   /** Whether a chat's compaction is an accepted wrap: the gateway then holds it as the wrap. */
@@ -1457,6 +1459,7 @@ export class OmniRushGatewayBroker {
   }
 
   private readonly onModelResponse?: BrokerOptions["onModelResponse"];
+  private readonly onCapabilities?: BrokerOptions["onCapabilities"];
   private readonly contextWrap?: BrokerOptions["contextWrap"];
 
   constructor(options: BrokerOptions) {
@@ -1470,6 +1473,7 @@ export class OmniRushGatewayBroker {
       : null;
     this.engineToken = options.engineToken?.trim() ?? "";
     this.onModelResponse = options.onModelResponse;
+    this.onCapabilities = options.onCapabilities;
     this.contextWrap = options.contextWrap;
     this.sessionModelsFile = options.sessionModelsFile;
     if (this.sessionModelsFile) {
@@ -1827,6 +1831,7 @@ export class OmniRushGatewayBroker {
       this.capabilitiesFailed = false;
       this.capabilityCache = { gatewayUrl, accountKey: settledKey, capabilities, expiresAt: Date.now() + TRACE_CAPABILITY_TTL_MS };
       this.rememberStrict(gatewayUrl, capabilities);
+      try { this.onCapabilities?.(capabilities); } catch { /* a listener's failure is not the answer's */ }
     }
     return capabilities;
   }

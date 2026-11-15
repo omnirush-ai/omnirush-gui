@@ -161,6 +161,21 @@ describe("OmniRush gateway broker", () => {
     }
   });
 
+  test("hands every fresh capabilities answer (not a cached one) to onCapabilities, so the Work switch never goes stale", async () => {
+    const seen: unknown[] = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
+      engineToken: "local-engine-token",
+      onCapabilities: (capabilities) => seen.push(capabilities.work),
+      fetch: async () => Response.json({ schema_versions: [1, 2], work: { enabled: true, sources: ["google"] } }),
+    });
+    await broker.sessionUploadCapabilities();
+    await broker.sessionUploadCapabilities();
+    expect(seen).toEqual([{ enabled: true, sources: ["google"] }]);
+    await broker.sessionUploadCapabilities({ maxAgeMs: 0 });
+    expect(seen.length).toBe(2);
+  });
+
   test("ends a file-aware upload callback promptly when its request is aborted", async () => {
     let started!: () => void;
     const uploadStarted = new Promise<void>((resolvePromise) => { started = resolvePromise; });

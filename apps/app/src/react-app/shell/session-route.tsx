@@ -115,7 +115,9 @@ import {
   type SessionPagePaneRuntime,
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
-import { hasSampleData, isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_PRESET, workConnectorsKey, workStateKey, type AppMode } from "@/react-app/domains/work/work-mode";
+import { hasRealSource, hasSampleData, isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_PRESET, workConnectorsKey, workStateKey, type AppMode } from "@/react-app/domains/work/work-mode";
+import { WorkOrganizationPage } from "@/react-app/domains/work/work-org";
+import { WorkToday } from "@/react-app/domains/work/work-today";
 import { WorkKnowledgePage } from "@/react-app/domains/work/knowledge-views";
 import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
 import { SampleDataBadge, WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
@@ -3761,6 +3763,12 @@ export function SessionRoute() {
     if (attachments.length) useComposerStateStore.getState().setAttachments(sessionId, attachments);
     markComposerAutoSend(sessionId);
   };
+  const workChecklist = workOrgId ? (
+    <>
+      <WorkChecklist client={client ?? null} onboarding={workOnboarding.data} connectors={workConnectorRows.data} orgId={workOrgId} onConnect={() => navigate(WORK_CONNECTORS_ROUTE)} onInvite={() => setWorkInviteOpen(true)} onOrganization={() => navigate(WORK_ORG_ROUTE)} />
+      <WorkInviteDialog client={client ?? null} open={workInviteOpen} onOpenChange={setWorkInviteOpen} />
+    </>
+  ) : null;
   // The Work home's composer: the new-task composer, on the Work workspace, with Work chat controls.
   const [workHomeDraft, setWorkHomeDraft] = useState("");
   const workHomeComposer = useMemo<NewTaskComposerContext | null>(() => newTaskComposerContext && workWorkspace ? {
@@ -3894,7 +3902,7 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? "Welcome" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_ORG_ROUTE) ? "Organization" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? "Welcome" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
@@ -3904,6 +3912,12 @@ export function SessionRoute() {
             backLabel={workConnectorsFrom ? "Back to chat" : undefined}
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
             notice={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
+          />
+        ) : location.pathname.startsWith(WORK_ORG_ROUTE) ? (
+          <WorkOrganizationPage
+            client={client ?? null}
+            backLabel={workConnectorsFrom ? "Back" : undefined}
+            onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
           />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
           <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
@@ -3922,11 +3936,17 @@ export function SessionRoute() {
             onStart={startWorkChat}
             starters={workStarters}
             badge={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
-            checklist={workOrgId ? (
-              <>
-                <WorkChecklist client={client ?? null} onboarding={workOnboarding.data} connectors={workConnectorRows.data} orgId={workOrgId} onConnect={() => navigate(WORK_CONNECTORS_ROUTE)} onInvite={() => setWorkInviteOpen(true)} />
-                <WorkInviteDialog client={client ?? null} open={workInviteOpen} onOpenChange={setWorkInviteOpen} />
-              </>
+            checklist={workChecklist}
+            onConnect={() => navigate(WORK_CONNECTORS_ROUTE)}
+            today={hasRealSource(workConnectorRows.data) || hasSampleData(workOnboarding.data) ? (
+              <WorkToday
+                client={client ?? null}
+                openLink={(url) => platform.openLink(url)}
+                onAsk={startWorkChat}
+                onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)}
+                badge={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
+                checklist={workChecklist ? <div className="w-full max-w-[420px]">{workChecklist}</div> : null}
+              />
             ) : null}
             composer={(
               <NewTaskComposer

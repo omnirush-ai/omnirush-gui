@@ -614,12 +614,32 @@ export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAl
 /** `available`: Work is off but the account can try it (POST /work/enable). */
 export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null };
 /** The company profile and first-run steps (contract Addendum B2: GET/POST /omnirush/work/onboarding). */
-export type OmniRushWorkOrg = { id: string; name: string; domain?: string | null; size?: string | null; industry?: string | null };
+export type OmniRushWorkOrg = { id: string; name: string; domain?: string | null; size?: string | null; industry?: string | null; tools?: string[] | null };
 export type OmniRushWorkStarter = { title: string; prompt: string };
 export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | null; steps?: Partial<Record<"company" | "connected" | "first_chat", boolean>>; sample_data?: boolean };
 export type OmniRushWorkOnboardingInput = { company: string; domain?: string; size?: string; industry?: string; role?: string; tools: string[] };
 export type OmniRushWorkOnboardingResult = { org: OmniRushWorkOrg; recommended_sources?: string[]; starters?: OmniRushWorkStarter[] };
-export type OmniRushWorkMember = { id?: string; email: string; name?: string | null; role?: string | null; joined_at?: string | null };
+/** GET /omnirush/work/org/members (contract Addendum B2, C1 adds `you_role` and `org.tools`). */
+export type OmniRushWorkMember = { user_id: string; email: string; role: "owner" | "member" | string; job_role?: string | null; tools?: string[] | null; you?: boolean };
+export type OmniRushWorkInvite = { id: string; email: string; created_at?: string | null; expires_at?: string | null; link?: string | null };
+export type OmniRushWorkMembers = { org: OmniRushWorkOrg | null; members: OmniRushWorkMember[]; invites: OmniRushWorkInvite[]; you_role?: "owner" | "member" | string };
+export type OmniRushWorkOrgPatch = { name?: string; domain?: string; size?: string; industry?: string; tools?: string[] };
+/** A connected source's problem (contract Addendum C1): what to show and which button fixes it. */
+export type OmniRushWorkAttention = {
+  kind: "reconnect" | "failing" | "stale" | "coverage" | string;
+  message: string;
+  action: "reconnect" | "retry" | "setup" | null;
+  since: string | null;
+};
+/** GET /omnirush/work/feed (contract Addendum C1). */
+export type OmniRushWorkFeedItem = { id: string; source: string; kind: string; title: string; who?: string | null; at?: string | null; url?: string | null; reason?: string | null; due_at?: string | null; starts_at?: string | null };
+export type OmniRushWorkFeed = {
+  generated_at: string;
+  sources: { id: string; label: string; status: OmniRushWorkConnectorStatus; attention?: OmniRushWorkAttention | null }[];
+  groups: { needs_you: OmniRushWorkFeedItem[]; today: OmniRushWorkFeedItem[]; fyi: OmniRushWorkFeedItem[] };
+};
+/** Whether the Work chat's engine has the hosted Work tools (the app's own check, GET /work/chat-tools). */
+export type OmniRushWorkChatTools = { attached: boolean; reason: string | null };
 export type OmniRushWorkConnectorStatus = "disconnected" | "connected" | "error" | "syncing" | "unavailable";
 /** One source of GET /omnirush/work/connectors (e2e/work-mode-contract-2026-11-09.md). */
 export type OmniRushWorkConnector = {
@@ -634,6 +654,9 @@ export type OmniRushWorkConnector = {
   sync_enabled: boolean;
   /** A page to finish setup on after consent (GitHub: choose the repositories the App sees). */
   setup_url?: string;
+  attention?: OmniRushWorkAttention | null;
+  coverage?: { records: number; by_kind?: Record<string, number> } | null;
+  skipped_records?: number;
 };
 /** One source of GET /omnirush/work/health (contract Addendum A1). */
 export type OmniRushWorkHealth = {
@@ -2394,11 +2417,33 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
     removeWorkDemo: () =>
       requestJson<unknown>(baseUrl, "/work/demo", { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
     inviteWorkMember: (email: string) =>
-      requestJson<{ link: string }>(baseUrl, "/work/org/invites", { token, hostToken, method: "POST", body: { email }, timeoutMs: timeouts.config }),
+      requestJson<{ id?: string; email?: string; link: string; expires_at?: string }>(baseUrl, "/work/org/invites", { token, hostToken, method: "POST", body: { email }, timeoutMs: timeouts.config }),
     acceptWorkInvite: (link: string) =>
       requestJson<{ ok: boolean; org?: OmniRushWorkOrg }>(baseUrl, "/work/org/invites/accept", { token, hostToken, method: "POST", body: { token: link }, timeoutMs: timeouts.config }),
     listWorkMembers: () =>
-      requestJson<unknown>(baseUrl, "/work/org/members", { token, hostToken, timeoutMs: timeouts.config }),
+      requestJson<OmniRushWorkMembers>(baseUrl, "/work/org/members", { token, hostToken, timeoutMs: timeouts.config }),
+    updateWorkOrg: (patch: OmniRushWorkOrgPatch) =>
+      requestJson<{ org: OmniRushWorkOrg }>(baseUrl, "/work/org", { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
+    updateWorkOrgMe: (patch: { job_role?: string; tools?: string[] }) =>
+      requestJson<{ ok: boolean }>(baseUrl, "/work/org/me", { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
+    cancelWorkInvite: (id: string) =>
+      requestJson<{ ok: boolean }>(baseUrl, `/work/org/invites/${encodeURIComponent(id)}`, { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
+    removeWorkMember: (userId: string) =>
+      requestJson<{ ok: boolean }>(baseUrl, `/work/org/members/${encodeURIComponent(userId)}`, { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
+    transferWorkOrg: (userId: string) =>
+      requestJson<{ ok: boolean }>(baseUrl, "/work/org/transfer", { token, hostToken, method: "POST", body: { user_id: userId }, timeoutMs: timeouts.config }),
+    leaveWorkOrg: () =>
+      requestJson<{ ok: boolean }>(baseUrl, "/work/org/leave", { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    getWorkFeed: (query: { source?: string; tz?: string; limit?: number } = {}) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
+      return requestJson<OmniRushWorkFeed>(baseUrl, `/work/feed${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    syncWorkConnector: (id: string) =>
+      requestJson<{ ok: boolean; queued: boolean }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/sync`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    getWorkChatTools: () =>
+      requestJson<OmniRushWorkChatTools>(baseUrl, "/work/chat-tools", { token, hostToken, timeoutMs: timeouts.config }),
+    fixWorkChatTools: () =>
+      requestJson<OmniRushWorkChatTools>(baseUrl, "/work/chat-tools/fix", { token, hostToken, method: "POST", timeoutMs: timeouts.activateWorkspace * 3 }),
     getWorkGraph: (query: { focus?: string; depth?: 1 | 2; kinds?: string; limit?: number } = {}) => {
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
       return requestJson<OmniRushWorkGraph>(baseUrl, `/work/graph${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });

@@ -57,7 +57,7 @@ import { SandboxStatusChip } from "./composer/sandbox-status-chip";
 import { SandboxSetupPanel } from "./sandbox-setup-panel";
 import { useSessionCommandsStore } from "@/react-app/domains/session/commands/session-commands-store";
 import { SubagentModelMenu } from "./composer/subagent-model-menu";
-import { WorkConnectorsChip } from "@/react-app/domains/work/work-views";
+import { WorkConnectorsChip, WorkToolsBanner } from "@/react-app/domains/work/work-views";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import type { ModelAvailability } from "./model-availability";
@@ -3660,6 +3660,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
             {attachment.name}{sending ? " · Uploading…" : ""}
           </div>
         )))}
+        <WorkToolsBanner workChat={props.workChat} client={props.client} />
         <SandboxSetupPanel
           client={props.client}
           workspaceId={props.workspaceId}
