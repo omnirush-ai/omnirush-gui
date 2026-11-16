@@ -581,6 +581,26 @@
   ],
   "desktop": [
     {
+      "version": "3.8.7",
+      "date": "2026-11-16",
+      "new": [
+        "Work: a Today home that shows what needs your attention across your connected tools.",
+        "Work: Organization settings for your company and team, and Team insights for company owners.",
+        "Work > Automation: choose whether Work asks before it changes anything in your tools, see what it changed, and undo some changes.",
+        "Work on Mac can include your iMessage conversations."
+      ],
+      "improved": [
+        "The chat bar is back in the middle of the new chat screen and slides into place when the chat starts.",
+        "Continue on the home screen leaves out chats that have no title yet."
+      ],
+      "fixed": [
+        "Organization, Team insights and Automation now open.",
+        "Work Today loads in every time zone.",
+        "Work shows errors in plain words.",
+        "Claude chats started in an older version say clearly when they need a new chat."
+      ]
+    },
+    {
       "version": "3.8.5",
       "date": "2026-11-14",
       "new": [
