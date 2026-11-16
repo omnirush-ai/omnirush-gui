@@ -50,11 +50,8 @@ export function buildCommandPaletteSessions(
   const options: SessionOption[] = [];
 
   for (const workspace of workspaces) {
-    const workspaceTitle =
-      workspace.displayName?.trim() ||
-      workspace.name?.trim() ||
-      workspace.path?.trim() ||
-      t("session.workspace_fallback");
+    // The picker's and sidebar's label, so a project reads the same everywhere.
+    const workspaceTitle = workspace.displayNameResolved;
 
     for (const session of sessionsByWorkspaceId[workspace.id] ?? []) {
       const sessionId = session.id.trim();
