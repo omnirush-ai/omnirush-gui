@@ -10,10 +10,9 @@ export type HomeWorkspace = {
   task: boolean;
 };
 
-/** A chat's title for lists (the engine's default "New session - <date>" reads "Untitled chat"). */
+/** A chat's title for lists: one line, at most 72 characters. */
 export function homeChatTitle(title: string | null | undefined): string {
   const text = String(title ?? "").replace(/\s+/g, " ").trim();
-  if (!text || /^(new session|child session)\s*-\s*\d{4}-/i.test(text)) return "Untitled chat";
   return text.length > 72 ? `${text.slice(0, 69).trimEnd()}…` : text;
 }
 

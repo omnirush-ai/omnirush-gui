@@ -2,6 +2,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 
+import { isGeneratedSessionTitle } from "@/app/lib/session-title";
 import { formatRelativeTime } from "@/app/utils";
 import { t } from "@/i18n";
 import type { SearchableSession } from "@/react-app/domains/session/search/session-search";
@@ -36,7 +37,9 @@ function searchShortcut(): string {
 export function HomeContinue({ context }: { context: HomeViewContext }) {
   const chats = useMemo(() => {
     const tasks = new Set(context.workspaces.filter((workspace) => workspace.task).map((workspace) => workspace.id));
-    return recentChats(context.sessions.filter((session) => !tasks.has(session.workspaceId)), HOME_CONTINUE_CHATS);
+    // Untitled chats would all read "New session": they stay in the sidebar and the search.
+    const untitled = (title: string) => !title.trim() || isGeneratedSessionTitle(title) || title === t("session.default_title");
+    return recentChats(context.sessions.filter((session) => !tasks.has(session.workspaceId) && !untitled(session.title)), HOME_CONTINUE_CHATS);
   }, [context.sessions, context.workspaces]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [fits, setFits] = useState(HOME_CONTINUE_CHATS);
