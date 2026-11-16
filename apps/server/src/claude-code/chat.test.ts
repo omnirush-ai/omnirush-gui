@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { CLAUDE_CODE_VERSION, CLAUDE_CONTRACT, chatPinRules, claudeChatRoute } from "./chat.js";
-import type { ClaudeAccess, ClaudeAuthorization, ClaudeGrant } from "./access.js";
+import { CLAUDE_CODE_VERSION, CLAUDE_CONTRACT, CLAUDE_OLDER_CHAT, chatPinRules, claudeChatRoute } from "./chat.js";
+import { ClaudeAccessError, type ClaudeAccess, type ClaudeAuthorization, type ClaudeGrant } from "./access.js";
 // @ts-expect-error The shared provider is plain JavaScript (opencode-plugins/claude-provider, PARITY with the CLI).
 import { CLAUDE_CODE_VERSION as PROVIDER_VERSION, CONTRACT as PROVIDER_CONTRACT } from "../opencode-plugins/claude-provider/index.js";
 
@@ -55,6 +55,16 @@ describe("Claude turn route", () => {
     // A resumed Claude chat (its transcript is there) goes on.
     expect(await r.handle({ op: "grant", sessionID: "ses_old", model: "claude-opus-5-5", earlier: true, resume: true })).toMatchObject({ ok: true });
     expect(r.asked.map((a) => a.sessionId)).toEqual(["ses_titled", "ses_old"]);
+  });
+
+  test("a chat bound to another Claude Code (started before the pin changed) is told to start a new chat", async () => {
+    const handle = claudeChatRoute({
+      access: async () => account(["claude-opus-5-5"]),
+      authorize: async () => { throw new ClaudeAccessError(409, "The session's model or capture contract conflicts with its backend binding (409)"); },
+      pin: () => "claude-opus-5-5", setPin: () => undefined,
+    });
+    expect(await handle({ op: "grant", sessionID: "ses_old", model: "claude-opus-5-5", earlier: true, resume: true })).toEqual({ ok: false, message: CLAUDE_OLDER_CHAT });
+    expect(await handle({ op: "grant", sessionID: "ses_new", model: "claude-opus-5-5", earlier: false })).toMatchObject({ ok: false, message: expect.stringContaining("(409)") });
   });
 
   test("end reports the turn with the chat's grant; unknown ops and models are refused", async () => {

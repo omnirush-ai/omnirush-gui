@@ -2,7 +2,7 @@
  * Work mode's local routes, for the app (client scope). The account's credential stays in this server: the
  * app and the engine reach /omnirush/work/* only through here.
  *
- *   GET   /work/state                      { enabled, sources, message, workspaceId }
+ *   GET   /work/state                      { enabled, sources, message, autopilot, full_access, writes_paused, workspaceId }
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
  *   POST  /work/connectors/:id/start       { auth_url }
@@ -17,6 +17,10 @@
  *   POST  /work/org/invites {email}, POST /work/org/invites/accept {token}, GET /work/org/members
  *   PATCH /work/org, PATCH /work/org/me, DELETE /work/org/invites/:id, DELETE /work/org/members/:id,
  *   POST  /work/org/transfer {user_id}, POST /work/org/leave                   the organization (contract Addendum C1)
+ *   GET   /work/org/insights?days=         the owner's team insights
+ *   GET   /work/settings, PATCH /work/settings {autopilot?, full_access?, writes_paused?}   the action layer (Addendum F)
+ *   GET   /work/actions?limit=, POST /work/actions/:id/undo                    the activity log and an action's undo
+ *   GET   /work/imessage, POST /work/imessage {records}                        the Mac's iMessage records (macOS desktop)
  *   GET   /work/feed?source=&tz=&limit=    the Today home's feed
  *   POST  /work/connectors/:id/sync        a sync now (429 too_soon within a minute)
  *   GET   /work/chat-tools, POST /work/chat-tools/fix   whether the Work chats' engine has the hosted tools; fix re-reads the switch and re-syncs
@@ -29,7 +33,7 @@ import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
-import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
+import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
@@ -76,6 +80,18 @@ const WORK_ERRORS: Record<string, string> = {
   provider_error: "The service returned an error. Try again.",
   provider_unreachable: "The service could not be reached. Try again.",
   unreadable_answer: "omnirush.ai answered with something unexpected. Try again.",
+  bad_arguments: "Something in that request wasn't accepted. Try again.",
+  unknown_member: "That person is no longer in the organization.",
+  unknown_action: "That action no longer exists.",
+  not_undoable: "This action can't be undone.",
+  cannot_undo: "This action can't be undone.",
+  unknown_entity: "That item no longer exists.",
+  unknown_fact: "That item no longer exists.",
+  unknown_node: "That item no longer exists.",
+  bad_import: "Those messages couldn't be read.",
+  body_too_large: "That's too much at once. Try with less.",
+  token_exchange_failed: "The service didn't accept the sign-in. Reconnect.",
+  unsupported_work_path: "This needs a newer version of the app.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
@@ -104,10 +120,11 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
   const text = await response.text().catch(() => "");
   let data: unknown = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { detail: "unreadable_answer" }; }
-  // The app's client reads `code` and `message`; the server's own `detail` is kept as it came.
-  if (response.status >= 400 && data && typeof data === "object" && !Array.isArray(data) && typeof (data as { detail?: unknown }).detail === "string") {
-    const detail = (data as { detail: string }).detail;
-    data = { ...data, code: detail, message: WORK_ERRORS[detail] ?? detail };
+  // The app's client reads `code` and `message` (never a bare code); the server's own `detail` is kept as it came.
+  if (response.status >= 400 && data && typeof data === "object" && !Array.isArray(data)) {
+    const detail = (data as { detail?: unknown }).detail;
+    if (typeof detail === "string") data = { ...data, code: detail, message: WORK_ERRORS[detail] ?? "That didn't work. Try again." };
+    else if (Array.isArray(detail)) data = { ...data, code: "invalid_request", message: "That request wasn't accepted." };
   }
   return { status: response.status, data, response: jsonResponse(data, response.status) };
 }
@@ -133,7 +150,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
       if (rememberWorkSwitch(deps.workDir(), capabilities)) void deps.applyEngine().catch(() => undefined);
     }
     const setting = rememberedWorkSwitch(deps.workDir());
-    return jsonResponse({ ...setting, workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null });
+    return jsonResponse({ ...setting, ...rememberedWorkActions(deps.workDir()), workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null });
   });
 
   addRoute(routes, "POST", "/work/workspace", "client", async () => {
@@ -351,6 +368,38 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   });
 
   addRoute(routes, "GET", "/work/org/members", "client", async () => forward("org/members", "GET"));
+  addRoute(routes, "GET", "/work/org/insights", "client", async (ctx) => forward(`org/insights${forwardQuery(ctx.url, ["days"])}`, "GET"));
+
+  // The action layer: autopilot, full access, the pause switch, and the log of writes with their undo.
+  addRoute(routes, "GET", "/work/settings", "client", async () => forward("settings", "GET"));
+  addRoute(routes, "PATCH", "/work/settings", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    const patch: Record<string, boolean> = {};
+    for (const key of ["autopilot", "full_access", "writes_paused"]) {
+      const value = body[key];
+      if (value === undefined) continue;
+      if (typeof value !== "boolean") return invalid(`${key} must be true or false`);
+      patch[key] = value;
+    }
+    if (Object.keys(patch).length === 0) return invalid("Nothing to change.");
+    const answer = await forward("settings", "PATCH", patch);
+    // The switches ride in the capabilities' work block (GET /work/state): read it fresh next time.
+    if (answer.ok) switchStale = true;
+    return answer;
+  });
+  addRoute(routes, "GET", "/work/actions", "client", async (ctx) => forward(`actions${forwardQuery(ctx.url, ["limit"])}`, "GET"));
+  addRoute(routes, "POST", "/work/actions/:id/undo", "client", async (ctx) => {
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_action", code: "unknown_action", message: WORK_ERRORS.unknown_action }, 404);
+    return forward(`actions/${ctx.params.id}/undo`, "POST", {});
+  });
+
+  // iMessage (macOS desktop): the records the desktop read from the Mac's Messages database, and how many the server has.
+  addRoute(routes, "GET", "/work/imessage", "client", async () => forward("imessage", "GET"));
+  addRoute(routes, "POST", "/work/imessage", "client", async (ctx) => {
+    const records = (await deps.readJsonBody(ctx.request)).records;
+    if (!Array.isArray(records)) return invalid("records must be a list");
+    return forward("imessage", "POST", { records });
+  });
 }
 
 /**
