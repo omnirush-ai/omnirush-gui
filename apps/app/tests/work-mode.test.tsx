@@ -108,19 +108,25 @@ describe("Work mode", () => {
     expect(connectorsBackState("/workspace/ws_1/session/ses_1", "?x=1")).toEqual({ state: { from: "/workspace/ws_1/session/ses_1?x=1" } });
   });
 
-  test("the home asks what to get done, has no card grid, and puts the composer where the chat has it, with the starter chips above", () => {
+  test("the home asks what to get done, has no card grid, and centres the composer with the starter chips under it", () => {
     const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} starters={[{ title: "Overdue invoices", prompt: "List overdue invoices." }, { title: "Reply to leads", prompt: "x" }, { title: "Weekly summary", prompt: "y" }, { title: "Fourth", prompt: "z" }]} badge={<span data-testid="badge-slot" />} />);
     expect(markup).toContain("What do you want to get done?");
     expect(markup).toContain('data-testid="composer-slot"');
     expect(markup).toContain('data-testid="badge-slot"');
     expect(markup).not.toContain("data-work-template");
-    // The chat composer's own column: 800 wide with its gutters and bottom spacing (composer.tsx).
+    // A 640 column between two equal spacers, with the chat composer's gutters and bottom spacing (composer.tsx), so
+    // a send glides it into the chat's place.
     expect(markup).toContain("lg:px-8");
-    expect(markup).toContain("max-w-[800px]");
+    expect(markup).toContain("max-w-[640px]");
     expect(markup).toContain("pb-[max(0.5rem,");
     expect(markup.match(/data-work-starter=/g)?.length).toBe(3);
-    expect(markup.indexOf("data-work-starter")).toBeLessThan(markup.indexOf("composer-slot"));
+    expect(markup.indexOf("composer-slot")).toBeLessThan(markup.indexOf("data-work-starter"));
     expect(renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} />)).not.toContain("work-starters");
+    // With Today the feed scrolls and the composer stays in the chat's place, starters just above it.
+    const today = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} starters={[{ title: "Overdue invoices", prompt: "x" }]} today={<div data-testid="today-slot" />} />);
+    expect(today).toContain("max-w-[800px]");
+    expect(today.indexOf("today-slot")).toBeLessThan(today.indexOf("data-work-starter"));
+    expect(today.indexOf("data-work-starter")).toBeLessThan(today.indexOf("composer-slot"));
   });
 
   test("first run: domain from a work e-mail, recommended sources first, checklist, sample data", () => {
@@ -364,6 +370,12 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(home.indexOf("today-slot")).toBeLessThan(home.indexOf("composer-slot"));
     const empty = renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} onConnect={noop} />);
     expect(empty).toContain('data-testid="work-home-connect"');
+    // Sources still loading: the composer waits in the chat's place, so it does not jump when Today arrives.
+    const pending = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} pending onConnect={noop} />);
+    expect(pending).not.toContain("work-home-connect");
+    expect(pending).not.toContain("What do you want to get done?");
+    expect(pending).toContain("max-w-[800px]");
+    expect(pending.indexOf('data-testid="work-home-column"')).toBeLessThan(pending.indexOf("composer-slot"));
   });
 
   test("relative times read short", () => {

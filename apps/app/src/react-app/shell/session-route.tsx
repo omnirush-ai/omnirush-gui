@@ -3966,6 +3966,7 @@ export function SessionRoute() {
             badge={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
             checklist={workChecklist}
             onConnect={() => navigate(WORK_CONNECTORS_ROUTE)}
+            pending={workConnectorRows.isPending || workOnboarding.isPending}
             today={hasRealSource(workConnectorRows.data) || hasSampleData(workOnboarding.data) ? (
               <WorkToday
                 client={client ?? null}

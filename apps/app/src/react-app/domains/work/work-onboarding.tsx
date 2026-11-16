@@ -187,7 +187,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
         <div className="space-y-1.5">
           <div className="text-[12px] font-medium text-muted-foreground">{t("work.onboarding.step", { n: step === "company" ? 1 : 2 })}</div>
           <h1 className="text-balance text-[22px] font-semibold leading-[28px] tracking-[-0.02em]">
-            {step === "company" ? t("work.onboarding.company_title") : t("work.home.connect")}
+            {step === "company" ? t("work.onboarding.company_title") : t("work.home_connect")}
           </h1>
           <p className="text-[13px] text-muted-foreground">
             {step === "company" ? t("work.onboarding.company_body") : t("work.onboarding.connect_body")}

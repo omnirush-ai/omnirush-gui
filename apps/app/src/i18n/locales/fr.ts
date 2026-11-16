@@ -1182,4 +1182,8 @@ export default {
   "settings.runtime_config_no_removed_keys": "No omnirush.ai-managed keys removed.",
   "settings.runtime_config_backup_path": "Backup: {path}",
   "settings.runtime_config_no_backup": "No backup needed.",
+  "work.home_title": "Que voulez-vous faire ?",
+  "work.home_subtitle": "Posez vos questions sur vos e-mails, documents, clients ou factures.",
+  "work.home_connect": "Connecter vos outils",
+  "work.home_start_failed": "Impossible de démarrer la discussion.",
 } as const;
