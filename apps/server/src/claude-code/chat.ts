@@ -25,6 +25,9 @@ export function claudeNotAllowedMessage(name: string): string {
 export type ClaudeChatInput = { op?: unknown; sessionID?: unknown; model?: unknown; resume?: unknown; earlier?: unknown; uuid?: unknown; ok?: unknown; directory?: unknown };
 export type ClaudeChatAnswer = { ok: true; token?: string; baseUrl?: string; client?: string } | { ok: false; message: string };
 
+/** A chat whose relay binding is another Claude Code's (started before the app's pin changed). */
+export const CLAUDE_OLDER_CHAT = "This Claude chat started in an older version of the app. Start a new chat to keep going.";
+
 /** What the person sees when the server could not say whether Claude is available (the detail goes to the log). */
 export const CLAUDE_ACCESS_CHECK_FAILED = "Couldn't check your Claude access. Try again.";
 
@@ -71,7 +74,10 @@ export function claudeChatRoute(deps: {
       const workspaceId = typeof input.directory === "string" && input.directory ? input.directory : sessionID;
       grant = await deps.authorize({ owner: account.owner, sessionId: sessionID, model: entry.id, workspaceId, contractSha256: CLAUDE_CONTRACT });
     } catch (error) {
-      deps.log?.("warn", "claude: no relay token", { status: (error as { status?: unknown })?.status ?? null });
+      const status = (error as { status?: unknown })?.status ?? null;
+      deps.log?.("warn", "claude: no relay token", { status });
+      // The relay binds a chat to the Claude Code it started on: a chat from before the app's pin changed can't go on.
+      if (status === 409 && input.earlier === true) return refuse(CLAUDE_OLDER_CHAT);
       return refuse(error instanceof Error ? error.message : "Claude could not start.");
     }
     if (pinned !== entry.id) deps.setPin(sessionID, entry.id);
