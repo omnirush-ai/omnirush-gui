@@ -98,6 +98,8 @@ export function WorkHome(props: {
   checklist?: ReactNode;
   /** The Today view (work-today.tsx); null while nothing is connected. */
   today?: ReactNode;
+  /** Sources still loading: keep the Today layout so the composer does not jump once they arrive. */
+  pending?: boolean;
   onConnect?: () => void;
 }) {
   const [starting, setStarting] = useState(false);
@@ -113,9 +115,10 @@ export function WorkHome(props: {
       setStarting(false);
     }
   };
+  const feed = Boolean(props.today || props.pending);
   const starters = (props.starters ?? []).slice(0, 3);
   const starterChips = starters.length ? (
-    <div className={cn("flex flex-wrap gap-2", !props.today && "justify-center")} data-testid="work-starters">
+    <div className={cn("flex flex-wrap gap-2", !feed && "justify-center")} data-testid="work-starters">
       {starters.map((starter) => (
         <button
           key={starter.title}
@@ -133,7 +136,7 @@ export function WorkHome(props: {
     </div>
   ) : null;
   const message = props.message ? <p className="text-center text-[12px] text-muted-foreground">{props.message}</p> : null;
-  if (props.today) {
+  if (feed) {
     return (
       <div className="flex h-full flex-col" data-testid="work-home">
         <div className="min-h-0 flex-1 overflow-y-auto">

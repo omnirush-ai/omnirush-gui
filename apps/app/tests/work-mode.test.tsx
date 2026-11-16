@@ -351,6 +351,12 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(home.indexOf("today-slot")).toBeLessThan(home.indexOf("composer-slot"));
     const empty = renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} onConnect={noop} />);
     expect(empty).toContain('data-testid="work-home-connect"');
+    // Sources still loading: the composer waits in the chat's place, so it does not jump when Today arrives.
+    const pending = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} pending onConnect={noop} />);
+    expect(pending).not.toContain("work-home-connect");
+    expect(pending).not.toContain("What do you want to get done?");
+    expect(pending).toContain("max-w-[800px]");
+    expect(pending.indexOf('data-testid="work-home-column"')).toBeLessThan(pending.indexOf("composer-slot"));
   });
 
   test("relative times read short", () => {
