@@ -4,9 +4,11 @@ import { t } from "../src/i18n";
 import type { SessionOption } from "../src/react-app/shell/command-palette";
 import { rankPaletteItems, type PaletteItem } from "../src/react-app/shell/command-palette-search";
 import {
+  buildCommandPaletteSessions,
   buildCommandPaletteSplitSessions,
   buildCopySessionIdPaletteItem,
 } from "../src/react-app/shell/command-palette-sessions";
+import type { RouteSession, RouteWorkspace } from "../src/react-app/shell/route-workspaces";
 
 const sessions: SessionOption[] = [
   {
@@ -51,6 +53,16 @@ describe("command palette split sessions", () => {
     ]);
     expect(options.some((option) => option.workspaceTitle === "Workspace B")).toBe(true);
     expect(options.some((option) => option.workspaceId === "workspace-a" && option.sessionId === "session-a")).toBe(false);
+  });
+});
+
+describe("command palette sessions", () => {
+  test("name the project the way the picker does", () => {
+    const workspace = { id: "ws", displayName: "OmniRush.ai", displayNameResolved: "omnirush.ai" } as RouteWorkspace;
+    const session = { id: "s1", title: "Fix the login redirect", time: { created: 1, updated: 2 } } as RouteSession;
+    const [option] = buildCommandPaletteSessions([workspace], { ws: [session] }, "ws");
+    expect(option?.workspaceTitle).toBe("omnirush.ai");
+    expect(option?.searchText).toBe("fix the login redirect omnirush.ai");
   });
 });
 
