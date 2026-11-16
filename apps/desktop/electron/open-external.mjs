@@ -2,6 +2,19 @@ import { spawn } from "node:child_process";
 
 const DEFAULT_TIMEOUT_MS = 4000;
 
+// Schemes the app hands to the OS. Everything else (file:, smb:, ms-msdt:,
+// search-ms:, javascript: ...) can run or fetch something, so it is refused.
+// The two settings schemes open the microphone privacy pane (voice/mic-source.ts).
+const ALLOWED_PROTOCOLS = new Set(["http:", "https:", "mailto:", "ms-settings:", "x-apple.systempreferences:"]);
+
+function protocolOf(url) {
+  try {
+    return new URL(String(url)).protocol;
+  } catch {
+    return null;
+  }
+}
+
 function describeError(error) {
   if (error instanceof Error && error.message.trim()) return error.message;
   return String(error ?? "unknown error");
@@ -16,6 +29,13 @@ async function defaultOpenExternal(url) {
 }
 
 export async function openExternalUrl(url, deps = {}) {
+  const protocol = protocolOf(url);
+  if (!protocol || !ALLOWED_PROTOCOLS.has(protocol)) {
+    const message = protocol ? `protocol "${protocol}" is not allowed` : "not a valid URL";
+    console.error("[shell] openExternal refused:", message);
+    return { ok: false, error: message };
+  }
+
   const env = deps.env ?? process.env;
   if (env.OMNIRUSH_SIMULATE_OPEN_EXTERNAL_FAILURE === "1") {
     const message = "simulated failure";
@@ -44,7 +64,8 @@ export async function openExternalUrl(url, deps = {}) {
     console.error("[shell] openExternal failed:", message);
 
     const platform = deps.platform ?? process.platform;
-    if (platform === "win32") {
+    // why: FileProtocolHandler also runs local files, so only web links take the fallback.
+    if (platform === "win32" && (protocol === "http:" || protocol === "https:")) {
       const spawnProcess = deps.spawnProcess ?? spawn;
       try {
         console.error("[shell] attempting rundll32 browser fallback");
