@@ -470,6 +470,8 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     // A code the local server words already keeps its sentence; a bare code or HTTP status text never shows.
     expect(workFailure(new OmniRushServerError(410, "invite_used", "This invite was already used. Ask for a new one.")).text).toBe("This invite was already used. Ask for a new one.");
     expect(workFailure(new OmniRushServerError(400, "odd_code", "odd_code")).text).toBe("That did not work.");
+    expect(workFailure(new OmniRushServerError(404, "work_disabled", "work_disabled")).text).toBe("Work is turned off for your account.");
+    expect(workFailure(new OmniRushServerError(404, "not_connected", "not_connected")).text).not.toBe(missing.text);
     expect(workFailure(new OmniRushServerError(400, "request_failed", "Bad Request")).text).toBe("That did not work.");
     expect(workFailure(new OmniRushServerError(503, "request_failed", "Service Unavailable"))).toEqual({ text: "Something went wrong. Try again.", retry: true });
     expect(workFailure(new Error("Request timed out."))).toEqual({ text: "Request timed out.", retry: true });

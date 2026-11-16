@@ -298,8 +298,6 @@ export function workFailure(error: unknown): { text: string; retry: boolean } {
   const failure = error && typeof error === "object" ? (error as { status?: unknown; code?: unknown; message?: unknown }) : {};
   const status = typeof failure.status === "number" ? failure.status : 0;
   const code = typeof failure.code === "string" ? failure.code : "";
-  // Not found on this side: an older app (no local route) or server (no such path). Specific misses say unknown_*.
-  if (status === 404 && !code.startsWith("unknown_")) return { text: t("work.error.update_app"), retry: false };
   const copy: Record<string, string> = {
     bad_arguments: t("work.error.bad_arguments"),
     not_undoable: t("work.error.not_undoable"),
@@ -315,8 +313,12 @@ export function workFailure(error: unknown): { text: string; retry: boolean } {
   const message = typeof failure.message === "string" ? failure.message.trim() : "";
   const fromServer = Boolean(code) && code !== "request_failed" && message !== code;
   const worded = message && !CODE.test(message) && (!status || fromServer) ? message : "";
+  const known = copy[code] || workErrorCopy(code);
+  // Not found on this side: an older app (no local route) or server (no such path). A known code (work_disabled,
+  // not_connected) or a specific miss (unknown_*) is the server answering, not a missing route.
+  if (status === 404 && !known && !code.startsWith("unknown_")) return { text: t("work.error.update_app"), retry: false };
   const retry = !status || status >= 500 || status === 408 || status === 429;
-  return { text: copy[code] || worded || (retry ? t("work.error.try_again") : t("work.error.did_not_work")), retry };
+  return { text: known || worded || (retry ? t("work.error.try_again") : t("work.error.did_not_work")), retry };
 }
 
 /** One source's row of a GET /work/health answer (a list, or `{sources}` / `{items}`); null when absent. */
