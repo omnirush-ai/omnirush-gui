@@ -3,8 +3,10 @@ import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 import type { OmniRushWorkGraphEdge, OmniRushWorkGraphNode } from "@/app/lib/omnirush-server";
+import { t } from "@/i18n";
 
 import { categoryColor, categoryKey, GRAPH_CATEGORIES, nodeRadius, placeLabels, type LabelBox } from "./graph-model";
+import { countLabel } from "./work-mode";
 
 type SimNode = OmniRushWorkGraphNode & SimulationNodeDatum & { r: number; key: string };
 type SimLink = SimulationLinkDatum<SimNode> & { edge: OmniRushWorkGraphEdge };
@@ -400,7 +402,7 @@ export function KnowledgeGraph(props: {
         className="absolute inset-0 size-full touch-none"
         style={{ cursor: hover?.kind === "node" ? "pointer" : drag.current ? "grabbing" : "grab" }}
         role="img"
-        aria-label={`Knowledge graph: ${props.nodes.length} items. The list view shows the same items as a list.`}
+        aria-label={t("work.knowledge.graph_label", { n: props.nodes.length.toLocaleString() })}
         onPointerDown={(event) => {
           const { sx, sy, wx, wy } = toWorld(event);
           const node = nodeAt(wx, wy);
@@ -491,7 +493,7 @@ function GraphTooltip(props: { hover: NonNullable<Hover> }) {
     <div className={box} style={style} data-testid="work-graph-tooltip">
       <div className="font-medium">{node.label}</div>
       <div className="mt-0.5 text-muted-foreground">{[node.kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()), node.sub, at && !Number.isNaN(at.getTime()) ? at.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : null].filter(Boolean).join(" · ")}</div>
-      <div className="mt-1 text-[11px] text-muted-foreground">{node.degree} link{node.degree === 1 ? "" : "s"} · right-click to expand</div>
+      <div className="mt-1 text-[11px] text-muted-foreground">{countLabel(node.degree, "work.count.links")} · {t("work.knowledge.right_click")}</div>
     </div>
   );
 }

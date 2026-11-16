@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { toast } from "@/components/ui/sonner";
+import { t } from "@/i18n";
 import type { OmniRushWorkAnswerStyle } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 import {
@@ -12,11 +13,11 @@ import {
   LayoutSectionItemTitle,
 } from "@/react-app/domains/settings/settings-layout";
 
-import { useWorkState, type WorkClient } from "./work-mode";
+import { useWorkState, workFailure, type WorkClient } from "./work-mode";
 
 const OPTIONS: { value: OmniRushWorkAnswerStyle; label: string }[] = [
-  { value: "brief", label: "Brief" },
-  { value: "detailed", label: "Detailed" },
+  { value: "brief", get label() { return t("work.answer_style.brief"); } },
+  { value: "detailed", get label() { return t("work.answer_style.detailed"); } },
 ];
 
 /** Settings > Work: "Answer style: Brief | Detailed" for Work chats. Shown only while Work is on for the account. */
@@ -28,19 +29,19 @@ export function WorkAnswerStyleSetting(props: { client: WorkClient | null }) {
   const change = useMutation({
     mutationFn: (value: OmniRushWorkAnswerStyle) => props.client!.setWorkAnswerStyle(value),
     onSuccess: (answer) => queryClient.setQueryData(key, answer),
-    onError: (reason) => toast.error(reason instanceof Error ? reason.message : "The answer style could not be saved."),
+    onError: (reason) => toast.error(workFailure(reason).text),
   });
   if (!work.data?.enabled || !style.data) return null;
   const current = change.isPending && change.variables ? change.variables : style.data.style;
   return (
     <LayoutSectionItem>
       <LayoutSectionItemHeader>
-        <LayoutSectionItemTitle>Work answer style</LayoutSectionItemTitle>
+        <LayoutSectionItemTitle>{t("work.answer_style.title")}</LayoutSectionItemTitle>
         <LayoutSectionItemDescription>
-          How Work chats answer. Brief: short sentences and bullets, sources as links. Detailed: more context and options.
+          {t("work.answer_style.body")}
         </LayoutSectionItemDescription>
         <LayoutSectionItemHeaderActions>
-          <div role="radiogroup" aria-label="Answer style" data-testid="work-answer-style" className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
+          <div role="radiogroup" aria-label={t("work.answer_style.label")} data-testid="work-answer-style" className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
             {OPTIONS.map((option) => (
               <button key={option.value} type="button" role="radio" aria-checked={current === option.value} data-answer-style={option.value}
                 disabled={change.isPending} onClick={() => current !== option.value && change.mutate(option.value)}

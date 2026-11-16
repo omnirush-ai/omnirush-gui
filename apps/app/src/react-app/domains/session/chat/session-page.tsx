@@ -51,7 +51,7 @@ import { usePlatform } from "../../../kernel/platform";
 import { useDenAuth } from "../../cloud/den-auth-provider";
 import ProviderAuthModal, { type ProviderAuthModalProps } from "../../connections/provider-auth/provider-auth-modal";
 import { RenameSessionModal } from "../modals/rename-session-modal";
-import { AppSidebar } from "../sidebar/app-sidebar";
+import { AppSidebar, type AppSidebarProps } from "../sidebar/app-sidebar";
 import { useSessionManagementStore } from "../sidebar/session-management-store";
 import { SessionSurface, type SessionSurfaceProps } from "../surface/session-surface";
 import { useSessionFindStore } from "../surface/find-store";
@@ -159,7 +159,7 @@ export type SessionPageSidebarProps = {
   /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
   modeToggle?: React.ReactNode;
   /** In Work: Home, Knowledge and Connectors take the place of the Code tools row. */
-  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean; onOpenActivity: () => void; activityActive: boolean; onOpenInsights?: () => void; insightsActive?: boolean };
+  workNavigation?: AppSidebarProps["workNavigation"];
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
   selectedSessionId: string | null;

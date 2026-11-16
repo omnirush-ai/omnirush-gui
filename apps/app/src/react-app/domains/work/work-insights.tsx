@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-// Work > Insights (owner only): the manager's view of how the team is working — aggregate activity and smart alerts
+// Work > Insights (owner only): the manager's view of how the team is working: aggregate activity and smart alerts
 // from GET /omnirush/work/org/insights. It never shows message content: only counts, trends, meetings and flags.
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, RotateCw } from "lucide-react";
@@ -7,18 +7,31 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { t } from "@/i18n";
 import type { OmniRushWorkInsights, OmniRushWorkInsightsAlert, OmniRushWorkInsightsMember } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { relativeTime, useWorkOrgInsights, type WorkClient } from "./work-mode";
+import { relativeTime, useWorkOrgInsights, workFailure, type WorkClient } from "./work-mode";
 
 const RANGES = [7, 14, 30, 90] as const;
 const DEFAULT_DAYS = 14;
 
 /** A member's name line from the three bits the server gives (email is always there, the rest when set). */
 function memberName(member: OmniRushWorkInsightsMember): { primary: string; secondary: string | null } {
-  const tags = [member.job_role, member.role === "owner" ? "Owner" : member.role].filter((part): part is string => Boolean(part));
+  const role = member.role === "owner" ? t("work.role.owner") : member.role === "member" ? t("work.role.member") : member.role;
+  const tags = [member.job_role, role].filter((part): part is string => Boolean(part));
   return { primary: member.email, secondary: tags.length ? tags.join(" · ") : null };
+}
+
+/** An alert in words, by its kind; a kind this app does not know shows the server's own text. */
+export function alertText(alert: OmniRushWorkInsightsAlert, member: Pick<OmniRushWorkInsightsMember, "trend" | "meetings">): string {
+  const overdue = Number(alert.text.match(/\d+/)?.[0] ?? Number.NaN);
+  if (alert.kind === "idle") return t("work.insights.alert_idle");
+  if (alert.kind === "drop_off") return t("work.insights.alert_drop_off", { n: Math.abs(member.trend) });
+  if (alert.kind === "overload") return t("work.insights.alert_overload", { n: member.trend });
+  if (alert.kind === "meeting_load") return t("work.insights.alert_meetings", { count: member.meetings, n: member.meetings });
+  if (alert.kind === "overdue" && Number.isFinite(overdue)) return t("work.insights.alert_overdue", { count: overdue, n: overdue });
+  return alert.text;
 }
 
 /** Members with a serious alert come first, then by activity desc; ties keep the server's order. */
@@ -49,7 +62,7 @@ function Sparkline(props: { data: OmniRushWorkInsightsMember["daily"]; label: st
       height={h}
       viewBox={`0 0 ${w} ${h}`}
       role="img"
-      aria-label={`${props.label}: ${total} over ${count} day${count === 1 ? "" : "s"}`}
+      aria-label={t("work.insights.sparkline", { name: props.label, total, count, n: count })}
       className="shrink-0 text-blue-9"
       preserveAspectRatio="none"
     >
@@ -61,17 +74,17 @@ function Sparkline(props: { data: OmniRushWorkInsightsMember["daily"]; label: st
 
 /** The signed change vs the previous window, as an arrow (not colour alone) plus percent. */
 function Trend(props: { trend: number }) {
-  if (props.trend === 0) return <span className="text-[12px] text-muted-foreground" aria-label="No change">No change</span>;
+  if (props.trend === 0) return <span className="text-[12px] text-muted-foreground">{t("work.insights.no_change")}</span>;
   const up = props.trend > 0;
   const Icon = up ? ArrowUp : ArrowDown;
   return (
-    <span className={cn("inline-flex items-center gap-0.5 text-[12px] font-medium", up ? "text-green-11" : "text-red-11")} aria-label={`${up ? "Up" : "Down"} ${Math.abs(props.trend)} percent`}>
+    <span className={cn("inline-flex items-center gap-0.5 text-[12px] font-medium", up ? "text-green-11" : "text-red-11")} aria-label={up ? t("work.insights.trend_up", { n: Math.abs(props.trend) }) : t("work.insights.trend_down", { n: Math.abs(props.trend) })}>
       <Icon aria-hidden className="size-3" />{up ? "+" : ""}{props.trend}%
     </span>
   );
 }
 
-function AlertBadge(props: { alert: OmniRushWorkInsightsAlert }) {
+function AlertBadge(props: { alert: OmniRushWorkInsightsAlert; member: OmniRushWorkInsightsMember }) {
   const serious = props.alert.level === "serious";
   const Icon = serious ? AlertTriangle : AlertCircle;
   return (
@@ -83,7 +96,7 @@ function AlertBadge(props: { alert: OmniRushWorkInsightsAlert }) {
       data-alert-level={props.alert.level}
     >
       <Icon aria-hidden className="size-3.5 shrink-0" />
-      <span>{props.alert.text}</span>
+      <span>{alertText(props.alert, props.member)}</span>
     </span>
   );
 }
@@ -121,19 +134,19 @@ function MemberCard(props: { member: OmniRushWorkInsightsMember; now: number }) 
           <div className="truncate text-[14px] font-medium text-foreground" title={name.primary}>{name.primary}</div>
           {name.secondary ? <div className="truncate text-[12px] text-muted-foreground">{name.secondary}</div> : null}
         </div>
-        <Sparkline data={member.daily} label={`${name.primary} daily activity`} />
+        <Sparkline data={member.daily} label={name.primary} />
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
-        <span><span className="font-medium tabular-nums text-foreground">{member.activity}</span> activity</span>
+        <span><span className="font-medium tabular-nums text-foreground">{member.activity}</span> {t("work.insights.activity_unit")}</span>
         <Trend trend={member.trend} />
-        <span><span className="font-medium tabular-nums text-foreground">{member.meetings}</span> meeting{member.meetings === 1 ? "" : "s"}</span>
-        <span><span className="font-medium tabular-nums text-foreground">{member.active_days}</span> active day{member.active_days === 1 ? "" : "s"}</span>
-        <span>{member.last_active ? `Last active ${relativeTime(member.last_active, props.now)}` : "No activity yet"}</span>
+        <span><span className="font-medium tabular-nums text-foreground">{member.meetings}</span> {t("work.insights.meetings_unit", { count: member.meetings })}</span>
+        <span><span className="font-medium tabular-nums text-foreground">{member.active_days}</span> {t("work.insights.active_days_unit", { count: member.active_days })}</span>
+        <span>{member.last_active ? t("work.insights.last_active", { when: relativeTime(member.last_active, props.now) }) : t("work.insights.no_activity")}</span>
       </div>
       <FocusChips focus={member.focus} />
       {member.alerts.length ? (
         <div className="flex flex-wrap gap-2" data-testid="work-insights-alerts">
-          {member.alerts.map((alert, index) => <AlertBadge key={`${alert.kind}-${index}`} alert={alert} />)}
+          {member.alerts.map((alert, index) => <AlertBadge key={`${alert.kind}-${index}`} alert={alert} member={member} />)}
         </div>
       ) : null}
     </li>
@@ -161,12 +174,13 @@ function InsightsSkeleton() {
   );
 }
 
-/** Work > Insights. Owner only — the shell gates both the nav entry and this route; a member never reaches it. */
+/** Work > Insights. Owner only: the shell gates the nav entry and this route; the server refuses a member (not_owner). */
 export function WorkInsightsPage(props: { client: WorkClient | null; onBack: () => void; backLabel?: string }) {
   const [days, setDays] = useState<number>(DEFAULT_DAYS);
   const query = useWorkOrgInsights(props.client, days, Boolean(props.client));
   const data: OmniRushWorkInsights | undefined = query.data;
   const members = data ? sortMembers(data.members) : [];
+  const failure = query.error && !data ? workFailure(query.error) : null;
   const now = Date.now();
   const rangeChip = (active: boolean) => cn(
     "h-8 rounded-full px-3 text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
@@ -177,34 +191,34 @@ export function WorkInsightsPage(props: { client: WorkClient | null; onBack: () 
     <div className="h-full overflow-y-auto" data-testid="work-insights">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pb-10 pt-10">
         <div>
-          <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}><ArrowLeft className="size-4" />{props.backLabel ?? "Back to Work"}</Button>
+          <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}><ArrowLeft className="size-4" />{props.backLabel ?? t("work.common.back_to_work")}</Button>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">Team insights</h1>
-              <p className="mt-1 text-sm text-muted-foreground">How your team is working. Aggregate activity and alerts only — never the content of anyone's messages.</p>
+              <h1 className="text-xl font-semibold tracking-tight">{t("work.nav.insights")}</h1>
+              <p className="mt-1 text-sm text-muted-foreground">{t("work.insights.subtitle")}</p>
             </div>
-            <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Time range">
+            <div className="flex items-center gap-1.5" role="radiogroup" aria-label={t("work.insights.range")}>
               {RANGES.map((value) => (
                 <button key={value} type="button" role="radio" aria-checked={days === value} onClick={() => setDays(value)} className={rangeChip(days === value)} data-range={value}>
-                  {value}d
+                  {t("work.insights.days_short", { n: value })}
                 </button>
               ))}
             </div>
           </div>
         </div>
 
-        {query.isLoading ? <InsightsSkeleton /> : query.error && !data ? (
+        {query.isLoading ? <InsightsSkeleton /> : failure ? (
           <div className="flex flex-col items-start gap-2 rounded-xl border border-border px-4 py-4" data-testid="work-insights-error">
-            <span className="text-sm text-muted-foreground">{query.error instanceof Error ? query.error.message : "Insights could not be loaded."}</span>
-            <Button variant="outline" size="sm" onClick={() => void query.refetch()}><RotateCw className="size-3.5" />Try again</Button>
+            <span className="text-sm text-muted-foreground">{failure.text}</span>
+            {failure.retry ? <Button variant="outline" size="sm" onClick={() => void query.refetch()}><RotateCw className="size-3.5" />{t("work.common.try_again")}</Button> : null}
           </div>
         ) : data ? (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="work-insights-summary">
-              <Stat label="Active members" value={`${data.team.active_members} / ${data.team.members}`} />
-              <Stat label="Activity" value={data.team.total_activity} />
-              <Stat label="Meetings" value={data.team.meetings} />
-              <Stat label="Open alerts" value={data.team.alerts} tone={data.team.alerts > 0 ? "alert" : "default"} />
+              <Stat label={t("work.insights.active_members")} value={`${data.team.active_members} / ${data.team.members}`} />
+              <Stat label={t("work.insights.activity")} value={data.team.total_activity} />
+              <Stat label={t("work.insights.meetings")} value={data.team.meetings} />
+              <Stat label={t("work.insights.open_alerts")} value={data.team.alerts} tone={data.team.alerts > 0 ? "alert" : "default"} />
             </div>
             {members.length ? (
               <ul className="rounded-xl border border-border bg-background" data-testid="work-insights-members">
@@ -212,7 +226,7 @@ export function WorkInsightsPage(props: { client: WorkClient | null; onBack: () 
               </ul>
             ) : (
               <div className="rounded-xl border border-border px-4 py-10 text-center text-sm text-muted-foreground" data-testid="work-insights-empty">
-                No team activity yet. Insights fill in as your team uses Work.
+                {t("work.insights.empty")}
               </div>
             )}
           </>

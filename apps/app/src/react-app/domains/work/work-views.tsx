@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
+import { t } from "@/i18n";
 import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
@@ -31,7 +32,7 @@ import { COMPOSER_BOTTOM, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/do
 
 import {
   connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageLine, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
-  sourceErrorText, workChatToolsKey, workConnectorsKey, workStateKey, type AppMode, type WorkClient,
+  sourceErrorText, workChatToolsKey, workConnectorsKey, workFailure, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
 const CONNECTOR_ICONS: Record<string, LucideIcon> = {
@@ -71,13 +72,13 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
   return (
     <div
       role="radiogroup"
-      aria-label="Mode"
-      title={`Switch between Code and Work (${props.shortcut})`}
+      aria-label={t("work.mode.label")}
+      title={t("work.mode.switch", { shortcut: props.shortcut })}
       data-app-mode={props.mode}
       className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5 mac:titlebar-no-drag"
     >
-      {option("code", "Code", <Code2 />)}
-      {option("work", "Work", <Briefcase />)}
+      {option("code", t("work.mode.code"), <Code2 />)}
+      {option("work", t("work.nav.work"), <Briefcase />)}
     </div>
   );
 }
@@ -106,7 +107,7 @@ export function WorkHome(props: {
     try {
       await props.onStart(prompt);
     } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : "The chat could not be started.");
+      toast.error(reason instanceof Error ? reason.message : t("work.home.start_failed"));
     } finally {
       setStarting(false);
     }
@@ -123,13 +124,13 @@ export function WorkHome(props: {
         <div className={cn(COMPOSER_GUTTER, "flex min-h-full flex-col justify-center py-8")}>
           <div className="mx-auto flex w-full max-w-[800px] flex-col items-center gap-4" data-testid="work-home-column">
             <div className="space-y-1.5 text-center">
-              <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">What do you want to get done?</h1>
-              <p className="text-[13px] text-muted-foreground">Ask about your email, documents, customers or invoices.</p>
+              <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">{t("work.home.title")}</h1>
+              <p className="text-[13px] text-muted-foreground">{t("work.home.subtitle")}</p>
             </div>
             {props.badge}
             {props.checklist ? <div className="w-full max-w-[420px]">{props.checklist}</div> : null}
             {props.onConnect ? (
-              <Button variant="outline" size="sm" onClick={props.onConnect} data-testid="work-home-connect"><Plug className="size-4" />Connect your tools</Button>
+              <Button variant="outline" size="sm" onClick={props.onConnect} data-testid="work-home-connect"><Plug className="size-4" />{t("work.home.connect")}</Button>
             ) : null}
           </div>
         </div>
@@ -163,18 +164,17 @@ export function WorkHome(props: {
   );
 }
 
-const STATUS_LABEL: Record<OmniRushWorkConnector["status"], string> = {
-  connected: "Connected",
-  syncing: "Importing history",
-  error: "Needs attention",
-  disconnected: "Not connected",
-  unavailable: "Unavailable",
-};
+function statusLabel(status: OmniRushWorkConnector["status"]): string {
+  if (status === "connected") return t("work.connectors.status_connected");
+  if (status === "syncing") return t("work.connectors.status_syncing");
+  if (status === "error") return t("work.today.dot_attention");
+  if (status === "disconnected") return t("work.error.not_connected");
+  return t("work.connectors.status_unavailable");
+}
 
 function lastSync(value: string | null): string {
-  if (!value) return "Not synced yet";
-  const at = new Date(value);
-  return Number.isNaN(at.getTime()) ? "Not synced yet" : `Last sync ${at.toLocaleString()}`;
+  const at = value ? new Date(value) : null;
+  return at && !Number.isNaN(at.getTime()) ? t("work.connectors.last_sync", { when: at.toLocaleString() }) : t("work.connectors.not_synced");
 }
 
 export const CONNECT_POLL_MS = 2_000;
@@ -217,14 +217,14 @@ export function ConnectorRow(props: {
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{name}</span>
           <Badge variant={row.status === "error" || attention?.kind === "reconnect" || attention?.kind === "failing" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
-            {props.connecting ? "Waiting for sign-in…" : attention ? STATUS_LABEL.error : STATUS_LABEL[row.status]}
+            {props.connecting ? t("work.common.waiting_sign_in") : attention ? statusLabel("error") : statusLabel(row.status)}
           </Badge>
         </div>
         <div className="mt-0.5 break-words text-[12px] text-muted-foreground">
           {row.status === "error" && !attention
             ? sourceErrorText(row.error)
             : connected
-              ? [row.account, coverage ?? countLabel(row.records, "record"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
+              ? [row.account, coverage ?? countLabel(row.records, "work.count.records"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
               : connectorAccess(row.id)}
         </div>
         {attention ? (
@@ -238,26 +238,26 @@ export function ConnectorRow(props: {
         ) : null}
         {connected && (row.skipped_records ?? 0) > 0 ? (
           <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-connector-skipped">
-            {countLabel(row.skipped_records ?? 0, "item")} could not be imported and {row.skipped_records === 1 ? "was" : "were"} skipped.
+            {t("work.connectors.skipped", { count: row.skipped_records ?? 0, n: (row.skipped_records ?? 0).toLocaleString() })}
           </div>
         ) : null}
         {needsSetup ? (
           <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-connector-setup-hint">
-            Nothing to read yet. {setupLabel(row.id)} to pick what OmniRush can see.
+            {t("work.connectors.setup_hint", { action: setupLabel(row.id) })}
           </div>
         ) : null}
         {connected && props.health !== undefined ? (
           <div className={cn("mt-0.5 text-[12px]", problem ? "text-destructive" : "text-muted-foreground")} data-testid="work-connector-health">
-            {props.health === null ? "No health report for this source yet." : problem ? problem.text : "All checks passed."}
+            {props.health === null ? t("work.connectors.no_health") : problem ? problem.text : t("work.connectors.health_ok")}
           </div>
         ) : null}
       </div>
       <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
       {connected ? (
         <label className="me-2 flex items-center gap-2 text-[12px] text-muted-foreground">
-          Data sync
+          {t("work.connectors.data_sync")}
           <Switch
-            aria-label={`Data sync for ${name}`}
+            aria-label={t("work.connectors.data_sync_for", { name })}
             checked={row.sync_enabled}
             disabled={props.busy}
             onCheckedChange={(checked: boolean) => props.onSync(checked)}
@@ -265,21 +265,21 @@ export function ConnectorRow(props: {
         </label>
       ) : null}
       {connected && props.onCheck ? (
-        <Button variant="ghost" size="sm" aria-label={`Check ${name}`} disabled={props.checking} onClick={props.onCheck}>{props.checking ? "Checking…" : "Check"}</Button>
+        <Button variant="ghost" size="sm" aria-label={t("work.connectors.check_name", { name })} disabled={props.checking} onClick={props.onCheck}>{props.checking ? t("work.connectors.checking") : t("work.connectors.check")}</Button>
       ) : null}
       {connected && attention?.action === "retry" && props.onRetry ? (
-        <Button size="sm" aria-label={`Retry sync for ${name}`} disabled={props.retrying} onClick={props.onRetry}>{props.retrying ? "Starting…" : "Retry sync"}</Button>
+        <Button size="sm" aria-label={t("work.connectors.retry_sync_for", { name })} disabled={props.retrying} onClick={props.onRetry}>{props.retrying ? t("work.connectors.starting") : t("work.connectors.retry_sync")}</Button>
       ) : null}
       {connected && row.setup_url && props.onSetup ? (
-        <Button variant={needsSetup || attention?.action === "setup" ? "default" : "ghost"} size="sm" onClick={props.onSetup}>{attention?.action === "setup" ? "Open setup" : setupLabel(row.id)}</Button>
+        <Button variant={needsSetup || attention?.action === "setup" ? "default" : "ghost"} size="sm" onClick={props.onSetup}>{attention?.action === "setup" ? t("work.connectors.open_setup") : setupLabel(row.id)}</Button>
       ) : null}
       {connected && reconnect ? (
-        <Button size="sm" aria-label={`Reconnect ${name}`} disabled={props.busy || props.connecting} onClick={props.onConnect}>Reconnect</Button>
+        <Button size="sm" aria-label={t("work.connectors.reconnect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.connectors.reconnect")}</Button>
       ) : null}
       {connected ? (
-        <Button variant="outline" size="sm" aria-label={`Disconnect ${name}`} disabled={props.busy} onClick={props.onDisconnect}>Disconnect</Button>
+        <Button variant="outline" size="sm" aria-label={t("work.connectors.disconnect_name", { name })} disabled={props.busy} onClick={props.onDisconnect}>{t("work.connectors.disconnect")}</Button>
       ) : (
-        <Button size="sm" aria-label={`Connect ${name}`} disabled={props.busy || props.connecting} onClick={props.onConnect}>Connect</Button>
+        <Button size="sm" aria-label={t("work.connectors.connect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.common.connect")}</Button>
       )}
       </div>
     </div>
@@ -292,18 +292,37 @@ function imessageRowidKey(client: WorkClient | null) {
   return `omnirush-imessage-rowid:${client?.baseUrl?.trim() || "default"}`;
 }
 
+/** The server takes at most 2,000 records and 20 MB per iMessage push: slices well under both (JSON length is
+ *  UTF-16 units; a unit is at most 3 bytes of UTF-8). Each record is a whole chat-day, so no record is split. */
+export function importBatches<T>(records: T[], maxRecords = 500, maxChars = 6_000_000): T[][] {
+  const batches: T[][] = [];
+  let batch: T[] = [];
+  let chars = 0;
+  for (const record of records) {
+    const size = JSON.stringify(record).length;
+    if (batch.length && (batch.length >= maxRecords || chars + size > maxChars)) {
+      batches.push(batch);
+      batch = [];
+      chars = 0;
+    }
+    batch.push(record);
+    chars += size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
 /** iMessage has no API and nothing on a server: it is read only from the
  *  Mac's local Messages database, after the user grants Full Disk Access.
- *  macOS desktop only. */
+ *  macOS desktop only (the Connectors page shows it nowhere else). */
 export function IMessageCard(props: { client: WorkClient | null; openLink: (url: string) => void }) {
   const queryClient = useQueryClient();
-  const supported = isDesktopRuntime() && isMacPlatform();
   const [fdaNeeded, setFdaNeeded] = useState(false);
   const countKey = ["omnirush-imessage-count", props.client?.baseUrl?.trim() || "default"];
   const count = useQuery({
     queryKey: countKey,
     queryFn: () => props.client!.getIMessageCount(),
-    enabled: Boolean(props.client) && supported,
+    enabled: Boolean(props.client),
   });
   const run = useMutation({
     mutationFn: async () => {
@@ -313,14 +332,15 @@ export function IMessageCard(props: { client: WorkClient | null; openLink: (url:
         setFdaNeeded(result.code === "fda_required");
         throw new Error(
           result.code === "no_messages_db"
-            ? "No Messages database was found on this Mac."
+            ? t("work.imessage.no_db")
             : result.code === "unsupported_os"
-              ? "Reading iMessage is only possible on macOS."
-              : "OmniRush needs Full Disk Access to read Messages.",
+              ? t("work.imessage.mac_only")
+              : t("work.imessage.fda_needed"),
         );
       }
       setFdaNeeded(false);
-      if (result.records.length > 0) await props.client!.importIMessage(result.records);
+      // The read position moves only once every slice is in: a failed push is read and sent again next time.
+      for (const batch of importBatches(result.records)) await props.client!.importIMessage(batch);
       if (result.lastRowid > since) {
         localStorage.setItem(imessageRowidKey(props.client), String(result.lastRowid));
       }
@@ -328,9 +348,9 @@ export function IMessageCard(props: { client: WorkClient | null; openLink: (url:
     },
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: countKey });
-      toast.success(result.records.length > 0 ? `Imported ${result.messageCount} messages.` : "No new messages.");
+      toast.success(result.records.length > 0 ? t("work.imessage.imported", { count: result.messageCount, n: result.messageCount.toLocaleString() }) : t("work.imessage.no_new"));
     },
-    onError: (reason) => toast.error(reason instanceof Error ? reason.message : "That did not work. Try again."),
+    onError: (reason) => toast.error(workFailure(reason).text),
   });
   const records = count.data?.records ?? 0;
   return (
@@ -340,33 +360,27 @@ export function IMessageCard(props: { client: WorkClient | null; openLink: (url:
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-medium">iMessage</span>
-            <Badge variant="secondary">Local import</Badge>
+            <Badge variant="secondary">{t("work.imessage.local_import")}</Badge>
           </div>
-          <div className="mt-0.5 text-[12px] text-muted-foreground">
-            {supported
-              ? records > 0
-                ? `${records.toLocaleString()} ${records === 1 ? "chat" : "chats"} imported`
-                : "Read your Mac's Messages and keep a copy for Work chats."
-              : "Available in the macOS desktop app."}
+          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-imessage-count">
+            {records > 0 ? t("work.imessage.synced_days", { count: records, n: records.toLocaleString() }) : t("work.imessage.intro")}
           </div>
         </div>
-        {supported ? (
-          <Button type="button" variant="outline" size="sm" disabled={run.isPending} onClick={() => run.mutate()} data-testid="work-imessage-import">
-            {run.isPending ? "Reading…" : records > 0 ? "Sync new messages" : "Import iMessage"}
-          </Button>
-        ) : null}
+        <Button type="button" variant="outline" size="sm" disabled={run.isPending} onClick={() => run.mutate()} data-testid="work-imessage-import">
+          {run.isPending ? t("work.imessage.reading") : records > 0 ? t("work.imessage.sync_new") : t("work.imessage.import")}
+        </Button>
       </div>
       {fdaNeeded ? (
         <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3 text-[12px]" data-testid="work-imessage-fda">
           <p className="text-muted-foreground">
-            To read Messages, turn on Full Disk Access for OmniRush in System Settings, then try again.
+            {t("work.imessage.fda_steps")}
           </p>
           <div className="mt-2 flex gap-2">
             <Button type="button" variant="outline" size="sm" onClick={() => props.openLink(IMESSAGE_FDA_URL)}>
-              Open System Settings
+              {t("work.imessage.open_settings")}
             </Button>
             <Button type="button" variant="ghost" size="sm" disabled={run.isPending} onClick={() => run.mutate()}>
-              Try again
+              {t("work.common.try_again")}
             </Button>
           </div>
         </div>
@@ -397,11 +411,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     }
     if (Date.now() - connectStarted.current > CONNECT_TIMEOUT_MS) {
       setConnecting(null);
-      toast.error("Sign-in did not finish. Try connecting again.");
+      toast.error(t("work.common.sign_in_timeout"));
     }
   }, [connecting, query.data]);
   const onError = (reason: unknown) => {
-    toast.error(reason instanceof Error ? reason.message : "That did not work. Try again.");
+    toast.error(workFailure(reason).text);
     // Work was switched off: the app leaves Work now rather than when its switch is next read.
     if ((reason as { code?: unknown } | null)?.code === "work_disabled") void queryClient.invalidateQueries({ queryKey: workStateKey(props.client) });
   };
@@ -432,31 +446,35 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const retry = useMutation({
     mutationFn: (id: string) => props.client!.syncWorkConnector(id),
     onSuccess: () => {
-      toast.success("Sync started");
+      toast.success(t("work.common.sync_started"));
       void refresh();
     },
     onError,
   });
   const rows = visibleConnectors(query.data);
   const busy = connect.isPending || disconnect.isPending || sync.isPending;
+  const failure = query.error ? workFailure(query.error) : null;
   return (
     <div className="h-full overflow-y-auto" data-testid="work-connectors">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-10 pt-10">
         <div>
-          {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}><ArrowLeft className="size-4" />{props.backLabel ?? "Back to Work"}</Button> : null}
-          <h1 className="text-xl font-semibold tracking-tight">Connectors</h1>
+          {props.onBack ? <Button variant="ghost" size="sm" className="-ms-2 mb-2" onClick={props.onBack}><ArrowLeft className="size-4" />{props.backLabel ?? t("work.common.back_to_work")}</Button> : null}
+          <h1 className="text-xl font-semibold tracking-tight">{t("work.nav.connectors")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Connect the tools your business uses. The agent can search and read them in Work chats, and asks you before it sends or changes anything. Data sync keeps a copy up to date; switch it off to stop collecting new data.
+            {t("work.connectors.subtitle")}
           </p>
           {props.notice ? <div className="mt-3">{props.notice}</div> : null}
         </div>
         <div className="rounded-xl border border-border bg-background">
           {query.isLoading ? (
-            <div className="px-4 py-6 text-sm text-muted-foreground">Loading…</div>
-          ) : query.error ? (
-            <div className="px-4 py-6 text-sm text-muted-foreground">{query.error instanceof Error ? query.error.message : "The connectors could not be loaded."}</div>
+            <div className="px-4 py-6 text-sm text-muted-foreground">{t("common.loading")}</div>
+          ) : failure ? (
+            <div className="flex flex-col items-start gap-2 px-4 py-4" data-testid="work-connectors-error">
+              <span className="text-sm text-muted-foreground">{failure.text}</span>
+              {failure.retry ? <Button variant="outline" size="sm" onClick={() => void query.refetch()}>{t("work.common.try_again")}</Button> : null}
+            </div>
           ) : rows.length === 0 ? (
-            <div className="px-4 py-6 text-sm text-muted-foreground">No connectors are available yet.</div>
+            <div className="px-4 py-6 text-sm text-muted-foreground">{t("work.connectors.none")}</div>
           ) : rows.map((row) => (
             <ConnectorRow
               key={row.id}
@@ -475,14 +493,14 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
             />
           ))}
         </div>
-        <IMessageCard client={props.client} openLink={props.openLink} />
+        {isDesktopRuntime() && isMacPlatform() ? <IMessageCard client={props.client} openLink={props.openLink} /> : null}
       </div>
       <ConfirmModal
         open={confirmDisconnect !== null}
-        title={`Disconnect ${confirmDisconnect ? connectorLabel(confirmDisconnect.id, confirmDisconnect.label) : ""}?`}
-        message="OmniRush signs out of it and stops syncing, and Work chats can no longer read or act in it. Records already imported stay in Knowledge and search. To pause collecting new data instead, switch Data sync off."
-        confirmLabel="Disconnect"
-        cancelLabel="Cancel"
+        title={t("work.connectors.disconnect_title", { name: confirmDisconnect ? connectorLabel(confirmDisconnect.id, confirmDisconnect.label) : "" })}
+        message={t("work.connectors.disconnect_body")}
+        confirmLabel={t("work.connectors.disconnect")}
+        cancelLabel={t("common.cancel")}
         variant="danger"
         onConfirm={() => {
           if (confirmDisconnect) disconnect.mutate(confirmDisconnect.id);
@@ -505,12 +523,12 @@ function WorkConnectorsChipButton(props: { client: WorkClient | null }) {
   const location = useLocation();
   const query = useQuery({ queryKey: workConnectorsKey(props.client), queryFn: () => props.client!.listWorkConnectors(), enabled: Boolean(props.client) });
   const connected = visibleConnectors(query.data).filter((row) => row.status === "connected" || row.status === "syncing" || row.status === "error");
-  const label = connected.length ? countLabel(connected.length, "connector") : "Connect tools";
+  const label = connected.length ? countLabel(connected.length, "work.count.connectors") : t("work.connectors.chip_connect");
   return (
     <button
       type="button"
       data-testid="work-connectors-chip"
-      title={connected.length ? `Connectors: ${connected.map((row) => connectorLabel(row.id, row.label)).join(", ")}` : "Connect tools"}
+      title={connected.length ? t("work.connectors.chip_title", { names: connected.map((row) => connectorLabel(row.id, row.label)).join(", ") }) : t("work.connectors.chip_connect")}
       aria-label={label}
       onClick={() => navigate(WORK_CONNECTORS_ROUTE, connectorsBackState(location.pathname, location.search))}
       className="flex h-9 max-h-9 min-w-9 shrink-[4] items-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
@@ -529,10 +547,10 @@ export function WorkConnectorsSetting(props: { client: WorkClient | null }) {
   return (
     <LayoutSectionItem>
       <LayoutSectionItemHeader>
-        <LayoutSectionItemTitle>Work connectors</LayoutSectionItemTitle>
-        <LayoutSectionItemDescription>Connect your mail, chat, documents, CRM, tickets and accounting for Work chats.</LayoutSectionItemDescription>
+        <LayoutSectionItemTitle>{t("work.connectors.setting_title")}</LayoutSectionItemTitle>
+        <LayoutSectionItemDescription>{t("work.connectors.setting_body")}</LayoutSectionItemDescription>
         <LayoutSectionItemHeaderActions>
-          <Button variant="outline" size="sm" data-testid="settings-work-connectors" onClick={() => navigate(WORK_CONNECTORS_ROUTE)}>Open</Button>
+          <Button variant="outline" size="sm" data-testid="settings-work-connectors" onClick={() => navigate(WORK_CONNECTORS_ROUTE)}>{t("work.common.open")}</Button>
         </LayoutSectionItemHeaderActions>
       </LayoutSectionItemHeader>
     </LayoutSectionItem>
@@ -552,20 +570,20 @@ function WorkToolsBannerCheck(props: { client: WorkClient }) {
     mutationFn: () => props.client.fixWorkChatTools(),
     onSuccess: (answer) => {
       queryClient.setQueryData(key, answer);
-      if (answer.attached) toast.success("Work tools are connected");
-      else toast.error(answer.reason ?? "Work tools are still not connected.");
+      if (answer.attached) toast.success(t("work.tools.connected"));
+      else toast.error(answer.reason ?? t("work.tools.still_not_connected"));
     },
-    onError: (reason) => toast.error(reason instanceof Error ? reason.message : "That did not work. Try again."),
+    onError: (reason) => toast.error(workFailure(reason).text),
   });
   if (!query.data || query.data.attached) return null;
   return (
     <div role="status" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-amber-7/50 bg-amber-2/50 px-3 py-2 text-[13px] text-amber-11" data-testid="work-tools-banner">
       <Plug aria-hidden className="size-4 shrink-0" />
       <div className="min-w-0 flex-1">
-        <span className="font-medium">Work tools aren't connected in this chat</span>
+        <span className="font-medium">{t("work.tools.banner")}</span>
         {query.data.reason ? <span className="text-amber-11/80"> {query.data.reason}</span> : null}
       </div>
-      <Button size="sm" variant="outline" disabled={fix.isPending} onClick={() => fix.mutate()} data-testid="work-tools-fix">{fix.isPending ? "Fixing…" : "Fix"}</Button>
+      <Button size="sm" variant="outline" disabled={fix.isPending} onClick={() => fix.mutate()} data-testid="work-tools-fix">{fix.isPending ? t("work.tools.fixing") : t("work.today.fix")}</Button>
     </div>
   );
 }

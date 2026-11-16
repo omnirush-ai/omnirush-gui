@@ -2184,7 +2184,7 @@ const desktopCommandHandlers = {
   "workImessageRead": async (event, ...args) => {
       const sinceRowid = Number(args[0]) || 0;
       try {
-        const { records, lastRowid, messageCount } = readIMessage({ sinceRowid });
+        const { records, lastRowid, messageCount } = await readIMessage({ sinceRowid });
         return { status: "ok", records, lastRowid, messageCount };
       } catch (error) {
         if (error instanceof IMessageError) return { status: "error", code: error.code };

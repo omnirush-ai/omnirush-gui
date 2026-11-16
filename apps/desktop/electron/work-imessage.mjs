@@ -5,7 +5,8 @@
 // chat per day, and hands them to the renderer to push to the backend.
 // macOS only.
 
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -185,10 +186,11 @@ export function readDatabase(dbPath, sinceRowid = 0) {
  * Copy the live Messages database (locked by Messages, so never opened in
  * place) and read it. Throws `IMessageError('fda_required')` when Full
  * Disk Access is missing, `'no_messages_db'` when Messages was never used,
- * and `'unsupported_os'` off macOS.
+ * and `'unsupported_os'` off macOS. The copy is async: chat.db can be
+ * hundreds of MB, and this runs in the Electron main process.
  * @param {{ homeDir?: string, sinceRowid?: number, platform?: string }} [options]
  */
-export function readIMessage(options = {}) {
+export async function readIMessage(options = {}) {
   const platform = options.platform || process.platform;
   if (platform !== "darwin") throw new IMessageError("unsupported_os");
   const homeDir = options.homeDir || os.homedir();
@@ -201,7 +203,7 @@ export function readIMessage(options = {}) {
     // checkpointed into chat.db; copy them so the read sees recent chats.
     for (const suffix of ["", "-wal", "-shm"]) {
       const from = src + suffix;
-      if (suffix === "" || existsSync(from)) copyFileSync(from, copy + suffix);
+      if (suffix === "" || existsSync(from)) await copyFile(from, copy + suffix);
     }
     return readDatabase(copy, options.sinceRowid);
   } catch (error) {
