@@ -4,20 +4,27 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { matchRoutes, MemoryRouter } from "react-router";
 
-import type { OmniRushWorkConnector, OmniRushWorkFeed, OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
-  askAboutItemPrompt, coverageLine, relativeTime, workChatToolsKey, workFeedKey, workMembersKey, workToolNotices,
+import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
+import { askAboutPrompt, checklistItems, connectorAccess, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
+  askAboutItemPrompt, coverageLine, relativeTime, workActionsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
-import { leaveState, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
+import { leaveState, mePatch, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
+import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
+import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
-import { ConnectorIcon, ConnectorRow, WorkConnectorsChip, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
+import { ConnectorIcon, ConnectorRow, importBatches, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
   id: "google", label: "Google", status: "disconnected", last_sync_at: null, records: 0, sync_enabled: false, ...over,
 });
 const noop = () => {};
+/** A query left in its error state, as a failed read leaves it (and not read again when the page mounts). */
+function failQuery(queries: QueryClient, queryKey: readonly unknown[], error: Error) {
+  queries.setQueryDefaults([...queryKey], { retryOnMount: false });
+  queries.getQueryCache().build(queries, { queryKey: [...queryKey], retry: false }).setState({ status: "error", error, fetchStatus: "idle", errorUpdatedAt: 1 });
+}
 
 describe("Work mode", () => {
   test("every Work page has a route in the app (none falls through to the catch-all)", () => {
@@ -60,9 +67,9 @@ describe("Work mode", () => {
   });
 
   test("counts read naturally", () => {
-    expect(countLabel(1, "record")).toBe("1 record");
-    expect(countLabel(0, "record")).toBe("0 records");
-    expect(countLabel(1200, "record")).toBe("1,200 records");
+    expect(countLabel(1, "work.count.records")).toBe("1 record");
+    expect(countLabel(0, "work.count.records")).toBe("0 records");
+    expect(countLabel(1200, "work.count.records")).toBe("1,200 records");
   });
 
   test("Cmd/Ctrl+Shift+K switches mode; Cmd/Ctrl+K stays the command palette", () => {
@@ -228,9 +235,10 @@ describe("Work mode", () => {
 
   test("a source not connected says what the agent may read and do; buttons name their source", () => {
     const off = renderToStaticMarkup(<ConnectorRow connector={row({ id: "slack", label: "Slack" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
-    expect(off).toContain(CONNECTOR_ACCESS.slack);
+    expect(off).toContain(connectorAccess("slack"));
     expect(off).toContain('aria-label="Connect Slack"');
-    for (const id of ["google", "microsoft", "slack", "hubspot", "quickbooks", "notion", "jira", "confluence", "linear", "github"]) expect(CONNECTOR_ACCESS[id]).toContain("after you approve");
+    for (const id of ["google", "microsoft", "slack", "hubspot", "quickbooks", "notion", "jira", "confluence", "linear", "github"]) expect(connectorAccess(id)).toContain("after you approve");
+    expect(connectorAccess("zendesk")).toContain("asks you before");
   });
 
   test("GitHub with its install link: Choose repositories, and a hint while nothing is visible", () => {
@@ -438,5 +446,134 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(render(true, false)).toContain('data-testid="work-tools-fix"');
     expect(render(true, true)).toBe("");
     expect(render(false, false)).toBe("");
+  });
+  test("a failed Work request reads as words, and only a failure that can pass offers Try again", () => {
+    const missing = workFailure(new OmniRushServerError(404, "not_found", "Not found"));
+    expect(missing).toEqual({ text: "This needs the latest OmniRush. Update and reopen.", retry: false });
+    expect(workFailure(new OmniRushServerError(404, "unsupported_work_path", "unsupported_work_path")).retry).toBe(false);
+    const refused = workFailure(new OmniRushServerError(422, "bad_arguments", "bad_arguments"));
+    expect(refused.text).not.toContain("bad_arguments");
+    expect(refused.retry).toBe(false);
+    expect(workFailure(new OmniRushServerError(409, "not_undoable", "not_undoable")).text).toBe("This action can no longer be undone.");
+    // A code the local server words already keeps its sentence; a bare code or HTTP status text never shows.
+    expect(workFailure(new OmniRushServerError(410, "invite_used", "This invite was already used. Ask for a new one.")).text).toBe("This invite was already used. Ask for a new one.");
+    expect(workFailure(new OmniRushServerError(400, "odd_code", "odd_code")).text).toBe("That did not work.");
+    expect(workFailure(new OmniRushServerError(400, "request_failed", "Bad Request")).text).toBe("That did not work.");
+    expect(workFailure(new OmniRushServerError(503, "request_failed", "Service Unavailable"))).toEqual({ text: "Something went wrong. Try again.", retry: true });
+    expect(workFailure(new Error("Request timed out."))).toEqual({ text: "Request timed out.", retry: true });
+    expect(workFailure(undefined).retry).toBe(true);
+  });
+
+  test("Today: a refused feed read shows words and no dead Try again; a server hiccup offers it", () => {
+    const client = { baseUrl: "http://today-error.test" } as never;
+    const render = (error: Error) => {
+      const queries = new QueryClient();
+      failQuery(queries, workFeedKey(client, null), error);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkToday client={client} openLink={noop} onAsk={async () => {}} onOpenConnectors={noop} /></QueryClientProvider>);
+    };
+    const refused = render(new OmniRushServerError(422, "bad_arguments", "bad_arguments"));
+    expect(refused).toContain('data-testid="work-feed-error"');
+    expect(refused).not.toContain("bad_arguments");
+    expect(refused).not.toContain("Try again");
+    expect(render(new OmniRushServerError(502, "provider_error", "The service returned an error. Try again."))).toContain("Try again");
+  });
+
+  test("organization: a failed read is an error, never 'no company' with Set up; no company is its own state", () => {
+    const client = { baseUrl: "http://org-error.test" } as never;
+    const render = (setup: (queries: QueryClient) => void) => {
+      const queries = new QueryClient();
+      setup(queries);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} openLink={noop} onBack={noop} /></MemoryRouter></QueryClientProvider>);
+    };
+    const failed = render((queries) => failQuery(queries, workMembersKey(client), new OmniRushServerError(404, "not_found", "Not found")));
+    expect(failed).toContain('data-testid="work-org-error"');
+    expect(failed).not.toContain('data-testid="work-org-none"');
+    expect(failed).not.toContain("Set up your company");
+    expect(failed).not.toContain("Try again");
+    expect(render((queries) => failQuery(queries, workMembersKey(client), new Error("Request timed out.")))).toContain("Try again");
+    const none = render((queries) => queries.setQueryData(workMembersKey(client), { org: null, members: [], invites: [] }));
+    expect(none).toContain('data-testid="work-org-none"');
+    expect(none).toContain("Set up your company");
+  });
+
+  test("organization: an owner's tools are the company's (no second picker); Save waits for an edit; a sole owner sees what leaving deletes", () => {
+    const client = { baseUrl: "http://org-tools.test" } as never;
+    const render = (data: OmniRushWorkMembers) => {
+      const queries = new QueryClient();
+      queries.setQueryData(workStateKey(client), { enabled: true, sources: ["google", "slack"] });
+      queries.setQueryData(workMembersKey(client), data);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} openLink={noop} onBack={noop} /></MemoryRouter></QueryClientProvider>);
+    };
+    const org = { id: "org_1", name: "Acme", tools: ["google"] };
+    const owner = render({ org, you_role: "owner", members: [{ user_id: "u1", email: "o@acme.test", role: "owner", you: true }], invites: [] });
+    expect(owner).not.toContain('data-testid="work-org-my-tools"');
+    expect(owner).toMatch(/disabled=""[^>]*data-testid="work-org-save"/);
+    expect(owner).toMatch(/disabled=""[^>]*data-testid="work-org-me-save"/);
+    expect(owner).toContain("the organization and its pending invites are deleted");
+    const member = render({ org, you_role: "member", members: [{ user_id: "u1", email: "o@acme.test", role: "owner" }, { user_id: "u2", email: "m@acme.test", role: "member", you: true }], invites: [] });
+    expect(member).toContain('data-testid="work-org-my-tools"');
+    // The company's chips are shown, not offered: a member cannot press them.
+    expect(member.match(/aria-pressed="(true|false)" disabled=""/g)?.length).toBeGreaterThanOrEqual(2);
+    // Saving only a role never sends tools: an owner's tools are the company's, and a member's never come back from the server.
+    expect(mePatch({ job_role: " Founder " }, { job_role: null })).toEqual({ job_role: "Founder" });
+    expect(mePatch({ tools: ["slack"] }, { job_role: "Ops" })).toEqual({ job_role: "Ops", tools: ["slack"] });
+  });
+
+  test("insights: alerts in the app's words by kind, roles as labels, a missing route says update with no retry", () => {
+    const client = { baseUrl: "http://insights.test" } as never;
+    const member = { user_id: "u2", email: "m@acme.test", role: "member", job_role: "Ops", activity: 3, prev_activity: 10, trend: -70, active_days: 1, last_active: null, meetings: 1, by_source: {}, by_kind: {}, focus: [], daily: [{ d: "2026-11-15", n: 3 }], alerts: [{ kind: "drop_off", level: "warn" as const, text: "Activity down 70% vs the previous period" }, { kind: "overdue", level: "serious" as const, text: "2 assigned items overdue" }, { kind: "new_kind", level: "warn" as const, text: "Server words" }] };
+    expect(alertText(member.alerts[0]!, member)).toBe("Activity down 70% vs the previous period");
+    expect(alertText(member.alerts[1]!, member)).toBe("2 assigned items overdue");
+    expect(alertText(member.alerts[2]!, member)).toBe("Server words");
+    const render = (setup: (queries: QueryClient) => void) => {
+      const queries = new QueryClient();
+      setup(queries);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkInsightsPage client={client} onBack={noop} /></QueryClientProvider>);
+    };
+    const page = render((queries) => queries.setQueryData(workInsightsKey(client, 14), { org: { id: "o", name: "Acme" }, range: { days: 14, from: "", to: "" }, team: { members: 2, active_members: 1, total_activity: 3, meetings: 1, alerts: 2 }, members: [member] }));
+    expect(page).toContain("Ops · Member");
+    expect(page).not.toContain("—");
+    const missing = render((queries) => failQuery(queries, workInsightsKey(client, 14), new OmniRushServerError(404, "not_found", "Not found")));
+    expect(missing).toContain("This needs the latest OmniRush.");
+    expect(missing).not.toContain("Try again");
+  });
+
+  test("automation: the log shows even when the settings read fails; the consent copy promises only what ships", () => {
+    const client = { baseUrl: "http://automation.test" } as never;
+    const action: OmniRushWorkAction = { id: "a1", source: "slack", tool: "post", target: "#ops", summary: "Posted the weekly summary", result: "done", undoable: true, created_at: "2026-11-15T09:00:00Z", undone_at: null };
+    const render = (setup: (queries: QueryClient) => void) => {
+      const queries = new QueryClient();
+      setup(queries);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkAutomationPage client={client} onBack={noop} /></QueryClientProvider>);
+    };
+    const failed = render((queries) => {
+      failQuery(queries, workSettingsKey(client), new OmniRushServerError(404, "not_found", "Not found"));
+      queries.setQueryData(workActionsKey(client), { actions: [action] });
+    });
+    expect(failed).toContain('data-testid="work-automation-error"');
+    expect(failed).toContain('data-action="a1"');
+    expect(failed).toContain('data-testid="work-action-undo"');
+    const page = render((queries) => {
+      queries.setQueryData(workSettingsKey(client), { autopilot: false, full_access: false, writes_paused: false });
+      queries.setQueryData(workActionsKey(client), { actions: [] });
+    });
+    expect(page).toContain('data-testid="work-automation-full-access"');
+    expect(page).toContain('data-testid="work-automation-empty"');
+    expect(page).not.toMatch(/—|screen|proactive/);
+  });
+
+  test("iMessage: pushed in slices under the server's limits; the card shows only in the Mac desktop app", () => {
+    const records = Array.from({ length: 2001 }, (_, index) => ({ day: "2026-11-15", text: `m${index}` }));
+    const batches = importBatches(records);
+    expect(batches.flat()).toEqual(records);
+    expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(500);
+    const big = importBatches([{ text: "x".repeat(40) }, { text: "y".repeat(40) }, { text: "z" }], 500, 70);
+    expect(big.map((batch) => batch.length)).toEqual([1, 2]);
+    const client = { baseUrl: "http://connectors.test" } as never;
+    const queries = new QueryClient();
+    queries.setQueryData(workConnectorsKey(client), [row({})]);
+    const page = renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={noop} /></MemoryRouter></QueryClientProvider>);
+    expect(page).toContain('data-work-connector="google"');
+    expect(page).not.toContain('data-testid="work-imessage-card"');
   });
 });

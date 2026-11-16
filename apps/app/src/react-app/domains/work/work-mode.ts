@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { t } from "@/i18n";
 import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
@@ -172,9 +173,9 @@ export function connectOrder(rows: OmniRushWorkConnector[] | null | undefined, r
 export function checklistItems(onboarding: OmniRushWorkOnboarding | null | undefined, rows: OmniRushWorkConnector[] | null | undefined) {
   const steps = onboarding?.steps ?? {};
   return [
-    { id: "company", label: "Add your company", done: steps.company === true || Boolean(onboarding?.org) },
-    { id: "connected", label: "Connect a tool or try sample data", done: steps.connected === true || hasRealSource(rows) || hasSampleData(onboarding) },
-    { id: "first_chat", label: "Start your first chat", done: steps.first_chat === true },
+    { id: "company", label: t("work.checklist.company"), done: steps.company === true || Boolean(onboarding?.org) },
+    { id: "connected", label: t("work.checklist.connected"), done: steps.connected === true || hasRealSource(rows) || hasSampleData(onboarding) },
+    { id: "first_chat", label: t("work.checklist.first_chat"), done: steps.first_chat === true },
   ] as const;
 }
 
@@ -195,8 +196,8 @@ export function connectSettled(rows: OmniRushWorkConnector[] | null | undefined,
   return Boolean(row && (row.status === "connected" || row.status === "syncing" || row.status === "error"));
 }
 
-/** "1 record", "2 records". */
-export const countLabel = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
+/** "1 record", "1,200 records": `key` is a plural key whose copy says `{n}` (the count as the locale writes it). */
+export const countLabel = (count: number, key: string) => t(key, { count, n: count.toLocaleString() });
 
 /** Which workspaces a mode lists: Work lists only the Work workspace; Code, and the whole app while Work is off, never do. */
 export const shownInMode = (workspace: { preset?: string | null }, workEnabled: boolean, mode: AppMode) =>
@@ -208,73 +209,114 @@ export const WORK_TOOL_PREFIX = "omnirush-work_";
 const WORK_APPS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
   slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
-  linear: "Linear", github: "GitHub", mock: "Test source",
+  linear: "Linear", github: "GitHub",
 };
-const WORK_ACTIONS: Record<string, string> = {
-  send: "Send e-mail", draft: "Draft e-mail", post: "Post a message", create: "Create an event", note: "Add a note",
-  create_task: "Create a task", update_deal: "Update a deal", create_invoice_draft: "Create an invoice draft",
-  create_page: "Create a page", comment: "Add a comment", create_issue: "Create an issue",
-};
+function workAction(action: string): string | undefined {
+  const actions: Record<string, string> = {
+    send: t("work.tool.send"), draft: t("work.tool.draft"), post: t("work.tool.post"), create: t("work.tool.create"), note: t("work.tool.note"),
+    create_task: t("work.tool.create_task"), update_deal: t("work.tool.update_deal"), create_invoice_draft: t("work.tool.create_invoice_draft"),
+    create_page: t("work.tool.create_page"), comment: t("work.tool.comment"), create_issue: t("work.tool.create_issue"),
+  };
+  return actions[action];
+}
 
 /** An approval's tool and scope in words for a Work connector tool (`omnirush-work_gmail_send` → "Send e-mail (Gmail)",
  *  "Your Gmail account"); null for any other permission. */
 export function workToolPermission(permission: string): { label: string; scope: string } | null {
   if (!permission.startsWith(WORK_TOOL_PREFIX)) return null;
   const tool = permission.slice(WORK_TOOL_PREFIX.length);
-  if (tool === "work_remember") return { label: "Save to company knowledge", scope: "Your Work knowledge" };
-  if (tool === "work_forget") return { label: "Forget saved knowledge", scope: "Your Work knowledge" };
+  if (tool === "work_remember") return { label: t("work.tool.remember"), scope: t("work.tool.knowledge_scope") };
+  if (tool === "work_forget") return { label: t("work.tool.forget"), scope: t("work.tool.knowledge_scope") };
   const [app, ...rest] = tool.split("_");
-  const action = WORK_ACTIONS[rest.join("_")] ?? (rest.join(" ") || tool).replace(/^./, (c) => c.toUpperCase());
-  const name = WORK_APPS[app] ?? app;
-  return { label: `${action} (${name})`, scope: `Your ${name} account` };
+  const action = workAction(rest.join("_")) ?? (rest.join(" ") || tool).replace(/^./, (c) => c.toUpperCase());
+  const name = app === "mock" ? t("work.connector.mock") : WORK_APPS[app] ?? app;
+  return { label: `${action} (${name})`, scope: t("work.tool.account_scope", { name }) };
 }
 
 /** Connector names for ids the server lists without a label; an unknown id shows as it is (with a generic icon). */
-export const CONNECTOR_LABELS: Record<string, string> = {
+const CONNECTOR_LABELS: Record<string, string> = {
   google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
-  notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", mock: "Test source", demo: "Sample data",
+  notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub",
 };
-export const connectorLabel = (id: string, label?: string | null) => label?.trim() || CONNECTOR_LABELS[id] || id;
+export const connectorLabel = (id: string, label?: string | null) =>
+  label?.trim() || CONNECTOR_LABELS[id] || (id === "mock" ? t("work.connector.mock") : id === "demo" ? t("work.connector.demo") : id);
 
 /** What each connector lets the agent do, in a line, for the Connectors page (an unknown id gets the generic line). */
-export const CONNECTOR_ACCESS: Record<string, string> = {
-  google: "Reads Gmail, Drive and Calendar. Drafts and sends e-mail and creates events only after you approve.",
-  microsoft: "Reads Outlook, OneDrive, SharePoint and Teams chats (work or school account). Sends and posts only after you approve.",
-  slack: "Reads the channels, DMs and files you can see. Posts as you only after you approve.",
-  hubspot: "Reads contacts, companies, deals and tickets. Adds notes and tasks and updates deals only after you approve.",
-  quickbooks: "Reads customers, invoices, bills and payments. Creates invoice drafts only after you approve.",
-  notion: "Reads only the pages you share with OmniRush when you connect. Creates pages only after you approve.",
-  jira: "Reads issues and comments on the sites you allow. Comments and creates issues only after you approve.",
-  confluence: "Reads pages, spaces and comments on the sites you allow. Creates pages only after you approve.",
-  linear: "Reads issues, projects and comments. Comments and creates issues only after you approve.",
-  github: "Reads issues, pull requests and docs in the repositories you install the OmniRush app on. Comments and creates issues only after you approve.",
-};
-export const connectorAccess = (id: string) => CONNECTOR_ACCESS[id] ?? "Connect to let the agent search and use it. It asks you before it sends or changes anything.";
+export function connectorAccess(id: string): string {
+  const access: Record<string, string> = {
+    google: t("work.connector.access_google"),
+    microsoft: t("work.connector.access_microsoft"),
+    slack: t("work.connector.access_slack"),
+    hubspot: t("work.connector.access_hubspot"),
+    quickbooks: t("work.connector.access_quickbooks"),
+    notion: t("work.connector.access_notion"),
+    jira: t("work.connector.access_jira"),
+    confluence: t("work.connector.access_confluence"),
+    linear: t("work.connector.access_linear"),
+    github: t("work.connector.access_github"),
+  };
+  return access[id] ?? t("work.connector.access_other");
+}
 
 /** A connector's setup link label: GitHub's is where the user picks repositories. */
-export const setupLabel = (id: string) => (id === "github" ? "Choose repositories" : "Finish setup");
+export const setupLabel = (id: string) => (id === "github" ? t("work.connector.choose_repos") : t("work.connector.finish_setup"));
 
-const WORK_ERROR_COPY: Record<string, string> = {
-  reconnect_required: "Sign-in expired or access was revoked. Reconnect.",
-  rate_limited: "The service asked us to slow down. Sync resumes on its own.",
-  provider_error: "The service returned an error. Sync retries on its own.",
-  provider_unreachable: "The service could not be reached. Sync retries on its own.",
-  token_exchange_failed: "The service did not accept the sign-in. Reconnect.",
-  connector_unavailable: "This connector is not available on this server right now.",
-  work_disabled: "Work is turned off for your account.",
-  not_connected: "Not connected.",
-};
+function workErrorCopy(code: string): string | undefined {
+  const copy: Record<string, string> = {
+    reconnect_required: t("work.error.reconnect_required"),
+    rate_limited: t("work.error.rate_limited"),
+    provider_error: t("work.error.provider_error"),
+    provider_unreachable: t("work.error.provider_unreachable"),
+    token_exchange_failed: t("work.error.token_exchange_failed"),
+    connector_unavailable: t("work.error.connector_unavailable"),
+    work_disabled: t("work.error.work_disabled"),
+    not_connected: t("work.error.not_connected"),
+  };
+  return copy[code];
+}
 
 /** A server error code (a source's `error`, a health check detail) in words. Unknown codes (internal names such as
  *  `KeyError`) never reach the screen as they are. */
 export function workErrorText(code: string | null | undefined): string {
-  if (!code) return "Something went wrong. Reconnect.";
-  return WORK_ERROR_COPY[code] ?? "Sync failed. OmniRush retries on its own; reconnect if it keeps failing.";
+  if (!code) return t("work.error.reconnect");
+  return workErrorCopy(code) ?? t("work.error.sync_failed");
 }
 
 /** A source in `error`: its sync has stopped (signed out, or too many failures in a row) until it is reconnected. */
 export function sourceErrorText(code: string | null | undefined): string {
-  return code === "reconnect_required" || code === "token_exchange_failed" ? workErrorText(code) : "Sync stopped after repeated errors. Reconnect to start it again.";
+  return code === "reconnect_required" || code === "token_exchange_failed" ? workErrorText(code) : t("work.error.sync_stopped");
+}
+
+const CODE = /^[a-z]+(_[a-z]+)+$/;
+
+/**
+ * A failed Work request in words, and whether trying again can help. A 4xx (a route this app's local server lacks,
+ * an argument the server refused) answers the same every time, so it gets no Try again; a 5xx, a timeout or no
+ * answer at all might pass. Server codes never reach the screen as they are.
+ */
+export function workFailure(error: unknown): { text: string; retry: boolean } {
+  const failure = error && typeof error === "object" ? (error as { status?: unknown; code?: unknown; message?: unknown }) : {};
+  const status = typeof failure.status === "number" ? failure.status : 0;
+  const code = typeof failure.code === "string" ? failure.code : "";
+  // Not found on this side: an older app (no local route) or server (no such path). Specific misses say unknown_*.
+  if (status === 404 && !code.startsWith("unknown_")) return { text: t("work.error.update_app"), retry: false };
+  const copy: Record<string, string> = {
+    bad_arguments: t("work.error.bad_arguments"),
+    not_undoable: t("work.error.not_undoable"),
+    cannot_undo: t("work.error.cannot_undo"),
+    unknown_action: t("work.error.unknown_action"),
+    not_owner: t("work.error.not_owner"),
+    no_org: t("work.error.no_org"),
+    omnirush_account_required: t("work.error.signed_out"),
+    work_disabled: t("work.error.work_disabled"),
+  };
+  // The local server already words the codes it knows (WORK_ERRORS); a bare code or a bare HTTP status text is no
+  // sentence. An error with no status is this app's own (already words) or the network's.
+  const message = typeof failure.message === "string" ? failure.message.trim() : "";
+  const fromServer = Boolean(code) && code !== "request_failed" && message !== code;
+  const worded = message && !CODE.test(message) && (!status || fromServer) ? message : "";
+  const retry = !status || status >= 500 || status === 408 || status === 429;
+  return { text: copy[code] || worded || (retry ? t("work.error.try_again") : t("work.error.did_not_work")), retry };
 }
 
 /** One source's row of a GET /work/health answer (a list, or `{sources}` / `{items}`); null when absent. */
@@ -285,7 +327,10 @@ export function healthFor(answer: unknown, id: string): OmniRushWorkHealth | nul
   return row ?? null;
 }
 
-const CHECK_NAMES: Record<string, string> = { token: "Sign-in", scopes: "Permissions", sync: "Sync" };
+function checkName(name: string): string {
+  const names: Record<string, string> = { token: t("work.health.token"), scopes: t("work.health.scopes"), sync: t("work.health.sync") };
+  return names[name] ?? name;
+}
 
 /** How the composer chip opens Work > Connectors: from a chat its Back returns there; from the Work home it is the usual Back to Work. */
 export function connectorsBackState(pathname: string, search = ""): { state: { from: string } } | undefined {
@@ -301,36 +346,37 @@ export function keyLabel(key: string): string {
 export function healthProblem(health: OmniRushWorkHealth | null): { text: string; reconnect: boolean } | null {
   if (!health) return null;
   const missing = (health.missing_scopes ?? []).filter(Boolean);
-  if (missing.length) return { text: `Missing permissions: ${missing.join(", ")}. Reconnect to grant them.`, reconnect: true };
+  if (missing.length) return { text: t("work.health.missing_scopes", { scopes: missing.join(", ") }), reconnect: true };
   // A token that fails says nothing about the scopes (the server reports them as not ok then too).
-  if (health.token_ok === false) return { text: "Sign-in expired or revoked. Reconnect.", reconnect: true };
-  if (health.scopes_ok === false) return { text: "Missing permissions. Reconnect to grant them.", reconnect: true };
+  if (health.token_ok === false) return { text: t("work.health.token_failed"), reconnect: true };
+  if (health.scopes_ok === false) return { text: t("work.health.scopes_failed"), reconnect: true };
   const failed = (health.checks ?? []).find((check) => !check.ok);
   if (failed) {
     const detail = failed.detail?.trim();
     // A check's detail is either a code (`provider_error`) or already words (`sync off`).
     const words = detail && /^[a-z]+(_[a-z]+)+$|^[A-Z]\w*Error$/.test(detail) ? workErrorText(detail) : detail;
-    return { text: `${CHECK_NAMES[failed.name] ?? failed.name}: ${words || "failed"}`, reconnect: detail === "reconnect_required" };
+    return { text: `${checkName(failed.name)}: ${words || t("work.health.failed")}`, reconnect: detail === "reconnect_required" };
   }
   if (health.last_error) return { text: workErrorText(health.last_error), reconnect: health.last_error === "reconnect_required" };
   return null;
 }
 
+// Labels are getters: t() reads the language when shown, not when this module loads.
 export const ENTITY_KINDS = [
-  { id: "person", label: "People" },
-  { id: "company", label: "Companies" },
-  { id: "deal", label: "Deals" },
-  { id: "project", label: "Projects" },
-  { id: "product", label: "Products" },
-  { id: "other", label: "Other" },
+  { id: "person", get label() { return t("work.kind.people"); } },
+  { id: "company", get label() { return t("work.kind.companies"); } },
+  { id: "deal", get label() { return t("work.kind.deals"); } },
+  { id: "project", get label() { return t("work.kind.projects"); } },
+  { id: "product", get label() { return t("work.kind.products"); } },
+  { id: "other", get label() { return t("work.kind.other"); } },
 ] as const;
 
 export const FACT_KINDS = [
-  { id: "fact", label: "Fact" },
-  { id: "decision", label: "Decision" },
-  { id: "preference", label: "Preference" },
-  { id: "policy", label: "Policy" },
-  { id: "contact_note", label: "Contact note" },
+  { id: "fact", get label() { return t("work.fact.fact"); } },
+  { id: "decision", get label() { return t("work.fact.decision"); } },
+  { id: "preference", get label() { return t("work.fact.preference"); } },
+  { id: "policy", get label() { return t("work.fact.policy"); } },
+  { id: "contact_note", get label() { return t("work.fact.contact_note"); } },
 ] as const;
 
 /** "Ask about this": the brief a Work chat starts with, so the agent calls work_context on the entity first. */
@@ -353,12 +399,12 @@ export function relativeTime(value: string | null | undefined, now = Date.now())
   if (Number.isNaN(at)) return "";
   const minutes = Math.round((at - now) / 60_000);
   const abs = Math.abs(minutes);
-  const say = (amount: string) => (minutes < 0 ? `${amount} ago` : `in ${amount}`);
-  if (abs < 1) return "now";
-  if (abs < 60) return say(`${abs} min`);
-  if (abs < 24 * 60) return say(`${Math.round(abs / 60)} h`);
-  if (minutes < 0 && abs < 48 * 60) return "Yesterday";
-  if (minutes > 0 && abs < 48 * 60) return "Tomorrow";
+  if (abs < 1) return t("work.time.now");
+  if (abs < 60) return minutes < 0 ? t("work.time.min_ago", { n: abs }) : t("work.time.in_min", { n: abs });
+  const hours = Math.round(abs / 60);
+  if (abs < 24 * 60) return minutes < 0 ? t("work.time.h_ago", { n: hours }) : t("work.time.in_h", { n: hours });
+  if (minutes < 0 && abs < 48 * 60) return t("work.time.yesterday");
+  if (minutes > 0 && abs < 48 * 60) return t("work.time.tomorrow");
   return new Date(at).toLocaleDateString(undefined, abs < 7 * 24 * 60 ? { weekday: "short" } : { month: "short", day: "numeric" });
 }
 

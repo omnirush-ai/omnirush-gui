@@ -13,6 +13,7 @@ import {
 import { useLocation, useNavigate } from "react-router";
 import { Archive, ArchiveRestore } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { closeWorkspaceTerminals } from "../domains/session/terminal/terminal-runtime";
 import type { ProviderListResponse } from "@opencode-ai/sdk/v2/client";
 
@@ -570,10 +571,10 @@ export function SessionRoute() {
   const accountEmail = useAccountStatusStore((state) => state.status?.email ?? null);
   const [workInviteOpen, setWorkInviteOpen] = useState(false);
   const tryWork = useCallback(async () => {
-    if (!client) throw new Error("Sign in to omnirush.ai to use Work.");
+    if (!client) throw new Error(t("work.error.signed_out"));
     await client.enableWork();
     const next = await queryClient.fetchQuery({ queryKey: workStateKey(client), queryFn: () => client.getWorkState(), staleTime: 0 });
-    if (!next.enabled) throw new Error("Work could not be turned on. Try again in a moment.");
+    if (!next.enabled) throw new Error(t("work.onboarding.turn_on_failed"));
     useWorkModeStore.getState().setMode("work");
     appModeRestored.current = true; // the start-up restore must not send this to the Work home first
     navigate(WORK_ONBOARDING_ROUTE);
@@ -593,12 +594,14 @@ export function SessionRoute() {
     if (!workRouteActive || location.pathname !== WORK_HOME_ROUTE || !data || data.done || data.org || data.steps?.company) return;
     navigate(WORK_ONBOARDING_ROUTE, { replace: true });
   }, [location.pathname, navigate, workOnboarding.data, workRouteActive]);
-  // Insights is owner-only: if a member lands on it (an old link), send them back to the Work home once we know their role.
+  // Insights is owner-only: if a member lands on it (an old link), send them back to the Work home once their role is
+  // known. An unknown role (the read failed) stays: the page shows the server's own answer.
+  const workRole = workMembers.data?.you_role;
   useEffect(() => {
     if (!workRouteActive || location.pathname !== WORK_INSIGHTS_ROUTE) return;
-    if (workMembers.isPending || workIsOwner) return;
+    if (!workRole || workRole === "owner") return;
     navigate(WORK_HOME_ROUTE, { replace: true });
-  }, [location.pathname, navigate, workIsOwner, workMembers.isPending, workRouteActive]);
+  }, [location.pathname, navigate, workRole, workRouteActive]);
   const appMode: AppMode = workRouteActive || workChatActive ? "work" : "code";
   // Set when Work > Connectors was opened from a Work chat (composer chip or sidebar), so Back returns to it.
   const workConnectorsFrom = (location.state as { from?: string } | null)?.from ?? null;
@@ -629,7 +632,7 @@ export function SessionRoute() {
       .then(() => refreshRouteState())
       .catch((error: unknown) => {
         workWorkspaceRequested.current = false;
-        toast.error(error instanceof Error ? error.message : "Work could not be set up.");
+        toast.error(error instanceof Error ? error.message : t("work.home.setup_failed"));
       });
   }, [client, refreshRouteState, workRouteActive, workWorkspace]);
   const switchAppMode = useCallback((mode: AppMode) => {
@@ -3774,9 +3777,9 @@ export function SessionRoute() {
 
   const startWorkChat = async (prompt: string, attachments: ComposerAttachment[] = []) => {
     const workspaceId = workWorkspace?.id;
-    if (!workspaceId) throw new Error("Work is still getting ready. Try again in a moment.");
+    if (!workspaceId) throw new Error(t("work.home.not_ready"));
     const sessionId = await handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary");
-    if (!sessionId) throw new Error("Could not start a chat. Try again in a moment.");
+    if (!sessionId) throw new Error(t("work.home.chat_failed"));
     // Attachment chips live in memory only, so the stored fallback draft drops their tokens (as Code's new task does).
     saveSessionDraft(sessionDraftScope, workspaceId, sessionId, { text: prompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
     useComposerStateStore.getState().setDraft(sessionId, prompt);
@@ -3922,14 +3925,14 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_ORG_ROUTE) ? "Organization" : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? "Team insights" : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? "Automation" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? "Welcome" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? t("work.nav.connectors") : location.pathname.startsWith(WORK_ORG_ROUTE) ? t("work.nav.organization") : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? t("work.nav.insights") : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? t("work.nav.automation") : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? t("work.nav.knowledge") : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? t("work.nav.welcome") : t("work.nav.work")) : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
           <WorkConnectorsPage
             client={client ?? null}
             openLink={(url) => platform.openLink(url)}
-            backLabel={workConnectorsFrom ? "Back to chat" : undefined}
+            backLabel={workConnectorsFrom ? t("work.common.back_to_chat") : undefined}
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
             notice={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
           />
@@ -3937,11 +3940,11 @@ export function SessionRoute() {
           <WorkOrganizationPage
             client={client ?? null}
             openLink={(url) => platform.openLink(url)}
-            backLabel={workConnectorsFrom ? "Back" : undefined}
+            backLabel={workConnectorsFrom ? t("common.back") : undefined}
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
           />
         ) : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? (
-          workIsOwner ? <WorkInsightsPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} /> : null
+          workIsOwner || workMembers.isError ? <WorkInsightsPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} /> : workMembers.isPending ? <Skeleton className="m-10 h-[220px] rounded-xl" data-testid="work-insights-role-loading" /> : null
         ) : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? (
           <WorkAutomationPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
@@ -4030,7 +4033,7 @@ export function SessionRoute() {
       sidebar={{
         workspaceSessionGroups: sidebarWorkspaceSessionGroups,
         modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : workAvailable ? <WorkTryButton onTry={tryWork} /> : undefined,
-        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE), onOpenActivity: () => navigate(WORK_ACTIVITY_ROUTE), activityActive: location.pathname.startsWith(WORK_ACTIVITY_ROUTE), ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}) } : undefined,
+        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), homeActive: location.pathname === WORK_HOME_ROUTE, onOpenOrganization: () => navigate(WORK_ORG_ROUTE), organizationActive: location.pathname.startsWith(WORK_ORG_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE), onOpenActivity: () => navigate(WORK_ACTIVITY_ROUTE), activityActive: location.pathname.startsWith(WORK_ACTIVITY_ROUTE), ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}) } : undefined,
         selectedWorkspaceId,
         selectedSessionId,
         developerMode: false,

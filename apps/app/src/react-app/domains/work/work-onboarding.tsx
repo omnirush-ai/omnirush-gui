@@ -10,18 +10,19 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/sonner";
+import { t } from "@/i18n";
 import type { OmniRushWorkConnector } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
 import {
   checklistItems, connectorLabel, connectOrder, DEMO_SOURCE, domainFromEmail, isLinked, useWorkInviteLinks, useWorkInviteStore, useWorkSetupStore,
-  workConnectorsKey, workOnboardingKey, workStateKey, type WorkClient,
+  workConnectorsKey, workFailure, workOnboardingKey, workStateKey, type WorkClient,
 } from "./work-mode";
 import { CONNECT_POLL_MS, CONNECT_TIMEOUT_MS, ConnectorIcon } from "./work-views";
 
 // The server's size values, with how they read.
-export const SIZES = [["1", "Just me"], ["2-10", "2–10"], ["11-50", "11–50"], ["51-200", "51–200"], ["201-1000", "201–1,000"], ["1000+", "1,000+"]] as const;
-const errorText = (reason: unknown) => (reason instanceof Error ? reason.message : "That did not work. Try again.");
+export const sizeOptions = () => [["1", t("work.onboarding.just_me")], ["2-10", "2–10"], ["11-50", "11–50"], ["51-200", "51–200"], ["201-1000", "201–1,000"], ["1000+", "1,000+"]] as const;
+const errorText = (reason: unknown) => workFailure(reason).text;
 
 /** In place of the Code | Work switch while Work is off but the account may try it. */
 export function WorkTryButton(props: { onTry: () => Promise<void> }) {
@@ -38,20 +39,21 @@ export function WorkTryButton(props: { onTry: () => Promise<void> }) {
       className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-muted text-[12px] font-medium text-foreground transition-colors hover:bg-muted/70 disabled:opacity-60 mac:titlebar-no-drag [&_svg]:size-3.5"
     >
       <Briefcase aria-hidden />
-      {busy ? "Turning on Work…" : "Try Work"}
+      {busy ? t("work.onboarding.turning_on") : t("work.onboarding.try")}
     </button>
   );
 }
 
-export function Chip(props: { selected: boolean; onClick: () => void; children: React.ReactNode; testId?: string }) {
+export function Chip(props: { selected: boolean; onClick: () => void; children: React.ReactNode; testId?: string; disabled?: boolean }) {
   return (
     <button
       type="button"
       aria-pressed={props.selected}
       data-testid={props.testId}
+      disabled={props.disabled}
       onClick={props.onClick}
       className={cn(
-        "flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors",
+        "flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors disabled:pointer-events-none",
         props.selected ? "border-foreground/40 bg-foreground/[0.06] text-foreground" : "border-border text-muted-foreground hover:border-foreground/25 hover:text-foreground",
       )}
     >
@@ -69,7 +71,7 @@ function useJoinWork(client: WorkClient | null, onDone: () => void) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: workOnboardingKey(client) });
       void queryClient.invalidateQueries({ queryKey: workStateKey(client) });
-      toast.success("You joined your team");
+      toast.success(t("work.onboarding.joined"));
       onDone();
     },
     onError: (reason) => toast.error(errorText(reason)),
@@ -85,17 +87,15 @@ export function WorkJoinDialog(props: { client: WorkClient | null; onJoined: () 
     <Dialog open={Boolean(token)} onOpenChange={(open) => { if (!open) setToken(null); }}>
       <DialogContent data-testid="work-join-invite">
         <DialogHeader>
-          <DialogTitle>Join your team in Work</DialogTitle>
+          <DialogTitle>{t("work.onboarding.join_title")}</DialogTitle>
           <DialogDescription>
-            {props.client
-              ? "A teammate invited you to their company. Each person connects their own tools; nobody sees another person's data."
-              : "Sign in with the e-mail address the invite was sent to, then open the invite link again."}
+            {props.client ? t("work.onboarding.join_body") : t("work.onboarding.join_signed_out")}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setToken(null)}>Not now</Button>
+          <Button variant="outline" onClick={() => setToken(null)}>{t("work.common.not_now")}</Button>
           <Button disabled={!props.client || !token || join.isPending} onClick={() => { if (token) join.mutate(token); }} data-testid="work-join-invite-submit">
-            {join.isPending ? "Joining…" : "Join team"}
+            {join.isPending ? t("work.onboarding.joining") : t("work.onboarding.join_team")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -105,7 +105,7 @@ export function WorkJoinDialog(props: { client: WorkClient | null; onJoined: () 
 
 export const TRUST_URL = "https://omnirush.ai/trust";
 // Our own SOC 2 badge (contract D7); a release flips it when the CPA report arrives. Never "certified" before that.
-export const SOC2_STATUS = { title: "SOC 2 Type II", status: "In progress", alt: "SOC 2 Type II audit in progress" };
+export const SOC2_STATUS = { title: "SOC 2 Type II", get status() { return t("work.trust.status"); }, get alt() { return t("work.trust.alt"); } };
 
 /** The SOC 2 status badge: outlined, neutral, the words "In progress" on the badge itself. */
 export function TrustBadge() {
@@ -158,7 +158,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
     if ((connectors.data ?? []).some((row) => row.id === connecting.id && isLinked(row))) setConnecting(null);
     else if (Date.now() - connecting.at > CONNECT_TIMEOUT_MS) {
       setConnecting(null);
-      toast.error("Sign-in did not finish. Try connecting again.");
+      toast.error(t("work.common.sign_in_timeout"));
     }
   }, [connecting, connectors.data]);
   const connect = useMutation({
@@ -185,14 +185,12 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
     <div className="h-full overflow-y-auto" data-testid="work-onboarding" data-step={step}>
       <div className="mx-auto flex min-h-full w-full max-w-[560px] flex-col justify-center gap-6 px-6 py-10">
         <div className="space-y-1.5">
-          <div className="text-[12px] font-medium text-muted-foreground">Step {step === "company" ? 1 : 2} of 2</div>
+          <div className="text-[12px] font-medium text-muted-foreground">{t("work.onboarding.step", { n: step === "company" ? 1 : 2 })}</div>
           <h1 className="text-balance text-[22px] font-semibold leading-[28px] tracking-[-0.02em]">
-            {step === "company" ? "Set up Work for your company" : "Connect your tools"}
+            {step === "company" ? t("work.onboarding.company_title") : t("work.home.connect")}
           </h1>
           <p className="text-[13px] text-muted-foreground">
-            {step === "company"
-              ? "Tell us a little about your company so Work can suggest where to start."
-              : "Work searches and reads the tools you connect, and asks before it sends or changes anything."}
+            {step === "company" ? t("work.onboarding.company_body") : t("work.onboarding.connect_body")}
           </p>
         </div>
 
@@ -202,22 +200,22 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
             onSubmit={(event) => { event.preventDefault(); if (company.trim() && !save.isPending) save.mutate(); }}
           >
             <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-              Company name
-              <Input autoFocus required maxLength={200} value={company} onChange={(event) => setCompany(event.target.value)} placeholder="Acme Bakery" data-testid="work-onboarding-company" />
+              {t("work.org.company_name")}
+              <Input autoFocus required maxLength={200} value={company} onChange={(event) => setCompany(event.target.value)} placeholder={t("work.onboarding.company_placeholder")} data-testid="work-onboarding-company" />
             </label>
             <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-              Company website
+              {t("work.org.company_website")}
               <Input maxLength={253} value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="acme-bakery.com" data-testid="work-onboarding-domain" />
             </label>
             <div className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">Team size</span>
+              <span className="text-[13px] font-medium">{t("work.org.team_size")}</span>
               <div className="flex flex-wrap gap-2">
-                {SIZES.map(([value, label]) => <Chip key={value} selected={size === value} onClick={() => setSize(size === value ? null : value)}>{label}</Chip>)}
+                {sizeOptions().map(([value, label]) => <Chip key={value} selected={size === value} onClick={() => setSize(size === value ? null : value)}>{label}</Chip>)}
               </div>
             </div>
             {offered.length ? (
               <div className="flex flex-col gap-1.5">
-                <span className="text-[13px] font-medium">Tools you use</span>
+                <span className="text-[13px] font-medium">{t("work.org.your_tools")}</span>
                 <div className="flex flex-wrap gap-2">
                   {offered.map((id) => (
                     <Chip key={id} testId={`work-onboarding-tool-${id}`} selected={tools.includes(id)} onClick={() => setTools(tools.includes(id) ? tools.filter((tool) => tool !== id) : [...tools, id])}>
@@ -229,12 +227,12 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
               </div>
             ) : null}
             <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-              <span>Your role <span className="font-normal text-muted-foreground">(optional)</span></span>
-              <Input maxLength={100} value={role} onChange={(event) => setRole(event.target.value)} placeholder="Operations manager" />
+              <span>{t("work.org.your_role")} <span className="font-normal text-muted-foreground">{t("work.onboarding.optional")}</span></span>
+              <Input maxLength={100} value={role} onChange={(event) => setRole(event.target.value)} placeholder={t("work.org.role_placeholder")} />
             </label>
             <div className="flex justify-end">
               <Button type="submit" disabled={!company.trim() || save.isPending || !props.client} data-testid="work-onboarding-continue">
-                {save.isPending ? "Saving…" : "Continue"}<ArrowRight className="size-4" />
+                {save.isPending ? t("work.common.saving") : t("work.common.continue")}<ArrowRight className="size-4" />
               </Button>
             </div>
           </form>
@@ -245,32 +243,32 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
             data-testid="work-join"
             onSubmit={(event) => { event.preventDefault(); if (invite.trim() && !join.isPending) join.mutate(invite.trim()); }}
           >
-            <span className="text-[13px] font-medium">Join a team</span>
-            <span className="text-[12px] text-muted-foreground">Got an invite from a teammate? Paste the link to join their company instead.</span>
+            <span className="text-[13px] font-medium">{t("work.onboarding.join_a_team")}</span>
+            <span className="text-[12px] text-muted-foreground">{t("work.onboarding.join_hint")}</span>
             <div className="flex items-center gap-2">
-              <Input value={invite} onChange={(event) => setInvite(event.target.value)} placeholder="Paste invite link" aria-label="Invite link" data-testid="work-join-link" />
-              <Button type="submit" variant="outline" disabled={!invite.trim() || join.isPending || !props.client} data-testid="work-join-submit">{join.isPending ? "Joining…" : "Join"}</Button>
+              <Input value={invite} onChange={(event) => setInvite(event.target.value)} placeholder={t("work.onboarding.paste_invite")} aria-label={t("work.onboarding.invite_link")} data-testid="work-join-link" />
+              <Button type="submit" variant="outline" disabled={!invite.trim() || join.isPending || !props.client} data-testid="work-join-submit">{join.isPending ? t("work.onboarding.joining") : t("work.onboarding.join")}</Button>
             </div>
           </form>
         ) : null}
         {step === "company" ? (
           <div className="flex flex-wrap items-center gap-3" data-testid="work-onboarding-trust">
             <TrustBadge />
-            <Button variant="link" size="sm" className="px-0" onClick={() => props.openLink(TRUST_URL)}>How we protect your data</Button>
+            <Button variant="link" size="sm" className="px-0" onClick={() => props.openLink(TRUST_URL)}>{t("work.onboarding.how_we_protect")}</Button>
           </div>
         ) : (
           <div className="flex flex-col gap-4">
             <div className="rounded-xl border border-border bg-background">
-              {connectors.isLoading ? <div className="px-4 py-6 text-sm text-muted-foreground">Loading…</div> : rows.map((row: OmniRushWorkConnector) => (
+              {connectors.isLoading ? <div className="px-4 py-6 text-sm text-muted-foreground">{t("common.loading")}</div> : rows.map((row: OmniRushWorkConnector) => (
                 <div key={row.id} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0" data-work-connect={row.id}>
                   <ConnectorIcon id={row.id} />
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{connectorLabel(row.id, row.label)}</span>
-                  {recommended.includes(row.id) && !isLinked(row) ? <Badge variant="secondary">Recommended</Badge> : null}
+                  {recommended.includes(row.id) && !isLinked(row) ? <Badge variant="secondary">{t("work.onboarding.recommended")}</Badge> : null}
                   {isLinked(row) ? (
-                    <span className="flex items-center gap-1 text-[12px] text-muted-foreground"><Check className="size-3.5" />Connected</span>
+                    <span className="flex items-center gap-1 text-[12px] text-muted-foreground"><Check className="size-3.5" />{t("work.connectors.status_connected")}</span>
                   ) : (
                     <Button size="sm" variant={recommended.includes(row.id) ? "default" : "outline"} disabled={connect.isPending || connecting?.id === row.id} onClick={() => connect.mutate(row.id)}>
-                      {connecting?.id === row.id ? "Waiting for sign-in…" : "Connect"}
+                      {connecting?.id === row.id ? t("work.common.waiting_sign_in") : t("work.common.connect")}
                     </Button>
                   )}
                 </div>
@@ -278,10 +276,10 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Button variant="outline" disabled={demo.isPending || !props.client} onClick={() => demo.mutate()} data-testid="work-onboarding-demo">
-                <Database className="size-4" />{demo.isPending ? "Adding sample data…" : "Try with sample data"}
+                <Database className="size-4" />{demo.isPending ? t("work.onboarding.adding_demo") : t("work.onboarding.try_demo")}
               </Button>
               <Button variant={anyLinked ? "default" : "ghost"} onClick={props.onDone} data-testid="work-onboarding-finish">
-                {anyLinked ? "Continue" : "Skip for now"}
+                {anyLinked ? t("work.common.continue") : t("work.onboarding.skip")}
               </Button>
             </div>
           </div>
@@ -300,8 +298,8 @@ export function WorkChecklist(props: { client: WorkClient | null; onboarding: Pa
   return (
     <div className="rounded-xl border border-border bg-background px-4 py-3" data-testid="work-checklist">
       <div className="flex items-center justify-between">
-        <span className="text-[13px] font-medium">Get started</span>
-        <button type="button" aria-label="Hide checklist" onClick={() => hide(props.orgId)} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><X className="size-3.5" /></button>
+        <span className="text-[13px] font-medium">{t("work.checklist.title")}</span>
+        <button type="button" aria-label={t("work.checklist.hide")} onClick={() => hide(props.orgId)} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><X className="size-3.5" /></button>
       </div>
       <ul className="mt-1.5 flex flex-col gap-1">
         {items.map((item) => (
@@ -316,12 +314,12 @@ export function WorkChecklist(props: { client: WorkClient | null; onboarding: Pa
         ))}
         <li className="flex items-center gap-2 text-[13px]">
           <UserPlus aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onInvite} data-testid="work-checklist-invite">Invite teammates</button>
+          <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onInvite} data-testid="work-checklist-invite">{t("work.invite.title")}</button>
         </li>
         {props.onOrganization ? (
           <li className="flex items-center gap-2 text-[13px]">
             <Building2 aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onOrganization} data-testid="work-checklist-organization">Organization settings</button>
+            <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onOrganization} data-testid="work-checklist-organization">{t("work.checklist.organization")}</button>
           </li>
         ) : null}
       </ul>
@@ -350,23 +348,23 @@ export function WorkInviteDialog(props: { client: WorkClient | null; open: boole
     <Dialog open={props.open} onOpenChange={close}>
       <DialogContent data-testid="work-invite">
         <DialogHeader>
-          <DialogTitle>Invite teammates</DialogTitle>
-          <DialogDescription>They join your company in Work. Each person connects their own tools; nobody sees another person's data.</DialogDescription>
+          <DialogTitle>{t("work.invite.title")}</DialogTitle>
+          <DialogDescription>{t("work.invite.body")}</DialogDescription>
         </DialogHeader>
         {link ? (
           <div className="flex items-center gap-2">
-            <Input readOnly value={link} aria-label="Invite link" onFocus={(event) => event.currentTarget.select()} />
-            <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(link).then(() => toast.success("Link copied"))}><Copy className="size-4" />Copy</Button>
+            <Input readOnly value={link} aria-label={t("work.onboarding.invite_link")} onFocus={(event) => event.currentTarget.select()} />
+            <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(link).then(() => toast.success(t("work.common.link_copied")))}><Copy className="size-4" />{t("work.invite.copy")}</Button>
           </div>
         ) : (
           <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); if (email.trim()) invite.mutate(); }}>
-            <Input type="email" autoFocus required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" aria-label="Teammate e-mail" />
-            <Button type="submit" disabled={!email.trim() || invite.isPending || !props.client}>{invite.isPending ? "Inviting…" : "Invite"}</Button>
+            <Input type="email" autoFocus required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" aria-label={t("work.invite.email")} />
+            <Button type="submit" disabled={!email.trim() || invite.isPending || !props.client}>{invite.isPending ? t("work.invite.inviting") : t("work.org.invite")}</Button>
           </form>
         )}
         <DialogFooter>
-          {link ? <Button variant="ghost" onClick={() => { setEmail(""); setLink(null); }}>Invite another</Button> : null}
-          <Button variant="outline" onClick={() => close(false)}>Done</Button>
+          {link ? <Button variant="ghost" onClick={() => { setEmail(""); setLink(null); }}>{t("work.invite.another")}</Button> : null}
+          <Button variant="outline" onClick={() => close(false)}>{t("work.invite.done")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -379,7 +377,7 @@ export function SampleDataBadge(props: { client: WorkClient | null }) {
   const remove = useMutation({
     mutationFn: () => props.client!.removeWorkDemo(),
     onSuccess: () => {
-      toast.success("Sample data removed");
+      toast.success(t("work.onboarding.demo_removed"));
       void queryClient.invalidateQueries({ queryKey: workConnectorsKey(props.client) });
       void queryClient.invalidateQueries({ queryKey: workOnboardingKey(props.client) });
     },
@@ -388,9 +386,9 @@ export function SampleDataBadge(props: { client: WorkClient | null }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-7/50 bg-amber-2/50 py-0.5 pe-1 ps-2.5 text-[12px] text-amber-11" data-testid="work-sample-data">
       <Database aria-hidden className="size-3.5" />
-      Sample data
+      {t("work.connector.demo")}
       <button type="button" disabled={remove.isPending} onClick={() => remove.mutate()} className="rounded-full px-2 py-0.5 font-medium hover:bg-amber-3 disabled:opacity-60" data-testid="work-sample-data-remove">
-        {remove.isPending ? "Removing…" : "Remove"}
+        {remove.isPending ? t("work.onboarding.removing") : t("common.remove")}
       </button>
     </span>
   );

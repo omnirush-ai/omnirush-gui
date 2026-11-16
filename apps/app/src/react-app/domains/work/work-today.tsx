@@ -9,17 +9,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
+import { t } from "@/i18n";
 import type { OmniRushWorkFeed, OmniRushWorkFeedItem } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutItemPrompt, connectorLabel, relativeTime, workConnectorsKey, workFeedKey, type WorkClient } from "./work-mode";
+import { askAboutItemPrompt, connectorLabel, relativeTime, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
 const SECTIONS = [
-  { id: "needs_you", label: "Needs you", empty: "Nothing is waiting on you." },
-  { id: "today", label: "Today", empty: "Nothing scheduled or due today." },
-  { id: "fyi", label: "FYI", empty: "Nothing new in the last 7 days." },
+  { id: "needs_you", get label() { return t("work.today.needs_you"); }, get empty() { return t("work.today.needs_you_empty"); } },
+  { id: "today", get label() { return t("work.today.today"); }, get empty() { return t("work.today.today_empty"); } },
+  { id: "fyi", get label() { return t("work.today.fyi"); }, get empty() { return t("work.today.fyi_empty"); } },
 ] as const;
 
 type FeedSource = OmniRushWorkFeed["sources"][number];
@@ -32,7 +33,7 @@ export function sourceDot(source: Pick<FeedSource, "status" | "attention">): "ok
 }
 
 const DOT_CLASS = { ok: "bg-green-9", syncing: "bg-blue-9 animate-pulse", attention: "bg-amber-9", error: "bg-red-9" } as const;
-const DOT_LABEL = { ok: "Up to date", syncing: "Syncing", attention: "Needs attention", error: "Needs attention" } as const;
+const dotLabel = (dot: keyof typeof DOT_CLASS) => (dot === "ok" ? t("work.today.dot_ok") : dot === "syncing" ? t("work.today.dot_syncing") : t("work.today.dot_attention"));
 
 function localZone(): string | undefined {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; }
@@ -46,8 +47,8 @@ export function SourceStrip(props: { sources: FeedSource[]; selected: string | n
   );
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid="work-source-strip">
-      <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Filter by source">
-        <button type="button" role="radio" aria-checked={props.selected === null} data-feed-filter="all" onClick={() => props.onSelect(null)} className={chip(props.selected === null)}>All</button>
+      <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label={t("work.today.filter")}>
+        <button type="button" role="radio" aria-checked={props.selected === null} data-feed-filter="all" onClick={() => props.onSelect(null)} className={chip(props.selected === null)}>{t("work.today.all")}</button>
         {props.sources.map((source) => {
           const dot = sourceDot(source);
           const active = props.selected === source.id;
@@ -60,13 +61,13 @@ export function SourceStrip(props: { sources: FeedSource[]; selected: string | n
               data-work-source={source.id}
               data-dot={dot}
               data-feed-filter={source.id}
-              title={source.attention?.message ?? DOT_LABEL[dot]}
+              title={source.attention?.message ?? dotLabel(dot)}
               onClick={() => props.onSelect(source.id)}
               className={chip(active)}
             >
               <ConnectorIcon id={source.id} className="size-3.5 text-current" />
               <span className="max-w-[10rem] truncate">{connectorLabel(source.id, source.label)}</span>
-              <span aria-label={DOT_LABEL[dot]} role="img" className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
+              <span aria-label={dotLabel(dot)} role="img" className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
             </button>
           );
         })}
@@ -78,7 +79,7 @@ export function SourceStrip(props: { sources: FeedSource[]; selected: string | n
         className="flex h-8 items-center gap-1 rounded-full border border-dashed border-border px-3 text-[12px] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground"
       >
         <Plus aria-hidden className="size-3.5" />
-        Add
+        {t("common.add")}
       </button>
     </div>
   );
@@ -92,7 +93,7 @@ export function SourceAttention(props: { sources: FeedSource[]; busy: string | n
     <div className="flex flex-col divide-y divide-border rounded-xl border border-border" data-testid="work-source-attention">
       {needs.map((source) => {
         const action = source.attention!.action!;
-        const label = action === "reconnect" ? "Reconnect" : action === "retry" ? "Retry" : "Fix";
+        const label = action === "reconnect" ? t("work.connectors.reconnect") : action === "retry" ? t("common.retry") : t("work.today.fix");
         return (
           <div key={source.id} data-work-attention={source.id} className="flex items-center justify-between gap-3 px-3 py-2">
             <span className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
@@ -123,7 +124,7 @@ export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy:
     <li
       data-feed-item={item.id}
       data-source={item.source}
-      {...(open ? { role: "button", tabIndex: 0, "aria-label": `Open ${item.title}`, onClick: open, onKeyDown: (event: React.KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } } } : {})}
+      {...(open ? { role: "button", tabIndex: 0, "aria-label": t("work.today.open_item", { title: item.title }), onClick: open, onKeyDown: (event: React.KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } } } : {})}
       className={cn(
         "group flex items-center gap-3 border-b border-border px-3 py-2.5 last:border-b-0",
         open && "cursor-pointer outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring",
@@ -135,8 +136,8 @@ export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy:
         <div className="truncate text-[12px] text-muted-foreground">{[item.who, when].filter(Boolean).join(" · ")}</div>
       </div>
       {item.reason ? <Badge variant="secondary" className="hidden shrink-0 sm:inline-flex" data-testid="work-feed-reason">{item.reason}</Badge> : null}
-      <Button variant="ghost" size="sm" className="shrink-0" aria-label={`Ask about ${item.title}`} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onAsk(item); }}>
-        <MessageSquare className="size-3.5" />Ask
+      <Button variant="ghost" size="sm" className="shrink-0" aria-label={t("work.today.ask_about", { title: item.title })} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onAsk(item); }}>
+        <MessageSquare className="size-3.5" />{t("work.today.ask")}
       </Button>
     </li>
   );
@@ -183,7 +184,7 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
     void queryClient.invalidateQueries({ queryKey: ["omnirush-work-feed"] });
     void queryClient.invalidateQueries({ queryKey: workConnectorsKey(props.client) });
   };
-  const onError = (reason: unknown) => toast.error(reason instanceof Error ? reason.message : "That did not work. Try again.");
+  const onError = (reason: unknown) => toast.error(workFailure(reason).text);
   const reconnect = useMutation({
     mutationFn: (id: string) => props.client!.startWorkConnector(id),
     onSuccess: (answer) => props.openLink(answer.auth_url),
@@ -191,7 +192,7 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
   });
   const retry = useMutation({
     mutationFn: (id: string) => props.client!.syncWorkConnector(id),
-    onSuccess: () => { toast.success("Sync started"); refresh(); },
+    onSuccess: () => { toast.success(t("work.common.sync_started")); refresh(); },
     onError,
   });
   const ask = async (item: OmniRushWorkFeedItem) => {
@@ -201,11 +202,12 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
   };
   const today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   const now = Date.now();
+  const failure = feed.error && !feed.data ? workFailure(feed.error) : null;
   return (
     <div className="flex w-full flex-col gap-5" data-testid="work-today">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h1 className="text-[22px] font-semibold leading-[28px] tracking-[-0.02em] text-foreground">Today</h1>
+          <h1 className="text-[22px] font-semibold leading-[28px] tracking-[-0.02em] text-foreground">{t("work.today.today")}</h1>
           <p className="text-[13px] text-muted-foreground">{today}</p>
         </div>
         {props.badge}
@@ -221,10 +223,10 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
         />
       ) : null}
       {props.checklist}
-      {feed.isLoading ? <FeedSkeleton /> : feed.error && !feed.data ? (
+      {feed.isLoading ? <FeedSkeleton /> : failure ? (
         <div className="flex flex-col items-start gap-2 rounded-xl border border-border px-4 py-4" data-testid="work-feed-error">
-          <span className="text-[13px] text-muted-foreground">{feed.error instanceof Error ? feed.error.message : "Today could not be loaded."}</span>
-          <Button variant="outline" size="sm" onClick={() => void feed.refetch()}><RotateCw className="size-3.5" />Try again</Button>
+          <span className="text-[13px] text-muted-foreground">{failure.text}</span>
+          {failure.retry ? <Button variant="outline" size="sm" onClick={() => void feed.refetch()}><RotateCw className="size-3.5" />{t("work.common.try_again")}</Button> : null}
         </div>
       ) : (
         <div className={cn("flex flex-col gap-6", feed.isPlaceholderData && "opacity-60")} data-testid="work-feed">

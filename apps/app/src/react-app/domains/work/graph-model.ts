@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 
 import type { OmniRushWorkGraph, OmniRushWorkGraphNode } from "@/app/lib/omnirush-server";
+import { t } from "@/i18n";
 
 export type GraphGroup = "entity" | "record" | "fact";
 export type GraphCategory = { key: string; group: GraphGroup; label: string; icon: LucideIcon; slot: number };
@@ -27,36 +28,37 @@ const RECORD = 5;
 const FACT = 6;
 const OTHER = 7;
 
+// Labels are getters: t() reads the language when shown, not when this module loads.
 export const GRAPH_GROUPS: { id: GraphGroup; label: string }[] = [
-  { id: "entity", label: "Entities" },
-  { id: "record", label: "Records" },
-  { id: "fact", label: "Knowledge" },
+  { id: "entity", get label() { return t("work.graph.entities"); } },
+  { id: "record", get label() { return t("work.graph.records"); } },
+  { id: "fact", get label() { return t("work.nav.knowledge"); } },
 ];
 
 export const GRAPH_CATEGORIES: GraphCategory[] = [
-  { key: "entity:person", group: "entity", label: "People", icon: User, slot: 0 },
-  { key: "entity:company", group: "entity", label: "Companies", icon: Building2, slot: 1 },
-  { key: "entity:deal", group: "entity", label: "Deals", icon: Handshake, slot: 2 },
-  { key: "entity:project", group: "entity", label: "Projects", icon: FolderKanban, slot: 3 },
-  { key: "entity:product", group: "entity", label: "Products", icon: Package, slot: 4 },
-  { key: "entity:other", group: "entity", label: "Other", icon: Shapes, slot: OTHER },
-  { key: "record:email", group: "record", label: "Emails", icon: Mail, slot: RECORD },
-  { key: "record:message", group: "record", label: "Messages", icon: MessageSquare, slot: RECORD },
-  { key: "record:ticket", group: "record", label: "Tickets", icon: Ticket, slot: RECORD },
-  { key: "record:issue", group: "record", label: "Issues", icon: CircleDot, slot: RECORD },
-  { key: "record:pull_request", group: "record", label: "Pull requests", icon: GitPullRequest, slot: RECORD },
-  { key: "record:page", group: "record", label: "Pages", icon: BookOpen, slot: RECORD },
-  { key: "record:file", group: "record", label: "Files", icon: File, slot: RECORD },
-  { key: "record:event", group: "record", label: "Events", icon: CalendarDays, slot: RECORD },
-  { key: "record:invoice", group: "record", label: "Invoices", icon: Receipt, slot: RECORD },
-  { key: "record:bill", group: "record", label: "Bills", icon: Landmark, slot: RECORD },
-  { key: "record:contact", group: "record", label: "CRM records", icon: Contact, slot: RECORD },
-  { key: "record:other", group: "record", label: "Other", icon: FileText, slot: RECORD },
-  { key: "fact:decision", group: "fact", label: "Decisions", icon: Gavel, slot: FACT },
-  { key: "fact:policy", group: "fact", label: "Policies", icon: ScrollText, slot: FACT },
-  { key: "fact:preference", group: "fact", label: "Preferences", icon: Heart, slot: FACT },
-  { key: "fact:fact", group: "fact", label: "Facts", icon: Lightbulb, slot: FACT },
-  { key: "fact:contact_note", group: "fact", label: "Contact notes", icon: StickyNote, slot: FACT },
+  { key: "entity:person", group: "entity", get label() { return t("work.kind.people"); }, icon: User, slot: 0 },
+  { key: "entity:company", group: "entity", get label() { return t("work.kind.companies"); }, icon: Building2, slot: 1 },
+  { key: "entity:deal", group: "entity", get label() { return t("work.kind.deals"); }, icon: Handshake, slot: 2 },
+  { key: "entity:project", group: "entity", get label() { return t("work.kind.projects"); }, icon: FolderKanban, slot: 3 },
+  { key: "entity:product", group: "entity", get label() { return t("work.kind.products"); }, icon: Package, slot: 4 },
+  { key: "entity:other", group: "entity", get label() { return t("work.kind.other"); }, icon: Shapes, slot: OTHER },
+  { key: "record:email", group: "record", get label() { return t("work.graph.emails"); }, icon: Mail, slot: RECORD },
+  { key: "record:message", group: "record", get label() { return t("work.graph.messages"); }, icon: MessageSquare, slot: RECORD },
+  { key: "record:ticket", group: "record", get label() { return t("work.graph.tickets"); }, icon: Ticket, slot: RECORD },
+  { key: "record:issue", group: "record", get label() { return t("work.graph.issues"); }, icon: CircleDot, slot: RECORD },
+  { key: "record:pull_request", group: "record", get label() { return t("work.graph.pull_requests"); }, icon: GitPullRequest, slot: RECORD },
+  { key: "record:page", group: "record", get label() { return t("work.graph.pages"); }, icon: BookOpen, slot: RECORD },
+  { key: "record:file", group: "record", get label() { return t("work.graph.files"); }, icon: File, slot: RECORD },
+  { key: "record:event", group: "record", get label() { return t("work.graph.events"); }, icon: CalendarDays, slot: RECORD },
+  { key: "record:invoice", group: "record", get label() { return t("work.graph.invoices"); }, icon: Receipt, slot: RECORD },
+  { key: "record:bill", group: "record", get label() { return t("work.graph.bills"); }, icon: Landmark, slot: RECORD },
+  { key: "record:contact", group: "record", get label() { return t("work.graph.crm_records"); }, icon: Contact, slot: RECORD },
+  { key: "record:other", group: "record", get label() { return t("work.kind.other"); }, icon: FileText, slot: RECORD },
+  { key: "fact:decision", group: "fact", get label() { return t("work.graph.decisions"); }, icon: Gavel, slot: FACT },
+  { key: "fact:policy", group: "fact", get label() { return t("work.graph.policies"); }, icon: ScrollText, slot: FACT },
+  { key: "fact:preference", group: "fact", get label() { return t("work.graph.preferences"); }, icon: Heart, slot: FACT },
+  { key: "fact:fact", group: "fact", get label() { return t("work.graph.facts"); }, icon: Lightbulb, slot: FACT },
+  { key: "fact:contact_note", group: "fact", get label() { return t("work.graph.contact_notes"); }, icon: StickyNote, slot: FACT },
 ];
 
 const BY_KEY = new Map(GRAPH_CATEGORIES.map((category) => [category.key, category]));
