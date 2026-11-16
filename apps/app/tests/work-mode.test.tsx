@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MemoryRouter } from "react-router";
+import { matchRoutes, MemoryRouter } from "react-router";
 
 import type { OmniRushWorkConnector, OmniRushWorkFeed, OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
 import { askAboutPrompt, checklistItems, CONNECTOR_ACCESS, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
-  askAboutItemPrompt, coverageLine, relativeTime, workChatToolsKey, workFeedKey, workMembersKey, workToolNotices } from "../src/react-app/domains/work/work-mode";
+  askAboutItemPrompt, coverageLine, relativeTime, workChatToolsKey, workFeedKey, workMembersKey, workToolNotices,
+  WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
 import { leaveState, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
@@ -18,6 +20,15 @@ const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
 const noop = () => {};
 
 describe("Work mode", () => {
+  test("every Work page has a route in the app (none falls through to the catch-all)", () => {
+    const source = readFileSync(new URL("../src/react-app/shell/app-root.tsx", import.meta.url), "utf8");
+    const routes = [...source.matchAll(/<Route\s+path="([^"]+)"/g)].map((match) => ({ path: match[1]! }));
+    expect(routes.some((route) => route.path === "*")).toBe(true);
+    for (const path of [WORK_HOME_ROUTE, WORK_CONNECTORS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_INSIGHTS_ROUTE, WORK_ACTIVITY_ROUTE]) {
+      expect(matchRoutes(routes, path)?.[0]?.route.path ?? "none").not.toBe("*");
+    }
+  });
+
   test("approvals name Work tools and their account in words", () => {
     expect(workToolPermission("omnirush-work_gmail_send")).toEqual({ label: "Send e-mail (Gmail)", scope: "Your Gmail account" });
     expect(workToolPermission("omnirush-work_mock_send")?.label).toBe("Send e-mail (Test source)");
