@@ -1182,4 +1182,8 @@ export default {
   "settings.runtime_config_no_removed_keys": "No omnirush.ai-managed keys removed.",
   "settings.runtime_config_backup_path": "Backup: {path}",
   "settings.runtime_config_no_backup": "No backup needed.",
+  "work.home_title": "Què vols fer?",
+  "work.home_subtitle": "Pregunta pel correu, els documents, els clients o les factures.",
+  "work.home_connect": "Connecta les teves eines",
+  "work.home_start_failed": "No s'ha pogut iniciar el xat.",
 } as const;

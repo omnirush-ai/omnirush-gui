@@ -1167,4 +1167,8 @@ export default {
   "settings.runtime_config_no_removed_keys": "No omnirush.ai-managed keys removed.",
   "settings.runtime_config_backup_path": "Backup: {path}",
   "settings.runtime_config_no_backup": "No backup needed.",
+  "work.home_title": "Bạn muốn làm xong việc gì?",
+  "work.home_subtitle": "Hỏi về email, tài liệu, khách hàng hoặc hóa đơn của bạn.",
+  "work.home_connect": "Kết nối công cụ",
+  "work.home_start_failed": "Không thể bắt đầu cuộc trò chuyện.",
 } as const;

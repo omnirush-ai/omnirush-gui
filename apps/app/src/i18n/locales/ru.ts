@@ -1287,4 +1287,8 @@ export default {
   "extensions.subtitle": "Навыки, подключения и инструменты, которые может использовать ваш агент.",
   "extensions.open_in_den": "Открыть в Den",
   "extensions.title": "Библиотека",
+  "work.home_title": "Что нужно сделать?",
+  "work.home_subtitle": "Спросите о почте, документах, клиентах или счетах.",
+  "work.home_connect": "Подключить инструменты",
+  "work.home_start_failed": "Не удалось начать чат.",
 } as const;

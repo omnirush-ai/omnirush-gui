@@ -1166,4 +1166,8 @@ export default {
   "settings.runtime_config_no_removed_keys": "No omnirush.ai-managed keys removed.",
   "settings.runtime_config_backup_path": "Backup: {path}",
   "settings.runtime_config_no_backup": "No backup needed.",
+  "work.home_title": "何を片付けますか？",
+  "work.home_subtitle": "メール、ドキュメント、顧客、請求書について聞けます。",
+  "work.home_connect": "ツールを接続",
+  "work.home_start_failed": "チャットを開始できませんでした。",
 } as const;

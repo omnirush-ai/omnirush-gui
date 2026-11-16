@@ -1173,4 +1173,8 @@ export default {
   "settings.runtime_config_no_removed_keys": "No omnirush.ai-managed keys removed.",
   "settings.runtime_config_backup_path": "Backup: {path}",
   "settings.runtime_config_no_backup": "No backup needed.",
+  "work.home_title": "O que você quer resolver?",
+  "work.home_subtitle": "Pergunte sobre seus e-mails, documentos, clientes ou faturas.",
+  "work.home_connect": "Conecte suas ferramentas",
+  "work.home_start_failed": "Não foi possível iniciar o chat.",
 } as const;

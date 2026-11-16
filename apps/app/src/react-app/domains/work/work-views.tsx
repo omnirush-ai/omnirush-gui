@@ -27,7 +27,8 @@ import {
 } from "@/react-app/domains/settings/settings-layout";
 
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
-import { COMPOSER_BOTTOM, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
+import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
+import { t } from "@/i18n";
 
 import {
   connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageLine, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
@@ -82,9 +83,10 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
   );
 }
 
-/** Work home: the Today view once a source is connected (or sample data is in), otherwise "What do you want to get
- *  done?", the first-run checklist and a connect button; above the real chat composer (passed in, the same one the
- *  running Work chat uses), with up to three tailored starter chips from onboarding just above it. */
+/** Work home: the Today view once a source is connected (or sample data is in), above the real chat composer (passed
+ *  in, the same one the running Work chat uses) with up to three tailored starter chips from onboarding just above it.
+ *  Before that, "What do you want to get done?" and the composer centred, the starters, checklist and connect button
+ *  under them; a starter glides the composer into the chat's place. */
 export function WorkHome(props: {
   composer: ReactNode;
   onStart: (prompt: string) => Promise<void>;
@@ -106,58 +108,74 @@ export function WorkHome(props: {
     try {
       await props.onStart(prompt);
     } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : "The chat could not be started.");
+      toast.error(reason instanceof Error ? reason.message : t("work.home_start_failed"));
     } finally {
       setStarting(false);
     }
   };
   const starters = (props.starters ?? []).slice(0, 3);
-  return (
-    <div className="flex h-full flex-col" data-testid="work-home">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {props.today ? (
+  const starterChips = starters.length ? (
+    <div className={cn("flex flex-wrap gap-2", !props.today && "justify-center")} data-testid="work-starters">
+      {starters.map((starter) => (
+        <button
+          key={starter.title}
+          type="button"
+          data-work-starter={starter.title}
+          title={starter.prompt}
+          disabled={busy}
+          onClick={() => void start(starter.prompt)}
+          className="flex h-8 max-w-full items-center gap-1.5 rounded-full border border-border bg-background px-3 text-[13px] text-foreground transition-colors hover:border-foreground/25 hover:bg-muted disabled:opacity-60"
+        >
+          <Sparkles aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate">{starter.title}</span>
+        </button>
+      ))}
+    </div>
+  ) : null;
+  const message = props.message ? <p className="text-center text-[12px] text-muted-foreground">{props.message}</p> : null;
+  if (props.today) {
+    return (
+      <div className="flex h-full flex-col" data-testid="work-home">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           <div className={cn(COMPOSER_GUTTER, "py-8")}>
             <div className="mx-auto w-full max-w-[800px]" data-testid="work-home-column">{props.today}</div>
           </div>
-        ) : (
-        <div className={cn(COMPOSER_GUTTER, "flex min-h-full flex-col justify-center py-8")}>
-          <div className="mx-auto flex w-full max-w-[800px] flex-col items-center gap-4" data-testid="work-home-column">
-            <div className="space-y-1.5 text-center">
-              <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">What do you want to get done?</h1>
-              <p className="text-[13px] text-muted-foreground">Ask about your email, documents, customers or invoices.</p>
-            </div>
+        </div>
+        <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
+          <div className={cn(COMPOSER_WIDTH, "flex flex-col gap-2")}>
+            {starterChips}
+            {props.composer}
+            {message}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  // Same layout as the Code home (session-empty-hero.tsx): two equal spacers centre the heading and composer.
+  return (
+    <div className="flex h-full flex-col overflow-y-auto" data-testid="work-home">
+      <div className="min-h-8 grow basis-0" />
+      <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
+        <div className={cn("mx-auto flex w-full flex-col gap-2", COMPOSER_GLIDE, starting ? "max-w-[800px]" : "max-w-[640px]")} data-testid="work-home-column">
+          <div className={cn("mb-2 space-y-1.5 text-center", COMPOSER_GLIDE, starting && "opacity-0")}>
+            <h1 className="text-balance text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">{t("work.home_title")}</h1>
+            <p className="text-[13px] text-muted-foreground">{t("work.home_subtitle")}</p>
+          </div>
+          {props.composer}
+          {message}
+        </div>
+      </div>
+      <div className={cn(COMPOSER_GUTTER, "basis-0", COMPOSER_GLIDE, starting ? "grow-0" : "grow")}>
+        {starting ? null : (
+          <div className="mx-auto flex w-full max-w-[640px] flex-col items-center gap-4 pb-8">
+            {starterChips}
             {props.badge}
             {props.checklist ? <div className="w-full max-w-[420px]">{props.checklist}</div> : null}
             {props.onConnect ? (
-              <Button variant="outline" size="sm" onClick={props.onConnect} data-testid="work-home-connect"><Plug className="size-4" />Connect your tools</Button>
+              <Button variant="outline" size="sm" onClick={props.onConnect} data-testid="work-home-connect"><Plug className="size-4" />{t("work.home_connect")}</Button>
             ) : null}
           </div>
-        </div>
         )}
-      </div>
-      <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
-        <div className={cn(COMPOSER_WIDTH, "flex flex-col gap-2")}>
-          {starters.length ? (
-            <div className="flex flex-wrap gap-2" data-testid="work-starters">
-              {starters.map((starter) => (
-                <button
-                  key={starter.title}
-                  type="button"
-                  data-work-starter={starter.title}
-                  title={starter.prompt}
-                  disabled={busy}
-                  onClick={() => void start(starter.prompt)}
-                  className="flex h-8 max-w-full items-center gap-1.5 rounded-full border border-border bg-background px-3 text-[13px] text-foreground transition-colors hover:border-foreground/25 hover:bg-muted disabled:opacity-60"
-                >
-                  <Sparkles aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{starter.title}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {props.composer}
-          {props.message ? <p className="text-center text-[12px] text-muted-foreground">{props.message}</p> : null}
-        </div>
       </div>
     </div>
   );
