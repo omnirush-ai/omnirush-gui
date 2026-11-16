@@ -9,7 +9,7 @@ import { desiredV2Mcp, v2McpGate } from "../engine-v2-mcp.js";
 import { writeWorkspaceMcp } from "../mcp-allow/state.js";
 import { workPrompt } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
-import { isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
+import { isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
 import type { Route } from "../routes/registry.js";
 import type { ServerConfig } from "../types.js";
 
@@ -30,6 +30,16 @@ describe("work switch", () => {
     expect(rememberedWorkSwitch(dir)).toMatchObject({ enabled: false, available: true });
     rememberWorkSwitch(dir, { work: { enabled: true, available: true, sources: [] } });
     expect(rememberedWorkSwitch(dir)).toMatchObject({ enabled: true, available: false });
+  });
+
+  test("the action layer's switches are remembered with the block, off unless Work is on, and never count as a switch change", () => {
+    const dir = temp();
+    expect(rememberedWorkActions(dir)).toEqual({ autopilot: false, full_access: false, writes_paused: false });
+    rememberWorkSwitch(dir, { work: { enabled: true, sources: [] } });
+    expect(rememberWorkSwitch(dir, { work: { enabled: true, sources: [], autopilot: true, full_access: "yes", writes_paused: true } })).toBe(false);
+    expect(rememberedWorkActions(dir)).toEqual({ autopilot: true, full_access: false, writes_paused: true });
+    rememberWorkSwitch(dir, { work: { enabled: false, sources: [], autopilot: true } });
+    expect(rememberedWorkActions(dir)).toEqual({ autopilot: false, full_access: false, writes_paused: false });
   });
 });
 
@@ -198,7 +208,7 @@ describe("work routes", () => {
     const { dir, calls, call, refreshed } = setup((path) => path === "connectors"
       ? json([{ id: "mock", label: "Mock", status: "connected", sync_enabled: true, records: 3, last_sync_at: null, scopes: [] }])
       : path.endsWith("/start") ? json({ auth_url: "https://auth.example/x" }) : json({ ok: true, sync_enabled: false }));
-    expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, available: false, sources: ["mock"], message: null, workspaceId: null });
+    expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, available: false, sources: ["mock"], message: null, autopilot: false, full_access: false, writes_paused: false, workspaceId: null });
     expect(await (await call("POST", "/work/workspace")).json()).toEqual({ workspaceId: "ws_work", path: join(dir, "user_1") });
     expect((await (await call("GET", "/work/connectors")).json())[0].id).toBe("mock");
     expect(workEnvironment(dir, join(dir, "user_1"))?.work.connectors).toEqual([{ id: "mock", enabled: true }]);
@@ -251,8 +261,10 @@ describe("work routes", () => {
 
   test("the broker reaches only the contract's paths", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
-      "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge"]) expect(WORK_PATH.test(path)).toBe(false);
+      "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
+      "org/insights", "settings", "imessage", "actions", "actions/act_1/undo"]) expect(WORK_PATH.test(path)).toBe(true);
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
+      "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "org/insights/x"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("tryout, company setup, sample data and invites are checked, then forwarded", async () => {
@@ -315,6 +327,40 @@ describe("work routes", () => {
     // The owner-only answers read in words.
     const { call: denied } = setup(() => json({ detail: "transfer_first" }, 409));
     expect(await (await denied("POST", "/work/org/leave")).json()).toMatchObject({ code: "transfer_first", message: "Make someone else the owner before you leave." });
+  });
+
+  test("insights, the action layer and iMessage are checked, then forwarded; a saved setting re-reads the switch", async () => {
+    const asked: unknown[] = [];
+    let autopilot = false;
+    const { calls, call } = setup((path) => json(path.startsWith("settings") ? { autopilot: true, full_access: false, writes_paused: false } : { ok: true }), async (options) => {
+      asked.push(options);
+      return { work: { enabled: true, sources: ["mock"], autopilot, full_access: false, writes_paused: false } };
+    });
+    expect(await (await call("GET", "/work/state")).json()).toMatchObject({ enabled: true, autopilot: false });
+    await call("GET", "/work/org/insights?days=30&evil=1");
+    await call("GET", "/work/settings");
+    expect((await call("PATCH", "/work/settings", { autopilot: "yes" })).status).toBe(400);
+    expect((await call("PATCH", "/work/settings", { evil: true })).status).toBe(400);
+    autopilot = true;
+    expect((await call("PATCH", "/work/settings", { autopilot: true, evil: true })).status).toBe(200);
+    expect(await (await call("GET", "/work/state")).json()).toMatchObject({ enabled: true, autopilot: true, full_access: false, writes_paused: false });
+    expect(asked).toEqual([undefined, { maxAgeMs: 0 }]);
+    await call("GET", "/work/actions?limit=50&evil=1");
+    await call("POST", "/work/actions/act_1/undo");
+    expect(await (await call("POST", "/work/actions/a%2Fb/undo")).json()).toMatchObject({ code: "unknown_action", message: "That action no longer exists." });
+    await call("GET", "/work/imessage");
+    const record = { chat_key: "c1", chat_name: null, is_group: false, day: "2026-11-16", occurred_at: "2026-11-16T09:00:00Z", text: "hi", participants: [] };
+    expect((await call("POST", "/work/imessage", { records: [record], evil: 1 })).status).toBe(200);
+    expect((await call("POST", "/work/imessage", { records: "x" })).status).toBe(400);
+    expect(calls).toEqual([
+      "GET org/insights?days=30 ",
+      "GET settings ",
+      "PATCH settings {\"autopilot\":true}",
+      "GET actions?limit=50 ",
+      "POST actions/act_1/undo {}",
+      "GET imessage ",
+      `POST imessage ${JSON.stringify({ records: [record] })}`,
+    ]);
   });
 
   test("the server's errors reach the app as they came (work_disabled)", async () => {
