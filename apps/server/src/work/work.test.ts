@@ -264,7 +264,7 @@ describe("work routes", () => {
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
       "org/insights", "settings", "imessage", "actions", "actions/act_1/undo"]) expect(WORK_PATH.test(path)).toBe(true);
     for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
-      "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "org/insights/x"]) expect(WORK_PATH.test(path)).toBe(false);
+      "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/.."]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("tryout, company setup, sample data and invites are checked, then forwarded", async () => {

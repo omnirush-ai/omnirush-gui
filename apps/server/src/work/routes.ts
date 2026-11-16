@@ -95,7 +95,7 @@ const WORK_ERRORS: Record<string, string> = {
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
-const RECORD_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+const RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const FACT_KINDS = ["decision", "preference", "policy", "fact", "contact_note"];
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,189}\.[^\s@]{2,}$/;
