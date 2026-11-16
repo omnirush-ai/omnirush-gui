@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Zap } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { COMPOSER_BOTTOM, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
+import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER } from "@/react-app/domains/session/surface/composer/composer";
 
 import { t } from "@/i18n";
 
@@ -77,8 +77,8 @@ export type SessionEmptyHeroProps = {
 };
 
 /**
- * Paper "first chat" empty state: the greeting and one quiet "Continue … Search" line, with the real session composer
- * where a running chat has it.
+ * Paper "first chat" empty state: the greeting and the real session composer front and center, with one quiet
+ * "Continue … Search" line under it. On send the composer glides into the running chat's place.
  */
 export function SessionEmptyHero(props: SessionEmptyHeroProps) {
   const [prompt, setPrompt] = useState("");
@@ -87,6 +87,8 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
   const providerLock = useProviderLock();
   const canAddProviders = !providerLock.locked && !checkDesktopRestriction({ restriction: "allowCustomProviders" });
 
+  const [starting, setStarting] = useState(false);
+
   const submit = (
     resolvedPrompt: string,
     attachments: ComposerAttachment[],
@@ -94,7 +96,15 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
   ) => {
     const trimmedPrompt = resolvedPrompt.trim();
     if ((!trimmedPrompt && !attachments.length) || props.busy) return;
-    return props.onRunTask(trimmedPrompt, attachments, handoff);
+    setStarting(true);
+    return Promise.resolve(props.onRunTask(trimmedPrompt, attachments, handoff)).then(
+      // The chat replaces this home; if it did not open (navigation moved on), the home comes back.
+      () => void window.setTimeout(() => setStarting(false), 1500),
+      (error: unknown) => {
+        setStarting(false);
+        throw error;
+      },
+    );
   };
 
   // The editor's "Ask about selection" / "Fix with agent" before any chat exists: appended to the draft.
@@ -110,19 +120,32 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
     return () => window.removeEventListener("omnirush:new-task-prefill", onPrefill);
   }, []);
 
-  // Greeting and home cards above; the composer at the bottom, in the chat composer's place (same width, gutters and
-  // bottom spacing), so it does not move when the chat starts.
+  // Greeting and composer centred, the Continue line and cards under them. On send the composer glides into the
+  // running chat's place (same gutters, width and bottom spacing), so the chat replaces this without a jump.
   return (
-    <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={cn(COMPOSER_GUTTER, "flex min-h-full flex-col justify-center py-8")}>
-          <div className={cn(COMPOSER_WIDTH, "w-full space-y-4")}>
-            <div className="space-y-1.5 text-center">
-              <h2 className="text-balance break-keep text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">
-                {greeting.title}
-              </h2>
-              <p className="text-[13px] text-muted-foreground">{greeting.subtitle}</p>
-            </div>
+    <div className="flex h-full flex-col overflow-y-auto">
+      <div className="min-h-8 grow basis-0" />
+      <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
+        <div className={cn("mx-auto w-full", COMPOSER_GLIDE, starting ? "max-w-[800px]" : "max-w-[640px]")} data-testid="home-column">
+          <div className={cn("mb-4 space-y-1.5 text-center", COMPOSER_GLIDE, starting && "opacity-0")}>
+            <h2 className="text-balance break-keep text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">
+              {greeting.title}
+            </h2>
+            <p className="text-[13px] text-muted-foreground">{greeting.subtitle}</p>
+          </div>
+          <NewTaskComposer
+            draft={prompt}
+            onDraftChange={setPrompt}
+            onRunTask={submit}
+            busy={props.busy ?? false}
+            context={props.composer ?? null}
+          />
+        </div>
+      </div>
+      <div className={cn(COMPOSER_GUTTER, "basis-0", COMPOSER_GLIDE, starting ? "grow-0" : "grow")}>
+        {starting ? null : (
+          <div className="mx-auto w-full max-w-[640px] space-y-4 pb-8">
+            {props.home ? <HomeContinue context={props.home} /> : null}
 
             {canAddProviders && props.providerCount === 0 && props.onOpenProviderAuth ? (
               <button
@@ -140,24 +163,11 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
               </button>
             ) : null}
 
-            {props.home ? <HomeContinue context={props.home} /> : null}
-
             <BuildathonPromoCard />
 
             <PlacementHomeCard />
           </div>
-        </div>
-      </div>
-      <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
-        <div className={COMPOSER_WIDTH}>
-          <NewTaskComposer
-            draft={prompt}
-            onDraftChange={setPrompt}
-            onRunTask={submit}
-            busy={props.busy ?? false}
-            context={props.composer ?? null}
-          />
-        </div>
+        )}
       </div>
     </div>
   );

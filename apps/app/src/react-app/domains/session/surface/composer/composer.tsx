@@ -136,12 +136,14 @@ type ComposerProps = {
   voiceWorkspaceId?: string | null;
 };
 
-/** Where the chat composer sits: its gutters, width and bottom spacing. The homes (Code and Work) put their composer in
- *  the same place, so nothing moves when the first message is sent. */
+/** Where the chat composer sits: its gutters, width and bottom spacing. The homes (Code and Work) centre their composer
+ *  and glide it into this place on send, so nothing jumps when the first message is sent. */
 export const COMPOSER_GUTTER = "px-4 max-lg:px-3 lg:px-8";
 export const COMPOSER_WIDTH = "max-w-[800px] mx-auto";
 export const COMPOSER_BOTTOM = "pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))]";
 // The chat surface wraps the composer in a pb-2 shell (session-surface data-composer-shell); homes add mb-2 to match.
+/** The homes' glide into that place on send. */
+export const COMPOSER_GLIDE = "transition-all duration-200 ease-out motion-reduce:transition-none";
 
 const FLUSH_PROMPT_EVENT = "omnirush:flushPromptDraft";
 const FOCUS_PROMPT_EVENT = "omnirush:focusPrompt";
