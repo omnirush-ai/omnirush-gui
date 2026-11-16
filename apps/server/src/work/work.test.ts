@@ -363,6 +363,13 @@ describe("work routes", () => {
     ]);
   });
 
+  test("an error reads in words: known codes their own text, any other code or a validation list a plain line", async () => {
+    const message = async (detail: unknown, status: number) => (await (await setup(() => json({ detail }, status)).call("GET", "/work/feed?tz=Asia%2FCalcutta")).json()) as Record<string, unknown>;
+    expect(await message("bad_arguments", 422)).toMatchObject({ code: "bad_arguments", message: "Something in that request wasn't accepted. Try again." });
+    expect(await message("something_new", 409)).toMatchObject({ detail: "something_new", code: "something_new", message: "That didn't work. Try again." });
+    expect(await message([{ loc: ["query", "limit"], msg: "too big" }], 422)).toMatchObject({ code: "invalid_request", message: "That request wasn't accepted." });
+  });
+
   test("the server's errors reach the app as they came (work_disabled)", async () => {
     const { call } = setup(() => json({ detail: "work_disabled" }, 404));
     const response = await call("GET", "/work/connectors");

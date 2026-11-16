@@ -80,6 +80,18 @@ const WORK_ERRORS: Record<string, string> = {
   provider_error: "The service returned an error. Try again.",
   provider_unreachable: "The service could not be reached. Try again.",
   unreadable_answer: "omnirush.ai answered with something unexpected. Try again.",
+  bad_arguments: "Something in that request wasn't accepted. Try again.",
+  unknown_member: "That person is no longer in the organization.",
+  unknown_action: "That action no longer exists.",
+  not_undoable: "This action can't be undone.",
+  cannot_undo: "This action can't be undone.",
+  unknown_entity: "That item no longer exists.",
+  unknown_fact: "That item no longer exists.",
+  unknown_node: "That item no longer exists.",
+  bad_import: "Those messages couldn't be read.",
+  body_too_large: "That's too much at once. Try with less.",
+  token_exchange_failed: "The service didn't accept the sign-in. Reconnect.",
+  unsupported_work_path: "This needs a newer version of the app.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
@@ -108,10 +120,11 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
   const text = await response.text().catch(() => "");
   let data: unknown = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { detail: "unreadable_answer" }; }
-  // The app's client reads `code` and `message`; the server's own `detail` is kept as it came.
-  if (response.status >= 400 && data && typeof data === "object" && !Array.isArray(data) && typeof (data as { detail?: unknown }).detail === "string") {
-    const detail = (data as { detail: string }).detail;
-    data = { ...data, code: detail, message: WORK_ERRORS[detail] ?? detail };
+  // The app's client reads `code` and `message` (never a bare code); the server's own `detail` is kept as it came.
+  if (response.status >= 400 && data && typeof data === "object" && !Array.isArray(data)) {
+    const detail = (data as { detail?: unknown }).detail;
+    if (typeof detail === "string") data = { ...data, code: detail, message: WORK_ERRORS[detail] ?? "That didn't work. Try again." };
+    else if (Array.isArray(detail)) data = { ...data, code: "invalid_request", message: "That request wasn't accepted." };
   }
   return { status: response.status, data, response: jsonResponse(data, response.status) };
 }
@@ -376,7 +389,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   });
   addRoute(routes, "GET", "/work/actions", "client", async (ctx) => forward(`actions${forwardQuery(ctx.url, ["limit"])}`, "GET"));
   addRoute(routes, "POST", "/work/actions/:id/undo", "client", async (ctx) => {
-    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_action", code: "unknown_action", message: "That action no longer exists." }, 404);
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_action", code: "unknown_action", message: WORK_ERRORS.unknown_action }, 404);
     return forward(`actions/${ctx.params.id}/undo`, "POST", {});
   });
 
