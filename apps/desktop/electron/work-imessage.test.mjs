@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -134,14 +134,29 @@ test("readDatabase reads only rows past sinceRowid (incremental)", () => {
   }
 });
 
-test("readIMessage refuses non-macOS platforms", () => {
-  assert.throws(() => readIMessage({ platform: "win32" }), (e) => e instanceof IMessageError && e.code === "unsupported_os");
+test("readIMessage refuses non-macOS platforms", async () => {
+  await assert.rejects(() => readIMessage({ platform: "win32" }), (e) => e instanceof IMessageError && e.code === "unsupported_os");
 });
 
-test("readIMessage reports a missing Messages database", () => {
+test("readIMessage reads a copy of the Messages database", async () => {
+  const { dir, dbPath } = buildFixture();
+  const home = mkdtempSync(path.join(os.tmpdir(), "imsg-home-"));
+  try {
+    mkdirSync(path.join(home, "Library", "Messages"), { recursive: true });
+    copyFileSync(dbPath, path.join(home, "Library", "Messages", "chat.db"));
+    const { records, lastRowid } = await readIMessage({ platform: "darwin", homeDir: home, sinceRowid: 0 });
+    assert.equal(records.length, 2);
+    assert.equal(lastRowid, 4);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("readIMessage reports a missing Messages database", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "imsg-empty-"));
   try {
-    assert.throws(
+    await assert.rejects(
       () => readIMessage({ platform: "darwin", homeDir: dir }),
       (e) => e instanceof IMessageError && e.code === "no_messages_db",
     );
