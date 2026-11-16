@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import { useProviderLock } from "@/app/lib/provider-lock";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Zap } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -88,6 +88,8 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
   const canAddProviders = !providerLock.locked && !checkDesktopRestriction({ restriction: "allowCustomProviders" });
 
   const [starting, setStarting] = useState(false);
+  const startTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(startTimer.current), []);
 
   const submit = (
     resolvedPrompt: string,
@@ -99,7 +101,9 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
     setStarting(true);
     return Promise.resolve(props.onRunTask(trimmedPrompt, attachments, handoff)).then(
       // The chat replaces this home; if it did not open (navigation moved on), the home comes back.
-      () => void window.setTimeout(() => setStarting(false), 1500),
+      () => {
+        startTimer.current = window.setTimeout(() => setStarting(false), 1500);
+      },
       (error: unknown) => {
         setStarting(false);
         throw error;
