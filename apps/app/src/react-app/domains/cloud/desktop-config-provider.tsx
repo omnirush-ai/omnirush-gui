@@ -88,8 +88,6 @@ const DESKTOP_CONFIG_ITEMS = [
   "automationsEnabled",
   "dashboardEnabled",
   "connectEnabled",
-  "onboardingPrompts",
-  "onboardingPromptDescriptions",
 ] as const satisfies readonly (keyof DenDesktopConfig)[];
 
 export function resolveConnectStateToPush(config: DenDesktopConfig): boolean | null {

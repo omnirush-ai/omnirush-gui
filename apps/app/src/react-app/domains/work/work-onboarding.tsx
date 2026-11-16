@@ -53,7 +53,7 @@ export function Chip(props: { selected: boolean; onClick: () => void; children: 
       disabled={props.disabled}
       onClick={props.onClick}
       className={cn(
-        "flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors disabled:pointer-events-none",
+        "flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-colors disabled:pointer-events-none disabled:opacity-60",
         props.selected ? "border-foreground/40 bg-foreground/[0.06] text-foreground" : "border-border text-muted-foreground hover:border-foreground/25 hover:text-foreground",
       )}
     >

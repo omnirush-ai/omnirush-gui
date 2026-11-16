@@ -3944,7 +3944,7 @@ export function SessionRoute() {
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
           />
         ) : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? (
-          workIsOwner || workMembers.isError ? <WorkInsightsPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} /> : workMembers.isPending ? <Skeleton className="m-10 h-[220px] rounded-xl" data-testid="work-insights-role-loading" /> : null
+          workIsOwner || workMembers.isError ? <WorkInsightsPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} /> : workMembers.isPending ? <div className="mx-auto w-full max-w-3xl px-6 pt-10"><Skeleton className="h-[220px] rounded-xl" data-testid="work-insights-role-loading" /></div> : null
         ) : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? (
           <WorkAutomationPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
