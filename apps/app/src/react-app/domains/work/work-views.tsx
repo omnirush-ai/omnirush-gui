@@ -29,7 +29,6 @@ import {
 
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
-import { t } from "@/i18n";
 
 import {
   connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageLine, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
