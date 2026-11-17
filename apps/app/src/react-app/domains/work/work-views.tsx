@@ -139,7 +139,7 @@ export function WorkHome(props: {
   if (feed) {
     return (
       <div className="flex h-full flex-col" data-testid="work-home">
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto mask-b-from-[calc(100%-1.5rem)]">
           <div className={cn(COMPOSER_GUTTER, "py-8")}>
             <div className="mx-auto w-full max-w-[800px]" data-testid="work-home-column">{props.today}</div>
           </div>
