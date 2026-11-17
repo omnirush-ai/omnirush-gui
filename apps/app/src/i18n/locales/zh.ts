@@ -2906,6 +2906,7 @@ export default {
   "work.today.today": "今天",
   "work.today.fyi": "最近",
   "work.today.all_clear": "今天没有需要你处理的事。",
+  "work.today.empty_broken": "修复上面的连接后，这里才会显示内容。",
   "work.today.show_more": "再显示 {count} 条",
   "work.today.show_less": "收起",
   "work.today.attention_count": "{count} 个连接需要处理",

@@ -46,7 +46,7 @@ export function SourceStrip(props: { sources: FeedSource[]; selected: string | n
   const solo = props.sources.length === 1;
   const chip = (active: boolean) => cn(
     "flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] text-foreground transition-colors",
-    active ? "border-transparent bg-muted font-medium" : "border-border bg-background hover:bg-muted",
+    active ? "border-foreground/20 bg-muted font-medium" : "border-border bg-background hover:bg-muted/50",
   );
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid="work-source-strip">
@@ -97,7 +97,7 @@ export function SourceAttention(props: { sources: FeedSource[]; busy: string | n
             <span className="flex shrink-0 items-center gap-1">{needs.map((source) => <ConnectorIcon key={source.id} id={source.id} className="size-3.5" />)}</span>
             <span className="truncate">{t("work.today.attention_count", { count: needs.length })}</span>
           </span>
-          <Button variant="outline" size="sm" aria-expanded={open} aria-controls={rowsId} onClick={() => setOpen(!open)}>{open ? t("common.hide") : t("work.today.review")}</Button>
+          <Button variant="outline" size="sm" aria-expanded={open} aria-controls={open ? rowsId : undefined} onClick={() => setOpen(!open)}>{open ? t("common.hide") : t("work.today.review")}</Button>
         </div>
       ) : null}
       {many && !open ? null : <div id={rowsId} className="flex flex-col divide-y divide-border">{needs.map((source) => {
@@ -247,8 +247,11 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
         </div>
       ) : (
         <div className={cn("flex flex-col gap-6", feed.isPlaceholderData && "opacity-60")} data-testid="work-feed">
-          {groups.needs_you.length || groups.today.length || broken ? null : (
+          {groups.needs_you.length || groups.today.length ? null : !broken ? (
             <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground" data-testid="work-feed-clear"><Check aria-hidden className="size-3.5" />{t("work.today.all_clear")}</p>
+          ) : groups.fyi.length ? null : (
+            // A broken source can be why the feed is empty, so no all-clear and never a blank page.
+            <p className="text-[13px] text-muted-foreground" data-testid="work-feed-blocked">{t("work.today.empty_broken")}</p>
           )}
           {SECTIONS.map((section) => {
             const all = groups[section.id];

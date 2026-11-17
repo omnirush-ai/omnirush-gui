@@ -348,7 +348,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(attention).toContain('data-testid="work-source-attention"');
     expect(attention).toContain("3 connections need attention");
     expect(attention).toMatch(/aria-expanded="false"[^>]*>Review</);
-    expect(attention).toContain("aria-controls=");
+    expect(attention).not.toContain("aria-controls="); // only points at the rows once they render
     expect(attention).not.toContain("data-work-attention=");
     expect(attention).not.toContain(">Retry<");
     // Exactly one: its row and button as is, no summary.
@@ -387,7 +387,11 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(clear).toContain("Nothing needs you today.");
     expect(clear).not.toContain("data-feed-section=");
     // A source to reconnect or retry may be holding things back: no all-clear then.
-    expect(render({ ...feed, groups: { needs_you: [], today: [], fyi: [] } })).not.toContain('data-testid="work-feed-clear"');
+    const blocked = render({ ...feed, groups: { needs_you: [], today: [], fyi: [] } });
+    expect(blocked).not.toContain('data-testid="work-feed-clear"');
+    // ...and never a blank feed: say the fixes come first.
+    expect(blocked).toContain("Nothing to show until the connections above are fixed.");
+    expect(render({ ...feed, groups: { needs_you: [], today: [], fyi: [feed.groups.needs_you[0]!] } })).not.toContain('data-testid="work-feed-blocked"');
     // One source: its pill (dot) and Add stay, nothing to filter.
     const one = render({ ...feed, sources: [feed.sources[3]!] });
     expect(one).toContain('data-testid="work-source-add"');

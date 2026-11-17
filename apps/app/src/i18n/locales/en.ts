@@ -2899,6 +2899,7 @@ export default {
   "work.today.today": "Today",
   "work.today.fyi": "Recent",
   "work.today.all_clear": "Nothing needs you today.",
+  "work.today.empty_broken": "Nothing to show until the connections above are fixed.",
   "work.today.show_more": "Show {count} more",
   "work.today.show_less": "Show less",
   "work.today.attention_count": "{count} connections need attention",
