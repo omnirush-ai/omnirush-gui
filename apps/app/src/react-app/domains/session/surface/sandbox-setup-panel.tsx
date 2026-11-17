@@ -33,8 +33,8 @@ export function SandboxSetupPanel(props: Props) {
   return <Panel key={props.workspaceId} client={props.client} workspaceId={props.workspaceId} sessionId={props.sessionId ?? null} chatRunning={props.chatRunning ?? false} onOpenSettings={props.onOpenSettings} />;
 }
 
-/** As wide as the composer below it (its max-w-[800px] mx-auto), a little inset on narrow chats. */
-const WIDTH = "mx-auto mb-2 w-[calc(100%-1.5rem)] max-w-[800px]";
+/** As wide as the composer below it: the chat's notice column, or the new-task composer's own column. */
+const WIDTH = "mb-2";
 
 const TONE: Record<SandboxSetupView["tone"], string> = {
   busy: "text-dls-secondary",

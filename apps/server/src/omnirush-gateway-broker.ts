@@ -301,6 +301,8 @@ const GATEWAY_ERROR_COPY: Record<string, string> = {
   queue_timeout: BUSY_COPY,
   omni_queue_timeout: "every model seat is taken right now, and this turn waited in line too long. Send your message again; your place in line is kept for a few minutes.",
   provider_rate_limited: BUSY_COPY,
+  // The proxy router had no usable upstream channel for the model (all capped, cooling down or paused).
+  no_channel_available: BUSY_COPY,
   voice_unavailable: "voice input is not available on this account yet.",
   transcription_unavailable: "the transcription service did not answer. Try again in a moment.",
   audio_unreadable: "the recording could not be read. Try again.",

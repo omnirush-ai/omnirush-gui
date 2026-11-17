@@ -373,7 +373,8 @@ async function workChatTools(config: ServerConfig, fix: boolean, log: (message: 
   if (fix) await workBrokersByServer.get(config)?.capabilities({ maxAgeMs: 0 }).then((capabilities) => workSwitchSeen(config, capabilities)).catch(() => undefined);
   const workspace = findWorkWorkspace(config.workspaces);
   const engine = engineV2ByServer.get(config);
-  const missing = (reason: string, detail: string) => {
+  // `reason` is shown under the banner's "Work tools aren't connected": null when it would only say that again.
+  const missing = (reason: string | null, detail: string) => {
     log("work chat tools missing", { reason: detail });
     return { attached: false, reason };
   };
@@ -385,9 +386,9 @@ async function workChatTools(config: ServerConfig, fix: boolean, log: (message: 
   // The engine is not up (or not answering): unknown, so no banner.
   if (!servers) return { attached: true, reason: null };
   const work = servers.find((server) => server.name === FIRST_PARTY_REMOTE.work.id);
-  if (!work) return missing("Work tools were not added to this chat.", "omnirush-work not in the engine's MCP list");
+  if (!work) return missing(null, "omnirush-work not in the engine's MCP list");
   if (work.status === "connected" || work.status === "pending") return { attached: true, reason: null };
-  return missing("Work tools could not connect.", `omnirush-work ${work.status}${work.error ? `: ${work.error.slice(0, 200)}` : ""}`);
+  return missing(null, `omnirush-work ${work.status}${work.error ? `: ${work.error.slice(0, 200)}` : ""}`);
 }
 
 /** Restarts the engine's projects (when idle) so they pick up the built-in computer use server. */

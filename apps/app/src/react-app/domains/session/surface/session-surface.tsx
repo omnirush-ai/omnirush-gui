@@ -50,7 +50,7 @@ import type {
   CloudMcpSubmissionGateState,
   CloudMcpSubmissionResult,
 } from "@/react-app/domains/connections/cloud-mcp-submit-readiness";
-import { ReactSessionComposer } from "./composer/composer";
+import { COMPOSER_GUTTER, COMPOSER_WIDTH, ReactSessionComposer } from "./composer/composer";
 import { WorkspaceRunModeMenu } from "./composer/workspace-run-mode-menu";
 import { FullPermissionsToggle } from "./composer/full-permissions-toggle";
 import { SandboxStatusChip } from "./composer/sandbox-status-chip";
@@ -814,7 +814,7 @@ type SessionRunStatusProps = {
  * agent is waiting on, or a retry after an error. Routine work (thinking,
  * tools, responding, compacting) shows nothing here; the composer keeps Stop.
  */
-function SessionRunStatus(props: SessionRunStatusProps) {
+export function SessionRunStatus(props: SessionRunStatusProps) {
   const [stopPending, setStopPending] = useState(false);
   if (!props.acceptanceUnknown && props.activityStatus !== "waiting" && !(props.busy && props.retryMessage)) {
     return null;
@@ -882,7 +882,7 @@ function SessionRunStatus(props: SessionRunStatusProps) {
       data-testid="session-run-status"
       role={props.acceptanceUnknown ? "alert" : "status"}
       aria-live="polite"
-      className={`mx-3 mb-2 flex items-start gap-3 rounded-xl border px-3 py-2.5 text-xs ${tone}`}
+      className={`mb-2 flex items-start gap-3 rounded-xl border px-3 py-2.5 text-xs ${tone}`}
     >
       <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${iconClass}`} />
       <div className="min-w-0 flex-1">
@@ -1114,7 +1114,7 @@ function SessionErrorCard({ error, developerMode, onDismiss, onChangeModel, onOp
 function RevertedMessagesBanner(props: { hiddenCount: number; restoring: boolean; onRestore: () => void }) {
   return (
     <div
-      className="mx-3 mb-2 flex items-center gap-3 rounded-xl border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-xs text-warning"
+      className="mb-2 flex items-center gap-3 rounded-xl border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-xs text-warning"
       data-testid="reverted-messages-banner"
       role="status"
     >
@@ -3575,6 +3575,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
       </div>
 
       <div ref={composerShellRef} data-composer-shell className="shrink-0 px-0 pb-2 pt-2">
+        {/* The notices share the composer's column (its gutters and width), so their edges line up with its box. */}
+        <div className={COMPOSER_GUTTER}><div className={COMPOSER_WIDTH}>
         {/* Next to the composer, not above the first message: in a long chat the top is far off screen. */}
         {revertMessageId ? (
           <RevertedMessagesBanner
@@ -3585,7 +3587,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         ) : null}
         {composerEditTarget ? (
           <div
-            className="mx-3 mb-2 flex items-center gap-3 rounded-xl border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-xs text-warning"
+            className="mb-2 flex items-center gap-3 rounded-xl border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-xs text-warning"
             data-testid="composer-edit-target"
             role="status"
           >
@@ -3612,7 +3614,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         {(props.providerConnectedCount ?? 0) === 0 ? (
           <button
             type="button"
-            className="mx-3 mb-2 flex w-[calc(100%-1.5rem)] items-center gap-2 rounded-lg border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-left text-xs text-warning transition-colors hover:bg-amber-3/40"
+            className="mb-2 flex w-full items-center gap-2 rounded-lg border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-left text-xs text-warning transition-colors hover:bg-amber-3/40"
             onClick={() => props.onOpenSettingsSection?.("providers")}
           >
             <span className="font-medium">No AI model connected.</span>
@@ -3621,7 +3623,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         ) : null}
         {props.cloudMcpSubmissionState.status === "failed" ? (
           <div
-            className="mx-3 mb-2 flex items-center gap-3 rounded-xl border border-red-7/40 bg-red-2/40 px-3 py-2 text-xs text-red-11"
+            className="mb-2 flex items-center gap-3 rounded-xl border border-red-7/40 bg-red-2/40 px-3 py-2 text-xs text-red-11"
             data-testid="cloud-mcp-submission-failure"
           >
             <span className="min-w-0 flex-1">
@@ -3641,7 +3643,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           </div>
         ) : null}
         {failedDraft ? (
-          <div className="mx-3 mb-2 flex items-center gap-3 text-xs text-red-11">
+          <div className="mb-2 flex items-center gap-3 text-xs text-red-11">
             <span>Your unsent message is saved. Clear the current draft to restore it.</span>
             <button type="button" disabled={Boolean(draft || attachments.length)} className="font-medium disabled:opacity-50" onClick={() => {
               const state = useComposerStateStore.getState();
@@ -3656,7 +3658,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           </div>
         ) : null}
         {unmatchedPendingMessages.flatMap(({ draft: pending }) => pending.attachments.map((attachment) => (
-          <div key={attachment.id} className="mx-3 mb-2 text-xs text-muted-foreground" data-attachment-status={sending ? "uploading" : "ready"}>
+          <div key={attachment.id} className="mb-2 text-xs text-muted-foreground" data-attachment-status={sending ? "uploading" : "ready"}>
             {attachment.name}{sending ? " · Uploading…" : ""}
           </div>
         )))}
@@ -3694,6 +3696,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           turnRunning={chatStreaming || (effectiveActivityStatus !== "idle" && effectiveActivityStatus !== "error")}
         />
         <SideAnswers answers={sideAnswers} onDismiss={(id) => setSideAnswers((list) => list.filter((item) => item.id !== id))} />
+        </div></div>
         <ReactSessionComposer
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}
           fullPermissionsControl={<FullPermissionsToggle client={props.client} workspaceId={props.workspaceId} />}

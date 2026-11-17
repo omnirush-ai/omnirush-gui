@@ -597,13 +597,23 @@ function WorkToolsBannerCheck(props: { client: WorkClient }) {
   });
   if (!query.data || query.data.attached) return null;
   return (
-    <div role="status" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-amber-7/50 bg-amber-2/50 px-3 py-2 text-[13px] text-amber-11" data-testid="work-tools-banner">
-      <Plug aria-hidden className="size-4 shrink-0" />
+    // The chat's run status card (session-surface SessionRunStatus) in its warning tone, so stacked notices read as one;
+    // a single line sits centred with its button, two lines start at the top like the card.
+    <div role="status" className={cn("mb-2 flex gap-3 rounded-xl border border-amber-7/50 bg-amber-2/30 px-3 py-2.5 text-xs", query.data.reason ? "items-start" : "items-center")} data-testid="work-tools-banner">
+      <Plug aria-hidden className={cn("size-4 shrink-0 text-warning", query.data.reason && "mt-0.5")} />
       <div className="min-w-0 flex-1">
-        <span className="font-medium">{t("work.tools.banner")}</span>
-        {query.data.reason ? <span className="text-amber-11/80"> {query.data.reason}</span> : null}
+        <p className="font-medium text-dls-text">{t("work.tools.banner")}</p>
+        {query.data.reason ? <p className="mt-0.5 text-dls-secondary">{query.data.reason}</p> : null}
       </div>
-      <Button size="sm" variant="outline" disabled={fix.isPending} onClick={() => fix.mutate()} data-testid="work-tools-fix">{fix.isPending ? t("work.tools.fixing") : t("work.today.fix")}</Button>
+      <button
+        type="button"
+        className="shrink-0 rounded-md border border-dls-border px-2.5 py-1 font-medium text-dls-text transition-colors hover:bg-dls-hover disabled:cursor-wait disabled:opacity-60"
+        disabled={fix.isPending}
+        onClick={() => fix.mutate()}
+        data-testid="work-tools-fix"
+      >
+        {fix.isPending ? t("work.tools.fixing") : t("work.today.fix")}
+      </button>
     </div>
   );
 }

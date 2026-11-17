@@ -2972,7 +2972,7 @@ export default {
   "work.imessage.no_new": "没有新信息。",
   "work.tools.connected": "Work 工具已连接",
   "work.tools.still_not_connected": "Work 工具仍未连接。",
-  "work.tools.banner": "这个对话中没有连接 Work 工具",
+  "work.tools.banner": "Work 工具未连接",
   "work.tools.fixing": "正在修复…",
   "work.onboarding.just_me": "只有我",
   "work.onboarding.try": "试用 Work",

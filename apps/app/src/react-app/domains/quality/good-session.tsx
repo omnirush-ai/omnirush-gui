@@ -506,13 +506,13 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
   const dockLink = dock?.link;
   return (
     // A container: the checklist lays out by the chat's own width (the chat can be narrow beside the editor), not the window's.
-    <div className="@container/quality px-4 max-lg:px-3 lg:px-8" data-testid="good-session-checklist" data-verdict={verdict} data-source={checklist.source}>
+    <div className="@container/quality" data-testid="good-session-checklist" data-verdict={verdict} data-source={checklist.source}>
       {dock ? (
         <div
           role="status"
           data-testid="good-session-dock"
           data-tone={dock.tone}
-          className={cn("mx-auto mb-1.5 flex max-w-[800px] items-center gap-2 rounded-lg border px-3 py-1.5 text-xs", TONE_BOX[dock.tone])}
+          className={cn("mb-1.5 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs", TONE_BOX[dock.tone])}
         >
           <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="min-w-0 flex-1">{dock.message}</span>
@@ -529,7 +529,7 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
         </div>
       ) : null}
       {followUpShown ? (
-        <div className="mx-auto flex max-w-[800px] items-center gap-2 pb-1 text-[11px] leading-4 text-muted-foreground" data-testid="good-session-follow-up" role="status">
+        <div className="flex items-center gap-2 pb-1 text-[11px] leading-4 text-muted-foreground" data-testid="good-session-follow-up" role="status">
           <span className="min-w-0 flex-1">{FOLLOW_UP_HINT}</span>
           <button
             type="button"
@@ -546,7 +546,7 @@ export function GoodSessionChecklistBar(props: GoodSessionChecklistBarProps) {
       ) : null}
       {/* At every width: a compact summary ("On track ★ 4/6") that opens to the full checklist,
           and the guide link on its own line under it (never cut off at the right edge). */}
-      <div className="mx-auto flex max-w-[800px] flex-col items-start gap-1 pb-1.5" data-testid="good-session-row" data-expanded={checklistOpen ? "" : undefined}>
+      <div className="flex flex-col items-start gap-1 pb-1.5" data-testid="good-session-row" data-expanded={checklistOpen ? "" : undefined}>
         <span role="status" className="sr-only">{[checklist.text, ...statusLines].map(sentence).join(" ")}</span>
         <button
           type="button"

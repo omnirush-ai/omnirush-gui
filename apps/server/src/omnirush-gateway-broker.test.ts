@@ -1116,6 +1116,8 @@ describe("readable gateway errors", () => {
         code: "provider_error",
         copy: "the model provider could not complete this request.",
       },
+      // The proxy with no usable channel for the model: busy, never the bare code.
+      { status: 503, body: { detail: "no_channel_available" }, code: "no_channel_available", copy: "this model is busy right now." },
     ];
     for (const entry of cases) {
       const response = await refusingBroker(entry.status, JSON.stringify(entry.body), { "content-type": "application/json", ...entry.headers })
@@ -1126,6 +1128,7 @@ describe("readable gateway errors", () => {
       expect(payload.error.code).toBe(entry.code);
       expect(payload.error.message).toStartWith("omnirush.ai: ");
       expect(payload.error.message).toContain(entry.copy);
+      expect(payload.error.message).not.toContain(entry.code);
     }
   });
 

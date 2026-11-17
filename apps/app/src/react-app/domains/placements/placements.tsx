@@ -166,33 +166,31 @@ export function PlacementTurnFooterView({ placement }: { placement: Placement })
   const ref = useRef<HTMLDivElement | null>(null);
   useDisplayMeasurement(ref, placement);
   return (
-    <div className="px-4 max-lg:px-3 lg:px-8">
-      <div
-        ref={ref}
-        role="note"
-        aria-label={placement.label}
-        data-testid="placement-turn-footer"
-        data-placement-id={placement.id}
-        data-display-id={placement.displayId}
-        className="mx-auto flex max-w-[800px] items-center gap-2 pb-1 text-[11px] leading-4 text-muted-foreground/80"
+    <div
+      ref={ref}
+      role="note"
+      aria-label={placement.label}
+      data-testid="placement-turn-footer"
+      data-placement-id={placement.id}
+      data-display-id={placement.displayId}
+      className="flex items-center gap-2 pb-1 text-[11px] leading-4 text-muted-foreground/80"
+    >
+      <span className="min-w-0 flex-1 truncate">
+        <span>{placement.label}</span>
+        <span aria-hidden="true"> — </span>
+        <span className="text-muted-foreground">{placement.title}</span>
+        {placement.body ? <span> · {placement.body}</span> : null}
+      </span>
+      <button
+        type="button"
+        onClick={() => openPlacement(placement)}
+        className="inline-flex shrink-0 items-center gap-0.5 underline-offset-2 hover:text-foreground hover:underline"
+        data-testid="placement-turn-footer-cta"
       >
-        <span className="min-w-0 flex-1 truncate">
-          <span>{placement.label}</span>
-          <span aria-hidden="true"> — </span>
-          <span className="text-muted-foreground">{placement.title}</span>
-          {placement.body ? <span> · {placement.body}</span> : null}
-        </span>
-        <button
-          type="button"
-          onClick={() => openPlacement(placement)}
-          className="inline-flex shrink-0 items-center gap-0.5 underline-offset-2 hover:text-foreground hover:underline"
-          data-testid="placement-turn-footer-cta"
-        >
-          {placement.ctaLabel}
-          <ArrowUpRight className="size-3" aria-hidden="true" />
-        </button>
-        <DismissButton placement={placement} testId="placement-turn-footer-dismiss" />
-      </div>
+        {placement.ctaLabel}
+        <ArrowUpRight className="size-3" aria-hidden="true" />
+      </button>
+      <DismissButton placement={placement} testId="placement-turn-footer-dismiss" />
     </div>
   );
 }
