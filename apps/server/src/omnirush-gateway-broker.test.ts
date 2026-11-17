@@ -1132,6 +1132,13 @@ describe("readable gateway errors", () => {
     }
   });
 
+  test("a code without copy keeps its name in error.code, out of the words the user reads", async () => {
+    const response = await refusingBroker(503, JSON.stringify({ detail: "some_new_gateway_code" }))
+      .handle(gatewayRequest({ model: "meta-muse-spark", input: "hi", stream: true }), "responses");
+    const payload = await response.json() as { error: { message: string; code: string } };
+    expect(payload.error).toMatchObject({ code: "some_new_gateway_code", message: "omnirush.ai could not complete the model request." });
+  });
+
   test("a streamed refusal (capped session, Windows cut-off) becomes a 403 the engine shows once, word for word", async () => {
     const sse = { "content-type": "text/event-stream", "x-should-retry": "false" };
     for (const [detail, message] of [

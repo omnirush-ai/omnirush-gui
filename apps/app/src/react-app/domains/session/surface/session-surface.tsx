@@ -871,7 +871,8 @@ export function SessionRunStatus(props: SessionRunStatusProps) {
     detail = t("session.run_status_responding_detail");
   } else if (props.retryMessage) {
     title = t("session.run_status_retrying");
-    detail = props.retryMessage;
+    // The app is already retrying, so the message's own "try again" ending is left off.
+    detail = props.retryMessage.replace(/ (?:Try again in a moment|Retry the request)\.$/, "");
     tone = "border-amber-7/50 bg-amber-2/30";
     Icon = CircleAlert;
     iconClass = "text-warning";
@@ -1114,16 +1115,16 @@ function SessionErrorCard({ error, developerMode, onDismiss, onChangeModel, onOp
 function RevertedMessagesBanner(props: { hiddenCount: number; restoring: boolean; onRestore: () => void }) {
   return (
     <div
-      className="mb-2 flex items-center gap-3 rounded-xl border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-xs text-warning"
+      className="mb-2 flex items-center gap-3 rounded-xl border border-amber-7/50 bg-amber-2/30 px-3 py-2.5 text-xs"
       data-testid="reverted-messages-banner"
       role="status"
     >
-      <span className="min-w-0 flex-1 font-medium">
+      <span className="min-w-0 flex-1 font-medium text-dls-text">
         {t("session.reverted_messages_hidden", { count: props.hiddenCount })}
       </span>
       <button
         type="button"
-        className="shrink-0 rounded-full border border-amber-7/50 bg-dls-surface px-3 py-1.5 text-xs font-medium text-dls-text transition-colors hover:bg-dls-hover disabled:opacity-50"
+        className="shrink-0 rounded-md border border-dls-border px-2.5 py-1 font-medium text-dls-text transition-colors hover:bg-dls-hover disabled:opacity-50"
         disabled={props.restoring}
         onClick={props.onRestore}
       >
@@ -3587,23 +3588,23 @@ export function SessionSurface(props: SessionSurfaceProps) {
         ) : null}
         {composerEditTarget ? (
           <div
-            className="mb-2 flex items-center gap-3 rounded-xl border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-xs text-warning"
+            className="mb-2 flex items-center gap-3 rounded-xl border border-amber-7/50 bg-amber-2/30 px-3 py-2.5 text-xs"
             data-testid="composer-edit-target"
             role="status"
           >
-            <span className="min-w-0 flex-1">
+            <span className="min-w-0 flex-1 text-dls-text">
               {editTargetText(turnsFromRevertPoint(baseRenderedMessages, composerEditTarget))}
             </span>
             <button
               type="button"
-              className="shrink-0 font-medium hover:underline"
+              className="shrink-0 rounded-md border border-dls-border px-2.5 py-1 font-medium text-dls-text transition-colors hover:bg-dls-hover"
               onClick={() => clearComposerRevertTarget(props.sessionId)}
             >
               Send as new
             </button>
             <button
               type="button"
-              className="shrink-0 font-medium hover:underline"
+              className="shrink-0 rounded-md px-2 py-1 font-medium text-dls-secondary transition-colors hover:bg-dls-hover hover:text-dls-text"
               data-testid="composer-edit-cancel"
               onClick={() => replaceComposerDraft(props.sessionId, "")}
             >
@@ -3614,11 +3615,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
         {(props.providerConnectedCount ?? 0) === 0 ? (
           <button
             type="button"
-            className="mb-2 flex w-full items-center gap-2 rounded-lg border border-amber-7/40 bg-amber-2/30 px-3 py-2 text-left text-xs text-warning transition-colors hover:bg-amber-3/40"
+            className="mb-2 flex w-full items-center gap-2 rounded-xl border border-amber-7/50 bg-amber-2/30 px-3 py-2.5 text-left text-xs transition-colors hover:bg-amber-3/40"
             onClick={() => props.onOpenSettingsSection?.("providers")}
           >
-            <span className="font-medium">No AI model connected.</span>
-            <span className="text-warning/70">Add a provider to run tasks.</span>
+            <span className="font-medium text-dls-text">No AI model connected.</span>
+            <span className="text-dls-secondary">Add a provider to run tasks.</span>
           </button>
         ) : null}
         {props.cloudMcpSubmissionState.status === "failed" ? (

@@ -257,6 +257,8 @@ const UNAVAILABLE_COPY = "this model is temporarily unavailable. Try again in a 
 const BUSY_COPY = "this model is busy right now. Try again in a moment.";
 const STALLED_COPY = "the model stopped responding before it finished. Retry the request, or pick a lower effort.";
 const SETUP_COPY = "the model route is being set up. Try again later.";
+/** A code without copy: its name stays in `error.code` (and `param`), never in the words the user reads. */
+const UNKNOWN_CODE_COPY = "omnirush.ai could not complete the model request.";
 
 /**
  * What the user reads for an omnirush.ai gateway error: the backend's own
@@ -524,8 +526,7 @@ function errorEvent(block: Uint8Array, payload: Record<string, unknown>): Uint8A
   const readable = baseCode === MODEL_NOT_IN_MODE && original ? original : code ? gatewayErrorMessage(code, original) : null;
   const detail = stringField(payload.detail);
   if (retryRefused(nested) || (detail && FINAL_STREAM_CODES.has(detail)) || (baseCode && FINAL_STREAM_CODES.has(baseCode))) {
-    const named = detail ?? baseCode ?? "omnirush_refused";
-    return finalStreamEvent(payload, nested, code, readable ?? original ?? `omnirush.ai could not complete the model request (${named}).`);
+    return finalStreamEvent(payload, nested, code, readable ?? original ?? UNKNOWN_CODE_COPY);
   }
   const sequence = payload.sequence_number;
   const parsed = payload.type === "error"
@@ -785,7 +786,7 @@ function readableErrorBody(text: string, grant: string | null): { error: Record<
     // The server names the version to install, or the kind of project the model runs in; keep its words.
     ?? (OWN_WORDS.has(code) ? stringField(nested?.message) ?? stringField(payload.message) : null)
     ?? gatewayErrorMessage(code, stringField(nested?.message))
-    ?? (bareCode ? `omnirush.ai could not complete the model request (${code}).` : null);
+    ?? (bareCode ? UNKNOWN_CODE_COPY : null);
   if (!message) return null;
   const param = stringField(nested?.param);
   return {
@@ -861,7 +862,7 @@ function streamedRefusalResponse(text: string, headers: Headers): Response | nul
   if (!detail) return null;
   const nested = isRecord(payload.error) ? payload.error : null;
   const message = stringField(nested?.message) ?? stringField(payload.message)
-    ?? gatewayErrorMessage(detail) ?? `omnirush.ai could not complete the model request (${detail}).`;
+    ?? gatewayErrorMessage(detail) ?? UNKNOWN_CODE_COPY;
   const result = responseHeaders(headers);
   result.set("content-type", "application/json");
   result.set("x-should-retry", "false");
