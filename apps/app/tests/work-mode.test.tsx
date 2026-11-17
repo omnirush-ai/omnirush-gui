@@ -333,14 +333,22 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(strip).toContain('data-testid="work-source-add"');
     expect(strip).not.toContain(">Retry<");
     expect(strip).not.toContain(">Reconnect<");
+    // Three sources need a fix: one summary line with Review, the per-source rows folded away.
     const attention = renderToStaticMarkup(<SourceAttention sources={feed.sources} busy={null} onReconnect={noop} onRetry={noop} onSetup={noop} />);
     expect(attention).toContain('data-testid="work-source-attention"');
-    expect(attention).toContain(">Retry<");
-    expect(attention).toContain(">Reconnect<");
-    expect(attention).toContain(">Fix<");
+    expect(attention).toContain("3 connections need attention");
+    expect(attention).toMatch(/aria-expanded="false"[^>]*>Review</);
+    expect(attention).not.toContain("data-work-attention=");
+    expect(attention).not.toContain(">Retry<");
+    // Exactly one: its row and button as is, no summary.
+    const single = renderToStaticMarkup(<SourceAttention sources={[feed.sources[0]!, feed.sources[3]!]} busy={null} onReconnect={noop} onRetry={noop} onSetup={noop} />);
+    expect(single).toContain('data-work-attention="github"');
+    expect(single).toContain(">Retry<");
+    expect(single).not.toContain('data-testid="work-attention-summary"');
+    expect(renderToStaticMarkup(<SourceAttention sources={[feed.sources[3]!]} busy={null} onReconnect={noop} onRetry={noop} onSetup={noop} />)).toBe("");
   });
 
-  test("Today: three sections with counts, rows with reason, Open only with a link, Ask about this; skeleton while loading", () => {
+  test("Today: non-empty sections with counts, rows with reason, Open only with a link, Ask about this; skeleton while loading", () => {
     const client = { baseUrl: "http://today.test" } as never;
     const render = (data?: OmniRushWorkFeed) => {
       const queries = new QueryClient();
@@ -348,15 +356,36 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkToday client={client} openLink={noop} onAsk={async () => {}} onOpenConnectors={noop} /></QueryClientProvider>);
     };
     const markup = render(feed);
-    expect(markup.match(/data-feed-section=/g)?.length).toBe(3);
+    expect(markup.match(/data-feed-section=/g)?.length).toBe(2);
+    expect(markup).not.toContain('data-feed-section="fyi"');
+    expect(markup).not.toContain('data-testid="work-feed-clear"');
     expect(markup).toContain("Needs you");
-    expect(markup).toContain("Review requested");
+    expect(markup).toMatch(/data-testid="work-feed-reason">Review requested</);
     expect(markup).toContain('aria-label="Open Fix invoice rounding"');
     expect(markup).not.toContain('aria-label="Open Supplier call"');
     expect(markup.match(/aria-label="Ask about /g)?.length).toBe(2);
     expect(markup).toContain('data-testid="work-source-strip"');
-    expect(markup).toContain("Nothing new in the last 7 days.");
+    expect(markup.indexOf('data-testid="work-source-attention"')).toBeLessThan(markup.indexOf('data-testid="work-source-strip"'));
     expect(render()).not.toContain('data-testid="work-feed"');
+    // Nothing anywhere: one quiet line, no empty sections.
+    const clear = render({ ...feed, groups: { needs_you: [], today: [], fyi: [] } });
+    expect(clear).toContain("Nothing needs you today.");
+    expect(clear).not.toContain("data-feed-section=");
+    // One source: nothing to filter, so no chips.
+    expect(render({ ...feed, sources: [feed.sources[3]!] })).not.toContain('data-testid="work-source-strip"');
+    // Recent: 5 rows, then Show N more; a file row reads as its name with the folder in the meta line.
+    const files = Array.from({ length: 8 }, (_, i) => ({ id: `github:file:${i}`, source: "github", kind: "file", title: `acme/api/docs/rule${i}.md`, at: "2026-11-15T08:00:00Z", url: `https://github.test/f/${i}`, reason: "Edited" }));
+    const recent = render({ ...feed, groups: { needs_you: [], today: [], fyi: files } });
+    expect(recent).toContain("Nothing needs you today.");
+    expect(recent).toContain('data-feed-section="fyi"');
+    expect(recent).toContain(">Recent<");
+    expect(recent).toMatch(/data-testid="work-feed-count">8</);
+    expect(recent.match(/data-feed-item=/g)?.length).toBe(5);
+    expect(recent).toMatch(/aria-expanded="false"[^>]*>Show 3 more</);
+    expect(recent).toContain('title="acme/api/docs/rule0.md">rule0.md<');
+    expect(recent).toContain(">acme/api/docs · ");
+    expect(recent).toContain('aria-label="Open acme/api/docs/rule0.md"');
+    expect(render({ ...feed, groups: { needs_you: [], today: [], fyi: files.slice(0, 5) } })).not.toContain('data-testid="work-feed-more"');
     expect(markup).not.toMatch(/—|farm|stock/i);
     const prompt = askAboutItemPrompt(feed.groups.needs_you[0]!);
     expect(prompt).toContain("Fix invoice rounding");
