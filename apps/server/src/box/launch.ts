@@ -332,8 +332,10 @@ export type ReadyPlan = {
   shell: string;
   /**
    * Open the box (once); resolves the Box (state "ready" or "failed").
-   * `pkglog`: the install log's folder (phase 1: { root, bin, py } with
-   * POSIX wrappers), mounted into a new box and put on its PATH.
+   * `pkglog`: the install log's folders (phase 1, install-log.ts
+   * boxInstallLogPaths: { root, tools, raw, bin, py, legacy } with POSIX
+   * wrappers): the wrappers mounted read-only into a new box and put on
+   * its PATH, the raw folder writable (common.ts pkglogBinds).
    */
   start: (options?: { pkglog?: BoxInstallLog | null }) => Promise<Box>;
   /**

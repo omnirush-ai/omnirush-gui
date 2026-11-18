@@ -266,8 +266,8 @@ export class BoxService {
 
   /**
    * The install log of box chats (install-log.ts): new boxes mount its
-   * folder and put its wrappers on PATH; the plugin points their calls at its
-   * raw folder. Set at server start, before any box is planned.
+   * folders (the wrappers read-only) and put its wrappers on PATH; the plugin
+   * points their calls at its raw folder. Set at server start, before any box is planned.
    */
   useInstallLog(paths: BoxInstallLogPaths | null): void {
     this.installLog = paths;
@@ -492,7 +492,7 @@ export class BoxService {
         log: this.log,
         // Box ports on this computer's 127.0.0.1: only under the required sandbox.
         required: this.required().required,
-        pkglog: this.installLog ? { root: this.installLog.root, bin: this.installLog.bin, py: this.installLog.py } : null,
+        pkglog: this.installLog?.pkglog ?? null,
         tmpRoot: join(this.home, "pending"),
         // boxd stopped while the app ran: started again (installs kept), or once why not and what to do.
         onRevive: (event) => {

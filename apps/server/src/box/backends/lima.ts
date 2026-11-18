@@ -42,7 +42,7 @@ import { fileURLToPath } from "node:url";
 
 import serverPackage from "../../../package.json" with { type: "json" };
 import { ping } from "../client.js";
-import { GOARCH, containerName, firstLine, freePort, helperPath, newToken, readJson, toolsRoot, writeJson, type BoxLog, type BoxRuntime } from "../common.js";
+import { GOARCH, containerName, firstLine, freePort, helperPath, newToken, pkglogBinds, pkglogMountPoints, readJson, toolsRoot, writeJson, type BoxInstallLog, type BoxLog, type BoxRuntime } from "../common.js";
 import { REQUIRED_RULES } from "../required.js";
 import { YOUNG_IMAGE_MS, removableImage, removeTree, staleEntries } from "../retention.mjs";
 import { runCommand, type RunCommand, type RunOptions, type RunResult } from "../run.js";
@@ -1056,8 +1056,8 @@ export function startKeeper(runtime: LimaRuntime, args: string[], { env = proces
 type LimaMeta = BoxMeta & { shadows?: string[]; started_at?: string };
 
 /** The host folders a box binds (each must be shared into the VM). */
-export function bindSources({ root, runFolder, shims, pkglog }: { root: string; runFolder: string; shims?: string | null; pkglog?: { root: string } | null }): string[] {
-  return [root, runFolder, shims, pkglog?.root].filter((p): p is string => Boolean(p));
+export function bindSources({ root, runFolder, shims, pkglog }: { root: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "tools" | "raw"> | null }): string[] {
+  return [root, runFolder, shims, ...(pkglog ? pkglogBinds(pkglog, "darwin").map((bind) => bind.source) : [])].filter((p): p is string => Boolean(p));
 }
 
 /** Desktop: what the tests swap in (the VM's own calls, the idle watcher's spawn, the downloads). */
@@ -1146,7 +1146,7 @@ async function openWithLease(ctx: OpenContext & LimaOpenExtras, runtime: LimaRun
   }
   if (!kept.ok) return { ok: false, error: `could not start the sandbox: ${kept.error}` };
   const endpoint = { host: "127.0.0.1", port: num(kept.out.port) ?? 0, token: meta.token };
-  const mounts = [croot, "/run/omnirush", ...(shims ? ["/opt/omnirush/pkglog-src"] : []), ...(pkglog ? [pkglog.root] : [])];
+  const mounts = [croot, "/run/omnirush", ...(shims ? ["/opt/omnirush/pkglog-src"] : []), ...(pkglog ? pkglogMountPoints(pkglog, "darwin") : [])];
   // The folders boxrun shadowed (a box it found running keeps the set it started with).
   const reported = Array.isArray(kept.out.shadows) ? kept.out.shadows.filter((item): item is string => typeof item === "string") : null;
   const shadowed = reported ?? (kept.out.reused ? (meta.shadows ?? []) : []);

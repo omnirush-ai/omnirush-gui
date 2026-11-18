@@ -19,6 +19,12 @@
 //              x-omnirush-directory names it instead (one desktop engine, many projects)
 //   client     "cli/2.7.3" | "gui/3.8.0": X-OmniRush-Client to the relay
 //   note       optional text shown once at a chat's start
+//   rollback   a turn that ends with no reply (an error, or nothing said) is undone: Claude's transcript back to
+//              its size at the turn's start, the project's files as they were then (turnSnapshot / rollBack); the
+//              end op then says {rolledBack: true, retryAfter: seconds}. Set by one-shot (-p) runs only.
+//   systemPrompt  optional: Claude Code's system prompt instead of its default, "Working directory: <where Claude
+//              runs>" after it (claudeArgs); Claude Code puts its own first line before it, and keeps a chat's first
+//              turn's prompt for the chat (a resume ignores it). Unset (the desktop): Claude Code's default.
 // The relay token lives in the box's run folder, read by Claude Code's
 // apiKeyHelper; nothing else of this machine's env enters the box.
 // Claude's session id is uuidv5(engine session id); its config folder is the
@@ -62,8 +68,12 @@ export const CLAUDE_CODE_BUILDS = {
 export const PROVIDER_ID = "omnirush-claude";
 /** A Claude turn of a boxed project whose box isn't running, or one the app gave no box folder. */
 export const NO_BOX = "This project runs in the OmniRush sandbox, and the sandbox isn't running for it, so Claude can't start here.";
-/** A Claude turn without a box that the relay refuses (403: a server that runs Claude only in the box). */
+/** A Claude turn without a box that the relay refuses (403 with RELAY_SANDBOX_ONLY: a server that runs Claude only in the box). */
 export const NATIVE_REFUSED = "The server runs Claude only in the OmniRush sandbox for now, so Claude can't run here. Turn the sandbox on for this project, or pick another model.";
+/** The relay's own words for that refusal (omnirush-backend claude_relay.py SANDBOX_ONLY): any other 403 is the upstream's. */
+export const RELAY_SANDBOX_ONLY = "Claude runs only in OmniRush sandbox projects.";
+/** On a rolled-back turn's error (kept in the engine's message as its error's responseHeaders): the capture marks the turn. */
+export const ROLLED_BACK_HEADER = "x-omnirush-rolled-back";
 /** The host env names a Claude run without a box never gets: the app's own (its secrets among them), and any that would route Claude Code elsewhere. */
 export const HOST_ENV_DROP = /^(OMNIRUSH_|OPENCODE_|ANTHROPIC_|CLAUDE_|AWS_BEARER_TOKEN_BEDROCK$)/i;
 const BOX_RUN = "/run/omnirush";
@@ -101,13 +111,17 @@ export function hasTranscript(configDir, uuid) {
   } catch { return false; }
 }
 
-/** Claude Code's core tools only: the client's reference harness runs with this set, the same on every OS. */
+/**
+ * Claude Code's core tools only: the client's reference harness runs with this set, the same on every OS.
+ * shortcut: without Skill, Claude Code 2.1.302 leaves out its prompt's "Session-specific guidance" (the /<skill-name> line), which the reference has; declare Skill if the client wants that line.
+ */
 export const CLAUDE_TOOLS = "Bash,Read,Edit,Write,Grep,Glob";
 
-/** Claude Code's argv for a turn, with its own default system prompt (LAUNCH adds --resume or --session-id in the box). */
-export function claudeArgs({ model }) {
+/** Claude Code's argv for a turn (LAUNCH adds --resume or --session-id in the box): its own default system prompt, or `systemPrompt` with `cwd`. */
+export function claudeArgs({ model, systemPrompt, cwd }) {
   return ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-    "--model", model, "--permission-mode", "bypassPermissions", "--tools", CLAUDE_TOOLS];
+    "--model", model, "--permission-mode", "bypassPermissions", "--tools", CLAUDE_TOOLS,
+    ...(systemPrompt ? ["--system-prompt", `${systemPrompt}\n\nWorking directory: ${cwd}`] : [])];
 }
 
 /**
@@ -163,6 +177,9 @@ export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null,
     ANTHROPIC_MODEL: model, ANTHROPIC_SMALL_FAST_MODEL: model, ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: model, ANTHROPIC_DEFAULT_HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model,
     DISABLE_AUTOUPDATER: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
+    // Claude Code's default prompt as its CLI sends it: without the auto-memory section, and without the
+    // <total_tokens> budget line (its fallback when the feature flags it would fetch are off, as here).
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
     // The box is the boundary that makes running without asks acceptable (it runs as root in a container).
     ...(configDir ? {} : { IS_SANDBOX: "1" }),
     // The install log: Claude's commands (its sub-agents' too) note installs where the app reads this chat's, and
@@ -193,6 +210,73 @@ export function boxedTurn({ shell, boxHome, client, key, sessionID }) {
     const listed = JSON.parse(fs.readFileSync(path.join(boxHome, "desktop-projects.json"), "utf8"));
     return Array.isArray(listed?.keys) && listed.keys.includes(key) && !(Array.isArray(listed.native_chats) && listed.native_chats.includes(sessionID));
   } catch { return false; }
+}
+
+/** Claude's transcript of `uuid` in the config folder, or null. */
+function transcriptFile(configDir, uuid) {
+  try {
+    for (const dir of fs.readdirSync(path.join(configDir, "projects"))) {
+      const file = path.join(configDir, "projects", dir, `${uuid}.jsonl`);
+      if (fs.existsSync(file)) return file;
+    }
+  } catch { /* none yet */ }
+  return null;
+}
+
+/** git with the undo store's env; resolves its exit code and stdout. */
+function git(args, env, input = null) {
+  return new Promise((resolve) => {
+    const child = spawn("git", ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "-c", "core.fsmonitor=false", ...args], { env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true, timeout: 120_000 });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(input ?? undefined);
+    child.on("error", () => resolve({ code: 127, out }));
+    child.on("close", (code) => resolve({ code: code ?? 1, out }));
+  });
+}
+
+/**
+ * What a turn may have to undo, taken at its start: the size of Claude's transcript (null: none yet), and the project's
+ * files as a git tree in a store of the provider's own (<run>/undo.git, its own index: the project's repo, if any, is
+ * never touched). Null tree when git is missing or too slow. The project's ignored files (.gitignore) are left out, so
+ * neither restored nor removed; nested repositories are kept as they are.
+ * shortcut: the store grows with every changed file and is never pruned; prune it (git gc) if a farm box fills up.
+ */
+export async function turnSnapshot({ run, root, configDir, uuid }) {
+  const file = transcriptFile(configDir, uuid);
+  let size = null;
+  try { size = file ? fs.statSync(file).size : null; } catch { /* none */ }
+  const store = path.join(run, "undo.git");
+  const base = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+  const env = { ...base, GIT_DIR: store, GIT_WORK_TREE: root, GIT_INDEX_FILE: path.join(run, "undo.index"), GIT_LITERAL_PATHSPECS: "1", GIT_OPTIONAL_LOCKS: "0" };
+  if (!fs.existsSync(path.join(store, "HEAD")) && (await git(["init", "-q", "--bare", store], base)).code !== 0) return { size, env, tree: null };
+  const tree = (await git(["add", "-A", "--", "."], env)).code === 0 ? (await git(["write-tree"], env)).out.trim() : "";
+  return { size, env, tree: /^[0-9a-f]{40,64}$/.test(tree) ? tree : null };
+}
+
+/** Undoes a turn since `snap` (turnSnapshot): files changed or deleted come back, new ones go, the transcript is cut back. */
+export async function rollBack(snap, { configDir, uuid }) {
+  if (!snap?.tree) return false;
+  if ((await git(["add", "-A", "--", "."], snap.env)).code !== 0) return false;
+  const now = (await git(["write-tree"], snap.env)).out.trim();
+  const changed = now === snap.tree ? "" : (await git(["diff-tree", "-r", "-z", "--name-only", "--no-renames", snap.tree, now], snap.env)).out;
+  // No-overlay restore: a path the start's tree lacks (a new file) is removed, the rest written back as it was.
+  if (changed && (await git(["restore", `--source=${snap.tree}`, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul"], snap.env, changed)).code !== 0) return false;
+  await git(["read-tree", snap.tree], snap.env);
+  const file = transcriptFile(configDir, uuid);
+  try {
+    if (file && snap.size === null) fs.rmSync(file, { force: true });
+    else if (file && fs.statSync(file).size > snap.size) fs.truncateSync(file, snap.size);
+  } catch { return false; }
+  return true;
+}
+
+/** Seconds the caller should wait before sending a rolled-back turn's prompt again: the error's kind, roughly. */
+export function retryAfter(status, message) {
+  if ((status === 402 || status === 403) && /budget|credit|quota/i.test(message)) return 900;
+  if (status === 429 || status === 529 || status >= 500) return 60;
+  return 30;
 }
 
 const lower = (headers) => Object.fromEntries(Object.entries(headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
@@ -357,18 +441,22 @@ class ClaudeCodeModel {
     const passed = claudeEnv({ model: this.modelId, baseUrl: grant.baseUrl, sessionID, client: grant.client || client, pkglogDir: installLogDir(boxHome, client), ...(boxed ? {} : { configDir }) });
     const firstLine = `${JSON.stringify({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: uuid })}\n`;
     const turnFile = path.join(run, `turn-${uuid}.jsonl`);
+    // What a turn with no reply undoes (`rollback`): taken before Claude can change anything. Not for a compaction.
+    const snap = this.settings.rollback && !compaction ? await turnSnapshot({ run, root, configDir, uuid }) : null;
+    // Where Claude runs: in the box the folder's path there (boxsh's mapping, the record's croot: Windows C:\x -> /c/x).
+    const args = claudeArgs({ model: this.modelId, systemPrompt: this.settings.systemPrompt, cwd: record?.croot || root });
     let child;
     if (boxed) {
       const env = { ...process.env, ...passed, OMNIRUSH_BOX_KEY: key, OMNIRUSH_BOX_HOME: boxHome, OMNIRUSH_BOX_PASS_ENV: Object.keys(passed).join(",") };
       try { await ensureClaude({ shell, env, cwd: root, home: boxHome, run }); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed in the sandbox."); }
       fs.writeFileSync(turnFile, firstLine, { mode: 0o600 });
-      child = spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...claudeArgs({ model: this.modelId })], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      child = spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...args], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     } else {
       let bin;
       try { bin = await ensureHostClaude(boxHome); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed."); }
       const running = hostRuns.get(uuid);
       if (running && running.exitCode === null && running.signalCode === null) running.kill("SIGKILL");
-      child = spawn(bin, [...claudeArgs({ model: this.modelId }), resume ? "--resume" : "--session-id", uuid], { cwd: root, env: hostEnv(process.env, passed), stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      child = spawn(bin, [...args, resume ? "--resume" : "--session-id", uuid], { cwd: root, env: hostEnv(process.env, passed), stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       hostRuns.set(uuid, child);
       child.on("close", () => { if (hostRuns.get(uuid) === child) hostRuns.delete(uuid); });
       child.stdin.write(firstLine);
@@ -377,7 +465,7 @@ class ClaudeCodeModel {
     let stderr = "";
     let done = false;
     let stopped = false;
-    let refused = null;
+    let replied = false;
     const refresh = setInterval(() => { void this.grant({ ...ask, refresh: true }).then((next) => { grant = next; writeToken(next.token); }).catch(() => undefined); }, REFRESH_MS);
     refresh.unref?.();
     const timers = [];
@@ -403,30 +491,41 @@ class ClaudeCodeModel {
               if (!line) continue;
               let event;
               try { event = JSON.parse(line); } catch { continue; }
-              // Claude Code retries a 403 for minutes; without a box it is the relay refusing the turn for good.
-              if (!boxed && !refused && event.type === "system" && event.subtype === "api_retry" && event.error_status === 403) {
-                refused = NATIVE_REFUSED;
-                child.kill("SIGKILL");
-                continue;
+              for (const part of mapper.push(event)) {
+                if (part.type === "tool-call" || (part.type === "text-delta" && part.delta.trim())) replied = true;
+                send(part);
               }
-              for (const part of mapper.push(event)) send(part);
               // The turn is over: Claude exits once its input ends.
               if (event.type === "result") child.stdin.end();
             }
           });
           child.on("error", (error) => { if (done) return; send({ type: "error", error: apiError(`Claude Code could not start${boxed ? " in the sandbox" : ""} (${error.message}).`) }); end(); controller.close(); });
           // The turn's native transcript goes up with the chat (best effort), a stopped turn's too once Claude has exited.
-          const ended = (ok) => void fetch(settings.grantURL, { method: "POST", headers: { "content-type": "application/json", "x-omnirush-usage-key": settings.grantKey || "" }, body: JSON.stringify({ op: "end", sessionID, uuid, ok }) }).catch(() => undefined);
-          child.on("close", (code) => {
+          const ended = (ok, extra = {}) => void fetch(settings.grantURL, { method: "POST", headers: { "content-type": "application/json", "x-omnirush-usage-key": settings.grantKey || "" }, body: JSON.stringify({ op: "end", sessionID, uuid, ok, ...extra }) }).catch(() => undefined);
+          child.on("close", async (code) => {
             if (stopped) return ended(false);
             if (done) return;
             const tail = stderr.trim().split("\n").filter(Boolean).at(-1);
-            const last = refused ? { type: "error", error: apiError(refused) } : mapper.finish(`Claude Code stopped before the turn finished${tail ? `: ${tail.slice(0, 300)}` : ` (exit ${code})`}.`);
+            let last = mapper.finish(`Claude Code stopped before the turn finished${tail ? `: ${tail.slice(0, 300)}` : ` (exit ${code})`}.`);
+            // Only the relay's own refusal words mean "box only"; any other 403 (an upstream budget, say) keeps its text.
+            if (!boxed && last.type === "error" && last.error.message.includes(RELAY_SANDBOX_ONLY)) last = { type: "error", error: apiError(NATIVE_REFUSED) };
+            let extra = {};
+            if (snap && (last.type === "error" || !replied) && await rollBack(snap, { configDir, uuid })) {
+              const why = last.type === "error" ? last.error.message : "Claude gave no reply.";
+              extra = { rolledBack: true, retryAfter: retryAfter(Number(mapper.result?.api_error_status) || 0, why) };
+              // Still never retried by the engine: a retry would land in the same assistant message, next to the undone
+              // attempt's tool calls. The caller sends the prompt again (retryAfter); the capture skips this one (ROLLED_BACK_HEADER).
+              const error = apiError(`${why} The turn was undone (its file changes and Claude's transcript); send the same prompt again.`);
+              error.responseHeaders[ROLLED_BACK_HEADER] = "1";
+              last = { type: "error", error };
+            }
+            // Stopped while the undo ran: the stream is gone.
+            if (done) return ended(false, extra);
             for (const part of mapper.close()) send(part);
             send(last);
             end();
             controller.close();
-            ended(last.type === "finish");
+            ended(last.type === "finish", extra);
           });
         },
         cancel() {

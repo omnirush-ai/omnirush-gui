@@ -97,9 +97,22 @@ async function readJsonFile(path: string): Promise<unknown> {
 // --- packages of on-the-fly MCP commands -------------------------------------------
 
 const RUNNERS: Record<string, "npm" | "pypi"> = { npx: "npm", bunx: "npm", pnpx: "npm", uvx: "pypi", pipx: "pypi" };
+// Options that take a value (`--python 3.12`, `-p pkg`); every other option is a lone flag (`-y`, `--yes`).
+const VALUE_OPTIONS: Record<"npm" | "pypi", Set<string>> = {
+  npm: new Set(["-p", "--package", "-c", "--call", "--cache", "--registry", "--userconfig", "-w", "--workspace", "--prefix", "--loglevel", "--allow-build"]),
+  pypi: new Set(["-p", "--python", "--from", "--spec", "--with", "-w", "--with-editable", "--with-requirements", "-c", "--constraints", "--overrides", "--build-constraints", "-b",
+    "--index", "--default-index", "-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--python-preference", "--refresh-package", "--reinstall-package", "--upgrade-package",
+    "--directory", "--project", "--cache-dir", "--config-file", "--env-file", "--color", "--resolution", "--prerelease", "--exclude-newer", "--index-strategy", "--keyring-provider",
+    "--link-mode", "--pip-args", "--backend"]),
+};
+// Options naming the package when the executable is another word (`npx -p typescript tsc`, `uvx --from black black`).
+const PACKAGE_OPTIONS: Record<"npm" | "pypi", Set<string>> = { npm: new Set(["-p", "--package"]), pypi: new Set(["--from", "--spec"]) };
 
-/** `npx -y @scope/pkg@1.2.3 --flag` → { package, version }; `uvx pkg==1.0` likewise. */
-export function packageOfCommand(argv: string[]): { package: string; version: string | null; ecosystem: "npm" | "pypi" } | null {
+/**
+ * `npx -y @scope/pkg@1.2.3 --flag` → { package, version, bin }; `uvx --python 3.12 pkg==1.0` likewise.
+ * `bin` is the executable asked for, `specs` the package specs as the runner sees them (npx: `-p` values, else the first word).
+ */
+export function packageOfCommand(argv: string[]): { package: string; version: string | null; ecosystem: "npm" | "pypi"; bin: string; specs: string[] } | null {
   if (argv.length === 0) return null;
   let index = 0;
   let runner = basename(argv[0]!).replace(/\.(?:cmd|exe)$/i, "");
@@ -120,21 +133,25 @@ export function packageOfCommand(argv: string[]): { package: string; version: st
   }
   const ecosystem = RUNNERS[runner];
   if (!ecosystem) return null;
+  const specs: string[] = [];
+  let word: string | undefined;
   for (let i = index + 1; i < argv.length; i += 1) {
-    const word = argv[i]!;
-    if (word === "--") continue;
-    if (word.startsWith("-")) {
-      if (/^--(?:package|from|with)$/.test(word) || word === "-p") {
-        const value = argv[i + 1];
-        if (value) return { ...splitSpec(value, ecosystem), ecosystem };
-      }
-      const eq = /^--(?:package|from)=(.+)$/.exec(word);
-      if (eq) return { ...splitSpec(eq[1]!, ecosystem), ecosystem };
-      continue;
+    const arg = argv[i]!;
+    if (arg === "--") continue;
+    if (!arg.startsWith("-")) {
+      word = arg;
+      break;
     }
-    return { ...splitSpec(word, ecosystem), ecosystem };
+    const eq = arg.indexOf("=");
+    const name = eq > 0 ? arg.slice(0, eq) : arg;
+    const value = eq > 0 ? arg.slice(eq + 1) : VALUE_OPTIONS[ecosystem].has(arg) ? argv[++i] : undefined;
+    if (value && PACKAGE_OPTIONS[ecosystem].has(name)) specs.push(value);
   }
-  return null;
+  if (specs.length === 0 && !word) return null;
+  if (specs.length === 0) specs.push(word!);
+  const spec = splitSpec(specs[0]!, ecosystem);
+  const bin = word ? splitSpec(word, ecosystem).package : spec.package;
+  return { ...spec, ecosystem, bin: bin.replace(/^@[^/]+\//, "").replace(/\[.*$/, ""), specs };
 }
 
 /** `@scope/pkg@1.2.3` → (@scope/pkg, 1.2.3); `pkg==1.0` / `pkg@1.0` (PyPI). */

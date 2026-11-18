@@ -22,6 +22,8 @@ export type ToolCall = {
   command: string | null;
   /** The directory the tool ran in (its workdir input), absolute. */
   cwd: string;
+  /** The start of a shell tool's captured output (a version line). */
+  output?: string | null;
 };
 
 const SHELL_TOOLS = new Set(["bash", "shell", "sh", "zsh", "run_command", "run_shell_command", "exec", "terminal", "local_shell", "powershell", "cmd"]);
@@ -122,6 +124,7 @@ export function toolCallsOf(messages: unknown, root: string, home: string | null
         end: typeof time.end === "number" ? time.end : null,
         command: toolKind(tool) === "shell" ? command : null,
         cwd: expanded ? resolve(root, expanded) : root,
+        output: typeof state.output === "string" ? state.output.slice(0, 4096) : null,
       });
     }
   }
@@ -288,8 +291,8 @@ export type CommandEffects = {
   executed: string[];
   /** Every path-like word, resolved (read/used candidates). */
   named: string[];
-  /** On-the-fly tools. */
-  ephemeral: Array<{ runner: string; package: string; requested: string | null }>;
+  /** On-the-fly tools: the executable asked for (`bin`), the runner's package specs, the folder it ran in. */
+  ephemeral: Array<{ runner: string; package: string; requested: string | null; bin?: string; specs?: string[]; cwd?: string }>;
   /** Python environments it runs, activates or makes (a `bin`/`Scripts` interpreter, pip or activate by path, `-m venv`). */
   pythonEnvs: string[];
   /** It installs or removes Python packages (pip, uv, poetry, pipenv, pdm, conda). */
@@ -389,7 +392,7 @@ export function commandEffects(command: string, cwd: string, home: string | null
     const spec = packageOfCommand(words);
     if (spec) {
       const runner = words[0] && ["pnpm", "yarn", "npm", "bun", "pipx", "uv"].includes(head) ? `${head} ${words[1]}` : head;
-      effects.ephemeral.push({ runner: runner === "npm exec" ? "npx" : runner === "uv tool" ? "uvx" : runner, package: spec.package, requested: spec.version });
+      effects.ephemeral.push({ runner: runner === "npm exec" ? "npx" : runner === "uv tool" ? "uvx" : runner, package: spec.package, requested: spec.version, bin: spec.bin, specs: spec.specs, cwd: dir });
     }
     switch (head) {
       case "cd":

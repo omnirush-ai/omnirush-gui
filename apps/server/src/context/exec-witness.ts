@@ -3,8 +3,9 @@
 // program the command starts and the machine (OS, architecture, version).
 // The engine never reports its shell, so it is chosen here by the engine's
 // own rule (core/src/shell.ts `acceptable()`, tool/shell.ts `cmd()`), and
-// `shell.how` says which branch of that rule picked it. Identical in the CLI
-// and the desktop app.
+// `shell.how` says which branch of that rule picked it. A Claude chat's calls
+// run in Claude Code instead, whose Bash tool on Windows is Git Bash
+// ("claude_git_bash"). Identical in the CLI and the desktop app.
 
 import nodePath from "node:path";
 import { existsSync } from "node:fs";
@@ -17,7 +18,7 @@ export const EXEC_SCHEMA = "omnirush.exec.v1";
 const DENIED = new Set(["fish", "nu"]);
 const POWERSHELL = new Set(["powershell", "pwsh"]);
 
-export type ShellChoice = { path: string; name: string; how: "config" | "env_shell" | "pwsh" | "powershell" | "git_bash" | "comspec" | "zsh_default" | "bash_on_path" | "sh_fallback" | "box" };
+export type ShellChoice = { path: string; name: string; how: "config" | "env_shell" | "pwsh" | "powershell" | "git_bash" | "comspec" | "zsh_default" | "bash_on_path" | "sh_fallback" | "box" | "claude_git_bash" };
 
 type Lookup = (command: string) => string | null;
 
@@ -26,8 +27,12 @@ function shellName(file: string, platform: NodeJS.Platform): string {
   return (platform === "win32" ? parse(file).name : nodePath.posix.basename(file)).toLowerCase();
 }
 
-/** The engine's shell for a tool call (`configShell`: the config's `shell`, set for a box run). */
-export function engineShell(input: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; configShell?: string | null; which?: Lookup; exists?: (file: string) => boolean }): ShellChoice | null {
+/**
+ * The engine's shell for a tool call (`configShell`: the config's `shell`, set for a box run). `claudeCode`: the call
+ * is Claude Code's (a Claude chat), whose Bash tool on Windows runs Git Bash: beside git on PATH, else Git's default
+ * install folders (its CLAUDE_CODE_GIT_BASH_PATH never reaches it: the provider drops CLAUDE_* names), else as the engine.
+ */
+export function engineShell(input: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; configShell?: string | null; which?: Lookup; exists?: (file: string) => boolean; claudeCode?: boolean }): ShellChoice | null {
   const { platform, env } = input;
   const pathEnv = platform === "win32" ? (env.Path ?? env.PATH) : env.PATH;
   const which: Lookup = input.which ?? ((command) => resolveCommand(command, { platform, pathEnv: pathEnv ?? "" }));
@@ -39,6 +44,11 @@ export function engineShell(input: { platform: NodeJS.Platform; env: NodeJS.Proc
     const found = resolve(file);
     return found ? { path: found, name: shellName(found, platform), how } : null;
   };
+  const gitBash = (found: string | null) => (found ? nodePath.win32.join(found, "..", "..", "bin", "bash.exe") : null);
+  if (input.claudeCode && platform === "win32") {
+    const bash = [gitBash(which("git")), "C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files (x86)\\Git\\bin\\bash.exe"].find((file) => file && exists(file));
+    if (bash) return { path: bash, name: "bash", how: "claude_git_bash" };
+  }
   // A config shell replaces $SHELL (the engine never falls back from one to the other).
   const chosen = input.configShell ? pick(input.configShell, "config") : pick(env.SHELL, "env_shell");
   if (chosen) return chosen;
@@ -47,10 +57,7 @@ export function engineShell(input: { platform: NodeJS.Platform; env: NodeJS.Proc
     if (pwsh) return { path: pwsh, name: "pwsh", how: "pwsh" };
     const powershell = which("powershell");
     if (powershell) return { path: powershell, name: "powershell", how: "powershell" };
-    const git = env.OPENCODE_GIT_BASH_PATH || (() => {
-      const found = which("git");
-      return found ? nodePath.win32.join(found, "..", "..", "bin", "bash.exe") : null;
-    })();
+    const git = env.OPENCODE_GIT_BASH_PATH || gitBash(which("git"));
     if (git && exists(git)) return { path: git, name: "bash", how: "git_bash" };
     const comspec = env.ComSpec || env.COMSPEC || "cmd.exe";
     return { path: comspec, name: shellName(comspec, platform), how: "comspec" };

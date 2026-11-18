@@ -1,25 +1,31 @@
 // #22 On-the-fly tools (npx, pnpm dlx, yarn dlx, bunx, uvx, pipx run,
-// go run pkg@version, deno run npm:/jsr:): the package and the exact
-// version that ran. An exact requested version is taken as is; otherwise
-// the version is read from the runner's cache after the call (the npx
-// cache, pnpm's dlx cache, bun's install cache, uv's cache and tool
-// environments, pipx's run cache, the go module cache, deno's npm cache).
-// Only when no cache has it, `npm view <pkg> version` is asked once for an
-// npm package (marked `registry_latest`); anything else stays unresolved.
+// go run pkg@version, deno run npm:/jsr:): the package and the version that
+// actually ran. npx and bunx run a local copy first: the executable in the
+// nearest node_modules/.bin (walking up from the command's folder, as npx
+// does) is followed to the package that owns it (`local`). Otherwise an
+// exact requested version is taken as is, else the runner's cache entry
+// is read (npx: the _npx/<hash> folder of the exact specs asked for; pnpm's
+// dlx cache, bun's install cache, uv's cache and tool environments, pipx's
+// run cache, the go module cache, deno's npm cache). The registry is never
+// asked: what can't be found is `unresolved`. A version line the command
+// printed is kept apart as `output_version`.
 
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
-
-import { runTool, type Runner } from "./exec.js";
+import { createHash } from "node:crypto";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
 
 export type EphemeralTool = {
   tool_call_id: string | null;
   runner: string;
   package: string;
+  /** The executable asked for (`tsc` in `npx -p typescript tsc`). */
+  bin: string | null;
   requested: string | null;
   version: string | null;
-  resolved: "exact" | "cache" | "registry_latest" | "unresolved";
-  source: "npx_cache" | "pnpm_cache" | "bun_cache" | "uv_cache" | "pipx_venv" | "go_modcache" | "deno_cache" | "registry" | null;
+  resolved: "exact" | "local" | "cache" | "unresolved";
+  source: "spec" | "local" | "npx_cache" | "pnpm_cache" | "bun_cache" | "uv_cache" | "pipx_venv" | "go_modcache" | "deno_cache" | "unresolved";
+  /** A `<name> <semver>` / `v<semver>` line at the start of the command's output. */
+  output_version: string | null;
 };
 
 const EXACT = /^v?\d+\.\d+\.\d+(?:[-+][\w.+-]+)?$/;
@@ -80,13 +86,67 @@ function cacheHome({ home, platform, env }: CacheDirs): string | null {
   return home ? join(home, ".cache") : null;
 }
 
-/** The newest npx cache entry holding `pkg` (~/.npm/_npx/<hash>/node_modules/<pkg>/package.json). */
-export async function npxCacheVersion(pkg: string, dirs: CacheDirs, wanted: string | null = null): Promise<string | null> {
+/** npx installs the specs it was given into _npx/<first 16 hex of sha512(sorted specs joined by newlines)> (libnpmexec). */
+export function npxCacheDir(specs: string[]): string {
+  return createHash("sha512").update([...specs].sort((a, b) => a.localeCompare(b, "en")).join("\n")).digest("hex").slice(0, 16);
+}
+
+/** The version of `pkg` in the npx cache entry of exactly these specs. */
+export async function npxCacheVersion(pkg: string, specs: string[], dirs: CacheDirs): Promise<string | null> {
   const cache = npmCache(dirs);
-  if (!cache) return null;
-  for (const entry of await newestFirst(await listDirs(join(cache, "_npx")))) {
-    const version = await packageVersion(join(entry, "node_modules", pkg, "package.json"));
-    if (version && (!wanted || version === wanted || !EXACT.test(wanted))) return version;
+  return cache ? packageVersion(join(cache, "_npx", npxCacheDir(specs), "node_modules", pkg, "package.json")) : null;
+}
+
+async function readSmall(path: string): Promise<string | null> {
+  try {
+    return (await stat(path)).size <= 64 * 1024 ? await readFile(path, "utf8") : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The package owning `bin` in the nearest node_modules/.bin above `cwd` (npm/yarn/bun symlinks,
+ * pnpm sh shims, Windows .cmd shims): its name and version from its own package.json.
+ */
+export async function localBin(bin: string, cwd: string, platform: NodeJS.Platform): Promise<{ package: string; version: string } | null> {
+  const names = platform === "win32" ? [`${bin}.cmd`, bin] : [bin];
+  for (let dir = resolve(cwd), depth = 0; depth < 64; dir = dirname(dir), depth += 1) {
+    const binDir = join(dir, "node_modules", ".bin");
+    for (const name of names) {
+      const link = join(binDir, name);
+      const info = await lstat(link).catch(() => null);
+      if (!info) continue;
+      let target = info.isSymbolicLink() ? await realpath(link).catch(() => link) : link;
+      if (!info.isSymbolicLink()) {
+        // A shim: `"%dp0%\\..\\typescript\\bin\\tsc"` (cmd), `"$basedir/../typescript/bin/tsc"` (sh).
+        const rel = /(?:%~?dp0%?|\$basedir)[\\/]+(\.\.[\\/][^"'%*\s]+)/.exec((await readSmall(link)) ?? "")?.[1];
+        if (rel) target = await realpath(resolve(binDir, rel.replace(/[\\/]/g, sep))).catch(() => resolve(binDir, rel.replace(/[\\/]/g, sep)));
+      }
+      // The last node_modules/<pkg> of the target (greedy; `.bin`, `.pnpm` never match a name).
+      const match = /^(.*[\\/]node_modules[\\/])((?:@[^\\/]+[\\/])?[^.\\/@][^\\/]*)[\\/]/.exec(target);
+      if (!match) continue;
+      const manifest = await readSmall(join(match[1]!, match[2]!, "package.json"));
+      try {
+        const parsed = JSON.parse(manifest ?? "") as { name?: unknown; version?: unknown };
+        if (typeof parsed.name === "string" && typeof parsed.version === "string") return { package: parsed.name, version: parsed.version };
+      } catch {
+        // not a package: keep looking further up
+      }
+    }
+    if (dirname(dir) === dir) break;
+  }
+  return null;
+}
+
+/** A version the command printed first: `webpack 5.11.0`, `webpack: 5.11.0`, `v3.2.7` or a bare `3.3.3` among its first 3 lines. */
+export function outputVersion(output: string | null | undefined, names: string[]): string | null {
+  if (!output) return null;
+  const wanted = new Set(names.filter(Boolean).map((name) => name.toLowerCase()));
+  const lines = output.slice(0, 4096).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 3);
+  for (const line of lines) {
+    const match = /^(?:([@\w./-]+):?\s+)?v?(\d+\.\d+\.\d+(?:[-+][\w.+-]+)?)$/.exec(line);
+    if (match && (!match[1] || wanted.has(match[1].toLowerCase()) || wanted.has(match[1].replace(/^@[^/]+\//, "").toLowerCase()))) return match[2]!;
   }
   return null;
 }
@@ -216,52 +276,46 @@ export async function denoNpmVersion(pkg: string, dirs: CacheDirs): Promise<stri
   return newest[0] ? newest[0].split(/[\\/]/).at(-1)! : null;
 }
 
-export type ResolveEphemeralOptions = Partial<CacheDirs> & { run?: Runner; resolve?: (command: string) => string | null; registryFallback?: boolean };
+export type ResolveEphemeralOptions = Partial<CacheDirs>;
 
-/** The exact version of one on-the-fly tool run (see the module comment). */
+/** The version of one on-the-fly tool run (see the module comment). */
 export async function resolveEphemeral(
-  call: { tool_call_id: string | null; runner: string; package: string; requested: string | null },
+  call: { tool_call_id: string | null; runner: string; package: string; requested: string | null; bin?: string | null; specs?: string[]; cwd?: string | null; output?: string | null },
   options: ResolveEphemeralOptions = {},
 ): Promise<EphemeralTool> {
   const dirs: CacheDirs = { home: options.home ?? null, platform: options.platform ?? process.platform, env: options.env ?? process.env };
-  const base = { tool_call_id: call.tool_call_id, runner: call.runner, package: call.package, requested: call.requested };
+  const bin = call.bin ?? null;
+  const base = { tool_call_id: call.tool_call_id, runner: call.runner, package: call.package, bin, requested: call.requested, output_version: outputVersion(call.output, [bin ?? "", call.package]) };
+  const unresolved = { ...base, version: null, resolved: "unresolved", source: "unresolved" } as const;
   const ecosystem = ecosystemOf(call.runner);
   const validName = ecosystem === "pypi" ? PY_NAME.test(call.package) : ecosystem === "go" ? /^[\w.~/-]+$/.test(call.package) : NPM_NAME.test(call.package.replace(/^jsr:/, ""));
-  if (!validName) return { ...base, version: null, resolved: "unresolved", source: null };
-  if (call.requested && EXACT.test(call.requested)) return { ...base, version: call.requested.replace(/^v(?=\d)/, ecosystem === "go" ? "v" : ""), resolved: "exact", source: null };
+  if (!validName) return unresolved;
+  // npx/bunx run the local copy when the project has the executable (and it is the version asked for, if any).
+  if ((call.runner === "npx" || call.runner === "bunx") && bin && call.cwd && /^[\w@.~-][\w.~-]*$/.test(bin)) {
+    const local = await localBin(bin, call.cwd, dirs.platform).catch(() => null);
+    // `npx tsc`: whatever owns the bin; `npx -p typescript tsc`, `npx @scope/tool`: only that package.
+    if (local && (bin === call.package || local.package === call.package) && (!call.requested || call.requested.replace(/^v/, "") === local.version)) {
+      return { ...base, package: local.package, version: local.version, resolved: "local", source: "local" };
+    }
+  }
+  if (call.requested && EXACT.test(call.requested)) return { ...base, version: call.requested.replace(/^v(?=\d)/, ecosystem === "go" ? "v" : ""), resolved: "exact", source: "spec" };
   let version: string | null = null;
-  let source: EphemeralTool["source"] = null;
-  const attempt = async (value: Promise<string | null>, from: NonNullable<EphemeralTool["source"]>) => {
+  let source: EphemeralTool["source"] = "unresolved";
+  const attempt = async (value: Promise<string | null>, from: EphemeralTool["source"]) => {
     if (version) return;
     version = await value.catch(() => null);
     if (version) source = from;
   };
-  if (ecosystem === "npm") {
-    if (call.runner === "pnpm dlx") await attempt(pnpmDlxVersion(call.package, dirs), "pnpm_cache");
-    if (call.runner === "bunx" || call.runner === "bun x") await attempt(bunCacheVersion(call.package, dirs), "bun_cache");
-    await attempt(npxCacheVersion(call.package, dirs, call.requested), "npx_cache");
-  } else if (ecosystem === "pypi") {
+  if (call.runner === "npx") await attempt(npxCacheVersion(call.package, call.specs?.length ? call.specs : [call.requested ? `${call.package}@${call.requested}` : call.package], dirs), "npx_cache");
+  else if (call.runner === "pnpm dlx") await attempt(pnpmDlxVersion(call.package, dirs), "pnpm_cache");
+  else if (call.runner === "bunx") await attempt(bunCacheVersion(call.package, dirs), "bun_cache");
+  else if (ecosystem === "pypi") {
     if (call.runner === "pipx run") await attempt(pipxVersion(call.package, dirs), "pipx_venv");
     await attempt(uvVersion(call.package, dirs), "uv_cache");
   } else if (ecosystem === "go") {
     await attempt(goModVersion(call.package, dirs), "go_modcache");
-  } else {
+  } else if (ecosystem === "deno") {
     await attempt(denoNpmVersion(call.package, dirs), "deno_cache");
   }
-  if (version) return { ...base, version, resolved: "cache", source };
-  const npmName = ecosystem === "npm" ? call.package : ecosystem === "deno" && !call.package.startsWith("jsr:") ? call.package : null;
-  if (npmName && options.registryFallback !== false) {
-    const spec = call.requested && !EXACT.test(call.requested) && /^[\w.^~<>=*|-]+$/.test(call.requested) ? `${npmName}@${call.requested}` : npmName;
-    const result = await runTool("npm", ["view", spec, "version"], {
-      timeoutMs: 8_000,
-      maxBytes: 64 * 1024,
-      ...(options.run ? { run: options.run } : {}),
-      ...(options.resolve ? { resolve: options.resolve } : {}),
-    });
-    const lines = result && result.code === 0 ? result.stdout.trim().split(/\r?\n/) : [];
-    // A range lists `pkg@1.2.3 '1.2.3'` per match: the last one is the highest.
-    const last = lines.at(-1)?.replace(/^.*\s'?|'$/g, "").trim() ?? "";
-    if (EXACT.test(last)) return { ...base, version: last, resolved: "registry_latest", source: "registry" };
-  }
-  return { ...base, version: null, resolved: "unresolved", source: null };
+  return version ? { ...base, version, resolved: "cache", source } : unresolved;
 }

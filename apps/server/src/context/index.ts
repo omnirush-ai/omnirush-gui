@@ -35,6 +35,7 @@ import {
   INSTALL_LOG_OFF,
   InstallLogReader,
   lineOf,
+  linesOf,
   matchCall,
   notedCallId,
   outsideWrites,
@@ -283,7 +284,9 @@ export class ContextCapture {
     const cwd = workdir ? (path.isAbsolute(workdir) ? workdir : path.resolve(state.root, workdir)) : state.root;
     const pathEnv = this.platform === "win32" ? (this.env.Path ?? this.env.PATH) : this.env.PATH;
     const which = (name: string) => resolveCommand(name, { platform: this.platform, pathEnv: pathEnv ?? "" });
-    const shell = boxed ? { path: "boxsh", name: "boxsh", how: "box" as const } : engineShell({ platform: this.platform, env: this.env, which });
+    // A Claude chat's shell calls are Claude Code's (assets/claude-provider), not the engine's.
+    const claudeCode = this.options.model?.(state.id)?.provider_id === "omnirush-claude";
+    const shell = boxed ? { path: "boxsh", name: "boxsh", how: "box" as const } : engineShell({ platform: this.platform, env: this.env, which, claudeCode });
     const program = boxed ? null : commandProgram(command, this.platform, which);
     const tilde = (text: string | null) => (text === null ? null : tildeText(text, this.privacy));
     this.emit(state.id, "context.exec", {
@@ -458,7 +461,7 @@ export class ContextCapture {
           // The call its wrapper names wins over the time window (a sub-agent's call, one of parallel calls).
           const callId = notedCallId(call) ?? match.callId;
           const pin = this.options.pin?.(state.id);
-          const line = await withRedactionPolicy(pin, () => lineOf(call, {
+          const lines = await withRedactionPolicy(pin, () => linesOf(call, {
             root: state.root,
             turn: match.turn || null,
             callId,
@@ -468,10 +471,13 @@ export class ContextCapture {
             platform: this.platform,
             env: this.env,
             run: this.options.installRun ?? runCommand,
-          })).catch(() => null);
-          if (line) {
+            box: this.boxOf(state),
+          })).catch(() => []);
+          for (const line of lines) {
             state.installs += 1;
             withRedactionPolicy(pin, () => this.emit(state.id, "context.install", line));
+          }
+          if (lines.length) {
             const envs = [call.hooks[0]?.meta.prefix, call.meta.venv_dir].filter((env): env is string => typeof env === "string" && nodePath.isAbsolute(env));
             this.options.pythonHint?.(state.id, { envs, installed: true });
           }
@@ -915,7 +921,7 @@ export class ContextCapture {
           state.ephemeral += 1;
           const runner = tool.runner === "bun x" ? "bunx" : tool.runner;
           const resolved = await resolveEphemeral(
-            { tool_call_id: call.callId, runner, package: tool.package, requested: tool.requested },
+            { ...tool, tool_call_id: call.callId, runner, output: call.output },
             { home: this.privacy.home, platform: this.platform, env: this.env, ...(this.options.ephemeral ?? {}) },
           );
           this.emit(sessionId, "context.ephemeral_tool", resolved);

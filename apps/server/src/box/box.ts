@@ -33,7 +33,7 @@ import path from "node:path";
 
 import * as client from "./client.js";
 import type { BoxEndpoint, BoxStat } from "./client.js";
-import { DEPS_MAX_BYTES, FILE_MAX_BYTES, HOME_IN_BOX, RECORD_SCHEMA, RUN_DIR, SHIMS_DIR, TAR_MAX_BYTES, boxHome, boxKey, containerName, containerRoot, firstLine, readJson, readRecord, recordFile, runDir, writeJson, type BoxInstallLog, type BoxLog, type BoxRecord, type BoxRuntime } from "./common.js";
+import { DEPS_MAX_BYTES, FILE_MAX_BYTES, HOME_IN_BOX, RECORD_SCHEMA, RUN_DIR, SHIMS_DIR, TAR_MAX_BYTES, boxHome, boxKey, containerName, containerRoot, firstLine, installLogLayout, readJson, readRecord, recordFile, runDir, writeJson, type BoxInstallLog, type BoxLog, type BoxRecord, type BoxRuntime } from "./common.js";
 import { driverFor } from "./backends/index.js";
 import { boxEgress } from "./backends/bwrap.js";
 import type { ListedBox, SpawnLike } from "./backends/types.js";
@@ -256,8 +256,14 @@ export async function openBox({ root, runtime, env = process.env, platform = pro
     box.identity = identity;
     if (shims) await box.installShims().catch((error) => log("warn", "box wrappers not installed", { error: String(error?.message || error) }));
     else if (pkglog) {
-      if (opened.mounts.includes(containerRoot(pkglog.root, platform))) box.useInstallLog(pkglog);
-      else log("info", "box made before the install log: its wrappers are not in this box (Reset sandbox adds them)", { key });
+      const layout = installLogLayout(opened.mounts, pkglog, platform);
+      if (layout === "ro") box.useInstallLog(pkglog);
+      else if (layout === "legacy" && pkglog.legacy) {
+        // Made before the wrappers were read-only: this box can write all of pkglog/, so it runs
+        // its own copies there (this machine runs only the checked ones in pkglog-wrappers/).
+        box.useInstallLog({ ...pkglog, bin: pkglog.legacy.bin, py: pkglog.legacy.py });
+        log("info", "box made before the read-only install log: it uses its own wrapper copies (Reset sandbox gives it the read-only ones)", { key });
+      } else log("info", "box made before the install log: its wrappers are not in this box (Reset sandbox adds them)", { key });
     }
     try { box.useGitIdentity(); } catch (error) { log("warn", "box git identity not set", { error: error instanceof Error ? error.message : String(error) }); }
     // The shadows boxrun really bound (a box another start made before keeps its own set until it stops):
@@ -487,7 +493,7 @@ export class Box {
     const inBox = (p: string) => containerRoot(p, this.platform);
     this.pathPrefix = inBox(pkglog.bin);
     // What sudo (root) notes in the per-run folders goes back to the user, so this machine can clear it.
-    const lines = [`BOXD_PATH_PREFIX=${this.pathPrefix}`, `PYTHONPATH=${inBox(pkglog.py)}`, `BOXD_CHOWN_DIRS=${inBox(path.join(pkglog.root, "raw"))}`];
+    const lines = [`BOXD_PATH_PREFIX=${this.pathPrefix}`, `PYTHONPATH=${inBox(pkglog.py)}`, `BOXD_CHOWN_DIRS=${inBox(pkglog.raw)}`];
     writeFileSync(path.join(this.runFolder, "env"), `${lines.join("\n")}\n`, { mode: 0o644 });
     this.writeRecord();
   }

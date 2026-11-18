@@ -608,10 +608,12 @@ describe("box on Windows: a WSL engine (detected, never installed)", () => {
 
   test("Windows folders mount through /mnt/<drive>; the prefix goes on every call", async () => {
     expect(wslPath("C:\\Users\\Sam\\proj")).toBe("/mnt/c/Users/Sam/proj");
-    const args = createArgs({ name: "n", key: "k", root: "C:\\Users\\Sam\\proj", croot: "/c/Users/Sam/proj", image: "img", runtime: { name: "docker", bin: "wsl.exe", wsl: true, vm: true, prefix: ["-e", "docker"] }, run: "C:\\Users\\Sam\\.omnirush\\box\\projects\\k", shims: null, pkglog: { root: "C:\\Users\\Sam\\state\\pkglog", bin: "C:\\Users\\Sam\\state\\pkglog\\bin-1", py: "C:\\Users\\Sam\\state\\pkglog\\py-1" }, token: "t", user: { uid: 0, gid: 0 }, env: {}, platform: "win32" });
+    const args = createArgs({ name: "n", key: "k", root: "C:\\Users\\Sam\\proj", croot: "/c/Users/Sam/proj", image: "img", runtime: { name: "docker", bin: "wsl.exe", wsl: true, vm: true, prefix: ["-e", "docker"] }, run: "C:\\Users\\Sam\\.omnirush\\box\\projects\\k", shims: null, pkglog: { root: "C:\\Users\\Sam\\state\\pkglog", tools: "C:\\Users\\Sam\\state\\pkglog-wrappers", raw: "C:\\Users\\Sam\\state\\pkglog\\raw", bin: "C:\\Users\\Sam\\state\\pkglog-wrappers\\bin-1", py: "C:\\Users\\Sam\\state\\pkglog-wrappers\\py-1" }, token: "t", user: { uid: 0, gid: 0 }, env: {}, platform: "win32" });
     expect(args).toContain("type=bind,source=/mnt/c/Users/Sam/proj,target=/c/Users/Sam/proj");
     expect(args).toContain("type=bind,source=/mnt/c/Users/Sam/.omnirush/box/projects/k,target=/run/omnirush");
-    expect(args).toContain("type=bind,source=/mnt/c/Users/Sam/state/pkglog,target=/c/Users/Sam/state/pkglog");
+    expect(args).toContain("type=bind,source=/mnt/c/Users/Sam/state/pkglog-wrappers,target=/c/Users/Sam/state/pkglog-wrappers,readonly");
+    expect(args).toContain("type=bind,source=/mnt/c/Users/Sam/state/pkglog/raw,target=/c/Users/Sam/state/pkglog/raw");
+    expect(args.some((a) => /target=\/c\/Users\/Sam\/state\/pkglog(?:,|$)/.test(a))).toBe(false);
     const calls: string[][] = [];
     await rt({ name: "docker", bin: WSL, prefix: ["-e", "docker"] }, async (bin, a) => { calls.push([bin, ...a]); return { code: 0, stdout: "", stderr: "" }; })(["ps"]);
     expect(calls).toEqual([[WSL, "-e", "docker", "ps"]]);
@@ -619,9 +621,11 @@ describe("box on Windows: a WSL engine (detected, never installed)", () => {
 });
 
 describe("box install log and upkeep", () => {
-  test("a new box mounts the install log's folder at the same path", () => {
-    const args = createArgs({ name: "n", key: "k", root: "/p", croot: "/p", image: "img", runtime: { name: "docker", bin: "docker", vm: false }, run: "/h/projects/k", shims: null, pkglog: { root: "/s/pkglog", bin: "/s/pkglog/bin-1", py: "/s/pkglog/py-1" }, token: "t", user: { uid: 0, gid: 0 }, env: {} });
-    expect(args).toContain("type=bind,source=/s/pkglog,target=/s/pkglog");
+  test("a new box mounts the install log's folders at the same paths: the wrappers read-only, the raw folder writable", () => {
+    const args = createArgs({ name: "n", key: "k", root: "/p", croot: "/p", image: "img", runtime: { name: "docker", bin: "docker", vm: false }, run: "/h/projects/k", shims: null, pkglog: { root: "/s/pkglog", tools: "/s/pkglog-wrappers", raw: "/s/pkglog/raw", bin: "/s/pkglog-wrappers/bin-1", py: "/s/pkglog-wrappers/py-1" }, token: "t", user: { uid: 0, gid: 0 }, env: {}, platform: "linux" });
+    expect(args).toContain("type=bind,source=/s/pkglog-wrappers,target=/s/pkglog-wrappers,readonly");
+    expect(args).toContain("type=bind,source=/s/pkglog/raw,target=/s/pkglog/raw");
+    expect(args).toContain("ai.omnirush.box.pkglog=2");
   });
 
   test("the daily cleanup runs at most once a day, in the background", async () => {

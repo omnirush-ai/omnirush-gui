@@ -36,8 +36,13 @@ export const DEPS_MAX_BYTES = 128 * 1024 * 1024;
 /** What runs a box: a probed backend (runtime.ts RuntimeInfo), or the parts of one a caller has. */
 export type BoxRuntime = Pick<RuntimeInfo, "name" | "bin"> & Partial<Omit<RuntimeInfo, "ok" | "name" | "bin">>;
 
-/** The install log (phase 1): its folder, the wrappers' folder and the pip hook's, all on this machine. */
-export type BoxInstallLog = { root: string; bin: string; py: string };
+/**
+ * The install log (phase 1, context/install-log.ts boxInstallLogPaths), all on this machine: `tools` the wrappers'
+ * and the pip hook's parent (read-only in a box), `raw` the folder the wrappers note calls in (writable), `bin`/`py`
+ * the wrappers and the hook, `root` all of pkglog/ (what a box made before the read-only layout mounted read-write)
+ * and `legacy` the copies such a box keeps there.
+ */
+export type BoxInstallLog = { root: string; tools: string; raw: string; bin: string; py: string; legacy?: { bin: string; py: string } };
 
 // --- where things are ------------------------------------------------------
 
@@ -68,6 +73,39 @@ export function containerRoot(root: string, platform: NodeJS.Platform = process.
   const match = /^([a-zA-Z]):[\\/]?(.*)$/.exec(root);
   if (!match) return `/w/${root.replace(/[\\]+/g, "/").replace(/^\/+/, "")}`;
   return `/${match[1]!.toLowerCase()}/${match[2]!.replace(/[\\]+/g, "/")}`.replace(/\/+$/, "") || "/";
+}
+
+/**
+ * The install log's folders a box gets, each at its own path inside (Windows: /c/...): the wrappers and the pip
+ * hook read-only (the same files go first on this machine's engine PATH: nothing in a box may change them), and
+ * the raw folder the wrappers note calls in, the only one a box writes.
+ */
+export function pkglogBinds(pkglog: Pick<BoxInstallLog, "tools" | "raw">, platform: NodeJS.Platform = process.platform): Array<{ source: string; target: string; readonly: boolean }> {
+  return [
+    { source: pkglog.tools, target: containerRoot(pkglog.tools, platform), readonly: true },
+    { source: pkglog.raw, target: containerRoot(pkglog.raw, platform), readonly: false },
+  ];
+}
+
+/** Where pkglogBinds() puts them inside, for a box's `mounts` list. */
+export function pkglogMountPoints(pkglog: Pick<BoxInstallLog, "tools" | "raw">, platform: NodeJS.Platform = process.platform): string[] {
+  return pkglogBinds(pkglog, platform).map((bind) => bind.target);
+}
+
+/** A container label: the install log's layout a box was made with (2: wrappers read-only). */
+export const PKGLOG_LAYOUT_LABEL = `${LABEL}.pkglog`;
+export const PKGLOG_LAYOUT = "2";
+
+/**
+ * Which install log a box can use, from the folders it was started with: "ro" (read-only wrappers, pkglogBinds),
+ * "legacy" (a box made before: all of `pkglog.root` read-write, so it gets its own copies there, which this machine
+ * never runs) or null (none).
+ */
+export function installLogLayout(mounts: unknown, pkglog: BoxInstallLog, platform: NodeJS.Platform = process.platform): "ro" | "legacy" | null {
+  const list = Array.isArray(mounts) ? mounts : [];
+  if (pkglogMountPoints(pkglog, platform).every((target) => list.includes(target))) return "ro";
+  if (pkglog.root && list.includes(containerRoot(pkglog.root, platform))) return "legacy";
+  return null;
 }
 
 export function recordFile(home: string, key: string): string {

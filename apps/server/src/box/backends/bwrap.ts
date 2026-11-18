@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } fr
 import os from "node:os";
 import path from "node:path";
 
-import { GOARCH, RUN_DIR, SHIMS_DIR, containerName, containerRoot, helperPath, newToken, readJson, writeJson, type BoxInstallLog, type BoxRuntime } from "../common.js";
+import { GOARCH, RUN_DIR, SHIMS_DIR, containerName, helperPath, newToken, pkglogBinds, pkglogMountPoints, readJson, writeJson, type BoxInstallLog, type BoxRuntime } from "../common.js";
 import { REQUIRED_RULES, shadowId, type ShadowPlan } from "../required.js";
 import { farmRun } from "../../stock-mode/stock-mode.mjs";
 import { runCommand, type RunCommand, type RunOptions } from "../run.js";
@@ -186,11 +186,12 @@ export function lazyShadowRules(): Array<{ dir: string; markers: string[] }> {
 }
 
 /** `boxrun up` arguments for a project's box. */
-export function upArgs({ box, store, image, boxd, portFile, root, croot, runFolder, shims = null, pkglog = null, token, bwrap = null, idleMinutes = IDLE_MINUTES, listen, platform = "linux", mapPath = (p: string) => p, shadows = null, shadowStore = null, egress = null }: { box: string; store: string; image: string; boxd: string; portFile: string; root: string; croot: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "root"> | null; token: string; bwrap?: string | null; idleMinutes?: number; listen?: string; platform?: NodeJS.Platform; mapPath?: (p: string) => string; shadows?: Pick<ShadowPlan, "binds"> | null; shadowStore?: string | null; egress?: string | null }): string[] {
+export function upArgs({ box, store, image, boxd, portFile, root, croot, runFolder, shims = null, pkglog = null, token, bwrap = null, idleMinutes = IDLE_MINUTES, listen, platform = "linux", mapPath = (p: string) => p, shadows = null, shadowStore = null, egress = null }: { box: string; store: string; image: string; boxd: string; portFile: string; root: string; croot: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "tools" | "raw"> | null; token: string; bwrap?: string | null; idleMinutes?: number; listen?: string; platform?: NodeJS.Platform; mapPath?: (p: string) => string; shadows?: Pick<ShadowPlan, "binds"> | null; shadowStore?: string | null; egress?: string | null }): string[] {
   const args = ["up", "--box", box, "--store", store, "--image", image, "--boxd", boxd, "--port-file", portFile,
     "--bind", `${mapPath(root)}=${croot}`, "--bind", `${mapPath(runFolder)}=${RUN_DIR}`];
   if (shims) args.push("--ro-bind", `${mapPath(shims)}=${SHIMS_DIR}-src`);
-  if (pkglog) args.push("--bind", `${mapPath(pkglog.root)}=${containerRoot(pkglog.root, platform)}`);
+  // The install log: its wrappers read-only, only the raw folder writable (common.ts pkglogBinds).
+  if (pkglog) for (const bind of pkglogBinds(pkglog, platform)) args.push(bind.readonly ? "--ro-bind" : "--bind", `${mapPath(bind.source)}=${bind.target}`);
   for (const kv of boxdEnv({ token, croot, idleMinutes, egress, ...(listen ? { listen } : {}) })) args.push("--env", kv);
   if (bwrap) args.push("--bwrap", bwrap);
   // The box's own build folders (required.ts shadowPlan; backends whose boxrun runs as root):
@@ -244,7 +245,7 @@ async function open(ctx: OpenContext): Promise<Opened> {
   if (!out?.ok || !port) return { ok: false, error: `could not start the sandbox: ${String(out?.error || res.stderr || res.error || res.code).slice(0, 300)}` };
   // The folders this running box was started with (a box another session
   // started keeps its own until it stops).
-  const mounts = [croot, RUN_DIR, ...(shims ? [`${SHIMS_DIR}-src`] : []), ...(pkglog ? [containerRoot(pkglog.root)] : [])];
+  const mounts = [croot, RUN_DIR, ...(shims ? [`${SHIMS_DIR}-src`] : []), ...(pkglog ? pkglogMountPoints(pkglog) : [])];
   if (!out.reused) writeJson(file, { ...meta, mounts, started_at: new Date().toISOString(), launcher: out.launcher, idmap: out.idmap, overlay: out.overlay });
   return { ok: true, created, endpoint: { host: "127.0.0.1", port, token: meta.token }, uid: 0, gid: 0, containerId: `bwrap_${key}_${meta.instance}`, imageId: meta.config || meta.image, mounts: out.reused ? (meta.mounts ?? mounts) : mounts, timing: { ...(num(out.ms) !== null ? { ms: num(out.ms) ?? 0 } : {}), reused: Boolean(out.reused) } };
 }

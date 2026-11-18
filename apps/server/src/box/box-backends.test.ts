@@ -15,11 +15,12 @@ import { PassThrough } from "node:stream";
 
 import { OPT_IN, BACKENDS, REQUIRED_FIRST, backendsFor, detectBackend, driverFor, normalizeBackend, ORDER } from "./backends/index.js";
 import { apparmorProfile, boxEgress, boxdEnv, boxrunPath, bwrapCandidates, ENABLED_BWRAP, explainProbe, parseOut, probeBwrap, upArgs } from "./backends/bwrap.js";
-import { createAppleArgs, findDigest, macosMajor, parseVersions, probeApple, snapshotInfo, SUPPORTED as APPLE, systemProductVersion } from "./backends/apple.js";
+import { appleInstallLogMounts, createAppleArgs, findDigest, macosMajor, parseVersions, probeApple, snapshotInfo, SUPPORTED as APPLE, systemProductVersion } from "./backends/apple.js";
 import { versionAtLeast } from "./backends/shared.js";
 import { decodeWsl, download, ENABLE_HINT, inDistro, parseWslList, probeWslDistro, startKeeper } from "./backends/wsl.js";
-import { createWslcArgs, labelsOf, parseJsonRows, parseWslcVersion, probeWslc, UPDATE_HINT } from "./backends/wslc.js";
+import { createWslcArgs, labelsOf, wslcInstallLogMounts, parseJsonRows, parseWslcVersion, probeWslc, UPDATE_HINT } from "./backends/wslc.js";
 import { Box, setToolsRoot } from "./box.js";
+import { installLogLayout } from "./common.js";
 import { askedBackend, readBackend, rememberServerDefault, saveBackend, serverBackends } from "./launch.js";
 import type { RunCommand, RunResult } from "./run.js";
 import { BoxService, backendChoices, type BoxWorkspace } from "./service.js";
@@ -37,6 +38,16 @@ afterEach(() => {
 });
 
 const set = (...files: Array<string | null>) => (file: string) => files.includes(file);
+
+/** The install log as a box gets it (install-log.ts boxInstallLogPaths). */
+const PKGLOG = {
+  root: "/h/.omnirush/pkglog",
+  tools: "/h/.omnirush/pkglog-wrappers",
+  raw: "/h/.omnirush/pkglog/raw",
+  bin: "/h/.omnirush/pkglog-wrappers/bin-0123456789ab",
+  py: "/h/.omnirush/pkglog-wrappers/py-0123456789ab",
+  legacy: { bin: "/h/.omnirush/pkglog/bin-0123456789ab", py: "/h/.omnirush/pkglog/py-0123456789ab" },
+};
 const ok = (stdout: unknown): RunResult => ({ code: 0, stdout: typeof stdout === "string" ? stdout : JSON.stringify(stdout), stderr: "" });
 const fail = (stderr: string, code = 1): RunResult => ({ code, stdout: "", stderr });
 
@@ -233,9 +244,14 @@ describe("box backends: Linux", () => {
   });
 
   test("bwrap box start: the project at its path, the run folder, boxd on loopback with a port file, nothing of $HOME", () => {
-    const args = upArgs({ box: "/h/.omnirush/box/bwrap/boxes/k", store: "/h/.omnirush/box/bwrap/store", image: "abc-amd64", boxd: "/pkg/boxd", portFile: "/h/.omnirush/box/projects/k/boxd.port", root: "/home/u/proj", croot: "/home/u/proj", runFolder: "/h/.omnirush/box/projects/k", pkglog: { root: "/h/.omnirush/pkglog" }, token: "t0k", idleMinutes: 90 });
+    const args = upArgs({ box: "/h/.omnirush/box/bwrap/boxes/k", store: "/h/.omnirush/box/bwrap/store", image: "abc-amd64", boxd: "/pkg/boxd", portFile: "/h/.omnirush/box/projects/k/boxd.port", root: "/home/u/proj", croot: "/home/u/proj", runFolder: "/h/.omnirush/box/projects/k", pkglog: PKGLOG, token: "t0k", idleMinutes: 90 });
     const binds = args.flatMap((a, i) => (a === "--bind" || a === "--ro-bind" ? [args[i + 1]] : []));
-    expect(binds).toEqual(["/home/u/proj=/home/u/proj", "/h/.omnirush/box/projects/k=/run/omnirush", "/h/.omnirush/pkglog=/h/.omnirush/pkglog"]);
+    expect(binds).toEqual(["/home/u/proj=/home/u/proj", "/h/.omnirush/box/projects/k=/run/omnirush", "/h/.omnirush/pkglog-wrappers=/h/.omnirush/pkglog-wrappers", "/h/.omnirush/pkglog/raw=/h/.omnirush/pkglog/raw"]);
+    // The wrappers this machine runs are read-only in the box; only the raw folder is writable.
+    const pairs = args.flatMap((a, i) => (a === "--bind" || a === "--ro-bind" ? [`${a} ${args[i + 1]}`] : []));
+    expect(pairs).toContain("--ro-bind /h/.omnirush/pkglog-wrappers=/h/.omnirush/pkglog-wrappers");
+    expect(pairs).toContain("--bind /h/.omnirush/pkglog/raw=/h/.omnirush/pkglog/raw");
+    expect(pairs.some((p) => p.startsWith("--bind /h/.omnirush/pkglog-wrappers") || p.startsWith("--bind /h/.omnirush/pkglog="))).toBe(false);
     const env = args.flatMap((a, i) => (a === "--env" ? [args[i + 1]] : []));
     expect(env).toContain("BOXD_LISTEN=127.0.0.1:0");
     expect(env).toContain("BOXD_PORT_FILE=/run/omnirush/boxd.port");
@@ -559,5 +575,57 @@ describe("box backends: record, label, status", () => {
     rememberServerDefault(stateDir, { local_box: { default: "off", backends: ["podman"] } });
     await boxes.setBackend("auto");
     expect((await boxes.status(workspace, { fresh: true })).backend?.allowed).toEqual(["podman"]);
+  });
+});
+
+describe("box install log: the wrappers read-only", () => {
+  test("wrappers read-only and raw writable on every backend; the layout a box was made with decides", () => {
+    const wpk = {
+      root: "C:\\Users\\Sam\\.omnirush\\pkglog",
+      tools: "C:\\Users\\Sam\\.omnirush\\pkglog-wrappers",
+      raw: "C:\\Users\\Sam\\.omnirush\\pkglog\\raw",
+      bin: "C:\\Users\\Sam\\.omnirush\\pkglog-wrappers\\bin-0123456789ab",
+      py: "C:\\Users\\Sam\\.omnirush\\pkglog-wrappers\\py-0123456789ab",
+      legacy: { bin: "C:\\Users\\Sam\\.omnirush\\pkglog\\bin-0123456789ab", py: "C:\\Users\\Sam\\.omnirush\\pkglog\\py-0123456789ab" },
+    };
+    const apple = createAppleArgs({ name: "n", key: "k", root: "/Users/u/p", croot: "/Users/u/p", image: "img", runFolder: "/Users/u/.omnirush/box/projects/k", pkglog: { tools: "/Users/u/.omnirush/pkglog-wrappers", raw: "/Users/u/.omnirush/pkglog/raw" }, token: "t", port: 1234, env: {} });
+    const appleMounts = apple.filter((_, i) => apple[i - 1] === "--mount");
+    expect(appleMounts).toContain("type=bind,source=/Users/u/.omnirush/pkglog-wrappers,target=/Users/u/.omnirush/pkglog-wrappers,readonly");
+    expect(appleMounts).toContain("type=bind,source=/Users/u/.omnirush/pkglog/raw,target=/Users/u/.omnirush/pkglog/raw");
+    expect(appleMounts.some((m) => m.includes("target=/Users/u/.omnirush/pkglog,") || m.endsWith("target=/Users/u/.omnirush/pkglog"))).toBe(false);
+    expect(apple).toContain("ai.omnirush.box.pkglog=2");
+    const wslc = createWslcArgs({ name: "n", key: "k", root: "C:\\p", croot: "/c/p", image: "img", runFolder: "C:\\r", pkglog: wpk, token: "t", port: 1234, env: {} });
+    const wslcMounts = wslc.filter((_, i) => wslc[i - 1] === "--mount");
+    expect(wslcMounts).toContain("type=bind,source=C:\\Users\\Sam\\.omnirush\\pkglog-wrappers,target=/c/Users/Sam/.omnirush/pkglog-wrappers,readonly");
+    expect(wslcMounts).toContain("type=bind,source=C:\\Users\\Sam\\.omnirush\\pkglog\\raw,target=/c/Users/Sam/.omnirush/pkglog/raw");
+    expect(wslc).toContain("ai.omnirush.box.pkglog=2");
+    // Their mounts are not read back: the label tells the layout (no label: a box made before).
+    expect(appleInstallLogMounts({ "ai.omnirush.box.pkglog": "2" }, PKGLOG)).toEqual(["/h/.omnirush/pkglog-wrappers", "/h/.omnirush/pkglog/raw"]);
+    expect(appleInstallLogMounts({}, PKGLOG)).toEqual(["/h/.omnirush/pkglog"]);
+    expect(wslcInstallLogMounts({}, wpk)).toEqual(["/c/Users/Sam/.omnirush/pkglog"]);
+    // The WSL distro backend (boxrun under WSL): the same split, through /mnt/<drive>.
+    const wslUp = upArgs({ box: "/b", store: "/s", image: "i", boxd: "/opt/omnirush/boxd", portFile: "/p", root: "C:\\p", croot: "/c/p", runFolder: "C:\\r", pkglog: wpk, token: "t", platform: "win32", mapPath: (p) => `/mnt/${p[0]!.toLowerCase()}/${p.slice(3).replaceAll("\\", "/")}` });
+    const wslPairs = wslUp.flatMap((a, i) => (a === "--bind" || a === "--ro-bind" ? [`${a} ${wslUp[i + 1]}`] : []));
+    expect(wslPairs).toContain("--ro-bind /mnt/c/Users/Sam/.omnirush/pkglog-wrappers=/c/Users/Sam/.omnirush/pkglog-wrappers");
+    expect(wslPairs).toContain("--bind /mnt/c/Users/Sam/.omnirush/pkglog/raw=/c/Users/Sam/.omnirush/pkglog/raw");
+    // Which wrappers a box uses: the read-only ones when both folders are mounted; a box made
+    // before (all of pkglog/ read-write) its own copies there; none when it has neither.
+    expect(installLogLayout(["/home/u/p", "/run/omnirush", "/h/.omnirush/pkglog-wrappers", "/h/.omnirush/pkglog/raw"], PKGLOG, "linux")).toBe("ro");
+    expect(installLogLayout(["/home/u/p", "/run/omnirush", "/h/.omnirush/pkglog"], PKGLOG, "linux")).toBe("legacy");
+    expect(installLogLayout(["/home/u/p", "/run/omnirush", "/h/.omnirush/pkglog-wrappers"], PKGLOG, "linux")).toBe(null);
+    expect(installLogLayout(["/home/u/p"], PKGLOG, "linux")).toBe(null);
+  });
+
+  test("a box's install-log environment: the read-only wrappers, or for a box made before its own copies", () => {
+    const dir = tmp();
+    const box = new Box({ key: "k", name: "n", root: "/home/u/p", croot: "/home/u/p", runtime: { name: "bwrap", bin: "boxrun" }, home: dir, runFolder: dir, run: async () => ({ code: 0, stdout: "", stderr: "" }), log: () => {}, platform: "linux", env: {} });
+    box.useInstallLog(PKGLOG);
+    expect(readFileSync(path.join(dir, "env"), "utf8").trim().split("\n")).toEqual([
+      "BOXD_PATH_PREFIX=/h/.omnirush/pkglog-wrappers/bin-0123456789ab",
+      "PYTHONPATH=/h/.omnirush/pkglog-wrappers/py-0123456789ab",
+      "BOXD_CHOWN_DIRS=/h/.omnirush/pkglog/raw",
+    ]);
+    box.useInstallLog({ ...PKGLOG, bin: PKGLOG.legacy.bin, py: PKGLOG.legacy.py });
+    expect(readFileSync(path.join(dir, "env"), "utf8")).toMatch(/^BOXD_PATH_PREFIX=\/h\/\.omnirush\/pkglog\/bin-0123456789ab$/m);
   });
 });

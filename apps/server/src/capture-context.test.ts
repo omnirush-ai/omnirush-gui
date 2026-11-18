@@ -10,6 +10,7 @@ import zlib from "node:zlib";
 
 import * as privacy from "./context/privacy.js";
 import * as exec from "./context/exec.js";
+import * as witness from "./context/exec-witness.js";
 import * as systemPackages from "./context/system-packages.js";
 import * as processes from "./context/processes.js";
 import * as services from "./context/services.js";
@@ -723,13 +724,27 @@ test("outside: an 8.3 short name compares as its long name against the temp root
   assert.equal(outside.isTempPath(`C:\\Users\\SNEHAS~1\\Documents\\x.txt`, [long], real), false);
 });
 
+// --- execution witness: the shell a call ran in ---------------------------------------------------
+
+test("engine shell: a Claude chat's call runs in Claude Code's Git Bash on Windows, the engine's rule elsewhere", () => {
+  const lookup = (map) => (name) => map[name] ?? null;
+  const win = { platform: "win32", env: { ComSpec: "C:\\Windows\\system32\\cmd.exe" }, exists: () => true };
+  const both = lookup({ git: "C:\\Git\\cmd\\git.exe", powershell: "C:\\ps\\powershell.exe" });
+  assert.deepEqual(witness.engineShell({ ...win, which: both, claudeCode: true }), { path: "C:\\Git\\bin\\bash.exe", name: "bash", how: "claude_git_bash" });
+  assert.equal(witness.engineShell({ ...win, which: both }).name, "powershell");
+  assert.deepEqual(witness.engineShell({ ...win, which: lookup({ powershell: "C:\\ps\\powershell.exe" }), exists: (f) => f === "C:\\Program Files\\Git\\bin\\bash.exe", claudeCode: true }), { path: "C:\\Program Files\\Git\\bin\\bash.exe", name: "bash", how: "claude_git_bash" });
+  assert.equal(witness.engineShell({ ...win, which: lookup({ powershell: "C:\\ps\\powershell.exe" }), exists: (f) => f.endsWith("powershell.exe"), claudeCode: true }).how, "powershell");
+  assert.equal(witness.engineShell({ platform: "linux", env: { SHELL: "/bin/zsh" }, which: lookup({}), exists: () => true, claudeCode: true }).how, "env_shell");
+});
+
 // --- #22 ephemeral tools --------------------------------------------------------------------------
 
-test("#22 on-the-fly tools: exact versions, cache lookups per runner, registry fallback only without a cache hit", async () => {
+test("#22 on-the-fly tools: exact versions, cache lookups per runner, never the registry", async () => {
   const home = tmp("eph");
+  const npx = (specs) => ephemeral.npxCacheDir(specs);
   write(home, {
-    ".npm/_npx/1a2b/node_modules/cowsay/package.json": JSON.stringify({ name: "cowsay", version: "1.6.0" }),
-    ".npm/_npx/3c4d/node_modules/@scope/tool/package.json": JSON.stringify({ name: "@scope/tool", version: "2.3.4" }),
+    [`.npm/_npx/${npx(["cowsay"])}/node_modules/cowsay/package.json`]: JSON.stringify({ name: "cowsay", version: "1.6.0" }),
+    [`.npm/_npx/${npx(["@scope/tool@latest"])}/node_modules/@scope/tool/package.json`]: JSON.stringify({ name: "@scope/tool", version: "2.3.4" }),
     ".bun/install/cache/prettier@3.3.3@@@1/package.json": "{}",
     ".cache/uv/archive-v0/xyz/lib/python3.12/site-packages/ruff-0.6.9.dist-info/METADATA": "",
     ".local/share/pipx/.cache/abc/lib/python3.11/site-packages/black-24.8.0.dist-info/METADATA": "",
@@ -737,9 +752,9 @@ test("#22 on-the-fly tools: exact versions, cache lookups per runner, registry f
     ".cache/pnpm/dlx/hash1/1700000000/node_modules/create-next-app/package.json": JSON.stringify({ version: "14.2.5" }),
     ".cache/deno/npm/registry.npmjs.org/chalk/5.3.0/package.json": "{}",
   });
-  const opts = { home, platform: "linux", env: {}, registryFallback: false };
+  const opts = { home, platform: "linux", env: {} };
   const r = (runner, pkg, requested = null) => ephemeral.resolveEphemeral({ tool_call_id: "c", runner, package: pkg, requested }, opts);
-  assert.deepEqual(await r("npx", "cowsay", "1.6.0"), { tool_call_id: "c", runner: "npx", package: "cowsay", requested: "1.6.0", version: "1.6.0", resolved: "exact", source: null });
+  assert.deepEqual(await r("npx", "cowsay", "1.6.0"), { tool_call_id: "c", runner: "npx", package: "cowsay", bin: null, requested: "1.6.0", output_version: null, version: "1.6.0", resolved: "exact", source: "spec" });
   assert.equal((await r("npx", "cowsay")).source, "npx_cache");
   assert.equal((await r("npx", "@scope/tool", "latest")).version, "2.3.4");
   assert.deepEqual([(await r("bunx", "prettier")).version, (await r("bunx", "prettier")).source], ["3.3.3", "bun_cache"]);
@@ -748,16 +763,118 @@ test("#22 on-the-fly tools: exact versions, cache lookups per runner, registry f
   assert.deepEqual([(await r("go run", "golang.org/x/tools/cmd/stringer", "latest")).version, (await r("go run", "golang.org/x/tools/cmd/stringer", "latest")).source], ["v0.24.0", "go_modcache"]);
   assert.equal((await r("pnpm dlx", "create-next-app")).version, "14.2.5");
   assert.equal((await r("deno run", "chalk")).version, "5.3.0");
-  assert.equal((await r("uvx", "not-cached")).resolved, "unresolved");
-  const calls = [];
-  const viaRegistry = await ephemeral.resolveEphemeral({ tool_call_id: "c", runner: "npx", package: "left-pad", requested: null }, {
-    home, platform: "linux", env: {}, resolve: () => "/usr/bin/npm", run: fakeRun({ npm: ok("1.3.0\n") }, calls),
+  assert.deepEqual(await r("uvx", "not-cached"), { tool_call_id: "c", runner: "uvx", package: "not-cached", bin: null, requested: null, output_version: null, version: null, resolved: "unresolved", source: "unresolved" });
+  // No cache entry for these exact specs (another version cached under another spec): unresolved, never the registry's latest.
+  assert.deepEqual([(await r("npx", "cowsay", "^2")).version, (await r("npx", "cowsay", "^2")).source], [null, "unresolved"]);
+  assert.deepEqual([(await r("npx", "left-pad")).version, (await r("npx", "left-pad")).source], [null, "unresolved"]);
+  assert.equal((await r("npx", "bad name; rm -rf /")).resolved, "unresolved");
+});
+
+/** A project with packages in node_modules and their .bin entries (symlinks, as npm makes them). */
+function npmProject(root, packages) {
+  for (const [name, { version, bin }] of Object.entries(packages)) {
+    write(root, { [`node_modules/${name}/package.json`]: JSON.stringify({ name, version, bin }) });
+    for (const [command, file] of Object.entries(bin)) {
+      write(root, { [`node_modules/${name}/${file}`]: "#!/usr/bin/env node\n" });
+      fs.mkdirSync(path.join(root, "node_modules", ".bin"), { recursive: true });
+      fs.symlinkSync(path.join("..", name, file), path.join(root, "node_modules", ".bin", command));
+    }
+  }
+  return root;
+}
+
+const effectsOf = (command, cwd) => commands.commandEffects(command, cwd, "/home/u", {}, "linux").ephemeral;
+const resolveCommand = async (command, cwd, opts, output = null) => {
+  const [tool] = effectsOf(command, cwd);
+  return ephemeral.resolveEphemeral({ ...tool, tool_call_id: "c", output }, opts);
+};
+
+test("#22 npx parsing: flags and their values are skipped, the executable and the package are apart", () => {
+  const pick = (command) => effectsOf(command, "/p").map((t) => [t.runner, t.package, t.bin, t.requested, t.specs]);
+  assert.deepEqual(pick("npx vitest run"), [["npx", "vitest", "vitest", null, ["vitest"]]]);
+  assert.deepEqual(pick("npx -p typescript tsc --noEmit"), [["npx", "typescript", "tsc", null, ["typescript"]]]);
+  assert.deepEqual(pick("npx --package=typescript@5.4.5 -y -- tsc"), [["npx", "typescript", "tsc", "5.4.5", ["typescript@5.4.5"]]]);
+  assert.deepEqual(pick("npx --yes @scope/tool@2 x"), [["npx", "@scope/tool", "tool", "2", ["@scope/tool@2"]]]);
+  assert.deepEqual(pick("uvx --python 3.12 pytest -q"), [["uvx", "pytest", "pytest", null, ["pytest"]]]);
+  assert.deepEqual(pick("uvx -p 3.11 --with rich --from 'black==24.8.0' black ."), [["uvx", "black", "black", "24.8.0", ["black==24.8.0"]]]);
+  assert.deepEqual(pick("uv tool run --python=3.12 ruff check"), [["uvx", "ruff", "ruff", null, ["ruff"]]]);
+  assert.deepEqual(pick("pipx run --spec black==24.8.0 black ."), [["pipx run", "black", "black", "24.8.0", ["black==24.8.0"]]]);
+  assert.deepEqual(pick("pnpm dlx --package=create-vite create-vite app"), [["pnpm dlx", "create-vite", "create-vite", null, ["create-vite"]]]);
+  assert.deepEqual(pick("yarn dlx -p typescript tsc"), [["yarn dlx", "typescript", "tsc", null, ["typescript"]]]);
+  assert.deepEqual(pick("bunx --bun vite"), [["bunx", "vite", "vite", null, ["vite"]]]);
+});
+
+test("#22 npx runs the local copy: vitest, webpack, tsc → typescript, -p typescript tsc (from a subfolder)", async () => {
+  const home = tmp("eph-home");
+  // A stale npx cache entry for vitest must not win over the project's copy.
+  write(home, { [`.npm/_npx/${ephemeral.npxCacheDir(["vitest"])}/node_modules/vitest/package.json`]: JSON.stringify({ name: "vitest", version: "5.1.0" }) });
+  const root = npmProject(write(tmp("eph-proj"), { "package.json": "{}", "src/app/x.ts": "" }), {
+    vitest: { version: "3.2.7", bin: { vitest: "vitest.mjs" } },
+    webpack: { version: "5.11.0", bin: { webpack: "bin/webpack.js" } },
+    typescript: { version: "5.4.5", bin: { tsc: "bin/tsc", tsserver: "bin/tsserver" } },
   });
-  assert.deepEqual([viaRegistry.version, viaRegistry.resolved, viaRegistry.source], ["1.3.0", "registry_latest", "registry"]);
-  assert.deepEqual(calls[0].args, ["view", "left-pad", "version"]);
-  const cached = await ephemeral.resolveEphemeral({ tool_call_id: "c", runner: "npx", package: "cowsay", requested: null }, { home, platform: "linux", env: {}, run: () => assert.fail("no registry call on a cache hit") });
-  assert.equal(cached.resolved, "cache");
-  assert.equal((await ephemeral.resolveEphemeral({ tool_call_id: "c", runner: "npx", package: "bad name; rm -rf /", requested: null }, { home, run: () => assert.fail("never") })).resolved, "unresolved");
+  const opts = { home, platform: "linux", env: {} };
+  const vitest = await resolveCommand("npx vitest run", path.join(root, "src", "app"), opts);
+  assert.deepEqual(vitest, { tool_call_id: "c", runner: "npx", package: "vitest", bin: "vitest", requested: null, output_version: null, version: "3.2.7", resolved: "local", source: "local" });
+  const webpack = await resolveCommand("npx webpack --version", root, opts, "webpack 5.11.0\nwebpack-cli 4.2.0\n");
+  assert.deepEqual([webpack.package, webpack.version, webpack.source, webpack.output_version], ["webpack", "5.11.0", "local", "5.11.0"]);
+  const tsc = await resolveCommand("npx tsc --noEmit", root, opts);
+  assert.deepEqual([tsc.package, tsc.bin, tsc.version, tsc.source], ["typescript", "tsc", "5.4.5", "local"]);
+  const explicit = await resolveCommand("cd src && npx -p typescript tsc -v", root, opts, "\u001b[1mVersion 5.4.5\u001b[0m");
+  assert.deepEqual([explicit.package, explicit.bin, explicit.version, explicit.source, explicit.output_version], ["typescript", "tsc", "5.4.5", "local", null]);
+  // Another version asked for: not the local copy.
+  assert.equal((await resolveCommand("npx vitest@4.0.0 run", root, opts)).source, "spec");
+  // -p names another package than the bin's owner: not the local copy.
+  assert.equal((await resolveCommand("npx -p tsc-alias tsc", root, opts)).source, "unresolved");
+});
+
+test("#22 npx without a local copy: the npx cache entry of the specs asked for, else unresolved", async () => {
+  const home = tmp("eph-home2");
+  write(home, {
+    [`.npm/_npx/${ephemeral.npxCacheDir(["tsc"])}/node_modules/tsc/package.json`]: JSON.stringify({ name: "tsc", version: "2.0.4" }),
+    [`.npm/_npx/${ephemeral.npxCacheDir(["typescript"])}/node_modules/typescript/package.json`]: JSON.stringify({ name: "typescript", version: "5.6.3" }),
+    [`.npm/_npx/${ephemeral.npxCacheDir(["vitest@3"])}/node_modules/vitest/package.json`]: JSON.stringify({ name: "vitest", version: "3.2.4" }),
+  });
+  const cwd = write(tmp("eph-empty"), { "package.json": "{}" });
+  const opts = { home, platform: "linux", env: {} };
+  const tsc = await resolveCommand("npx tsc", cwd, opts);
+  assert.deepEqual([tsc.package, tsc.version, tsc.source], ["tsc", "2.0.4", "npx_cache"]);
+  const viaP = await resolveCommand("npx -p typescript tsc", cwd, opts);
+  assert.deepEqual([viaP.package, viaP.bin, viaP.version, viaP.source], ["typescript", "tsc", "5.6.3", "npx_cache"]);
+  const ranged = await resolveCommand("npx vitest@3 run", cwd, opts);
+  assert.deepEqual([ranged.version, ranged.source], ["3.2.4", "npx_cache"]);
+  const none = await resolveCommand("npx eslint .", cwd, opts, "v9.12.0\n");
+  assert.deepEqual([none.version, none.source, none.resolved, none.output_version], [null, "unresolved", "unresolved", "9.12.0"]);
+  const py = await resolveCommand("uvx --python 3.12 pytest", cwd, opts);
+  assert.deepEqual([py.package, py.bin, py.version, py.source], ["pytest", "pytest", null, "unresolved"]);
+});
+
+test("#22 Windows: a .cmd shim in node_modules/.bin (backslash paths) leads to the owning package", async () => {
+  const root = write(tmp("eph-win"), {
+    "package.json": "{}",
+    "node_modules/typescript/package.json": JSON.stringify({ name: "typescript", version: "5.4.5", bin: { tsc: "./bin/tsc" } }),
+    "node_modules/typescript/bin/tsc": "",
+    "node_modules/.bin/tsc.cmd": '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\..\\typescript\\bin\\tsc" %*\r\n',
+    // pnpm's sh shim (no symlink) works the same way.
+    "node_modules/.bin/vite": '#!/bin/sh\nbasedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")\nif [ -x "$basedir/node" ]; then\n  exec "$basedir/node"  "$basedir/../vite/bin/vite.js" "$@"\nelse\n  exec node  "$basedir/../vite/bin/vite.js" "$@"\nfi\n',
+    "node_modules/vite/package.json": JSON.stringify({ name: "vite", version: "6.0.1", bin: { vite: "bin/vite.js" } }),
+    "node_modules/vite/bin/vite.js": "",
+  });
+  assert.deepEqual(await ephemeral.localBin("tsc", path.join(root, "src"), "win32"), { package: "typescript", version: "5.4.5" });
+  assert.deepEqual(await ephemeral.localBin("vite", root, "linux"), { package: "vite", version: "6.0.1" });
+  const tool = await ephemeral.resolveEphemeral({ tool_call_id: "c", runner: "npx", package: "tsc", bin: "tsc", specs: ["tsc"], requested: null, cwd: root }, { home: tmp("eph-winhome"), platform: "win32", env: {} });
+  assert.deepEqual([tool.package, tool.version, tool.source], ["typescript", "5.4.5", "local"]);
+  assert.deepEqual(effectsOf("npx.cmd -y tsc", "/p").map((t) => [t.runner, t.package, t.bin]), [["npx", "tsc", "tsc"]]);
+});
+
+test("#22 output version: a leading `<name> <semver>` or `v<semver>` line only", () => {
+  assert.equal(ephemeral.outputVersion("webpack 5.11.0\n", ["webpack"]), "5.11.0");
+  assert.equal(ephemeral.outputVersion("webpack: 5.11.0\nwebpack-cli: 5.1.4", ["webpack"]), "5.11.0");
+  assert.equal(ephemeral.outputVersion("v3.2.7\n", ["vitest"]), "3.2.7");
+  assert.equal(ephemeral.outputVersion("eslint 9.0.0\n", ["vitest"]), null);
+  assert.equal(ephemeral.outputVersion("RUN  v3.2.7 /proj\n", ["vitest"]), null);
+  assert.equal(ephemeral.outputVersion("a\nb\nc\nvitest 3.2.7", ["vitest"]), null);
+  assert.equal(ephemeral.outputVersion(null, ["x"]), null);
 });
 
 // --- #20 network -------------------------------------------------------------------------------

@@ -13,6 +13,15 @@
 //              and exit code; for an install it notes the call in a folder
 //              under the instance's raw folder (no tool is run then: copies
 //              and listings only).
+//   layout     <stateDir>/pkglog-wrappers/bin-<digest>, py-<digest>: the
+//              wrappers and the hook, checked file by file against the
+//              embedded copies before every use (anything else there, or a
+//              changed byte, and they are written again). A box gets this
+//              folder read-only. <stateDir>/pkglog/raw: the noted calls, the
+//              only folder a box may write (read as untrusted input: no
+//              links followed). Boxes made before this layout mounted all of
+//              <stateDir>/pkglog read-write; they keep their own copies there
+//              (legacyBoxWrappers), which this machine never runs.
 //   records    InstallLog reads those folders after the call, outside it:
 //              it matches each to the session and shell call that ran it (by
 //              time and folder), resolves the exact versions (pip's own
@@ -30,7 +39,7 @@
 // OMNIRUSH_INSTALL_LOG=0 keeps the wrappers off PATH altogether.
 
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, promises as fs } from "node:fs";
+import { constants as fsConstants, createReadStream, promises as fs } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
@@ -46,7 +55,7 @@ export const ENV_TURN_SCHEMA = "omnirush.env-turn.v1";
 /** The tools wrapped on Linux, macOS and WSL (pip itself is also seen by the hook, however it is started). */
 export const POSIX_TOOLS = [
   "npm", "pnpm", "yarn", "bun", "npx", "pnpx", "bunx", "corepack",
-  "pip", "pip3", "uv", "pipx", "poetry", "pipenv", "conda", "mamba", "micromamba",
+  "pip", "pip3", "uv", "uvx", "pipx", "poetry", "pipenv", "conda", "mamba", "micromamba",
   "cargo", "rustup", "go", "gem", "bundle", "bundler", "composer",
   "apt", "apt-get", "aptitude", "dnf", "yum", "microdnf", "apk", "pacman", "brew",
   "curl", "wget",
@@ -55,7 +64,7 @@ export const POSIX_TOOLS = [
 /** The tools wrapped on Windows (PowerShell, cmd and Git Bash all find `<tool>.exe`). */
 export const WINDOWS_TOOLS = [
   "npm", "pnpm", "yarn", "bun", "npx", "pnpx", "bunx", "corepack",
-  "pip", "pip3", "uv", "pipx", "poetry", "pipenv", "conda", "mamba",
+  "pip", "pip3", "uv", "uvx", "pipx", "poetry", "pipenv", "conda", "mamba",
   "cargo", "rustup", "go", "gem", "bundle", "composer",
   "winget", "choco", "scoop", "curl", "wget",
 ] as const;
@@ -114,10 +123,27 @@ export type InstallLogPaths = {
   raw: string;
 };
 
+/** Where the wrappers and the hook live (`bin-*`, `py-*`): nothing in a box can write here. */
+export const WRAPPERS_DIR = "pkglog-wrappers";
+/** The raw folders' parent (`raw/`): a box writes there; boxes made before the read-only layout mount all of it. */
+export const PKGLOG_DIR = "pkglog";
+
 function digestOf(...parts: string[]): string {
   const hash = createHash("sha256");
   for (const part of parts) hash.update(part).update("\0");
   return hash.digest("hex").slice(0, 12);
+}
+
+function sha256Hex(data: string | Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+function binName(windows: boolean): string {
+  return `bin-${digestOf(windows ? WINDOWS_WRAPPER_SHA256 : POSIX_WRAPPER, (windows ? WINDOWS_TOOLS : POSIX_TOOLS).join(","))}`;
+}
+
+function pyName(): string {
+  return `py-${digestOf(PYTHON_HOOK)}`;
 }
 
 async function isComplete(dir: string): Promise<boolean> {
@@ -182,6 +208,113 @@ async function writeWindowsWrappers(dir: string): Promise<void> {
   }
 }
 
+async function writePythonHook(dir: string): Promise<void> {
+  await fs.writeFile(path.join(dir, "sitecustomize.py"), PYTHON_HOOK);
+}
+
+async function lstatOrNull(file: string): Promise<import("node:fs").Stats | null> {
+  try {
+    return await fs.lstat(file);
+  } catch {
+    return null;
+  }
+}
+
+/** A regular file (never a link) whose bytes hash to `digest`. */
+async function fileIs(file: string, digest: string, max = 16 * 1024 * 1024): Promise<boolean> {
+  const stat = await lstatOrNull(file);
+  if (!stat?.isFile() || stat.size > max) return false;
+  try {
+    return sha256Hex(await fs.readFile(file)) === digest;
+  } catch {
+    return false;
+  }
+}
+
+function sameNames(found: string[], expected: string[]): boolean {
+  const a = [...found].sort();
+  const b = [...expected].sort();
+  return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
+/**
+ * Whether a wrapper folder holds exactly what this version writes: the
+ * names, each tool a link to the main file (or a copy of it), and every
+ * byte equal to the embedded wrapper. An extra program, a changed byte, a
+ * link anywhere else, or the folder itself a link: false.
+ */
+export async function wrappersIntact(dir: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+  const windows = platform === "win32";
+  const stat = await lstatOrNull(dir);
+  if (!stat?.isDirectory()) return false;
+  const main = windows ? "omnirush-pkg.exe" : "omnirush-pkg";
+  const tools = windows ? WINDOWS_TOOLS.map((tool) => `${tool}.exe`) : [...POSIX_TOOLS];
+  const extras = windows ? ["omnirush-pkg.marker"] : [];
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return false;
+  }
+  if (!sameNames(names, [".complete", main, ...tools, ...extras])) return false;
+  const digest = windows ? WINDOWS_WRAPPER_SHA256 : sha256Hex(POSIX_WRAPPER);
+  const empty = sha256Hex("");
+  if (!(await fileIs(path.join(dir, main), digest)) || !(await fileIs(path.join(dir, ".complete"), empty, 0))) return false;
+  for (const extra of extras) if (!(await fileIs(path.join(dir, extra), empty, 0))) return false;
+  for (const tool of tools) {
+    const file = path.join(dir, tool);
+    const entry = await lstatOrNull(file);
+    if (!entry) return false;
+    if (entry.isSymbolicLink()) {
+      if (windows) return false;
+      try {
+        if ((await fs.readlink(file)) !== main) return false;
+      } catch {
+        return false;
+      }
+      continue;
+    }
+    if (!(await fileIs(file, digest))) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether the hook folder holds the embedded hook and nothing else. A
+ * `__pycache__` (the host's own Python writes one) is removed first: a
+ * compiled copy there would run in place of the checked source.
+ */
+export async function pythonHookIntact(dir: string): Promise<boolean> {
+  const stat = await lstatOrNull(dir);
+  if (!stat?.isDirectory()) return false;
+  await fs.rm(path.join(dir, "__pycache__"), { recursive: true, force: true }).catch(() => undefined);
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return false;
+  }
+  if (!sameNames(names, [".complete", "sitecustomize.py"])) return false;
+  return (await fileIs(path.join(dir, "sitecustomize.py"), sha256Hex(PYTHON_HOOK))) && (await fileIs(path.join(dir, ".complete"), sha256Hex(""), 0));
+}
+
+/** `dir` as a real folder: a link in its place (to anywhere) is removed first. */
+async function realDir(dir: string): Promise<void> {
+  const stat = await lstatOrNull(dir);
+  if (stat && !stat.isDirectory()) await fs.rm(dir, { force: true });
+  await fs.mkdir(dir, { recursive: true });
+  if (!(await lstatOrNull(dir))?.isDirectory()) throw new Error(`install log: ${dir} is not a folder`);
+}
+
+/** Writes `dir` unless it is already intact; once more from scratch when it is not. False when it still is not. */
+async function materializeChecked(dir: string, write: (tmp: string) => Promise<void>, intact: (dir: string) => Promise<boolean>): Promise<boolean> {
+  await materialize(dir, write);
+  if (await intact(dir)) return true;
+  await fs.rm(dir, { recursive: true, force: true });
+  await materialize(dir, write);
+  return intact(dir);
+}
+
 /** Removes raw folders of instances that ended long ago (their process is gone). */
 async function sweepRaw(rawRoot: string, keep: string): Promise<void> {
   let entries: string[] = [];
@@ -195,7 +328,7 @@ async function sweepRaw(rawRoot: string, keep: string): Promise<void> {
     const full = path.join(rawRoot, name);
     if (full === keep) continue;
     try {
-      const stat = await fs.stat(full);
+      const stat = await fs.lstat(full);
       if (now - stat.mtimeMs > STALE_INSTANCE_MS) await fs.rm(full, { recursive: true, force: true });
     } catch {
       /* gone */
@@ -204,28 +337,63 @@ async function sweepRaw(rawRoot: string, keep: string): Promise<void> {
 }
 
 /**
- * Writes the wrappers and the pip hook under `<stateDir>/pkglog/` (once per
- * version) and makes this instance's raw folder. Null when the platform has
- * no wrappers or anything fails: the engine then starts without them.
+ * Writes the wrappers and the pip hook under `<stateDir>/pkglog-wrappers/`
+ * (once per version; checked against the embedded copies on every call and
+ * written again when anything differs) and makes this instance's raw
+ * folder under `<stateDir>/pkglog/raw/`. Null when the platform has no
+ * wrappers or anything fails: the engine then starts without them.
  */
 export async function prepareInstallLog(options: { stateDir: string; platform?: NodeJS.Platform }): Promise<InstallLogPaths | null> {
   const platform = options.platform ?? process.platform;
   try {
-    const root = path.join(options.stateDir, "pkglog");
     const windows = platform === "win32";
-    const bin = path.join(root, `bin-${digestOf(windows ? WINDOWS_WRAPPER_SHA256 : POSIX_WRAPPER, (windows ? WINDOWS_TOOLS : POSIX_TOOLS).join(","))}`);
-    const py = path.join(root, `py-${digestOf(PYTHON_HOOK)}`);
-    await fs.mkdir(root, { recursive: true });
-    await materialize(bin, windows ? writeWindowsWrappers : writePosixWrappers);
-    await materialize(py, (tmp) => fs.writeFile(path.join(tmp, "sitecustomize.py"), PYTHON_HOOK));
+    const tools = path.join(options.stateDir, WRAPPERS_DIR);
+    const bin = path.join(tools, binName(windows));
+    const py = path.join(tools, pyName());
+    await realDir(tools);
+    if (!(await materializeChecked(bin, windows ? writeWindowsWrappers : writePosixWrappers, (dir) => wrappersIntact(dir, platform)))) return null;
+    if (!(await materializeChecked(py, writePythonHook, pythonHookIntact))) return null;
+    const root = path.join(options.stateDir, PKGLOG_DIR);
     const rawRoot = path.join(root, "raw");
+    await realDir(root);
+    await realDir(rawRoot);
     const raw = path.join(rawRoot, `${process.pid}-${randomBytes(4).toString("hex")}`);
-    await fs.mkdir(raw, { recursive: true });
+    await fs.mkdir(raw);
     void sweepRaw(rawRoot, raw);
     return { bin, py, raw };
   } catch {
     return null;
   }
+}
+
+/** What a box gets of the install log (src/box: `pkglog`). */
+export type BoxInstallLogPaths = {
+  /** `<stateDir>/pkglog`: all of it was mounted read-write in boxes made before the read-only layout. */
+  root: string;
+  /** `<stateDir>/pkglog-wrappers`: mounted read-only. */
+  tools: string;
+  /** `<stateDir>/pkglog/raw`: mounted read-write (the wrappers note calls there). */
+  raw: string;
+  bin: string;
+  py: string;
+  /** The wrappers a box made before the read-only layout uses (in its own read-write folder; never run on this machine). */
+  legacy: { bin: string; py: string };
+};
+
+/**
+ * The box's view of the install log: `posix` is prepareInstallLog()'s answer
+ * for a POSIX box (this machine's own unless it is Windows).
+ */
+export function boxInstallLogPaths(stateDir: string, posix: InstallLogPaths): BoxInstallLogPaths {
+  const root = path.join(stateDir, PKGLOG_DIR);
+  return {
+    root,
+    tools: path.join(stateDir, WRAPPERS_DIR),
+    raw: path.join(root, "raw"),
+    bin: posix.bin,
+    py: posix.py,
+    legacy: { bin: path.join(root, binName(false)), py: path.join(root, pyName()) },
+  };
 }
 
 /** The name an environment uses for `name` (Windows keys are case-insensitive: `Path`). */
@@ -255,12 +423,21 @@ export function installLogEnv(paths: InstallLogPaths, base: Record<string, strin
   };
 }
 
-/** Switches noting on or off for every wrapper of the instance (the `on` file; nothing restarts). */
+/**
+ * Switches noting on or off for every wrapper of the instance (the `on`
+ * file; nothing restarts). A box can write the raw folder, so the marker
+ * is made new (never written through something already at its name).
+ */
 export async function setInstallLogActive(raw: string, on: boolean): Promise<void> {
   const marker = path.join(raw, "on");
   try {
-    if (on) await fs.writeFile(marker, "");
-    else await fs.rm(marker, { force: true });
+    if (!(await lstatOrNull(raw))?.isDirectory()) return;
+    if (on) {
+      const entry = await lstatOrNull(marker);
+      if (entry?.isFile() && entry.size === 0) return;
+      await fs.rm(marker, { force: true, recursive: true });
+      await fs.writeFile(marker, "", { flag: "wx" });
+    } else await fs.rm(marker, { force: true, recursive: true });
   } catch {
     /* best effort */
   }
@@ -343,6 +520,50 @@ async function readJson(file: string): Promise<unknown> {
   }
 }
 
+// O_NOFOLLOW where the platform has it (not Windows: there the lstat check below stands alone).
+const NO_FOLLOW = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+
+/**
+ * A file of a raw folder: a box writes those, so only a regular file at
+ * that very name counts (a link to anything on this machine is never
+ * followed). Null otherwise, or past `max` bytes.
+ */
+async function readRawBytes(file: string, max = 64 * 1024 * 1024): Promise<Buffer | null> {
+  let handle: import("node:fs/promises").FileHandle | null = null;
+  try {
+    const entry = await fs.lstat(file);
+    if (!entry.isFile() || entry.size > max) return null;
+    handle = await fs.open(file, fsConstants.O_RDONLY | NO_FOLLOW);
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > max || stat.ino !== entry.ino || stat.dev !== entry.dev) return null;
+    return await handle.readFile();
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function readRawText(file: string, max = 64 * 1024 * 1024): Promise<string | null> {
+  const bytes = await readRawBytes(file, max);
+  return bytes === null ? null : bytes.toString("utf8");
+}
+
+async function readRawJson(file: string): Promise<unknown> {
+  const text = await readRawText(file);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** A folder of a raw folder (a call's), never a link to one elsewhere. */
+async function isRawDir(dir: string): Promise<boolean> {
+  return (await lstatOrNull(dir))?.isDirectory() === true;
+}
+
 async function mtimeMs(file: string): Promise<number | null> {
   try {
     return (await fs.stat(file)).mtimeMs;
@@ -389,17 +610,14 @@ export type RawCall = {
 };
 
 async function readArgv(dir: string, name: string): Promise<string[] | null> {
-  try {
-    const buffer = await fs.readFile(path.join(dir, name));
-    const text = buffer.toString("utf8");
-    return text.split("\0").filter((_, index, all) => index < all.length - 1 || all[index] !== "");
-  } catch {
-    return null;
-  }
+  const buffer = await readRawBytes(path.join(dir, name), 16 * 1024 * 1024);
+  if (buffer === null) return null;
+  const text = buffer.toString("utf8");
+  return text.split("\0").filter((_, index, all) => index < all.length - 1 || all[index] !== "");
 }
 
 async function readRc(file: string): Promise<{ exit: number | null; at: number | null } | null> {
-  const text = await readText(file, 4096);
+  const text = await readRawText(file, 4096);
   if (text === null) return null;
   const [code, at] = text.split(/\r?\n/);
   const exit = code !== undefined && /^-?\d+$/.test(code.trim()) ? Number(code.trim()) : null;
@@ -410,6 +628,7 @@ async function readRc(file: string): Promise<{ exit: number | null; at: number |
 
 /** Reads one noted call folder (null when it is not one, or not readable yet). */
 export async function readRawCall(dir: string, now = Date.now()): Promise<RawCall | null> {
+  if (!(await isRawDir(dir))) return null;
   let names: string[];
   try {
     names = await fs.readdir(dir);
@@ -419,24 +638,25 @@ export async function readRawCall(dir: string, now = Date.now()): Promise<RawCal
   const hooks: RawCall["hooks"] = [];
   for (const name of names.filter((item) => item === "hook" || item.startsWith("hook."))) {
     const tag = name === "hook" ? "" : name.slice(4);
-    const metaText = await readText(path.join(dir, name), 64 * 1024);
+    const metaText = await readRawText(path.join(dir, name), 64 * 1024);
     if (metaText === null) continue;
     const meta = parseMeta(metaText);
-    const report = meta.report ? await readJson(path.join(dir, meta.report)) : null;
-    const removedText = await readText(path.join(dir, `removed${tag}`), 1024 * 1024);
+    // The report is a file of this call folder: a name only, never a path out of it.
+    const report = meta.report && path.basename(meta.report) === meta.report && meta.report !== ".." ? await readRawJson(path.join(dir, meta.report)) : null;
+    const removedText = await readRawText(path.join(dir, `removed${tag}`), 1024 * 1024);
     const rc = await readRc(path.join(dir, `rc${tag}`));
     if (rc) meta.exit = rc.exit === null ? "" : String(rc.exit);
     if (rc?.at) meta.t1 = String(rc.at);
     hooks.push({ meta, argv: (await readArgv(dir, `argv${tag}`)) ?? [], report, removed: removedText ? removedText.split(/\r?\n/).filter(Boolean) : [] });
   }
-  const metaText = await readText(path.join(dir, "meta"), 64 * 1024);
+  const metaText = await readRawText(path.join(dir, "meta"), 64 * 1024);
   let meta: Record<string, string>;
   let argv: string[];
   let rc: { exit: number | null; at: number | null } | null;
   let start: number | null;
   if (metaText !== null) {
     meta = parseMeta(metaText);
-    const win = await readText(path.join(dir, "argv.win"), 1024 * 1024);
+    const win = await readRawText(path.join(dir, "argv.win"), 1024 * 1024);
     argv = win !== null ? splitWindowsArgs(win) : (await readArgv(dir, "argv")) ?? [];
     rc = await readRc(path.join(dir, "rc"));
     start = meta.t0 && /^\d+$/.test(meta.t0) ? Number(meta.t0) : await mtimeMs(path.join(dir, "meta"));
@@ -496,6 +716,27 @@ export type InstallLine = {
   lockfile_rel: string | null;
   lockfile_sha256: string | null;
   truncated?: boolean;
+  /** A Python interpreter uv downloaded into its managed folder during the call (one line each). */
+  kind?: "python_download";
+  subcommand?: string;
+  python_download?: PythonDownload;
+};
+
+/** What uv put in its managed Python folder; a field uv does not reveal is null and named in `unresolved`. */
+export type PythonDownload = {
+  request: string | null;
+  key: string;
+  implementation: string;
+  version: string;
+  variant: string;
+  platform: string;
+  build: string | null;
+  path: string;
+  url: string | null;
+  host: string | null;
+  mirror: boolean;
+  sha256: string | null;
+  unresolved: string[];
 };
 
 /** Flags whose value is the next word, per tool family (so values never count as package names). */
@@ -517,7 +758,7 @@ const VALUE_FLAGS: Record<string, Set<string>> = {
 
 function familyOf(tool: string): string {
   if (["npm", "pnpm", "yarn", "bun", "npx", "pnpx", "bunx", "corepack"].includes(tool)) return "npm";
-  if (/^pip/.test(tool) || ["uv", "pipx", "poetry", "pipenv", "python", "python3", "py"].includes(tool)) return "pip";
+  if (/^pip/.test(tool) || ["uv", "uvx", "pipx", "poetry", "pipenv", "python", "python3", "py"].includes(tool)) return "pip";
   if (["conda", "mamba", "micromamba"].includes(tool)) return "conda";
   if (["apt", "apt-get", "aptitude", "dnf", "yum", "microdnf", "apk", "pacman"].includes(tool)) return "apt";
   if (["gem", "bundle", "bundler"].includes(tool)) return "gem";
@@ -933,8 +1174,9 @@ async function distVersion(sitePackages: string[], name: string): Promise<string
 async function resolveCall(call: RawCall, cls: Classified, tool: string, ctx: ResolveContext): Promise<{
   resolved: Package[]; removed: Array<{ name: string; version?: string }>; downloads: Download[]; target: string | null; python: string | null; lockfile: string | null;
 }> {
-  // A call read from its command text (fullPathInstalls) has no folder.
-  const read = (name: string) => (call.dir ? readText(path.join(call.dir, name)) : Promise.resolve(null));
+  // The copies the wrapper made inside the call folder (written by a box too): never through a link. A call read
+  // from its command text (fullPathInstalls) has no folder.
+  const read = (name: string) => (call.dir ? readRawText(path.join(call.dir, name)) : Promise.resolve(null));
   let resolved: Package[] = [];
   let removed: Array<{ name: string; version?: string }> = [];
   const downloads: Download[] = [];
@@ -1284,6 +1526,12 @@ export async function lineOf(call: RawCall, options: { root: string; turn: numbe
   const tool = (call.meta.tool || "pip").toLowerCase();
   const cls = classifyCall(tool, call.argv);
   if (!cls) return null;
+  return buildLine(call, tool, cls, options);
+}
+
+type LineOptions = Parameters<typeof lineOf>[1];
+
+async function buildLine(call: RawCall, tool: string, cls: Classified, options: LineOptions): Promise<InstallLine | null> {
   const ctx: ResolveContext = { platform: options.platform, home: options.privacy.home, env: options.env, run: options.run, root: options.root };
   const found = await resolveCall(call, cls, tool, ctx);
   if (cls.ecosystem === "url") {
@@ -1340,6 +1588,102 @@ export async function lineOf(call: RawCall, options: { root: string; turn: numbe
     ...(truncated || found.resolved.length >= MAX_PACKAGES ? { truncated: true } : {}),
   };
   return line;
+}
+
+// --- Python interpreters uv downloads -------------------------------------------------
+
+// uv's folder for one interpreter: `cpython-3.13.1-linux-x86_64-gnu`, `cpython-3.13.1+freethreaded-windows-x86_64-none`, `pypy-3.10.16-macos-aarch64-none`.
+const PYTHON_KEY = /^([a-z]+)-(\d+\.\d+\.\d+[^-]*)-([a-z0-9_]+-[a-z0-9_]+-[a-z0-9_]+)$/;
+
+/** Interpreter folders in uv's managed folder after a call that were not there before (minor-version links, dot names left out). */
+export function newPythonKeys(before: string | null, after: string | null): string[] {
+  if (before === null || after === null) return [];
+  const had = new Set(before.split(/\r?\n/));
+  return [...new Set(after.split(/\r?\n/))].filter((name) => !had.has(name) && PYTHON_KEY.test(name));
+}
+
+/** A uv call's subcommand and the interpreter it asked for (`-p 3.13`; `uv python install 3.12 3.13`: each). */
+export function uvPythonRequest(tool: string, argv: string[]): { sub: string; specs: string[] } {
+  const words = positionals(tool, argv);
+  const spec = flagValue(argv, "-p", "--python");
+  if (tool === "uvx") return { sub: "tool run", specs: spec ? [spec] : [] };
+  const [s1 = "", s2 = ""] = words;
+  const sub = ["python", "tool", "pip"].includes(s1) ? `${s1} ${s2}`.trim() : s1;
+  if (sub === "python install") return { sub, specs: words.slice(2) };
+  return { sub, specs: spec ? [spec] : [] };
+}
+
+/** One new interpreter folder: from its name, and the download URL uv's own list gives that key (the call's mirror applied). */
+async function pythonDownload(key: string, call: RawCall, tool: string, specs: string[], options: LineOptions & { box?: Runner | null }): Promise<PythonDownload> {
+  const [, implementation = "", full = "", platform = ""] = PYTHON_KEY.exec(key) ?? [];
+  const [version = full, variant = "default"] = full.split("+");
+  const dir = call.meta.uv_python_dir!;
+  const at = (/^[A-Za-z]:\\|^\\\\/.test(dir) ? path.win32 : path.posix).join(dir, key);
+  const request = specs.length === 1 ? specs[0]! : specs.find((spec) => key.startsWith(spec) || version === spec || version.startsWith(`${spec}.`)) ?? null;
+  const mirror = call.meta.uv_mirror || null;
+  // uvx is `uv tool run`: the list comes from the uv beside it.
+  const uv = (call.meta.real || tool).replace(/uvx(\.exe)?$/i, "uv$1");
+  const args = ["python", "list", key, "--only-downloads", "--output-format", "json"];
+  const probe = options.box
+    ? await options.box("env", [...(mirror ? [`UV_PYTHON_INSTALL_MIRROR=${mirror}`] : []), uv, ...args], { timeoutMs: 5_000, maxBytes: 256 * 1024 }).catch(() => null)
+    : await options.run(uv, args, { timeoutMs: 5_000, maxBytes: 256 * 1024, cwd: call.meta.cwd || options.root, env: quietEnv({ ...options.env, OMNIRUSH_PKGLOG_OFF: "1", ...(mirror ? { UV_PYTHON_INSTALL_MIRROR: mirror } : {}) }) }).catch(() => null);
+  let url: string | null = null;
+  try {
+    const hit = (JSON.parse(probe?.stdout ?? "") as Array<{ key?: unknown; url?: unknown }>).find((item) => item.key === key);
+    if (typeof hit?.url === "string" && /^https?:\/\//i.test(hit.url)) url = hit.url;
+  } catch {
+    /* an older uv, or no answer */
+  }
+  let host: string | null = null;
+  try {
+    host = url ? new URL(url).host : null;
+  } catch {
+    /* keep null */
+  }
+  // python-build-standalone's release tag: in the URL, else the BUILD file uv leaves in the folder (this machine's paths only).
+  let build = url ? /\/(\d{8})\/|%2B(\d{8})/.exec(url)?.slice(1).find(Boolean) ?? null : null;
+  if (!build && !options.box) build = (await readText(path.join(at, "BUILD"), 64))?.trim().match(/^\d{8}$/)?.[0] ?? null;
+  const unresolved = [
+    ...(request === null ? ["request"] : []),
+    ...(url === null ? ["url", "host"] : []),
+    ...(build === null ? ["build"] : []),
+    "sha256", // uv checks it against its own list but never prints it
+  ];
+  return { request, key, implementation, version, variant, platform, build, path: at, url, host, mirror: mirror !== null, sha256: null, unresolved };
+}
+
+/**
+ * lineOf(), plus one `python_download` line per interpreter uv put in its
+ * managed folder during the call (`uv venv -p 3.13`, `uv run --python`, `uvx
+ * --python`, `uv python install`, a `uv sync` that needed one). `uv python
+ * install`'s own runtime line gives way to them; any other install line stays.
+ */
+export async function linesOf(call: RawCall, options: LineOptions & { box?: Runner | null }): Promise<InstallLine[]> {
+  const line = await lineOf(call, options);
+  const tool = (call.meta.tool || "").toLowerCase();
+  if (!call.dir || !call.meta.uv_python_dir || (tool !== "uv" && tool !== "uvx")) return line ? [line] : [];
+  const keys = newPythonKeys(await readRawText(path.join(call.dir, "b.uvpy"), 1024 * 1024), await readRawText(path.join(call.dir, "a.uvpy"), 1024 * 1024)).slice(0, 20);
+  if (!keys.length) return line ? [line] : [];
+  const { sub, specs } = uvPythonRequest(tool, call.argv);
+  const base = await buildLine(call, tool, { ecosystem: "runtime", scope: "global", sub, requested: specs }, options);
+  if (!base) return line ? [line] : [];
+  const tilde = (text: string) => options.scrub.text(tildeText(text, options.privacy));
+  const out: InstallLine[] = [];
+  for (const key of keys) {
+    const found = await pythonDownload(key, call, tool, specs, options);
+    const url = found.url && !redactionRaw() ? cleanUrl(found.url) : found.url;
+    out.push({
+      ...base,
+      kind: "python_download",
+      subcommand: sub,
+      target: tilde(found.path),
+      target_rel: relativeTo(options.root, found.path, options.platform),
+      python: found.version,
+      resolved: [{ name: found.implementation, version: found.version, path: tilde(found.path), ...(url ? { source: url } : {}) }],
+      python_download: { ...found, request: found.request === null ? null : tilde(found.request), path: tilde(found.path), url },
+    });
+  }
+  return line && line.ecosystem !== "runtime" ? [line, ...out] : out;
 }
 
 // --- package managers run by path (no PATH wrapper sees them) -------------------------
@@ -1569,10 +1913,11 @@ const fingerprintCache = new Map<string, { key: string; runtimes: Record<string,
 type EnvFingerprint = Omit<EnvTurn, "schema" | "turn" | "at" | "installs" | "outside_writes" | "outside_truncated" | "timings_ms">;
 
 /** The box's machine, kernel and the runtimes on its PATH (`<command> <path>` lines). */
-// PATH is walked by hand so the install log's wrappers (~/.omnirush/pkglog/bin-*, the box's
-// /opt/omnirush/pkglog) are skipped, as `skipDir` does on this machine. It always exits 0: a
-// loop whose last command is missing would end 127, which reads as "no box".
-const BOX_WHICH = `uname -m; uname -r; IFS=:; for c in ${[...new Set(["mise", ...RUNTIMES.flatMap((runtime) => runtime.commands)])].join(" ")}; do for d in $PATH; do case "$d" in */pkglog|*/pkglog/*) continue;; esac; if [ -f "$d/$c" ] && [ -x "$d/$c" ]; then echo "$c $d/$c"; break; fi; done; done; true`;
+// PATH is walked by hand so the install log's wrappers (~/.omnirush/pkglog-wrappers/bin-*,
+// boxes made before it ~/.omnirush/pkglog/bin-*, the box's /opt/omnirush/pkglog; any folder
+// with the wrapper's `omnirush-pkg` in it) are skipped, as `skipDir` does on this machine. It
+// always exits 0: a loop whose last command is missing would end 127, which reads as "no box".
+const BOX_WHICH = `uname -m; uname -r; IFS=:; for c in ${[...new Set(["mise", ...RUNTIMES.flatMap((runtime) => runtime.commands)])].join(" ")}; do for d in $PATH; do case "$d" in */pkglog|*/pkglog/*|*/pkglog-wrappers/*) continue;; esac; [ -f "$d/omnirush-pkg" ] && continue; if [ -f "$d/$c" ] && [ -x "$d/$c" ]; then echo "$c $d/$c"; break; fi; done; done; true`;
 
 /**
  * The fingerprint of a session whose shell tool runs in its box (src/box):
@@ -1863,6 +2208,8 @@ export class InstallLogReader {
   /** Complete noted calls, oldest first (folders still being written are left for later). */
   async pending(now = Date.now()): Promise<RawCall[]> {
     let names: string[] = [];
+    // A box writes the raw folders: one that became a link (to anywhere) is never read.
+    if (!(await isRawDir(this.raw))) return [];
     try {
       names = await fs.readdir(this.raw);
     } catch {

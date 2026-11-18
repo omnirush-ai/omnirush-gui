@@ -33,7 +33,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
-import { GOARCH, containerName, containerRoot, firstLine, helperPath, readJson, writeJson, wslPath, type BoxLog, type BoxRuntime } from "../common.js";
+import { GOARCH, containerName, firstLine, helperPath, pkglogMountPoints, readJson, writeJson, wslPath, type BoxLog, type BoxRuntime } from "../common.js";
 import { runCommand, type RunCommand, type RunResult } from "../run.js";
 import { externalFetch } from "../../server-fetch.js";
 import type { RuntimeResult } from "../runtime.js";
@@ -414,7 +414,7 @@ async function open(ctx: OpenContext): Promise<Opened> {
     const addr = String(ip.stdout).split(/\s+/).find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a));
     if (addr) alternates.push({ host: addr, port, token: meta.token });
   }
-  const mounts = [croot, "/run/omnirush", ...(shims ? ["/opt/omnirush/pkglog-src"] : []), ...(pkglog ? [containerRoot(pkglog.root, "win32")] : [])];
+  const mounts = [croot, "/run/omnirush", ...(shims ? ["/opt/omnirush/pkglog-src"] : []), ...(pkglog ? pkglogMountPoints(pkglog, "win32") : [])];
   // The folders boxrun shadowed (a box it found running keeps the set it started with).
   const reported = Array.isArray(kept.out.shadows) ? kept.out.shadows.filter((item): item is string => typeof item === "string") : null;
   const shadowed = reported ?? (kept.out.reused ? (meta.shadows ?? []) : []);

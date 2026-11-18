@@ -28,7 +28,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync,
 import os from "node:os";
 import path from "node:path";
 
-import { BOX_PORT, HOME_IN_BOX, LABEL, RUN_DIR, SHIMS_DIR, containerName, containerRoot, firstLine, freePort, helperPath, newToken, type BoxInstallLog, type BoxRuntime } from "../common.js";
+import { BOX_PORT, HOME_IN_BOX, LABEL, PKGLOG_LAYOUT, PKGLOG_LAYOUT_LABEL, RUN_DIR, SHIMS_DIR, containerName, containerRoot, firstLine, freePort, helperPath, newToken, pkglogBinds, pkglogMountPoints, type BoxInstallLog, type BoxRuntime } from "../common.js";
 import { runCommand, type RunCommand } from "../run.js";
 import type { RuntimeResult } from "../runtime.js";
 import { versionAtLeast } from "./shared.js";
@@ -188,7 +188,7 @@ export function appleResources({ env = process.env, cpus = os.cpus().length, mem
   return ["--cpus", String(c), "--memory", m];
 }
 
-export function createAppleArgs({ name, key, root, croot, image, runFolder, shims = null, pkglog = null, token, port, env = process.env }: { name: string; key: string; root: string; croot: string; image: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "root"> | null; token: string; port: number; env?: Env }): string[] {
+export function createAppleArgs({ name, key, root, croot, image, runFolder, shims = null, pkglog = null, token, port, env = process.env }: { name: string; key: string; root: string; croot: string; image: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "tools" | "raw"> | null; token: string; port: number; env?: Env }): string[] {
   return [
     "create", "--name", name,
     "--label", `${LABEL}=1`, "--label", `${LABEL}.key=${key}`, "--label", `${LABEL}.root=${root}`, "--label", `${LABEL}.version=1`, "--label", `${LABEL}.port=${port}`,
@@ -196,7 +196,9 @@ export function createAppleArgs({ name, key, root, croot, image, runFolder, shim
     "--mount", `type=bind,source=${runFolder},target=${RUN_DIR}`,
     "--mount", `type=bind,source=${path.join(runFolder, "bin")},target=/opt/omnirush/bin,readonly`,
     ...(shims ? ["--mount", `type=bind,source=${shims},target=${SHIMS_DIR}-src,readonly`] : []),
-    ...(pkglog ? ["--mount", `type=bind,source=${pkglog.root},target=${containerRoot(pkglog.root, "darwin")}`] : []),
+    // The install log: its wrappers read-only, only the raw folder writable (common.ts pkglogBinds).
+    ...(pkglog ? pkglogBinds(pkglog, "darwin").flatMap((bind) => ["--mount", `type=bind,source=${bind.source},target=${bind.target}${bind.readonly ? ",readonly" : ""}`]) : []),
+    ...(pkglog ? ["--label", `${PKGLOG_LAYOUT_LABEL}=${PKGLOG_LAYOUT}`] : []),
     "-p", `127.0.0.1:${port}:${BOX_PORT}`,
     "-e", `BOXD_TOKEN=${token}`, "-e", "BOXD_UID=0", "-e", "BOXD_GID=0", "-e", `BOXD_HOME=${HOME_IN_BOX}`, "-e", `BOXD_ROOT=${croot}`, "-e", `BOXD_ENV_FILE=${RUN_DIR}/env`,
     "-e", "LANG=C.UTF-8", "-e", "DEBIAN_FRONTEND=noninteractive",
@@ -278,7 +280,15 @@ async function open(ctx: OpenContext): Promise<Opened> {
   const port = Number(info.labels[`${LABEL}.port`]) || 0;
   if (!token || !port) return { ok: false, error: "the sandbox has no port or token (Reset sandbox makes a new one)" };
   const alternates = info.address ? [{ host: info.address, port: BOX_PORT, token }] : [];
-  return { ok: true, created, endpoint: { host: "127.0.0.1", port, token }, alternates, uid: 0, gid: 0, containerId: info.id || name, imageId: info.digest || info.image, mounts: [croot, RUN_DIR, ...(shims ? [`${SHIMS_DIR}-src`] : []), ...(pkglog ? [containerRoot(pkglog.root, "darwin")] : [])] };
+  return { ok: true, created, endpoint: { host: "127.0.0.1", port, token }, alternates, uid: 0, gid: 0, containerId: info.id || name, imageId: info.digest || info.image, mounts: [croot, RUN_DIR, ...(shims ? [`${SHIMS_DIR}-src`] : []), ...(pkglog ? appleInstallLogMounts(info.labels, pkglog) : [])] };
+}
+
+/**
+ * The install log's folders an Apple box was made with (the mounts are not read back): the read-only layout when
+ * its label says so, else the old single read-write folder (box.ts then gives it its own copies).
+ */
+export function appleInstallLogMounts(labels: Record<string, string> | undefined, pkglog: BoxInstallLog): string[] {
+  return labels?.[PKGLOG_LAYOUT_LABEL] === PKGLOG_LAYOUT ? pkglogMountPoints(pkglog, "darwin") : [containerRoot(pkglog.root, "darwin")];
 }
 
 export const appleDriver: BoxDriver = {

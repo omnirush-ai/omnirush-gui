@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import os from "node:os";
 
-import { BOX_PORT, GOARCH, HOME_IN_BOX, LABEL, RUN_DIR, SHIMS_DIR, containerName, containerRoot, firstLine, helperPath, newToken, wslPath, type BoxInstallLog, type BoxRuntime } from "../common.js";
+import { BOX_PORT, GOARCH, HOME_IN_BOX, LABEL, PKGLOG_LAYOUT, PKGLOG_LAYOUT_LABEL, RUN_DIR, SHIMS_DIR, containerName, firstLine, helperPath, newToken, pkglogBinds, wslPath, type BoxInstallLog, type BoxRuntime } from "../common.js";
 import { runCommand, type RunCommand, type RunOptions } from "../run.js";
 import { removableImage, removalTarget } from "../retention.mjs";
 import type { BoxDriver, ListedBox, OpenContext, Opened, Removed } from "./types.js";
@@ -153,9 +153,10 @@ export function createArgs({ name, key, root, croot, image, runtime, run: runFol
     "--mount", `type=bind,source=${source(runtime, root)},target=${croot}`,
     "--mount", `type=bind,source=${source(runtime, runFolder)},target=${RUN_DIR}`,
     ...(shims ? ["--mount", `type=bind,source=${source(runtime, shims)},target=${SHIMS_DIR}-src,readonly`] : []),
-    // The install log's folder (phase 1: its wrappers, pip hook and the per-run folders the
-    // wrappers note calls in), at the path the launcher reads it at.
-    ...(pkglog ? ["--mount", `type=bind,source=${source(runtime, pkglog.root)},target=${containerRoot(pkglog.root, platform)}`] : []),
+    // The install log (phase 1), at the paths the launcher reads it at: its wrappers and pip hook
+    // read-only, the per-run folders the wrappers note calls in writable (common.ts pkglogBinds).
+    ...(pkglog ? pkglogBinds(pkglog, platform).flatMap((bind) => ["--mount", `type=bind,source=${source(runtime, bind.source)},target=${bind.target}${bind.readonly ? ",readonly" : ""}`]) : []),
+    ...(pkglog ? ["--label", `${PKGLOG_LAYOUT_LABEL}=${PKGLOG_LAYOUT}`] : []),
     "-p", `127.0.0.1::${BOX_PORT}`,
     "-e", `BOXD_TOKEN=${token}`, "-e", `BOXD_UID=${user.uid}`, "-e", `BOXD_GID=${user.gid}`,
     "-e", `BOXD_HOME=${HOME_IN_BOX}`, "-e", `BOXD_ROOT=${croot}`, "-e", `BOXD_ENV_FILE=${RUN_DIR}/env`,
