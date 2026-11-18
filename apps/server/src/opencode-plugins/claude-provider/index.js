@@ -101,7 +101,10 @@ export function hasTranscript(configDir, uuid) {
   } catch { return false; }
 }
 
-/** Claude Code's core tools only: the client's reference harness runs with this set, the same on every OS. */
+/**
+ * Claude Code's core tools only: the client's reference harness runs with this set, the same on every OS.
+ * shortcut: without Skill, Claude Code 2.1.302 leaves out its prompt's "Session-specific guidance" (the /<skill-name> line), which the reference has; declare Skill if the client wants that line.
+ */
 export const CLAUDE_TOOLS = "Bash,Read,Edit,Write,Grep,Glob";
 
 /** Claude Code's argv for a turn, with its own default system prompt (LAUNCH adds --resume or --session-id in the box). */
@@ -163,6 +166,9 @@ export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null,
     ANTHROPIC_MODEL: model, ANTHROPIC_SMALL_FAST_MODEL: model, ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: model, ANTHROPIC_DEFAULT_HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model,
     DISABLE_AUTOUPDATER: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
+    // Claude Code's default prompt as its CLI sends it: without the auto-memory section, and without the
+    // <total_tokens> budget line (its fallback when the feature flags it would fetch are off, as here).
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
     // The box is the boundary that makes running without asks acceptable (it runs as root in a container).
     ...(configDir ? {} : { IS_SANDBOX: "1" }),
     // The install log: Claude's commands (its sub-agents' too) note installs where the app reads this chat's, and
