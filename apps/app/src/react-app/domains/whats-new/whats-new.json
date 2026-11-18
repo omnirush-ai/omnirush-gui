@@ -3,6 +3,15 @@
   "schema": 1,
   "cli": [
     {
+      "version": "3.0.2",
+      "date": "2026-11-18",
+      "new": [],
+      "improved": [
+        "Reliability improvements."
+      ],
+      "fixed": []
+    },
+    {
       "version": "3.0.1",
       "date": "2026-11-14",
       "new": [],
