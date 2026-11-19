@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, BookOpen, Briefcase, Calculator, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, MessageSquare, Plug, Shapes, Sparkles, Ticket,
+  ArrowLeft, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
-import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { isMacPlatform } from "@/app/utils";
@@ -31,13 +31,16 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageLine, healthFor, healthProblem, setupLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
-  sourceErrorText, workChatToolsKey, workConnectorsKey, workFailure, workStateKey, type AppMode, type WorkClient,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageLine, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, useWorkCoverage, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
+// Connectors, and the channels search results and deals name (gmail, drive, qbo, …).
 const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   google: Mail, microsoft: Cloud, slack: Hash, hubspot: Handshake, quickbooks: Calculator, notion: FileText,
   jira: Ticket, confluence: BookOpen, linear: Kanban, github: Github, mock: Shapes, demo: Database,
+  gmail: Mail, outlook: Mail, drive: FileText, onedrive: FileText, calendar: Calendar, qbo: Calculator, teams: MessageSquare,
+  whatsapp: MessageCircle, whatsapp_business: MessageCircle, telegram: Send, imessage: MessageSquare, meetings: Phone, zoom: Phone,
 };
 
 /** A connector's icon; an id the app does not know gets the generic plug. */
@@ -409,6 +412,112 @@ export function IMessageCard(props: { client: WorkClient | null; openLink: (url:
   );
 }
 
+const METER_DOT = { connected: "bg-foreground/45", attention: "bg-amber-9", missing: "bg-muted-foreground/25" } as const;
+
+/** "Ask sees 3 of 4 channels" with a dot per channel group and "+ Slack" chips for what is missing. Hidden when nothing
+ *  is missing, while it loads, and when the read fails (an older server answers 404): it never shows an error. */
+export function WorkCoverageMeter(props: { client: WorkClient | null; onAdd?: (id: string) => void; className?: string }) {
+  const coverage = useWorkCoverage(props.client);
+  const data = coverage.data;
+  const adds = coverageAdds(data);
+  if (!data || !data.total || (data.connected >= data.total && !adds.length)) return null;
+  return (
+    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-muted-foreground", props.className)} data-testid="work-coverage">
+      <span className="flex items-center gap-2">
+        <span role="meter" aria-valuemin={0} aria-valuemax={data.total} aria-valuenow={data.connected} aria-label={t("work.coverage.sees", { connected: data.connected, total: data.total })} className="flex items-center gap-0.5">
+          {data.groups.map((group) => (
+            <span key={group.group} title={group.label} data-coverage-group={group.group} data-state={group.state} className={cn("h-1.5 w-3 rounded-full", METER_DOT[group.state as keyof typeof METER_DOT] ?? METER_DOT.missing)} />
+          ))}
+        </span>
+        <span>{t("work.coverage.sees", { connected: data.connected, total: data.total })}</span>
+      </span>
+      {adds.map((id) => {
+        const label = isImportKind(id) ? t("work.coverage.add_import", { name: connectorLabel(id) }) : connectorLabel(id);
+        return props.onAdd ? (
+          <button key={id} type="button" data-coverage-add={id} onClick={() => props.onAdd!(id)} className="flex h-6 items-center gap-1 rounded-full border border-dashed border-border px-2 transition-colors hover:border-foreground/25 hover:text-foreground">
+            <Plus aria-hidden className="size-3" />{label}
+          </button>
+        ) : <span key={id} data-coverage-add={id} className="flex items-center gap-1"><Plus aria-hidden className="size-3" />{label}</span>;
+      })}
+    </div>
+  );
+}
+
+/** The server refuses a chat export over 50 MB. */
+const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
+const IMPORT_ACCEPT: Record<OmniRushWorkImportKind, string> = { whatsapp: ".txt,.zip,text/plain,application/zip", telegram: ".json,application/json" };
+
+/** WhatsApp and Telegram have no sign-in: a chat export from the phone (or Telegram Desktop) is uploaded instead. Each row says
+ *  how to export, Import opens the file picker, and the line under it shows the last import. */
+export function ChatImportCard(props: { client: WorkClient | null }) {
+  const queryClient = useQueryClient();
+  const imports = useQuery({ queryKey: workImportsKey(props.client), queryFn: () => props.client!.listWorkImports(), enabled: Boolean(props.client), retry: false });
+  const upload = useMutation({
+    mutationFn: ({ kind, file }: { kind: OmniRushWorkImportKind; file: File }) => {
+      if (file.size > IMPORT_MAX_BYTES) throw new Error(t("work.import.too_large"));
+      return props.client!.importWorkChat(kind, file);
+    },
+    onSuccess: (result) => {
+      if (result.status === "failed" || !result.records) toast.error(t("work.import.unreadable"));
+      else toast.success(t("work.import.done", { count: result.records, n: result.records.toLocaleString() }));
+    },
+    onError: (reason) => toast.error(workFailure(reason).text),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: workImportsKey(props.client) });
+      void queryClient.invalidateQueries({ queryKey: workConnectorsKey(props.client) });
+      void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) });
+    },
+  });
+  const latest = (kind: string): OmniRushWorkImport | undefined => (Array.isArray(imports.data) ? imports.data : []).find((item) => (item.source ?? "whatsapp") === kind);
+  return (
+    <div className="rounded-xl border border-border bg-background" data-testid="work-import-card">
+      {IMPORT_KINDS.map((kind) => {
+        const last = latest(kind);
+        // A file with no messages in it (a Telegram file that is no export) comes back done with nothing: not read either.
+        const failed = last?.status === "failed" || (last?.status === "done" && !last.records);
+        const busy = upload.isPending && upload.variables?.kind === kind;
+        return (
+          <div key={kind} className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-import={kind}>
+            <ConnectorIcon id={kind} />
+            <div className="min-w-[16rem] flex-1">
+              <span className="text-sm font-medium">{connectorLabel(kind)}</span>
+              <div className="mt-0.5 text-[12px] text-muted-foreground">{kind === "whatsapp" ? t("work.import.howto_whatsapp") : t("work.import.howto_telegram")}</div>
+              {last ? (
+                <div className={cn("mt-0.5 truncate text-[12px]", failed ? "text-destructive" : "text-muted-foreground")} data-testid="work-import-status" data-status={failed ? "failed" : last.status}>
+                  {failed
+                    ? t("work.import.failed_line", { file: last.file_name ?? "" })
+                    : [last.file_name, last.status === "parsing" ? t("work.import.reading") : countLabel(last.records, "work.import.days"), relativeTime(last.created_at)].filter(Boolean).join(" · ")}
+                </div>
+              ) : null}
+            </div>
+            <input
+              type="file"
+              hidden
+              accept={IMPORT_ACCEPT[kind]}
+              data-import-input={kind}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (file) upload.mutate({ kind, file });
+              }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="ms-auto"
+              disabled={upload.isPending}
+              aria-label={t("work.import.import_name", { name: connectorLabel(kind) })}
+              onClick={(event) => event.currentTarget.parentElement?.querySelector<HTMLInputElement>("[data-import-input]")?.click()}
+            >
+              {busy ? t("work.import.importing") : t("work.import.import")}
+            </Button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Work > Connectors (also reachable from Settings): each source's status, record count, last sync and sync switch. */
 export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string; notice?: ReactNode }) {
   const queryClient = useQueryClient();
@@ -471,8 +580,14 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     },
     onError,
   });
-  const rows = visibleConnectors(query.data);
+  // An import source (WhatsApp) has no sign-in: it is imported in the card under the list.
+  const rows = visibleConnectors(query.data).filter((row) => row.mode !== "import");
   const busy = connect.isPending || disconnect.isPending || sync.isPending;
+  // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker.
+  const add = (id: string) => {
+    if (isImportKind(id)) document.querySelector<HTMLInputElement>(`[data-import-input="${id}"]`)?.click();
+    else if (rows.some((row) => row.id === id) && !busy) connect.mutate(id);
+  };
   const failure = query.error ? workFailure(query.error) : null;
   return (
     <div className="h-full overflow-y-auto" data-testid="work-connectors">
@@ -485,6 +600,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           </p>
           {props.notice ? <div className="mt-3">{props.notice}</div> : null}
         </div>
+        <WorkCoverageMeter client={props.client} onAdd={add} />
         <div className="rounded-xl border border-border bg-background">
           {query.isLoading ? (
             <div className="px-4 py-6 text-sm text-muted-foreground">{t("common.loading")}</div>
@@ -513,6 +629,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
             />
           ))}
         </div>
+        <ChatImportCard client={props.client} />
         {isDesktopRuntime() && isMacPlatform() ? <IMessageCard client={props.client} openLink={props.openLink} /> : null}
       </div>
       <ConfirmModal

@@ -1987,7 +1987,7 @@ export class OmniRushGatewayBroker {
    * A Work mode call (`/omnirush/work/<path>[?query]`: connectors, knowledge, health, the hosted MCP server, company setup), with the device bearer and
    * the same bounded 401 refresh. Only the contract's paths; the answer is returned as it came.
    */
-  workRequest(path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }): Promise<Response> {
+  workRequest(path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData; headers?: Record<string, string>; signal?: AbortSignal }): Promise<Response> {
     const [bare = "", query] = path.split("?", 2);
     if (!WORK_PATH.test(bare)) {
       return Promise.resolve(Response.json({ detail: "unsupported_work_path" }, { status: 404 }));
@@ -1998,7 +1998,8 @@ export class OmniRushGatewayBroker {
         Accept: "application/json",
         ...init.headers,
         Authorization: `Bearer ${state.accessToken}`,
-        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+        // A FormData body (an import's file) gets its multipart type and boundary from fetch.
+        ...(typeof init.body === "string" ? { "Content-Type": "application/json" } : {}),
       },
       ...(init.body === undefined ? {} : { body: init.body }),
       signal: init.signal ?? AbortSignal.timeout(60_000),

@@ -26,6 +26,10 @@
  *   GET   /work/chat-tools, POST /work/chat-tools/fix   whether the Work chats' engine has the hosted tools; fix re-reads the switch and re-syncs
  *   GET   /work/graph?focus=&depth=&kinds=&limit=, GET /work/timeline?focus=&cursor=&limit=   the graph explorer
  *   GET   /work/answer-style, PUT /work/answer-style { style: "brief"|"detailed" }   (local: the Work prompt's style)
+ *   GET   /work/search?q=&channels=&from=&to=&mode=&limit=   every channel at once (contract D1)
+ *   GET   /work/coverage                   the channel groups Ask sees (D6)
+ *   GET   /work/deals?filter=&owner=, GET /work/deals/:id    deals with last touch and risk (D3)
+ *   GET   /work/imports, POST /work/imports (multipart: file, kind whatsapp|telegram)   chat exports (D5)
  *
  * The engine's hosted MCP calls (POST /omnirush/work/mcp with the engine's token) are forwarded by server.ts.
  */
@@ -36,7 +40,7 @@ import type { ServerConfig, WorkspaceInfo } from "../types.js";
 import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
-  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
+  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
   accountId: () => Promise<string | null>;
   /** `maxAgeMs`: an answer older than that is asked again. */
   capabilities: (options?: { maxAgeMs?: number }) => Promise<unknown>;
@@ -91,21 +95,29 @@ const WORK_ERRORS: Record<string, string> = {
   bad_import: "Those messages couldn't be read.",
   body_too_large: "That's too much at once. Try with less.",
   token_exchange_failed: "The service didn't accept the sign-in. Reconnect.",
+  unknown_deal: "That deal no longer exists.",
+  too_many_imports: "That's 20 imports today. Try again tomorrow.",
+  parse_failed: "That file couldn't be read. Export the chat again and pick the .txt or .zip.",
+  empty_import: "No messages were found in that file.",
+  unsupported_kind: "That kind of file can't be imported yet.",
+  file_too_large: "That file is over 50 MB.",
   unsupported_work_path: "This needs a newer version of the app.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
+/** The server refuses a chat export over 50 MB (contract D5). */
+const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
 const RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const FACT_KINDS = ["decision", "preference", "policy", "fact", "contact_note"];
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,189}\.[^\s@]{2,}$/;
 
 /** The query a list route forwards: only the named parameters, each short. */
-function forwardQuery(url: URL, names: string[]): string {
+function forwardQuery(url: URL, names: string[], max = 200): string {
   const out = new URLSearchParams();
   for (const name of names) {
     const value = url.searchParams.get(name)?.trim();
-    if (value) out.set(name, value.slice(0, 200));
+    if (value) out.set(name, value.slice(0, max));
   }
   const text = out.toString();
   return text ? `?${text}` : "";
@@ -391,6 +403,32 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   addRoute(routes, "POST", "/work/actions/:id/undo", "client", async (ctx) => {
     if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_action", code: "unknown_action", message: WORK_ERRORS.unknown_action }, 404);
     return forward(`actions/${ctx.params.id}/undo`, "POST", {});
+  });
+
+  // Search, coverage and deals (contract D1, D3, D6): forwarded as they are. A search query may be 500 characters.
+  addRoute(routes, "GET", "/work/search", "client", async (ctx) => forward(`search${forwardQuery(ctx.url, ["q", "channels", "from", "to", "mode", "limit"], 500)}`, "GET"));
+  addRoute(routes, "GET", "/work/coverage", "client", async () => forward("coverage", "GET"));
+  addRoute(routes, "GET", "/work/deals", "client", async (ctx) => forward(`deals${forwardQuery(ctx.url, ["filter", "owner"])}`, "GET"));
+  addRoute(routes, "GET", "/work/deals/:id", "client", async (ctx) => {
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_deal", code: "unknown_deal", message: WORK_ERRORS.unknown_deal }, 404);
+    return forward(`deals/${ctx.params.id}`, "GET");
+  });
+
+  // Chat exports (WhatsApp `.txt`/`.zip`, Telegram `result.json`): the file goes on as it came, with its kind.
+  addRoute(routes, "GET", "/work/imports", "client", async () => forward("imports", "GET"));
+  addRoute(routes, "POST", "/work/imports", "client", async (ctx) => {
+    const form = await ctx.request.formData().catch(() => null);
+    const file = form?.get("file");
+    const kind = form?.get("kind");
+    if (kind !== "whatsapp" && kind !== "telegram") return invalid("kind must be whatsapp or telegram");
+    if (!file || typeof file === "string") return invalid("Pick a file to import.");
+    if (file.size > IMPORT_MAX_BYTES) return jsonResponse({ detail: "file_too_large", code: "file_too_large", message: WORK_ERRORS.file_too_large }, 413);
+    const found = deps.broker();
+    if (!found) return signedOut();
+    const body = new FormData();
+    body.set("kind", kind);
+    body.set("file", file, file.name || "chat.txt");
+    return (await pass(await found.workRequest("imports", { method: "POST", body, signal: AbortSignal.timeout(300_000) }))).response;
   });
 
   // iMessage (macOS desktop): the records the desktop read from the Mac's Messages database, and how many the server has.
