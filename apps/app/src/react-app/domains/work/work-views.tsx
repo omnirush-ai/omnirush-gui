@@ -414,12 +414,13 @@ export function IMessageCard(props: { client: WorkClient | null; openLink: (url:
 
 const METER_DOT = { connected: "bg-foreground/45", attention: "bg-amber-9", missing: "bg-muted-foreground/25" } as const;
 
-/** "Ask sees 3 of 4 channels" with a dot per channel group and "+ Slack" chips for what is missing. Hidden when nothing
- *  is missing, while it loads, and when the read fails (an older server answers 404): it never shows an error. */
-export function WorkCoverageMeter(props: { client: WorkClient | null; onAdd?: (id: string) => void; className?: string }) {
+/** "Ask sees 3 of 4 channels" with a dot per channel group and "+ Slack" chips for what is missing (only those `canAdd`
+ *  allows). Hidden when nothing is missing, while it loads, and when the read fails (an older server answers 404): it never
+ *  shows an error. */
+export function WorkCoverageMeter(props: { client: WorkClient | null; onAdd?: (id: string) => void; canAdd?: (id: string) => boolean; className?: string }) {
   const coverage = useWorkCoverage(props.client);
   const data = coverage.data;
-  const adds = coverageAdds(data);
+  const adds = coverageAdds(data).filter((id) => props.canAdd?.(id) ?? true);
   if (!data || !data.total || (data.connected >= data.total && !adds.length)) return null;
   return (
     <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-muted-foreground", props.className)} data-testid="work-coverage">
@@ -583,10 +584,12 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   // An import source (WhatsApp) has no sign-in: it is imported in the card under the list.
   const rows = visibleConnectors(query.data).filter((row) => row.mode !== "import");
   const busy = connect.isPending || disconnect.isPending || sync.isPending;
-  // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker.
+  // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker. A source this page does not
+  // list (Meetings) gets no chip.
+  const canAdd = (id: string) => isImportKind(id) || rows.some((row) => row.id === id);
   const add = (id: string) => {
     if (isImportKind(id)) document.querySelector<HTMLInputElement>(`[data-import-input="${id}"]`)?.click();
-    else if (rows.some((row) => row.id === id) && !busy) connect.mutate(id);
+    else if (canAdd(id) && !busy) connect.mutate(id);
   };
   const failure = query.error ? workFailure(query.error) : null;
   return (
@@ -600,7 +603,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           </p>
           {props.notice ? <div className="mt-3">{props.notice}</div> : null}
         </div>
-        <WorkCoverageMeter client={props.client} onAdd={add} />
+        <WorkCoverageMeter client={props.client} onAdd={add} canAdd={canAdd} />
         <div className="rounded-xl border border-border bg-background">
           {query.isLoading ? (
             <div className="px-4 py-6 text-sm text-muted-foreground">{t("common.loading")}</div>

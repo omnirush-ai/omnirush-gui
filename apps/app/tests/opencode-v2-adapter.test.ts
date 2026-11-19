@@ -658,6 +658,39 @@ describe("OpenCode v2 event translation", () => {
       createV2EventTranslationState())?.[0]?.properties).toMatchObject({ status: { message: "Rate limited" } });
   });
 
+  test("a one-word gateway code from the shared table reads as its copy too", () => {
+    const failed = (message: string) => translateV2Event({
+      type: "session.execution.failed",
+      properties: { sessionID: "ses_2", error: { type: "provider.internal", message, status: 503 } },
+    }, createV2EventTranslationState())?.[0]?.properties;
+    const unavailable = "omnirush.ai: this model is temporarily unavailable. Try again in a minute, or pick another model.";
+    for (const code of ["maintenance", "draining", "upstream_maintenance"]) {
+      expect(failed(code)).toMatchObject({ error: { data: { message: unavailable, code, statusCode: 503 } } });
+    }
+    // A one-word message the table does not know stays as sent, and so do Object's own names.
+    for (const word of ["overloaded", "constructor", "toString"]) {
+      expect(failed(word)).toMatchObject({ error: { data: { message: word } } });
+      expect((failed(word) as { error: { data: Record<string, unknown> } }).error.data.code).toBeUndefined();
+    }
+  });
+
+  test("a snake_case error on another provider's message keeps its own words", async () => {
+    const originalFetch = globalThis.fetch;
+    const turn = (providerID: string) => ({
+      id: `msg_${providerID}`, type: "assistant", time: { created: 1, completed: 2 },
+      model: { id: "model", providerID }, error: { type: "provider.invalid-request", message: "context_length_exceeded", status: 400 }, content: [],
+    });
+    globalThis.fetch = async () => jsonResponse({ data: [turn("openai"), turn("omnirush")] });
+    try {
+      const client = createClientV2("http://opencode.test/opencode2", "/workspace", {});
+      const result = await client.session.messages({ sessionID: "ses_other" });
+      expect(Object.fromEntries(result.data?.map((message) => [message.info.id, message.info.error]) ?? [])).toEqual({
+        msg_openai: { name: "UnknownError", data: { message: "context_length_exceeded", statusCode: 400 } },
+        msg_omnirush: { name: "UnknownError", data: { message: "omnirush.ai could not complete the model request (context_length_exceeded).", code: "context_length_exceeded", statusCode: 400 } },
+      });
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test("translates captured permission events for the child session while preserving busy and idle", () => {
     const state = createV2EventTranslationState();
     const translated = [

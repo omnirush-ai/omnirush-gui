@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { getReactQueryClient } from "../src/react-app/infra/query-client";
 
 import { modeSwitchNote as sharedNote } from "../../server/src/model-modes/model-modes.mjs";
-import { chatModeNote, chatStarted, fixedModelNote, modeAllowsModel, modeFallbackModel, modeSwitchNote, newChatAllowsModel, useProjectModelModes } from "../src/react-app/domains/session/surface/model-modes";
+import { chatModeNote, chatStarted, fixedModelNote, modeAllowsModel, modeFallbackModel, modeSwitchNote, newChatAllowsModel, useModelModeFilter, useProjectModelModes } from "../src/react-app/domains/session/surface/model-modes";
+import { nextFavoriteModel } from "../src/react-app/domains/session/models/model-collections-store";
 
 // As GET /omnirush/subagent-model lists them: `modes` normalized by the server.
 const MODELS = [
@@ -86,4 +87,38 @@ test("a Work chat started on Claude sends nothing and says why; Code chats keep 
   for (const work of [true, false]) renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Probe, { work })));
   expect(seen[0]).toEqual({ allows: false, note: "Claude can't use your Work tools. Pick another model to start a new chat." });
   expect(seen[1]?.allows).toBe(true);
+});
+
+test("Ctrl+Shift+M and the favorites Next button skip Claude in Work chats; Code chats keep it", async () => {
+  const { GlobalRegistrator } = await import("@happy-dom/global-registrator");
+  const registered = typeof globalThis.window === "undefined";
+  if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  try {
+    const { act, createElement } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const astra = ref("gpt-6-astra");
+    const claude = ref("claude-opus-4-7", "omnirush-claude");
+    const kimi = ref("kimi-k3.1-pro");
+    const favorites = [astra, claude, kimi];
+    let rules: ReturnType<typeof useProjectModelModes> | null = null;
+    const Probe = (props: { work: boolean }) => {
+      rules = useProjectModelModes(null, null, null, props.work);
+      return null;
+    };
+    for (const [work, steps] of [[true, [[astra, kimi], [kimi, astra], [claude, astra]]], [false, [[astra, claude], [claude, kimi], [kimi, astra]]]] as const) {
+      const root = createRoot(document.createElement("div"));
+      await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Probe, { work }))));
+      for (const [current, next] of steps) {
+        // Ctrl+Shift+M (session-route cycleFavoriteModel) keeps the favorites `allowsNew` takes.
+        expect(nextFavoriteModel(favorites.filter((model) => rules!.allowsNew(model)), current)).toEqual(next);
+        // The menu's Next button lists favorites through the filter the route sets (model-select modeAllows).
+        expect(nextFavoriteModel(favorites.filter((model) => useModelModeFilter.getState().allows(model)), current)).toEqual(next);
+      }
+      await act(async () => root.unmount());
+    }
+  } finally {
+    if (registered) await GlobalRegistrator.unregister();
+  }
 });

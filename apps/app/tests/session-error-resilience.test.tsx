@@ -159,6 +159,20 @@ describe("session error resilience", () => {
       .toEqual(["msg_user", "session-error:msg_assistant", "session-error:ses_1"])
   })
 
+  test("two turns that fail with the same title both keep their cards", () => {
+    const refused = presentOpencodeSessionError({ name: "UnknownError", data: { message: "omnirush.ai could not complete the model request (some_new_gateway_code).", statusCode: 400 } })
+    const first: UIMessage = { id: "msg_user_1", role: "user", parts: [{ type: "text", text: "Tidy the changelog" }] }
+    const second: UIMessage = { id: "msg_user_2", role: "user", parts: [{ type: "text", text: "Try again" }] }
+    const firstCard = createSessionErrorUIMessage("msg_assistant_1", refused)
+    // The second run failed before the app saw its turn; the snapshot does not have it yet.
+    const live = [first, firstCard, second, createSessionErrorUIMessage("ses_1", refused)]
+    const ids = (snapshot: UIMessage[]) => reconcileTranscriptMessages({ currentMessages: live, snapshotMessages: snapshot }).map((message) => message.id).sort()
+    expect(ids([first, firstCard, second])).toEqual(["msg_user_1", "msg_user_2", "session-error:msg_assistant_1", "session-error:ses_1"])
+    // Once the snapshot has the second turn's card, the live one goes and each turn shows its own.
+    expect(ids([first, firstCard, second, createSessionErrorUIMessage("msg_assistant_2", refused)]))
+      .toEqual(["msg_user_1", "msg_user_2", "session-error:msg_assistant_1", "session-error:msg_assistant_2"])
+  })
+
   test("keeps partial output and adds the recoverable error beside the failed turn", () => {
     const syncInput = {
       workspaceId: "workspace-1",
