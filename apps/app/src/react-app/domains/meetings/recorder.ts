@@ -155,6 +155,8 @@ function retryable(error: unknown): boolean {
 }
 
 const sleepFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** The server's Retry-After on 503 transcribe_busy/transcribe_unavailable and retryable 429. */
+const BUSY_RETRY_MS = 5_000;
 
 /**
  * One stream's parts, sent one at a time in order (`part` from 0, `offset_ms` on the meeting's clock). A part stays
@@ -227,7 +229,10 @@ export class PartUploader {
           continue;
         }
         this.retrying = true;
-        await sleep(delays[Math.min(attempt, delays.length - 1)]!);
+        const delay = delays[Math.min(attempt, delays.length - 1)]!;
+        // Busy answers carry Retry-After: 5 (the local server drops the header): never send sooner. Network errors keep the short waits.
+        const busy = error instanceof OmniRushServerError && (error.status === 503 || error.status === 429);
+        await sleep(busy ? Math.max(delay, BUSY_RETRY_MS) : delay);
         attempt += 1;
       }
     }

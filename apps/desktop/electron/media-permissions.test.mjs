@@ -55,10 +55,13 @@ test("the app's window may ask for the microphone and for display media (no devi
   const mainWindow = { webContents: { id: 1 } };
   const ask = (details, extra = {}) => shouldAllowMainWindowPermission({ webContents: { id: 1 }, permission: "media", origin: "http://localhost:5173", details, mainWindow, request: true, ...extra });
   assert.equal(ask({ mediaTypes: ["audio"] }), true);
-  assert.equal(ask({ mediaTypes: [] }), true);
+  assert.equal(ask({ mediaTypes: [], isMainFrame: true }), true);
+  // A subframe (an MCP app's sandbox iframe) asking with no device types could be legacy desktop getUserMedia.
+  assert.equal(ask({ mediaTypes: [], isMainFrame: false }), false);
+  assert.equal(ask({ mediaTypes: [] }), false);
   assert.equal(ask({ mediaTypes: ["video"] }), false);
   assert.equal(ask({ mediaTypes: ["audio", "video"] }), false);
-  assert.equal(ask({ mediaTypes: [] }, { request: false }), false);
-  assert.equal(ask({ mediaTypes: [] }, { webContents: { id: 2 } }), false);
-  assert.equal(ask({ mediaTypes: [] }, { origin: "https://example.com" }), false);
+  assert.equal(ask({ mediaTypes: [], isMainFrame: true }, { request: false }), false);
+  assert.equal(ask({ mediaTypes: [], isMainFrame: true }, { webContents: { id: 2 } }), false);
+  assert.equal(ask({ mediaTypes: [], isMainFrame: true }, { origin: "https://example.com" }), false);
 });

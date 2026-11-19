@@ -172,7 +172,7 @@ function partOf(ms: number, startMs: number): Part {
 describe("meeting part uploader", () => {
   test("parts count from 0 per stream with their offsets; busy, in progress and network errors retry the same part until done", async () => {
     const calls: string[] = [];
-    const failures = [new OmniRushServerError(503, "transcribe_busy", "busy"), new OmniRushServerError(409, "part_in_progress", "wait"), new TypeError("Failed to fetch")];
+    const failures = [new OmniRushServerError(503, "transcribe_busy", "busy"), new OmniRushServerError(429, "rate_limited", "slow down"), new OmniRushServerError(409, "part_in_progress", "wait"), new TypeError("Failed to fetch")];
     const waits: number[] = [];
     const uploader = new PartUploader("them", async (speaker, part, offsetMs, wav) => {
       calls.push(`${speaker}:${part}@${offsetMs}:${wav.length}`);
@@ -188,10 +188,11 @@ describe("meeting part uploader", () => {
     const bytes = (ms: number) => 44 + samplesOf(ms) * 2;
     expect(calls).toEqual([
       `them:0@0:${bytes(9_000)}`,
-      `them:1@9000:${bytes(12_000)}`, `them:1@9000:${bytes(12_000)}`, `them:1@9000:${bytes(12_000)}`, `them:1@9000:${bytes(12_000)}`,
+      `them:1@9000:${bytes(12_000)}`, `them:1@9000:${bytes(12_000)}`, `them:1@9000:${bytes(12_000)}`, `them:1@9000:${bytes(12_000)}`, `them:1@9000:${bytes(12_000)}`,
       `them:2@21000:${bytes(8_000)}`,
     ]);
-    expect(waits).toEqual([10, 20, 20]);
+    // 503 and 429 wait at least the server's Retry-After (5 s); in progress and network errors keep the short ladder.
+    expect(waits).toEqual([5_000, 5_000, 20, 20]);
     expect(uploader.gaps).toEqual([]);
     expect(uploader.backlogMs).toBe(0);
   });

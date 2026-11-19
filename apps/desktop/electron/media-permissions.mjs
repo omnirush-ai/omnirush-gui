@@ -32,8 +32,9 @@ export function shouldAllowMainWindowPermission(input) {
   const mediaType = typeof details.mediaType === "string" ? details.mediaType : "";
   if (mediaType && mediaType !== "audio") return false;
   const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
-  // getDisplayMedia asks with no device types; the display-media handler then grants this window and loopback audio only.
-  if (request && permission === "media" && !mediaType && mediaTypes.length === 0) return true;
+  // getDisplayMedia asks with no device types, but so does the legacy getUserMedia({ chromeMediaSource: "desktop" }),
+  // which never reaches the display-media handler and gets the whole screen. Only the app's own top frame may ask.
+  if (request && permission === "media" && !mediaType && mediaTypes.length === 0) return details.isMainFrame === true;
   return mediaType === "audio" || (mediaTypes.includes("audio") && !mediaTypes.includes("video"));
 }
 
