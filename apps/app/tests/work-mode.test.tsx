@@ -136,6 +136,8 @@ describe("Work mode", () => {
     expect(domainFromEmail(null)).toBe("");
     const rows = [row({ id: "google" }), row({ id: "slack", label: "Slack" }), row({ id: "hubspot", label: "HubSpot" }), row({ id: "demo", label: "Sample", status: "connected" }), row({ id: "mock" })];
     expect(connectOrder(rows, ["hubspot", "slack"]).map((item) => item.id)).toEqual(["hubspot", "slack", "google"]);
+    // An import source has no sign-in: onboarding offers no Connect for it (Connectors has its import card).
+    expect(connectOrder([...rows, row({ id: "whatsapp", label: "WhatsApp", mode: "import" })], ["whatsapp"]).map((item) => item.id)).toEqual(["google", "slack", "hubspot"]);
     expect(visibleConnectors(rows).map((item) => item.id)).not.toContain("demo");
     expect(hasSampleData({ done: true, sample_data: true })).toBe(true);
     expect(hasSampleData({ done: true, sample_data: false })).toBe(false);

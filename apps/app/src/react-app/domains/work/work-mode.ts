@@ -225,11 +225,16 @@ export function domainFromEmail(email: string | null | undefined): string {
   return domain && !PERSONAL_MAIL.has(domain) ? domain : "";
 }
 
-/** Sources for the connect step: the recommended ones first (in their order), then the rest; no sample data or test source. */
+/** Sources for the connect step: the recommended ones first (in their order), then the rest; no sample data, test source
+ *  or import source (WhatsApp has no sign-in: it is imported on Connectors). */
 export function connectOrder(rows: OmniRushWorkConnector[] | null | undefined, recommended: string[] = []): OmniRushWorkConnector[] {
   const rank = (id: string) => { const at = recommended.indexOf(id); return at === -1 ? recommended.length : at; };
-  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock").sort((a, b) => rank(a.id) - rank(b.id));
+  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && row.mode !== "import").sort((a, b) => rank(a.id) - rank(b.id));
 }
+
+/** A coverage "+" chip has somewhere to go on Connectors: an import card, or a row that signs in (Meetings has neither). */
+export const coverageCanAdd = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
+  isImportKind(id) || visibleConnectors(rows).some((row) => row.id === id && row.mode !== "import");
 
 /** The first-run checklist: company, a source connected (or sample data), a first chat. */
 export function checklistItems(onboarding: OmniRushWorkOnboarding | null | undefined, rows: OmniRushWorkConnector[] | null | undefined) {

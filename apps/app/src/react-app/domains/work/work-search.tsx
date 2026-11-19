@@ -11,8 +11,8 @@ import { t } from "@/i18n";
 import type { OmniRushWorkSearch, OmniRushWorkSearchGroup, OmniRushWorkSearchItem } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutItemPrompt, periodStart, relativeTime, snippetParts, workFailure, workSearchKey, WORK_SEARCH_FOCUS_EVENT, type SearchPeriod, type WorkClient } from "./work-mode";
-import { ConnectorIcon, WorkCoverageMeter } from "./work-views";
+import { askAboutItemPrompt, coverageCanAdd, periodStart, relativeTime, snippetParts, workConnectorsKey, workFailure, workSearchKey, WORK_SEARCH_FOCUS_EVENT, type SearchPeriod, type WorkClient } from "./work-mode";
+import { ConnectorIcon, useCoverageMeter, WorkCoverageMeter } from "./work-views";
 
 /** Items a group shows before "Show all". */
 export const GROUP_ROWS = 3;
@@ -103,6 +103,10 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
     retry: false,
     staleTime: 30_000,
   });
+  // "+" chips only for what Connectors can add (Meetings has no row there). While the meter shows, it alone says what is missing.
+  const connectors = useQuery({ queryKey: workConnectorsKey(props.client), queryFn: () => props.client!.listWorkConnectors(), enabled: Boolean(props.client), retry: false });
+  const canAdd = (id: string) => coverageCanAdd(connectors.data, id);
+  const meterShown = useCoverageMeter(props.client, canAdd).shown;
   // The chips always show every channel of the unfiltered search, also while one is picked.
   const data = q ? results.data : undefined;
   const all = queryClient.getQueryData<OmniRushWorkSearch>(workSearchKey(props.client, base)) ?? (channel ? undefined : data);
@@ -124,7 +128,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
     <div className="h-full overflow-y-auto" data-testid="work-search">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-10 pt-10">
         <h1 className="text-[22px] font-semibold leading-[28px] tracking-[-0.02em] text-foreground">{t("work.nav.search")}</h1>
-        <WorkCoverageMeter client={props.client} onAdd={props.onOpenConnectors} />
+        <WorkCoverageMeter client={props.client} onAdd={props.onOpenConnectors} canAdd={canAdd} />
         <form className="flex items-center gap-2" role="search" onSubmit={(event) => { event.preventDefault(); setQ(text.trim().slice(0, 500)); }}>
           <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-border bg-background px-3 focus-within:ring-2 focus-within:ring-ring">
             <Search aria-hidden className="size-4 shrink-0 text-muted-foreground" />
@@ -137,7 +141,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
               placeholder={t("work.search.placeholder")}
               aria-label={t("work.search.placeholder")}
               data-testid="work-search-input"
-              className="h-full min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-muted-foreground"
+              className="h-full min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:appearance-none"
             />
           </div>
           <Button type="button" variant="outline" className="h-10" disabled={!text.trim() || asking} onClick={() => void ask(text.trim())} data-testid="work-search-ask">
@@ -176,7 +180,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
             {failure.retry ? <Button variant="outline" size="sm" onClick={() => void results.refetch()}><RotateCw className="size-3.5" />{t("work.common.try_again")}</Button> : null}
           </div>
         ) : !groups.length ? (
-          <p className="text-[13px] text-muted-foreground" data-testid="work-search-empty">{t("work.search.empty")}</p>
+          <p className="text-[13px] text-muted-foreground" data-testid="work-search-empty">{meterShown ? t("work.search.no_match") : t("work.search.empty")}</p>
         ) : (
           <div className={cn("flex flex-col gap-6", results.isPlaceholderData && "opacity-60")} data-testid="work-search-results">
             {groups.map((group) => {
@@ -204,7 +208,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
             })}
           </div>
         )}
-        {data?.coverage_note && q ? <p className="text-[12px] text-muted-foreground" data-testid="work-search-note">{data.coverage_note}</p> : null}
+        {data?.coverage_note && q && !meterShown ? <p className="text-[12px] text-muted-foreground" data-testid="work-search-note">{data.coverage_note}</p> : null}
       </div>
     </div>
   );

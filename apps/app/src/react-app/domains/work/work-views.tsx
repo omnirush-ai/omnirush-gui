@@ -31,7 +31,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageLine, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, useWorkCoverage, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
@@ -412,26 +412,34 @@ export function IMessageCard(props: { client: WorkClient | null; openLink: (url:
   );
 }
 
-const METER_DOT = { connected: "bg-foreground/45", attention: "bg-amber-9", missing: "bg-muted-foreground/25" } as const;
+const METER_DOT = { connected: "bg-foreground/45", attention: "bg-amber-9", missing: "bg-muted-foreground/25 dark:bg-muted-foreground/40" } as const;
 
-/** "Ask sees 3 of 4 channels" with a dot per channel group and "+ Slack" chips for what is missing (only those `canAdd`
- *  allows). Hidden when nothing is missing, while it loads, and when the read fails (an older server answers 404): it never
- *  shows an error. */
+/** The meter's "+" chips (only those `canAdd` allows) and whether it shows: not while it loads, not when nothing is missing,
+ *  not when the read fails (an older server answers 404). */
+export function useCoverageMeter(client: WorkClient | null, canAdd?: (id: string) => boolean) {
+  const data = useWorkCoverage(client).data;
+  const adds = coverageAdds(data).filter((id) => canAdd?.(id) ?? true);
+  return { data, adds, shown: Boolean(data && data.total && (data.connected < data.total || adds.length)) };
+}
+
+/** "Ask sees 3 of 4 channels" with a dot per channel group and "+ Slack" chips for what is missing. It never shows an error. */
 export function WorkCoverageMeter(props: { client: WorkClient | null; onAdd?: (id: string) => void; canAdd?: (id: string) => boolean; className?: string }) {
-  const coverage = useWorkCoverage(props.client);
-  const data = coverage.data;
-  const adds = coverageAdds(data).filter((id) => props.canAdd?.(id) ?? true);
-  if (!data || !data.total || (data.connected >= data.total && !adds.length)) return null;
+  const { data, adds, shown } = useCoverageMeter(props.client, props.canAdd);
+  // Reads the shell's onboarding query without fetching it. Sample data is no channel, so "0 of 6" would read wrong beside its results.
+  const sampleOnly = hasSampleData(useWorkOnboarding(props.client, false).data) && data?.connected === 0;
+  if (!shown || !data) return null;
   return (
     <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-muted-foreground", props.className)} data-testid="work-coverage">
-      <span className="flex items-center gap-2">
-        <span role="meter" aria-valuemin={0} aria-valuemax={data.total} aria-valuenow={data.connected} aria-label={t("work.coverage.sees", { connected: data.connected, total: data.total })} className="flex items-center gap-0.5">
-          {data.groups.map((group) => (
-            <span key={group.group} title={group.label} data-coverage-group={group.group} data-state={group.state} className={cn("h-1.5 w-3 rounded-full", METER_DOT[group.state as keyof typeof METER_DOT] ?? METER_DOT.missing)} />
-          ))}
+      {sampleOnly ? <span data-testid="work-coverage-sample">{t("work.coverage.sample")}</span> : (
+        <span className="flex items-center gap-2">
+          <span role="meter" aria-valuemin={0} aria-valuemax={data.total} aria-valuenow={data.connected} aria-label={t("work.coverage.sees", { connected: data.connected, total: data.total })} className="flex items-center gap-0.5">
+            {data.groups.map((group) => (
+              <span key={group.group} title={group.label} data-coverage-group={group.group} data-state={group.state} className={cn("h-1.5 w-3 rounded-full", METER_DOT[group.state as keyof typeof METER_DOT] ?? METER_DOT.missing)} />
+            ))}
+          </span>
+          <span>{t("work.coverage.sees", { connected: data.connected, total: data.total })}</span>
         </span>
-        <span>{t("work.coverage.sees", { connected: data.connected, total: data.total })}</span>
-      </span>
+      )}
       {adds.map((id) => {
         const label = isImportKind(id) ? t("work.coverage.add_import", { name: connectorLabel(id) }) : connectorLabel(id);
         return props.onAdd ? (
@@ -586,7 +594,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const busy = connect.isPending || disconnect.isPending || sync.isPending;
   // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker. A source this page does not
   // list (Meetings) gets no chip.
-  const canAdd = (id: string) => isImportKind(id) || rows.some((row) => row.id === id);
+  const canAdd = (id: string) => coverageCanAdd(query.data, id);
   const add = (id: string) => {
     if (isImportKind(id)) document.querySelector<HTMLInputElement>(`[data-import-input="${id}"]`)?.click();
     else if (canAdd(id) && !busy) connect.mutate(id);
