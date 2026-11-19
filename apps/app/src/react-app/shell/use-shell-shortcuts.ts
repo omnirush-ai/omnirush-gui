@@ -34,6 +34,8 @@ export type UseShellShortcutsInput = {
   onPrevSessionTab?: () => void;
   onCycleThinkingMode?: (direction: ThinkingModeShortcutDirection) => void;
   onCycleFavoriteModel?: () => void;
+  /** False while Cmd/Ctrl+K belongs to someone else (Work: its Search). */
+  commandPaletteShortcut?: boolean;
 };
 
 export function useCommandPaletteShortcut(enabled = true) {
@@ -77,7 +79,7 @@ export function useShellShortcuts(input: UseShellShortcutsInput) {
     onCycleThinkingMode,
     onCycleFavoriteModel,
   } = input;
-  const { commandPaletteOpen, setCommandPaletteOpen } = useCommandPaletteShortcut();
+  const { commandPaletteOpen, setCommandPaletteOpen } = useCommandPaletteShortcut(input.commandPaletteShortcut !== false);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [sessionNumberModifierHeld, setSessionNumberModifierHeld] = useState(false);

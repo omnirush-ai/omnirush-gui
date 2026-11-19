@@ -768,6 +768,32 @@ describe("OmniRush gateway broker sharing a device session with the desktop acco
   });
 });
 
+describe("OmniRush gateway broker Work requests", () => {
+  test("a chat export goes as multipart (no JSON type) and is sent again after a refresh; other paths are refused", async () => {
+    const seen: Array<{ url: string; contentType: string | null; body: unknown }> = [];
+    const broker = new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1/", accessToken: "access-1", refreshToken: "refresh-1" },
+      engineToken: "local-engine-token",
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/device/refresh")) return Response.json({ access_token: "access-2", refresh_token: "refresh-2", gateway_url: "https://gateway.example/omnirush/v1" });
+        const headers = new Headers(init?.headers);
+        seen.push({ url, contentType: headers.get("content-type"), body: init?.body });
+        return headers.get("authorization") === "Bearer access-2" ? Response.json({ id: "imp_1", status: "done", records: 1 }) : Response.json({ detail: "invalid_token" }, { status: 401 });
+      },
+    });
+    const form = new FormData();
+    form.set("kind", "telegram");
+    form.set("file", new File(["{}"], "result.json"));
+    expect((await broker.workRequest("imports", { method: "POST", body: form })).status).toBe(200);
+    expect(seen.map((call) => call.url)).toEqual(["https://gateway.example/omnirush/work/imports", "https://gateway.example/omnirush/work/imports"]);
+    expect(seen.every((call) => call.contentType === null && call.body === form)).toBe(true);
+    expect((await broker.workRequest("deals/demo:hubspot:deal:9001", { method: "GET" })).status).toBe(200);
+    expect(seen.at(-1)?.url).toBe("https://gateway.example/omnirush/work/deals/demo:hubspot:deal:9001");
+    expect((await broker.workRequest("asks", { method: "GET" })).status).toBe(404);
+  });
+});
+
 describe("OmniRush gateway broker project archive requests", () => {
   const archiveId = "0f6c2a7e-5b1d-4c8e-9a3f-2d7b6e1c4a90";
 

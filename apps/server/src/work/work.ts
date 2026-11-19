@@ -19,8 +19,9 @@ export const WORK_SOURCE_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the graph, the timeline,
  *  the MCP server, the Today feed, the tryout and company setup (enable, onboarding, demo, the org, its invites, members and
- *  insights), iMessage, and the action layer (settings, the activity log and an action's undo). */
-export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect|sync))?)?|entities(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|facts(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|health|graph|timeline|feed|mcp|enable|onboarding|demo|settings|imessage|actions(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/undo)?|org(?:\/(?:me|leave|transfer|insights|invites(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|members(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?))?)$/;
+ *  insights), iMessage, search, coverage, deals, chat-export imports, and the action layer (settings, the activity log and
+ *  an action's undo). */
+export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect|sync))?)?|entities(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|facts(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|deals(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|health|graph|timeline|feed|mcp|enable|onboarding|demo|settings|imessage|search|coverage|imports|actions(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/undo)?|org(?:\/(?:me|leave|transfer|insights|invites(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|members(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?))?)$/;
 
 /** The hosted server's tools that only read (the contract's table): every other tool asks first, in every mode. */
 export const WORK_READ_TOOLS = [
@@ -31,6 +32,8 @@ export const WORK_READ_TOOLS = [
   "jira_search", "jira_read", "confluence_search", "confluence_read", "linear_search", "linear_read", "github_search", "github_read",
   // The context graph: briefing and lookup only; work_remember and work_forget ask like every write.
   "work_context", "work_entity",
+  // Full read of one record, counts across many, and deals (contract D1-D3): reads only.
+  "work_read", "work_count", "work_deals",
 ];
 
 /** The engine's own tools a Work chat does not get (no shell, no code editing). */

@@ -702,6 +702,9 @@ export type OmniRushWorkConnector = {
   attention?: OmniRushWorkAttention | null;
   coverage?: { records: number; by_kind?: Record<string, number> } | null;
   skipped_records?: number;
+  /** "import": no sign-in, the data comes from an uploaded export (WhatsApp); absent for OAuth sources. */
+  mode?: "import" | string;
+  last_import_at?: string | null;
 };
 /** One chat-per-day record the desktop reads from the Mac's local chat.db
  *  and pushes to POST /omnirush/work/imessage (contract Addendum D5). */
@@ -783,6 +786,58 @@ export type OmniRushWorkGraphEdge = { a: string; b: string; kind: "mentions" | "
 export type OmniRushWorkGraph = { nodes: OmniRushWorkGraphNode[]; edges: OmniRushWorkGraphEdge[]; counts: Record<string, number>; truncated: boolean };
 export type OmniRushWorkTimelineItem = Omit<OmniRushWorkGraphNode, "degree">;
 export type OmniRushWorkAnswerStyle = "brief" | "detailed";
+/** GET /omnirush/work/search (contract D1): hits grouped by channel, groups in the order of their best hit. */
+export type OmniRushWorkSearchItem = {
+  source_id: string;
+  channel: string;
+  kind: string;
+  subject?: string | null;
+  /** The best matching sentence, query words wrapped in `**`. */
+  snippet?: string | null;
+  who?: string | null;
+  occurred_at?: string | null;
+  url?: string | null;
+  match?: "keyword" | "meaning" | "both" | string;
+};
+export type OmniRushWorkSearchGroup = { channel: string; group?: string; label: string; count: number; items: OmniRushWorkSearchItem[] };
+export type OmniRushWorkSearch = {
+  query: string;
+  semantic: boolean;
+  /** Present while the account's chunks are still being embedded. */
+  indexing?: { embedded: number; total: number } | null;
+  total: number;
+  groups: OmniRushWorkSearchGroup[];
+  coverage_note?: string | null;
+};
+export type OmniRushWorkSearchQuery = { q: string; channels?: string; from?: string; to?: string; limit?: number };
+/** GET /omnirush/work/coverage (contract D6): which channel groups Ask sees. */
+export type OmniRushWorkCoverageGroup = { group: string; label: string; state: "connected" | "missing" | "attention" | string; sources: string[]; said_you_use?: boolean };
+export type OmniRushWorkCoverage = { groups: OmniRushWorkCoverageGroup[]; connected: number; total: number; missing_used: string[] };
+/** GET /omnirush/work/deals (contract D3). */
+export type OmniRushWorkDealFilter = "open" | "at_risk" | "closing_soon";
+export type OmniRushWorkDeal = {
+  source_id: string;
+  url?: string | null;
+  name?: string | null;
+  company?: string | null;
+  amount?: number | null;
+  stage?: string | null;
+  close_date?: string | null;
+  owner?: string | null;
+  last_touch?: { at: string | null; channel: string; direction?: "in" | "out" | string } | null;
+  risk: string[];
+};
+export type OmniRushWorkDealRecord = { source_id: string; kind: string; channel: string; subject?: string | null; at?: string | null; direction?: string; url?: string | null };
+export type OmniRushWorkDealDetail = OmniRushWorkDeal & {
+  contacts?: { id: string; name: string }[];
+  activity?: { channel: string; items: OmniRushWorkDealRecord[] }[];
+  awaiting_us?: OmniRushWorkDealRecord[];
+  meetings?: OmniRushWorkDealRecord[];
+  facts?: OmniRushWorkFact[];
+};
+/** One chat-export import (contract D5: GET/POST /omnirush/work/imports). */
+export type OmniRushWorkImportKind = "whatsapp" | "telegram";
+export type OmniRushWorkImport = { id: string; source?: string; file_name?: string | null; status: "parsing" | "done" | "failed" | string; records: number; error?: string | null; created_at?: string | null };
 
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
@@ -2524,6 +2579,31 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<{ actions: OmniRushWorkAction[] }>(baseUrl, `/work/actions?limit=${limit}`, { token, hostToken, timeoutMs: timeouts.config }),
     undoWorkAction: (id: string) =>
       requestJson<{ ok: true }>(baseUrl, `/work/actions/${encodeURIComponent(id)}/undo`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    searchWork: (query: OmniRushWorkSearchQuery) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
+      return requestJson<OmniRushWorkSearch>(baseUrl, `/work/search?${params}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    getWorkCoverage: () =>
+      requestJson<OmniRushWorkCoverage>(baseUrl, "/work/coverage", { token, hostToken, timeoutMs: timeouts.config }),
+    listWorkDeals: (filter?: OmniRushWorkDealFilter) =>
+      requestJson<{ items: OmniRushWorkDeal[] }>(baseUrl, `/work/deals${filter ? `?filter=${filter}` : ""}`, { token, hostToken, timeoutMs: timeouts.config }),
+    getWorkDeal: (id: string) =>
+      requestJson<OmniRushWorkDealDetail>(baseUrl, `/work/deals/${encodeURIComponent(id)}`, { token, hostToken, timeoutMs: timeouts.config }),
+    listWorkImports: () =>
+      requestJson<OmniRushWorkImport[]>(baseUrl, "/work/imports", { token, hostToken, timeoutMs: timeouts.config }),
+    /** A WhatsApp (`.txt`/`.zip`) or Telegram (`result.json`) chat export, uploaded as it is. */
+    importWorkChat: async (kind: OmniRushWorkImportKind, file: File) => {
+      const form = new FormData();
+      form.set("kind", kind);
+      form.set("file", file);
+      const result = await requestMultipartRaw(baseUrl, "/work/imports", { token, hostToken, method: "POST", body: form, timeoutMs: 300_000 });
+      let json: { code?: unknown; message?: unknown } | null = null;
+      try { json = result.text ? JSON.parse(result.text) : null; } catch { json = null; }
+      if (!result.ok) {
+        throw new OmniRushServerError(result.status, typeof json?.code === "string" ? json.code : "request_failed", typeof json?.message === "string" ? json.message : `Request failed (${result.status})`);
+      }
+      return json as unknown as { id: string; status: string; records: number };
+    },
     getWorkAnswerStyle: () =>
       requestJson<{ style: OmniRushWorkAnswerStyle }>(baseUrl, "/work/answer-style", { token, hostToken, timeoutMs: timeouts.config }),
     setWorkAnswerStyle: (style: OmniRushWorkAnswerStyle) =>

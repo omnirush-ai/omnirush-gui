@@ -8,7 +8,7 @@ import { matchRoutes, MemoryRouter } from "react-router";
 import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
 import { askAboutPrompt, checklistItems, connectorAccess, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
   askAboutItemPrompt, coverageLine, relativeTime, workActionsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
-  WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE } from "../src/react-app/domains/work/work-mode";
+  WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
 import { leaveState, mePatch, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
 import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
@@ -32,7 +32,7 @@ describe("Work mode", () => {
     const source = readFileSync(new URL("../src/react-app/shell/app-root.tsx", import.meta.url), "utf8");
     const routes = [...source.matchAll(/<Route\s+path="([^"]+)"/g)].map((match) => ({ path: match[1]! }));
     expect(routes.some((route) => route.path === "*")).toBe(true);
-    for (const path of [WORK_HOME_ROUTE, WORK_CONNECTORS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_INSIGHTS_ROUTE, WORK_ACTIVITY_ROUTE]) {
+    for (const path of [WORK_HOME_ROUTE, WORK_CONNECTORS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_INSIGHTS_ROUTE, WORK_ACTIVITY_ROUTE, WORK_SEARCH_ROUTE, WORK_DEALS_ROUTE]) {
       expect(matchRoutes(routes, path)?.[0]?.route.path ?? "none").not.toBe("*");
     }
   });
@@ -73,7 +73,7 @@ describe("Work mode", () => {
     expect(countLabel(1200, "work.count.records")).toBe("1,200 records");
   });
 
-  test("Cmd/Ctrl+Shift+K switches mode; Cmd/Ctrl+K stays the command palette", () => {
+  test("Cmd/Ctrl+Shift+K switches mode (Cmd/Ctrl+K is Search inside Work, the command palette in Code)", () => {
     const key = { key: "K", metaKey: true, ctrlKey: false, shiftKey: true, altKey: false };
     expect(isWorkModeShortcut(key, true)).toBe(true);
     expect(isWorkModeShortcut(key, false)).toBe(false);

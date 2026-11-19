@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { t } from "@/i18n";
-import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -16,6 +16,8 @@ export const WORK_ONBOARDING_ROUTE = "/work/welcome";
 export const WORK_ORG_ROUTE = "/work/organization";
 export const WORK_INSIGHTS_ROUTE = "/work/insights";
 export const WORK_ACTIVITY_ROUTE = "/work/activity";
+export const WORK_SEARCH_ROUTE = "/work/search";
+export const WORK_DEALS_ROUTE = "/work/deals";
 
 /**
  * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own
@@ -50,7 +52,8 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
   | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
-  | "importIMessage" | "getIMessageCount"> & { baseUrl?: string };
+  | "importIMessage" | "getIMessageCount"
+  | "searchWork" | "getWorkCoverage" | "listWorkDeals" | "getWorkDeal" | "listWorkImports" | "importWorkChat"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];
@@ -62,6 +65,65 @@ export const workChatToolsKey = (client: WorkClient | null) => ["omnirush-work-c
 export const workInsightsKey = (client: WorkClient | null, days: number) => ["omnirush-work-insights", client?.baseUrl?.trim() || "default", days];
 export const workSettingsKey = (client: WorkClient | null) => ["omnirush-work-settings", client?.baseUrl?.trim() || "default"];
 export const workActionsKey = (client: WorkClient | null) => ["omnirush-work-actions", client?.baseUrl?.trim() || "default"];
+export const workSearchKey = (client: WorkClient | null, query: Record<string, unknown>) => ["omnirush-work-search", client?.baseUrl?.trim() || "default", query];
+export const workCoverageKey = (client: WorkClient | null) => ["omnirush-work-coverage", client?.baseUrl?.trim() || "default"];
+export const workDealsKey = (client: WorkClient | null, filter: string | null) => ["omnirush-work-deals", client?.baseUrl?.trim() || "default", filter ?? "all"];
+export const workDealKey = (client: WorkClient | null, id: string) => ["omnirush-work-deal", client?.baseUrl?.trim() || "default", id];
+export const workImportsKey = (client: WorkClient | null) => ["omnirush-work-imports", client?.baseUrl?.trim() || "default"];
+
+/** Which channels Ask sees. Fails safe: an older server (404) or any error hides the meter, never shows an error. */
+export function useWorkCoverage(client: WorkClient | null, enabled = true) {
+  return useQuery<OmniRushWorkCoverage>({
+    queryKey: workCoverageKey(client),
+    queryFn: () => client!.getWorkCoverage(),
+    enabled: Boolean(client) && enabled,
+    retry: false,
+    staleTime: 60_000,
+  });
+}
+
+/** The connectors the meter offers to add: the ones the person said they use first, then one per missing group; at most 4. */
+export function coverageAdds(coverage: OmniRushWorkCoverage | null | undefined): string[] {
+  const missing = (coverage?.groups ?? []).filter((group) => group.state === "missing");
+  const ids = [...(coverage?.missing_used ?? []), ...missing.map((group) => group.sources[0]).filter((id): id is string => Boolean(id))];
+  return [...new Set(ids)].slice(0, 4);
+}
+
+/** The chat exports the app can import (contract D5): no sign-in, a file from the phone or Telegram Desktop. */
+export const IMPORT_KINDS = ["whatsapp", "telegram"] as const;
+export const isImportKind = (id: string): id is (typeof IMPORT_KINDS)[number] => (IMPORT_KINDS as readonly string[]).includes(id);
+
+/** Sent on Cmd/Ctrl+K while Search is open: its box takes the cursor again. */
+export const WORK_SEARCH_FOCUS_EVENT = "omnirush:work-search-focus";
+
+/** Cmd/Ctrl+K inside Work: go to Search and put the cursor in its box (in Code it stays the command palette). */
+export function isWorkSearchShortcut(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">, mac: boolean): boolean {
+  return (mac ? event.metaKey : event.ctrlKey) && !event.shiftKey && !event.altKey && event.key?.toLowerCase() === "k";
+}
+
+export type SearchPeriod = "week" | "month" | "quarter" | "any";
+/** The first local day of this week (Monday), month or quarter as YYYY-MM-DD; undefined for Any time. */
+export function periodStart(period: SearchPeriod, now = new Date()): string | undefined {
+  if (period === "any") return undefined;
+  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (period === "week") day.setDate(day.getDate() - ((day.getDay() + 6) % 7));
+  else day.setMonth(period === "quarter" ? day.getMonth() - (day.getMonth() % 3) : day.getMonth(), 1);
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+}
+
+/** A snippet's parts: the server wraps matched words in `**`, shown bold (odd parts). Never parsed as markup. */
+export function snippetParts(snippet: string | null | undefined): { text: string; bold: boolean }[] {
+  return (snippet ?? "").split("**").map((text, index) => ({ text, bold: index % 2 === 1 })).filter((part) => part.text);
+}
+
+/** Whether to list Deals in the sidebar: only once the server has deals (an error or an older server: no). */
+export const hasDeals = (deals: { items?: OmniRushWorkDeal[] } | null | undefined) => (deals?.items?.length ?? 0) > 0;
+
+/** "Ask about this deal": the brief a Work chat starts with, so the agent reads the deal through work_deals first. */
+export function askAboutDealPrompt(deal: Pick<OmniRushWorkDeal, "source_id" | "name" | "company">): string {
+  const name = deal.name?.trim() || deal.source_id;
+  return `Brief me on the deal "${name}"${deal.company ? ` with ${deal.company}` : ""} (source id ${deal.source_id}). Call work_deals for it first, then tell me where it stands, what puts it at risk, the latest contact on each channel and what I should do next, with links.`;
+}
 
 /** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
 export function useWorkState(client: WorkClient | null) {
@@ -237,6 +299,7 @@ export function workToolPermission(permission: string): { label: string; scope: 
 const CONNECTOR_LABELS: Record<string, string> = {
   google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
   notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub",
+  whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
 };
 export const connectorLabel = (id: string, label?: string | null) =>
   label?.trim() || CONNECTOR_LABELS[id] || (id === "mock" ? t("work.connector.mock") : id === "demo" ? t("work.connector.demo") : id);

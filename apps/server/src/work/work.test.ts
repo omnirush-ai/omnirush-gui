@@ -156,12 +156,15 @@ describe("work on the 2.x engine", () => {
 
 describe("work prompt and tools", () => {
   test("context tools read without asking; remember and forget ask; the prompt briefs and remembers", () => {
-    for (const tool of ["work_context", "work_entity", "jira_search", "github_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["work_context", "work_entity", "jira_search", "github_read", "work_read", "work_count", "work_deals"]) expect(WORK_READ_TOOLS).toContain(tool);
     for (const tool of ["work_remember", "work_forget", "jira_comment", "github_create_issue"]) expect(WORK_READ_TOOLS).not.toContain(tool);
     for (const style of ["brief", "detailed"] as const) {
       expect(workPrompt(style)).toContain("call work_context once with the task and a budget");
       expect(workPrompt(style)).toContain("pass max_tokens on searches");
       expect(workPrompt(style)).toContain("work_remember once they agree");
+      expect(workPrompt(style)).toContain("call work_count (terms for names, about for fuzzy conditions)");
+      expect(workPrompt(style)).toContain("For deal questions call work_deals first");
+      expect(workPrompt(style)).toContain("coverage_note, pass it on once");
     }
   });
 
@@ -179,7 +182,7 @@ describe("work prompt and tools", () => {
 
 describe("work routes", () => {
   const json = (data: unknown, status = 200) => Response.json(data, { status });
-  function setup(answer: (path: string, init: { method: string; body?: string; headers?: Record<string, string> }) => Response, capabilities: WorkBroker["capabilities"] = async () => ({ work: { enabled: true, sources: ["mock"] } })) {
+  function setup(answer: (path: string, init: { method: string; body?: string | FormData; headers?: Record<string, string> }) => Response, capabilities: WorkBroker["capabilities"] = async () => ({ work: { enabled: true, sources: ["mock"] } })) {
     const dir = temp();
     const calls: string[] = [];
     const routes: Route[] = [];
@@ -198,7 +201,7 @@ describe("work routes", () => {
       const params: Record<string, string> = {};
       const match = pathname.match(route.regex);
       route.keys.forEach((key, i) => { params[key] = match?.[i + 1] ?? ""; });
-      const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }) });
       return route.handler({ request, url: new URL(request.url), params } as never);
     };
     return { dir, calls, call, refreshed };
@@ -262,9 +265,43 @@ describe("work routes", () => {
   test("the broker reaches only the contract's paths", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
-      "org/insights", "settings", "imessage", "actions", "actions/act_1/undo"]) expect(WORK_PATH.test(path)).toBe(true);
+      "org/insights", "settings", "imessage", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports"]) expect(WORK_PATH.test(path)).toBe(true);
     for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
-      "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/.."]) expect(WORK_PATH.test(path)).toBe(false);
+      "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
+      "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks"]) expect(WORK_PATH.test(path)).toBe(false);
+  });
+
+  test("search, coverage and deals are forwarded with only their parameters; a chat export goes on as multipart", async () => {
+    const forms: FormData[] = [];
+    const { calls, call } = setup((path, init) => {
+      if (init.body instanceof FormData) forms.push(init.body);
+      return path === "imports" && init.method === "POST" ? json({ id: "imp_1", status: "done", records: 4 }) : json({ ok: true });
+    });
+    const long = "a".repeat(600);
+    await call("GET", `/work/search?q=${long}&channels=gmail&from=2026-11-01&evil=1`);
+    expect(calls[0]).toBe(`GET search?q=${"a".repeat(500)}&channels=gmail&from=2026-11-01 `);
+    await call("GET", "/work/coverage");
+    await call("GET", "/work/deals?filter=at_risk&x=1");
+    await call("GET", "/work/deals/demo:hubspot:deal:9001");
+    expect(calls.slice(1)).toEqual(["GET coverage ", "GET deals?filter=at_risk ", "GET deals/demo:hubspot:deal:9001 "]);
+    expect((await call("GET", "/work/deals/..")).status).toBe(404);
+    await call("GET", "/work/imports");
+    expect(calls.at(-1)).toBe("GET imports ");
+
+    const form = (kind: string, file?: File) => { const body = new FormData(); body.set("kind", kind); if (file) body.set("file", file); return body; };
+    const answer = await call("POST", "/work/imports", form("whatsapp", new File(["[1/2/26, 9:00] Ana: hi"], "_chat.txt", { type: "text/plain" })));
+    expect(await answer.json()).toEqual({ id: "imp_1", status: "done", records: 4 });
+    expect(forms[0]?.get("kind")).toBe("whatsapp");
+    const sent = forms[0]?.get("file") as File;
+    expect(sent.name).toBe("_chat.txt");
+    expect(await sent.text()).toBe("[1/2/26, 9:00] Ana: hi");
+    const before = calls.length;
+    expect((await call("POST", "/work/imports", form("audio", new File(["x"], "a.mp3")))).status).toBe(400);
+    expect((await call("POST", "/work/imports", form("telegram"))).status).toBe(400);
+    const big = await call("POST", "/work/imports", form("telegram", new File([new Uint8Array(50 * 1024 * 1024 + 1)], "result.json")));
+    expect(big.status).toBe(413);
+    expect((await big.json()).code).toBe("file_too_large");
+    expect(calls.length).toBe(before);
   });
 
   test("tryout, company setup, sample data and invites are checked, then forwarded", async () => {
@@ -390,7 +427,7 @@ describe("work routes", () => {
   });
 
   test("the engine's MCP call is forwarded as POST with its MCP headers; GET is 405", async () => {
-    let seen: { body?: string; headers?: Record<string, string> } = {};
+    let seen: { body?: string | FormData; headers?: Record<string, string> } = {};
     const broker: WorkBroker = {
       workRequest: async (_path, init) => { seen = init; return new Response('{"jsonrpc":"2.0","id":1,"result":{}}', { headers: { "content-type": "application/json" } }); },
       accountId: async () => null,
