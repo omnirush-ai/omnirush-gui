@@ -8,7 +8,7 @@ import type { SideAnswer } from "./side-question";
 export function SideAnswers(props: { answers: SideAnswer[]; onDismiss: (id: number) => void }) {
   if (!props.answers.length) return null;
   return (
-    <div className="mx-auto flex max-h-[40vh] w-full max-w-3xl shrink-0 flex-col-reverse gap-2 overflow-y-auto px-4 pb-2" data-side-answers>
+    <div className="flex max-h-[40vh] shrink-0 flex-col-reverse gap-2 overflow-y-auto pb-2" data-side-answers>
       {/* reversed list in a column-reverse box: oldest on top, and the scroll starts at the newest card */}
       {[...props.answers].reverse().map((item) => (
         <div

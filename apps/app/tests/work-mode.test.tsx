@@ -550,15 +550,19 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(renderToStaticMarkup(<WorkToolNotices notices={["Google needs reconnecting."]} />)).toContain("Google needs reconnecting.");
   });
 
-  test("the tools banner shows only in a Work chat whose engine lacks the Work tools", () => {
+  test("the tools banner shows only in a Work chat whose engine lacks the Work tools, saying it once", () => {
     const client = { baseUrl: "http://tools.test" } as never;
-    const render = (workChat: boolean, attached: boolean) => {
+    const render = (workChat: boolean, attached: boolean, reason: string | null = null) => {
       const queries = new QueryClient();
-      queries.setQueryData(workChatToolsKey(client), { attached, reason: attached ? null : "Work tools were not added to this chat." });
+      queries.setQueryData(workChatToolsKey(client), { attached, reason: attached ? null : reason });
       return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkToolsBanner workChat={workChat} client={client} /></QueryClientProvider>);
     };
-    expect(render(true, false)).toContain("Work tools aren&#x27;t connected in this chat");
-    expect(render(true, false)).toContain('data-testid="work-tools-fix"');
+    const banner = render(true, false);
+    expect(banner).toContain(">Work tools aren&#x27;t connected<");
+    expect(banner).toContain('data-testid="work-tools-fix"');
+    expect(banner.match(/<p[ >]/g)?.length).toBe(1);
+    // A reason that adds to the title shows under it.
+    expect(render(true, false, "Work is off for your account.")).toContain(">Work is off for your account.<");
     expect(render(true, true)).toBe("");
     expect(render(false, false)).toBe("");
   });

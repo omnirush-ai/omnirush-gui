@@ -2965,7 +2965,7 @@ export default {
   "work.imessage.no_new": "No new messages.",
   "work.tools.connected": "Work tools are connected",
   "work.tools.still_not_connected": "Work tools are still not connected.",
-  "work.tools.banner": "Work tools aren't connected in this chat",
+  "work.tools.banner": "Work tools aren't connected",
   "work.tools.fixing": "Fixing…",
   "work.onboarding.just_me": "Just me",
   "work.onboarding.try": "Try Work",

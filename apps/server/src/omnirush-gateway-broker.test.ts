@@ -1116,6 +1116,8 @@ describe("readable gateway errors", () => {
         code: "provider_error",
         copy: "the model provider could not complete this request.",
       },
+      // The proxy with no usable channel for the model: busy, never the bare code.
+      { status: 503, body: { detail: "no_channel_available" }, code: "no_channel_available", copy: "this model is busy right now." },
     ];
     for (const entry of cases) {
       const response = await refusingBroker(entry.status, JSON.stringify(entry.body), { "content-type": "application/json", ...entry.headers })
@@ -1126,7 +1128,15 @@ describe("readable gateway errors", () => {
       expect(payload.error.code).toBe(entry.code);
       expect(payload.error.message).toStartWith("omnirush.ai: ");
       expect(payload.error.message).toContain(entry.copy);
+      expect(payload.error.message).not.toContain(entry.code);
     }
+  });
+
+  test("a code without copy keeps its name in the message, so a screenshot still says which one", async () => {
+    const response = await refusingBroker(503, JSON.stringify({ detail: "some_new_gateway_code" }))
+      .handle(gatewayRequest({ model: "meta-muse-spark", input: "hi", stream: true }), "responses");
+    const payload = await response.json() as { error: { message: string; code: string } };
+    expect(payload.error).toMatchObject({ code: "some_new_gateway_code", message: "omnirush.ai could not complete the model request (some_new_gateway_code)." });
   });
 
   test("a streamed refusal (capped session, Windows cut-off) becomes a 403 the engine shows once, word for word", async () => {
