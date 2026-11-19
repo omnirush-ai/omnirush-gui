@@ -626,6 +626,23 @@
   ],
   "desktop": [
     {
+      "version": "3.8.9",
+      "date": "2026-11-19",
+      "new": [
+        "Search in Work: one box for all your connected tools. Narrow it by tool or date and ask about any result. In Work, Cmd+K (Ctrl+K on Windows and Linux) opens it.",
+        "Chat imports from WhatsApp and Telegram: add an exported chat in Work > Connectors.",
+        "Deals in Work: your open deals, with the ones at risk or closing soon flagged. It appears once Work has deals to show."
+      ],
+      "improved": [
+        "Work > Search and Connectors show how many of your tools Work can see, with a quick way to add the missing ones."
+      ],
+      "fixed": [
+        "Chats explain model errors in plain words instead of error codes.",
+        "A failed reply shows one error instead of two.",
+        "A Work chat started on Claude says why it can't use your Work tools and how to continue."
+      ]
+    },
+    {
       "version": "3.8.8",
       "date": "2026-11-19",
       "new": [],
