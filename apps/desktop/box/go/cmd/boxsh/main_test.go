@@ -64,6 +64,15 @@ func TestForwardEnv(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%v", got)
 	}
+	// TZ: a zone passes; empty or a file is left to the env file.
+	if got := forwardEnv([]string{"TZ=Asia/Kolkata"}); got["TZ"] != "Asia/Kolkata" {
+		t.Fatalf("%v", got)
+	}
+	for _, tz := range []string{"TZ=", "TZ=:/etc/localtime", "TZ=/usr/share/zoneinfo/Asia/Kolkata"} {
+		if got := forwardEnv([]string{tz}); len(got) != 0 {
+			t.Fatalf("%s: %v", tz, got)
+		}
+	}
 }
 
 func TestWindowsArgs(t *testing.T) {

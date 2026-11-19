@@ -122,13 +122,13 @@ describe("build-artefact shadows: a box", () => {
     mkdirSync(runFolder, { recursive: true });
     // What the wrappers and the git identity wrote before: kept.
     writeFileSync(path.join(runFolder, "env"), "BOXD_PATH_PREFIX=/x\nGIT_CONFIG_SYSTEM=/run/omnirush/gitconfig\n");
-    const box = new Box({ key: "k", name: "omnirush-box-k", root, croot: root, runtime: { name: "wsl", backend: "wsl", bin: "wsl.exe" }, home, runFolder, run: down, log: () => {}, platform: "win32", env: {} });
+    const box = new Box({ key: "k", name: "omnirush-box-k", root, croot: root, runtime: { name: "wsl", backend: "wsl", bin: "wsl.exe" }, home, runFolder, run: down, log: () => {}, platform: "win32", env: { TZ: "UTC" } });
     const plan = shadowPlan(root, { platform: "win32", croot: root });
     // boxrun bound only the root's node_modules (a box started before keeps its own set).
     box.useShadows(plan, [`${root}/node_modules`]);
     box.useShadows(plan, [`${root}/node_modules`]);
     const envFile = readFileSync(path.join(runFolder, "env"), "utf8");
-    expect(envFile).toBe(`BOXD_PATH_PREFIX=/x\nGIT_CONFIG_SYSTEM=/run/omnirush/gitconfig\nUV_PROJECT_ENVIRONMENT=${store}/${shadowId(".")}/venv\n`);
+    expect(envFile).toBe(`TZ=UTC\nBOXD_PATH_PREFIX=/x\nGIT_CONFIG_SYSTEM=/run/omnirush/gitconfig\nUV_PROJECT_ENVIRONMENT=${store}/${shadowId(".")}/venv\n`);
     const forBoxd = JSON.parse(readFileSync(path.join(runFolder, "shadows.json"), "utf8"));
     expect(forBoxd.active).toEqual([`${root}/node_modules`]);
     expect(forBoxd.lazy).toEqual([{ dir: "node_modules", when_any: ["package.json"] }]);

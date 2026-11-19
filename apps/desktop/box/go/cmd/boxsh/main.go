@@ -420,6 +420,10 @@ func forwardEnv(environ []string) map[string]string {
 			continue
 		}
 		k, v := kv[:i], kv[i+1:]
+		// An empty TZ or a file (TZ=:/etc/localtime reads the box's own file) is left to the env file's zone name.
+		if k == "TZ" && (v == "" || strings.HasPrefix(strings.TrimPrefix(v, ":"), "/")) {
+			continue
+		}
 		if passExact[k] || extra[k] {
 			if k == "OMNIRUSH_PKGLOG_DIR" && runtime.GOOS == "windows" {
 				v = windowsToBox(v)

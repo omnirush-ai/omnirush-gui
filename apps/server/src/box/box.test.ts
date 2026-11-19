@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Box, boxKey, containerName, containerRoot, createArgs, credentialPath, filterChanges, helperPath, installShell, parseDiff, parseSize, rt, setToolsRoot, singleFileTar, wslPath } from "./box.js";
+import { Box, boxKey, containerName, containerRoot, createArgs, credentialPath, filterChanges, helperPath, hostZone, installShell, parseDiff, parseSize, rt, setToolsRoot, singleFileTar, wslPath } from "./box.js";
 import { readBoxSettings } from "./desktop.js";
 import { detectStack, imageFor } from "./images.js";
 import { boxRun, engineConfig, gcInBackground, mapToBox, pullInBackground, pullLog, pullMarker, rememberServerDefault, resolveMode, serverDefault, watchServerDefault, type BoxRun } from "./launch.js";
@@ -122,12 +123,48 @@ describe("box core", () => {
   test("this machine's git identity is the box's system git config (lowest priority), kept with the env file", async () => {
     const runFolder = await temp("run");
     await writeFile(join(runFolder, "env"), "BOXD_PATH_PREFIX=/opt/w\n");
-    const box = new Box({ key: "k", name: "n", root: "/p", croot: "/p", runtime: { name: "docker", bin: "docker" }, home: await temp("home"), runFolder, run: async () => ({ code: 0, stdout: "", stderr: "" }), log: () => {}, platform: "linux", env: {} });
+    const box = new Box({ key: "k", name: "n", root: "/p", croot: "/p", runtime: { name: "docker", bin: "docker" }, home: await temp("home"), runFolder, run: async () => ({ code: 0, stdout: "", stderr: "" }), log: () => {}, platform: "linux", env: { TZ: "UTC" } });
     box.useGitIdentity(() => ({ name: 'Sam "S" \\ R', email: "sam@example.invalid" }));
-    expect(await readFile(join(runFolder, "env"), "utf8")).toBe("BOXD_PATH_PREFIX=/opt/w\nGIT_CONFIG_SYSTEM=/run/omnirush/gitconfig\n");
+    expect(await readFile(join(runFolder, "env"), "utf8")).toBe("TZ=UTC\nBOXD_PATH_PREFIX=/opt/w\nGIT_CONFIG_SYSTEM=/run/omnirush/gitconfig\n");
     expect(await readFile(join(runFolder, "gitconfig"), "utf8")).toBe('[user]\n\tname = "Sam \\"S\\" \\\\ R"\n\temail = "sam@example.invalid"\n');
     box.useGitIdentity(() => ({ name: "", email: "" }));
-    expect(await readFile(join(runFolder, "env"), "utf8")).toBe("BOXD_PATH_PREFIX=/opt/w\n");
+    expect(await readFile(join(runFolder, "env"), "utf8")).toBe("TZ=UTC\nBOXD_PATH_PREFIX=/opt/w\n");
+  });
+
+  test("the box's time zone: TZ as set on this machine, else the zone it uses; never an empty line (CLI: the same)", async () => {
+    const work = await temp("tz");
+    const runFolder = join(work, "run");
+    await mkdir(runFolder);
+    const box = (env: NodeJS.ProcessEnv) => new Box({ key: "k", name: "n", root: "/p", croot: "/p", runtime: { name: "docker", bin: "docker" }, home: work, runFolder, run: async () => ({ code: 0, stdout: "", stderr: "" }), log: () => {}, platform: "linux", env });
+    const file = () => readFile(join(runFolder, "env"), "utf8");
+    // One line, first, whichever writer runs (the others keep the file's lines).
+    box({ TZ: "Asia/Kolkata" }).useInstallLog({ root: "/h", tools: "/h/w", raw: "/h/raw", bin: "/h/w/bin", py: "/h/w/py" });
+    box({ TZ: "Asia/Kolkata" }).useGitIdentity(() => ({ name: "", email: "" }));
+    expect(await file()).toBe("TZ=Asia/Kolkata\nBOXD_PATH_PREFIX=/h/w/bin\nPYTHONPATH=/h/w/py\nBOXD_CHOWN_DIRS=/h/raw\n");
+    // No TZ here: the zone this process runs in (/etc/localtime), never "Etc/Unknown".
+    box({}).useGitIdentity(() => ({ name: "", email: "" }));
+    expect((await file()).split("\n")[0]).toBe(`TZ=${Intl.DateTimeFormat().resolvedOptions().timeZone}`);
+    // A process started in another zone (TZ standing in for /etc/localtime): that zone.
+    const script = join(work, "zone.ts");
+    await writeFile(script, `import { hostZone } from ${JSON.stringify(join(import.meta.dir, "box.ts"))};\nconsole.log(JSON.stringify([hostZone(), hostZone({})]));\n`);
+    const zones = (tz: string) => JSON.parse(execFileSync(process.execPath, ["--conditions=development", script], { env: { ...process.env, TZ: tz }, encoding: "utf8" })) as Array<string | null>;
+    const [, kolkata] = zones("Asia/Kolkata");
+    expect(kolkata).toMatch(/^Asia\/(Kolkata|Calcutta)$/);
+    // A file: the zone it points at; one that is missing or outside a zoneinfo folder: no line.
+    await mkdir(join(work, "zoneinfo", "Asia"), { recursive: true });
+    await writeFile(join(work, "zoneinfo", "Asia", "Kolkata"), "TZif");
+    await symlink(join(work, "zoneinfo", "Asia", "Kolkata"), join(work, "localtime"));
+    expect(hostZone({ TZ: `:${join(work, "localtime")}` })).toBe("Asia/Kolkata");
+    expect(hostZone({ TZ: join(work, "localtime") })).toBe("Asia/Kolkata");
+    expect(hostZone({ TZ: `:${join(work, "missing")}` })).toBeNull();
+    expect(hostZone({ TZ: `:${join(runFolder, "env")}` })).toBeNull();
+    // Empty (UTC to glibc, the box's own zone): no line, also in a process started that way (Node's Intl says "Etc/Unknown").
+    box({ TZ: "" }).useGitIdentity(() => ({ name: "", email: "" }));
+    expect((await file()).split("\n")[0]).toBe("BOXD_PATH_PREFIX=/h/w/bin");
+    const [own, unset] = zones("");
+    // Node: no line; Bun reports UTC there (the same zone).
+    expect([null, "UTC"]).toContain(own);
+    expect([null, "UTC"]).toContain(unset);
   });
 
   test("snapshot filter: noise, mounts and credentials out; a folder changed only by them goes too", () => {

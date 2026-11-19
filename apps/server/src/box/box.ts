@@ -27,7 +27,7 @@
 import { gitChildEnv } from "../git-env.js";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -480,7 +480,7 @@ export class Box {
     }
     // boxd puts BOXD_PATH_PREFIX in front of the image's own PATH.
     if (this.pathPrefix) lines.push(`BOXD_PATH_PREFIX=${this.pathPrefix}`);
-    writeFileSync(path.join(this.runFolder, "env"), `${lines.join("\n")}\n`, { mode: 0o644 });
+    this.writeEnv(lines);
     this.writeRecord();
   }
 
@@ -493,8 +493,7 @@ export class Box {
     const inBox = (p: string) => containerRoot(p, this.platform);
     this.pathPrefix = inBox(pkglog.bin);
     // What sudo (root) notes in the per-run folders goes back to the user, so this machine can clear it.
-    const lines = [`BOXD_PATH_PREFIX=${this.pathPrefix}`, `PYTHONPATH=${inBox(pkglog.py)}`, `BOXD_CHOWN_DIRS=${inBox(pkglog.raw)}`];
-    writeFileSync(path.join(this.runFolder, "env"), `${lines.join("\n")}\n`, { mode: 0o644 });
+    this.writeEnv([`BOXD_PATH_PREFIX=${this.pathPrefix}`, `PYTHONPATH=${inBox(pkglog.py)}`, `BOXD_CHOWN_DIRS=${inBox(pkglog.raw)}`]);
     this.writeRecord();
   }
 
@@ -514,7 +513,7 @@ export class Box {
       writeFileSync(path.join(this.runFolder, "gitconfig"), `[user]\n${name ? `\tname = ${quote(name)}\n` : ""}${email ? `\temail = ${quote(email)}\n` : ""}`, { mode: 0o644 });
       lines.push(`GIT_CONFIG_SYSTEM=${RUN_DIR}/gitconfig`);
     }
-    writeFileSync(file, `${lines.join("\n")}\n`, { mode: 0o644 });
+    this.writeEnv(lines);
   }
 
   /**
@@ -540,8 +539,14 @@ export class Box {
     let lines: string[] = [];
     try { lines = readFileSync(file, "utf8").split("\n").filter((line) => line && !names.some((name) => line.startsWith(`${name}=`))); } catch { /* none yet */ }
     lines.push(...Object.entries(plan.env ?? {}).map(([k, v]) => `${k}=${v}`));
-    writeFileSync(file, `${lines.join("\n")}\n`, { mode: 0o644 });
+    this.writeEnv(lines);
     this.writeRecord();
+  }
+
+  /** The env file boxd reads before each command: this machine's time zone first (one line; the writers above keep the file's lines), then `lines`. CLI: writeEnv. */
+  private writeEnv(lines: string[]): void {
+    const zone = hostZone(this.env);
+    writeFileSync(path.join(this.runFolder, "env"), `${[...(zone ? [`TZ=${zone}`] : []), ...lines.filter((line) => !line.startsWith("TZ="))].join("\n")}\n`, { mode: 0o644 });
   }
 
   /** A bound folder (inside path) the plan does not list: its project-relative path, or null outside the project. */
@@ -880,6 +885,22 @@ export function savedTurns(dir: string): number {
   } catch {
     return 0;
   }
+}
+
+/** The time zone the box's commands get: TZ as set here, else the zone this machine uses (the box's own is UTC). CLI: the same. */
+export function hostZone(env: Env = process.env): string | null {
+  // An empty TZ is UTC to glibc, the box's own zone already (and Intl calls it "Etc/Unknown").
+  if (env.TZ === "") return null;
+  // A file (TZ=:/etc/localtime) would name the box's own file: the zone name it points at instead.
+  if (/^:?\//.test(env.TZ ?? "")) {
+    try {
+      return realpathSync(env.TZ!.replace(/^:/, "")).split("/zoneinfo/")[1] || null;
+    } catch {
+      return null;
+    }
+  }
+  const zone = env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return zone && zone !== "Etc/Unknown" ? zone : null;
 }
 
 /** This machine's `git config --global user.name` and `user.email` (empty when unset or git is missing). */
