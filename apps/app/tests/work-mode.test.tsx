@@ -581,6 +581,11 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(render(true, false, "Work is off for your account.")).toContain(">Work is off for your account.<");
     expect(render(true, true)).toBe("");
     expect(render(false, false)).toBe("");
+    // A Work chat started on Claude never gets the tools: one plain notice, no Fix.
+    const claude = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkToolsBanner workChat client={client} claude /></QueryClientProvider>);
+    expect(claude).toContain(">Claude can&#x27;t use your Work tools. Pick another model to start a new chat.<");
+    expect(claude).not.toContain("work-tools-fix");
+    expect(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkToolsBanner client={client} claude /></QueryClientProvider>)).toBe("");
   });
   test("a failed Work request reads as words, and only a failure that can pass offers Try again", () => {
     const missing = workFailure(new OmniRushServerError(404, "not_found", "Not found"));

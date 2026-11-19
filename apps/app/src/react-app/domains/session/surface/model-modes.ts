@@ -12,7 +12,9 @@
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 
+import { DEFAULT_MODEL } from "@/app/constants";
 import type { ModelRef } from "@/app/types";
+import { t } from "@/i18n";
 import type { OmniRushSubagentModelState } from "@/app/lib/omnirush-server";
 import { useLinuxSandbox, type LinuxSandboxClient } from "@/react-app/domains/settings/linux-sandbox";
 import { useSubagentModel, type SubagentModelClient } from "@/react-app/domains/settings/subagent-model";
@@ -45,7 +47,9 @@ export function modeFallbackModel(models: CatalogModels | undefined, mode: Mode 
   if (newChatAllowsModel(models, mode, model, work)) return model ?? null;
   const allowed = (models ?? []).filter((entry) => newChatAllowsModel(models, mode, { providerID: "omnirush", modelID: entry.id }));
   const pick = allowed.find((entry) => entry.default) ?? allowed[0];
-  return pick ? { providerID: "omnirush", modelID: pick.id } : null;
+  if (pick) return { providerID: "omnirush", modelID: pick.id };
+  // No catalog yet: a Work chat still never falls back to Claude.
+  return work ? DEFAULT_MODEL : null;
 }
 
 /** "Kimi K3.1 Pro isn't available in sandbox projects. Using GPT 6 Astra here." */
@@ -144,8 +148,8 @@ export function useProjectModelModes(
   const models = state?.models;
   const rules = useMemo(() => ({
     mode,
-    /** An existing chat's model in the chat's own mode. */
-    allows: (model: ModelRef | null | undefined) => modeAllowsModel(models, mode, model),
+    /** An existing chat's model in the chat's own mode; a Work chat started on Claude sends nothing (no Work tools there). */
+    allows: (model: ModelRef | null | undefined) => !(work && model?.providerID === "omnirush-claude") && modeAllowsModel(models, mode, model),
     /** What a new chat may start on (the pickers' list). */
     allowsNew: (model: ModelRef | null | undefined) => newChatAllowsModel(models, mode, model, work),
     fallback: (model: ModelRef | null | undefined) => modeFallbackModel(models, mode, model, work),
@@ -155,7 +159,7 @@ export function useProjectModelModes(
     fixedNote: (current: ModelRef, wanted: ModelRef) => fixedModelNote(models, current, wanted),
     /** A started chat may go on with `next` (same provider). */
     switchable: (current: ModelRef, next: ModelRef) => switchableModel(models, current, next),
-    chatNote: (model: ModelRef) => chatModeNote(models, mode ?? "native", model),
+    chatNote: (model: ModelRef) => work && model.providerID === "omnirush-claude" ? t("work.tools.claude_notice") : chatModeNote(models, mode ?? "native", model),
   }), [mode, models, work]);
   useEffect(() => {
     useModelModeFilter.setState({ allows: rules.allowsNew });

@@ -379,7 +379,7 @@ export function ModelSelect({
   const selectedThinkingOptions = selectedOption ? thinkingOptionsFor(selectedOption) : [];
   const effectiveBehaviorLabel = behaviorLabel ?? selectedOption?.behaviorLabel ?? "Default";
   const currentFavorite = favoriteOptions.find((option) => isSameModel(value, option)) ?? favoriteOptions[0] ?? null;
-  const nextFavorite = nextFavoriteModel(favorites, value);
+  const nextFavorite = nextFavoriteModel(favoriteOptions, value);
   const showBehavior = !hideValue
     && selectedThinkingOptions.length > 0
     && Boolean(effectiveBehaviorLabel);

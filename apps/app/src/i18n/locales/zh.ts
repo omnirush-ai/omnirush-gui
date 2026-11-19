@@ -2974,6 +2974,7 @@ export default {
   "work.tools.connected": "Work 工具已连接",
   "work.tools.still_not_connected": "Work 工具仍未连接。",
   "work.tools.banner": "Work 工具未连接",
+  "work.tools.claude_notice": "Claude 无法使用你的 Work 工具。请选择其他模型以开始新聊天。",
   "work.tools.fixing": "正在修复…",
   "work.onboarding.just_me": "只有我",
   "work.onboarding.try": "试用 Work",
