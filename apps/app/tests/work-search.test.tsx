@@ -159,6 +159,7 @@ describe("Work search, deals and coverage (contract D6)", () => {
           if (query.q === "slow") await new Promise<void>((resolve) => { release = resolve; });
           if (query.q === "boom") throw new OmniRushServerError(500, "request_failed", "boom");
           if (query.q === "zzz") return { query: "zzz", semantic: false, total: 0, groups: [] };
+          if (query.q === "thin") return { ...results, groups: [...results.groups, { channel: "notion", group: "docs", label: "Notion", count: 5, items: [] }] };
           if (query.channels === "gmail") return { ...results, total: 5, groups: [results.groups[0]!] };
           return results;
         },
@@ -211,7 +212,16 @@ describe("Work search, deals and coverage (contract D6)", () => {
 
       await act(async () => { document.querySelector<HTMLButtonElement>('[data-search-period="month"]')!.click(); await sleep(0); });
       await act(async () => { await sleep(0); });
-      expect(String(queriesSeen.at(-1)?.from)).toMatch(/^\d{4}-\d{2}-01$/);
+      // A new period drops the picked channel, so the chips come back.
+      expect(queriesSeen.at(-1)).toEqual({ q: "price", from: expect.stringMatching(/^\d{4}-\d{2}-01$/) });
+      expect(document.querySelectorAll("[data-search-channel]").length).toBe(3);
+      expect(document.querySelector('[data-search-channel="all"]')?.getAttribute("aria-checked")).toBe("true");
+
+      // A channel with a count but no items keeps its header and Show all, without an empty box.
+      await type("thin");
+      const thin = document.querySelector('[data-search-group="notion"]')!;
+      expect(thin.querySelector("ul")).toBeNull();
+      expect(thin.querySelector('[data-testid="work-search-show-all"]')?.textContent).toBe("Show all 5");
 
       await type("zzz");
       expect(byTest("work-search-empty")?.textContent).toBe("No matches. Try other words, or connect more channels.");

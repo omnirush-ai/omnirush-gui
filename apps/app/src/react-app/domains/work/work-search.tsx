@@ -147,7 +147,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div role="radiogroup" aria-label={t("work.search.period")} className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
             {PERIODS.map(({ id, label }) => (
-              <button key={id} type="button" role="radio" aria-checked={period === id} data-search-period={id} onClick={() => setPeriod(id)}
+              <button key={id} type="button" role="radio" aria-checked={period === id} data-search-period={id} onClick={() => { setPeriod(id); setChannel(null); }}
                 className={cn("h-6 rounded-md px-2 text-[12px] transition-colors", period === id ? "bg-background font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.12)] dark:bg-gray-5" : "text-muted-foreground hover:text-foreground")}>
                 {label}
               </button>
@@ -188,9 +188,12 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
                     {group.label}
                     <span className="rounded-full bg-muted px-1.5 text-[11px] font-medium text-muted-foreground">{group.count}</span>
                   </h2>
-                  <ul className="rounded-xl border border-border bg-background">
-                    {items.map((item) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} onOpen={props.openLink} onAsk={(picked) => askItem(picked, group.label)} />)}
-                  </ul>
+                  {/* The backend fills items only for the top hits overall, so a lower-ranked channel can come with a count and no items. */}
+                  {items.length ? (
+                    <ul className="rounded-xl border border-border bg-background">
+                      {items.map((item) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} onOpen={props.openLink} onAsk={(picked) => askItem(picked, group.label)} />)}
+                    </ul>
+                  ) : null}
                   {!channel && group.count > items.length ? (
                     <button type="button" onClick={() => setChannel(group.channel)} data-testid="work-search-show-all" className="self-start text-[12px] text-muted-foreground transition-colors hover:text-foreground">
                       {t("work.search.show_all", { count: group.count })}
