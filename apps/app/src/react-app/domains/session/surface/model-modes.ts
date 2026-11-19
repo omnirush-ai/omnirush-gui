@@ -33,14 +33,16 @@ export function modeAllowsModel(models: CatalogModels | undefined, mode: Mode | 
  * allows, or in a sandbox project one that runs only on this computer (the
  * chat then runs here).
  */
-export function newChatAllowsModel(models: CatalogModels | undefined, mode: Mode | null, model: ModelRef | null | undefined): boolean {
+export function newChatAllowsModel(models: CatalogModels | undefined, mode: Mode | null, model: ModelRef | null | undefined, work = false): boolean {
+  // The omnirush-claude provider runs a Work chat with none of Work's tools, rules or prompt.
+  if (work && model?.providerID === "omnirush-claude") return false;
   if (modeAllowsModel(models, mode, model)) return true;
   return mode === "box" && modeAllowsModel(models, "native", model);
 }
 
 /** The model a new chat in `mode` starts on instead of `model`: the catalog default among the allowed ones, else the first allowed. */
-export function modeFallbackModel(models: CatalogModels | undefined, mode: Mode | null, model: ModelRef | null | undefined): ModelRef | null {
-  if (newChatAllowsModel(models, mode, model)) return model ?? null;
+export function modeFallbackModel(models: CatalogModels | undefined, mode: Mode | null, model: ModelRef | null | undefined, work = false): ModelRef | null {
+  if (newChatAllowsModel(models, mode, model, work)) return model ?? null;
   const allowed = (models ?? []).filter((entry) => newChatAllowsModel(models, mode, { providerID: "omnirush", modelID: entry.id }));
   const pick = allowed.find((entry) => entry.default) ?? allowed[0];
   return pick ? { providerID: "omnirush", modelID: pick.id } : null;
@@ -132,6 +134,8 @@ export function useProjectModelModes(
   client: (LinuxSandboxClient & SubagentModelClient) | null,
   workspaceId: string | null,
   sessionId: string | null,
+  /** A Work chat (or the Work home's composer): no omnirush-claude models. */
+  work = false,
 ) {
   const sandbox = useLinuxSandbox(client, workspaceId, { fresh: false, sessionId });
   const { state } = useSubagentModel(client);
@@ -143,14 +147,16 @@ export function useProjectModelModes(
     /** An existing chat's model in the chat's own mode. */
     allows: (model: ModelRef | null | undefined) => modeAllowsModel(models, mode, model),
     /** What a new chat may start on (the pickers' list). */
-    allowsNew: (model: ModelRef | null | undefined) => newChatAllowsModel(models, mode, model),
-    fallback: (model: ModelRef | null | undefined) => modeFallbackModel(models, mode, model),
-    note: (from: ModelRef, to: ModelRef) => modeSwitchNote(models, mode ?? "native", from, to),
+    allowsNew: (model: ModelRef | null | undefined) => newChatAllowsModel(models, mode, model, work),
+    fallback: (model: ModelRef | null | undefined) => modeFallbackModel(models, mode, model, work),
+    note: (from: ModelRef, to: ModelRef) => work && from.providerID === "omnirush-claude"
+      ? `Claude isn't available in Work chats. Using ${models?.find((entry) => entry.id === to.modelID)?.name ?? to.modelID} here.`
+      : modeSwitchNote(models, mode ?? "native", from, to),
     fixedNote: (current: ModelRef, wanted: ModelRef) => fixedModelNote(models, current, wanted),
     /** A started chat may go on with `next` (same provider). */
     switchable: (current: ModelRef, next: ModelRef) => switchableModel(models, current, next),
     chatNote: (model: ModelRef) => chatModeNote(models, mode ?? "native", model),
-  }), [mode, models]);
+  }), [mode, models, work]);
   useEffect(() => {
     useModelModeFilter.setState({ allows: rules.allowsNew });
   }, [rules]);

@@ -1892,7 +1892,11 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
             await workBrokersByServer.get(config)?.capabilities({ maxAgeMs: 60_000 }).then((capabilities) => workSwitchSeen(config, capabilities)).catch(() => undefined);
             if (!rememberedWorkSwitch(workDir(runtimeStorageDir(config))).enabled) logger.log("warn", "work chat without work tools", { reason: "work switch off" });
           }
-          await engineV2Preview.syncWorkspaceMcp(workspace.id, workspace.path);
+          // A turn first checks the engine still has them: it drops them when it unloads a folder idle for an hour.
+          const reapplied = await engineV2Preview.syncWorkspaceMcp(workspace.id, workspace.path, {
+            verify: isUploadV2PromptDispatch(request.method, decodeEngineRoutePath(mount.restPath.slice("/opencode2".length) || "/")),
+          });
+          if (reapplied.length > 0) logger.log("warn", "engine dropped MCP servers, applied again", { servers: reapplied });
           const send = () => proxyOpencodeV2Request({
             config,
             request,

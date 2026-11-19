@@ -3,7 +3,7 @@
 // Needs you / Today / Recent from GET /work/feed (empty sections stay out). Each row opens at its source or starts a Work chat about it.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, MessageSquare, Plus, RotateCw } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -143,7 +143,8 @@ export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy:
       )}
     >
       <ConnectorIcon id={item.source} />
-      <div className="min-w-0 flex-1">
+      {/* Room for Ask while it shows, so a long title ends in an ellipsis before it. */}
+      <div className="min-w-0 flex-1 group-focus-within:pr-[4.5rem] group-hover:pr-[4.5rem]">
         <div className="truncate text-[13px] font-medium text-foreground" title={item.title}>{name}</div>
         <div className="truncate text-[12px] text-muted-foreground">{[item.who, when, folder].filter(Boolean).join(" · ")}</div>
       </div>
@@ -191,6 +192,10 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
     placeholderData: keepPreviousData,
     retry: 1,
   });
+  // The picked source went away: show all again (one source left has no All chip to clear it).
+  useEffect(() => {
+    if (source && feed.data && !feed.data.sources.some((item) => item.id === source)) { setSource(null); setMore({}); }
+  }, [feed.data, source]);
   // The strip and the chips always show every source, also while one is picked.
   const all = queryClient.getQueryData<OmniRushWorkFeed>(workFeedKey(props.client, null));
   const sources = (source ? all?.sources : feed.data?.sources) ?? feed.data?.sources ?? [];
@@ -219,6 +224,8 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
   const failure = feed.error && !feed.data ? workFailure(feed.error) : null;
   // A source in view that needs reconnecting or keeps failing may be holding back what needs you, so no all-clear then.
   const broken = sources.some((item) => (!source || item.id === source) && (item.attention?.action === "reconnect" || item.attention?.action === "retry"));
+  // A source in view still on its first import may bring something that needs you: no all-clear yet either.
+  const importing = sources.some((item) => (!source || item.id === source) && sourceDot(item) === "syncing");
   const groups = { needs_you: feed.data?.groups.needs_you ?? [], today: feed.data?.groups.today ?? [], fyi: feed.data?.groups.fyi ?? [] };
   return (
     <div className="flex w-full flex-col gap-6" data-testid="work-today">
@@ -247,9 +254,11 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
         </div>
       ) : (
         <div className={cn("flex flex-col gap-6", feed.isPlaceholderData && "opacity-60")} data-testid="work-feed">
-          {groups.needs_you.length || groups.today.length ? null : !broken ? (
+          {groups.needs_you.length || groups.today.length ? null : !broken ? (importing ? (
+            <p className="text-[13px] text-muted-foreground" data-testid="work-feed-importing">{t("work.today.importing")}</p>
+          ) : (
             <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground" data-testid="work-feed-clear"><Check aria-hidden className="size-3.5" />{t("work.today.all_clear")}</p>
-          ) : groups.fyi.length ? null : (
+          )) : groups.fyi.length ? null : (
             // A broken source can be why the feed is empty, so no all-clear and never a blank page.
             <p className="text-[13px] text-muted-foreground" data-testid="work-feed-blocked">{t("work.today.empty_broken")}</p>
           )}

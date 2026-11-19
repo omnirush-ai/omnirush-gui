@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -17,6 +17,7 @@ import { engineV2Root } from "./engine-v2-migration.js";
 import { builtinOmniRushModelCatalog, writeOmniRushModelCatalog } from "./omnirush-model-catalog.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import { buildOmniRushV2Instructions, waitForOmniRushV2Skills } from "./opencode-v2-instructions.js";
+import { workDir } from "./work/work.js";
 
 const realV2Binary = process.env.OMNIRUSH_OPENCODE2_BIN?.trim()
   || join(resolve(import.meta.dir, "../../.."), "apps/desktop/resources/sidecars/opencode2-x86_64-unknown-linux-gnu");
@@ -152,6 +153,53 @@ realV2Test("removes a configured MCP from the real v2 engine before admission", 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+realV2Test("a Work folder gets its server again when the engine has dropped it (an idle folder unloaded)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "omnirush-engine-v2-mcp-idle-"));
+  const previousBinary = process.env.OMNIRUSH_OPENCODE2_BIN;
+  const previousUserData = process.env.OMNIRUSH_DESKTOP_USER_DATA_DIR;
+  delete process.env.OMNIRUSH_DESKTOP_USER_DATA_DIR;
+  const config: ServerConfig = {
+    ...testConfig(root),
+    port: 9,
+    omnirushGatewayCredentials: { gatewayUrl: "https://gateway.invalid", accessToken: "a", refreshToken: "r" },
+    omnirushEngineToken: "engine-token",
+  };
+  await writeEngineV2PreviewState(config, { enabled: true, chatRouting: false });
+  const folder = join(workDir(runtimeStorageDir(config)), "acct_1");
+  await mkdir(folder, { recursive: true });
+  await writeFile(join(workDir(runtimeStorageDir(config)), "server.json"), JSON.stringify({ block: { enabled: true } }));
+  process.env.OMNIRUSH_OPENCODE2_BIN = realV2Binary;
+  const preview = createEngineV2Preview({ config, deferStart: true });
+  try {
+    preview.start();
+    const connection = await preview.awaitConnection(60_000);
+    if (!connection) throw new Error(preview.status().lastError ?? "Timed out waiting for the real v2 engine");
+    const request = (path: string, init?: RequestInit) => fetch(`${connection.url}${path}?location%5Bdirectory%5D=${encodeURIComponent(folder)}`, {
+      ...init,
+      headers: { authorization: `Basic ${Buffer.from(`${connection.username}:${connection.password}`).toString("base64")}` },
+    });
+    const listed = async () => ((await (await request("/api/mcp")).json()) as { data?: Array<{ name?: string }> }).data?.map((entry) => entry.name) ?? [];
+
+    await preview.syncWorkspaceMcp("ws_work", folder);
+    expect(await listed()).toContain("omnirush-work");
+    // What an idle hour does: the engine unloads the folder and forgets the servers added at runtime.
+    expect((await request("/api/experimental/mcp/omnirush-work", { method: "DELETE" })).status).toBe(204);
+    await preview.syncWorkspaceMcp("ws_work", folder);
+    expect(await listed()).not.toContain("omnirush-work");
+    // A prompt checks, and applies it again.
+    const reapplied = await preview.syncWorkspaceMcp("ws_work", folder, { verify: true });
+    expect(await listed()).toContain("omnirush-work");
+    expect(reapplied).toEqual(["omnirush-work"]);
+    expect(await preview.syncWorkspaceMcp("ws_work", folder, { verify: true })).toEqual([]);
+  } finally {
+    await preview.stop();
+    if (previousBinary === undefined) delete process.env.OMNIRUSH_OPENCODE2_BIN;
+    else process.env.OMNIRUSH_OPENCODE2_BIN = previousBinary;
+    if (previousUserData !== undefined) process.env.OMNIRUSH_DESKTOP_USER_DATA_DIR = previousUserData;
+    await rm(root, { recursive: true, force: true });
+  }
+}, 120_000);
 
 test("maps runtime provider fields and models to an OpenCode v2 spec", () => {
   expect(mapRuntimeProvidersToV2Specs({

@@ -79,7 +79,9 @@ export interface EngineV2Preview {
   /** The account's providers and model catalog again (a catalog change); resolves once the engine has them. */
   refreshProviders(): Promise<void>;
   ensureWorkspaceReady(directory: string): Promise<void>;
-  syncWorkspaceMcp(workspaceId: string, directory: string): Promise<void>;
+  /** Applies a location's MCP servers once; `verify` checks the engine still lists them and applies them again if not.
+   *  The names the engine had dropped (applied again), else none. */
+  syncWorkspaceMcp(workspaceId: string, directory: string, options?: { verify?: boolean }): Promise<string[]>;
   /** Applies a location's MCP servers again (they changed outside the runtime config: Work's connected sources or switch);
    *  resolves once applied (a failure lands in the status' lastError). `workspaceId` for a location not synced yet. */
   refreshWorkspaceMcp(directory: string, workspaceId?: string): Promise<void>;
@@ -355,8 +357,10 @@ export function createEngineV2Preview(options: {
   let migrated = readMigratedSessions(rootDir);
   let mirroredSpecs: OpencodeV2ProviderSpec[] = [];
   const mcpCleaned = new Set<string>();
-  const mcpInFlight = new Map<string, Promise<void>>();
+  const mcpInFlight = new Map<string, Promise<string[]>>();
   const mcpWorkspaces = new Map<string, string>();
+  /** The MCP servers last applied to each location (`verify` checks them). */
+  const mcpApplied = new Map<string, string[]>();
 
   /** The org's cloud connector, as the app persisted it (engine-v2-mcp.ts). */
   const cloudConnector = async () => cloudMcpEntry(runtimeMcpMap(await readGlobalRuntimeOpencodeConfig(config).catch(() => ({}))));
@@ -381,7 +385,7 @@ export function createEngineV2Preview(options: {
     await start();
   }
 
-  async function syncWorkspaceMcp(workspaceId: string, directory: string): Promise<void> {
+  async function syncWorkspaceMcp(workspaceId: string, directory: string, options: { verify?: boolean } = {}): Promise<string[]> {
     mcpWorkspaces.set(directory, workspaceId);
     // Serialize each location, then re-read authoritative state. A queued call
     // must not reuse a snapshot taken before a removal or credential update.
@@ -390,7 +394,18 @@ export function createEngineV2Preview(options: {
       if (previous) await previous.catch(() => undefined);
       const active = sidecar;
       if (!active) throw new Error("OmniRush v2 is not running");
-      if (mcpCleaned.has(directory)) return;
+      let dropped: string[] = [];
+      if (mcpCleaned.has(directory)) {
+        // The engine unloads a location after an idle hour and forgets the servers applied through its runtime API.
+        const applied = mcpApplied.get(directory) ?? [];
+        if (!options.verify || applied.length === 0) return [];
+        const listed = await active.fetchJson("/api/mcp", { directory, timeoutMs: 5_000 }).catch(() => null);
+        if (!listed || listed.status !== 200 || !isRecord(listed.json) || !Array.isArray(listed.json.data)) return [];
+        const names = new Set(listed.json.data.map((entry) => (isRecord(entry) ? entry.name : undefined)));
+        dropped = applied.filter((name) => !names.has(name));
+        if (dropped.length === 0) return [];
+        mcpCleaned.delete(directory);
+      }
       // The allowed servers (engine-v2-mcp.ts) through the engine's runtime MCP API; every other one goes.
       const desired = await desiredV2Mcp(runtimeStorageDir(config), directory, active.env, active.mcpGate, await cloudConnector());
       const current = await active.fetchJson("/api/mcp", { directory, timeoutMs: 10_000 });
@@ -424,10 +439,12 @@ export function createEngineV2Preview(options: {
         if (!waiting) break;
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
+      mcpApplied.set(directory, Object.keys(desired));
       mcpCleaned.add(directory);
+      return dropped;
     })();
     mcpInFlight.set(directory, pending);
-    try { await pending; }
+    try { return await pending; }
     catch (error) {
       mcpCleaned.delete(directory);
       throw error;
@@ -523,6 +540,7 @@ export function createEngineV2Preview(options: {
     sidecar = undefined;
     mcpCleaned.clear();
     mcpWorkspaces.clear();
+    mcpApplied.clear();
     running = false;
     version = undefined;
     pid = undefined;
