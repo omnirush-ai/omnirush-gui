@@ -19,7 +19,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { globalOpencodeConfigDir, workspaceOpencodeConfigCandidates } from "@omnirush/paths";
 
-import { configureFakeMediaForTests, installMediaPermissionHandlers } from "./media-permissions.mjs";
+import { configureFakeMediaForTests, installDisplayAudioHandler, installMediaPermissionHandlers } from "./media-permissions.mjs";
 import { registerMigrationIpc } from "./migration.mjs";
 import { readIMessage, IMessageError } from "./work-imessage.mjs";
 import { createRuntimeManager, createSystemCaCertificateVerifyProc } from "./runtime.mjs";
@@ -3545,6 +3545,7 @@ or use: pnpm dev:worktree`);
       return details.webContentsId === contents.id && Boolean(frame && main) && frame.processId === main.processId && frame.routingId === main.routingId;
     });
     installMediaPermissionHandlers(session, () => mainWindow);
+    installDisplayAudioHandler(session, () => mainWindow);
     await runPendingNukeCleanup({
       env: process.env,
       homedir: os.homedir(),

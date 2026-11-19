@@ -791,6 +791,10 @@ describe("OmniRush gateway broker Work requests", () => {
     expect((await broker.workRequest("deals/demo:hubspot:deal:9001", { method: "GET" })).status).toBe(200);
     expect(seen.at(-1)?.url).toBe("https://gateway.example/omnirush/work/deals/demo:hubspot:deal:9001");
     expect((await broker.workRequest("asks", { method: "GET" })).status).toBe(404);
+    // A meeting's audio part: the bytes as they are, typed as WAV by the caller, the query kept.
+    const wav = new Uint8Array([82, 73, 70, 70, 0, 1]);
+    expect((await broker.workRequest("meetings/m_1/audio?speaker=them&part=2&offset_ms=56000", { method: "POST", body: wav, headers: { "Content-Type": "audio/wav" } })).status).toBe(200);
+    expect(seen.at(-1)).toEqual({ url: "https://gateway.example/omnirush/work/meetings/m_1/audio?speaker=them&part=2&offset_ms=56000", contentType: "audio/wav", body: wav });
   });
 });
 

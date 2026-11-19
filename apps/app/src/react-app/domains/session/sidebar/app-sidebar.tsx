@@ -35,7 +35,7 @@ import {
   Sparkles,
   CircleHelp,
 } from "lucide-react";
-import { Activity, Building2, CalendarClock, Flag, Handshake, Home, LayoutDashboard, Library, Megaphone, MessageSquareText, Plug, Puzzle, Zap } from "lucide-react";
+import { Activity, Building2, CalendarClock, Flag, Handshake, Home, LayoutDashboard, Library, Megaphone, MessageSquareText, Mic, Plug, Puzzle, Zap } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -931,7 +931,7 @@ export type AppSidebarProps = {
   /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
   modeToggle?: React.ReactNode;
   /** In Work: Home, Knowledge and Connectors take the place of the Code tools row. */
-  workNavigation?: { onOpenHome: () => void; homeActive?: boolean; onOpenSearch?: () => void; searchActive?: boolean; onOpenDeals?: () => void; dealsActive?: boolean; onOpenOrganization: () => void; organizationActive: boolean; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean; onOpenActivity: () => void; activityActive: boolean; onOpenInsights?: () => void; insightsActive?: boolean };
+  workNavigation?: { onOpenHome: () => void; homeActive?: boolean; onOpenSearch?: () => void; searchActive?: boolean; onOpenDeals?: () => void; dealsActive?: boolean; onOpenMeetings?: () => void; meetingsActive?: boolean; onOpenOrganization: () => void; organizationActive: boolean; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean; onOpenActivity: () => void; activityActive: boolean; onOpenInsights?: () => void; insightsActive?: boolean };
   sessionNumberShortcuts: SessionNumberShortcutsState;
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
@@ -1520,6 +1520,9 @@ export function AppSidebar(props: AppSidebarProps) {
               ) : null}
               {props.workNavigation?.onOpenDeals ? (
                 <SidebarIconButton icon={Handshake} label={t("work.nav.deals")} active={props.workNavigation.dealsActive} onClick={props.workNavigation.onOpenDeals} data-testid="sidebar-work-deals" className="size-8" />
+              ) : null}
+              {props.workNavigation?.onOpenMeetings ? (
+                <SidebarIconButton icon={Mic} label={t("work.nav.meetings")} active={props.workNavigation.meetingsActive} onClick={props.workNavigation.onOpenMeetings} data-testid="sidebar-work-meetings" className="size-8" />
               ) : null}
             </SidebarMenuItem>
           </SidebarMenu>

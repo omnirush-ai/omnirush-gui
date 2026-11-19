@@ -613,7 +613,8 @@ export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAl
 /** Work mode (the server's `work` switch, as the local server last read it). */
 /** `available`: Work is off but the account can try it (POST /work/enable). */
 /** `autopilot`/`writes_paused`/`full_access`: F action-layer capabilities, carried by /work/state (contract Work Addendum F). */
-export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null; autopilot?: boolean; writes_paused?: boolean; full_access?: boolean };
+/** `meetings`: the server transcribes meeting audio (capabilities.work.meetings); everything about meetings stays hidden without it. */
+export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null; autopilot?: boolean; writes_paused?: boolean; full_access?: boolean; meetings?: boolean };
 /** F action-layer: the user's automation settings (GET/PATCH /omnirush/work/settings). `full_access` implies `autopilot`. */
 export type OmniRushWorkSettings = { autopilot: boolean; full_access: boolean; writes_paused: boolean };
 /** One row of the Work activity log (GET /omnirush/work/actions): a write the agent made in a connected app. */
@@ -838,6 +839,19 @@ export type OmniRushWorkDealDetail = OmniRushWorkDeal & {
 /** One chat-export import (contract D5: GET/POST /omnirush/work/imports). */
 export type OmniRushWorkImportKind = "whatsapp" | "telegram";
 export type OmniRushWorkImport = { id: string; source?: string; file_name?: string | null; status: "parsing" | "done" | "failed" | string; records: number; error?: string | null; created_at?: string | null };
+/** A meeting (contract D4: /omnirush/work/meetings). Segments come with GET /meetings/{id}. */
+export type OmniRushWorkMeetingSegment = { start_ms: number; end_ms: number; text: string; speaker: "me" | "them" | string };
+export type OmniRushWorkMeeting = {
+  id: string;
+  title: string;
+  status: "created" | "processing" | "done" | "failed" | string;
+  started_at: string;
+  ended_at: string | null;
+  audio_seconds?: number | null;
+  segments?: OmniRushWorkMeetingSegment[];
+};
+/** One audio part's answer: its segments, or `duplicate` when the server already has it. */
+export type OmniRushWorkMeetingPartAnswer = { status: "done" | "duplicate"; speaker: string; part: number; seconds?: number; segments?: OmniRushWorkMeetingSegment[] };
 
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
@@ -1969,7 +1983,7 @@ export type OmniRushEditorGitStatus = {
 async function requestJson<T>(
   baseUrl: string,
   path: string,
-  options: { method?: string; token?: string; hostToken?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
+  options: { method?: string; token?: string; hostToken?: string; body?: unknown; raw?: { bytes: Uint8Array<ArrayBuffer>; contentType: string }; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<T> {
   const url = `${baseUrl}${path}`;
   const fetchImpl = resolveFetch(url);
@@ -1979,8 +1993,9 @@ async function requestJson<T>(
     {
       method: options.method ?? "GET",
       signal: options.signal,
-      headers: buildHeaders(options.token, options.hostToken),
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      // Raw bytes (meeting audio) go as they are, never through a Blob: a Blob may be paged to disk.
+      headers: buildHeaders(options.token, options.hostToken, options.raw ? { "Content-Type": options.raw.contentType } : undefined),
+      body: options.raw ? options.raw.bytes : options.body ? JSON.stringify(options.body) : undefined,
     },
     options.timeoutMs ?? DEFAULT_OMNIRUSH_SERVER_TIMEOUT_MS,
   );
@@ -2585,6 +2600,17 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
     },
     getWorkCoverage: () =>
       requestJson<OmniRushWorkCoverage>(baseUrl, "/work/coverage", { token, hostToken, timeoutMs: timeouts.config }),
+    createWorkMeeting: (body: { title?: string; started_at?: string }) =>
+      requestJson<{ id: string }>(baseUrl, "/work/meetings", { token, hostToken, method: "POST", body, timeoutMs: timeouts.config }),
+    getWorkMeeting: (id: string) =>
+      requestJson<OmniRushWorkMeeting>(baseUrl, `/work/meetings/${encodeURIComponent(id)}`, { token, hostToken, timeoutMs: timeouts.config }),
+    updateWorkMeeting: (id: string, patch: { title?: string; ended_at?: string }) =>
+      requestJson<OmniRushWorkMeeting>(baseUrl, `/work/meetings/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
+    /** One audio part (16 kHz mono 16-bit WAV, at most 2 MiB), transcribed while the request waits (up to about 2 min on the server). */
+    uploadWorkMeetingAudio: (id: string, part: { speaker: "me" | "them"; part: number; offsetMs: number }, wav: Uint8Array<ArrayBuffer>) =>
+      requestJson<OmniRushWorkMeetingPartAnswer>(baseUrl, `/work/meetings/${encodeURIComponent(id)}/audio?speaker=${part.speaker}&part=${part.part}&offset_ms=${part.offsetMs}`, {
+        token, hostToken, method: "POST", raw: { bytes: wav, contentType: "audio/wav" }, timeoutMs: 150_000,
+      }),
     listWorkDeals: (filter?: OmniRushWorkDealFilter) =>
       requestJson<{ items: OmniRushWorkDeal[] }>(baseUrl, `/work/deals${filter ? `?filter=${filter}` : ""}`, { token, hostToken, timeoutMs: timeouts.config }),
     getWorkDeal: (id: string) =>

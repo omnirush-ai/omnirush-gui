@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { configureFakeMediaForTests, isBrowserPanelPermissionAllowed } from "./media-permissions.mjs";
+import { configureFakeMediaForTests, displayAudioAnswer, isBrowserPanelPermissionAllowed, shouldAllowMainWindowPermission } from "./media-permissions.mjs";
 
 function fakeApp() {
   const switches = [];
@@ -37,4 +37,28 @@ test("the built-in browser grants only page-local permissions", () => {
   for (const permission of ["fullscreen", "clipboard-sanitized-write", "pointerLock"]) {
     assert.equal(isBrowserPanelPermissionAllowed(permission), true, permission);
   }
+});
+
+test("system audio: only the app's own window gets its frame as video and loopback audio", () => {
+  const frame = { processId: 4, routingId: 1 };
+  const mainWindow = { webContents: { mainFrame: { processId: 4, routingId: 1 } } };
+  const request = (overrides) => ({ frame, securityOrigin: "http://127.0.0.1:5173", videoRequested: true, audioRequested: true, ...overrides });
+  assert.deepEqual(displayAudioAnswer(request({}), mainWindow), { video: frame, audio: "loopback" });
+  assert.deepEqual(displayAudioAnswer(request({ securityOrigin: "file://" }), mainWindow), { video: frame, audio: "loopback" });
+  assert.deepEqual(displayAudioAnswer(request({ securityOrigin: "https://example.com" }), mainWindow), {});
+  assert.deepEqual(displayAudioAnswer(request({ frame: { processId: 9, routingId: 1 } }), mainWindow), {});
+  assert.deepEqual(displayAudioAnswer(request({ frame: null }), mainWindow), {});
+  assert.deepEqual(displayAudioAnswer(request({}), null), {});
+});
+
+test("the app's window may ask for the microphone and for display media (no device types), never the camera", () => {
+  const mainWindow = { webContents: { id: 1 } };
+  const ask = (details, extra = {}) => shouldAllowMainWindowPermission({ webContents: { id: 1 }, permission: "media", origin: "http://localhost:5173", details, mainWindow, request: true, ...extra });
+  assert.equal(ask({ mediaTypes: ["audio"] }), true);
+  assert.equal(ask({ mediaTypes: [] }), true);
+  assert.equal(ask({ mediaTypes: ["video"] }), false);
+  assert.equal(ask({ mediaTypes: ["audio", "video"] }), false);
+  assert.equal(ask({ mediaTypes: [] }, { request: false }), false);
+  assert.equal(ask({ mediaTypes: [] }, { webContents: { id: 2 } }), false);
+  assert.equal(ask({ mediaTypes: [] }, { origin: "https://example.com" }), false);
 });

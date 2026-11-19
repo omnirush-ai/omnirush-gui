@@ -32,14 +32,14 @@ describe("work switch", () => {
     expect(rememberedWorkSwitch(dir)).toMatchObject({ enabled: true, available: false });
   });
 
-  test("the action layer's switches are remembered with the block, off unless Work is on, and never count as a switch change", () => {
+  test("the action layer's switches and the meetings flag are remembered with the block, off unless Work is on, and never count as a switch change", () => {
     const dir = temp();
-    expect(rememberedWorkActions(dir)).toEqual({ autopilot: false, full_access: false, writes_paused: false });
+    expect(rememberedWorkActions(dir)).toEqual({ autopilot: false, full_access: false, writes_paused: false, meetings: false });
     rememberWorkSwitch(dir, { work: { enabled: true, sources: [] } });
-    expect(rememberWorkSwitch(dir, { work: { enabled: true, sources: [], autopilot: true, full_access: "yes", writes_paused: true } })).toBe(false);
-    expect(rememberedWorkActions(dir)).toEqual({ autopilot: true, full_access: false, writes_paused: true });
-    rememberWorkSwitch(dir, { work: { enabled: false, sources: [], autopilot: true } });
-    expect(rememberedWorkActions(dir)).toEqual({ autopilot: false, full_access: false, writes_paused: false });
+    expect(rememberWorkSwitch(dir, { work: { enabled: true, sources: [], autopilot: true, full_access: "yes", writes_paused: true, meetings: true } })).toBe(false);
+    expect(rememberedWorkActions(dir)).toEqual({ autopilot: true, full_access: false, writes_paused: true, meetings: true });
+    rememberWorkSwitch(dir, { work: { enabled: false, sources: [], autopilot: true, meetings: true } });
+    expect(rememberedWorkActions(dir)).toEqual({ autopilot: false, full_access: false, writes_paused: false, meetings: false });
   });
 });
 
@@ -182,7 +182,7 @@ describe("work prompt and tools", () => {
 
 describe("work routes", () => {
   const json = (data: unknown, status = 200) => Response.json(data, { status });
-  function setup(answer: (path: string, init: { method: string; body?: string | FormData; headers?: Record<string, string> }) => Response, capabilities: WorkBroker["capabilities"] = async () => ({ work: { enabled: true, sources: ["mock"] } })) {
+  function setup(answer: (path: string, init: { method: string; body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal }) => Response, capabilities: WorkBroker["capabilities"] = async () => ({ work: { enabled: true, sources: ["mock"] } })) {
     const dir = temp();
     const calls: string[] = [];
     const routes: Route[] = [];
@@ -201,7 +201,7 @@ describe("work routes", () => {
       const params: Record<string, string> = {};
       const match = pathname.match(route.regex);
       route.keys.forEach((key, i) => { params[key] = match?.[i + 1] ?? ""; });
-      const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }) });
+      const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: body instanceof FormData ? body : body instanceof Uint8Array ? new Uint8Array(body) : JSON.stringify(body) }) });
       return route.handler({ request, url: new URL(request.url), params } as never);
     };
     return { dir, calls, call, refreshed };
@@ -211,7 +211,7 @@ describe("work routes", () => {
     const { dir, calls, call, refreshed } = setup((path) => path === "connectors"
       ? json([{ id: "mock", label: "Mock", status: "connected", sync_enabled: true, records: 3, last_sync_at: null, scopes: [] }])
       : path.endsWith("/start") ? json({ auth_url: "https://auth.example/x" }) : json({ ok: true, sync_enabled: false }));
-    expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, available: false, sources: ["mock"], message: null, autopilot: false, full_access: false, writes_paused: false, workspaceId: null });
+    expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, available: false, sources: ["mock"], message: null, autopilot: false, full_access: false, writes_paused: false, meetings: false, workspaceId: null });
     expect(await (await call("POST", "/work/workspace")).json()).toEqual({ workspaceId: "ws_work", path: join(dir, "user_1") });
     expect((await (await call("GET", "/work/connectors")).json())[0].id).toBe("mock");
     expect(workEnvironment(dir, join(dir, "user_1"))?.work.connectors).toEqual([{ id: "mock", enabled: true }]);
@@ -265,10 +265,11 @@ describe("work routes", () => {
   test("the broker reaches only the contract's paths", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
-      "org/insights", "settings", "imessage", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports"]) expect(WORK_PATH.test(path)).toBe(true);
+      "org/insights", "settings", "imessage", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
+      "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio"]) expect(WORK_PATH.test(path)).toBe(true);
     for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
       "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
-      "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks"]) expect(WORK_PATH.test(path)).toBe(false);
+      "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("search, coverage and deals are forwarded with only their parameters; a chat export goes on as multipart", async () => {
@@ -301,6 +302,48 @@ describe("work routes", () => {
     const big = await call("POST", "/work/imports", form("telegram", new File([new Uint8Array(50 * 1024 * 1024 + 1)], "result.json")));
     expect(big.status).toBe(413);
     expect((await big.json()).code).toBe("file_too_large");
+    expect(calls.length).toBe(before);
+  });
+
+  test("meetings: the flag from the switch; create, read and end checked; an audio part goes on as raw WAV bytes", async () => {
+    const sent: Array<{ path: string; body: unknown; type?: string; signal: boolean }> = [];
+    const { calls, call } = setup((path, init) => {
+      sent.push({ path, body: init.body, type: init.headers?.["Content-Type"], signal: Boolean(init.signal) });
+      return path.endsWith("/audio?speaker=them&part=4&offset_ms=84000") ? json({ status: "done", speaker: "them", part: 4, seconds: 2, segments: [] }) : json({ id: "m_1" });
+    }, async () => ({ work: { enabled: true, sources: [], meetings: true } }));
+    expect(await (await call("GET", "/work/state")).json()).toMatchObject({ meetings: true });
+    expect((await call("POST", "/work/meetings", { title: "  Weekly sync ", started_at: "2026-11-19T10:00:00.000Z", evil: 1 })).status).toBe(200);
+    expect((await call("POST", "/work/meetings", { started_at: "yesterday" })).status).toBe(400);
+    expect((await call("POST", "/work/meetings", { title: "x".repeat(301) })).status).toBe(400);
+    await call("GET", "/work/meetings/m_1");
+    expect((await call("GET", "/work/meetings/..")).status).toBe(404);
+    expect((await call("PATCH", "/work/meetings/m_1", { ended_at: "2026-11-19T10:30:00Z" })).status).toBe(200);
+    expect((await call("PATCH", "/work/meetings/m_1", {})).status).toBe(400);
+    expect(calls).toEqual([
+      "POST meetings {\"title\":\"Weekly sync\",\"started_at\":\"2026-11-19T10:00:00.000Z\"}",
+      "GET meetings/m_1 ",
+      "PATCH meetings/m_1 {\"ended_at\":\"2026-11-19T10:30:00Z\"}",
+    ]);
+
+    const audio = (query: string, body: Uint8Array<ArrayBuffer>) => call("POST", `/work/meetings/m_1/audio${query}`, body);
+    const wav = new Uint8Array(64_000).fill(7);
+    const answer = await audio("?speaker=them&part=4&offset_ms=84000", wav);
+    expect(await answer.json()).toEqual({ status: "done", speaker: "them", part: 4, seconds: 2, segments: [] });
+    const last = sent.at(-1)!;
+    expect(last.path).toBe("meetings/m_1/audio?speaker=them&part=4&offset_ms=84000");
+    expect(last.type).toBe("audio/wav");
+    expect(last.signal).toBe(true);
+    expect(last.body).toBeInstanceOf(Uint8Array);
+    expect(last.body).toEqual(wav);
+    const before = calls.length;
+    for (const query of ["?speaker=bob&part=0&offset_ms=0", "?speaker=me&part=-1&offset_ms=0", "?speaker=me&part=1.5&offset_ms=0", "?speaker=me&part=0", "?speaker=me&part=0&offset_ms=abc"]) {
+      expect((await audio(query, wav)).status).toBe(400);
+    }
+    expect((await audio("?speaker=me&part=0&offset_ms=0", new Uint8Array(10))).status).toBe(400);
+    const big = await audio("?speaker=me&part=0&offset_ms=0", new Uint8Array(2 * 1024 * 1024 + 1));
+    expect(big.status).toBe(413);
+    expect((await big.json()).code).toBe("audio_too_large");
+    expect((await call("POST", "/work/meetings/a%2Fb/audio?speaker=me&part=0&offset_ms=0", wav)).status).toBe(404);
     expect(calls.length).toBe(before);
   });
 
@@ -427,7 +470,7 @@ describe("work routes", () => {
   });
 
   test("the engine's MCP call is forwarded as POST with its MCP headers; GET is 405", async () => {
-    let seen: { body?: string | FormData; headers?: Record<string, string> } = {};
+    let seen: { body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string> } = {};
     const broker: WorkBroker = {
       workRequest: async (_path, init) => { seen = init; return new Response('{"jsonrpc":"2.0","id":1,"result":{}}', { headers: { "content-type": "application/json" } }); },
       accountId: async () => null,

@@ -19,9 +19,9 @@ export const WORK_SOURCE_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the graph, the timeline,
  *  the MCP server, the Today feed, the tryout and company setup (enable, onboarding, demo, the org, its invites, members and
- *  insights), iMessage, search, coverage, deals, chat-export imports, and the action layer (settings, the activity log and
- *  an action's undo). */
-export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect|sync))?)?|entities(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|facts(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|deals(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|health|graph|timeline|feed|mcp|enable|onboarding|demo|settings|imessage|search|coverage|imports|actions(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/undo)?|org(?:\/(?:me|leave|transfer|insights|invites(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|members(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?))?)$/;
+ *  insights), iMessage, search, coverage, deals, chat-export imports, meetings (one, and its audio parts), and the action
+ *  layer (settings, the activity log and an action's undo). */
+export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|disconnect|sync))?)?|entities(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|facts(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|deals(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|meetings(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}(?:\/audio)?)?|health|graph|timeline|feed|mcp|enable|onboarding|demo|settings|imessage|search|coverage|imports|actions(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/undo)?|org(?:\/(?:me|leave|transfer|insights|invites(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|members(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?))?)$/;
 
 /** The hosted server's tools that only read (the contract's table): every other tool asks first, in every mode. */
 export const WORK_READ_TOOLS = [
@@ -91,12 +91,12 @@ export function workServerSwitch(capabilities: unknown): WorkSwitch {
   return { enabled, available: !enabled && block.available === true, sources, message };
 }
 
-/** The action layer's switches in the `work` block as last seen (all off unless Work is on). Not part of the switch, so
- *  turning autopilot on or off never restarts the engine. */
-export function rememberedWorkActions(dir: string): { autopilot: boolean; full_access: boolean; writes_paused: boolean } {
+/** The action layer's switches and the meetings flag (the server transcribes meeting audio) in the `work` block as last
+ *  seen (all off unless Work is on). Not part of the switch, so turning autopilot on or off never restarts the engine. */
+export function rememberedWorkActions(dir: string): { autopilot: boolean; full_access: boolean; writes_paused: boolean; meetings: boolean } {
   const saved = readJson(join(dir, "server.json"));
   const block = isRecord(saved) && isRecord(saved.block) && saved.block.enabled === true ? saved.block : {};
-  return { autopilot: block.autopilot === true, full_access: block.full_access === true, writes_paused: block.writes_paused === true };
+  return { autopilot: block.autopilot === true, full_access: block.full_access === true, writes_paused: block.writes_paused === true, meetings: block.meetings === true };
 }
 
 /** The switch as last seen (off when never seen). */
