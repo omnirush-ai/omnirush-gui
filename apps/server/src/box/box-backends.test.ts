@@ -618,9 +618,10 @@ describe("box install log: the wrappers read-only", () => {
 
   test("a box's install-log environment: the read-only wrappers, or for a box made before its own copies", () => {
     const dir = tmp();
-    const box = new Box({ key: "k", name: "n", root: "/home/u/p", croot: "/home/u/p", runtime: { name: "bwrap", bin: "boxrun" }, home: dir, runFolder: dir, run: async () => ({ code: 0, stdout: "", stderr: "" }), log: () => {}, platform: "linux", env: {} });
+    const box = new Box({ key: "k", name: "n", root: "/home/u/p", croot: "/home/u/p", runtime: { name: "bwrap", bin: "boxrun" }, home: dir, runFolder: dir, run: async () => ({ code: 0, stdout: "", stderr: "" }), log: () => {}, platform: "linux", env: { TZ: "UTC" } });
     box.useInstallLog(PKGLOG);
     expect(readFileSync(path.join(dir, "env"), "utf8").trim().split("\n")).toEqual([
+      "TZ=UTC",
       "BOXD_PATH_PREFIX=/h/.omnirush/pkglog-wrappers/bin-0123456789ab",
       "PYTHONPATH=/h/.omnirush/pkglog-wrappers/py-0123456789ab",
       "BOXD_CHOWN_DIRS=/h/.omnirush/pkglog/raw",
