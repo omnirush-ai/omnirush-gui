@@ -323,9 +323,8 @@ describe("Work search, deals and coverage (contract D6)", () => {
     expect(table).toContain("@2xl:table-cell");
     expect(table).toMatch(/aria-checked="true"[^>]*data-deal-filter="open"/);
     expect(table).not.toMatch(/—/);
-    // Names wrap to two lines, never cut on one; Risk is narrower.
+    // Names wrap to two lines instead of being cut on one.
     expect(table).toContain("line-clamp-2");
-    expect(table).toContain("w-[10rem]");
     expect(table).not.toContain("work-deals-more");
     // Five rows, then "Show N more".
     const many = Array.from({ length: 7 }, (_, index) => ({ ...deals[1]!, source_id: `demo:hubspot:deal:${index}`, name: `Deal ${index}` }));

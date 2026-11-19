@@ -174,7 +174,7 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
                   <th className="w-[6.5rem] px-3 py-2 text-right font-medium">{t("work.deals.amount")}</th>
                   <th className={cn("w-[5.5rem] px-3 py-2 font-medium", narrow)}>{t("work.deals.close_date")}</th>
                   <th className="w-[7rem] px-3 py-2 font-medium">{t("work.deals.last_touch")}</th>
-                  <th className="w-[10rem] px-3 py-2 font-medium">{t("work.deals.risk")}</th>
+                  <th className="w-[13rem] px-3 py-2 font-medium">{t("work.deals.risk")}</th>
                 </tr>
               </thead>
               <tbody>
