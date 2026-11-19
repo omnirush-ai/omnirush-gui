@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>m0audio</title>
+<script>
+  const { ipcRenderer } = require("electron")
+  const log = (o) => ipcRenderer.send("log", o)
+  const KEEP_SECONDS = 30
+
+  // Per-second RMS/peak (dBFS) of a track, plus its first 30 s as 16 kHz mono PCM.
+  function meter(name, track, ctx, clips) {
+    const src = ctx.createMediaStreamSource(new MediaStream([track]))
+    const proc = ctx.createScriptProcessor(4096, 2, 1)
+    const mute = ctx.createGain()
+    mute.gain.value = 0
+    src.connect(proc).connect(mute).connect(ctx.destination)
+    const keep = new Int16Array(KEEP_SECONDS * ctx.sampleRate)
+    let kept = 0, sum = 0, peak = 0, n = 0, sec = 0
+    proc.onaudioprocess = (ev) => {
+      const ib = ev.inputBuffer
+      const chans = Array.from({ length: ib.numberOfChannels }, (_, c) => ib.getChannelData(c))
+      for (let i = 0; i < ib.length; i++) {
+        let v = 0
+        for (const ch of chans) v += ch[i]
+        v /= chans.length
+        sum += v * v
+        peak = Math.max(peak, Math.abs(v))
+        if (kept < keep.length) keep[kept++] = Math.max(-1, Math.min(1, v)) * 32767
+        if (++n >= ctx.sampleRate) {
+          log({ stream: name, sec: sec++, rmsDb: +(10 * Math.log10(sum / n + 1e-12)).toFixed(1), peakDb: +(20 * Math.log10(peak + 1e-9)).toFixed(1) })
+          sum = 0; peak = 0; n = 0
+        }
+      }
+    }
+    clips[name] = () => keep.slice(0, kept)
+  }
+
+  async function start() {
+    const cfg = await ipcRenderer.invoke("cfg")
+    const ctx = new AudioContext({ sampleRate: 16000 })
+    await ctx.resume()
+    const clips = {}
+    try {
+      const t = performance.now()
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        // Display audio defaults to echo cancellation, noise suppression and gain control on; they eat the remote voice.
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      })
+      for (const v of stream.getVideoTracks()) v.stop()
+      const [track] = stream.getAudioTracks()
+      log({ event: "them-track", ms: Math.round(performance.now() - t), label: track?.label, state: track?.readyState, muted: track?.muted, settings: track?.getSettings() })
+      if (track) {
+        for (const ev of ["ended", "mute", "unmute"]) track.addEventListener(ev, () => log({ event: `them-${ev}` }))
+        meter("them", track, ctx, clips)
+      }
+    } catch (e) {
+      log({ event: "them-error", name: e.name, message: e.message })
+    }
+    if (cfg.mic) {
+      try {
+        // Which inputs Chromium offers (on Linux it hides Pulse/PipeWire monitor sources).
+        log({ event: "inputs", list: (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput").map((d) => d.label || d.deviceId) })
+        const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } })
+        const [t] = s.getAudioTracks()
+        log({ event: "me-track", label: t.label, settings: t.getSettings() })
+        meter("me", t, ctx, clips)
+      } catch (e) {
+        log({ event: "me-error", name: e.name, message: e.message })
+      }
+    }
+    setTimeout(() => {
+      const outClips = {}
+      for (const [k, f] of Object.entries(clips)) outClips[k] = f()
+      ipcRenderer.send("done", outClips)
+    }, cfg.seconds * 1000)
+  }
+</script>

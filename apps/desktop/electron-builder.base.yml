@@ -74,6 +74,8 @@ mac:
     - /Contents/Resources/sidecars/lima/bin/limactl$
   extendInfo:
     NSMicrophoneUsageDescription: omnirush uses the microphone when you allow a page to access audio input.
+    # Shown in the "System Audio Recording Only" prompt (Core Audio tap, macOS 14.2+). Electron's default text is generic.
+    NSAudioCaptureUsageDescription: omnirush records the other people in your call when you take meeting notes.
   extraResources:
     - from: resources/sidecars
       to: sidecars
