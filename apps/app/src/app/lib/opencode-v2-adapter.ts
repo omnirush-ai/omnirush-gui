@@ -16,6 +16,7 @@ import type {
   UnknownError,
 } from "@opencode-ai/sdk/v2/client";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { gatewayErrorMessage, unknownGatewayErrorMessage } from "@omnirush/types/gateway-errors";
 
 import { createClient, createDesktopFetch, type FieldsResult } from "./opencode";
 import { isDesktopRuntime, isStockMode } from "./runtime-env";
@@ -507,7 +508,7 @@ function mapV2Message(value: unknown, sessionID: string): V2MappedMessage | null
       },
       // A step the person stopped is the 1.x MessageAbortedError (stopped, never retried: good-session.ts).
       ...(role === "assistant" && error
-        ? { error: { name: readString(error, "type") === "aborted" ? "MessageAbortedError" : "UnknownError", data: { message: errorMessage(error), ...errorStatus(error) } } }
+        ? { error: { name: readString(error, "type") === "aborted" ? "MessageAbortedError" : "UnknownError", data: modelErrorData(error) } }
         : {}),
     },
     parts,
@@ -669,6 +670,19 @@ function mapDefaultModels(value: unknown): Record<string, string> {
 function errorStatus(value: unknown): { statusCode?: number } {
   const status = isRecord(value) ? readNumber(value, "status") ?? readNumber(readRecord(value, "error"), "status") : undefined;
   return status === undefined ? {} : { statusCode: status };
+}
+
+/** A gateway code engine v2 keeps as an error's whole message (`no_channel_available`). */
+const GATEWAY_CODE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
+
+/**
+ * A model request's 2.x error as the 1.x error data: a bare gateway code reads
+ * as the broker's copy for it, or a plain line naming it, and stays the `code`.
+ */
+function modelErrorData(value: unknown): { message: string; code?: string; statusCode?: number } {
+  const message = errorMessage(value);
+  if (!GATEWAY_CODE.test(message)) return { message, ...errorStatus(value) };
+  return { message: gatewayErrorMessage(message) ?? unknownGatewayErrorMessage(message), code: message, ...errorStatus(value) };
 }
 
 function errorMessage(value: unknown): string {
@@ -882,7 +896,7 @@ export function translateV2Event(
     return [{ type, properties: {
       ...properties, sequence: readNumber(value.durable, "seq"),
       ...(type === "session.execution.failed" ? {
-        error: { name: "UnknownError", data: { message: errorMessage(properties.error), ...errorStatus(properties.error) } },
+        error: { name: "UnknownError", data: modelErrorData(properties.error) },
       } : {}),
     } }];
   }
@@ -894,7 +908,7 @@ export function translateV2Event(
     return [{ type: "session.status", properties: {
       sessionID,
       sequence: readNumber(value.durable, "seq"),
-      status: { type: "retry", attempt, message: errorMessage(properties.error), next },
+      status: { type: "retry", attempt, message: modelErrorData(properties.error).message, next },
     } }];
   }
 

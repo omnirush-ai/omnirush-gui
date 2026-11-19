@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { getReactQueryClient } from "../src/react-app/infra/query-client";
 
 import { modeSwitchNote as sharedNote } from "../../server/src/model-modes/model-modes.mjs";
-import { chatModeNote, chatStarted, fixedModelNote, modeAllowsModel, modeFallbackModel, modeSwitchNote, newChatAllowsModel } from "../src/react-app/domains/session/surface/model-modes";
+import { chatModeNote, chatStarted, fixedModelNote, modeAllowsModel, modeFallbackModel, modeSwitchNote, newChatAllowsModel, useProjectModelModes } from "../src/react-app/domains/session/surface/model-modes";
 
 // As GET /omnirush/subagent-model lists them: `modes` normalized by the server.
 const MODELS = [
@@ -46,6 +46,9 @@ test("a new Work chat never starts on the omnirush-claude provider: it moves to 
   expect(newChatAllowsModel(MODELS, "box", claude, true)).toBe(false);
   expect(newChatAllowsModel(MODELS, "box", ref("gpt-6-astra"), true)).toBe(true);
   expect(modeFallbackModel(MODELS, "box", claude, true)).toEqual(ref("gpt-6-astra"));
+  // Before the catalog loads: the built-in default, never Claude; outside Work nothing changes.
+  expect(modeFallbackModel(undefined, null, claude, true)).toEqual(ref("gpt-6-astra"));
+  expect(modeFallbackModel(undefined, null, claude)).toEqual(claude);
 });
 
 test("a chat with a prompt in the engine's messages is started, marked here or not", () => {
@@ -67,4 +70,20 @@ test("a chat with a prompt in the engine's messages is started, marked here or n
   } finally {
     host.window = before;
   }
+});
+
+test("a Work chat started on Claude sends nothing and says why; Code chats keep Claude", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+  const claude = ref("claude-opus-4-7", "omnirush-claude");
+  const seen: Array<{ allows: boolean; note: string }> = [];
+  const Probe = (props: { work: boolean }) => {
+    const rules = useProjectModelModes(null, null, null, props.work);
+    seen.push({ allows: rules.allows(claude), note: rules.chatNote(claude) });
+    return null;
+  };
+  for (const work of [true, false]) renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Probe, { work })));
+  expect(seen[0]).toEqual({ allows: false, note: "Claude can't use your Work tools. Pick another model to start a new chat." });
+  expect(seen[1]?.allows).toBe(true);
 });

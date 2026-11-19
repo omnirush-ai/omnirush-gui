@@ -7,6 +7,7 @@ export default defineConfig({
     "omnirush-affordance": "src/omnirush-affordance.ts",
     "omnirush-context": "src/omnirush-context.ts",
     "omnirush-provider": "src/omnirush-provider.ts",
+    "gateway-errors": "src/gateway-errors.ts",
     "automations": "src/automations.ts",
     workflows: "src/workflows.ts",
     "local-workflows": "src/local-workflows.ts",

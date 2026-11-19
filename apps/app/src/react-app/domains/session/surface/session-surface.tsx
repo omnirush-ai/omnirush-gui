@@ -58,6 +58,8 @@ import { SandboxSetupPanel } from "./sandbox-setup-panel";
 import { useSessionCommandsStore } from "@/react-app/domains/session/commands/session-commands-store";
 import { SubagentModelMenu } from "./composer/subagent-model-menu";
 import { WorkConnectorsChip, WorkToolsBanner } from "@/react-app/domains/work/work-views";
+import { isClaudeModel } from "@/react-app/domains/session/surface/claude-models";
+import { chatStarted } from "@/react-app/domains/session/surface/model-modes";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import type { ModelAvailability } from "./model-availability";
@@ -3663,7 +3665,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
             {attachment.name}{sending ? " · Uploading…" : ""}
           </div>
         )))}
-        <WorkToolsBanner workChat={props.workChat} client={props.client} />
+        <WorkToolsBanner workChat={props.workChat} client={props.client} claude={isClaudeModel(sessionModel.selectedModel) && chatStarted(props.sessionId)} />
         <SandboxSetupPanel
           client={props.client}
           workspaceId={props.workspaceId}

@@ -2967,6 +2967,7 @@ export default {
   "work.tools.connected": "Work tools are connected",
   "work.tools.still_not_connected": "Work tools are still not connected.",
   "work.tools.banner": "Work tools aren't connected",
+  "work.tools.claude_notice": "Claude can't use your Work tools. Pick another model to start a new chat.",
   "work.tools.fixing": "Fixing…",
   "work.onboarding.just_me": "Just me",
   "work.onboarding.try": "Try Work",

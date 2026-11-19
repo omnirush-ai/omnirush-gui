@@ -577,8 +577,19 @@ export function WorkConnectorsSetting(props: { client: WorkClient | null }) {
   );
 }
 
-/** A Work chat whose engine has no hosted Work tools (the agent would only see local files): says so, with Fix. */
-export function WorkToolsBanner(props: { workChat?: boolean; client: WorkClient | null }) {
+/**
+ * A Work chat whose engine has no hosted Work tools (the agent would only see local files): says so, with Fix.
+ * A Work chat started on Claude never has them (a chat keeps its model): a plain notice instead.
+ */
+export function WorkToolsBanner(props: { workChat?: boolean; client: WorkClient | null; claude?: boolean }) {
+  if (props.workChat && props.claude) {
+    return (
+      <div role="status" className="mb-2 flex items-center gap-3 rounded-xl border border-amber-7/50 bg-amber-2/30 px-3 py-2.5 text-xs" data-testid="work-claude-notice">
+        <Plug aria-hidden className="size-4 shrink-0 text-warning" />
+        <p className="min-w-0 flex-1 font-medium text-dls-text">{t("work.tools.claude_notice")}</p>
+      </div>
+    );
+  }
   return props.workChat && props.client ? <WorkToolsBannerCheck client={props.client} /> : null;
 }
 

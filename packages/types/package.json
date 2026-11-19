@@ -28,6 +28,12 @@
       "bun": "./src/omnirush-context.ts",
       "default": "./dist/omnirush-context.js"
     },
+    "./gateway-errors": {
+      "types": "./src/gateway-errors.ts",
+      "development": "./src/gateway-errors.ts",
+      "bun": "./src/gateway-errors.ts",
+      "default": "./dist/gateway-errors.js"
+    },
     "./omnirush-provider": {
       "types": "./src/omnirush-provider.ts",
       "development": "./src/omnirush-provider.ts",

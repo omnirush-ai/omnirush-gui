@@ -2,6 +2,7 @@ import type { UIMessage } from "ai";
 
 import { SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX } from "../../../../app/types";
 import { mergeSnapshotIntoCachedMessages } from "./message-merge";
+import { sessionErrorPresentationFromUIMessage } from "./session-error";
 
 export type TranscriptReconcileReason = "snapshot" | "revert";
 
@@ -30,7 +31,20 @@ export function reconcileTranscriptMessages(input: ReconcileTranscriptInput): UI
   if (current.length === 0) return snapshot;
   if (snapshot.length === 0) return current;
 
-  return mergeSnapshotIntoCachedMessages(snapshot, current);
+  return mergeSnapshotIntoCachedMessages(snapshot, withoutSnapshotErrors(current, snapshot));
+}
+
+/**
+ * A live error card the snapshot shows under another id is dropped: a run that
+ * failed before the app saw its assistant turn keys its card to the session,
+ * the snapshot keys the same failure to that turn (two identical cards).
+ */
+function withoutSnapshotErrors(current: UIMessage[], snapshot: UIMessage[]): UIMessage[] {
+  const errorTitle = (message: UIMessage) => isSyntheticMessageId(message.id) ? sessionErrorPresentationFromUIMessage(message)?.title ?? null : null;
+  const titles = new Set(snapshot.map(errorTitle).filter(Boolean));
+  if (titles.size === 0) return current;
+  const ids = new Set(snapshot.map((message) => message.id));
+  return current.filter((message) => ids.has(message.id) || !titles.has(errorTitle(message)));
 }
 
 /**

@@ -636,6 +636,28 @@ describe("OpenCode v2 event translation", () => {
     });
   });
 
+  test("a bare gateway code reads as the broker's copy, an unknown one keeps the code in a plain line", () => {
+    // As engine v2 sends them (rig capture): the gateway's code is the whole message.
+    const busy = { type: "provider.internal", message: "no_channel_available", status: 503, response: { body: "{\"detail\":\"no_channel_available\"}" } };
+    expect(translateV2Event({ type: "session.retry.scheduled", data: { sessionID: "s", assistantMessageID: "m", attempt: 3, at: 10_000, error: busy } },
+      createV2EventTranslationState())?.[0]?.properties).toMatchObject({
+      status: { type: "retry", message: "omnirush.ai: this model is busy right now. Try again in a moment." },
+    });
+    expect(translateV2Event({ type: "session.retry.scheduled", data: { sessionID: "s", assistantMessageID: "m", attempt: 1, at: 10_000, error: { ...busy, message: "upstream_gateway_overload" } } },
+      createV2EventTranslationState())?.[0]?.properties).toMatchObject({
+      status: { message: "omnirush.ai: this model is busy right now. Try again in a moment." },
+    });
+    expect(translateV2Event({
+      type: "session.execution.failed",
+      properties: { sessionID: "ses_2", error: { type: "provider.invalid-request", message: "some_new_gateway_code", status: 400 } },
+    }, createV2EventTranslationState())?.[0]?.properties).toMatchObject({
+      error: { name: "UnknownError", data: { message: "omnirush.ai could not complete the model request (some_new_gateway_code).", code: "some_new_gateway_code", statusCode: 400 } },
+    });
+    // Words stay as they are.
+    expect(translateV2Event({ type: "session.retry.scheduled", data: { sessionID: "s", attempt: 2, at: 1, error: { message: "Rate limited" } } },
+      createV2EventTranslationState())?.[0]?.properties).toMatchObject({ status: { message: "Rate limited" } });
+  });
+
   test("translates captured permission events for the child session while preserving busy and idle", () => {
     const state = createV2EventTranslationState();
     const translated = [

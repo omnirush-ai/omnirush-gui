@@ -2629,7 +2629,8 @@ export function SessionRoute() {
       : selectedSessionId;
     const selection = activeSessionId ? getSessionModelSelection(activeSessionId) : null;
     const currentModel = selection?.model ?? local.prefs.defaultModel ?? null;
-    const next = nextFavoriteModel(useModelCollectionsStore.getState().favorites, currentModel);
+    // Only favorites a new chat here may use (no Claude in Work), as the model menu lists them.
+    const next = nextFavoriteModel(useModelCollectionsStore.getState().favorites.filter((model) => modelModesRef.current.allowsNew(model)), currentModel);
     if (!next) return null;
 
     const providerModel = providerCatalog?.[next.providerID]?.[next.modelID];

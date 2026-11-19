@@ -20,6 +20,7 @@ import {
   trackWorkspaceSessionSync,
   transcriptKey,
 } from "../src/react-app/domains/session/sync/session-sync"
+import { reconcileTranscriptMessages } from "../src/react-app/domains/session/sync/transcript-reconcile"
 
 import { afterAll as afterAllUnlocked, beforeAll as beforeAllUnlocked } from "bun:test";
 import { setProviderLockState } from "../src/app/lib/provider-lock";
@@ -142,6 +143,20 @@ describe("session error resilience", () => {
     const message = createSessionErrorUIMessage("assistant-turn", presentation)
 
     expect(sessionErrorPresentationFromUIMessage(message)).toEqual(presentation)
+  })
+
+  test("a live error card keyed to the session and the snapshot's card for that turn show once", () => {
+    const refused = presentOpencodeSessionError({ name: "UnknownError", data: { message: "omnirush.ai could not complete the model request (some_new_gateway_code).", statusCode: 400 } })
+    const user: UIMessage = { id: "msg_user", role: "user", parts: [{ type: "text", text: "Tidy the changelog" }] }
+    // The run failed before the app saw its assistant turn: the live card is keyed to the session.
+    const live = [user, createSessionErrorUIMessage("ses_1", refused)]
+    const snapshot = [user, createSessionErrorUIMessage("msg_assistant", refused)]
+    expect(reconcileTranscriptMessages({ currentMessages: live, snapshotMessages: snapshot }).map((message) => message.id))
+      .toEqual(["msg_user", "session-error:msg_assistant"])
+    // Another failure keeps its own card.
+    const other = createSessionErrorUIMessage("ses_1", presentOpencodeSessionError({ name: "UnknownError", data: { message: "Something else" } }))
+    expect(reconcileTranscriptMessages({ currentMessages: [user, other], snapshotMessages: snapshot }).map((message) => message.id).sort())
+      .toEqual(["msg_user", "session-error:msg_assistant", "session-error:ses_1"])
   })
 
   test("keeps partial output and adds the recoverable error beside the failed turn", () => {
