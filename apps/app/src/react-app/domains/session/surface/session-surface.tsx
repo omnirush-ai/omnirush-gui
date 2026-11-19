@@ -814,7 +814,7 @@ type SessionRunStatusProps = {
  * agent is waiting on, or a retry after an error. Routine work (thinking,
  * tools, responding, compacting) shows nothing here; the composer keeps Stop.
  */
-export function SessionRunStatus(props: SessionRunStatusProps) {
+function SessionRunStatus(props: SessionRunStatusProps) {
   const [stopPending, setStopPending] = useState(false);
   if (!props.acceptanceUnknown && props.activityStatus !== "waiting" && !(props.busy && props.retryMessage)) {
     return null;

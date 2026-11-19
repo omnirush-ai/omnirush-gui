@@ -1125,7 +1125,7 @@ export function SessionRoute() {
     entitledModelCount: entitledModelOptions.length,
   });
   // The open project's mode (sandbox or not) and the models it allows (model-modes.ts).
-  const modelModes = useProjectModelModes(selectedWorkspaceEndpoint?.client ?? null, selectedWorkspaceEndpoint?.workspaceId ?? null, selectedSessionId || null);
+  const modelModes = useProjectModelModes(selectedWorkspaceEndpoint?.client ?? null, selectedWorkspaceEndpoint?.workspaceId ?? null, selectedSessionId || null, appMode === "work");
   const modelModesRef = useRef(modelModes);
   modelModesRef.current = modelModes;
   useClaudeModelSync(selectedWorkspaceEndpoint?.client ?? null, selectedWorkspaceEndpoint?.workspaceId ?? null);

@@ -40,6 +40,14 @@ test("a new chat in a sandbox project may start on a model that runs only on thi
   expect(chatModeNote(MODELS, "native", ref("boxonly-x"))).toBe("This chat runs on Box Only X, which isn't available outside the sandbox. Start a new chat.");
 });
 
+test("a new Work chat never starts on the omnirush-claude provider: it moves to the default", () => {
+  const claude = ref("claude-opus-4-7", "omnirush-claude");
+  expect(newChatAllowsModel(MODELS, "box", claude)).toBe(true);
+  expect(newChatAllowsModel(MODELS, "box", claude, true)).toBe(false);
+  expect(newChatAllowsModel(MODELS, "box", ref("gpt-6-astra"), true)).toBe(true);
+  expect(modeFallbackModel(MODELS, "box", claude, true)).toEqual(ref("gpt-6-astra"));
+});
+
 test("a chat with a prompt in the engine's messages is started, marked here or not", () => {
   const store = new Map<string, string>();
   const host = globalThis as { window?: unknown };

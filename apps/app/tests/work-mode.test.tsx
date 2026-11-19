@@ -382,10 +382,16 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(markup.indexOf('data-testid="work-source-attention"')).toBeLessThan(markup.indexOf('data-testid="work-source-strip"'));
     expect(render()).not.toContain('data-testid="work-feed"');
     // Nothing anywhere and every source fine: one quiet line, no empty sections.
-    const healthy = [feed.sources[2]!, feed.sources[3]!];
+    const healthy = [feed.sources[2]!, { ...feed.sources[3]!, status: "connected" as const }];
     const clear = render({ ...feed, sources: healthy, groups: { needs_you: [], today: [], fyi: [] } });
     expect(clear).toContain("Nothing needs you today.");
     expect(clear).not.toContain("data-feed-section=");
+    // A source still on its first import: no all-clear yet, a quiet line instead.
+    const importing = render({ ...feed, sources: [feed.sources[2]!, feed.sources[3]!], groups: { needs_you: [], today: [], fyi: [] } });
+    expect(importing).not.toContain('data-testid="work-feed-clear"');
+    expect(importing).toContain('data-testid="work-feed-importing"');
+    // A long title ends before Ask while Ask shows.
+    expect(markup).toContain("group-hover:pr-[4.5rem]");
     // A source to reconnect or retry may be holding things back: no all-clear then.
     const blocked = render({ ...feed, groups: { needs_you: [], today: [], fyi: [] } });
     expect(blocked).not.toContain('data-testid="work-feed-clear"');
@@ -434,7 +440,10 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       const { act } = await import("react");
       const { createRoot } = await import("react-dom/client");
       const data = { ...feed, groups: { needs_you: [], today: [], fyi: files } };
-      const client = { baseUrl: "http://today.test", getWorkFeed: async (query: { source?: string }) => (query.source === "slack" ? { ...data, groups: { needs_you: [], today: [], fyi: [] } } : data) } as never;
+      let slackGone = false;
+      const client = { baseUrl: "http://today.test", getWorkFeed: async (query: { source?: string }) => (query.source === "slack"
+        ? { ...data, sources: slackGone ? data.sources.filter((source) => source.id !== "slack") : data.sources, groups: { needs_you: [], today: [], fyi: [] } }
+        : data) } as never;
       const queries = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
       queries.setQueryData(workFeedKey(client, null), data);
       document.body.innerHTML = '<div id="root"></div>';
@@ -455,10 +464,17 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       await act(async () => document.querySelector<HTMLButtonElement>('[data-feed-filter="github"]')!.click());
       expect(rows()).toBe(5);
       expect(document.querySelector('[data-testid="work-feed-more"]')?.textContent).toBe("Show 3 more");
-      // Slack is fine and empty while GitHub is broken: Slack's all-clear, not "fix the connections above".
+      // Slack is fine (still importing) and empty while GitHub is broken: not "fix the connections above".
       await act(async () => document.querySelector<HTMLButtonElement>('[data-feed-filter="slack"]')!.click());
       expect(document.querySelector('[data-testid="work-feed-blocked"]')).toBeNull();
-      expect(document.querySelector('[data-testid="work-feed-clear"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="work-feed-importing"]')).not.toBeNull();
+      // Slack goes away while picked: the filter goes back to all.
+      slackGone = true;
+      await act(async () => {
+        await queries.refetchQueries({ queryKey: workFeedKey(client, "slack") });
+        await new Promise((resolve) => setTimeout(resolve, 0)); // the query's update reaches the view on a timer
+      });
+      expect(document.querySelector('[data-feed-filter="all"]')?.getAttribute("aria-checked")).toBe("true");
       await act(async () => root.unmount());
       queries.clear();
     } finally {
