@@ -65,7 +65,9 @@ export const GATEWAY_ERROR_COPY: Readonly<Record<string, string>> = {
 
 /** The copy for a gateway error code (bare or `upstream_<code>`), or null for a code without copy. */
 export function gatewayErrorMessage(code: string, detail?: string | null): string | null {
-  const copy = GATEWAY_ERROR_COPY[code] ?? GATEWAY_ERROR_COPY[code.replace(/^upstream_/, "")]
+  // Own keys only: a whole error message ("constructor") is looked up too.
+  const key = Object.hasOwn(GATEWAY_ERROR_COPY, code) ? code : code.replace(/^upstream_/, "")
+  const copy = Object.hasOwn(GATEWAY_ERROR_COPY, key) ? GATEWAY_ERROR_COPY[key] : null
   if (!copy) return null
   // A provider error names what it refused ("Upstream returned an error: <why>").
   const why = code.endsWith("provider_error")

@@ -3665,7 +3665,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
             {attachment.name}{sending ? " · Uploading…" : ""}
           </div>
         )))}
-        <WorkToolsBanner workChat={props.workChat} client={props.client} claude={isClaudeModel(sessionModel.selectedModel) && chatStarted(props.sessionId)} />
+        <WorkToolsBanner workChat={props.workChat} client={props.client} claude={props.workChat && isClaudeModel(sessionModel.selectedModel) && chatStarted(props.sessionId)} />
         <SandboxSetupPanel
           client={props.client}
           workspaceId={props.workspaceId}

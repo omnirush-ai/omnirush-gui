@@ -19,6 +19,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { gatewayErrorMessage, unknownGatewayErrorMessage } from "@omnirush/types/gateway-errors";
 
 import { createClient, createDesktopFetch, type FieldsResult } from "./opencode";
+import { isInternalModelProvider } from "./provider-catalog";
 import { isDesktopRuntime, isStockMode } from "./runtime-env";
 import type { OpencodeEvent } from "../types";
 import { normalizeDirectoryPath } from "../utils";
@@ -508,7 +509,7 @@ function mapV2Message(value: unknown, sessionID: string): V2MappedMessage | null
       },
       // A step the person stopped is the 1.x MessageAbortedError (stopped, never retried: good-session.ts).
       ...(role === "assistant" && error
-        ? { error: { name: readString(error, "type") === "aborted" ? "MessageAbortedError" : "UnknownError", data: modelErrorData(error) } }
+        ? { error: { name: readString(error, "type") === "aborted" ? "MessageAbortedError" : "UnknownError", data: modelErrorData(error, readString(readRecord(value, "model"), "providerID")) } }
         : {}),
     },
     parts,
@@ -672,17 +673,21 @@ function errorStatus(value: unknown): { statusCode?: number } {
   return status === undefined ? {} : { statusCode: status };
 }
 
-/** A gateway code engine v2 keeps as an error's whole message (`no_channel_available`). */
+/** A code engine v2 keeps as an error's whole message that the shared table does not know yet (`some_new_code`). */
 const GATEWAY_CODE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 
 /**
- * A model request's 2.x error as the 1.x error data: a bare gateway code reads
- * as the broker's copy for it, or a plain line naming it, and stays the `code`.
+ * A model request's 2.x error as the 1.x error data: a bare gateway code
+ * (`maintenance`, `no_channel_available`) reads as the broker's copy for it, an
+ * unknown snake_case one as a plain line naming it, and stays the `code`. A
+ * message on another provider (the person's own key) keeps its error as sent.
  */
-function modelErrorData(value: unknown): { message: string; code?: string; statusCode?: number } {
+function modelErrorData(value: unknown, providerID?: string): { message: string; code?: string; statusCode?: number } {
   const message = errorMessage(value);
-  if (!GATEWAY_CODE.test(message)) return { message, ...errorStatus(value) };
-  return { message: gatewayErrorMessage(message) ?? unknownGatewayErrorMessage(message), code: message, ...errorStatus(value) };
+  const readable = providerID && !isInternalModelProvider(providerID)
+    ? null
+    : gatewayErrorMessage(message) ?? (GATEWAY_CODE.test(message) ? unknownGatewayErrorMessage(message) : null);
+  return readable ? { message: readable, code: message, ...errorStatus(value) } : { message, ...errorStatus(value) };
 }
 
 function errorMessage(value: unknown): string {

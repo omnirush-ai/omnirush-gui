@@ -319,6 +319,15 @@ describe("Work search, deals and coverage (contract D6)", () => {
     expect(markup).not.toContain('data-work-connector="whatsapp"');
     expect(markup).toContain('data-work-import="whatsapp"');
     expect(markup.indexOf('data-testid="work-coverage"')).toBeLessThan(markup.indexOf('data-work-connector="google"'));
+    // Chips only for what this page can add: Slack connects here, Telegram opens its import; Meetings has no row here, so no chip.
+    const addable = new QueryClient();
+    addable.setQueryData(workConnectorsKey(client), [...rows, { id: "slack", label: "Slack", status: "disconnected", last_sync_at: null, records: 0, sync_enabled: true }]);
+    addable.setQueryData(workCoverageKey(client), { ...coverage, groups: [...coverage.groups, { group: "calls", label: "Calls", state: "missing", sources: ["meetings"], said_you_use: false }], missing_used: ["slack", "telegram"] });
+    const chips = wrap(addable, <WorkConnectorsPage client={client} openLink={noop} />);
+    expect(chips).toContain('data-coverage-add="slack"');
+    expect(chips).toContain('data-coverage-add="telegram"');
+    expect(chips).not.toContain('data-coverage-add="meetings"');
+    expect(wrap(addable, <WorkCoverageMeter client={client} onAdd={noop} />)).toContain('data-coverage-add="meetings"');
     const old = new QueryClient();
     old.setQueryData(workConnectorsKey(client), rows);
     failQuery(old, workCoverageKey(client), new OmniRushServerError(404, "request_failed", "Not Found"));
