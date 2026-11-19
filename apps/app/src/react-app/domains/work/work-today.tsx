@@ -16,8 +16,8 @@ import { askAboutItemPrompt, connectorLabel, relativeTime, workConnectorsKey, wo
 import { ConnectorIcon } from "./work-views";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
-/** Recent rows shown before "Show N more". */
-export const RECENT_ROWS = 5;
+/** Rows a section shows before "Show N more". */
+export const SECTION_ROWS = 5;
 const SECTIONS = [
   { id: "needs_you", get label() { return t("work.today.needs_you"); } },
   { id: "today", get label() { return t("work.today.today"); } },
@@ -180,8 +180,8 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
   const queryClient = useQueryClient();
   const [source, setSource] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
-  const [more, setMore] = useState(false);
-  const pick = (id: string | null) => { setSource(id); setMore(false); };
+  const [more, setMore] = useState<Record<string, boolean>>({});
+  const pick = (id: string | null) => { setSource(id); setMore({}); };
   const feed = useQuery({
     queryKey: workFeedKey(props.client, source),
     queryFn: () => props.client!.getWorkFeed({ ...(source ? { source } : {}), tz: localZone(), limit: 60 }),
@@ -217,8 +217,8 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
   const today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   const now = Date.now();
   const failure = feed.error && !feed.data ? workFailure(feed.error) : null;
-  // A source that needs reconnecting or keeps failing may be holding back what needs you, so no all-clear then.
-  const broken = sources.some((item) => item.attention?.action === "reconnect" || item.attention?.action === "retry");
+  // A source in view that needs reconnecting or keeps failing may be holding back what needs you, so no all-clear then.
+  const broken = sources.some((item) => (!source || item.id === source) && (item.attention?.action === "reconnect" || item.attention?.action === "retry"));
   const groups = { needs_you: feed.data?.groups.needs_you ?? [], today: feed.data?.groups.today ?? [], fyi: feed.data?.groups.fyi ?? [] };
   return (
     <div className="flex w-full flex-col gap-6" data-testid="work-today">
@@ -257,8 +257,8 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
             const all = groups[section.id];
             if (!all.length) return null;
             const recent = section.id === "fyi";
-            const capped = recent && all.length > RECENT_ROWS;
-            const items = capped && !more ? all.slice(0, RECENT_ROWS) : all;
+            const capped = all.length > SECTION_ROWS;
+            const items = capped && !more[section.id] ? all.slice(0, SECTION_ROWS) : all;
             // The same reason on every Recent row ("Edited") says nothing, so it is left out.
             const same = recent && all.length > 1 && all.every((item) => item.reason === all[0]!.reason);
             return (
@@ -271,8 +271,8 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
                   {items.map((item) => <FeedRow key={item.id} item={same ? { ...item, reason: null } : item} now={now} busy={asking} onOpen={props.openLink} onAsk={(picked) => void ask(picked)} />)}
                 </ul>
                 {capped ? (
-                  <button type="button" aria-expanded={more} onClick={() => setMore(!more)} data-testid="work-feed-more" className="self-start text-[12px] text-muted-foreground transition-colors hover:text-foreground">
-                    {more ? t("work.today.show_less") : t("work.today.show_more", { count: all.length - RECENT_ROWS })}
+                  <button type="button" aria-expanded={Boolean(more[section.id])} onClick={() => setMore({ ...more, [section.id]: !more[section.id] })} data-testid="work-feed-more" className="self-start text-[12px] text-muted-foreground transition-colors hover:text-foreground">
+                    {more[section.id] ? t("work.today.show_less") : t("work.today.show_more", { count: all.length - SECTION_ROWS })}
                   </button>
                 ) : null}
               </section>

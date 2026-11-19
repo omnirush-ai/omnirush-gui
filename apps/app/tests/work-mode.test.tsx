@@ -415,6 +415,11 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     const drive = render({ ...feed, groups: { needs_you: [], today: [], fyi: [{ id: "google:file:1", source: "google", kind: "file", title: "Budget 2026/27", at: "2026-11-15T08:00:00Z", url: "https://drive.test/1", reason: "Edited" }] } });
     expect(drive).toContain('title="Budget 2026/27">Budget 2026/27<');
     expect(render({ ...feed, groups: { needs_you: [], today: [], fyi: files.slice(0, 5) } })).not.toContain('data-testid="work-feed-more"');
+    // Every section is capped, not only Recent: Needs you keeps its count.
+    const busy = render({ ...feed, groups: { needs_you: files, today: [], fyi: [] } });
+    expect(busy.match(/data-feed-item=/g)?.length).toBe(5);
+    expect(busy).toMatch(/data-testid="work-feed-count">8</);
+    expect(busy).toMatch(/aria-expanded="false"[^>]*>Show 3 more</);
     expect(markup).not.toMatch(/—|farm|stock/i);
     const prompt = askAboutItemPrompt(feed.groups.needs_you[0]!);
     expect(prompt).toContain("Fix invoice rounding");
@@ -429,7 +434,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       const { act } = await import("react");
       const { createRoot } = await import("react-dom/client");
       const data = { ...feed, groups: { needs_you: [], today: [], fyi: files } };
-      const client = { baseUrl: "http://today.test", getWorkFeed: async () => data } as never;
+      const client = { baseUrl: "http://today.test", getWorkFeed: async (query: { source?: string }) => (query.source === "slack" ? { ...data, groups: { needs_you: [], today: [], fyi: [] } } : data) } as never;
       const queries = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
       queries.setQueryData(workFeedKey(client, null), data);
       document.body.innerHTML = '<div id="root"></div>';
@@ -450,6 +455,10 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       await act(async () => document.querySelector<HTMLButtonElement>('[data-feed-filter="github"]')!.click());
       expect(rows()).toBe(5);
       expect(document.querySelector('[data-testid="work-feed-more"]')?.textContent).toBe("Show 3 more");
+      // Slack is fine and empty while GitHub is broken: Slack's all-clear, not "fix the connections above".
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-feed-filter="slack"]')!.click());
+      expect(document.querySelector('[data-testid="work-feed-blocked"]')).toBeNull();
+      expect(document.querySelector('[data-testid="work-feed-clear"]')).not.toBeNull();
       await act(async () => root.unmount());
       queries.clear();
     } finally {
