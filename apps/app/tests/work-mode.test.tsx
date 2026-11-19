@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -320,6 +321,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       fyi: [],
     },
   };
+  const files = Array.from({ length: 8 }, (_, i) => ({ id: `github:file:${i}`, source: "github", kind: "file", title: `acme/api/docs/rule${i}.md`, at: "2026-11-15T08:00:00Z", url: `https://github.test/f/${i}`, reason: "Edited" }));
 
   test("source chips: one row, a dot per state and a filter each; fixes sit in the attention line", () => {
     expect(sourceDot(feed.sources[0]!)).toBe("error");
@@ -333,14 +335,31 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(strip).toContain('data-testid="work-source-add"');
     expect(strip).not.toContain(">Retry<");
     expect(strip).not.toContain(">Reconnect<");
+    expect(strip).toMatch(/data-feed-filter="all"[^>]*class="[^"]*bg-muted/);
+    // One source: nothing to filter, so no All and no radios, but its status dot and Add stay.
+    const solo = renderToStaticMarkup(<SourceStrip sources={[feed.sources[3]!]} selected={null} onSelect={noop} onAdd={noop} />);
+    expect(solo).toMatch(/data-work-source="slack"[^>]*data-dot="syncing"/);
+    expect(solo).toContain('data-testid="work-source-add"');
+    expect(solo).not.toContain('data-feed-filter="all"');
+    expect(solo).not.toContain('role="radio');
+    expect(renderToStaticMarkup(<SourceStrip sources={[{ ...feed.sources[1]!, label: "Google (Gmail, Drive, Calendar)" }]} selected={null} onSelect={noop} onAdd={noop} />)).toContain(">Google<");
+    // Three sources need a fix: one summary line with Review, the per-source rows folded away.
     const attention = renderToStaticMarkup(<SourceAttention sources={feed.sources} busy={null} onReconnect={noop} onRetry={noop} onSetup={noop} />);
     expect(attention).toContain('data-testid="work-source-attention"');
-    expect(attention).toContain(">Retry<");
-    expect(attention).toContain(">Reconnect<");
-    expect(attention).toContain(">Fix<");
+    expect(attention).toContain("3 connections need attention");
+    expect(attention).toMatch(/aria-expanded="false"[^>]*>Review</);
+    expect(attention).not.toContain("aria-controls="); // only points at the rows once they render
+    expect(attention).not.toContain("data-work-attention=");
+    expect(attention).not.toContain(">Retry<");
+    // Exactly one: its row and button as is, no summary.
+    const single = renderToStaticMarkup(<SourceAttention sources={[feed.sources[0]!, feed.sources[3]!]} busy={null} onReconnect={noop} onRetry={noop} onSetup={noop} />);
+    expect(single).toContain('data-work-attention="github"');
+    expect(single).toContain(">Retry<");
+    expect(single).not.toContain('data-testid="work-attention-summary"');
+    expect(renderToStaticMarkup(<SourceAttention sources={[feed.sources[3]!]} busy={null} onReconnect={noop} onRetry={noop} onSetup={noop} />)).toBe("");
   });
 
-  test("Today: three sections with counts, rows with reason, Open only with a link, Ask about this; skeleton while loading", () => {
+  test("Today: non-empty sections with counts, rows with reason, Open only with a link, Ask about this; skeleton while loading", () => {
     const client = { baseUrl: "http://today.test" } as never;
     const render = (data?: OmniRushWorkFeed) => {
       const queries = new QueryClient();
@@ -348,19 +367,103 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       return renderToStaticMarkup(<QueryClientProvider client={queries}><WorkToday client={client} openLink={noop} onAsk={async () => {}} onOpenConnectors={noop} /></QueryClientProvider>);
     };
     const markup = render(feed);
-    expect(markup.match(/data-feed-section=/g)?.length).toBe(3);
+    expect(markup.match(/data-feed-section=/g)?.length).toBe(2);
+    expect(markup).not.toContain('data-feed-section="fyi"');
+    expect(markup).not.toContain('data-testid="work-feed-clear"');
     expect(markup).toContain("Needs you");
-    expect(markup).toContain("Review requested");
+    expect(markup).toMatch(/data-testid="work-feed-reason">Review requested</);
     expect(markup).toContain('aria-label="Open Fix invoice rounding"');
     expect(markup).not.toContain('aria-label="Open Supplier call"');
     expect(markup.match(/aria-label="Ask about /g)?.length).toBe(2);
+    // Ask takes the reason's place on hover or keyboard focus, so it stays reachable without a reserved column.
+    expect(markup).toContain("group-focus-within:opacity-100");
+    expect(markup).toContain("group-focus-within:opacity-0");
     expect(markup).toContain('data-testid="work-source-strip"');
-    expect(markup).toContain("Nothing new in the last 7 days.");
+    expect(markup.indexOf('data-testid="work-source-attention"')).toBeLessThan(markup.indexOf('data-testid="work-source-strip"'));
     expect(render()).not.toContain('data-testid="work-feed"');
+    // Nothing anywhere and every source fine: one quiet line, no empty sections.
+    const healthy = [feed.sources[2]!, feed.sources[3]!];
+    const clear = render({ ...feed, sources: healthy, groups: { needs_you: [], today: [], fyi: [] } });
+    expect(clear).toContain("Nothing needs you today.");
+    expect(clear).not.toContain("data-feed-section=");
+    // A source to reconnect or retry may be holding things back: no all-clear then.
+    const blocked = render({ ...feed, groups: { needs_you: [], today: [], fyi: [] } });
+    expect(blocked).not.toContain('data-testid="work-feed-clear"');
+    // ...and never a blank feed: say the fixes come first.
+    expect(blocked).toContain("Nothing to show until the connections above are fixed.");
+    expect(render({ ...feed, groups: { needs_you: [], today: [], fyi: [feed.groups.needs_you[0]!] } })).not.toContain('data-testid="work-feed-blocked"');
+    // One source: its pill (dot) and Add stay, nothing to filter.
+    const one = render({ ...feed, sources: [feed.sources[3]!] });
+    expect(one).toContain('data-testid="work-source-add"');
+    expect(one).toContain('data-dot="syncing"');
+    expect(one).not.toContain('data-feed-filter="all"');
+    // Recent: 5 rows, then Show N more; a GitHub file reads as its name with repo/folder in the meta line.
+    const recent = render({ ...feed, sources: healthy, groups: { needs_you: [], today: [], fyi: files } });
+    expect(recent).toContain("Nothing needs you today.");
+    expect(recent).toContain('data-feed-section="fyi"');
+    expect(recent).toContain(">Recent<");
+    expect(recent).not.toContain('data-testid="work-feed-count"');
+    expect(recent.match(/data-feed-item=/g)?.length).toBe(5);
+    expect(recent).toMatch(/aria-expanded="false"[^>]*>Show 3 more</);
+    expect(recent).toContain('title="acme/api/docs/rule0.md">rule0.md<');
+    expect(recent).toContain(" · api/docs<");
+    expect(recent).toContain('aria-label="Open acme/api/docs/rule0.md"');
+    // "Edited" on every Recent row says nothing; a reason that differs stays.
+    expect(recent).not.toContain('data-testid="work-feed-reason"');
+    expect(render({ ...feed, groups: { needs_you: [], today: [], fyi: [...files.slice(0, 2), { ...files[2]!, reason: "Mentioned you" }] } })).toContain(">Mentioned you<");
+    // A Drive file name may hold "/": it stays whole.
+    const drive = render({ ...feed, groups: { needs_you: [], today: [], fyi: [{ id: "google:file:1", source: "google", kind: "file", title: "Budget 2026/27", at: "2026-11-15T08:00:00Z", url: "https://drive.test/1", reason: "Edited" }] } });
+    expect(drive).toContain('title="Budget 2026/27">Budget 2026/27<');
+    expect(render({ ...feed, groups: { needs_you: [], today: [], fyi: files.slice(0, 5) } })).not.toContain('data-testid="work-feed-more"');
+    // Every section is capped, not only Recent: Needs you keeps its count.
+    const busy = render({ ...feed, groups: { needs_you: files, today: [], fyi: [] } });
+    expect(busy.match(/data-feed-item=/g)?.length).toBe(5);
+    expect(busy).toMatch(/data-testid="work-feed-count">8</);
+    expect(busy).toMatch(/aria-expanded="false"[^>]*>Show 3 more</);
     expect(markup).not.toMatch(/—|farm|stock/i);
     const prompt = askAboutItemPrompt(feed.groups.needs_you[0]!);
     expect(prompt).toContain("Fix invoice rounding");
     expect(prompt).toContain("github:pr:12");
+  });
+
+  test("Today: Review opens the fixes, Show more opens Recent, a source filter folds it back", async () => {
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const data = { ...feed, groups: { needs_you: [], today: [], fyi: files } };
+      const client = { baseUrl: "http://today.test", getWorkFeed: async (query: { source?: string }) => (query.source === "slack" ? { ...data, groups: { needs_you: [], today: [], fyi: [] } } : data) } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+      queries.setQueryData(workFeedKey(client, null), data);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><WorkToday client={client} openLink={noop} onAsk={async () => {}} onOpenConnectors={noop} /></QueryClientProvider>));
+      const rows = () => document.querySelectorAll("[data-feed-item]").length;
+      const review = [...document.querySelectorAll("button")].find((button) => button.textContent === "Review")!;
+      expect(document.querySelectorAll("[data-work-attention]").length).toBe(0);
+      await act(async () => review.click());
+      expect(review.getAttribute("aria-expanded")).toBe("true");
+      expect(review.textContent).toBe("Hide");
+      expect(document.getElementById(review.getAttribute("aria-controls")!)?.querySelectorAll("[data-work-attention]").length).toBe(3);
+      const more = document.querySelector<HTMLButtonElement>('[data-testid="work-feed-more"]')!;
+      expect(rows()).toBe(5);
+      await act(async () => more.click());
+      expect(rows()).toBe(8);
+      expect(more.textContent).toBe("Show less");
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-feed-filter="github"]')!.click());
+      expect(rows()).toBe(5);
+      expect(document.querySelector('[data-testid="work-feed-more"]')?.textContent).toBe("Show 3 more");
+      // Slack is fine and empty while GitHub is broken: Slack's all-clear, not "fix the connections above".
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-feed-filter="slack"]')!.click());
+      expect(document.querySelector('[data-testid="work-feed-blocked"]')).toBeNull();
+      expect(document.querySelector('[data-testid="work-feed-clear"]')).not.toBeNull();
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
   });
 
   test("the home shows Today in place of the empty column once something is connected", () => {
