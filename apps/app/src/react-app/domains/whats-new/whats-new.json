@@ -3,6 +3,16 @@
   "schema": 1,
   "cli": [
     {
+      "version": "3.0.7",
+      "date": "2026-11-19",
+      "new": [],
+      "improved": [],
+      "fixed": [
+        "Commands in the sandbox use your computer's time zone, so times and commit dates match.",
+        "`omnirush work mcp uninstall` says when an app's Work token could not be revoked yet (for example while Work is off), so you can run it again later. Config backups no longer keep a copy of the token."
+      ]
+    },
+    {
       "version": "3.0.6",
       "date": "2026-11-19",
       "new": [],
