@@ -637,7 +637,6 @@
       ],
       "fixed": [
         "Work chats keep their Work tools after the app has been idle for a while.",
-        "When models are busy, the chat says so in plain words.",
         "Work > Today shows that your data is still importing instead of an empty day.",
         "Long titles on Work > Today no longer run under the Ask button."
       ]
