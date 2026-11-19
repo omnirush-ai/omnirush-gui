@@ -805,7 +805,7 @@ type SessionRunStatusProps = {
   sending: boolean;
   acceptanceUnknown: boolean;
   queuedCount: number;
-  retryMessage?: string;
+  retrying?: boolean;
   onCheckAcceptance: () => void;
   onStop: () => void | Promise<void>;
 };
@@ -816,9 +816,9 @@ type SessionRunStatusProps = {
  * agent is waiting on, or a retry after an error. Routine work (thinking,
  * tools, responding, compacting) shows nothing here; the composer keeps Stop.
  */
-function SessionRunStatus(props: SessionRunStatusProps) {
+export function SessionRunStatus(props: SessionRunStatusProps) {
   const [stopPending, setStopPending] = useState(false);
-  if (!props.acceptanceUnknown && props.activityStatus !== "waiting" && !(props.busy && props.retryMessage)) {
+  if (!props.acceptanceUnknown && props.activityStatus !== "waiting" && !(props.busy && props.retrying)) {
     return null;
   }
 
@@ -833,7 +833,7 @@ function SessionRunStatus(props: SessionRunStatusProps) {
   };
 
   let title = t("session.run_status_working");
-  let detail = t("session.run_status_working_detail");
+  let detail: string | null = t("session.run_status_working_detail");
   let tone = "border-dls-border bg-dls-hover/50";
   let Icon = LoaderCircle;
   let iconClass = "animate-spin text-dls-secondary";
@@ -871,10 +871,10 @@ function SessionRunStatus(props: SessionRunStatusProps) {
   } else if (props.activityStatus === "responding") {
     title = t("session.run_status_responding");
     detail = t("session.run_status_responding_detail");
-  } else if (props.retryMessage) {
+  } else if (props.retrying) {
     title = t("session.run_status_retrying");
-    // The app is already retrying, so the message's own "try again" ending is left off.
-    detail = props.retryMessage.replace(/ (?:Try again in a moment|Retry the request)\.$/, "");
+    // The retry card in the chat already says why, with the countdown: the reason shows once.
+    detail = null;
     tone = "border-amber-7/50 bg-amber-2/30";
     Icon = CircleAlert;
     iconClass = "text-warning";
@@ -890,7 +890,7 @@ function SessionRunStatus(props: SessionRunStatusProps) {
       <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${iconClass}`} />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-dls-text">{title}</p>
-        <p className="mt-0.5 text-dls-secondary">{detail}</p>
+        {detail ? <p className="mt-0.5 text-dls-secondary">{detail}</p> : null}
         {props.queuedCount > 0 ? (
           <p className="mt-1 text-dls-secondary">
             {t("session.run_status_queued", { count: props.queuedCount })}
@@ -3680,7 +3680,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           sending={sending || autoSending}
           acceptanceUnknown={queuedDrainState.phase.kind === "admission_unknown"}
           queuedCount={queuedItems.length}
-          retryMessage={liveStatus.type === "retry" ? liveStatus.message : undefined}
+          retrying={liveStatus.type === "retry"}
           onCheckAcceptance={() => void checkUnknownAdmission(true)}
           onStop={async () => { await handleAbort(); }}
         />

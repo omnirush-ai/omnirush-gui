@@ -7,12 +7,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { createOmniRushServerClient, OmniRushServerError, type OmniRushWorkConnector, type OmniRushWorkCoverage, type OmniRushWorkDeal, type OmniRushWorkDealDetail, type OmniRushWorkImport, type OmniRushWorkSearch } from "../src/app/lib/omnirush-server";
 import {
-  askAboutDealPrompt, coverageAdds, hasDeals, isWorkSearchShortcut, periodStart, snippetParts, workConnectorsKey, workCoverageKey, workDealKey, workDealsKey, workImportsKey,
+  askAboutDealPrompt, coverageAdds, coverageCanAdd, hasDeals, isWorkSearchShortcut, periodStart, snippetParts, workConnectorsKey, workCoverageKey, workDealKey, workDealsKey, workImportsKey, workOnboardingKey,
   WORK_DEALS_ROUTE, WORK_SEARCH_ROUTE,
 } from "../src/react-app/domains/work/work-mode";
 import { ChatImportCard, WorkConnectorsPage, WorkCoverageMeter } from "../src/react-app/domains/work/work-views";
 import { WorkSearchPage } from "../src/react-app/domains/work/work-search";
 import { DealPanel, WorkDealsPage } from "../src/react-app/domains/work/work-deals";
+import { SampleDataBadge } from "../src/react-app/domains/work/work-onboarding";
 
 const noop = () => {};
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -139,6 +140,71 @@ describe("Work search, deals and coverage (contract D6)", () => {
     expect(render((queries) => queries.setQueryData(workCoverageKey(client), complete))).toBe("");
     expect(render((queries) => failQuery(queries, workCoverageKey(client), new OmniRushServerError(404, "request_failed", "Not Found")))).toBe("");
     expect(render((queries) => failQuery(queries, workCoverageKey(client), new OmniRushServerError(500, "request_failed", "boom")))).toBe("");
+    // Missing dots stay visible in dark mode.
+    expect(shown).toContain("dark:bg-muted-foreground/40");
+    // Sample data is no channel: with nothing else connected the meter names it instead of "0 of 4", and keeps the + chips.
+    const none = { ...coverage, groups: coverage.groups.map((group) => ({ ...group, state: "missing" })), connected: 0 };
+    const sample = render((queries) => { queries.setQueryData(workCoverageKey(client), none); queries.setQueryData(workOnboardingKey(client), { done: true, sample_data: true }); });
+    expect(sample).toContain("Ask sees sample data only");
+    expect(sample).not.toContain("0 of 4");
+    expect(sample).not.toContain('role="meter"');
+    expect(sample).toContain('data-coverage-add="slack"');
+    expect(render((queries) => queries.setQueryData(workCoverageKey(client), none))).toContain("Ask sees 0 of 4 channels");
+    const mixed = render((queries) => { queries.setQueryData(workCoverageKey(client), coverage); queries.setQueryData(workOnboardingKey(client), { done: true, sample_data: true }); });
+    expect(mixed).toContain("Ask sees 3 of 4 channels");
+  });
+
+  test("search with the meter: + chips only where Connectors can add, one no-match line, no coverage note, no native clear button", async () => {
+    const rows: OmniRushWorkConnector[] = [
+      { id: "google", label: "Google", status: "connected", last_sync_at: null, records: 3, sync_enabled: true },
+      { id: "slack", label: "Slack", status: "disconnected", last_sync_at: null, records: 0, sync_enabled: true },
+      { id: "whatsapp", label: "WhatsApp", status: "disconnected", mode: "import", last_sync_at: null, records: 0, sync_enabled: true },
+    ];
+    expect(coverageCanAdd(rows, "slack")).toBe(true);
+    expect(coverageCanAdd(rows, "telegram")).toBe(true);
+    expect(coverageCanAdd(rows, "meetings")).toBe(false);
+    expect(coverageCanAdd(undefined, "slack")).toBe(false);
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const withCalls = { ...coverage, groups: [...coverage.groups, { group: "calls", label: "Calls", state: "missing", sources: ["meetings"], said_you_use: false }], missing_used: ["slack", "meetings"] };
+      const client = {
+        baseUrl: "http://search-meter.test",
+        getWorkCoverage: async () => withCalls,
+        listWorkConnectors: async () => rows,
+        searchWork: async (query: Record<string, unknown>) => (query.q === "zzz" ? { query: "zzz", semantic: false, total: 0, groups: [], coverage_note: "Slack isn't connected, so its results are not included." } : results),
+      } as never;
+      const queries = new QueryClient();
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><WorkSearchPage client={client} openLink={noop} onAsk={async () => {}} onOpenConnectors={noop} /></QueryClientProvider>));
+      await act(async () => { await sleep(0); });
+      const box = document.querySelector<HTMLInputElement>('[data-testid="work-search-input"]')!;
+      expect(box.className).toContain("[&::-webkit-search-cancel-button]:appearance-none");
+      expect(document.querySelector('[data-coverage-add="slack"]')).not.toBeNull();
+      expect(document.querySelector('[data-coverage-add="meetings"]')).toBeNull();
+      const type = async (value: string) => {
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, value);
+          box.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await act(async () => { await sleep(450); });
+        await act(async () => { await sleep(0); });
+      };
+      await type("zzz");
+      expect(document.querySelector('[data-testid="work-search-empty"]')?.textContent).toBe("No matches. Try other words.");
+      expect(document.querySelector('[data-testid="work-search-note"]')).toBeNull();
+      await type("price");
+      expect(document.querySelectorAll("[data-search-group]").length).toBe(2);
+      expect(document.querySelector('[data-testid="work-search-note"]')).toBeNull();
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
   });
 
   test("search: loading, grouped results with bold matches and Show all, channel chips, empty, error, Ask; no meter when coverage 404s", async () => {
@@ -257,6 +323,15 @@ describe("Work search, deals and coverage (contract D6)", () => {
     expect(table).toContain("@2xl:table-cell");
     expect(table).toMatch(/aria-checked="true"[^>]*data-deal-filter="open"/);
     expect(table).not.toMatch(/—/);
+    // Names wrap to two lines, never cut on one; Risk is narrower.
+    expect(table).toContain("line-clamp-2");
+    expect(table).toContain("w-[10rem]");
+    expect(table).not.toContain("work-deals-more");
+    // Five rows, then "Show N more".
+    const many = Array.from({ length: 7 }, (_, index) => ({ ...deals[1]!, source_id: `demo:hubspot:deal:${index}`, name: `Deal ${index}` }));
+    const capped = render((queries) => queries.setQueryData(workDealsKey(client, "open"), { items: many }));
+    expect(capped.match(/data-deal="/g)?.length).toBe(5);
+    expect(capped).toContain(">Show 2 more<");
     expect(render((queries) => queries.setQueryData(workDealsKey(client, "open"), { items: [] }))).toContain("No deals here.");
     expect(render(() => {})).toContain('data-testid="work-deals-loading"');
     const failed = render((queries) => failQuery(queries, workDealsKey(client, "open"), new OmniRushServerError(503, "request_failed", "Service Unavailable")));
@@ -280,6 +355,31 @@ describe("Work search, deals and coverage (contract D6)", () => {
     const missing = new QueryClient();
     failQuery(missing, workDealKey(client, deals[0]!.source_id), new OmniRushServerError(404, "unknown_deal", "That deal no longer exists."));
     expect(wrap(missing, <DealPanel client={client} deal={deals[0]!} openLink={noop} onAsk={noop} asking={false} />)).toContain("That deal no longer exists.");
+  });
+
+  test("removing sample data refreshes Deals (the sidebar entry) and the coverage meter at once", async () => {
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const client = { baseUrl: "http://sample.test", removeWorkDemo: async () => ({ ok: true }) } as never;
+      const queries = new QueryClient();
+      queries.setQueryData(workDealsKey(client, null), { items: deals });
+      queries.setQueryData(workDealsKey(client, "open"), { items: deals });
+      queries.setQueryData(workCoverageKey(client), coverage);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><SampleDataBadge client={client} /></QueryClientProvider>));
+      await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="work-sample-data-remove"]')!.click(); await sleep(0); });
+      await act(async () => { await sleep(0); });
+      for (const key of [workDealsKey(client, null), workDealsKey(client, "open"), workCoverageKey(client)]) expect(queries.getQueryState(key)?.isInvalidated).toBe(true);
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
   });
 
   test("imports: WhatsApp and Telegram rows with the how-to and the last import; the import-mode row leaves the list; the strip sits above it", async () => {

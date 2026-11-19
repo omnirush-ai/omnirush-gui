@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 // Work first run (contract Addendum B3): Try Work, the company step, the connect step, the home checklist, invites
 // and the sample-data badge. Shown only while capabilities.work is enabled (or `available`, for Try Work).
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { ArrowRight, Briefcase, Building2, Check, Copy, Database, ShieldCheck, UserPlus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -16,13 +16,17 @@ import { cn } from "@/lib/utils";
 
 import {
   checklistItems, connectorLabel, connectOrder, DEMO_SOURCE, domainFromEmail, isLinked, useWorkInviteLinks, useWorkInviteStore, useWorkSetupStore,
-  workConnectorsKey, workFailure, workOnboardingKey, workStateKey, type WorkClient,
+  workConnectorsKey, workCoverageKey, workFailure, workOnboardingKey, workStateKey, type WorkClient,
 } from "./work-mode";
 import { CONNECT_POLL_MS, CONNECT_TIMEOUT_MS, ConnectorIcon } from "./work-views";
 
 // The server's size values, with how they read.
 export const sizeOptions = () => [["1", t("work.onboarding.just_me")], ["2-10", "2–10"], ["11-50", "11–50"], ["51-200", "51–200"], ["201-1000", "201–1,000"], ["1000+", "1,000+"]] as const;
 const errorText = (reason: unknown) => workFailure(reason).text;
+/** Sample data in or out changes the connectors, the checklist, the coverage meter and whether Deals shows in the sidebar. */
+function refreshSampleData(queryClient: QueryClient, client: WorkClient | null) {
+  for (const queryKey of [workConnectorsKey(client), workOnboardingKey(client), workCoverageKey(client), ["omnirush-work-deals"]]) void queryClient.invalidateQueries({ queryKey });
+}
 
 /** In place of the Code | Work switch while Work is off but the account may try it. */
 export function WorkTryButton(props: { onTry: () => Promise<void> }) {
@@ -169,8 +173,7 @@ export function WorkOnboarding(props: { client: WorkClient | null; email?: strin
   const demo = useMutation({
     mutationFn: () => props.client!.seedWorkDemo(),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: workConnectorsKey(props.client) });
-      void queryClient.invalidateQueries({ queryKey: workOnboardingKey(props.client) });
+      refreshSampleData(queryClient, props.client);
       props.onDone();
     },
     onError: (reason) => toast.error(errorText(reason)),
@@ -378,8 +381,7 @@ export function SampleDataBadge(props: { client: WorkClient | null }) {
     mutationFn: () => props.client!.removeWorkDemo(),
     onSuccess: () => {
       toast.success(t("work.onboarding.demo_removed"));
-      void queryClient.invalidateQueries({ queryKey: workConnectorsKey(props.client) });
-      void queryClient.invalidateQueries({ queryKey: workOnboardingKey(props.client) });
+      refreshSampleData(queryClient, props.client);
     },
     onError: (reason) => toast.error(errorText(reason)),
   });

@@ -13,6 +13,7 @@ import type { OmniRushWorkDeal, OmniRushWorkDealDetail, OmniRushWorkDealFilter }
 import { cn } from "@/lib/utils";
 
 import { askAboutDealPrompt, connectorLabel, relativeTime, workDealKey, workDealsKey, workFailure, type WorkClient } from "./work-mode";
+import { SECTION_ROWS } from "./work-today";
 import { ConnectorIcon } from "./work-views";
 
 const FILTERS = [
@@ -117,10 +118,11 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
   );
 }
 
-/** Work > Deals: Open, At risk or Closing soon; the table drops stage and close date on a narrow window. */
+/** Work > Deals: Open, At risk or Closing soon; the table drops stage and close date on a narrow window and shows 5 rows before "Show more". */
 export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void> }) {
   const [filter, setFilter] = useState<OmniRushWorkDealFilter>("open");
   const [picked, setPicked] = useState<OmniRushWorkDeal | null>(null);
+  const [more, setMore] = useState(false);
   const [asking, setAsking] = useState(false);
   const deals = useQuery({
     queryKey: workDealsKey(props.client, filter),
@@ -136,6 +138,7 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
   };
   const failure = deals.error && !deals.data ? workFailure(deals.error) : null;
   const items = deals.data?.items ?? [];
+  const capped = items.length > SECTION_ROWS;
   const now = Date.now();
   const narrow = "hidden @2xl:table-cell";
   return (
@@ -144,7 +147,7 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
         <h1 className="text-[22px] font-semibold leading-[28px] tracking-[-0.02em] text-foreground">{t("work.nav.deals")}</h1>
         <div role="radiogroup" aria-label={t("work.deals.filter")} className="flex items-center gap-0.5 self-start rounded-lg bg-muted p-0.5">
           {FILTERS.map(({ id, label }) => (
-            <button key={id} type="button" role="radio" aria-checked={filter === id} data-deal-filter={id} onClick={() => setFilter(id)}
+            <button key={id} type="button" role="radio" aria-checked={filter === id} data-deal-filter={id} onClick={() => { setFilter(id); setMore(false); }}
               className={cn("h-6 rounded-md px-2 text-[12px] transition-colors", filter === id ? "bg-background font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.12)] dark:bg-gray-5" : "text-muted-foreground hover:text-foreground")}>
               {label}
             </button>
@@ -171,11 +174,11 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
                   <th className="w-[6.5rem] px-3 py-2 text-right font-medium">{t("work.deals.amount")}</th>
                   <th className={cn("w-[5.5rem] px-3 py-2 font-medium", narrow)}>{t("work.deals.close_date")}</th>
                   <th className="w-[7rem] px-3 py-2 font-medium">{t("work.deals.last_touch")}</th>
-                  <th className="w-[13rem] px-3 py-2 font-medium">{t("work.deals.risk")}</th>
+                  <th className="w-[10rem] px-3 py-2 font-medium">{t("work.deals.risk")}</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((deal) => (
+                {(capped && !more ? items.slice(0, SECTION_ROWS) : items).map((deal) => (
                   <tr
                     key={deal.source_id}
                     data-deal={deal.source_id}
@@ -186,7 +189,7 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
                     className="cursor-pointer border-b border-border outline-none last:border-b-0 hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     <td className="px-3 py-2.5">
-                      <div className="truncate font-medium text-foreground" title={deal.name ?? ""}>{deal.name || deal.source_id}</div>
+                      <div className="line-clamp-2 break-words font-medium text-foreground" title={deal.name ?? ""}>{deal.name || deal.source_id}</div>
                       {deal.company ? <div className="truncate text-[12px] text-muted-foreground">{deal.company}</div> : null}
                     </td>
                     <td className={cn("truncate px-3 py-2.5 text-muted-foreground", narrow)}>{deal.stage}</td>
@@ -200,6 +203,11 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
             </table>
           </div>
         )}
+        {capped ? (
+          <button type="button" aria-expanded={more} onClick={() => setMore(!more)} data-testid="work-deals-more" className="-mt-2 self-start text-[12px] text-muted-foreground transition-colors hover:text-foreground">
+            {more ? t("work.today.show_less") : t("work.today.show_more", { count: items.length - SECTION_ROWS })}
+          </button>
+        ) : null}
       </div>
       <Sheet open={picked !== null} onOpenChange={(open) => { if (!open) setPicked(null); }}>
         <SheetContent className="w-[420px] max-w-[92vw] gap-0 p-0 sm:max-w-[420px]">
