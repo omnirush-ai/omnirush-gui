@@ -645,6 +645,24 @@
   ],
   "desktop": [
     {
+      "version": "3.9.0",
+      "date": "2026-11-20",
+      "new": [
+        "Work can keep your Telegram chats up to date on its own. Sign in to Telegram in Work > Connectors. The sign-in stays on this computer.",
+        "Work on Mac keeps your WhatsApp chats up to date on its own, from the WhatsApp app. Like iMessage, it needs Full Disk Access."
+      ],
+      "improved": [
+        "Work on Mac syncs iMessage on its own while the app is open. Each chat source has its own Data sync switch.",
+        "Work > Deals: long deal names wrap instead of being cut off, and the list shows the first five with Show more.",
+        "Work > Search is tidier: one line for tools that are not connected, and it says when Ask only sees sample data.",
+        "Deals and the count of tools Work can see update as soon as you add or remove sample data."
+      ],
+      "fixed": [
+        "Commands in the sandbox use your computer's time zone, so times and commit dates match.",
+        "A reply that is being retried shows its reason once instead of twice."
+      ]
+    },
+    {
       "version": "3.8.9",
       "date": "2026-11-19",
       "new": [
