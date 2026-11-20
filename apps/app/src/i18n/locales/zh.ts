@@ -2744,7 +2744,7 @@ export default {
   "work.mailcal.username": "邮箱或用户名",
   "work.mailcal.app_password": "应用专用密码",
   "work.mailcal.app_password_note": "大多数服务商在这里需要应用专用密码，而不是你的登录密码。",
-  "work.mailcal.outlook_note": "Outlook.com 和 Hotmail 已不再接受应用专用密码。Outlook 邮件请改为连接 Microsoft 365。",
+  "work.mailcal.outlook_note": "Outlook.com 和 Hotmail 账户无法在此连接，因为 Microsoft 已不再接受其应用专用密码。工作或学校的 Outlook 账户请改为连接 Microsoft 365。",
   "work.mailcal.app_password_help": "为 {name} 创建一个",
   "work.mailcal.link_note": "粘贴日历共享设置中的私密 .ics 链接。只读。",
   "work.mailcal.testing": "正在测试",

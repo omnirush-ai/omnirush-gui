@@ -324,7 +324,7 @@ const MAIL_PRESETS: FormPreset[] = [
   { id: "zoho", label: "Zoho Mail", help: ZOHO_HELP },
   { id: "yahoo", label: "Yahoo Mail", help: "https://help.yahoo.com/kb/SLN15241.html" },
   { id: "gmx", label: "GMX", help: "https://support.gmx.com/pop-imap/toggle.html" },
-  // No Outlook.com: Microsoft ended app passwords for it (2024-09-16). The form points to Microsoft 365 instead.
+  // No Outlook.com: Microsoft ended app passwords for it (2024-09-16). The form says so and points work or school accounts to Microsoft 365.
   { id: "other", label: t("work.mailcal.other_mail") },
 ];
 const CALENDAR_PRESETS: FormPreset[] = [

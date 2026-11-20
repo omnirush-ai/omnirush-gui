@@ -2737,7 +2737,7 @@ export default {
   "work.mailcal.username": "Email or user name",
   "work.mailcal.app_password": "App password",
   "work.mailcal.app_password_note": "Most providers need an app password here, not the password you sign in with.",
-  "work.mailcal.outlook_note": "Outlook.com and Hotmail no longer take app passwords. For Outlook mail, connect Microsoft 365 instead.",
+  "work.mailcal.outlook_note": "Outlook.com and Hotmail accounts cannot connect here, because Microsoft no longer takes app passwords for them. For a work or school Outlook account, connect Microsoft 365 instead.",
   "work.mailcal.app_password_help": "Make one for {name}",
   "work.mailcal.link_note": "Paste the private .ics link from your calendar's sharing settings. It is read only.",
   "work.mailcal.testing": "Testing",

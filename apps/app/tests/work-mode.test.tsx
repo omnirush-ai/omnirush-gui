@@ -567,8 +567,8 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       expect(form.querySelector('[data-credentials-field="host"]')).toBeNull();
       expect(form.querySelector('[data-credentials-field="password"]')?.getAttribute("type")).toBe("password");
       expect(form.querySelector('[data-testid="work-credentials-note"]')?.textContent).toContain("app password");
-      // No Outlook.com preset (Microsoft ended app passwords for it): a line points to Microsoft 365.
-      expect(form.querySelector('[data-testid="work-credentials-outlook"]')?.textContent).toBe("Outlook.com and Hotmail no longer take app passwords. For Outlook mail, connect Microsoft 365 instead.");
+      // No Outlook.com preset (Microsoft ended app passwords for it): a line says so and points work or school accounts to Microsoft 365.
+      expect(form.querySelector('[data-testid="work-credentials-outlook"]')?.textContent).toBe("Outlook.com and Hotmail accounts cannot connect here, because Microsoft no longer takes app passwords for them. For a work or school Outlook account, connect Microsoft 365 instead.");
       await act(async () => form.querySelector<HTMLButtonElement>('[data-testid="work-credentials-help"]')!.click());
       expect(opened).toEqual(["https://support.apple.com/en-us/102654"]);
       const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-credentials-save"]')!;
