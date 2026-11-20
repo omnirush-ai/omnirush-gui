@@ -2993,6 +2993,7 @@ export default {
   "work.telegram.error_wrong_password": "That password is not right.",
   "work.telegram.error_not_registered": "This number has no Telegram account.",
   "work.telegram.error_failed": "Telegram sign-in failed. Try again.",
+  "work.telegram.disconnect_body": "This computer signs out of Telegram and stops syncing. Chats already synced stay in Work.",
   "work.tools.connected": "Work tools are connected",
   "work.tools.still_not_connected": "Work tools are still not connected.",
   "work.tools.banner": "Work tools aren't connected",

@@ -437,6 +437,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
   const count = useQuery({ queryKey: countKey, queryFn: () => props.client!.getTelegramCount(), enabled: Boolean(props.client) && signedIn });
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [confirmLogout, setConfirmLogout] = useState(false);
   const settle = () => {
     for (const queryKey of [statusKey, syncKey, countKey, workCoverageKey(props.client)]) void queryClient.invalidateQueries({ queryKey });
   };
@@ -534,10 +535,23 @@ export function TelegramCard(props: { client: WorkClient | null }) {
             </>
           ) : null}
           {signedIn || data.step === "other_account" ? (
-            <Button type="button" variant="outline" size="sm" disabled={busy} aria-label={t("work.connectors.disconnect_name", { name: "Telegram" })} onClick={() => logout.mutate()}>{t("work.connectors.disconnect")}</Button>
+            <Button type="button" variant="outline" size="sm" disabled={busy} aria-label={t("work.connectors.disconnect_name", { name: "Telegram" })} onClick={() => setConfirmLogout(true)}>{t("work.connectors.disconnect")}</Button>
           ) : null}
         </div>
       </div>
+      <ConfirmModal
+        open={confirmLogout}
+        title={t("work.connectors.disconnect_title", { name: "Telegram" })}
+        message={t("work.telegram.disconnect_body")}
+        confirmLabel={t("work.connectors.disconnect")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        onConfirm={() => {
+          setConfirmLogout(false);
+          logout.mutate();
+        }}
+        onCancel={() => setConfirmLogout(false)}
+      />
     </div>
   );
 }

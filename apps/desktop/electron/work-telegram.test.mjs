@@ -23,6 +23,7 @@ const me = new Api.User({ id: big(42), firstName: "Sam", lastName: "Rao", access
 const ann = new Api.User({ id: big(777), firstName: "Ann", lastName: "Buyer", accessHash: big(2) });
 const bob = new Api.User({ id: big(888), firstName: "Bob", accessHash: big(3) });
 const service = new Api.User({ id: big(777000), firstName: "Telegram", accessHash: big(4) });
+const botfather = new Api.User({ id: big(93372553), firstName: "BotFather", accessHash: big(7), bot: true });
 const group = new Api.Channel({ id: big(123), title: "Ops", megagroup: true, accessHash: big(5), photo: new Api.ChatPhotoEmpty(), date: 0 });
 const news = new Api.Channel({ id: big(456), title: "News", broadcast: true, accessHash: big(6), photo: new Api.ChatPhotoEmpty(), date: 0 });
 const basic = new Api.Chat({ id: big(55), title: "Old group", photo: new Api.ChatPhotoEmpty(), participantsCount: 3, date: 0, version: 1 });
@@ -47,7 +48,7 @@ function fakeTelegram() {
       chat.push(new Api.Message({ peerId: peerOf(entity), ...message }));
     },
   };
-  const entities = () => [me, ann, bob, service, group, news, basic];
+  const entities = () => [me, ann, bob, service, botfather, group, news, basic];
   const find = (peer) => [...chats.keys()].find((e) => String(e.id) === String(peer.userId ?? peer.chatId ?? peer.channelId));
   server.client = () => ({
     session: { save: () => SESSION },
@@ -211,7 +212,7 @@ test("sign-in errors: FLOOD_WAIT on the code, a stale code, cancel, no keychain"
   }
 });
 
-/** Ann (private, two days), Ops (a supergroup), News (a channel), Old group (a basic group), the service chat. */
+/** Ann (private, two days), Ops (a supergroup), News (a channel), Old group (a basic group), the service chat, a bot. */
 function seed(server) {
   server.add(ann, { id: 1, date: NOW / 1000 - 100 * DAY, message: "too old" });
   server.add(ann, { id: 10, date: at("2026-11-19T23:30:00Z"), message: "Can we ship on Friday?" });
@@ -223,9 +224,10 @@ function seed(server) {
   server.add(news, { id: 3, date: at("2026-11-20T07:00:00Z"), message: "release notes" });
   server.add(basic, { id: 20, date: at("2026-11-18T12:00:00Z"), message: "lunch", fromId: new Api.PeerUser({ userId: bob.id }) });
   server.add(service, { id: 30, date: at("2026-11-20T09:30:00Z"), message: "Login code: 12345" });
+  server.add(botfather, { id: 31, date: at("2026-11-20T09:40:00Z"), message: "Use this token to access the HTTP API: 123:AAbot" });
 }
 
-test("first read: private chats and groups by the export's bare ids and UTC days; channels and the service chat left out", async () => {
+test("first read: private chats and groups by the export's bare ids and UTC days; channels, bots and the service chat left out", async () => {
   const r = rig();
   try {
     await signIn(r);
@@ -249,6 +251,7 @@ test("first read: private chats and groups by the export's bare ids and UTC days
     assert.equal(byKey["55:2026-11-18"].chat_name, "Old group");
     assert.ok(!JSON.stringify(read.records).includes("too old"), "the first read goes back 90 days");
     assert.ok(!JSON.stringify(read.records).includes("Login code"), "the service chat is never read");
+    assert.ok(!r.server.calls.includes("history 93372553 from 0"), "a bot chat is never read (BotFather's replies carry bot tokens)");
     assert.ok(!JSON.stringify(read.records).includes("release notes"), "channels only with the setting");
     assert.equal(read.messageCount, 6);
     assert.deepEqual(read.cursor, { user: "42", channels: false, at: NOW / 1000, chats: { 777: 12, 123: 7, 55: 20 } });
