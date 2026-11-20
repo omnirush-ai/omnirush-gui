@@ -3000,6 +3000,7 @@ export default {
   "work.telegram.error_wrong_password": "密码不正确。",
   "work.telegram.error_not_registered": "这个号码没有 Telegram 账号。",
   "work.telegram.error_failed": "Telegram 登录失败，请重试。",
+  "work.telegram.disconnect_body": "这台电脑会退出 Telegram 并停止同步。已同步的聊天会保留在 Work 中。",
   "work.tools.connected": "Work 工具已连接",
   "work.tools.still_not_connected": "Work 工具仍未连接。",
   "work.tools.banner": "Work 工具未连接",

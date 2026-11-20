@@ -3,9 +3,9 @@
 // this device (phone, the code Telegram sends, the two-step password if set). The login (a StringSession) is
 // encrypted with safeStorage and kept only in
 // <userData>/work-telegram.json: never sent to the server, never logged. The chat sync (work-chat-sync.mjs) calls
-// `read` at app start and every 10 minutes and pushes the chat-days to /work/telegram: private chats and groups
-// (channels when the setting adds them), text, captions and file names (no media bytes), one record per chat per
-// UTC day under the chat's bare id, the id Telegram Desktop's result.json export uses, so the import and the sync
+// `read` at app start and every 10 minutes and pushes the chat-days to /work/telegram: private chats (no bots) and
+// groups (channels when the setting adds them), text, captions and file names (no media bytes), one record per chat
+// per UTC day under the chat's bare id, the id Telegram Desktop's result.json export uses, so the import and the sync
 // land on the same records. Requests are paced and FLOOD_WAIT is honoured, so the account is never flagged.
 
 import { readFileSync } from "node:fs";
@@ -84,9 +84,10 @@ export function nameOf(entity) {
   return entity.title ?? "";
 }
 
-/** Private chats (not the service chat) and groups; broadcast channels only with `channels`. */
+/** Private chats (not the service chat, not bots: noise, and BotFather's replies carry bot tokens) and groups;
+ *  broadcast channels only with `channels`. */
 function wanted(entity, channels) {
-  if (entity?.className === "User") return String(entity.id) !== SERVICE_USER;
+  if (entity?.className === "User") return String(entity.id) !== SERVICE_USER && !entity.bot;
   if (entity?.className === "Chat") return !entity.deactivated && !entity.left;
   if (entity?.className === "Channel") return !entity.broadcast || channels;
   return false; // forbidden or empty chats
@@ -151,9 +152,10 @@ function finishDay(record) {
 }
 
 /** The real client: teleproto over TCP, its log off (it would print connection details), no automatic flood sleeps. */
-async function openGram(credentials, session, appVersion) {
+async function openGram(credentials, session, appVersion, testServers) {
   const { TelegramClient, sessions, Logger } = (await import("teleproto")).default;
   return new TelegramClient(new sessions.StringSession(session), credentials.apiId, credentials.apiHash, {
+    testServers,
     connectionRetries: 3,
     floodSleepThreshold: 0,
     deviceModel: "OmniRush.ai",
@@ -175,6 +177,7 @@ async function realCheck(srp, password) {
  *   open?: (session: string) => Promise<any>,
  *   computeCheck?: (srp: any, password: string) => Promise<any>,
  *   appVersion?: string,
+ *   testServers?: boolean,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
  * }} deps
@@ -182,7 +185,8 @@ async function realCheck(srp, password) {
 export function createTelegram(deps) {
   const {
     credentials, file, storage,
-    open = (session) => openGram(/** @type {any} */ (credentials), session, deps.appVersion),
+    // testServers: Telegram's test DC, only for live tests that drive this module from Node; main.mjs never sets it.
+    open = (session) => openGram(/** @type {any} */ (credentials), session, deps.appVersion, deps.testServers === true),
     computeCheck = realCheck,
     now = Date.now,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
