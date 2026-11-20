@@ -227,6 +227,19 @@ describe("work routes", () => {
     expect(calls).toEqual(["GET connectors ", "GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
   });
 
+  test("a server-and-password connect forwards only the form's fields", async () => {
+    const { calls, call } = setup(() => json({ ok: true, account: "me@corp.test" }));
+    const form = { preset: "other", host: "mail.corp.test", port: 993, security: "tls", username: "me@corp.test", password: "app-pw", evil: "x", url: 5 };
+    const answer = await call("POST", "/work/connectors/imap/connect", form);
+    expect(await answer.json()).toEqual({ ok: true, account: "me@corp.test" });
+    expect((await call("POST", "/work/connectors/Bad.Id/connect", form)).status).toBe(404);
+    expect(calls).toEqual([`POST connectors/imap/connect ${JSON.stringify({ preset: "other", host: "mail.corp.test", security: "tls", username: "me@corp.test", password: "app-pw", port: 993 })}`]);
+    const refused = setup(() => json({ detail: "login_failed" }, 400));
+    expect(await (await refused.call("POST", "/work/connectors/imap/connect", form)).json()).toEqual({
+      detail: "login_failed", code: "login_failed", message: "The server said the password is wrong. Most providers need an app password here.",
+    });
+  });
+
   test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {
     const { calls, call } = setup((path) => json(path.startsWith("health") ? { sources: [{ id: "jira", token_ok: true, scopes_ok: false, missing_scopes: ["write:jira-work"] }] } : { items: [], next_cursor: null }));
     expect((await (await call("GET", "/work/health?source=jira")).json()).sources[0].missing_scopes).toEqual(["write:jira-work"]);
@@ -265,7 +278,7 @@ describe("work routes", () => {
   });
 
   test("the broker reaches only the contract's paths", () => {
-    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
+    for (const path of ["connectors", "connectors/jira/start", "connectors/imap/connect", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
       "org/insights", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
       "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio"]) expect(WORK_PATH.test(path)).toBe(true);

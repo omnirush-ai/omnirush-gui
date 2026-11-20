@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket,
+  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
-import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
 import type { WorkChatSyncSource, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
@@ -34,7 +34,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
@@ -44,6 +44,7 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   jira: Ticket, confluence: BookOpen, linear: Kanban, github: Github, mock: Shapes, demo: Database,
   gmail: Mail, outlook: Mail, drive: FileText, onedrive: FileText, calendar: Calendar, qbo: Calculator, teams: MessageSquare,
   whatsapp: MessageCircle, whatsapp_business: MessageCircle, telegram: Send, imessage: MessageSquare, meetings: Phone, zoom: Phone,
+  imap: AtSign, caldav: Calendar,
 };
 
 /** A connector's icon; an id the app does not know gets the generic plug. */
@@ -309,6 +310,128 @@ export function ConnectorRow(props: {
       )}
       </div>
     </div>
+  );
+}
+
+/** The connect form's providers: the server knows each one's address; `help` is where the provider makes an app password. */
+type FormPreset = { id: string; label: string; help?: string };
+const APPLE_HELP = "https://support.apple.com/en-us/102654";
+const FASTMAIL_HELP = "https://www.fastmail.help/hc/en-us/articles/360058752854";
+const ZOHO_HELP = "https://www.zoho.com/mail/help/imap-access.html";
+const MAIL_PRESETS: FormPreset[] = [
+  { id: "icloud", label: "iCloud Mail", help: APPLE_HELP },
+  { id: "fastmail", label: "Fastmail", help: FASTMAIL_HELP },
+  { id: "zoho", label: "Zoho Mail", help: ZOHO_HELP },
+  { id: "yahoo", label: "Yahoo Mail", help: "https://help.yahoo.com/kb/SLN15241.html" },
+  { id: "gmx", label: "GMX", help: "https://support.gmx.com/pop-imap/toggle.html" },
+  { id: "outlook", label: "Outlook.com", help: "https://support.microsoft.com/en-us/account-billing/5896ed9b-4263-e681-128a-a6f2979a7944" },
+  { id: "other", label: t("work.mailcal.other_mail") },
+];
+const CALENDAR_PRESETS: FormPreset[] = [
+  { id: "icloud", label: "iCloud Calendar", help: APPLE_HELP },
+  { id: "fastmail", label: "Fastmail", help: FASTMAIL_HELP },
+  { id: "nextcloud", label: "Nextcloud", help: "https://docs.nextcloud.com/server/latest/user_manual/en/session_management.html" },
+  { id: "zoho", label: "Zoho Calendar", help: ZOHO_HELP },
+  { id: "other", label: t("work.mailcal.other_calendar") },
+  { id: "link", label: t("work.mailcal.link") },
+];
+
+/** Other email (IMAP) and other calendar (CalDAV or a link): pick the provider, fill in the server and an app password,
+ *  and Test and save tries the login before anything is saved. The password goes to the server once and is not kept here. */
+export function CredentialsForm(props: { connector: OmniRushWorkConnector; client: WorkClient | null; openLink: (url: string) => void; onDone: () => void; onCancel: () => void }) {
+  const mail = props.connector.id === "imap";
+  const presets = mail ? MAIL_PRESETS : CALENDAR_PRESETS;
+  const [preset, setPreset] = useState(presets[0]!.id);
+  const [field, setField] = useState({ host: "", port: "993", security: "tls", url: "", username: "", password: "" });
+  const [error, setError] = useState<string | null>(null);
+  const chosen = presets.find((item) => item.id === preset);
+  const link = preset === "link";
+  const server = mail && preset === "other";
+  const address = !mail && (link || preset === "other" || preset === "nextcloud");
+  const form = (): OmniRushWorkCredentials => ({
+    preset,
+    ...(server ? { host: field.host.trim(), port: Number(field.port) || 993, security: field.security === "starttls" ? "starttls" : "tls" } : {}),
+    ...(address ? { url: field.url.trim() } : {}),
+    ...(link ? {} : { username: field.username.trim(), password: field.password }),
+  });
+  const save = useMutation({
+    mutationFn: () => props.client!.connectWorkCredentials(props.connector.id, form()),
+    onSuccess: () => {
+      setField((current) => ({ ...current, password: "" }));
+      toast.success(t("work.mailcal.connected", { name: connectorLabel(props.connector.id, props.connector.label) }));
+      props.onDone();
+    },
+    onError: (reason) => setError(workFailure(reason).text),
+  });
+  const ready = Boolean(props.client) && (!server || field.host.trim()) && (!address || field.url.trim()) && (link || (field.username.trim() && field.password));
+  const input = (key: keyof typeof field, label: string, extra: { type?: string; placeholder?: string; autoComplete?: string; inputMode?: "numeric" } = {}) => (
+    <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+      {label}
+      <Input
+        className="h-8"
+        value={field[key]}
+        disabled={save.isPending}
+        onChange={(event) => { setError(null); setField({ ...field, [key]: event.target.value }); }}
+        data-credentials-field={key}
+        {...extra}
+      />
+    </label>
+  );
+  const securityItems = [{ value: "tls", label: t("work.mailcal.tls") }, { value: "starttls", label: "STARTTLS" }];
+  return (
+    <form
+      className="flex flex-col gap-3 border-b border-border bg-muted/30 px-4 py-3 last:border-b-0"
+      data-testid={`work-credentials-${props.connector.id}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (ready && !save.isPending) save.mutate();
+      }}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+          {t("work.mailcal.provider")}
+          <Select value={preset} items={presets.map((item) => ({ value: item.id, label: item.label }))} onValueChange={(value) => { if (value) { setPreset(value); setError(null); } }}>
+            <SelectTrigger className="h-8" aria-label={t("work.mailcal.provider")} data-testid="work-credentials-preset"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectGroup>{presets.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
+          </Select>
+        </label>
+        {server ? input("host", t("work.mailcal.server"), { placeholder: "mail.example.com", autoComplete: "off" }) : null}
+        {server ? input("port", t("work.mailcal.port"), { inputMode: "numeric", autoComplete: "off" }) : null}
+        {server ? (
+          <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+            {t("work.mailcal.security")}
+            <Select value={field.security} items={securityItems} onValueChange={(value) => { if (value) setField({ ...field, security: value, port: value === "starttls" ? "143" : "993" }); }}>
+              <SelectTrigger className="h-8" aria-label={t("work.mailcal.security")}><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>{securityItems.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
+            </Select>
+          </label>
+        ) : null}
+        {address ? input("url", link ? t("work.mailcal.link_url") : preset === "nextcloud" ? t("work.mailcal.nextcloud_url") : t("work.mailcal.caldav_url"), {
+          placeholder: link ? "https://calendar.example.com/private.ics" : preset === "nextcloud" ? "cloud.example.com" : "https://dav.example.com/",
+          autoComplete: "off",
+        }) : null}
+        {link ? null : input("username", t("work.mailcal.username"), { placeholder: "you@example.com", autoComplete: "username" })}
+        {link ? null : input("password", t("work.mailcal.app_password"), { type: "password", autoComplete: "current-password" })}
+      </div>
+      <p className="text-[12px] text-muted-foreground" data-testid="work-credentials-note">
+        {link ? t("work.mailcal.link_note") : t("work.mailcal.app_password_note")}
+        {!link && chosen?.help ? (
+          <>
+            {" "}
+            <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => props.openLink(chosen.help!)} data-testid="work-credentials-help">
+              {t("work.mailcal.app_password_help", { name: chosen.label })}
+            </button>
+          </>
+        ) : null}
+      </p>
+      {error ? <p className="text-[12px] text-destructive" role="alert" data-testid="work-credentials-error">{error}</p> : null}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={props.onCancel}>{t("common.cancel")}</Button>
+        <Button type="submit" size="sm" disabled={!ready || save.isPending} data-testid="work-credentials-save">
+          {save.isPending ? t("work.mailcal.testing") : t("work.mailcal.test_and_save")}
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -682,6 +805,8 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const [connecting, setConnecting] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState<OmniRushWorkConnector | null>(null);
   const [health, setHealth] = useState<Record<string, OmniRushWorkHealth | null>>({});
+  // The source whose server and password form is open (other email, other calendar).
+  const [form, setForm] = useState<string | null>(null);
   const connectStarted = useRef(0);
   const query = useQuery({
     queryKey: key,
@@ -745,6 +870,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const canAdd = (id: string) => coverageCanAdd(query.data, id);
   const add = (id: string) => {
     if (isImportKind(id)) document.querySelector<HTMLInputElement>(`[data-import-input="${id}"]`)?.click();
+    else if (signsInWithForm(query.data, id)) setForm(id);
     else if (canAdd(id) && !busy) connect.mutate(id);
   };
   const failure = query.error ? workFailure(query.error) : null;
@@ -770,13 +896,13 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
             </div>
           ) : rows.length === 0 ? (
             <div className="px-4 py-6 text-sm text-muted-foreground">{t("work.connectors.none")}</div>
-          ) : rows.map((row) => (
+          ) : rows.map((row) => [
             <ConnectorRow
               key={row.id}
               connector={row}
               connecting={connecting === row.id}
               busy={busy}
-              onConnect={() => connect.mutate(row.id)}
+              onConnect={() => (row.mode === "credentials" ? setForm(form === row.id ? null : row.id) : connect.mutate(row.id))}
               onDisconnect={() => setConfirmDisconnect(row)}
               onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
               onSetup={row.setup_url ? () => props.openLink(row.setup_url!) : undefined}
@@ -785,8 +911,18 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               onCheck={() => check.mutate(row.id)}
               retrying={retry.isPending && retry.variables === row.id}
               onRetry={() => retry.mutate(row.id)}
-            />
-          ))}
+            />,
+            form === row.id ? (
+              <CredentialsForm
+                key={`${row.id}-form`}
+                connector={row}
+                client={props.client}
+                openLink={props.openLink}
+                onDone={() => { setForm(null); void refresh(); void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) }); }}
+                onCancel={() => setForm(null)}
+              />
+            ) : null,
+          ])}
         </div>
         <ChatImportCard client={props.client} />
         {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} /> : null}

@@ -47,7 +47,7 @@ export const useWorkModeStore = create<WorkModeStore>()(
   }),
 );
 
-export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrgInsights" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
+export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrgInsights" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "connectWorkCredentials" | "disconnectWorkConnector" | "setWorkConnectorSync"
   | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact" | "getWorkGraph" | "getWorkTimeline"
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
@@ -228,12 +228,16 @@ export function domainFromEmail(email: string | null | undefined): string {
   return domain && !PERSONAL_MAIL.has(domain) ? domain : "";
 }
 
-/** Sources for the connect step: the recommended ones first (in their order), then the rest; no sample data, test source
- *  or import source (WhatsApp has no sign-in: it is imported on Connectors). */
+/** Sources for the connect step: the recommended ones first (in their order), then the rest; no sample data, test source,
+ *  import source (WhatsApp has no sign-in: it is imported on Connectors) or source with a server and password form (on Connectors). */
 export function connectOrder(rows: OmniRushWorkConnector[] | null | undefined, recommended: string[] = []): OmniRushWorkConnector[] {
   const rank = (id: string) => { const at = recommended.indexOf(id); return at === -1 ? recommended.length : at; };
-  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && row.mode !== "import").sort((a, b) => rank(a.id) - rank(b.id));
+  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && row.mode !== "import" && row.mode !== "credentials").sort((a, b) => rank(a.id) - rank(b.id));
 }
+
+/** A source connected with a server and password form on Connectors (other email, other calendar), not a sign-in page. */
+export const signsInWithForm = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
+  (rows ?? []).some((row) => row.id === id && row.mode === "credentials");
 
 /** A coverage "+" chip has somewhere to go on Connectors: an import card, or a row that signs in (Meetings has neither). */
 export const coverageCanAdd = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
@@ -308,6 +312,7 @@ const CONNECTOR_LABELS: Record<string, string> = {
   google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
   notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub",
   whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
+  imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)",
 };
 export const connectorLabel = (id: string, label?: string | null) =>
   label?.trim() || CONNECTOR_LABELS[id] || (id === "mock" ? t("work.connector.mock") : id === "demo" ? t("work.connector.demo") : id);
@@ -325,6 +330,8 @@ export function connectorAccess(id: string): string {
     confluence: t("work.connector.access_confluence"),
     linear: t("work.connector.access_linear"),
     github: t("work.connector.access_github"),
+    imap: t("work.connector.access_imap"),
+    caldav: t("work.connector.access_caldav"),
   };
   return access[id] ?? t("work.connector.access_other");
 }

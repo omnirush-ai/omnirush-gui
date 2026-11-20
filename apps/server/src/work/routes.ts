@@ -7,6 +7,8 @@
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
  *   POST  /work/connectors/:id/start       { auth_url }
+ *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password? } -> { ok, account }
+ *                                          (imap and caldav: the server tries the login, then saves and syncs)
  *   POST  /work/connectors/:id/disconnect
  *   PATCH /work/connectors/:id             { sync_enabled }
  *   GET   /work/health[?source=]           the sources' health checks
@@ -119,6 +121,14 @@ const WORK_ERRORS: Record<string, string> = {
   transcribe_unavailable: "Transcript is catching up.",
   audio_too_large: "That audio part is too large.",
   bad_audio: "That audio couldn't be read.",
+  login_failed: "The server said the password is wrong. Most providers need an app password here.",
+  server_unreachable: "Could not reach the server. Check its address and port.",
+  address_refused: "That server address is not allowed. Use the provider's public address.",
+  tls_failed: "The server's secure connection could not be checked.",
+  not_caldav: "No calendar server answered at that address. Check the URL.",
+  no_calendars: "That account has no calendars with events.",
+  not_calendar: "That link is not a calendar. Copy the .ics link again.",
+  too_many_tries: "Too many tries. Wait a few minutes and try again.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
@@ -219,6 +229,21 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
       return (await pass(await found.workRequest(`connectors/${ctx.params.id}/${action}`, { method: "POST", body: "{}" }))).response;
     });
   }
+
+  // A connector signed in to with a server and a password (imap, caldav): only the form's own fields go on.
+  addRoute(routes, "POST", "/work/connectors/:id/connect", "client", async (ctx) => {
+    if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
+    const body = await deps.readJsonBody(ctx.request);
+    const form: Record<string, string | number> = {};
+    for (const key of ["preset", "host", "security", "url", "username", "password"]) {
+      const value = body[key];
+      if (typeof value === "string" && value) form[key] = value;
+    }
+    if (typeof body.port === "number" && Number.isInteger(body.port)) form.port = body.port;
+    const found = deps.broker();
+    if (!found) return signedOut();
+    return (await pass(await found.workRequest(`connectors/${ctx.params.id}/connect`, { method: "POST", body: JSON.stringify(form) }))).response;
+  });
 
   addRoute(routes, "PATCH", "/work/connectors/:id", "client", async (ctx) => {
     if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);

@@ -82,6 +82,15 @@
       "override": null
     },
     {
+      "host": "docs.nextcloud.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Nextcloud's app password page, linked from the Work connect form for other calendars.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
       "host": "ghcr.io",
       "kind": "subprocess",
       "components": ["den"],
@@ -106,6 +115,15 @@
       "purpose": "Gmail API calls for Google Workspace message search, reading, attachments, and draft creation.",
       "requirement": "opt-in",
       "blockedEffect": "Gmail read and draft actions fail for connected Google Workspace accounts.",
+      "override": null
+    },
+    {
+      "host": "help.yahoo.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Yahoo Mail's app password page, linked from the Work connect form for other email.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
       "override": null
     },
     {
@@ -271,6 +289,33 @@
       "override": null
     },
     {
+      "host": "support.apple.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "iCloud's app-specific password page, linked from the Work connect form for other email and calendars.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
+      "host": "support.gmx.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "GMX's IMAP access page, linked from the Work connect form for other email.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
+      "host": "support.microsoft.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Outlook.com's app password page, linked from the Work connect form for other email.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
       "host": "us.i.posthog.com",
       "kind": "fetched",
       "components": ["renderer"],
@@ -278,6 +323,15 @@
       "requirement": "optional",
       "blockedEffect": "Analytics events are dropped silently; user-facing app behavior is unaffected.",
       "override": "VITE_OMNIRUSH_POSTHOG_HOST; build without VITE_OMNIRUSH_POSTHOG_KEY to send nothing"
+    },
+    {
+      "host": "www.fastmail.help",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Fastmail's app password page, linked from the Work connect form for other email and calendars.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
     },
     {
       "host": "www.google.com",
@@ -295,6 +349,15 @@
       "purpose": "Google profile, Calendar, and Drive API calls for Google Workspace connections.",
       "requirement": "opt-in",
       "blockedEffect": "Google profile, Calendar, and Drive actions fail for connected Google Workspace accounts.",
+      "override": null
+    },
+    {
+      "host": "www.zoho.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Zoho Mail's IMAP access page, linked from the Work connect form for other email and calendars.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
       "override": null
     }
   ]
