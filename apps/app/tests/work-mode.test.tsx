@@ -597,6 +597,94 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(connectorAccess("caldav")).toContain(".ics");
   });
 
+  test("pasted keys and the inbound hook: the key form tries the key, the hook URL is shown once with how to send it", async () => {
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const sent: unknown[] = [];
+      const made: string[] = [];
+      let refuse = true;
+      const rows = [
+        row({ id: "stripe", label: "Stripe", mode: "key" }),
+        row({ id: "freshdesk", label: "Freshdesk", mode: "key" }),
+        row({ id: "hook", label: "Zapier, Make or n8n", mode: "hook" }),
+      ];
+      const hookUrl = "https://api.example.com/omnirush/work/hooks/h1/orh_abc";
+      const client = {
+        baseUrl: "http://keys.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async () => { throw new Error("no OAuth for a key source"); },
+        connectWorkCredentials: async (id: string, form: unknown) => {
+          sent.push([id, form]);
+          if (refuse) throw new OmniRushServerError(400, "key_refused", "The service did not accept that key. Copy it again, all of it.");
+          return { ok: true, account: "me@acme.example" };
+        },
+        createWorkHook: async (id: string) => { made.push(id); return { url: hookUrl }; },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={noop} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
+      const type = async (form: Element, key: string, value: string) => {
+        const input = form.querySelector<HTMLInputElement>(`[data-key-field="${key}"]`)!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      };
+      // The hook is no connector row: it has its own card.
+      expect(button("Connect Zapier, Make or n8n")).toBeUndefined();
+      await act(async () => button("Connect Freshdesk")!.click());
+      const form = document.querySelector('[data-testid="work-key-freshdesk"]')!;
+      expect(form.querySelector('[data-testid="work-key-where"]')?.textContent).toContain("Profile settings");
+      expect(form.querySelector('[data-key-field="api_key"]')?.getAttribute("type")).toBe("password");
+      const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!;
+      await type(form, "api_key", "fd-key-1");
+      expect(save().disabled).toBe(true);
+      await type(form, "host", "acme.freshdesk.com");
+      expect(save().disabled).toBe(false);
+      await act(async () => save().click());
+      expect(sent).toEqual([["freshdesk", { api_key: "fd-key-1", host: "acme.freshdesk.com" }]]);
+      expect(form.querySelector('[data-testid="work-key-error"]')?.textContent).toBe("The service did not accept that key. Copy it again, all of it.");
+      refuse = false;
+      await act(async () => save().click());
+      expect(document.querySelector('[data-testid="work-key-freshdesk"]')).toBeNull();
+      // Stripe asks for a restricted key, without an address.
+      await act(async () => button("Connect Stripe")!.click());
+      const stripeForm = document.querySelector('[data-testid="work-key-stripe"]')!;
+      expect(stripeForm.querySelector('[data-key-field="host"]')).toBeNull();
+      expect(stripeForm.textContent).toContain("rk_");
+
+      const card = document.querySelector('[data-testid="work-hook-card"]')!;
+      expect(card.querySelector('[data-testid="work-hook-url"]')).toBeNull();
+      await act(async () => card.querySelector<HTMLButtonElement>('[data-testid="work-hook-create"]')!.click());
+      expect(made).toEqual(["hook"]);
+      expect(card.querySelector<HTMLInputElement>('[data-testid="work-hook-url"] input')?.value).toBe(hookUrl);
+      expect(card.querySelector('[data-testid="work-hook-url"]')?.textContent).toContain("shown only once");
+      expect(card.querySelector('[data-testid="work-hook-steps"]')?.textContent).toContain("Webhooks by Zapier");
+      await act(async () => button("n8n")!.click());
+      expect(card.querySelector('[data-testid="work-hook-steps"]')?.textContent).toContain("HTTP Request node");
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
+  test("key and hook sources are left out of the first-run connect step and say what they read", () => {
+    const rows = [row({ id: "google" }), row({ id: "stripe", mode: "key" }), row({ id: "hook", mode: "hook" })];
+    expect(connectOrder(rows).map((item) => item.id)).toEqual(["google"]);
+    expect(connectorAccess("stripe")).toContain("restricted key");
+    expect(connectorAccess("pipedrive")).toContain("Read only");
+  });
+
   test("organization: owner and member views, leave rules", () => {
     const client = { baseUrl: "http://org.test" } as never;
     const members = (you_role: "owner" | "member"): OmniRushWorkMembers => ({

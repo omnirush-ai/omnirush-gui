@@ -73,6 +73,15 @@
       "override": null
     },
     {
+      "host": "dashboard.stripe.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Stripe's API keys page, linked from the Work key form for Stripe.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
       "host": "discord.gg",
       "kind": "link-only",
       "components": ["renderer"],
@@ -271,6 +280,15 @@
       "override": "OMNIRUSH_GITHUB_RAW_BASE"
     },
     {
+      "host": "pipedrive.readme.io",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Pipedrive's guide to the personal API token, linked from the Work key form for Pipedrive.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
       "host": "registry.npmjs.org",
       "kind": "subprocess",
       "components": ["desktop", "renderer"],
@@ -293,6 +311,15 @@
       "kind": "link-only",
       "components": ["renderer"],
       "purpose": "iCloud's app-specific password page, linked from the Work connect form for other email and calendars.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
+      "host": "support.freshdesk.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Freshdesk's guide to the API key, linked from the Work key form for Freshdesk.",
       "requirement": "optional",
       "blockedEffect": "The help link will not open; connecting still works.",
       "override": null

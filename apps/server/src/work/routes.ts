@@ -7,8 +7,9 @@
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
  *   POST  /work/connectors/:id/start       { auth_url }
- *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password? } -> { ok, account }
- *                                          (imap and caldav: the server tries the login, then saves and syncs)
+ *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key? } -> { ok, account }
+ *                                          (imap and caldav, and the pasted-key sources: the server tries the login or key, then saves and syncs)
+ *   POST  /work/connectors/:id/hook        { url }: a new inbound URL for Zapier, Make or n8n (hook, hook_org), shown once
  *   POST  /work/connectors/:id/disconnect
  *   PATCH /work/connectors/:id             { sync_enabled }
  *   GET   /work/health[?source=]           the sources' health checks
@@ -129,6 +130,9 @@ const WORK_ERRORS: Record<string, string> = {
   no_calendars: "That account has no calendars with events.",
   not_calendar: "That link is not a calendar. Copy the .ics link again.",
   too_many_tries: "Too many tries. Wait a few minutes and try again.",
+  key_refused: "The service did not accept that key. Copy it again, all of it.",
+  key_not_restricted: "Use a restricted key (it starts with rk_), not your secret key.",
+  missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Events.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
@@ -221,7 +225,8 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     return answer.response;
   });
 
-  for (const action of ["start", "disconnect", "sync"] as const) {
+  // hook: a new inbound URL (Zapier, Make, n8n), passed to the app once and not kept here.
+  for (const action of ["start", "disconnect", "sync", "hook"] as const) {
     addRoute(routes, "POST", `/work/connectors/:id/${action}`, "client", async (ctx) => {
       if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
       const found = deps.broker();
@@ -230,12 +235,12 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     });
   }
 
-  // A connector signed in to with a server and a password (imap, caldav): only the form's own fields go on.
+  // A connector signed in to with a server and a password (imap, caldav) or a pasted key: only the form's own fields go on.
   addRoute(routes, "POST", "/work/connectors/:id/connect", "client", async (ctx) => {
     if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
     const body = await deps.readJsonBody(ctx.request);
     const form: Record<string, string | number> = {};
-    for (const key of ["preset", "host", "security", "url", "username", "password"]) {
+    for (const key of ["preset", "host", "security", "url", "username", "password", "api_key"]) {
       const value = body[key];
       if (typeof value === "string" && value) form[key] = value;
     }
