@@ -324,7 +324,7 @@ const MAIL_PRESETS: FormPreset[] = [
   { id: "zoho", label: "Zoho Mail", help: ZOHO_HELP },
   { id: "yahoo", label: "Yahoo Mail", help: "https://help.yahoo.com/kb/SLN15241.html" },
   { id: "gmx", label: "GMX", help: "https://support.gmx.com/pop-imap/toggle.html" },
-  { id: "outlook", label: "Outlook.com", help: "https://support.microsoft.com/en-us/account-billing/5896ed9b-4263-e681-128a-a6f2979a7944" },
+  // No Outlook.com: Microsoft ended app passwords for it (2024-09-16). The form points to Microsoft 365 instead.
   { id: "other", label: t("work.mailcal.other_mail") },
 ];
 const CALENDAR_PRESETS: FormPreset[] = [
@@ -413,6 +413,7 @@ export function CredentialsForm(props: { connector: OmniRushWorkConnector; clien
         {link ? null : input("username", t("work.mailcal.username"), { placeholder: "you@example.com", autoComplete: "username" })}
         {link ? null : input("password", t("work.mailcal.app_password"), { type: "password", autoComplete: "current-password" })}
       </div>
+      {mail ? <p className="text-[12px] text-muted-foreground" data-testid="work-credentials-outlook">{t("work.mailcal.outlook_note")}</p> : null}
       <p className="text-[12px] text-muted-foreground" data-testid="work-credentials-note">
         {link ? t("work.mailcal.link_note") : t("work.mailcal.app_password_note")}
         {!link && chosen?.help ? (
