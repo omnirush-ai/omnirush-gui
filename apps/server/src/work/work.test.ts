@@ -252,6 +252,15 @@ describe("work routes", () => {
     expect(await (await refused.call("POST", "/work/connectors/stripe/connect", { api_key: "rk_test_x" })).json()).toEqual({
       detail: "key_refused", code: "key_refused", message: "The service did not accept that key. Copy it again, all of it.",
     });
+    // A wrong Freshdesk address is said so, not blamed on the key; a broken calendar redirect is named too.
+    const missing = setup(() => json({ detail: "freshdesk_not_found" }, 400));
+    expect((await (await missing.call("POST", "/work/connectors/freshdesk/connect", { api_key: "fd-key-1", host: "acme" })).json()).message).toBe(
+      "Freshdesk could not find that account address. Check it and try again.",
+    );
+    const moved = setup(() => json({ detail: "bad_redirect", reason: "unusable location" }, 400));
+    expect((await (await moved.call("POST", "/work/connectors/caldav/connect", { preset: "other", url: "https://dav.example.com/", username: "u", password: "p" })).json()).message).toBe(
+      "The calendar server sent us to an address that does not work. Check the URL.",
+    );
   });
 
   test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {

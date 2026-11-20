@@ -14,7 +14,7 @@ import { leaveState, mePatch, WorkOrganizationPage } from "../src/react-app/doma
 import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
 import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
-import { ConnectorIcon, ConnectorRow, localChatError, LocalChatsCard, TelegramCard, telegramLoginError, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
+import { ConnectorIcon, ConnectorRow, HookCard, localChatError, LocalChatsCard, TelegramCard, telegramLoginError, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
@@ -567,6 +567,8 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       expect(form.querySelector('[data-credentials-field="host"]')).toBeNull();
       expect(form.querySelector('[data-credentials-field="password"]')?.getAttribute("type")).toBe("password");
       expect(form.querySelector('[data-testid="work-credentials-note"]')?.textContent).toContain("app password");
+      // No Outlook.com preset (Microsoft ended app passwords for it): a line says so and points work or school accounts to Microsoft 365.
+      expect(form.querySelector('[data-testid="work-credentials-outlook"]')?.textContent).toBe("Outlook.com and Hotmail accounts cannot connect here, because Microsoft no longer takes app passwords for them. For a work or school Outlook account, connect Microsoft 365 instead.");
       await act(async () => form.querySelector<HTMLButtonElement>('[data-testid="work-credentials-help"]')!.click());
       expect(opened).toEqual(["https://support.apple.com/en-us/102654"]);
       const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-credentials-save"]')!;
@@ -583,6 +585,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       // The calendar form starts on iCloud too; a form source never starts an OAuth sign-in.
       await act(async () => button("Connect Other calendar (CalDAV or link)").click());
       expect(document.querySelector('[data-testid="work-credentials-caldav"] [data-credentials-field="username"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="work-credentials-caldav"] [data-testid="work-credentials-outlook"]')).toBeNull();
       await act(async () => root.unmount());
       queries.clear();
     } finally {
@@ -676,6 +679,22 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     } finally {
       if (registered) await GlobalRegistrator.unregister();
     }
+  });
+
+  test("a company hook row with records but no URL of its own reads No URL yet and offers Create URL", () => {
+    const card = (status: OmniRushWorkConnector["status"]) => renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <HookCard rows={[row({ id: "hook_org", label: "Zapier, Make or n8n (company)", mode: "hook", status, records: 2 })]} client={null} onChanged={noop} />
+      </QueryClientProvider>,
+    );
+    const copy = card("disconnected");
+    expect(copy).toContain('data-status="off"');
+    expect(copy).toContain("No URL yet.");
+    expect(copy).toContain('data-testid="work-hook-create"');
+    expect(copy).not.toContain(">New URL<");
+    const live = card("connected");
+    expect(live).toContain('data-status="on"');
+    expect(live).toContain("2 records");
   });
 
   test("key and hook sources are left out of the first-run connect step and say what they read", () => {

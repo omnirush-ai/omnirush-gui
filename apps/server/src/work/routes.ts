@@ -131,8 +131,10 @@ const WORK_ERRORS: Record<string, string> = {
   not_calendar: "That link is not a calendar. Copy the .ics link again.",
   too_many_tries: "Too many tries. Wait a few minutes and try again.",
   key_refused: "The service did not accept that key. Copy it again, all of it.",
+  freshdesk_not_found: "Freshdesk could not find that account address. Check it and try again.",
+  bad_redirect: "The calendar server sent us to an address that does not work. Check the URL.",
   key_not_restricted: "Use a restricted key (it starts with rk_), not your secret key.",
-  missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Events.",
+  missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Refunds, and Events.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
