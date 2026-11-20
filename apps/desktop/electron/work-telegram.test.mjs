@@ -52,7 +52,10 @@ function fakeTelegram() {
     connected: false,
     destroyed: false,
     async connect() {
+      // GramJS answers false when Telegram cannot be reached.
+      if (server.offline) return false;
       this.connected = true;
+      return true;
     },
     async destroy() {
       this.destroyed = true;
@@ -359,6 +362,22 @@ test("Disconnect logs out on Telegram and deletes the local login, also when off
     r.server.errors.push(new Error("offline"));
     await r.tg.logout();
     assert.equal(existsSync(r.file), false);
+  } finally {
+    r.done();
+  }
+});
+
+test("offline: sign-in and reads stop at once instead of waiting on GramJS", async () => {
+  const r = rig();
+  try {
+    r.server.offline = true;
+    assert.deepEqual(await r.tg.login({ phone: "+447700900123" }, "acct_a"), { error: "offline" });
+    r.server.offline = false;
+    await signIn(r);
+    r.server.offline = true;
+    await assert.rejects(r.tg.read(undefined, "acct_a"), { code: "offline" });
+    assert.ok(existsSync(r.file), "an offline read keeps the login");
+    assert.ok(r.clients.every((c) => c.destroyed), "no client is left open");
   } finally {
     r.done();
   }

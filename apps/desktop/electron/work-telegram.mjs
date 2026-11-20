@@ -31,6 +31,8 @@ const MAX_DAY_MESSAGES = 5000;
 // Telegram's own service chat carries login codes: never synced.
 const SERVICE_USER = "777000";
 const LOGIN_TTL_MS = 15 * 60_000;
+// GramJS waits forever on a request when the connection is gone: each request and disconnect gets this long.
+const REQUEST_MS = 90_000;
 
 /** `{ apiId, apiHash }` from the build file (a path) or an object; null when missing or malformed. */
 export function telegramCredentials(source) {
@@ -88,6 +90,26 @@ function wanted(entity, channels) {
   if (entity?.className === "Channel") return !entity.broadcast || channels;
   return false; // forbidden or empty chats
 }
+
+/** `promise`, or a TelegramError("timeout") after REQUEST_MS. */
+function timed(promise) {
+  let timer;
+  const late = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new TelegramError("timeout")), REQUEST_MS);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+/** Connects `client`. GramJS's connect() answers false when Telegram cannot be reached (and its requests would then wait for ever). */
+async function online(client) {
+  const up = await timed(client.connect()).catch(() => false);
+  if (up !== false) return client;
+  await close(client);
+  throw new TelegramError("offline");
+}
+
+const ask = (client, request) => timed(client.invoke(request));
+const close = (client) => (client ? timed(client.destroy()).catch(() => undefined) : undefined);
 
 const dayStart = (seconds) => Math.floor(seconds / DAY_S) * DAY_S;
 const dayOf = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
@@ -193,7 +215,7 @@ export function createTelegram(deps) {
   async function drop() {
     const was = pending;
     pending = null;
-    await was?.client.destroy().catch(() => undefined);
+    await close(was?.client);
   }
 
   /** @returns {Promise<{ step: "done" }>} */
@@ -213,9 +235,7 @@ export function createTelegram(deps) {
 
   /** A connected client on the saved login; a login Telegram ended (another device signed it out) is removed here. */
   async function connected(saved) {
-    const client = await open(await (await keys()).decrypt(Buffer.from(saved.session, "base64")));
-    await client.connect();
-    return client;
+    return online(await open(await (await keys()).decrypt(Buffer.from(saved.session, "base64"))));
   }
 
   async function signedOutBy(error) {
@@ -266,15 +286,14 @@ export function createTelegram(deps) {
           if (!/^\+?\d{7,15}$/.test(phone)) throw new TelegramError("bad_phone");
           await keys();
           await drop();
-          const client = await open("");
+          const client = await online(await open(""));
           try {
-            await client.connect();
-            const sent = await client.sendCode(credentials, phone);
+            const sent = await timed(client.sendCode(credentials, phone));
             const via = sent.isCodeViaApp ? "app" : "sms";
             pending = { client, account, phone, hash: sent.phoneCodeHash, via, step: "code", hint: null, at: now() };
             return { step: "code", via };
           } catch (error) {
-            await client.destroy().catch(() => undefined);
+            await close(client);
             throw error;
           }
         }
@@ -287,10 +306,10 @@ export function createTelegram(deps) {
         if (pending.step === "code" && typeof input?.code === "string") {
           let result;
           try {
-            result = await client.invoke(new Api.auth.SignIn({ phoneNumber: pending.phone, phoneCodeHash: pending.hash, phoneCode: input.code.replace(/\D/g, "") }));
+            result = await ask(client, new Api.auth.SignIn({ phoneNumber: pending.phone, phoneCodeHash: pending.hash, phoneCode: input.code.replace(/\D/g, "") }));
           } catch (error) {
             if (error?.errorMessage !== "SESSION_PASSWORD_NEEDED") throw error;
-            const srp = await client.invoke(new Api.account.GetPassword());
+            const srp = await ask(client, new Api.account.GetPassword());
             Object.assign(pending, { step: "password", hint: srp.hint ?? null });
             return { step: "password", hint: pending.hint };
           }
@@ -299,8 +318,8 @@ export function createTelegram(deps) {
           return await finish(client, result.user, account);
         }
         if (pending.step === "password" && typeof input?.password === "string") {
-          const srp = await client.invoke(new Api.account.GetPassword());
-          const result = await client.invoke(new Api.auth.CheckPassword({ password: await computeCheck(srp, input.password) }));
+          const srp = await ask(client, new Api.account.GetPassword());
+          const result = await ask(client, new Api.auth.CheckPassword({ password: await computeCheck(srp, input.password) }));
           return await finish(client, result.user, account);
         }
         throw new TelegramError("failed");
@@ -319,9 +338,9 @@ export function createTelegram(deps) {
         try {
           const client = await connected(saved);
           try {
-            await client.invoke(new (await gram()).Api.auth.LogOut());
+            await ask(client, new (await gram()).Api.auth.LogOut());
           } finally {
-            await client.destroy().catch(() => undefined);
+            await close(client);
           }
         } catch {
           // Offline, or Telegram already ended it: the local login is deleted all the same.
@@ -373,7 +392,7 @@ export function createTelegram(deps) {
           if (wait > 0) await sleep(wait);
           lastCall = now();
           try {
-            return await client.invoke(request);
+            return await ask(client, request);
           } catch (error) {
             const seconds = floodSeconds(error);
             if (seconds === null) throw error;
@@ -470,7 +489,7 @@ export function createTelegram(deps) {
         complete = false;
         retryAfterMs = error.retryAfterMs;
       } finally {
-        await client?.destroy().catch(() => undefined);
+        await close(client);
       }
       return {
         records: [...days.values()].map(finishDay),
