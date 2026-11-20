@@ -678,6 +678,55 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     }
   });
 
+  test("Asana, Dropbox and Zoom: company marks, read-only copy, and Asana's workspace picker", async () => {
+    for (const id of ["asana", "dropbox", "zoom"]) {
+      const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);
+      expect(icon).toContain(`data-connector-icon="${id}"`);
+      expect(icon).toMatch(/<path fill="#[0-9A-F]{6}"/);
+      expect(connectorAccess(id)).toContain("Read only");
+      expect(connectorAccess(id)).not.toMatch(/[\u2013\u2014]/);
+    }
+    const choices = Array.from({ length: 7 }, (_, i) => ({ id: `w${i}`, name: `Space ${i}`, picked: i < 2 }));
+    const asana = (over: Partial<OmniRushWorkConnector>, onPick?: (picked: string[]) => void) => (
+      <ConnectorRow connector={row({ id: "asana", label: "Asana", status: "connected", records: 3, sync_enabled: true, choices, ...over })}
+        connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onPick={onPick} />
+    );
+    // One workspace, or not connected: nothing to pick.
+    expect(renderToStaticMarkup(asana({ choices: choices.slice(0, 1) }, noop))).not.toContain("work-connector-choices");
+    expect(renderToStaticMarkup(asana({ status: "disconnected" }, noop))).not.toContain("work-connector-choices");
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const picks: string[][] = [];
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(asana({}, (picked) => picks.push(picked))));
+      const box = (id: string) => document.querySelector<HTMLElement>(`[data-choice="${id}"]`);
+      // Five shown, then Show more.
+      expect(box("w4")).not.toBeNull();
+      expect(box("w5")).toBeNull();
+      const more = [...document.querySelectorAll("button")].find((item) => item.textContent === "Show 2 more")!;
+      await act(async () => more.click());
+      expect(box("w6")).not.toBeNull();
+      await act(async () => box("w1")!.click());
+      await act(async () => box("w2")!.click());
+      expect(picks).toEqual([["w0"], ["w0", "w1", "w2"]]);
+      // Everything checked is "all" ([]), and the last checked one cannot be unchecked.
+      await act(async () => root.render(asana({ choices: choices.map((choice, i) => ({ ...choice, picked: i !== 6 })) }, (picked) => picks.push(picked))));
+      await act(async () => box("w6")!.click());
+      expect(picks.at(-1)).toEqual([]);
+      await act(async () => root.render(asana({ choices: choices.map((choice, i) => ({ ...choice, picked: i === 0 })) }, (picked) => picks.push(picked))));
+      expect(box("w0")!.hasAttribute("data-disabled") || box("w0")!.getAttribute("aria-disabled") === "true").toBe(true);
+      expect(document.querySelector('[data-testid="work-connector-choices"]')?.textContent).toContain("Changes apply from the next sync");
+      await act(async () => root.unmount());
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
   test("key and hook sources are left out of the first-run connect step and say what they read", () => {
     const rows = [row({ id: "google" }), row({ id: "stripe", mode: "key" }), row({ id: "hook", mode: "hook" })];
     expect(connectOrder(rows).map((item) => item.id)).toEqual(["google"]);

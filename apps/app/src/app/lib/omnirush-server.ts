@@ -709,6 +709,9 @@ export type OmniRushWorkConnector = {
    *  Make or n8n (`createWorkHook`); absent for OAuth sources. */
   mode?: "import" | "credentials" | "key" | "hook" | string;
   last_import_at?: string | null;
+  /** What a source that picks could read (Asana's workspaces), once its first sync has seen them; `picked` is true for all
+   *  until the user picks (`setWorkConnectorPicked`). */
+  choices?: { id: string; name: string; picked: boolean }[];
 };
 /** The connect form of a "credentials" or "key" source (POST /omnirush/work/connectors/{id}/connect). */
 export type OmniRushWorkCredentials = { preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string };
@@ -2533,6 +2536,9 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<unknown>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/disconnect`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
     setWorkConnectorSync: (id: string, syncEnabled: boolean) =>
       requestJson<{ ok: boolean; sync_enabled: boolean }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: { sync_enabled: syncEnabled }, timeoutMs: timeouts.config }),
+    /** What a picking source reads from its next sync (Asana: workspace ids; [] is all). */
+    setWorkConnectorPicked: (id: string, picked: string[]) =>
+      requestJson<{ ok: boolean; picked: string[] }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: { picked }, timeoutMs: timeouts.config }),
     getWorkHealth: (source?: string) =>
       requestJson<unknown>(baseUrl, `/work/health${source ? `?source=${encodeURIComponent(source)}` : ""}`, { token, hostToken, timeoutMs: timeouts.config }),
     /** Push iMessage records the desktop read from the Mac's local chat.db. */

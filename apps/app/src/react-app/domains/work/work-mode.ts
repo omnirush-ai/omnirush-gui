@@ -47,7 +47,7 @@ export const useWorkModeStore = create<WorkModeStore>()(
   }),
 );
 
-export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrgInsights" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "connectWorkCredentials" | "createWorkHook" | "disconnectWorkConnector" | "setWorkConnectorSync"
+export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrgInsights" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "connectWorkCredentials" | "createWorkHook" | "disconnectWorkConnector" | "setWorkConnectorSync" | "setWorkConnectorPicked"
   | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact" | "getWorkGraph" | "getWorkTimeline"
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
@@ -311,7 +311,7 @@ export function workToolPermission(permission: string): { label: string; scope: 
 /** Connector names for ids the server lists without a label; an unknown id shows as it is (with a generic icon). */
 const CONNECTOR_LABELS: Record<string, string> = {
   google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
-  notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub",
+  notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", asana: "Asana", dropbox: "Dropbox", zoom: "Zoom",
   whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
   imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)", stripe: "Stripe", freshdesk: "Freshdesk", pipedrive: "Pipedrive",
   hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)",
@@ -332,6 +332,9 @@ export function connectorAccess(id: string): string {
     confluence: t("work.connector.access_confluence"),
     linear: t("work.connector.access_linear"),
     github: t("work.connector.access_github"),
+    asana: t("work.connector.access_asana"),
+    dropbox: t("work.connector.access_dropbox"),
+    zoom: t("work.connector.access_zoom"),
     imap: t("work.connector.access_imap"),
     caldav: t("work.connector.access_caldav"),
     stripe: t("work.connector.access_stripe"),

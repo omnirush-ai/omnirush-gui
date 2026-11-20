@@ -223,8 +223,12 @@ describe("work routes", () => {
     expect(await (await call("POST", "/work/connectors/mock/start")).json()).toEqual({ auth_url: "https://auth.example/x" });
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: false })).status).toBe(200);
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: "no" })).status).toBe(400);
+    expect((await call("PATCH", "/work/connectors/mock", {})).status).toBe(400);
+    expect((await call("PATCH", "/work/connectors/mock", { picked: [1] })).status).toBe(400);
+    // Asana's workspace pick goes on alone; other fields stay here.
+    expect((await call("PATCH", "/work/connectors/asana", { picked: ["w1"], evil: 1 })).status).toBe(200);
     expect((await call("POST", "/work/connectors/Bad.Id/start")).status).toBe(404);
-    expect(calls).toEqual(["GET connectors ", "GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
+    expect(calls).toEqual(["GET connectors ", "GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}", "PATCH connectors/asana {\"picked\":[\"w1\"]}"]);
   });
 
   test("a server-and-password connect forwards only the form's fields", async () => {
