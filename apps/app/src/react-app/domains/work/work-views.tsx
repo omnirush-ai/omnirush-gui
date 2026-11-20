@@ -4,10 +4,11 @@ import {
   ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Info, Kanban, LifeBuoy, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
@@ -47,8 +48,32 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   imap: AtSign, caldav: Calendar, stripe: CreditCard, freshdesk: LifeBuoy, pipedrive: Handshake, hook: Webhook, hook_org: Webhook,
 };
 
+// Company marks in their brand colour (simple-icons paths, CC0).
+const BRAND_ICONS: Record<string, { color: string; path: string }> = {
+  asana: {
+    color: "#F06A6A",
+    path: "M18.78 12.653c-2.882 0-5.22 2.336-5.22 5.22s2.338 5.22 5.22 5.22 5.22-2.34 5.22-5.22-2.336-5.22-5.22-5.22zm-13.56 0c-2.88 0-5.22 2.337-5.22 5.22s2.338 5.22 5.22 5.22 5.22-2.338 5.22-5.22-2.336-5.22-5.22-5.22zm12-6.525c0 2.883-2.337 5.22-5.22 5.22-2.882 0-5.22-2.337-5.22-5.22 0-2.88 2.338-5.22 5.22-5.22 2.883 0 5.22 2.34 5.22 5.22z",
+  },
+  dropbox: {
+    color: "#0061FF",
+    path: "M6 1.807L0 5.629l6 3.822 6.001-3.822L6 1.807zM18 1.807l-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zM18 9.452l-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z",
+  },
+  zoom: {
+    color: "#0B5CFF",
+    path: "M5.033 14.649H.743a.74.74 0 0 1-.686-.458.74.74 0 0 1 .16-.808L3.19 10.41H1.06A1.06 1.06 0 0 1 0 9.35h3.957c.301 0 .57.18.686.458a.74.74 0 0 1-.161.808L1.51 13.59h2.464c.585 0 1.06.475 1.06 1.06zM24 11.338c0-1.14-.927-2.066-2.066-2.066-.61 0-1.158.265-1.537.686a2.061 2.061 0 0 0-1.536-.686c-1.14 0-2.066.926-2.066 2.066v3.311a1.06 1.06 0 0 0 1.06-1.06v-2.251a1.004 1.004 0 0 1 2.013 0v2.251c0 .586.474 1.06 1.06 1.06v-3.311a1.004 1.004 0 0 1 2.012 0v2.251c0 .586.475 1.06 1.06 1.06zM16.265 12a2.728 2.728 0 1 1-5.457 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0zm-4.82 0a2.728 2.728 0 1 1-5.458 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0z",
+  },
+};
+
 /** A connector's icon; an id the app does not know gets the generic plug. */
 export function ConnectorIcon(props: { id: string; className?: string }) {
+  const brand = BRAND_ICONS[props.id];
+  if (brand) {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden className={cn("size-4 shrink-0", props.className)} data-connector-icon={props.id}>
+        <path fill={brand.color} d={brand.path} />
+      </svg>
+    );
+  }
   const Icon = CONNECTOR_ICONS[props.id] ?? Plug;
   return <Icon aria-hidden className={cn("size-4 shrink-0 text-muted-foreground", props.className)} data-connector-icon={CONNECTOR_ICONS[props.id] ? props.id : "generic"} />;
 }
@@ -225,6 +250,8 @@ export function ConnectorRow(props: {
   /** Clears the backoff and syncs now (an `attention` with action `retry`). */
   onRetry?: () => void;
   retrying?: boolean;
+  /** Saves what a picking source reads (Asana's workspaces; [] is all). */
+  onPick?: (picked: string[]) => void;
 }) {
   const row = props.connector;
   const name = connectorLabel(row.id, row.label);
@@ -273,6 +300,9 @@ export function ConnectorRow(props: {
             {t("work.connectors.setup_hint", { action: setupLabel(row.id) })}
           </div>
         ) : null}
+        {connected && props.onPick && (row.choices?.length ?? 0) > 1 ? (
+          <ConnectorChoices choices={row.choices!} busy={props.busy} onPick={props.onPick} />
+        ) : null}
         {connected && props.health !== undefined ? (
           <div className={cn("mt-0.5 text-[12px]", problem ? "text-destructive" : "text-muted-foreground")} data-testid="work-connector-health">
             {props.health === null ? t("work.connectors.no_health") : problem ? problem.text : t("work.connectors.health_ok")}
@@ -309,6 +339,48 @@ export function ConnectorRow(props: {
         <Button size="sm" aria-label={t("work.connectors.connect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.common.connect")}</Button>
       )}
       </div>
+    </div>
+  );
+}
+
+const CHOICES_SHOWN = 5;
+
+/** What a picking source reads (Asana's workspaces), as checkboxes; the last checked one stays checked. */
+function ConnectorChoices(props: { choices: NonNullable<OmniRushWorkConnector["choices"]>; busy: boolean; onPick: (picked: string[]) => void }) {
+  const [all, setAll] = useState(false);
+  const idBase = useId();
+  const picked = props.choices.filter((choice) => choice.picked).map((choice) => choice.id);
+  const toggle = (id: string, on: boolean) => {
+    const next = on ? [...picked, id] : picked.filter((item) => item !== id);
+    // Every one checked is the same as none picked: all of them, and any added later.
+    props.onPick(next.length === props.choices.length ? [] : next);
+  };
+  const shown = all ? props.choices : props.choices.slice(0, CHOICES_SHOWN);
+  return (
+    <div className="mt-2" role="group" aria-label={t("work.connectors.choices_title")} data-testid="work-connector-choices">
+      <div className="text-[12px] font-medium">{t("work.connectors.choices_title")}</div>
+      <div className="mt-1 flex flex-col gap-1">
+        {shown.map((choice) => (
+          <div key={choice.id} className="flex items-center gap-2 text-[12px]">
+            <Checkbox
+              id={`${idBase}-${choice.id}`}
+              checked={choice.picked}
+              disabled={props.busy || (choice.picked && picked.length === 1)}
+              onCheckedChange={(checked: boolean) => toggle(choice.id, checked)}
+              nativeButton
+              render={<button type="button" />}
+              data-choice={choice.id}
+            />
+            <label htmlFor={`${idBase}-${choice.id}`} className="truncate">{choice.name}</label>
+          </div>
+        ))}
+      </div>
+      {!all && props.choices.length > CHOICES_SHOWN ? (
+        <Button variant="ghost" size="sm" className="-ms-2 mt-1 h-7 text-[12px]" onClick={() => setAll(true)}>
+          {t("work.connectors.choices_more", { count: props.choices.length - CHOICES_SHOWN })}
+        </Button>
+      ) : null}
+      <div className="mt-1 text-[12px] text-muted-foreground">{t("work.connectors.choices_note")}</div>
     </div>
   );
 }
@@ -1050,6 +1122,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     onSuccess: refresh,
     onError,
   });
+  const pick = useMutation({
+    mutationFn: ({ id, picked }: { id: string; picked: string[] }) => props.client!.setWorkConnectorPicked(id, picked),
+    onSuccess: refresh,
+    onError,
+  });
   const retry = useMutation({
     mutationFn: (id: string) => props.client!.syncWorkConnector(id),
     onSuccess: () => {
@@ -1061,7 +1138,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   // An import source (WhatsApp) has no sign-in: it is imported in the card under the list. The hooks have their own card.
   const rows = visibleConnectors(query.data).filter((row) => row.mode !== "import" && row.mode !== "hook");
   const hookRows = visibleConnectors(query.data).filter((row) => row.mode === "hook");
-  const busy = connect.isPending || disconnect.isPending || sync.isPending;
+  const busy = connect.isPending || disconnect.isPending || sync.isPending || pick.isPending;
   // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker. A source this page does not
   // list (Meetings) gets no chip.
   const canAdd = (id: string) => coverageCanAdd(query.data, id);
@@ -1108,6 +1185,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               onCheck={() => check.mutate(row.id)}
               retrying={retry.isPending && retry.variables === row.id}
               onRetry={() => retry.mutate(row.id)}
+              onPick={(picked) => pick.mutate({ id: row.id, picked })}
             />,
             form === row.id ? (
               (() => {

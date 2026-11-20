@@ -11,7 +11,7 @@
  *                                          (imap and caldav, and the pasted-key sources: the server tries the login or key, then saves and syncs)
  *   POST  /work/connectors/:id/hook        { url }: a new inbound URL for Zapier, Make or n8n (hook, hook_org), shown once
  *   POST  /work/connectors/:id/disconnect
- *   PATCH /work/connectors/:id             { sync_enabled }
+ *   PATCH /work/connectors/:id             { sync_enabled?, picked? } (picked: Asana's workspace ids, [] is all)
  *   GET   /work/health[?source=]           the sources' health checks
  *   GET   /work/entities?q=&kind=&limit=&cursor=, GET /work/entities/:id   the context graph
  *   GET   /work/facts?entity_id=&status=, POST /work/facts, PATCH /work/facts/:id (retire: status)
@@ -255,10 +255,15 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   addRoute(routes, "PATCH", "/work/connectors/:id", "client", async (ctx) => {
     if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
     const body = await deps.readJsonBody(ctx.request);
-    if (typeof body.sync_enabled !== "boolean") return jsonResponse({ detail: "sync_enabled must be true or false" }, 400);
+    const patch: { sync_enabled?: boolean; picked?: string[] } = {};
+    if (typeof body.sync_enabled === "boolean") patch.sync_enabled = body.sync_enabled;
+    else if (body.sync_enabled !== undefined) return jsonResponse({ detail: "sync_enabled must be true or false" }, 400);
+    if (Array.isArray(body.picked) && body.picked.length <= 200 && body.picked.every((id: unknown) => typeof id === "string" && id.length <= 64)) patch.picked = body.picked;
+    else if (body.picked !== undefined) return jsonResponse({ detail: "picked must be a list of ids" }, 400);
+    if (!Object.keys(patch).length) return jsonResponse({ detail: "nothing to change" }, 400);
     const found = deps.broker();
     if (!found) return signedOut();
-    return (await pass(await found.workRequest(`connectors/${ctx.params.id}`, { method: "PATCH", body: JSON.stringify({ sync_enabled: body.sync_enabled }) }))).response;
+    return (await pass(await found.workRequest(`connectors/${ctx.params.id}`, { method: "PATCH", body: JSON.stringify(patch) }))).response;
   });
 
   // Connector health, the context graph and saved knowledge (Work > Knowledge): forwarded as they are.
