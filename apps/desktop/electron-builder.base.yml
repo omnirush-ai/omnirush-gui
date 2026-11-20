@@ -74,6 +74,9 @@ mac:
     - /Contents/Resources/sidecars/lima/bin/limactl$
   extendInfo:
     NSMicrophoneUsageDescription: omnirush uses the microphone when you allow a page to access audio input.
+    # Shown in the "System Audio Recording Only" prompt (Core Audio tap, macOS 14.2+) when meeting notes start.
+    # Without it macOS refuses and the system audio track arrives already ended.
+    NSAudioCaptureUsageDescription: omnirush records the other people in your call when you take meeting notes.
   extraResources:
     - from: resources/sidecars
       to: sidecars

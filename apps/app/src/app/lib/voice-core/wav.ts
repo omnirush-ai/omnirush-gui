@@ -1,7 +1,7 @@
 import { VOICE_SAMPLE_RATE } from "./types";
 
 /** A RIFF/WAVE file holding `samples` as 16-bit PCM, mono. */
-export function encodeWav(samples: Int16Array, sampleRate = VOICE_SAMPLE_RATE): Uint8Array {
+export function encodeWav(samples: Int16Array, sampleRate = VOICE_SAMPLE_RATE): Uint8Array<ArrayBuffer> {
   const dataBytes = samples.length * 2;
   const bytes = new Uint8Array(44 + dataBytes);
   const view = new DataView(bytes.buffer);

@@ -30,6 +30,9 @@
  *   GET   /work/coverage                   the channel groups Ask sees (D6)
  *   GET   /work/deals?filter=&owner=, GET /work/deals/:id    deals with last touch and risk (D3)
  *   GET   /work/imports, POST /work/imports (multipart: file, kind whatsapp|telegram)   chat exports (D5)
+ *   POST  /work/meetings {title?, started_at?}, GET /work/meetings/:id, PATCH /work/meetings/:id {title?, ended_at?}
+ *   POST  /work/meetings/:id/audio?speaker=me|them&part=&offset_ms=   one audio part (raw 16 kHz mono WAV, <= 2 MiB), transcribed
+ *                                                                     while it waits (meetings, contract D4)
  *
  * The engine's hosted MCP calls (POST /omnirush/work/mcp with the engine's token) are forwarded by server.ts.
  */
@@ -40,7 +43,7 @@ import type { ServerConfig, WorkspaceInfo } from "../types.js";
 import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
-  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
+  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
   accountId: () => Promise<string | null>;
   /** `maxAgeMs`: an answer older than that is asked again. */
   capabilities: (options?: { maxAgeMs?: number }) => Promise<unknown>;
@@ -102,11 +105,23 @@ const WORK_ERRORS: Record<string, string> = {
   unsupported_kind: "That kind of file can't be imported yet.",
   file_too_large: "That file is over 50 MB.",
   unsupported_work_path: "This needs a newer version of the app.",
+  not_found: "That item no longer exists.",
+  meetings_off: "Meeting notes are not available right now.",
+  notice_required: "Your company asks you to tell everyone before you record.",
+  part_in_progress: "This part is still being transcribed.",
+  meeting_budget: "You have used today's meeting minutes. Notes still work.",
+  transcribe_busy: "Transcript is catching up.",
+  transcribe_unavailable: "Transcript is catching up.",
+  audio_too_large: "That audio part is too large.",
+  bad_audio: "That audio couldn't be read.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
 /** The server refuses a chat export over 50 MB (contract D5). */
 const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
+/** One meeting audio part: 28 s of 16 kHz mono 16-bit is under 1 MiB; the plan's cap is 2 MiB. */
+const MEETING_PART_MAX_BYTES = 2 * 1024 * 1024;
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const FACT_KINDS = ["decision", "preference", "policy", "fact", "contact_note"];
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -429,6 +444,59 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     body.set("kind", kind);
     body.set("file", file, file.name || "chat.txt");
     return (await pass(await found.workRequest("imports", { method: "POST", body, signal: AbortSignal.timeout(300_000) }))).response;
+  });
+
+  // Meetings (contract D4): the meeting, its end, and its audio parts. A part is raw WAV bytes and waits on the server's
+  // transcriber (up to about 2 min), so it gets a longer timeout than the default minute.
+  const meetingFields = (body: Record<string, unknown>, timeField: "started_at" | "ended_at"): string | Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    if (body.title !== undefined) {
+      const title = text(body.title);
+      if (!title || title.length > 300) return "A title needs text (at most 300 characters).";
+      out.title = title;
+    }
+    if (body[timeField] !== undefined) {
+      if (typeof body[timeField] !== "string" || !ISO_TIME.test(body[timeField])) return `${timeField} must be an ISO time`;
+      out[timeField] = body[timeField];
+    }
+    return out;
+  };
+  addRoute(routes, "POST", "/work/meetings", "client", async (ctx) => {
+    const fields = meetingFields(await deps.readJsonBody(ctx.request), "started_at");
+    return typeof fields === "string" ? invalid(fields) : forward("meetings", "POST", fields);
+  });
+  const meetingId = (id: string | undefined) => (RECORD_ID.test(id ?? "") ? id : null);
+  const notFound = () => jsonResponse({ detail: "not_found", code: "not_found", message: WORK_ERRORS.not_found }, 404);
+  addRoute(routes, "GET", "/work/meetings/:id", "client", async (ctx) => {
+    const id = meetingId(ctx.params.id);
+    return id ? forward(`meetings/${id}`, "GET") : notFound();
+  });
+  addRoute(routes, "PATCH", "/work/meetings/:id", "client", async (ctx) => {
+    const id = meetingId(ctx.params.id);
+    if (!id) return notFound();
+    const fields = meetingFields(await deps.readJsonBody(ctx.request), "ended_at");
+    if (typeof fields === "string") return invalid(fields);
+    if (Object.keys(fields).length === 0) return invalid("Nothing to change.");
+    return forward(`meetings/${id}`, "PATCH", fields);
+  });
+  addRoute(routes, "POST", "/work/meetings/:id/audio", "client", async (ctx) => {
+    const id = meetingId(ctx.params.id);
+    if (!id) return notFound();
+    const speaker = ctx.url.searchParams.get("speaker");
+    const part = Number(ctx.url.searchParams.get("part") ?? "x");
+    const offset = Number(ctx.url.searchParams.get("offset_ms") ?? "x");
+    if (speaker !== "me" && speaker !== "them") return invalid("speaker must be me or them");
+    if (!Number.isInteger(part) || part < 0 || part > 1_000_000) return invalid("part must be a whole number from 0");
+    if (!Number.isInteger(offset) || offset < 0 || offset > 2_000_000_000) return invalid("offset_ms must be a whole number from 0");
+    const tooLarge = () => jsonResponse({ detail: "audio_too_large", code: "audio_too_large", message: WORK_ERRORS.audio_too_large }, 413);
+    if (Number(ctx.request.headers.get("content-length") ?? 0) > MEETING_PART_MAX_BYTES) return tooLarge();
+    const bytes = new Uint8Array(await ctx.request.arrayBuffer());
+    if (bytes.length > MEETING_PART_MAX_BYTES) return tooLarge();
+    if (bytes.length < 44) return invalid("The audio part is empty.");
+    const found = deps.broker();
+    if (!found) return signedOut();
+    const path = `meetings/${id}/audio?speaker=${speaker}&part=${part}&offset_ms=${offset}`;
+    return (await pass(await found.workRequest(path, { method: "POST", body: bytes, headers: { "Content-Type": "audio/wav" }, signal: AbortSignal.timeout(150_000) }))).response;
   });
 
   // iMessage (macOS desktop): the records the desktop read from the Mac's Messages database, and how many the server has.

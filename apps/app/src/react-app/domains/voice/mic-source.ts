@@ -64,6 +64,33 @@ export function releaseMicrophone(): void {
   if (open) release(open);
 }
 
+/**
+ * Delivers a source's audio (channels mixed down to one, at the context's rate) to `deliver` from an
+ * AudioWorklet, or the deprecated ScriptProcessor where there is none. Also used for meeting audio.
+ */
+export async function attachPcm(context: AudioContext, source: MediaStreamAudioSourceNode, deliver: (samples: Float32Array) => void): Promise<AudioWorkletNode | ScriptProcessorNode> {
+  let node: AudioWorkletNode | ScriptProcessorNode;
+  try {
+    const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "text/javascript" }));
+    try {
+      await context.audioWorklet.addModule(url);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    const worklet = new AudioWorkletNode(context, "omnirush-capture", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: "explicit" });
+    worklet.port.onmessage = (event: MessageEvent<Float32Array>) => deliver(event.data);
+    node = worklet;
+  } catch {
+    // No AudioWorklet (very old runtime): the deprecated processor still works.
+    const processor = context.createScriptProcessor(2048, 1, 1);
+    processor.onaudioprocess = (event) => deliver(event.inputBuffer.getChannelData(0).slice(0));
+    node = processor;
+  }
+  source.connect(node);
+  if (node instanceof ScriptProcessorNode) node.connect(context.destination);
+  return node;
+}
+
 async function openMicrophone(deviceId: string | null): Promise<OpenMic> {
   if (open && open.deviceId === deviceId && open.stream.getAudioTracks().some((track) => track.readyState === "live")) {
     if (open.releaseTimer) clearTimeout(open.releaseTimer);
@@ -98,27 +125,8 @@ async function openMicrophone(deviceId: string | null): Promise<OpenMic> {
   }
   const source = context.createMediaStreamSource(stream);
   const sink: OpenMic["sink"] = { listener: null };
-  const deliver = (samples: Float32Array) => sink.listener?.(samples);
-  let node: AudioWorkletNode | ScriptProcessorNode;
-  try {
-    const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "text/javascript" }));
-    try {
-      await context.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    const worklet = new AudioWorkletNode(context, "omnirush-capture", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 });
-    worklet.port.onmessage = (event: MessageEvent<Float32Array>) => deliver(event.data);
-    node = worklet;
-  } catch {
-    // No AudioWorklet (very old runtime): the deprecated processor still works.
-    const processor = context.createScriptProcessor(2048, 1, 1);
-    processor.onaudioprocess = (event) => deliver(event.inputBuffer.getChannelData(0).slice(0));
-    node = processor;
-  }
+  const node = await attachPcm(context, source, (samples) => sink.listener?.(samples));
   const mic: OpenMic = { deviceId, stream, context, source, node, sink, releaseTimer: null };
-  source.connect(node);
-  if (node instanceof ScriptProcessorNode) node.connect(context.destination);
   if (context.state === "suspended") await context.resume().catch(() => undefined);
   for (const track of stream.getAudioTracks()) {
     track.addEventListener("ended", () => {

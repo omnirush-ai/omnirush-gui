@@ -24,14 +24,17 @@ function isLocalRendererOrigin(origin) {
   }
 }
 
-function shouldAllowMainWindowPermission(input) {
-  const { webContents, permission, origin, details, mainWindow } = input;
+export function shouldAllowMainWindowPermission(input) {
+  const { webContents, permission, origin, details, mainWindow, request = false } = input;
   if (!mainWindow || !webContents || webContents.id !== mainWindow.webContents.id) return false;
   if (!isLocalRendererOrigin(origin)) return false;
   if (permission !== "media" && permission !== "audioCapture") return true;
   const mediaType = typeof details.mediaType === "string" ? details.mediaType : "";
   if (mediaType && mediaType !== "audio") return false;
   const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+  // getDisplayMedia asks with no device types, but so does the legacy getUserMedia({ chromeMediaSource: "desktop" }),
+  // which never reaches the display-media handler and gets the whole screen. Only the app's own top frame may ask.
+  if (request && permission === "media" && !mediaType && mediaTypes.length === 0) return details.isMainFrame === true;
   return mediaType === "audio" || (mediaTypes.includes("audio") && !mediaTypes.includes("video"));
 }
 
@@ -43,6 +46,7 @@ export function installMediaPermissionHandlers(session, getMainWindow) {
       origin: details?.requestingUrl,
       details: details ?? {},
       mainWindow: getMainWindow(),
+      request: true,
     }));
   });
   session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => (
@@ -54,6 +58,25 @@ export function installMediaPermissionHandlers(session, getMainWindow) {
       mainWindow: getMainWindow(),
     })
   ));
+}
+
+/**
+ * Meeting notes' system audio ("Them"): getDisplayMedia from the app's own window is answered with that window as
+ * the video (tab capture, no Screen Recording permission; the page stops it at once) and loopback audio: the Core
+ * Audio tap on macOS 14.2+ (Chromium's MacCatapLoopbackAudioForScreenShare, on by default; never disable it, or macOS
+ * falls back to ScreenCaptureKit and Screen Recording), WASAPI loopback on Windows, the default sink's monitor on
+ * Linux. Any other frame or origin is refused.
+ */
+export function displayAudioAnswer(request, mainWindow) {
+  const frame = request?.frame;
+  const main = mainWindow?.webContents?.mainFrame;
+  if (!frame || !main || frame.processId !== main.processId || frame.routingId !== main.routingId) return {};
+  if (!isLocalRendererOrigin(request.securityOrigin)) return {};
+  return { video: frame, audio: "loopback" };
+}
+
+export function installDisplayAudioHandler(session, getMainWindow) {
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => callback(displayAudioAnswer(request, getMainWindow())));
 }
 
 // The built-in browser shows arbitrary websites. Only harmless, page-local

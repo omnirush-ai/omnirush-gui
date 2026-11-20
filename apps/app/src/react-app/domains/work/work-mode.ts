@@ -18,6 +18,8 @@ export const WORK_INSIGHTS_ROUTE = "/work/insights";
 export const WORK_ACTIVITY_ROUTE = "/work/activity";
 export const WORK_SEARCH_ROUTE = "/work/search";
 export const WORK_DEALS_ROUTE = "/work/deals";
+/** Shown only while the server transcribes meeting audio (`meetings` in the Work state). */
+export const WORK_MEETINGS_ROUTE = "/work/meetings";
 
 /**
  * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own
@@ -53,7 +55,8 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
   | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
   | "importIMessage" | "getIMessageCount"
-  | "searchWork" | "getWorkCoverage" | "listWorkDeals" | "getWorkDeal" | "listWorkImports" | "importWorkChat"> & { baseUrl?: string };
+  | "searchWork" | "getWorkCoverage" | "listWorkDeals" | "getWorkDeal" | "listWorkImports" | "importWorkChat"
+  | "createWorkMeeting" | "getWorkMeeting" | "updateWorkMeeting" | "uploadWorkMeetingAudio"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];
