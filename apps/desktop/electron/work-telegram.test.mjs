@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import telegram from "telegram";
+import telegram from "teleproto";
 
 import { createTelegram, GAP_MS, messageRow, telegramCredentials } from "./work-telegram.mjs";
 
 const { Api, errors, helpers } = telegram;
 const big = (n) => helpers.returnBigInt(n);
+// A FLOOD_WAIT as it reaches the code: teleproto keeps Telegram's message ("FLOOD_WAIT_300") on the FloodWaitError.
+const flood = (seconds) => errors.RPCMessageToError(new Api.RpcError({ errorCode: 420, errorMessage: `FLOOD_WAIT_${seconds}` }), null);
 const DAY = 86_400;
 // 2026-11-20 10:00 UTC
 const NOW = Date.parse("2026-11-20T10:00:00Z");
@@ -52,7 +54,7 @@ function fakeTelegram() {
     connected: false,
     destroyed: false,
     async connect() {
-      // GramJS answers false when Telegram cannot be reached.
+      // A client that cannot reach Telegram fails its connect.
       if (server.offline) return false;
       this.connected = true;
       return true;
@@ -188,7 +190,7 @@ test("sign-in with two-step verification: the hint, a wrong password, the right 
 test("sign-in errors: FLOOD_WAIT on the code, a stale code, cancel, no keychain", async () => {
   const r = rig();
   try {
-    r.server.sendCodeError = new errors.FloodWaitError({ capture: 300 });
+    r.server.sendCodeError = flood(300);
     assert.deepEqual(await r.tg.login({ phone: "+447700900123" }, "acct_a"), { error: "flood_wait", waitSeconds: 300 });
     r.server.sendCodeError = null;
     assert.deepEqual(await r.tg.login({ code: "12345" }, "acct_a"), { error: "code_expired" });
@@ -295,7 +297,7 @@ test("FLOOD_WAIT: a short one is waited out; a long one ends the run with what w
   try {
     await signIn(r);
     seed(r.server);
-    r.server.errors.push(null, new errors.FloodWaitError({ capture: 5 }));
+    r.server.errors.push(null, flood(5));
     const waited = await r.tg.read(undefined, "acct_a");
     assert.ok(r.clock.sleeps.includes(6000), "waits the seconds Telegram asked, plus one");
     assert.equal(waited.records.length, 4);
@@ -303,7 +305,7 @@ test("FLOOD_WAIT: a short one is waited out; a long one ends the run with what w
 
     r.clock.sleeps.length = 0;
     // The listing and the first chat go through; the second is told to wait an hour.
-    r.server.errors.push(null, null, new errors.FloodWaitError({ capture: 3600 }));
+    r.server.errors.push(null, null, flood(3600));
     const cut = await r.tg.read(undefined, "acct_a");
     assert.equal(cut.retryAfterMs, 3601 * 1000);
     assert.ok(!r.clock.sleeps.some((ms) => ms > GAP_MS), "a long wait is not slept through");
@@ -340,6 +342,9 @@ test("account switch: the login belongs to the Work account it was made in", asy
     seed(r.server);
     await assert.rejects(r.tg.read(undefined, "acct_b"), { code: "other_account" });
     assert.deepEqual(await statusOf(r, "acct_b"), { available: true, step: "other_account", name: null, via: null, hint: null, channels: false, days: 90 });
+    // The Work account not known yet (offline at start): the card is hidden, never "another account" with a Disconnect.
+    assert.deepEqual(await statusOf(r, null), { available: false });
+    assert.equal((await statusOf(r, "acct_a")).step, "signed_in");
     await r.tg.setSettings({ channels: true }, "acct_b");
     assert.equal(JSON.parse(readFileSync(r.file, "utf8")).channels, false, "another account cannot change its settings");
     assert.equal(r.server.calls.filter((c) => c === "messages.GetDialogs").length, 0, "nothing was read for the other account");
@@ -367,7 +372,7 @@ test("Disconnect logs out on Telegram and deletes the local login, also when off
   }
 });
 
-test("offline: sign-in and reads stop at once instead of waiting on GramJS", async () => {
+test("offline: sign-in and reads stop at once instead of waiting on Telegram", async () => {
   const r = rig();
   try {
     r.server.offline = true;

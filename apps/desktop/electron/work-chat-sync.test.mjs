@@ -114,9 +114,15 @@ test("a read Telegram slowed down saves what it got and waits the time it was to
     assert.equal(entry.lastError, "flood_wait");
     assert.equal(entry.cursor, 1);
     r.advance(SYNC_EVERY_MS);
-    assert.deepEqual(await r.sync.run("whatsapp"), { status: "skipped", reason: "off" });
+    assert.deepEqual(await r.sync.run("whatsapp"), { status: "skipped", reason: "flood_wait" });
+    // Sync now and the switch wait too: Telegram is not asked again before its time.
+    assert.deepEqual(await r.sync.run("whatsapp", { manual: true }), { status: "skipped", reason: "flood_wait" });
+    await r.sync.setEnabled("whatsapp", false);
+    assert.deepEqual(await r.sync.setEnabled("whatsapp", true), { status: "skipped", reason: "flood_wait" });
+    assert.equal(r.reads.length, 1);
     r.advance(3_600_000);
     assert.equal((await r.sync.run("whatsapp")).status, "ok");
+    assert.equal(r.reads.length, 2);
   } finally {
     r.done();
   }

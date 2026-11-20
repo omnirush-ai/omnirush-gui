@@ -453,6 +453,8 @@ export function TelegramCard(props: { client: WorkClient | null }) {
     mutationFn: () => desktopBridge.workChatSyncNow("telegram"),
     onSuccess: (result) => {
       if (result.status === "ok") toast.success(result.messages > 0 ? t("work.imessage.imported", { count: result.messages, n: result.messages.toLocaleString() }) : t("work.imessage.no_new"));
+      // Telegram's wait is not over yet: Sync now does not ask it again before then.
+      else if (result.status === "skipped" && result.reason === "flood_wait") toast.info(t("work.telegram.flood_sync"));
     },
     onSettled: settle,
   });

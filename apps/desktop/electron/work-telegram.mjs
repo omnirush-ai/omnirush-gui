@@ -1,6 +1,7 @@
-// Telegram from the user's own account, through Telegram's official API (MTProto, via GramJS: the npm "telegram"
-// package, MIT), which allows third-party clients. Sign-in happens on this device (phone, the code Telegram sends,
-// the two-step password if set). The login (a GramJS StringSession) is encrypted with safeStorage and kept only in
+// Telegram from the user's own account, through Telegram's official API (MTProto, via teleproto: the maintained MIT
+// fork of GramJS, its dependencies MIT, ISC, BSD or Unlicense), which allows third-party clients. Sign-in happens on
+// this device (phone, the code Telegram sends, the two-step password if set). The login (a StringSession) is
+// encrypted with safeStorage and kept only in
 // <userData>/work-telegram.json: never sent to the server, never logged. The chat sync (work-chat-sync.mjs) calls
 // `read` at app start and every 10 minutes and pushes the chat-days to /work/telegram: private chats and groups
 // (channels when the setting adds them), text, captions and file names (no media bytes), one record per chat per
@@ -31,7 +32,7 @@ const MAX_DAY_MESSAGES = 5000;
 // Telegram's own service chat carries login codes: never synced.
 const SERVICE_USER = "777000";
 const LOGIN_TTL_MS = 15 * 60_000;
-// GramJS waits forever on a request when the connection is gone: each request and disconnect gets this long.
+// GramJS-style clients can wait forever on a request when the connection is gone: each request and disconnect gets this long.
 const REQUEST_MS = 90_000;
 
 /** `{ apiId, apiHash }` from the build file (a path) or an object; null when missing or malformed. */
@@ -58,9 +59,9 @@ export class TelegramError extends Error {
   }
 }
 
-/** The seconds of a FLOOD_WAIT (GramJS FloodWaitError), or null. */
+/** The seconds of a FLOOD_WAIT or FLOOD_PREMIUM_WAIT (FloodWaitError; teleproto keeps Telegram's own message, "FLOOD_WAIT_42"), or null. */
 export function floodSeconds(error) {
-  return error?.errorMessage === "FLOOD" && Number.isFinite(error.seconds) ? error.seconds : null;
+  return /^FLOOD($|_)/.test(String(error?.errorMessage ?? "")) && Number.isFinite(error.seconds) ? error.seconds : null;
 }
 
 function loginError(error) {
@@ -100,7 +101,7 @@ function timed(promise) {
   return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
-/** Connects `client`. GramJS's connect() answers false when Telegram cannot be reached (and its requests would then wait for ever). */
+/** Connects `client`; a failed or hung connect means Telegram cannot be reached (and requests would then wait for ever). */
 async function online(client) {
   const up = await timed(client.connect()).catch(() => false);
   if (up !== false) return client;
@@ -149,9 +150,9 @@ function finishDay(record) {
   return { ...record, messages: kept };
 }
 
-/** The real client: GramJS over TCP, its log off (it would print connection details), no automatic flood sleeps. */
+/** The real client: teleproto over TCP, its log off (it would print connection details), no automatic flood sleeps. */
 async function openGram(credentials, session, appVersion) {
-  const { TelegramClient, sessions, Logger } = (await import("telegram")).default;
+  const { TelegramClient, sessions, Logger } = (await import("teleproto")).default;
   return new TelegramClient(new sessions.StringSession(session), credentials.apiId, credentials.apiHash, {
     connectionRetries: 3,
     floodSleepThreshold: 0,
@@ -163,7 +164,7 @@ async function openGram(credentials, session, appVersion) {
 }
 
 async function realCheck(srp, password) {
-  return (await import("telegram")).default.password.computeCheck(srp, password);
+  return (await import("teleproto")).default.password.computeCheck(srp, password);
 }
 
 /**
@@ -186,7 +187,7 @@ export function createTelegram(deps) {
     now = Date.now,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   } = deps;
-  const gram = async () => (await import("telegram")).default;
+  const gram = async () => (await import("teleproto")).default;
   /** The sign-in in progress (between the code and the password), for one Work account. */
   let pending = null;
 
@@ -253,6 +254,9 @@ export function createTelegram(deps) {
      */
     async status(account) {
       if (!credentials) return { available: false };
+      // The Work account is not known yet (offline at start, signed out): nothing is shown, so a login is never taken
+      // for another account's and offered a Disconnect that could not end it on Telegram.
+      if (!account) return { available: false };
       if (pending && now() - pending.at > LOGIN_TTL_MS) await drop();
       const saved = await load();
       const mine = saved && saved.account === account;

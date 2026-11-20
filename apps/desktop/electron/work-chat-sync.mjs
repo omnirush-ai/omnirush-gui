@@ -135,11 +135,15 @@ export function createChatSync(deps) {
     return { server, account: state.account };
   }
 
+  const floodWaiting = (entry) => entry.lastError === "flood_wait" && Boolean(entry.nextAt) && now() < entry.nextAt;
+
   async function runOnce(source, manual) {
     const spec = sources[source];
     const me = await who();
     if (!me) return { status: "skipped", reason: "work_off" };
     const entry = (await load()).accounts[me.account]?.[source] ?? {};
+    // Telegram's FLOOD_WAIT holds for Sync now and the switch too: no request before the time it asked for.
+    if (floodWaiting(entry)) return { status: "skipped", reason: "flood_wait" };
     if (!manual && (entry.enabled !== true || (entry.nextAt && now() < entry.nextAt))) return { status: "skipped", reason: "off" };
     lastRunAt = now();
     running = source;
@@ -261,7 +265,7 @@ export function createChatSync(deps) {
     async setEnabled(source, enabled) {
       const me = await who();
       if (!me || !sources[source]) return null;
-      await update(me.account, source, (entry) => ({ ...entry, enabled: enabled === true, nextAt: null }));
+      await update(me.account, source, (entry) => ({ ...entry, enabled: enabled === true, nextAt: floodWaiting(entry) ? entry.nextAt : null }));
       return enabled === true ? run(source, { manual: true }) : { status: "skipped", reason: "off" };
     },
   };
