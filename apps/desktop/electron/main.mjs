@@ -21,7 +21,9 @@ import { globalOpencodeConfigDir, workspaceOpencodeConfigCandidates } from "@omn
 
 import { configureFakeMediaForTests, installDisplayAudioHandler, installMediaPermissionHandlers } from "./media-permissions.mjs";
 import { registerMigrationIpc } from "./migration.mjs";
-import { readIMessage, IMessageError } from "./work-imessage.mjs";
+import { readIMessage } from "./work-imessage.mjs";
+import { readWhatsApp } from "./work-whatsapp.mjs";
+import { CHAT_SYNC_FILE, createChatSync } from "./work-chat-sync.mjs";
 import { createRuntimeManager, createSystemCaCertificateVerifyProc } from "./runtime.mjs";
 import { installAppRequestSecret } from "./app-request-secret.mjs";
 import { registerUpdaterIpc, updatesTurnedOff } from "./updater.mjs";
@@ -1507,6 +1509,31 @@ const keepAwake = createKeepAwake({
   settingFile: path.join(app.getPath("userData"), KEEP_AWAKE_FILE),
 });
 
+// Work chat sync from this Mac: iMessage and the WhatsApp Mac apps (work-chat-sync.mjs).
+const groupContainers = path.join(os.homedir(), "Library", "Group Containers");
+const workChatSync = createChatSync({
+  file: path.join(app.getPath("userData"), CHAT_SYNC_FILE),
+  localServer: async () => {
+    const server = await runtimeManager.omnirushServerInfo();
+    return { baseUrl: server.baseUrl, token: server.clientToken ?? server.ownerToken };
+  },
+  sources: {
+    imessage: {
+      route: "/work/imessage",
+      read: async (cursor) => {
+        const { records, lastRowid, messageCount } = await readIMessage({ sinceRowid: Number(cursor) || 0 });
+        return { records, cursor: lastRowid, messageCount };
+      },
+      watch: [{ dir: path.join(os.homedir(), "Library", "Messages"), file: "chat.db-wal" }],
+    },
+    whatsapp: {
+      route: "/work/whatsapp-local",
+      read: (cursor) => readWhatsApp({ cursor: cursor && typeof cursor === "object" ? cursor : {} }),
+      watch: ["WhatsApp", "WhatsAppSMB"].map((app) => ({ dir: path.join(groupContainers, `group.net.whatsapp.${app}.shared`), file: "ChatStorage.sqlite-wal" })),
+    },
+  },
+});
+
 const runtimeManager = createRuntimeManager({
   app,
   desktopRoot: path.resolve(__dirname, ".."),
@@ -2178,19 +2205,10 @@ const openLogsFolder = createOpenLogsFolderHandler({
 // typecheck:electron`.
 /** @type {import("@omnirush/types/desktop-ipc").DesktopCommandHandlers<import("electron").IpcMainInvokeEvent>} */
 const desktopCommandHandlers = {
-  // Read the Mac's local Messages database (iMessage has no API). Returns
-  // the records for the renderer to push; a tagged code (fda_required,
-  // no_messages_db, unsupported_os) drives the Connectors-page step.
-  "workImessageRead": async (event, ...args) => {
-      const sinceRowid = Number(args[0]) || 0;
-      try {
-        const { records, lastRowid, messageCount } = await readIMessage({ sinceRowid });
-        return { status: "ok", records, lastRowid, messageCount };
-      } catch (error) {
-        if (error instanceof IMessageError) return { status: "error", code: error.code };
-        throw error;
-      }
-  },
+  // Work chat sync from this Mac (iMessage, WhatsApp): the card's status, Sync now and its Data sync switch.
+  "workChatSyncStatus": async () => workChatSync.status(),
+  "workChatSyncNow": async (event, ...args) => workChatSync.run(String(args[0]), { manual: true }),
+  "workChatSyncSet": async (event, ...args) => workChatSync.setEnabled(String(args[0]), args[1] === true),
   "workspaceBootstrap": async (event, ...args) => {
       return workspaceStore.readWorkspaceState();
   },
@@ -3476,6 +3494,7 @@ or use: pnpm dev:worktree`);
     // A teardown stuck past its bounds (seen after a sign-out on Windows): the engine and the rest are killed, the app exits.
     const disarmQuitWatchdog = armQuitWatchdog({ exit: () => app.exit(0), log: (message) => console.warn(`[quit] ${message}`) });
     desktopAutomationRunner.stop();
+    workChatSync.stop();
     browserLoginSync.shutdown();
     // The queued placement events: best effort, never waited for (the rest go next start).
     void desktopPlacements.stop().catch(() => undefined);
@@ -3626,6 +3645,7 @@ or use: pnpm dev:worktree`);
     const win = await createMainWindow();
     // In the background: the window never waits for it.
     desktopPlacements.start();
+    if (process.platform === "darwin") workChatSync.start();
     // Installed update downloads, old logs and temp files go two minutes later, in the updater's queue.
     scheduleDiskCleanup({ app, currentVersion: app.getVersion(), whenIdle: whenUpdaterIdle, protect: pendingUpdatePaths });
     void desktopFeedback.start();

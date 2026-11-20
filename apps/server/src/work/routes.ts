@@ -2,7 +2,8 @@
  * Work mode's local routes, for the app (client scope). The account's credential stays in this server: the
  * app and the engine reach /omnirush/work/* only through here.
  *
- *   GET   /work/state                      { enabled, sources, message, autopilot, full_access, writes_paused, workspaceId }
+ *   GET   /work/state[?account=1]          { enabled, sources, message, autopilot, full_access, writes_paused, workspaceId, account? }
+ *                                          (account: "<server origin> <account id>", for the desktop's chat sync)
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
  *   POST  /work/connectors/:id/start       { auth_url }
@@ -21,6 +22,7 @@
  *   GET   /work/settings, PATCH /work/settings {autopilot?, full_access?, writes_paused?}   the action layer (Addendum F)
  *   GET   /work/actions?limit=, POST /work/actions/:id/undo                    the activity log and an action's undo
  *   GET   /work/imessage, POST /work/imessage {records}                        the Mac's iMessage records (macOS desktop)
+ *   GET   /work/whatsapp-local, POST /work/whatsapp-local {records}            the WhatsApp Mac app's chat-days (macOS desktop)
  *   GET   /work/feed?source=&tz=&limit=    the Today home's feed
  *   POST  /work/connectors/:id/sync        a sync now (429 too_soon within a minute)
  *   GET   /work/chat-tools, POST /work/chat-tools/fix   whether the Work chats' engine has the hosted tools; fix re-reads the switch and re-syncs
@@ -45,6 +47,8 @@ import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, reme
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
   accountId: () => Promise<string | null>;
+  /** The account's server (gateway origin), so a key per server and account can be made. */
+  readonly serverOrigin?: string | null;
   /** `maxAgeMs`: an answer older than that is asked again. */
   capabilities: (options?: { maxAgeMs?: number }) => Promise<unknown>;
 };
@@ -169,7 +173,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   const signedOut = () => jsonResponse({ detail: "omnirush_account_required", code: "omnirush_account_required", message: WORK_ERRORS.omnirush_account_required }, 401);
 
   // The switch, read again from the server (at most as old as the capabilities cache), so the toggle follows it.
-  addRoute(routes, "GET", "/work/state", "client", async () => {
+  addRoute(routes, "GET", "/work/state", "client", async (ctx) => {
     const found = deps.broker();
     if (found) {
       const capabilities = await found.capabilities(switchStale ? { maxAgeMs: 0 } : undefined).catch(() => null);
@@ -177,7 +181,10 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
       if (rememberWorkSwitch(deps.workDir(), capabilities)) void deps.applyEngine().catch(() => undefined);
     }
     const setting = rememberedWorkSwitch(deps.workDir());
-    return jsonResponse({ ...setting, ...rememberedWorkActions(deps.workDir()), workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null });
+    // Only asked for by the desktop's chat sync: learning the account can take a network call.
+    const accountId = ctx.url.searchParams.has("account") && setting.enabled && found ? await found.accountId() : null;
+    const account = accountId ? { account: `${found?.serverOrigin ?? ""} ${accountId}`.trim() } : {};
+    return jsonResponse({ ...setting, ...rememberedWorkActions(deps.workDir()), workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null, ...account });
   });
 
   addRoute(routes, "POST", "/work/workspace", "client", async () => {
@@ -505,6 +512,13 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     const records = (await deps.readJsonBody(ctx.request)).records;
     if (!Array.isArray(records)) return invalid("records must be a list");
     return forward("imessage", "POST", { records });
+  });
+  // WhatsApp (macOS desktop): the chat-days the desktop read from the WhatsApp Mac app's database.
+  addRoute(routes, "GET", "/work/whatsapp-local", "client", async () => forward("whatsapp-local", "GET"));
+  addRoute(routes, "POST", "/work/whatsapp-local", "client", async (ctx) => {
+    const records = (await deps.readJsonBody(ctx.request)).records;
+    if (!Array.isArray(records)) return invalid("records must be a list");
+    return forward("whatsapp-local", "POST", { records });
   });
 }
 

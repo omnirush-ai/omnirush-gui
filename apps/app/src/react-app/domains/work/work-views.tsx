@@ -12,6 +12,7 @@ import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
 import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
+import type { WorkChatSyncSource } from "@omnirush/types/desktop-ipc";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { isMacPlatform } from "@/app/utils";
@@ -309,105 +310,95 @@ export function ConnectorRow(props: {
   );
 }
 
-const IMESSAGE_FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
+const FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
-function imessageRowidKey(client: WorkClient | null) {
-  return `omnirush-imessage-rowid:${client?.baseUrl?.trim() || "default"}`;
+const LOCAL_CHAT_NAMES: Record<WorkChatSyncSource, string> = { imessage: "iMessage", whatsapp: "WhatsApp" };
+
+/** What a chat sync error says on the card; repeated failures are one line with the count. */
+export function localChatError(source: WorkChatSyncSource, code: string | null, failures: number): string | null {
+  if (!code) return null;
+  const name = LOCAL_CHAT_NAMES[source];
+  const text = code === "fda_required" ? t("work.chatsync.fda_needed", { name })
+    : code === "no_messages_db" ? t("work.imessage.no_db")
+    : code === "no_whatsapp" ? t("work.chatsync.no_whatsapp")
+    : code === "unsupported_schema" ? t("work.chatsync.unsupported")
+    : t("work.chatsync.failed");
+  return failures > 1 ? `${text} ${t("work.chatsync.repeated", { n: failures })}` : text;
 }
 
-/** The server takes at most 2,000 records and 20 MB per iMessage push: slices well under both (JSON length is
- *  UTF-16 units; a unit is at most 3 bytes of UTF-8). Each record is a whole chat-day, so no record is split. */
-export function importBatches<T>(records: T[], maxRecords = 500, maxChars = 6_000_000): T[][] {
-  const batches: T[][] = [];
-  let batch: T[] = [];
-  let chars = 0;
-  for (const record of records) {
-    const size = JSON.stringify(record).length;
-    if (batch.length && (batch.length >= maxRecords || chars + size > maxChars)) {
-      batches.push(batch);
-      batch = [];
-      chars = 0;
-    }
-    batch.push(record);
-    chars += size;
-  }
-  if (batch.length) batches.push(batch);
-  return batches;
-}
-
-/** iMessage has no API and nothing on a server: it is read only from the
- *  Mac's local Messages database, after the user grants Full Disk Access.
- *  macOS desktop only (the Connectors page shows it nowhere else). */
-export function IMessageCard(props: { client: WorkClient | null; openLink: (url: string) => void }) {
+/** iMessage and the WhatsApp Mac app have no API: the desktop reads their databases on this Mac (Full Disk Access) and
+ *  syncs on its own while Data sync is on (it turns on after the first good read). macOS desktop only. */
+export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkClient | null; openLink: (url: string) => void }) {
   const queryClient = useQueryClient();
-  const [fdaNeeded, setFdaNeeded] = useState(false);
-  const countKey = ["omnirush-imessage-count", props.client?.baseUrl?.trim() || "default"];
+  const { source } = props;
+  const name = LOCAL_CHAT_NAMES[source];
+  const statusKey = ["omnirush-chat-sync"];
+  const countKey = [`omnirush-${source}-count`, props.client?.baseUrl?.trim() || "default"];
+  const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: 15_000 });
   const count = useQuery({
     queryKey: countKey,
-    queryFn: () => props.client!.getIMessageCount(),
+    queryFn: () => (source === "imessage" ? props.client!.getIMessageCount() : props.client!.getWhatsAppLocalCount()),
     enabled: Boolean(props.client),
   });
-  const run = useMutation({
-    mutationFn: async () => {
-      const since = Number(localStorage.getItem(imessageRowidKey(props.client))) || 0;
-      const result = await desktopBridge.workImessageRead(since);
-      if (result.status === "error") {
-        setFdaNeeded(result.code === "fda_required");
-        throw new Error(
-          result.code === "no_messages_db"
-            ? t("work.imessage.no_db")
-            : result.code === "unsupported_os"
-              ? t("work.imessage.mac_only")
-              : t("work.imessage.fda_needed"),
-        );
-      }
-      setFdaNeeded(false);
-      // The read position moves only once every slice is in: a failed push is read and sent again next time.
-      for (const batch of importBatches(result.records)) await props.client!.importIMessage(batch);
-      if (result.lastRowid > since) {
-        localStorage.setItem(imessageRowidKey(props.client), String(result.lastRowid));
-      }
-      return result;
-    },
+  const settle = () => {
+    void queryClient.invalidateQueries({ queryKey: statusKey });
+    void queryClient.invalidateQueries({ queryKey: countKey });
+    void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) });
+  };
+  const syncNow = useMutation({
+    mutationFn: () => desktopBridge.workChatSyncNow(source),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: countKey });
-      toast.success(result.records.length > 0 ? t("work.imessage.imported", { count: result.messageCount, n: result.messageCount.toLocaleString() }) : t("work.imessage.no_new"));
+      if (result.status === "ok") toast.success(result.messages > 0 ? t("work.imessage.imported", { count: result.messages, n: result.messages.toLocaleString() }) : t("work.imessage.no_new"));
     },
-    onError: (reason) => toast.error(workFailure(reason).text),
+    onSettled: settle,
   });
+  const toggle = useMutation({ mutationFn: (enabled: boolean) => desktopBridge.workChatSyncSet(source, enabled), onSettled: settle });
+  const state = status.data?.[source];
+  const busy = syncNow.isPending || toggle.isPending || Boolean(state?.running);
   const records = count.data?.records ?? 0;
+  const error = localChatError(source, state?.lastError ?? null, state?.failures ?? 0);
+  const line = [
+    records > 0 ? countLabel(records, "work.imessage.synced_days") : source === "imessage" ? t("work.imessage.intro") : t("work.chatsync.whatsapp_intro"),
+    state?.lastSyncAt ? t("work.chatsync.last_sync", { when: relativeTime(state.lastSyncAt) }) : null,
+  ].filter(Boolean).join(" · ");
   return (
-    <div className="rounded-xl border border-border bg-background p-4" data-work-connector="imessage" data-testid="work-imessage-card">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <MessageSquare aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-medium">iMessage</span>
-            <Badge variant="secondary">{t("work.imessage.local_import")}</Badge>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={source} data-testid={`work-${source}-card`}>
+      <ConnectorIcon id={source} />
+      <div className="min-w-[16rem] flex-1">
+        <span className="text-sm font-medium">{name}</span>
+        <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-local-chat-line">{line}</div>
+        {error ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
+        {state?.lastError === "fda_required" ? (
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground" data-testid="work-local-chat-fda">
+            {t("work.chatsync.fda_steps")}
+            <Button type="button" variant="outline" size="sm" onClick={() => props.openLink(FDA_URL)}>{t("work.imessage.open_settings")}</Button>
           </div>
-          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-imessage-count">
-            {records > 0 ? t("work.imessage.synced_days", { count: records, n: records.toLocaleString() }) : t("work.imessage.intro")}
-          </div>
-        </div>
-        <Button type="button" variant="outline" size="sm" disabled={run.isPending} onClick={() => run.mutate()} data-testid="work-imessage-import">
-          {run.isPending ? t("work.imessage.reading") : records > 0 ? t("work.imessage.sync_new") : t("work.imessage.import")}
+        ) : null}
+      </div>
+      <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
+        <label className="me-2 flex items-center gap-2 text-[12px] text-muted-foreground">
+          {t("work.connectors.data_sync")}
+          <Switch
+            aria-label={t("work.connectors.data_sync_for", { name })}
+            checked={state?.enabled === true}
+            disabled={!status.data || toggle.isPending}
+            onCheckedChange={(checked: boolean) => toggle.mutate(checked)}
+          />
+        </label>
+        <Button type="button" variant="outline" size="sm" disabled={busy || !status.data} onClick={() => syncNow.mutate()} data-testid={`work-${source}-sync`}>
+          {busy ? t("work.imessage.reading") : t("work.chatsync.sync_now")}
         </Button>
       </div>
-      {fdaNeeded ? (
-        <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3 text-[12px]" data-testid="work-imessage-fda">
-          <p className="text-muted-foreground">
-            {t("work.imessage.fda_steps")}
-          </p>
-          <div className="mt-2 flex gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => props.openLink(IMESSAGE_FDA_URL)}>
-              {t("work.imessage.open_settings")}
-            </Button>
-            <Button type="button" variant="ghost" size="sm" disabled={run.isPending} onClick={() => run.mutate()}>
-              {t("work.common.try_again")}
-            </Button>
-          </div>
-        </div>
-      ) : null}
+    </div>
+  );
+}
+
+/** The chats this Mac syncs on its own (iMessage, the WhatsApp app). */
+export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void }) {
+  return (
+    <div className="rounded-xl border border-border bg-background" data-testid="work-local-chats">
+      <LocalChatCard source="whatsapp" client={props.client} openLink={props.openLink} />
+      <LocalChatCard source="imessage" client={props.client} openLink={props.openLink} />
     </div>
   );
 }
@@ -452,6 +443,9 @@ export function WorkCoverageMeter(props: { client: WorkClient | null; onAdd?: (i
   );
 }
 
+/** The Mac desktop app, where iMessage and the WhatsApp app sync on their own. */
+const macDesktop = () => isDesktopRuntime() && isMacPlatform();
+
 /** The server refuses a chat export over 50 MB. */
 const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
 const IMPORT_ACCEPT: Record<OmniRushWorkImportKind, string> = { whatsapp: ".txt,.zip,text/plain,application/zip", telegram: ".json,application/json" };
@@ -491,6 +485,7 @@ export function ChatImportCard(props: { client: WorkClient | null }) {
             <div className="min-w-[16rem] flex-1">
               <span className="text-sm font-medium">{connectorLabel(kind)}</span>
               <div className="mt-0.5 text-[12px] text-muted-foreground">{kind === "whatsapp" ? t("work.import.howto_whatsapp") : t("work.import.howto_telegram")}</div>
+              {kind === "whatsapp" && !macDesktop() ? <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-import-whatsapp-manual">{t("work.import.whatsapp_no_local")}</div> : null}
               {last ? (
                 <div className={cn("mt-0.5 truncate text-[12px]", failed ? "text-destructive" : "text-muted-foreground")} data-testid="work-import-status" data-status={failed ? "failed" : last.status}>
                   {failed
@@ -641,7 +636,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           ))}
         </div>
         <ChatImportCard client={props.client} />
-        {isDesktopRuntime() && isMacPlatform() ? <IMessageCard client={props.client} openLink={props.openLink} /> : null}
+        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} /> : null}
       </div>
       <ConfirmModal
         open={confirmDisconnect !== null}

@@ -7,7 +7,9 @@ import { test } from "node:test";
 
 import {
   appleDateToDate,
+  cut,
   decodeAttributedBody,
+  groupRows,
   readDatabase,
   readIMessage,
   IMessageError,
@@ -122,13 +124,31 @@ test("readDatabase groups one record per chat per day with correct fields", () =
   }
 });
 
-test("readDatabase reads only rows past sinceRowid (incremental)", () => {
+test("readDatabase reads only chats with rows past sinceRowid (incremental)", () => {
   const { dir, dbPath } = buildFixture();
   try {
-    const { records, messageCount } = readDatabase(dbPath, 3);
+    const { records, messageCount, lastRowid } = readDatabase(dbPath, 3);
     assert.equal(messageCount, 1);
+    assert.equal(lastRowid, 4);
     assert.equal(records.length, 1);
     assert.equal(records[0].is_group, true);
+    // nothing new: nothing sent, the position stays
+    assert.deepEqual(readDatabase(dbPath, 4), { records: [], lastRowid: 4, messageCount: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readDatabase sends a chat's whole day again when a message joins it", () => {
+  const { dir, dbPath } = buildFixture();
+  try {
+    // Rows 3 and 4 are new; rows 1 and 2 are row 3's chat and day, already
+    // sent. The server replaces the chat-day's record, so all three go again.
+    const { records, messageCount } = readDatabase(dbPath, 2);
+    assert.equal(messageCount, 2);
+    const direct = records.find((r) => r.chat_key === "iMessage;-;+15551230000");
+    assert.equal(direct.text.split("\n").length, 3);
+    assert.equal(records.length, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -163,4 +183,24 @@ test("readIMessage reports a missing Messages database", async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a chat-day over the server's caps is cut to fit, so it never fails the push", () => {
+  // 300 people, ~306,000 characters in one day: the server takes 256 people and 200,000 characters.
+  const rows = Array.from({ length: 300 }, (_, index) => ({
+    rowid: index + 1,
+    date: 815_000_000 + index,
+    text: "x".repeat(1000),
+    is_from_me: 0,
+    handle: `+1555000${String(index).padStart(4, "0")}`,
+    chat_guid: "iMessage;+;chat1",
+    chat_style: 43,
+    service: "iMessage",
+  }));
+  const [record] = groupRows(rows).records;
+  assert.equal(record.text.length, 200_000);
+  assert.equal(record.participants.length, 256);
+  // a cut never leaves half of a surrogate pair
+  assert.equal(cut("a\u{1F600}", 2), "a");
+  assert.equal(cut("short", 10), "short");
 });

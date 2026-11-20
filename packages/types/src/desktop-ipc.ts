@@ -952,23 +952,29 @@ export type ComputerUseRealScreen = { on: boolean; forced: boolean; allowed: boo
 // The command map
 // ---------------------------------------------------------------------------
 
-export type IMessageReadResult =
-  | { status: "ok"; records: IMessageRecordInput[]; lastRowid: number; messageCount: number }
-  | { status: "error"; code: "fda_required" | "no_messages_db" | "unsupported_os" };
-
-export type IMessageRecordInput = {
-  chat_key: string;
-  chat_name: string | null;
-  is_group: boolean;
-  day: string;
-  occurred_at: string;
-  text: string;
-  participants: { name: string | null; handle: string; service: string | null }[];
+/** A Work chat source the desktop reads from this Mac and pushes (work-chat-sync.mjs). */
+export type WorkChatSyncSource = "imessage" | "whatsapp";
+/** One source's state for the signed-in Work account. `enabled` is null until the first good read turns it on. */
+export type WorkChatSyncSourceStatus = {
+  enabled: boolean | null;
+  lastSyncAt: string | null;
+  /** fda_required, no_messages_db, no_whatsapp, unsupported_schema, or the server's or a push's error code. */
+  lastError: string | null;
+  failures: number;
+  running: boolean;
 };
+/** Null while signed out, offline or Work is off. */
+export type WorkChatSyncStatus = Record<WorkChatSyncSource, WorkChatSyncSourceStatus> | null;
+export type WorkChatSyncRun =
+  | { status: "ok"; messages: number; records: number }
+  | { status: "error"; code: string }
+  | { status: "skipped"; reason: string };
 
 export type DesktopCommandMap = {
-  // Read a copy of the Mac's local Messages database (iMessage has no API).
-  workImessageRead: { args: [sinceRowid?: number]; result: IMessageReadResult };
+  // Work chat sync from this Mac (iMessage, WhatsApp): status, Sync now, the Data sync switch.
+  workChatSyncStatus: { args: []; result: WorkChatSyncStatus };
+  workChatSyncNow: { args: [source: WorkChatSyncSource]; result: WorkChatSyncRun };
+  workChatSyncSet: { args: [source: WorkChatSyncSource, enabled: boolean]; result: WorkChatSyncRun | null };
   // Workspace state
   workspaceBootstrap: { args: []; result: WorkspaceList };
   workspaceSetSelected: { args: [workspaceId: string]; result: WorkspaceList };

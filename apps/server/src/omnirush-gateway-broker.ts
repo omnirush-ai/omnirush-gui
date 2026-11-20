@@ -1484,6 +1484,11 @@ export class OmniRushGatewayBroker {
     return Boolean(this.state && this.engineToken);
   }
 
+  /** The account's server, as an origin (Work's chat sync keys its read position by it). */
+  get serverOrigin(): string | null {
+    return this.state ? originOf(this.state.gatewayUrl) : null;
+  }
+
   /** The console's Account page on the account's server (where Discord and GitHub are linked). */
   get consoleUrl(): string | null {
     return this.state ? new URL("/console/account", this.state.gatewayUrl).toString() : null;
