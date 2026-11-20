@@ -7,7 +7,9 @@ import { test } from "node:test";
 
 import {
   appleDateToDate,
+  cut,
   decodeAttributedBody,
+  groupRows,
   readDatabase,
   readIMessage,
   IMessageError,
@@ -181,4 +183,24 @@ test("readIMessage reports a missing Messages database", async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a chat-day over the server's caps is cut to fit, so it never fails the push", () => {
+  // 300 people, ~306,000 characters in one day: the server takes 256 people and 200,000 characters.
+  const rows = Array.from({ length: 300 }, (_, index) => ({
+    rowid: index + 1,
+    date: 815_000_000 + index,
+    text: "x".repeat(1000),
+    is_from_me: 0,
+    handle: `+1555000${String(index).padStart(4, "0")}`,
+    chat_guid: "iMessage;+;chat1",
+    chat_style: 43,
+    service: "iMessage",
+  }));
+  const [record] = groupRows(rows).records;
+  assert.equal(record.text.length, 200_000);
+  assert.equal(record.participants.length, 256);
+  // a cut never leaves half of a surrogate pair
+  assert.equal(cut("a\u{1F600}", 2), "a");
+  assert.equal(cut("short", 10), "short");
 });

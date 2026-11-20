@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { copyDatabase, probe } from "./work-imessage.mjs";
+import { copyDatabase, cut, MAX_DAY_TEXT, MAX_PEOPLE, probe } from "./work-imessage.mjs";
 
 // Seconds between the Unix epoch (1970) and Core Data's (2001).
 const CORE_DATA_EPOCH = 978_307_200;
@@ -28,6 +28,10 @@ const CHAT_TYPES = "0, 1";
 // (calls) and 14 (deleted) carry nothing to read.
 const MEDIA = { 1: "image", 2: "video", 3: "audio", 4: "contact", 5: "location", 8: "document", 11: "gif", 15: "sticker" };
 const SKIP_TYPES = new Set([6, 10, 14]);
+// The server's caps on one chat-day past MAX_DAY_TEXT and MAX_PEOPLE (backend whatsapp.py).
+const MAX_DAY_MESSAGES = 5000;
+const MAX_SENDER = 256;
+const MAX_NAME = 512;
 const REQUIRED = {
   ZWAMESSAGE: ["Z_PK", "ZCHATSESSION", "ZMESSAGEDATE", "ZISFROMME", "ZTEXT", "ZMESSAGETYPE"],
   ZWACHATSESSION: ["Z_PK", "ZCONTACTJID", "ZPARTNERNAME", "ZSESSIONTYPE"],
@@ -168,15 +172,19 @@ function readMessages(db, sincePk, ctx) {
       const key = `${session.pk}\u0000${when.day}`;
       let group = groups.get(key);
       if (!group) {
-        group = { chat_key: ctx.keyOf(session), chat_name: session.name, is_group: session.group, day: when.day, messages: [], phones: new Set() };
+        group = { chat_key: cut(ctx.keyOf(session), MAX_NAME), chat_name: cut(session.name, MAX_NAME), is_group: session.group, day: when.day, messages: [], phones: new Set(), chars: 0 };
         if (!session.group && phoneOf(session.jid)) group.phones.add(phoneOf(session.jid));
         groups.set(key, group);
       }
-      group.messages.push({ at: when.at, sender, text });
+      // A day over the server's caps would fail the whole push: the rest of it is left out.
+      if (group.messages.length >= MAX_DAY_MESSAGES || group.chars >= MAX_DAY_TEXT) continue;
+      const kept = cut(text, MAX_DAY_TEXT - group.chars);
+      group.chars += kept.length;
+      group.messages.push({ at: when.at, sender: cut(sender, MAX_SENDER), text: kept });
       if (!fromMe && session.group && phoneOf(jid)) group.phones.add(phoneOf(jid));
     }
   }
-  const records = [...groups.values()].map((group) => ({ ...group, phones: [...group.phones] }));
+  const records = [...groups.values()].map(({ chars: _chars, phones, ...group }) => ({ ...group, phones: [...phones].slice(0, MAX_PEOPLE) }));
   return { records, lastPk, messageCount };
 }
 
@@ -190,7 +198,7 @@ function readSessions(db, contacts) {
     const jid = str(row.jid);
     const group = Number(row.type) === 1;
     const phone = phoneOf(jid);
-    const name = str(row.name) || nameOf(contacts, jid) || (phone ? `+${phone}` : group ? "Group chat" : jid);
+    const name = str(row.name) || nameOf(contacts, jid) || (phone ? `+${phone}` : group ? "Group chat" : jid || "Unknown");
     return { pk: Number(row.pk), name, jid, group };
   });
 }

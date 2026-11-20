@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -33,9 +33,11 @@ function rig({ read } = {}) {
     const route = url.replace("http://127.0.0.1:1", "");
     assert.equal(init.headers.Authorization, "Bearer client-token");
     if (route === "/work/state?account=1") return Response.json({ enabled: server.enabled, ...(server.enabled ? { account: server.account } : {}) });
+    // A push lands in the account the server has when it arrives; onPush may switch it after.
+    const account = server.account;
     server.onPush?.();
     if (server.fail) return Response.json({ code: server.fail }, { status: 502 });
-    server.pushed.push({ route, records: JSON.parse(init.body).records });
+    server.pushed.push({ route, account, records: JSON.parse(init.body).records });
     return Response.json({ imported: 1 });
   };
   const sync = createChatSync(/** @type {any} */ ({
@@ -195,24 +197,45 @@ test("each server and account has its own read position; a switch mid-run saves 
   }
 });
 
+test("an account switch between pushes: no later batch reaches the new account", async () => {
+  const records = Array.from({ length: 1001 }, (_, index) => ({ chat_key: `c${index}`, day: "2026-11-20" }));
+  const r = rig({ read: () => ({ records, cursor: 1001, messageCount: 1001 }) });
+  try {
+    r.server.onPush = () => { r.server.account = "https://omnirush.ai acct_b"; };
+    assert.equal((await r.sync.run("imessage", { manual: true })).reason, "account_changed");
+    // three batches were due; only the first went, to the account that read them
+    assert.deepEqual(r.server.pushed.map((push) => [push.account, push.records.length]), [["https://omnirush.ai acct_a", 500]]);
+    assert.equal(existsSync(r.file), false); // no read position saved for either account
+  } finally {
+    r.done();
+  }
+});
+
 test("start: a first read soon, every 10 minutes, and after a quiet minute of log writes", async () => {
   const r = rig();
   try {
     r.sync.start();
+    // No folder is opened before the source is on and read.
+    assert.equal(r.watchers.length, 0);
+    assert.equal((await r.sync.setEnabled("imessage", false)).reason, "off");
+    assert.equal((await r.sync.run("imessage", { manual: true })).status, "ok");
+    assert.equal(r.watchers.length, 0);
+    await r.sync.setEnabled("imessage", true);
     assert.equal(r.watchers.length, 1);
     assert.equal(r.watchers[0].dir, "/msgs");
+    // Right after a read, the next waits out the gap.
+    r.watchers[0].listener("change", "chat.db-wal");
+    assert.equal(r.timers.at(-1).ms, MIN_GAP_MS);
+    r.advance(MIN_GAP_MS);
+    const before = r.timers.length;
     r.watchers[0].listener("change", "chat.db");
-    assert.equal(r.timers.length, 1); // only the start timer: the main file is not the log
+    assert.equal(r.timers.length, before); // the main file is not the log
     r.watchers[0].listener("change", "chat.db-wal");
     r.watchers[0].listener("change", "chat.db-wal");
-    const waits = r.timers.slice(1);
+    const waits = r.timers.slice(before);
     assert.equal(waits.length, 2);
     assert.equal(waits[0].cleared, true); // debounced
     assert.equal(waits[1].ms, WATCH_QUIET_MS);
-    // Right after a read, the next waits out the gap.
-    await r.sync.setEnabled("imessage", true);
-    r.watchers[0].listener("change", "chat.db-wal");
-    assert.equal(r.timers.at(-1).ms, MIN_GAP_MS);
     r.sync.stop();
     assert.equal(r.watchers[0].closed, true);
   } finally {

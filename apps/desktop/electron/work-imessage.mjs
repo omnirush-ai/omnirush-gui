@@ -13,6 +13,17 @@ import { DatabaseSync } from "node:sqlite";
 
 // Seconds between the Unix epoch (1970) and the Apple/Cocoa epoch (2001).
 const APPLE_EPOCH_OFFSET = 978_307_200;
+// The server's caps on one chat-day (backend imessage.py, whatsapp.py): a day
+// over them fails the whole push, so the rest of that day is left out.
+export const MAX_DAY_TEXT = 200_000;
+export const MAX_PEOPLE = 256;
+
+/** `text` cut to `max` UTF-16 units (never more than the server's character count), never halving a surrogate pair. */
+export function cut(text, max) {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  return /[\ud800-\udbff]$/.test(head) ? head.slice(0, -1) : head;
+}
 
 /** A tagged error so the UI can show the right step (grant Full Disk
  *  Access, no Messages database, not macOS). */
@@ -198,11 +209,14 @@ export function groupRows(rows, newAfter = 0) {
     is_group: group.is_group,
     day: group.day,
     occurred_at: group.occurred_at,
-    text: group.lines
-      .sort((a, b) => a.at - b.at)
-      .map((line) => line.text)
-      .join("\n"),
-    participants: [...group.participants.values()],
+    text: cut(
+      group.lines
+        .sort((a, b) => a.at - b.at)
+        .map((line) => line.text)
+        .join("\n"),
+      MAX_DAY_TEXT,
+    ),
+    participants: [...group.participants.values()].slice(0, MAX_PEOPLE),
   }));
   return { records, lastRowid, messageCount };
 }

@@ -86,6 +86,7 @@ export function createChatSync(deps) {
   const timers = new Map();
   const watchers = new Map();
   let stopped = false;
+  let writes = Promise.resolve();
 
   async function load() {
     try {
@@ -96,15 +97,20 @@ export function createChatSync(deps) {
     }
   }
 
-  /** Changes one source's saved entry; `change` gets the latest, so a switch flipped during a read is kept. */
-  async function update(account, source, change) {
-    const data = await load();
-    const entry = change(data.accounts[account]?.[source] ?? {});
-    data.accounts[account] = { ...(data.accounts[account] ?? {}), [source]: entry };
-    await mkdir(path.dirname(file), { recursive: true });
-    const temp = `${file}.${process.pid}.tmp`;
-    await writeFile(temp, `${JSON.stringify(data)}\n`, { mode: 0o600 });
-    await rename(temp, file);
+  /** Changes one source's saved entry; `change` gets the latest, so a switch flipped during a read is kept. Writes go one at a time. */
+  function update(account, source, change) {
+    const next = writes.then(async () => {
+      const data = await load();
+      const entry = change(data.accounts[account]?.[source] ?? {});
+      data.accounts[account] = { ...(data.accounts[account] ?? {}), [source]: entry };
+      await mkdir(path.dirname(file), { recursive: true });
+      const temp = `${file}.${process.pid}.tmp`;
+      await writeFile(temp, `${JSON.stringify(data)}\n`, { mode: 0o600 });
+      await rename(temp, file);
+      return entry;
+    });
+    writes = next.catch(() => undefined);
+    return next;
   }
 
   async function call(server, route, init = {}) {
@@ -137,11 +143,17 @@ export function createChatSync(deps) {
     running = source;
     try {
       const read = await spec.read(entry.cursor);
-      for (const batch of batches(read.records)) await call(me.server, spec.route, { method: "POST", body: JSON.stringify({ records: batch }) });
-      // The account changed while this ran (the server restarts on a switch): its read position stays put.
-      if ((await who())?.account !== me.account) return { status: "skipped", reason: "account_changed" };
-      await update(me.account, source, (latest) => ({ enabled: latest.enabled ?? true, cursor: read.cursor, lastSyncAt: new Date(now()).toISOString(), lastError: null, failures: 0, nextAt: null }));
-      ensureWatch(source);
+      // The server restarts on an account switch with the same port and token: the account is checked before every
+      // push, so no batch lands in another account, and once more after the last; on a change the read position stays put.
+      const switched = async () => (await who())?.account !== me.account;
+      const changed = { status: "skipped", reason: "account_changed" };
+      for (const batch of batches(read.records)) {
+        if (await switched()) return changed;
+        await call(me.server, spec.route, { method: "POST", body: JSON.stringify({ records: batch }) });
+      }
+      if (await switched()) return changed;
+      const saved = await update(me.account, source, (latest) => ({ enabled: latest.enabled ?? true, cursor: read.cursor, lastSyncAt: new Date(now()).toISOString(), lastError: null, failures: 0, nextAt: null }));
+      if (saved.enabled) ensureWatch(source);
       return { status: "ok", messages: read.messageCount, records: read.records.length };
     } catch (error) {
       const code = typeof error?.code === "string" && /^[a-z0-9_]{1,40}$/.test(error.code) ? error.code : "sync_failed";
@@ -190,7 +202,7 @@ export function createChatSync(deps) {
     timers.set(source, setTimer(() => void run(source), wait));
   }
 
-  /** Watch each database's folder for log writes; without Full Disk Access it cannot, and tries after the next good read. */
+  /** Watch each database's folder for log writes (after a good read with the switch on); without Full Disk Access it cannot, and tries after the next. */
   function ensureWatch(source) {
     for (const { dir, file: name } of sources[source].watch ?? []) {
       if (stopped || watchers.has(dir)) continue;
@@ -215,7 +227,7 @@ export function createChatSync(deps) {
       stopped = false;
       timers.set("start", setTimer(() => startTick(), START_DELAY_MS));
       repeat = setRepeat(() => void tick(), SYNC_EVERY_MS);
-      for (const source of Object.keys(sources)) ensureWatch(source);
+      // No folder is watched yet: a source's is, once it is on and read (runOnce), so nothing is opened without opting in.
     },
     stop() {
       stopped = true;

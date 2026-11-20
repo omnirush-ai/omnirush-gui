@@ -159,6 +159,40 @@ test("readWhatsApp reads WhatsApp Business too; a name both apps use stays two c
   }
 });
 
+test("a chat-day over the server's caps is cut to fit, so it never fails the push", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "wa-big-"));
+  try {
+    const file = path.join(dir, "ChatStorage.sqlite");
+    const db = new DatabaseSync(file);
+    db.exec(CHAT_STORAGE);
+    chat(db, 1, 1, "120363000000000002@g.us", "Big group");
+    chat(db, 2, 0, "15551230000@s.whatsapp.net", "Alice");
+    db.exec("BEGIN");
+    // 5,001 messages from 300 members with 300-character names in one day.
+    for (let i = 1; i <= 300; i += 1) {
+      db.prepare("INSERT INTO ZWAGROUPMEMBER (Z_PK, ZCHATSESSION, ZCONTACTNAME, ZMEMBERJID) VALUES (?, 1, ?, ?)").run(i, `m${i}`.padEnd(300, "x"), `1555${String(i).padStart(7, "0")}@s.whatsapp.net`);
+    }
+    for (let pk = 1; pk <= 5001; pk += 1) message(db, pk, 1, "2026-11-14T06:00:00Z", { text: `hi ${pk}`, member: ((pk - 1) % 300) + 1 });
+    // 250,000 characters in one private day.
+    message(db, 5002, 2, "2026-11-14T06:00:00Z", { text: "a".repeat(150_000) });
+    message(db, 5003, 2, "2026-11-14T06:01:00Z", { text: "b".repeat(100_000) });
+    message(db, 5004, 2, "2026-11-14T06:02:00Z", { text: "dropped" });
+    db.exec("COMMIT");
+    db.close();
+    const { records, cursor } = readDatabases([{ app: "whatsapp", chat: file }]);
+    assert.deepEqual(cursor, { whatsapp: 5004 });
+    const group = records.find((r) => r.is_group);
+    assert.equal(group.messages.length, 5000);
+    assert.equal(group.phones.length, 256);
+    assert.ok(group.messages.every((m) => m.sender.length <= 256));
+    assert.equal("chars" in group, false);
+    const alice = records.find((r) => r.chat_key === "Alice");
+    assert.deepEqual(alice.messages.map((m) => m.text.length), [150_000, 50_000]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("readWhatsApp fails soft on an unknown schema", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "wa-old-"));
   try {
