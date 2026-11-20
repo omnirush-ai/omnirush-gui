@@ -212,6 +212,8 @@ describe("work routes", () => {
       ? json([{ id: "mock", label: "Mock", status: "connected", sync_enabled: true, records: 3, last_sync_at: null, scopes: [] }])
       : path.endsWith("/start") ? json({ auth_url: "https://auth.example/x" }) : json({ ok: true, sync_enabled: false }));
     expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, available: false, sources: ["mock"], message: null, autopilot: false, full_access: false, writes_paused: false, meetings: false, workspaceId: null });
+    // The desktop's chat sync asks for the account its read position belongs to.
+    expect((await (await call("GET", "/work/state?account=1")).json()).account).toBe("user_1");
     expect(await (await call("POST", "/work/workspace")).json()).toEqual({ workspaceId: "ws_work", path: join(dir, "user_1") });
     expect((await (await call("GET", "/work/connectors")).json())[0].id).toBe("mock");
     expect(workEnvironment(dir, join(dir, "user_1"))?.work.connectors).toEqual([{ id: "mock", enabled: true }]);
@@ -265,10 +267,10 @@ describe("work routes", () => {
   test("the broker reaches only the contract's paths", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
-      "org/insights", "settings", "imessage", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
+      "org/insights", "settings", "imessage", "whatsapp-local", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
       "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio"]) expect(WORK_PATH.test(path)).toBe(true);
     for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
-      "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
+      "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "whatsapp-local/x", "whatsapp", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
       "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
@@ -432,6 +434,10 @@ describe("work routes", () => {
     const record = { chat_key: "c1", chat_name: null, is_group: false, day: "2026-11-16", occurred_at: "2026-11-16T09:00:00Z", text: "hi", participants: [] };
     expect((await call("POST", "/work/imessage", { records: [record], evil: 1 })).status).toBe(200);
     expect((await call("POST", "/work/imessage", { records: "x" })).status).toBe(400);
+    await call("GET", "/work/whatsapp-local");
+    const day = { chat_key: "Bob", chat_name: "Bob", day: "2026-11-16", messages: [{ at: "2026-11-16T09:00:00", sender: "Bob", text: "hi" }] };
+    expect((await call("POST", "/work/whatsapp-local", { records: [day], evil: 1 })).status).toBe(200);
+    expect((await call("POST", "/work/whatsapp-local", { records: {} })).status).toBe(400);
     expect(calls).toEqual([
       "GET org/insights?days=30 ",
       "GET settings ",
@@ -440,6 +446,8 @@ describe("work routes", () => {
       "POST actions/act_1/undo {}",
       "GET imessage ",
       `POST imessage ${JSON.stringify({ records: [record] })}`,
+      "GET whatsapp-local ",
+      `POST whatsapp-local ${JSON.stringify({ records: [day] })}`,
     ]);
   });
 

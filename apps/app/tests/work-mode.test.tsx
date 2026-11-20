@@ -14,7 +14,7 @@ import { leaveState, mePatch, WorkOrganizationPage } from "../src/react-app/doma
 import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
 import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
-import { ConnectorIcon, ConnectorRow, importBatches, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
+import { ConnectorIcon, ConnectorRow, localChatError, LocalChatsCard, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
@@ -706,18 +706,36 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(page).not.toMatch(/—|screen|proactive/);
   });
 
-  test("iMessage: pushed in slices under the server's limits; the card shows only in the Mac desktop app", () => {
-    const records = Array.from({ length: 2001 }, (_, index) => ({ day: "2026-11-15", text: `m${index}` }));
-    const batches = importBatches(records);
-    expect(batches.flat()).toEqual(records);
-    expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(500);
-    const big = importBatches([{ text: "x".repeat(40) }, { text: "y".repeat(40) }, { text: "z" }], 500, 70);
-    expect(big.map((batch) => batch.length)).toEqual([1, 2]);
+  test("Mac chat sync: errors read plainly, a repeated one is one line; the cards show only in the Mac desktop app", () => {
+    expect(localChatError("whatsapp", null, 0)).toBeNull();
+    expect(localChatError("whatsapp", "unsupported_schema", 1)).toBe("This WhatsApp version is not supported yet.");
+    expect(localChatError("imessage", "fda_required", 1)).toBe("OmniRush needs Full Disk Access to read iMessage.");
+    expect(localChatError("whatsapp", "http_502", 3)).toBe("Sync failed. It tries again on its own. Failed 3 times in a row.");
+    const card = (() => {
+      const queries = new QueryClient();
+      const at = new Date(Date.now() - 5 * 60_000).toISOString();
+      queries.setQueryData(["omnirush-chat-sync"], {
+        imessage: { enabled: true, lastSyncAt: at, lastError: null, failures: 0, running: false },
+        whatsapp: { enabled: null, lastSyncAt: null, lastError: "fda_required", failures: 4, running: false },
+      });
+      queries.setQueryData(["omnirush-imessage-count", "http://connectors.test"], { records: 12 });
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><LocalChatsCard client={{ baseUrl: "http://connectors.test" } as never} openLink={noop} /></QueryClientProvider>);
+    })();
+    expect(card).toContain("12 conversation days synced · last sync 5 min ago");
+    // A repeated error is one line with its count, and the Full Disk Access step shows once.
+    expect(card.match(/data-testid="work-local-chat-error"/g)?.length).toBe(1);
+    expect(card).toContain("OmniRush needs Full Disk Access to read WhatsApp. Failed 4 times in a row.");
+    expect(card.match(/data-testid="work-local-chat-fda"/g)?.length).toBe(1);
+    expect(card).not.toMatch(/—/);
     const client = { baseUrl: "http://connectors.test" } as never;
     const queries = new QueryClient();
     queries.setQueryData(workConnectorsKey(client), [row({})]);
     const page = renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={noop} /></MemoryRouter></QueryClientProvider>);
     expect(page).toContain('data-work-connector="google"');
     expect(page).not.toContain('data-testid="work-imessage-card"');
+    expect(page).not.toContain('data-testid="work-local-chats"');
+    // Off the Mac app, WhatsApp says in one line why it stays a manual export.
+    expect(page).toContain('data-testid="work-import-whatsapp-manual"');
+    expect(page).not.toMatch(/—/);
   });
 });

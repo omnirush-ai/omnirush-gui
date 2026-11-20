@@ -2,10 +2,10 @@
 // person's messages is the local Messages database on their Mac. This
 // reads a copy of ~/Library/Messages/chat.db (the live file is locked by
 // Messages and needs Full Disk Access), turns rows into one record per
-// chat per day, and hands them to the renderer to push to the backend.
-// macOS only.
+// chat per day, and hands them to the chat sync (work-chat-sync.mjs) to
+// push to the backend. macOS only.
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { constants, mkdtempSync, rmSync, statSync } from "node:fs";
 import { copyFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -84,9 +84,41 @@ function hhmm(date) {
   return date.toISOString().slice(11, 16);
 }
 
-const QUERY = `
-  SELECT
+/**
+ * Whether a protected file is there: `missing`, `denied` (no Full Disk
+ * Access: macOS answers EPERM even to a stat) or `ok`.
+ * @param {string} file
+ */
+export function probe(file) {
+  try {
+    statSync(file);
+    return "ok";
+  } catch (error) {
+    const code = error && /** @type {any} */ (error).code;
+    return code === "EPERM" || code === "EACCES" ? "denied" : "missing";
+  }
+}
+
+/**
+ * Copy a live SQLite database (`file`, `-wal`, `-shm`) into `scratch` and
+ * return the copy's path. The write-ahead log goes first: a checkpoint
+ * between the copies then leaves the main file newer, never older, than
+ * the log (older would lose the checkpointed rows). APFS clones the files.
+ * @param {string} file
+ * @param {string} scratch
+ */
+export async function copyDatabase(file, scratch) {
+  const copy = path.join(scratch, path.basename(file));
+  for (const suffix of ["-wal", "", "-shm"]) {
+    if (suffix && probe(file + suffix) === "missing") continue;
+    await copyFile(file + suffix, copy + suffix, constants.COPYFILE_FICLONE);
+  }
+  return copy;
+}
+
+const COLUMNS = `
     m.ROWID              AS rowid,
+    cmj.chat_id          AS chat_id,
     m.text               AS text,
     m.attributedBody     AS attributedBody,
     m.is_from_me         AS is_from_me,
@@ -96,21 +128,30 @@ const QUERY = `
     c.guid               AS chat_guid,
     c.chat_identifier    AS chat_identifier,
     c.display_name       AS chat_display_name,
-    c.style              AS chat_style
+    c.style              AS chat_style`;
+const FROM = `
   FROM message m
   JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
   JOIN chat c                ON c.ROWID = cmj.chat_id
-  LEFT JOIN handle h         ON h.ROWID = m.handle_id
-  WHERE m.ROWID > ?
-  ORDER BY m.ROWID
-`;
+  LEFT JOIN handle h         ON h.ROWID = m.handle_id`;
+const NEW_ROWS = `SELECT cmj.chat_id AS chat_id, MIN(m.date) AS date, MAX(m.ROWID) AS rowid ${FROM} WHERE m.ROWID > ? GROUP BY cmj.chat_id`;
+
+/** The UTC day start of an Apple `date`, in the same unit (nanoseconds or legacy seconds). */
+function dayStart(raw) {
+  const value = BigInt(raw);
+  const nanos = value > 100_000_000_000n;
+  const seconds = nanos ? value / 1_000_000_000n : value;
+  const start = seconds - ((seconds + BigInt(APPLE_EPOCH_OFFSET)) % 86_400n);
+  return nanos ? start * 1_000_000_000n : start;
+}
 
 /**
  * Group raw message rows into one record per chat per day.
  * @param {any[]} rows
+ * @param {number} [newAfter] `messageCount` counts only rows past this ROWID
  * @returns {{ records: object[], lastRowid: number, messageCount: number }}
  */
-export function groupRows(rows) {
+export function groupRows(rows, newAfter = 0) {
   const byKey = new Map();
   let lastRowid = 0;
   let messageCount = 0;
@@ -121,7 +162,7 @@ export function groupRows(rows) {
     if (!when) continue;
     const body = (row.text && String(row.text)) || decodeAttributedBody(row.attributedBody);
     if (!body) continue; // attachment-only / system rows carry no text
-    messageCount += 1;
+    if (rowid > newAfter) messageCount += 1;
     const chatKey = String(row.chat_guid || row.chat_identifier || "unknown");
     const day = dayOf(when);
     const key = `${chatKey}\u0000${day}`;
@@ -166,17 +207,27 @@ export function groupRows(rows) {
   return { records, lastRowid, messageCount };
 }
 
-/** Read the chat.db at `dbPath` for messages with ROWID greater than
- *  `sinceRowid`. Opens read-only; the caller gives a copy. */
+/** Read the chat.db at `dbPath` for the chats with messages past
+ *  `sinceRowid`, each whole day from the first new message on: the server
+ *  replaces a chat-day's record, so a record never holds only the new
+ *  messages. Opens read-only; the caller gives a copy. */
 export function readDatabase(dbPath, sinceRowid = 0) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const stmt = db.prepare(QUERY);
+    const since = Number(sinceRowid) || 0;
+    const fresh = db.prepare(NEW_ROWS);
     // Nanosecond timestamps (~8e17) overflow a JS double; read integers as
     // BigInt. groupRows coerces each column it needs.
+    fresh.setReadBigInts(true);
+    const chats = fresh.all(since);
+    if (!chats.length) return { records: [], lastRowid: since, messageCount: 0 };
+    const rows = [];
+    const stmt = db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE cmj.chat_id = ? AND m.date >= ? ORDER BY m.ROWID`);
     stmt.setReadBigInts(true);
-    const rows = stmt.all(Number(sinceRowid) || 0);
-    return groupRows(rows);
+    for (const chat of chats) rows.push(...stmt.all(chat.chat_id, chat.date === null ? 0n : dayStart(chat.date)));
+    const grouped = groupRows(rows, since);
+    const lastRowid = Math.max(since, ...chats.map((chat) => Number(chat.rowid)));
+    return { ...grouped, lastRowid };
   } finally {
     db.close();
   }
@@ -195,17 +246,14 @@ export async function readIMessage(options = {}) {
   if (platform !== "darwin") throw new IMessageError("unsupported_os");
   const homeDir = options.homeDir || os.homedir();
   const src = path.join(homeDir, "Library", "Messages", "chat.db");
-  if (!existsSync(src)) throw new IMessageError("no_messages_db");
+  const found = probe(src);
+  if (found === "missing") throw new IMessageError("no_messages_db");
+  if (found === "denied") throw new IMessageError("fda_required");
   const scratch = mkdtempSync(path.join(os.tmpdir(), "omnirush-imsg-"));
-  const copy = path.join(scratch, "chat.db");
   try {
     // The write-ahead log and shared-memory file carry messages not yet
     // checkpointed into chat.db; copy them so the read sees recent chats.
-    for (const suffix of ["", "-wal", "-shm"]) {
-      const from = src + suffix;
-      if (suffix === "" || existsSync(from)) await copyFile(from, copy + suffix);
-    }
-    return readDatabase(copy, options.sinceRowid);
+    return readDatabase(await copyDatabase(src, scratch), options.sinceRowid);
   } catch (error) {
     const code = error && error.code;
     if (code === "EACCES" || code === "EPERM") {

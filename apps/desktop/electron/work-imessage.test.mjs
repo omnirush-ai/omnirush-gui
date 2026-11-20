@@ -122,13 +122,31 @@ test("readDatabase groups one record per chat per day with correct fields", () =
   }
 });
 
-test("readDatabase reads only rows past sinceRowid (incremental)", () => {
+test("readDatabase reads only chats with rows past sinceRowid (incremental)", () => {
   const { dir, dbPath } = buildFixture();
   try {
-    const { records, messageCount } = readDatabase(dbPath, 3);
+    const { records, messageCount, lastRowid } = readDatabase(dbPath, 3);
     assert.equal(messageCount, 1);
+    assert.equal(lastRowid, 4);
     assert.equal(records.length, 1);
     assert.equal(records[0].is_group, true);
+    // nothing new: nothing sent, the position stays
+    assert.deepEqual(readDatabase(dbPath, 4), { records: [], lastRowid: 4, messageCount: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readDatabase sends a chat's whole day again when a message joins it", () => {
+  const { dir, dbPath } = buildFixture();
+  try {
+    // Rows 3 and 4 are new; rows 1 and 2 are row 3's chat and day, already
+    // sent. The server replaces the chat-day's record, so all three go again.
+    const { records, messageCount } = readDatabase(dbPath, 2);
+    assert.equal(messageCount, 2);
+    const direct = records.find((r) => r.chat_key === "iMessage;-;+15551230000");
+    assert.equal(direct.text.split("\n").length, 3);
+    assert.equal(records.length, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

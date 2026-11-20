@@ -2530,6 +2530,9 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<OmniRushIMessageImport>(baseUrl, "/work/imessage", { token, hostToken, method: "POST", body: { records }, timeoutMs: timeouts.activateWorkspace }),
     getIMessageCount: () =>
       requestJson<{ records: number }>(baseUrl, "/work/imessage", { token, hostToken, timeoutMs: timeouts.config }),
+    /** WhatsApp chat-days in Work (the Mac app sync and chat-export imports; the desktop's main process pushes them). */
+    getWhatsAppLocalCount: () =>
+      requestJson<{ records: number }>(baseUrl, "/work/whatsapp-local", { token, hostToken, timeoutMs: timeouts.config }),
     listWorkEntities: (query: { q?: string; kind?: string; limit?: number; cursor?: string } = {}) => {
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
       return requestJson<{ items: OmniRushWorkEntitySummary[]; next_cursor: string | null }>(baseUrl, `/work/entities${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
