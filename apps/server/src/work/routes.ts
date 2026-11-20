@@ -23,6 +23,7 @@
  *   GET   /work/actions?limit=, POST /work/actions/:id/undo                    the activity log and an action's undo
  *   GET   /work/imessage, POST /work/imessage {records}                        the Mac's iMessage records (macOS desktop)
  *   GET   /work/whatsapp-local, POST /work/whatsapp-local {records}            the WhatsApp Mac app's chat-days (macOS desktop)
+ *   GET   /work/telegram, POST /work/telegram {records}                        Telegram chat-days from the user's own login (desktop)
  *   GET   /work/feed?source=&tz=&limit=    the Today home's feed
  *   POST  /work/connectors/:id/sync        a sync now (429 too_soon within a minute)
  *   GET   /work/chat-tools, POST /work/chat-tools/fix   whether the Work chats' engine has the hosted tools; fix re-reads the switch and re-syncs
@@ -519,6 +520,13 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     const records = (await deps.readJsonBody(ctx.request)).records;
     if (!Array.isArray(records)) return invalid("records must be a list");
     return forward("whatsapp-local", "POST", { records });
+  });
+  // Telegram (desktop): the chat-days the desktop read with the user's own Telegram login (the login stays on the device).
+  addRoute(routes, "GET", "/work/telegram", "client", async () => forward("telegram", "GET"));
+  addRoute(routes, "POST", "/work/telegram", "client", async (ctx) => {
+    const records = (await deps.readJsonBody(ctx.request)).records;
+    if (!Array.isArray(records)) return invalid("records must be a list");
+    return forward("telegram", "POST", { records });
   });
 }
 

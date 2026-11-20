@@ -54,7 +54,7 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
   | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
-  | "importIMessage" | "getIMessageCount" | "getWhatsAppLocalCount"
+  | "importIMessage" | "getIMessageCount" | "getWhatsAppLocalCount" | "getTelegramCount"
   | "searchWork" | "getWorkCoverage" | "listWorkDeals" | "getWorkDeal" | "listWorkImports" | "importWorkChat"
   | "createWorkMeeting" | "getWorkMeeting" | "updateWorkMeeting" | "uploadWorkMeetingAudio"> & { baseUrl?: string };
 

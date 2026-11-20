@@ -82,6 +82,8 @@ jobs:
         env:
           OMNIRUSH_DESKTOP_SENTRY_DSN: ${{ secrets.OMNIRUSH_DESKTOP_SENTRY_DSN || vars.OMNIRUSH_DESKTOP_SENTRY_DSN }}
           OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE: ${{ vars.OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE || '0.01' }}
+          OMNIRUSH_TELEGRAM_API_ID: ${{ secrets.OMNIRUSH_TELEGRAM_API_ID }}
+          OMNIRUSH_TELEGRAM_API_HASH: ${{ secrets.OMNIRUSH_TELEGRAM_API_HASH }}
         run: pnpm --filter @omnirush/desktop package:electron:dir
 
       # Every relative import inside the packaged app resolves (a module missing from dist crashes the app at start).
@@ -336,6 +338,8 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "true"
           OMNIRUSH_DESKTOP_SENTRY_DSN: ${{ secrets.OMNIRUSH_DESKTOP_SENTRY_DSN || vars.OMNIRUSH_DESKTOP_SENTRY_DSN }}
           OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE: ${{ vars.OMNIRUSH_DESKTOP_SENTRY_TRACES_SAMPLE_RATE || '0.01' }}
+          OMNIRUSH_TELEGRAM_API_ID: ${{ secrets.OMNIRUSH_TELEGRAM_API_ID }}
+          OMNIRUSH_TELEGRAM_API_HASH: ${{ secrets.OMNIRUSH_TELEGRAM_API_HASH }}
         run: |
           set -euo pipefail
           pnpm --filter @omnirush/desktop run build:electron

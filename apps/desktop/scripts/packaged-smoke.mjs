@@ -51,6 +51,11 @@ try {
   run("server-import", binary, ["--input-type=module", "-e",
     `const server = await import(${JSON.stringify(embedded)}); if (typeof server.startEmbeddedServer !== "function") throw new Error("Missing embedded server export");`],
   15_000, { ELECTRON_RUN_AS_NODE: "1", NODE_PATH: "", NODE_OPTIONS: "" }, output);
+  // GramJS (Work's Telegram sync) loads only on use: the packaged app must carry it and its dependencies.
+  const fromMain = JSON.stringify(join(archive, "electron/main.mjs"));
+  run("telegram-import", binary, ["--input-type=module", "-e",
+    `const { createRequire } = await import("node:module"); const { TelegramClient, sessions, password } = createRequire(${fromMain})("telegram"); new TelegramClient(new sessions.StringSession(""), 1, "0", {}); if (typeof password.computeCheck !== "function") throw new Error("GramJS is incomplete");`],
+  15_000, { ELECTRON_RUN_AS_NODE: "1", NODE_PATH: "", NODE_OPTIONS: "" }, output);
   run("desktop-boot", "xvfb-run", ["-a", "pnpm", "evals:e2e", "app-smoke", "--local"], 90_000, {
     OMNIRUSH_EVAL_ELECTRON_BINARY: binary,
     OMNIRUSH_EVAL_ELECTRON_RESOURCES_PREPARED: "1",
