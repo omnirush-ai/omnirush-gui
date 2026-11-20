@@ -194,6 +194,9 @@ jobs:
       - name: Build desktop application
         env:
           TARGET: ${{ matrix.target }}
+          # The app's Telegram credentials (my.telegram.org); without them the Telegram sync stays hidden.
+          OMNIRUSH_TELEGRAM_API_ID: ${{ secrets.OMNIRUSH_TELEGRAM_API_ID }}
+          OMNIRUSH_TELEGRAM_API_HASH: ${{ secrets.OMNIRUSH_TELEGRAM_API_HASH }}
         shell: bash
         run: pnpm --filter @omnirush/desktop build:electron
 

@@ -24,6 +24,8 @@ import { registerMigrationIpc } from "./migration.mjs";
 import { readIMessage } from "./work-imessage.mjs";
 import { readWhatsApp } from "./work-whatsapp.mjs";
 import { CHAT_SYNC_FILE, createChatSync } from "./work-chat-sync.mjs";
+import { createTelegram, TELEGRAM_BUILD_FILE, TELEGRAM_FILE, telegramCredentials } from "./work-telegram.mjs";
+import { usableSafeStorage } from "./plaintext-credential-file.mjs";
 import { createRuntimeManager, createSystemCaCertificateVerifyProc } from "./runtime.mjs";
 import { installAppRequestSecret } from "./app-request-secret.mjs";
 import { registerUpdaterIpc, updatesTurnedOff } from "./updater.mjs";
@@ -1509,7 +1511,18 @@ const keepAwake = createKeepAwake({
   settingFile: path.join(app.getPath("userData"), KEEP_AWAKE_FILE),
 });
 
-// Work chat sync from this Mac: iMessage and the WhatsApp Mac apps (work-chat-sync.mjs).
+// Telegram from the user's own login (work-telegram.mjs): only in builds made with the app's Telegram credentials.
+const workTelegram = createTelegram({
+  credentials: telegramCredentials(app.isPackaged ? path.join(process.resourcesPath, TELEGRAM_BUILD_FILE) : path.join(__dirname, "..", ".electron-runtime", TELEGRAM_BUILD_FILE)),
+  file: path.join(app.getPath("userData"), TELEGRAM_FILE),
+  storage: async () => {
+    const storage = await usableSafeStorage(() => require("electron").safeStorage, process.platform);
+    return storage && { encrypt: (text) => storage.encryptStringAsync(text), decrypt: async (data) => (await storage.decryptStringAsync(data)).result };
+  },
+  appVersion: app.getVersion(),
+});
+
+// Work chat sync from this Mac (iMessage and the WhatsApp Mac apps) and from Telegram on any desktop (work-chat-sync.mjs).
 const groupContainers = path.join(os.homedir(), "Library", "Group Containers");
 const workChatSync = createChatSync({
   file: path.join(app.getPath("userData"), CHAT_SYNC_FILE),
@@ -1531,6 +1544,7 @@ const workChatSync = createChatSync({
       read: (cursor) => readWhatsApp({ cursor: cursor && typeof cursor === "object" ? cursor : {} }),
       watch: ["WhatsApp", "WhatsAppSMB"].map((app) => ({ dir: path.join(groupContainers, `group.net.whatsapp.${app}.shared`), file: "ChatStorage.sqlite-wal" })),
     },
+    ...(workTelegram.available ? { telegram: { route: "/work/telegram", read: (cursor, account) => workTelegram.read(cursor, account) } } : {}),
   },
 });
 
@@ -2209,6 +2223,19 @@ const desktopCommandHandlers = {
   "workChatSyncStatus": async () => workChatSync.status(),
   "workChatSyncNow": async (event, ...args) => workChatSync.run(String(args[0]), { manual: true }),
   "workChatSyncSet": async (event, ...args) => workChatSync.setEnabled(String(args[0]), args[1] === true),
+  // Telegram's sign-in on this device, its settings and Disconnect; the login is bound to the Work account it was made in.
+  "workTelegramStatus": async () => workTelegram.status(await workChatSync.account()),
+  "workTelegramLogin": async (event, ...args) => {
+    const result = await workTelegram.login(args[0], await workChatSync.account());
+    // Signed in: Data sync turns on and the first read starts.
+    if ("step" in result && result.step === "done") void workChatSync.setEnabled("telegram", true);
+    return result;
+  },
+  "workTelegramSettings": async (event, ...args) => workTelegram.setSettings(args[0], await workChatSync.account()),
+  "workTelegramLogout": async () => {
+    await workTelegram.logout();
+    await workChatSync.setEnabled("telegram", false);
+  },
   "workspaceBootstrap": async (event, ...args) => {
       return workspaceStore.readWorkspaceState();
   },
@@ -3645,7 +3672,7 @@ or use: pnpm dev:worktree`);
     const win = await createMainWindow();
     // In the background: the window never waits for it.
     desktopPlacements.start();
-    if (process.platform === "darwin") workChatSync.start();
+    if (process.platform === "darwin" || workTelegram.available) workChatSync.start();
     // Installed update downloads, old logs and temp files go two minutes later, in the updater's queue.
     scheduleDiskCleanup({ app, currentVersion: app.getVersion(), whenIdle: whenUpdaterIdle, protect: pendingUpdatePaths });
     void desktopFeedback.start();

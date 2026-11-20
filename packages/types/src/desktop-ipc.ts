@@ -952,8 +952,8 @@ export type ComputerUseRealScreen = { on: boolean; forced: boolean; allowed: boo
 // The command map
 // ---------------------------------------------------------------------------
 
-/** A Work chat source the desktop reads from this Mac and pushes (work-chat-sync.mjs). */
-export type WorkChatSyncSource = "imessage" | "whatsapp";
+/** A Work chat source the desktop reads (this Mac's databases, or the user's own Telegram login) and pushes (work-chat-sync.mjs). */
+export type WorkChatSyncSource = "imessage" | "whatsapp" | "telegram";
 /** One source's state for the signed-in Work account. `enabled` is null until the first good read turns it on. */
 export type WorkChatSyncSourceStatus = {
   enabled: boolean | null;
@@ -969,12 +969,35 @@ export type WorkChatSyncRun =
   | { status: "ok"; messages: number; records: number }
   | { status: "error"; code: string }
   | { status: "skipped"; reason: string };
+/** Telegram from the user's own login (work-telegram.mjs); `available` only in builds made with the app's Telegram credentials. */
+export type WorkTelegramStatus =
+  | { available: false }
+  | {
+    available: true;
+    /** other_account: this device's Telegram login was made in another Work account. */
+    step: "signed_out" | "code" | "password" | "signed_in" | "other_account";
+    name: string | null;
+    via: "app" | "sms" | null;
+    hint: string | null;
+    channels: boolean;
+    days: number;
+  };
+export type WorkTelegramLoginStep = { phone: string } | { code: string } | { password: string } | { cancel: true };
+/** The next step, or an error code (bad_phone, wrong_code, code_expired, wrong_password, not_registered, flood_wait, no_keyring, work_off, failed). */
+export type WorkTelegramLoginResult =
+  | { step: "code" | "password" | "done" | "signed_out"; via?: "app" | "sms"; hint?: string | null }
+  | { error: string; waitSeconds?: number };
 
 export type DesktopCommandMap = {
   // Work chat sync from this Mac (iMessage, WhatsApp): status, Sync now, the Data sync switch.
   workChatSyncStatus: { args: []; result: WorkChatSyncStatus };
   workChatSyncNow: { args: [source: WorkChatSyncSource]; result: WorkChatSyncRun };
   workChatSyncSet: { args: [source: WorkChatSyncSource, enabled: boolean]; result: WorkChatSyncRun | null };
+  // Telegram's sign-in on this device (the login never leaves it), its settings and Disconnect.
+  workTelegramStatus: { args: []; result: WorkTelegramStatus };
+  workTelegramLogin: { args: [step: WorkTelegramLoginStep]; result: WorkTelegramLoginResult };
+  workTelegramSettings: { args: [settings: { channels?: boolean; days?: number }]; result: void };
+  workTelegramLogout: { args: []; result: void };
   // Workspace state
   workspaceBootstrap: { args: []; result: WorkspaceList };
   workspaceSetSelected: { args: [workspaceId: string]; result: WorkspaceList };

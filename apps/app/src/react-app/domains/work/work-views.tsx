@@ -8,11 +8,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
 import type { OmniRushWorkConnector, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
-import type { WorkChatSyncSource } from "@omnirush/types/desktop-ipc";
+import type { WorkChatSyncSource, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { isMacPlatform } from "@/app/utils";
@@ -312,7 +314,7 @@ export function ConnectorRow(props: {
 
 const FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
-const LOCAL_CHAT_NAMES: Record<WorkChatSyncSource, string> = { imessage: "iMessage", whatsapp: "WhatsApp" };
+const LOCAL_CHAT_NAMES: Record<WorkChatSyncSource, string> = { imessage: "iMessage", whatsapp: "WhatsApp", telegram: "Telegram" };
 
 /** What a chat sync error says on the card; repeated failures are one line with the count. */
 export function localChatError(source: WorkChatSyncSource, code: string | null, failures: number): string | null {
@@ -322,6 +324,9 @@ export function localChatError(source: WorkChatSyncSource, code: string | null, 
     : code === "no_messages_db" ? t("work.imessage.no_db")
     : code === "no_whatsapp" ? t("work.chatsync.no_whatsapp")
     : code === "unsupported_schema" ? t("work.chatsync.unsupported")
+    : code === "flood_wait" ? t("work.telegram.flood_sync")
+    : code === "signed_out" ? t("work.telegram.signed_out")
+    : code === "no_keyring" ? t("work.telegram.no_keyring")
     : t("work.chatsync.failed");
   return failures > 1 ? `${text} ${t("work.chatsync.repeated", { n: failures })}` : text;
 }
@@ -399,6 +404,140 @@ export function LocalChatsCard(props: { client: WorkClient | null; openLink: (ur
     <div className="rounded-xl border border-border bg-background" data-testid="work-local-chats">
       <LocalChatCard source="whatsapp" client={props.client} openLink={props.openLink} />
       <LocalChatCard source="imessage" client={props.client} openLink={props.openLink} />
+    </div>
+  );
+}
+
+/** What a Telegram sign-in error says. */
+export function telegramLoginError(code: string, waitSeconds?: number): string {
+  if (code === "flood_wait") return waitSeconds ? t("work.telegram.wait", { n: Math.max(1, Math.ceil(waitSeconds / 60)) }) : t("work.telegram.wait_later");
+  return code === "no_keyring" ? t("work.telegram.no_keyring")
+    : code === "bad_phone" ? t("work.telegram.error_bad_phone")
+    : code === "wrong_code" ? t("work.telegram.error_wrong_code")
+    : code === "code_expired" ? t("work.telegram.error_code_expired")
+    : code === "wrong_password" ? t("work.telegram.error_wrong_password")
+    : code === "not_registered" ? t("work.telegram.error_not_registered")
+    : t("work.telegram.error_failed");
+}
+
+const TELEGRAM_DAYS = [30, 90, 365].map((n) => ({ value: String(n), label: t("work.telegram.days", { n }) }));
+
+/** Telegram syncs from the user's own login on this computer (the login never leaves it): sign in with the phone, the
+ *  code and the two-step password, then it syncs on its own like the Mac chats. Only in desktop builds that carry the
+ *  app's Telegram credentials. */
+export function TelegramCard(props: { client: WorkClient | null }) {
+  const queryClient = useQueryClient();
+  const statusKey = ["omnirush-telegram"];
+  const syncKey = ["omnirush-chat-sync"];
+  const countKey = ["omnirush-telegram-count", props.client?.baseUrl?.trim() || "default"];
+  const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workTelegramStatus(), enabled: isDesktopRuntime() });
+  const data = status.data?.available ? status.data : null;
+  const signedIn = data?.step === "signed_in";
+  const sync = useQuery({ queryKey: syncKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: 15_000, enabled: signedIn });
+  const count = useQuery({ queryKey: countKey, queryFn: () => props.client!.getTelegramCount(), enabled: Boolean(props.client) && signedIn });
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const settle = () => {
+    for (const queryKey of [statusKey, syncKey, countKey, workCoverageKey(props.client)]) void queryClient.invalidateQueries({ queryKey });
+  };
+  const login = useMutation({
+    mutationFn: (step: WorkTelegramLoginStep) => desktopBridge.workTelegramLogin(step),
+    onSuccess: (result) => {
+      setError("error" in result ? telegramLoginError(result.error, result.waitSeconds) : null);
+      if (!("error" in result)) setValue("");
+    },
+    onSettled: settle,
+  });
+  const toggle = useMutation({ mutationFn: (enabled: boolean) => desktopBridge.workChatSyncSet("telegram", enabled), onSettled: settle });
+  const syncNow = useMutation({
+    mutationFn: () => desktopBridge.workChatSyncNow("telegram"),
+    onSuccess: (result) => {
+      if (result.status === "ok") toast.success(result.messages > 0 ? t("work.imessage.imported", { count: result.messages, n: result.messages.toLocaleString() }) : t("work.imessage.no_new"));
+      // Telegram's wait is not over yet: Sync now does not ask it again before then.
+      else if (result.status === "skipped" && result.reason === "flood_wait") toast.info(t("work.telegram.flood_sync"));
+    },
+    onSettled: settle,
+  });
+  const settings = useMutation({ mutationFn: (change: { channels?: boolean; days?: number }) => desktopBridge.workTelegramSettings(change), onSettled: settle });
+  const logout = useMutation({ mutationFn: () => desktopBridge.workTelegramLogout(), onSettled: settle });
+  if (!data) return null;
+  const state = sync.data?.telegram;
+  const records = count.data?.records ?? 0;
+  const asking = data.step === "signed_out" || data.step === "code" || data.step === "password";
+  const busy = login.isPending || logout.isPending;
+  const line = signedIn
+    ? [t("work.telegram.signed_in", { name: data.name ?? "" }), records > 0 ? countLabel(records, "work.imessage.synced_days") : null, state?.lastSyncAt ? t("work.chatsync.last_sync", { when: relativeTime(state.lastSyncAt) }) : null].filter(Boolean).join(" · ")
+    : data.step === "other_account" ? t("work.telegram.other_account")
+    : data.step === "code" ? (data.via === "app" ? t("work.telegram.code_app") : t("work.telegram.code_sms"))
+    : data.step === "password" ? (data.hint ? t("work.telegram.password_hint", { hint: data.hint }) : t("work.telegram.password_intro"))
+    : t("work.telegram.intro");
+  const shownError = error ?? (signedIn ? localChatError("telegram", state?.lastError ?? null, state?.failures ?? 0) : null);
+  const submit = (): WorkTelegramLoginStep => (data.step === "code" ? { code: value } : data.step === "password" ? { password: value } : { phone: value });
+  return (
+    <div className="rounded-xl border border-border bg-background" data-testid="work-telegram-card" data-step={data.step}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+        <ConnectorIcon id="telegram" />
+        <div className="min-w-[16rem] flex-1">
+          <span className="text-sm font-medium">Telegram</span>
+          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-telegram-line">{line}</div>
+          {shownError ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-telegram-error">{shownError}</div> : null}
+          {asking ? (
+            <form
+              className="mt-2 flex flex-wrap items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (value.trim()) login.mutate(submit());
+              }}
+            >
+              <Input
+                className="h-8 w-56"
+                type={data.step === "password" ? "password" : "text"}
+                inputMode={data.step === "code" ? "numeric" : data.step === "signed_out" ? "tel" : undefined}
+                autoComplete={data.step === "code" ? "one-time-code" : data.step === "password" ? "current-password" : "tel"}
+                placeholder={data.step === "signed_out" ? "+44 7700 900123" : undefined}
+                aria-label={data.step === "code" ? t("work.telegram.code") : data.step === "password" ? t("work.telegram.password") : t("work.telegram.phone")}
+                value={value}
+                disabled={busy}
+                onChange={(event) => setValue(event.target.value)}
+                data-testid="work-telegram-input"
+              />
+              <Button type="submit" size="sm" disabled={busy || !value.trim()}>{data.step === "signed_out" ? t("work.telegram.send_code") : t("work.telegram.sign_in")}</Button>
+              {data.step !== "signed_out" ? <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => login.mutate({ cancel: true })}>{t("common.cancel")}</Button> : null}
+            </form>
+          ) : null}
+          {signedIn ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-muted-foreground">
+              <label className="flex items-center gap-2">
+                {t("work.telegram.channels")}
+                <Switch aria-label={t("work.telegram.channels")} checked={data.channels} disabled={settings.isPending} onCheckedChange={(channels: boolean) => settings.mutate({ channels })} />
+              </label>
+              <span className="flex items-center gap-2">
+                {t("work.telegram.first_days")}
+                <Select value={String(data.days)} items={TELEGRAM_DAYS} onValueChange={(days) => days && settings.mutate({ days: Number(days) })}>
+                  <SelectTrigger className="h-7 w-28" aria-label={t("work.telegram.first_days")}><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectGroup>{TELEGRAM_DAYS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
+                </Select>
+              </span>
+            </div>
+          ) : null}
+        </div>
+        <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
+          {signedIn ? (
+            <>
+              <label className="me-2 flex items-center gap-2 text-[12px] text-muted-foreground">
+                {t("work.connectors.data_sync")}
+                <Switch aria-label={t("work.connectors.data_sync_for", { name: "Telegram" })} checked={state?.enabled === true} disabled={!sync.data || toggle.isPending} onCheckedChange={(checked: boolean) => toggle.mutate(checked)} />
+              </label>
+              <Button type="button" variant="outline" size="sm" disabled={syncNow.isPending || Boolean(state?.running) || !sync.data} onClick={() => syncNow.mutate()} data-testid="work-telegram-sync">
+                {syncNow.isPending || state?.running ? t("work.imessage.reading") : t("work.chatsync.sync_now")}
+              </Button>
+            </>
+          ) : null}
+          {signedIn || data.step === "other_account" ? (
+            <Button type="button" variant="outline" size="sm" disabled={busy} aria-label={t("work.connectors.disconnect_name", { name: "Telegram" })} onClick={() => logout.mutate()}>{t("work.connectors.disconnect")}</Button>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -637,6 +776,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
         </div>
         <ChatImportCard client={props.client} />
         {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} /> : null}
+        <TelegramCard client={props.client} />
       </div>
       <ConfirmModal
         open={confirmDisconnect !== null}

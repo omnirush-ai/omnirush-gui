@@ -15,6 +15,7 @@ const packagedServerRoot = resolve(desktopRoot, "server");
 const packagedRuntimeRoot = resolve(desktopRoot, ".electron-runtime", "node_modules");
 const packagedUiMcpRoot = resolve(desktopRoot, ".electron-runtime", "omnirush-ui-mcp");
 const sentryBuildConfigPath = resolve(desktopRoot, ".electron-runtime", "omnirush-sentry.json");
+const telegramBuildConfigPath = resolve(desktopRoot, ".electron-runtime", "omnirush-telegram.json");
 
 const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const nodeCmd = process.execPath;
@@ -48,6 +49,15 @@ function writeSentryBuildConfig() {
   writeFileSync(sentryBuildConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
+// The app's Telegram credentials (CI secrets of the same names). Without both, the Telegram sync stays hidden in the
+// app (electron/work-telegram.mjs). The values are never printed.
+function writeTelegramBuildConfig() {
+  const apiId = Number(process.env.OMNIRUSH_TELEGRAM_API_ID?.trim());
+  const apiHash = process.env.OMNIRUSH_TELEGRAM_API_HASH?.trim() ?? "";
+  const config = Number.isInteger(apiId) && apiId > 0 && apiHash ? { apiId, apiHash } : {};
+  writeFileSync(telegramBuildConfigPath, `${JSON.stringify(config)}\n`, "utf8");
+}
+
 // The 2.x engine only: the 1.x engine no longer ships (its sandbox helpers are prepared on their own).
 run(nodeCmd, [resolve(__dirname, "prepare-sidecar.mjs"), "--force", "--engine", "v2", "--outdir", electronSidecarDir], desktopRoot);
 run(nodeCmd, [resolve(__dirname, "prepare-box-helpers.mjs"), "--outdir", electronSidecarDir], desktopRoot);
@@ -57,6 +67,7 @@ run(nodeCmd, [resolve(__dirname, "prepare-runtime-node-modules.mjs"), "--outdir"
 // runs under the app's own binary; packaged builds never resolve it from npm.
 run(nodeCmd, [resolve(__dirname, "prepare-ui-mcp.mjs"), "--outdir", packagedUiMcpRoot], desktopRoot);
 writeSentryBuildConfig();
+writeTelegramBuildConfig();
 // Build the server TS → JS so Electron can import it in-process
 // CI already compiles this exact checkout in the required build job.
 if (!process.argv.includes("--server-built")) {

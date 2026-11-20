@@ -1,6 +1,8 @@
-// Work chat sync from the Mac (iMessage and the WhatsApp Mac apps): reads
-// the local databases (work-imessage.mjs, work-whatsapp.mjs) and pushes the
-// chat-days through the local server (/work/imessage, /work/whatsapp-local),
+// Work chat sync from the Mac (iMessage and the WhatsApp Mac apps) and from
+// Telegram (any desktop): reads the local databases (work-imessage.mjs,
+// work-whatsapp.mjs) or the user's own Telegram login (work-telegram.mjs) and
+// pushes the chat-days through the local server (/work/imessage,
+// /work/whatsapp-local, /work/telegram),
 // at app start, every 10 minutes and soon after a database's write-ahead log
 // changes, while its "Data sync" switch is on. The switch turns itself on
 // after the first good read (Sync now). One read at a time; errors back off.
@@ -56,7 +58,7 @@ class SyncError extends Error {
 
 /**
  * @param {{
- *   sources: Record<string, { read: (cursor: any) => Promise<{ records: object[], cursor: any, messageCount: number }>, route: string, watch?: { dir: string, file: string }[] }>,
+ *   sources: Record<string, { read: (cursor: any, account: string) => Promise<{ records: object[], cursor: any, messageCount: number, retryAfterMs?: number }>, route: string, watch?: { dir: string, file: string }[] }>,
  *   localServer: () => Promise<{ baseUrl: string | null, token: string | null } | null>,
  *   file: string,
  *   fetchImpl?: typeof fetch,
@@ -133,16 +135,20 @@ export function createChatSync(deps) {
     return { server, account: state.account };
   }
 
+  const floodWaiting = (entry) => entry.lastError === "flood_wait" && Boolean(entry.nextAt) && now() < entry.nextAt;
+
   async function runOnce(source, manual) {
     const spec = sources[source];
     const me = await who();
     if (!me) return { status: "skipped", reason: "work_off" };
     const entry = (await load()).accounts[me.account]?.[source] ?? {};
+    // Telegram's FLOOD_WAIT holds for Sync now and the switch too: no request before the time it asked for.
+    if (floodWaiting(entry)) return { status: "skipped", reason: "flood_wait" };
     if (!manual && (entry.enabled !== true || (entry.nextAt && now() < entry.nextAt))) return { status: "skipped", reason: "off" };
     lastRunAt = now();
     running = source;
     try {
-      const read = await spec.read(entry.cursor);
+      const read = await spec.read(entry.cursor, me.account);
       // The server restarts on an account switch with the same port and token: the account is checked before every
       // push, so no batch lands in another account, and once more after the last; on a change the read position stays put.
       const switched = async () => (await who())?.account !== me.account;
@@ -152,7 +158,9 @@ export function createChatSync(deps) {
         await call(me.server, spec.route, { method: "POST", body: JSON.stringify({ records: batch }) });
       }
       if (await switched()) return changed;
-      const saved = await update(me.account, source, (latest) => ({ enabled: latest.enabled ?? true, cursor: read.cursor, lastSyncAt: new Date(now()).toISOString(), lastError: null, failures: 0, nextAt: null }));
+      // A read Telegram slowed down (FLOOD_WAIT) saves what it got and waits its time.
+      const wait = Number(read.retryAfterMs) || 0;
+      const saved = await update(me.account, source, (latest) => ({ enabled: latest.enabled ?? true, cursor: read.cursor, lastSyncAt: new Date(now()).toISOString(), lastError: wait ? "flood_wait" : null, failures: 0, nextAt: wait ? now() + wait : null }));
       if (saved.enabled) ensureWatch(source);
       return { status: "ok", messages: read.messageCount, records: read.records.length };
     } catch (error) {
@@ -223,6 +231,8 @@ export function createChatSync(deps) {
 
   return {
     run,
+    /** The Work account the local server speaks for (null: signed out, offline or Work off). */
+    account: async () => (await who())?.account ?? null,
     start() {
       stopped = false;
       timers.set("start", setTimer(() => startTick(), START_DELAY_MS));
@@ -255,7 +265,7 @@ export function createChatSync(deps) {
     async setEnabled(source, enabled) {
       const me = await who();
       if (!me || !sources[source]) return null;
-      await update(me.account, source, (entry) => ({ ...entry, enabled: enabled === true, nextAt: null }));
+      await update(me.account, source, (entry) => ({ ...entry, enabled: enabled === true, nextAt: floodWaiting(entry) ? entry.nextAt : null }));
       return enabled === true ? run(source, { manual: true }) : { status: "skipped", reason: "off" };
     },
   };

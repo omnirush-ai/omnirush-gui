@@ -400,6 +400,9 @@ importers:
       node-pty:
         specifier: npm:@lydell/node-pty@1.2.0-beta.12
         version: '@lydell/node-pty@1.2.0-beta.12'
+      teleproto:
+        specifier: 1.233.0
+        version: 1.233.0
       undici:
         specifier: 6.28.0
         version: 6.28.0
@@ -2061,6 +2064,50 @@ packages:
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
 
+  '@cifrante/darwin-arm64@0.8.1':
+    resolution: {integrity: sha512-CSHC3rayWsjNWWa0FxQe5nCVKa5TKCurTPnj00EZxk7y6P+1ApFUdB8Qdsw1HcVR1trSO8arvYc31R2y6LZWRQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@cifrante/darwin-x64@0.8.1':
+    resolution: {integrity: sha512-UROiCYX3a3xyQBy3LOMH4TnzkTWoCtmEjETCpWb1PPiIEeE/rAjFh9831XlR9ZfrUg0TUysPcV5sBju3EHrK7w==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@cifrante/linux-arm64-gnu@0.8.1':
+    resolution: {integrity: sha512-6OvNHT6hrBupku8PBCF2yGC0133KdaKpaHDz7w2N18nwewjFqdRaX5DDBoUusqzO7f4bfX1a36oYWArNeMfVqQ==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@cifrante/linux-arm64-musl@0.8.1':
+    resolution: {integrity: sha512-o8rrO4olBigzSvCXssyByP+5JUSuniN//OIM3FVkMY9oYXkoZcTBTCmsC45ggZlhcUAxK/+HxMfWJ2n4QApE5Q==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  '@cifrante/linux-x64-gnu@0.8.1':
+    resolution: {integrity: sha512-qP7FBxZb25WUlXZcX4I6cT62H41YxEaGGkvoo/NzJNL2Wezk0ifJpylFUoiXnxsVmyyhtWZ7EcaFDwHthmo2Eg==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@cifrante/linux-x64-musl@0.8.1':
+    resolution: {integrity: sha512-p1A/uhcsB8nLb5b6yEBlMOFAR21GgBscHjp0BCie5iz8PGp/Ty5GvAuh+9nNeY4bube5Gy6iUDC7OXkpG4TdwA==}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
+  '@cifrante/win32-arm64@0.8.1':
+    resolution: {integrity: sha512-VxkF/WJlDeeq5oY5T9fX632TzqN7yJ0KW6Xc4AA0PKSKi5EfFuBmVlpkShnQOBg5zkCJ7D02Yrm6xz1ByNm/8w==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@cifrante/win32-x64@0.8.1':
+    resolution: {integrity: sha512-GGxGANoFAfe1VCkFcsAaHyFNCnP6DKFcKG6RJRabGDQRuoDT55Uy/bqn72r9azchcDCkcckz385+M9WTmBb72g==}
+    cpu: [x64]
+    os: [win32]
+
   '@codemirror/autocomplete@6.20.3':
     resolution: {integrity: sha512-tlosUqb+3BbxCxZdu4tKeRghPFC+QM7q4X5YhKV2eCmPG+1r2F3f4AaSz5sCrFqUtX4Jh20VFTKecl16MgiV9g==}
 
@@ -2108,7 +2155,7 @@ packages:
 
   '@daytonaio/sdk@0.201.0':
     resolution: {integrity: sha512-j4kCkxyfGf9vd5SH/lQxXDr3LsatI9pm6Cr3eMnh1JZQxB4e3fbag7G2StjyUwXV7/90MOfja7xe8ntLIsoO1w==}
-    deprecated: 'Moved to @daytona/sdk, same API, no breaking changes. Please update: npm uninstall @daytonaio/sdk && npm i @daytona/sdk'
+    deprecated: 'Moved to @daytona/sdk, same API, no breaking changes. Please update: npm uninstall @daytonaio/sdk && npm i @daytona/sdk@0'
 
   '@dotenvx/dotenvx@1.64.0':
     resolution: {integrity: sha512-6+xRpZaWuHXEqnhBjae+VmQI9Uaqw5Uzu/ScpO+W7ww9Zp3lHSNBoNjFcUxhrCyc7pRGQzyDjhKzloqrPHERiQ==}
@@ -3216,6 +3263,7 @@ packages:
   '@opentelemetry/propagator-jaeger@2.9.0':
     resolution: {integrity: sha512-4mYGty27rYvSM0jtp1ZUOqd3LfVRCYg9H5G9OFzSx5HViYToU21MFhWfco7x1HwXr7ER8yGOiCIHZUwjPksc0Q==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Package no longer supported. See https://github.com/open-telemetry/opentelemetry-js/pull/7077
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -3246,12 +3294,14 @@ packages:
   '@opentelemetry/sdk-trace-base@2.9.0':
     resolution: {integrity: sha512-cp9zmTl62R8PJrpvFcmc8N2JQU/xfa0S+61q511Nji+QxCfZ8Ifvg7H27G8cANe4crg4RTrWsVvanHiXjSp6ag==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.3.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-node@2.9.0':
     resolution: {integrity: sha512-ec9a7ps37huy5itYk0MalaZdSLlM6AXWp/FhtEjgMpp5leEGojBDvAl/UWttQnkMZOvFHKzRESn8TD3yKTF5nQ==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -4623,6 +4673,9 @@ packages:
   '@smithy/smithy-client@4.12.5':
     resolution: {integrity: sha512-UqwYawyqSr/aog8mnLnfbPurS0gi4G7IYDcD28cUIBhsvWs1+rQcL2IwkUQ+QZ7dibaoRzhNF99fAQ9AUcO00w==}
     engines: {node: '>=18.0.0'}
+    deprecated: |-
+      Deprecated due to a bug in custom logger data redaction. Upgrade to the latest version. If you used a custom logger with
+        this version, review your logs and rotate any credentials or other secrets. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/types@4.13.1':
     resolution: {integrity: sha512-787F3yzE2UiJIQ+wYW1CVg2odHjmaWLGksnKQHUrK/lYZSEcy1msuLVvxaR/sI2/aDe9U+TBuLsXnr3vod1g0g==}
@@ -5501,6 +5554,10 @@ packages:
     resolution: {integrity: sha512-jW6oufeDhXZaiX9Lw5A+oerVClx4iFrI6uDj1zu7SqUAjak9vbJvA0NEcKLNxHiQHb6kYCoFzzXYV0YOauhV3g==}
     engines: {node: '>=22'}
 
+  big-integer@1.6.52:
+    resolution: {integrity: sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==}
+    engines: {node: '>=0.6'}
+
   binary-extensions@2.3.0:
     resolution: {integrity: sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==}
     engines: {node: '>=8'}
@@ -5564,6 +5621,9 @@ packages:
 
   buffer@5.6.0:
     resolution: {integrity: sha512-/gDYp/UtU0eA1ys8bOs9J6a+E/KWIY+DZ+Q2WESNUA0jFRsJOc0SNUO6xJ5SGA1xueg3NL65W6s+NY5l9cunuw==}
+
+  buffer@6.0.3:
+    resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
 
   builder-util-runtime@9.7.0:
     resolution: {integrity: sha512-g/kR520giAFYkSXTzcmF3kqQq7wi8F6N6SzeDgZrqTBN+VHdmgWOyTdD1yD7AATDId/yXLvuP34CxW46/BwCdw==}
@@ -5693,6 +5753,10 @@ packages:
   ci-info@4.4.0:
     resolution: {integrity: sha512-77PSwercCZU2Fc4sX94eF8k8Pxte6JAwL4/ICZLFjJLqegs7kCuAsqqj/70NQF6TvDpgFjkubQB2FW2ZZddvQg==}
     engines: {node: '>=8'}
+
+  cifrante@0.8.1:
+    resolution: {integrity: sha512-6IKK0R5Ur37hgktw1KyJO14jIMpjcj0q5H+gSt/Xev9aYNv7k7cOLNCXHFzNNOR3jbot2d+6ae/dqvS+7Ebtaw==}
+    engines: {node: '>=18'}
 
   citty@0.1.6:
     resolution: {integrity: sha512-tskPPKEs8D2KPafUypv2gxwJP8h/OaJmC82QQGGDQcHvXX43xF2VDACcJVmZ0EuSxkpO9Kc4MlrA3q0+FG58AQ==}
@@ -6995,6 +7059,10 @@ packages:
   import-meta-resolve@4.2.0:
     resolution: {integrity: sha512-Iqv2fzaTQN28s/FwZAoFq0ZSs/7hMAHJVX+w8PZl3cY19Pxk6jFFalxQoIfW2826i/fDLXv8IiEZRIT0lDuWcg==}
 
+  imurmurhash@0.1.4:
+    resolution: {integrity: sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA==}
+    engines: {node: '>=0.8.19'}
+
   inflight@1.0.6:
     resolution: {integrity: sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==}
     deprecated: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
@@ -7670,6 +7738,11 @@ packages:
     engines: {node: '>=4.0.0'}
     hasBin: true
 
+  mime@3.0.0:
+    resolution: {integrity: sha512-jSCU7/VB1loIWBZe14aEYHU/+1UMEHoaO7qxCOVJOw9GgH72VAWppxNcjU+x9a2k3GSIBXNKxXQFqRvvZ7vr3A==}
+    engines: {node: '>=10.0.0'}
+    hasBin: true
+
   mimic-fn@2.1.0:
     resolution: {integrity: sha512-OqbOk5oEQeAZ8WXWydlu9HJjz9WVdEIvamMCcXmuqUYjTknH/sqsWvhQ3vgwKFRR1HpjvNBKQ37nbJgYzGqGcg==}
     engines: {node: '>=6'}
@@ -7939,6 +8012,10 @@ packages:
 
   node-int64@0.4.0:
     resolution: {integrity: sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw==}
+
+  node-localstorage@3.0.5:
+    resolution: {integrity: sha512-GCwtK33iwVXboZWYcqQHu3aRvXEBwmPkAMRBLeaX86ufhqslyUkLGsi4aW3INEfdQYpUB5M9qtYf3eHvAk2VBg==}
+    engines: {node: '>=0.12'}
 
   node-releases@2.0.54:
     resolution: {integrity: sha512-YHs7BmmcsdAI5Ozuf8JZo6PT0mv2GIWC9vMfvUC3dp65M8hn7Ux8CPL+2oBI7juNuj9d0ndhTcznq2ODBps9cQ==}
@@ -8758,6 +8835,10 @@ packages:
   sisteransi@1.0.5:
     resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
 
+  smart-buffer@4.2.0:
+    resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
+    engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
+
   socket.io-adapter@2.5.6:
     resolution: {integrity: sha512-DkkO/dz7MGln0dHn5bmN3pPy+JmywNICWrJqVWiVOyvXjWQFIv9c2h24JrQLLFJ2aQVQf/Cvl1vblnd4r2apLQ==}
 
@@ -8772,6 +8853,10 @@ packages:
   socket.io@4.8.3:
     resolution: {integrity: sha512-2Dd78bqzzjE6KPkD5fHZmDAKRNe3J15q+YHDrIsy9WEkqttc7GY+kT9OBLSMaPbQaEd0x1BjcmtMtXkfpc+T5A==}
     engines: {node: '>=10.2.0'}
+
+  socks@2.8.10:
+    resolution: {integrity: sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==}
+    engines: {node: '>= 10.0.0', npm: '>= 3.0.0'}
 
   sonner@2.0.7:
     resolution: {integrity: sha512-W6ZN4p58k8aDKA4XPcx2hpIQXBRAgyiWVkYhT7CvK6D3iAu7xjvVyhQHg2/iaKJZ1XVJ4r7XuwGL+WGEK37i9w==}
@@ -8973,6 +9058,10 @@ packages:
 
   tar@7.5.22:
     resolution: {integrity: sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==}
+    engines: {node: '>=18'}
+
+  teleproto@1.233.0:
+    resolution: {integrity: sha512-7Ck4Jou40a1agacJWZkK7sTsXnyWzLUAMHwktlnqpBT4mmBzHsLwXskEEDeuTuEz6lMygw9FjYyD1m0MlgoS0A==}
     engines: {node: '>=18'}
 
   temp-file@3.4.0:
@@ -9438,6 +9527,10 @@ packages:
 
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
+
+  write-file-atomic@5.0.1:
+    resolution: {integrity: sha512-+QU2zd6OTD8XWIJCbffaiQeH9U73qIqafo1x6V1snCWYGJf6cVE0cDR4D8xRzcEnfI21IFrUPzPGtcPf8AC+Rw==}
+    engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
 
   ws@8.21.0:
     resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
@@ -10478,6 +10571,30 @@ snapshots:
   '@braintree/sanitize-url@7.1.2': {}
 
   '@chevrotain/types@11.1.2': {}
+
+  '@cifrante/darwin-arm64@0.8.1':
+    optional: true
+
+  '@cifrante/darwin-x64@0.8.1':
+    optional: true
+
+  '@cifrante/linux-arm64-gnu@0.8.1':
+    optional: true
+
+  '@cifrante/linux-arm64-musl@0.8.1':
+    optional: true
+
+  '@cifrante/linux-x64-gnu@0.8.1':
+    optional: true
+
+  '@cifrante/linux-x64-musl@0.8.1':
+    optional: true
+
+  '@cifrante/win32-arm64@0.8.1':
+    optional: true
+
+  '@cifrante/win32-x64@0.8.1':
+    optional: true
 
   '@codemirror/autocomplete@6.20.3':
     dependencies:
@@ -14012,6 +14129,8 @@ snapshots:
     dependencies:
       node-addon-api: 8.9.1
 
+  big-integer@1.6.52: {}
+
   binary-extensions@2.3.0: {}
 
   bluebird@3.7.2: {}
@@ -14082,6 +14201,11 @@ snapshots:
       '@types/node': 20.12.12
 
   buffer@5.6.0:
+    dependencies:
+      base64-js: 1.5.1
+      ieee754: 1.2.1
+
+  buffer@6.0.3:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
@@ -14228,6 +14352,17 @@ snapshots:
   ci-info@4.3.1: {}
 
   ci-info@4.4.0: {}
+
+  cifrante@0.8.1:
+    optionalDependencies:
+      '@cifrante/darwin-arm64': 0.8.1
+      '@cifrante/darwin-x64': 0.8.1
+      '@cifrante/linux-arm64-gnu': 0.8.1
+      '@cifrante/linux-arm64-musl': 0.8.1
+      '@cifrante/linux-x64-gnu': 0.8.1
+      '@cifrante/linux-x64-musl': 0.8.1
+      '@cifrante/win32-arm64': 0.8.1
+      '@cifrante/win32-x64': 0.8.1
 
   citty@0.1.6:
     dependencies:
@@ -15625,6 +15760,8 @@ snapshots:
 
   import-meta-resolve@4.2.0: {}
 
+  imurmurhash@0.1.4: {}
+
   inflight@1.0.6:
     dependencies:
       once: 1.4.0
@@ -16358,6 +16495,8 @@ snapshots:
 
   mime@2.6.0: {}
 
+  mime@3.0.0: {}
+
   mimic-fn@2.1.0: {}
 
   mimic-function@5.0.1: {}
@@ -16662,6 +16801,10 @@ snapshots:
       which: 6.0.1
 
   node-int64@0.4.0: {}
+
+  node-localstorage@3.0.5:
+    dependencies:
+      write-file-atomic: 5.0.1
 
   node-releases@2.0.54: {}
 
@@ -17646,6 +17789,8 @@ snapshots:
 
   sisteransi@1.0.5: {}
 
+  smart-buffer@4.2.0: {}
+
   socket.io-adapter@2.5.6:
     dependencies:
       debug: 4.4.3
@@ -17686,6 +17831,11 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  socks@2.8.10:
+    dependencies:
+      ip-address: 10.3.1
+      smart-buffer: 4.2.0
 
   sonner@2.0.7(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
     dependencies:
@@ -17891,6 +18041,15 @@ snapshots:
       minipass: 7.1.3
       minizlib: 3.1.0
       yallist: 5.0.0
+
+  teleproto@1.233.0:
+    dependencies:
+      big-integer: 1.6.52
+      buffer: 6.0.3
+      cifrante: 0.8.1
+      mime: 3.0.0
+      node-localstorage: 3.0.5
+      socks: 2.8.10
 
   temp-file@3.4.0:
     dependencies:
@@ -18320,6 +18479,11 @@ snapshots:
       strip-ansi: 6.0.1
 
   wrappy@1.0.2: {}
+
+  write-file-atomic@5.0.1:
+    dependencies:
+      imurmurhash: 0.1.4
+      signal-exit: 4.1.0
 
   ws@8.21.0: {}
 

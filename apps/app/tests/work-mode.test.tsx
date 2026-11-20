@@ -14,7 +14,7 @@ import { leaveState, mePatch, WorkOrganizationPage } from "../src/react-app/doma
 import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
 import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
-import { ConnectorIcon, ConnectorRow, localChatError, LocalChatsCard, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
+import { ConnectorIcon, ConnectorRow, localChatError, LocalChatsCard, TelegramCard, telegramLoginError, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
@@ -737,5 +737,45 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     // Off the Mac app, WhatsApp says in one line why it stays a manual export.
     expect(page).toContain('data-testid="work-import-whatsapp-manual"');
     expect(page).not.toMatch(/—/);
+    // No Telegram card without the desktop's say-so (a build without the app's Telegram credentials, or the browser).
+    expect(page).not.toContain('data-testid="work-telegram-card"');
+  });
+
+  test("Telegram card: hidden without credentials, then sign-in steps, then the signed-in line and its settings", () => {
+    const client = { baseUrl: "http://connectors.test" } as never;
+    const card = (status: unknown, sync?: unknown) => {
+      const queries = new QueryClient();
+      queries.setQueryData(["omnirush-telegram"], status);
+      if (sync) queries.setQueryData(["omnirush-chat-sync"], sync);
+      queries.setQueryData(["omnirush-telegram-count", "http://connectors.test"], { records: 12 });
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><TelegramCard client={client} /></QueryClientProvider>);
+    };
+    const base = { available: true, name: null, via: null, hint: null, channels: false, days: 90 };
+    expect(card({ available: false })).toBe("");
+    const out = card({ ...base, step: "signed_out" });
+    expect(out).toContain("Sign in with your Telegram account to sync private chats and groups on their own. The login stays on this computer.");
+    expect(out).toContain('data-testid="work-telegram-input"');
+    expect(out).toContain("Send code");
+    expect(out).not.toContain("Disconnect");
+    expect(card({ ...base, step: "code", via: "app" })).toContain("Telegram sent a code to your Telegram app. Enter it here.");
+    const password = card({ ...base, step: "password", hint: "pet" });
+    expect(password).toContain("Password hint: pet");
+    expect(password).toContain('type="password"');
+    const at = new Date(Date.now() - 5 * 60_000).toISOString();
+    const signedIn = card({ ...base, step: "signed_in", name: "Sam Rao" }, { telegram: { enabled: true, lastSyncAt: at, lastError: "flood_wait", failures: 0, running: false } });
+    expect(signedIn).toContain("Signed in as Sam Rao · 12 conversation days synced · last sync 5 min ago");
+    expect(signedIn).toContain("Telegram asked to slow down. Sync goes on later by itself.");
+    expect(signedIn).toContain("Include channels");
+    expect(signedIn).toContain("First sync goes back");
+    expect(signedIn).toContain("Disconnect");
+    expect(signedIn).not.toContain('data-testid="work-telegram-input"');
+    const other = card({ ...base, step: "other_account" });
+    expect(other).toContain("Telegram is signed in on this computer for another OmniRush account.");
+    expect(other).toContain("Disconnect");
+    expect(telegramLoginError("wrong_code")).toBe("That code is not right.");
+    expect(telegramLoginError("flood_wait", 90)).toBe("Telegram asks to wait 2 min before the next try.");
+    expect(telegramLoginError("PHONE_MIGRATE_2")).toBe("Telegram sign-in failed. Try again.");
+    expect(localChatError("telegram", "signed_out", 1)).toBe("Telegram signed this computer out. Sign in again to keep syncing.");
+    for (const html of [out, password, signedIn, other]) expect(html).not.toMatch(/—/);
   });
 });

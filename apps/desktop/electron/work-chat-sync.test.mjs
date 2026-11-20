@@ -20,8 +20,8 @@ function rig({ read } = {}) {
   const watchers = [];
   let active = 0;
   let overlap = false;
-  const reader = (source) => async (cursor) => {
-    reads.push({ source, cursor });
+  const reader = (source) => async (cursor, account) => {
+    reads.push({ source, cursor, account });
     active += 1;
     if (active > 1) overlap = true;
     await new Promise((resolve) => setImmediate(resolve));
@@ -98,6 +98,31 @@ test("off until the first good read; Sync now turns it on, then it syncs on its 
     assert.equal(r.reads.length, 2);
     assert.equal((await r.sync.run("imessage", { manual: true })).status, "ok");
     assert.equal((await r.sync.status()).imessage.enabled, false);
+  } finally {
+    r.done();
+  }
+});
+
+test("a read Telegram slowed down saves what it got and waits the time it was told", async () => {
+  const r = rig({ read: (_source, cursor) => ({ records: [{ chat_id: "1", day: "2026-11-20" }], cursor: (Number(cursor) || 0) + 1, messageCount: 1, retryAfterMs: 3_600_000 }) });
+  try {
+    assert.equal((await r.sync.run("whatsapp", { manual: true })).status, "ok");
+    // The reader learns the Work account it reads for (Telegram's login belongs to one).
+    assert.equal(r.reads[0].account, "https://omnirush.ai acct_a");
+    assert.equal(r.server.pushed.length, 1);
+    const entry = r.saved().accounts["https://omnirush.ai acct_a"].whatsapp;
+    assert.equal(entry.lastError, "flood_wait");
+    assert.equal(entry.cursor, 1);
+    r.advance(SYNC_EVERY_MS);
+    assert.deepEqual(await r.sync.run("whatsapp"), { status: "skipped", reason: "flood_wait" });
+    // Sync now and the switch wait too: Telegram is not asked again before its time.
+    assert.deepEqual(await r.sync.run("whatsapp", { manual: true }), { status: "skipped", reason: "flood_wait" });
+    await r.sync.setEnabled("whatsapp", false);
+    assert.deepEqual(await r.sync.setEnabled("whatsapp", true), { status: "skipped", reason: "flood_wait" });
+    assert.equal(r.reads.length, 1);
+    r.advance(3_600_000);
+    assert.equal((await r.sync.run("whatsapp")).status, "ok");
+    assert.equal(r.reads.length, 2);
   } finally {
     r.done();
   }

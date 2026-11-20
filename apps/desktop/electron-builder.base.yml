@@ -14,6 +14,8 @@ extraResources:
     to: computer-use/relay.mjs
   - from: .electron-runtime/omnirush-sentry.json
     to: omnirush-sentry.json
+  - from: .electron-runtime/omnirush-telegram.json
+    to: omnirush-telegram.json
   # Bundled UI-control MCP (scripts/prepare-ui-mcp.mjs). Launched with the app's
   # own binary and ELECTRON_RUN_AS_NODE=1; never fetched from a registry.
   - from: .electron-runtime/omnirush-ui-mcp
