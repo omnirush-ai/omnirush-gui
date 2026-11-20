@@ -18,8 +18,10 @@ export const WORK_INSIGHTS_ROUTE = "/work/insights";
 export const WORK_ACTIVITY_ROUTE = "/work/activity";
 export const WORK_SEARCH_ROUTE = "/work/search";
 export const WORK_DEALS_ROUTE = "/work/deals";
-/** Shown only while the server transcribes meeting audio (`meetings` in the Work state). */
+/** Shown only while the server transcribes meeting audio (`meetings` in the Work state) and MEETINGS_IN_APP is on. */
 export const WORK_MEETINGS_ROUTE = "/work/meetings";
+/** Meeting notes stay hidden in this build: not yet checked with real audio on macOS or Windows. */
+export const MEETINGS_IN_APP: boolean = false;
 
 /**
  * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createOmniRushServerClient, OmniRushServerError, type OmniRushWorkMeetingPartAnswer } from "../src/app/lib/omnirush-server";
 import type { AudioSource } from "../src/app/lib/voice-core";
 import { MeetingRecorder, PartCutter, PartUploader, type MeetingClient, type Part, type RecorderState, type Speaker } from "../src/react-app/domains/meetings/recorder";
-import { WORK_MEETINGS_ROUTE } from "../src/react-app/domains/work/work-mode";
+import { MEETINGS_IN_APP, WORK_MEETINGS_ROUTE } from "../src/react-app/domains/work/work-mode";
 
 const RATE = 16_000;
 const samplesOf = (ms: number) => Math.round((RATE * ms) / 1000);
@@ -350,8 +350,12 @@ describe("meetings: all four Work layers", () => {
   test("route, page branch and nav only with the meetings flag; local routes; the broker's path; client methods with raw bytes", async () => {
     expect(WORK_MEETINGS_ROUTE).toBe("/work/meetings");
     const route = readFileSync(new URL("../src/react-app/shell/session-route.tsx", import.meta.url), "utf8");
-    expect(route).toContain("location.pathname.startsWith(WORK_MEETINGS_ROUTE) && workState.data?.meetings ? (");
-    expect(route).toContain("workState.data?.meetings ? { onOpenMeetings");
+    expect(route).toContain("const meetingsShown = MEETINGS_IN_APP && workState.data?.meetings === true;");
+    expect(route).toContain("location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? (");
+    expect(route).toContain("meetingsShown ? { onOpenMeetings");
+    expect(route).not.toContain("workState.data?.meetings ?");
+    // Kept off until meeting audio is checked on real Macs and Windows PCs.
+    expect(MEETINGS_IN_APP).toBe(false);
     const local = readFileSync(new URL("../../server/src/work/routes.ts", import.meta.url), "utf8");
     for (const path of ["/work/meetings", "/work/meetings/:id", "/work/meetings/:id/audio"]) expect(local).toContain(`"${path}"`);
     const broker = readFileSync(new URL("../../server/src/work/work.ts", import.meta.url), "utf8");

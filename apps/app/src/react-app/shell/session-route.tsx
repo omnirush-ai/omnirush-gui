@@ -117,7 +117,7 @@ import {
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
 import { MeetingsPage } from "@/react-app/domains/meetings/meetings-page";
-import { hasDeals, hasRealSource, hasSampleData, isWorkModeShortcut, isWorkSearchShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, workAutopilotActive, workToolPermission, WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_MEETINGS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_PRESET, WORK_SEARCH_ROUTE, workConnectorsKey, workDealsKey, workMembersKey, workStateKey, WORK_SEARCH_FOCUS_EVENT, type AppMode } from "@/react-app/domains/work/work-mode";
+import { hasDeals, hasRealSource, hasSampleData, isWorkModeShortcut, isWorkSearchShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, workAutopilotActive, workToolPermission, WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_MEETINGS_ROUTE, MEETINGS_IN_APP, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_PRESET, WORK_SEARCH_ROUTE, workConnectorsKey, workDealsKey, workMembersKey, workStateKey, WORK_SEARCH_FOCUS_EVENT, type AppMode } from "@/react-app/domains/work/work-mode";
 import { WorkSearchPage } from "@/react-app/domains/work/work-search";
 import { WorkDealsPage } from "@/react-app/domains/work/work-deals";
 import { WorkOrganizationPage } from "@/react-app/domains/work/work-org";
@@ -558,6 +558,7 @@ export function SessionRoute() {
   // follows the route; the last one picked is remembered and reopened at start.
   const workState = useWorkState(client ?? null);
   const workEnabled = workState.data?.enabled === true;
+  const meetingsShown = MEETINGS_IN_APP && workState.data?.meetings === true;
   const storedAppMode = useWorkModeStore((state) => state.mode);
   const workWorkspace = workspaces.find((workspace) => workspace.preset === WORK_PRESET && workspace.workspaceType !== "remote") ?? null;
   const workChatActive = workEnabled && Boolean(selectedWorkspace && selectedWorkspace.preset === WORK_PRESET) && !workRouteRequested;
@@ -3939,7 +3940,7 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? t("work.nav.connectors") : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? t("work.nav.search") : location.pathname.startsWith(WORK_DEALS_ROUTE) ? t("work.nav.deals") : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && workState.data?.meetings ? t("work.nav.meetings") : location.pathname.startsWith(WORK_ORG_ROUTE) ? t("work.nav.organization") : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? t("work.nav.insights") : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? t("work.nav.automation") : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? t("work.nav.knowledge") : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? t("work.nav.welcome") : t("work.nav.work")) : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? t("work.nav.connectors") : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? t("work.nav.search") : location.pathname.startsWith(WORK_DEALS_ROUTE) ? t("work.nav.deals") : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? t("work.nav.meetings") : location.pathname.startsWith(WORK_ORG_ROUTE) ? t("work.nav.organization") : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? t("work.nav.insights") : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? t("work.nav.automation") : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? t("work.nav.knowledge") : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? t("work.nav.welcome") : t("work.nav.work")) : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
@@ -3954,7 +3955,7 @@ export function SessionRoute() {
           <WorkSearchPage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)} />
         ) : location.pathname.startsWith(WORK_DEALS_ROUTE) ? (
           <WorkDealsPage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} />
-        ) : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && workState.data?.meetings ? (
+        ) : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? (
           <MeetingsPage client={client ?? null} />
         ) : location.pathname.startsWith(WORK_ORG_ROUTE) ? (
           <WorkOrganizationPage
@@ -4054,7 +4055,7 @@ export function SessionRoute() {
       sidebar={{
         workspaceSessionGroups: sidebarWorkspaceSessionGroups,
         modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : workAvailable ? <WorkTryButton onTry={tryWork} /> : undefined,
-        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), homeActive: location.pathname === WORK_HOME_ROUTE, onOpenSearch: () => navigate(WORK_SEARCH_ROUTE), searchActive: location.pathname.startsWith(WORK_SEARCH_ROUTE), ...(hasDeals(workDeals.data) ? { onOpenDeals: () => navigate(WORK_DEALS_ROUTE), dealsActive: location.pathname.startsWith(WORK_DEALS_ROUTE) } : {}), ...(workState.data?.meetings ? { onOpenMeetings: () => navigate(WORK_MEETINGS_ROUTE), meetingsActive: location.pathname.startsWith(WORK_MEETINGS_ROUTE) } : {}), onOpenOrganization: () => navigate(WORK_ORG_ROUTE), organizationActive: location.pathname.startsWith(WORK_ORG_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE), onOpenActivity: () => navigate(WORK_ACTIVITY_ROUTE), activityActive: location.pathname.startsWith(WORK_ACTIVITY_ROUTE), ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}) } : undefined,
+        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), homeActive: location.pathname === WORK_HOME_ROUTE, onOpenSearch: () => navigate(WORK_SEARCH_ROUTE), searchActive: location.pathname.startsWith(WORK_SEARCH_ROUTE), ...(hasDeals(workDeals.data) ? { onOpenDeals: () => navigate(WORK_DEALS_ROUTE), dealsActive: location.pathname.startsWith(WORK_DEALS_ROUTE) } : {}), ...(meetingsShown ? { onOpenMeetings: () => navigate(WORK_MEETINGS_ROUTE), meetingsActive: location.pathname.startsWith(WORK_MEETINGS_ROUTE) } : {}), onOpenOrganization: () => navigate(WORK_ORG_ROUTE), organizationActive: location.pathname.startsWith(WORK_ORG_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE), onOpenActivity: () => navigate(WORK_ACTIVITY_ROUTE), activityActive: location.pathname.startsWith(WORK_ACTIVITY_ROUTE), ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}) } : undefined,
         selectedWorkspaceId,
         selectedSessionId,
         developerMode: false,
