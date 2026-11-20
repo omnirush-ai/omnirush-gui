@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Database, FileText, Github, Handshake, Hash, Info, Kanban, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket,
+  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Info, Kanban, LifeBuoy, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -44,7 +44,7 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   jira: Ticket, confluence: BookOpen, linear: Kanban, github: Github, mock: Shapes, demo: Database,
   gmail: Mail, outlook: Mail, drive: FileText, onedrive: FileText, calendar: Calendar, qbo: Calculator, teams: MessageSquare,
   whatsapp: MessageCircle, whatsapp_business: MessageCircle, telegram: Send, imessage: MessageSquare, meetings: Phone, zoom: Phone,
-  imap: AtSign, caldav: Calendar,
+  imap: AtSign, caldav: Calendar, stripe: CreditCard, freshdesk: LifeBuoy, pipedrive: Handshake, hook: Webhook, hook_org: Webhook,
 };
 
 /** A connector's icon; an id the app does not know gets the generic plug. */
@@ -432,6 +432,201 @@ export function CredentialsForm(props: { connector: OmniRushWorkConnector; clien
         </Button>
       </div>
     </form>
+  );
+}
+
+/** The pasted-key sources: where the key is (the steps and a link), its field's name and, for Freshdesk, the account's address. */
+const KEY_FORMS: Record<string, { help: string; placeholder: string; where: () => string; label: () => string; host?: () => string }> = {
+  stripe: { help: "https://dashboard.stripe.com/apikeys", placeholder: "rk_live_...", where: () => t("work.key.where_stripe"), label: () => t("work.key.label_stripe") },
+  freshdesk: {
+    help: "https://support.freshdesk.com/support/solutions/articles/215517-how-to-find-your-api-key",
+    placeholder: "",
+    where: () => t("work.key.where_freshdesk"),
+    label: () => t("work.key.label_freshdesk"),
+    host: () => t("work.key.host_freshdesk"),
+  },
+  pipedrive: { help: "https://pipedrive.readme.io/docs/how-to-find-the-api-token", placeholder: "", where: () => t("work.key.where_pipedrive"), label: () => t("work.key.label_pipedrive") },
+};
+
+/** A source connected with a pasted API key (Stripe, Freshdesk, Pipedrive): where to find the key, paste it, and Test and save
+ *  tries it before anything is saved. The key goes to the server once and is not kept here. */
+export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkClient | null; openLink: (url: string) => void; onDone: () => void; onCancel: () => void }) {
+  const id = props.connector.id;
+  const spec = KEY_FORMS[id] ?? { help: "", placeholder: "", where: () => "", label: () => t("work.key.label_freshdesk") };
+  const name = connectorLabel(id, props.connector.label);
+  const [field, setField] = useState({ api_key: "", host: "" });
+  const [error, setError] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: () => props.client!.connectWorkCredentials(id, { api_key: field.api_key.trim(), ...(spec.host ? { host: field.host.trim() } : {}) }),
+    onSuccess: () => {
+      setField({ api_key: "", host: "" });
+      toast.success(t("work.mailcal.connected", { name }));
+      props.onDone();
+    },
+    onError: (reason) => setError(workFailure(reason).text),
+  });
+  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || Boolean(field.host.trim()));
+  const input = (key: keyof typeof field, label: string, extra: { type?: string; placeholder?: string } = {}) => (
+    <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+      {label}
+      <Input
+        className="h-8"
+        value={field[key]}
+        disabled={save.isPending}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(event) => { setError(null); setField({ ...field, [key]: event.target.value }); }}
+        data-key-field={key}
+        {...extra}
+      />
+    </label>
+  );
+  return (
+    <form
+      className="flex flex-col gap-3 border-b border-border bg-muted/30 px-4 py-3 last:border-b-0"
+      data-testid={`work-key-${id}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (ready && !save.isPending) save.mutate();
+      }}
+    >
+      <p className="text-[12px] text-muted-foreground" data-testid="work-key-where">
+        {spec.where()}
+        {spec.help ? (
+          <>
+            {" "}
+            <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => props.openLink(spec.help)} data-testid="work-key-help">
+              {t("work.key.find")}
+            </button>
+          </>
+        ) : null}
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {spec.host ? input("host", spec.host(), { placeholder: "yourcompany.freshdesk.com" }) : null}
+        {input("api_key", spec.label(), { type: "password", placeholder: spec.placeholder })}
+      </div>
+      <p className="text-[12px] text-muted-foreground">{t("work.key.note")}</p>
+      {error ? <p className="text-[12px] text-destructive" role="alert" data-testid="work-key-error">{error}</p> : null}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={props.onCancel}>{t("common.cancel")}</Button>
+        <Button type="submit" size="sm" disabled={!ready || save.isPending} data-testid="work-key-save">
+          {save.isPending ? t("work.mailcal.testing") : t("work.mailcal.test_and_save")}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+const HOOK_TOOLS = [
+  { id: "zapier", label: "Zapier", steps: () => t("work.hook.howto_zapier") },
+  { id: "make", label: "Make", steps: () => t("work.hook.howto_make") },
+  { id: "n8n", label: "n8n", steps: () => t("work.hook.howto_n8n") },
+] as const;
+const HOOK_EXAMPLE = JSON.stringify(
+  { id: "lead-42", title: "New lead: Acme", text: "Wants 10 seats", url: "https://crm.example.com/leads/42", people: ["Ann Lee <ann@acme.example>"], kind: "deal" },
+  null,
+  2,
+);
+
+/** The inbound hook for Zapier, Make and n8n: one row per hook the server lists ("hook", and "hook_org" for the org's owner).
+ *  Create or New URL shows the URL once (it is not kept here); Delete stops it, the records stay. Hidden when none is listed. */
+export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkClient | null; onChanged: () => void }) {
+  const [shown, setShown] = useState<{ id: string; url: string } | null>(null);
+  const [tool, setTool] = useState<(typeof HOOK_TOOLS)[number]["id"]>("zapier");
+  const [confirm, setConfirm] = useState<{ id: string; action: "regenerate" | "delete" } | null>(null);
+  const make = useMutation({
+    mutationFn: (id: string) => props.client!.createWorkHook(id),
+    onSuccess: (answer, id) => { setShown({ id, url: answer.url }); props.onChanged(); },
+    onError: (reason) => toast.error(workFailure(reason).text),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => props.client!.disconnectWorkConnector(id),
+    onSuccess: (_answer, id) => { setShown((current) => (current?.id === id ? null : current)); props.onChanged(); },
+    onError: (reason) => toast.error(workFailure(reason).text),
+  });
+  if (!props.rows.length) return null;
+  const busy = make.isPending || remove.isPending;
+  return (
+    <div className="rounded-xl border border-border bg-background" data-testid="work-hook-card">
+      <div className="flex items-start gap-4 border-b border-border px-4 py-3">
+        <ConnectorIcon id="hook" />
+        <div className="min-w-[16rem] flex-1">
+          <span className="text-sm font-medium">{t("work.hook.title")}</span>
+          <div className="mt-0.5 text-[12px] text-muted-foreground">{t("work.hook.body")}</div>
+        </div>
+      </div>
+      {props.rows.map((row) => {
+        const on = row.status === "connected" || row.status === "syncing" || row.status === "error";
+        const company = row.id === "hook_org";
+        const url = shown?.id === row.id ? shown.url : null;
+        return (
+          <div key={row.id} className="flex flex-col gap-2 border-b border-border px-4 py-3" data-work-hook={row.id} data-status={on ? "on" : "off"}>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="min-w-[16rem] flex-1">
+                <span className="text-sm font-medium">{company ? t("work.hook.company") : t("work.hook.mine")}</span>
+                <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-hook-status">
+                  {!on
+                    ? t("work.hook.off")
+                    : row.records
+                      ? [countLabel(row.records, "work.count.records"), relativeTime(row.last_sync_at)].filter(Boolean).join(" · ")
+                      : t("work.hook.nothing_yet")}
+                </div>
+                {company ? <div className="mt-0.5 text-[12px] text-muted-foreground">{t("work.hook.company_note")}</div> : null}
+              </div>
+              <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
+                {on ? (
+                  <>
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirm({ id: row.id, action: "regenerate" })}>{t("work.hook.regenerate")}</Button>
+                    <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirm({ id: row.id, action: "delete" })}>{t("work.hook.delete")}</Button>
+                  </>
+                ) : (
+                  <Button size="sm" disabled={busy || !props.client} onClick={() => make.mutate(row.id)} data-testid="work-hook-create">{t("work.hook.create")}</Button>
+                )}
+              </div>
+            </div>
+            {url ? (
+              <div className="flex flex-col gap-1" data-testid="work-hook-url">
+                <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+                  {t("work.hook.url_label")}
+                  <div className="flex gap-2">
+                    <Input className="h-8 font-mono text-[12px]" value={url} readOnly onFocus={(event) => event.currentTarget.select()} />
+                    <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(url).then(() => toast.success(t("work.common.link_copied")))}>
+                      <Copy className="size-3.5" />{t("work.invite.copy")}
+                    </Button>
+                  </div>
+                </label>
+                <p className="text-[12px] text-amber-11">{t("work.hook.shown_once")}</p>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      <div className="flex flex-col gap-2 px-4 py-3" data-testid="work-hook-howto">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="me-2 text-[12px] font-medium">{t("work.hook.howto")}</span>
+          {HOOK_TOOLS.map((item) => (
+            <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-pressed={tool === item.id} onClick={() => setTool(item.id)}>{item.label}</Button>
+          ))}
+        </div>
+        <p className="text-[12px] text-muted-foreground" data-testid="work-hook-steps">{HOOK_TOOLS.find((item) => item.id === tool)!.steps()}</p>
+        <pre className="overflow-x-auto rounded-md bg-muted/50 px-3 py-2 text-[11px]">{HOOK_EXAMPLE}</pre>
+        <p className="text-[12px] text-muted-foreground">{t("work.hook.fields")}</p>
+      </div>
+      <ConfirmModal
+        open={confirm !== null}
+        title={confirm?.action === "delete" ? t("work.hook.delete_title") : t("work.hook.regenerate_title")}
+        message={confirm?.action === "delete" ? t("work.hook.delete_body") : t("work.hook.regenerate_body")}
+        confirmLabel={confirm?.action === "delete" ? t("work.hook.delete") : t("work.hook.regenerate")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        onConfirm={() => {
+          if (confirm?.action === "delete") remove.mutate(confirm.id);
+          else if (confirm) make.mutate(confirm.id);
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+    </div>
   );
 }
 
@@ -862,8 +1057,9 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     },
     onError,
   });
-  // An import source (WhatsApp) has no sign-in: it is imported in the card under the list.
-  const rows = visibleConnectors(query.data).filter((row) => row.mode !== "import");
+  // An import source (WhatsApp) has no sign-in: it is imported in the card under the list. The hooks have their own card.
+  const rows = visibleConnectors(query.data).filter((row) => row.mode !== "import" && row.mode !== "hook");
+  const hookRows = visibleConnectors(query.data).filter((row) => row.mode === "hook");
   const busy = connect.isPending || disconnect.isPending || sync.isPending;
   // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker. A source this page does not
   // list (Meetings) gets no chip.
@@ -902,7 +1098,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               connector={row}
               connecting={connecting === row.id}
               busy={busy}
-              onConnect={() => (row.mode === "credentials" ? setForm(form === row.id ? null : row.id) : connect.mutate(row.id))}
+              onConnect={() => (row.mode === "credentials" || row.mode === "key" ? setForm(form === row.id ? null : row.id) : connect.mutate(row.id))}
               onDisconnect={() => setConfirmDisconnect(row)}
               onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
               onSetup={row.setup_url ? () => props.openLink(row.setup_url!) : undefined}
@@ -913,17 +1109,20 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               onRetry={() => retry.mutate(row.id)}
             />,
             form === row.id ? (
-              <CredentialsForm
-                key={`${row.id}-form`}
-                connector={row}
-                client={props.client}
-                openLink={props.openLink}
-                onDone={() => { setForm(null); void refresh(); void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) }); }}
-                onCancel={() => setForm(null)}
-              />
+              (() => {
+                const formProps = {
+                  connector: row,
+                  client: props.client,
+                  openLink: props.openLink,
+                  onDone: () => { setForm(null); void refresh(); void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) }); },
+                  onCancel: () => setForm(null),
+                };
+                return row.mode === "key" ? <KeyForm key={`${row.id}-form`} {...formProps} /> : <CredentialsForm key={`${row.id}-form`} {...formProps} />;
+              })()
             ) : null,
           ])}
         </div>
+        <HookCard rows={hookRows} client={props.client} onChanged={() => void refresh()} />
         <ChatImportCard client={props.client} />
         {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} /> : null}
         <TelegramCard client={props.client} />

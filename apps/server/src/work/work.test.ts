@@ -240,6 +240,20 @@ describe("work routes", () => {
     });
   });
 
+  test("a pasted key goes on with the address only, and a new hook URL comes back as it was sent", async () => {
+    const hookUrl = "https://api.example.com/omnirush/work/hooks/0193a0b4/orh_secret";
+    const { calls, call } = setup((path) => json(path.endsWith("/hook") ? { url: hookUrl } : { ok: true, account: "me@acme.example" }));
+    const sent = await call("POST", "/work/connectors/freshdesk/connect", { api_key: "fd-key-1", host: "acme", evil: "x", port: "443" });
+    expect(await sent.json()).toEqual({ ok: true, account: "me@acme.example" });
+    expect(await (await call("POST", "/work/connectors/hook/hook", { evil: 1 })).json()).toEqual({ url: hookUrl });
+    expect((await call("POST", "/work/connectors/Bad.Id/hook", {})).status).toBe(404);
+    expect(calls).toEqual([`POST connectors/freshdesk/connect ${JSON.stringify({ host: "acme", api_key: "fd-key-1" })}`, "POST connectors/hook/hook {}"]);
+    const refused = setup(() => json({ detail: "key_refused" }, 400));
+    expect(await (await refused.call("POST", "/work/connectors/stripe/connect", { api_key: "rk_test_x" })).json()).toEqual({
+      detail: "key_refused", code: "key_refused", message: "The service did not accept that key. Copy it again, all of it.",
+    });
+  });
+
   test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {
     const { calls, call } = setup((path) => json(path.startsWith("health") ? { sources: [{ id: "jira", token_ok: true, scopes_ok: false, missing_scopes: ["write:jira-work"] }] } : { items: [], next_cursor: null }));
     expect((await (await call("GET", "/work/health?source=jira")).json()).sources[0].missing_scopes).toEqual(["write:jira-work"]);
@@ -278,13 +292,13 @@ describe("work routes", () => {
   });
 
   test("the broker reaches only the contract's paths", () => {
-    for (const path of ["connectors", "connectors/jira/start", "connectors/imap/connect", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
+    for (const path of ["connectors", "connectors/jira/start", "connectors/imap/connect", "connectors/hook/hook", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
       "org/insights", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
       "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio"]) expect(WORK_PATH.test(path)).toBe(true);
     for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
       "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "whatsapp-local/x", "whatsapp", "telegram/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
-      "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin"]) expect(WORK_PATH.test(path)).toBe(false);
+      "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin", "hooks/h1/orh_x", "connectors/hook/hook/x"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("search, coverage and deals are forwarded with only their parameters; a chat export goes on as multipart", async () => {
