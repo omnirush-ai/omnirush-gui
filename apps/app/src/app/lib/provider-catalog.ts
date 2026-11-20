@@ -30,6 +30,17 @@ export function isSupportedModelProvider(providerID: string, allowOtherProviders
   return isInternalModelProvider(providerID) || (allowOtherProviders && isDirectModelProvider(providerID));
 }
 
+/** The provider whose group lists a model: Claude's are shown under omnirush.ai (display only; a pick keeps `omnirush-claude`, which routes it). */
+export function providerDisplayGroup(providerID: string) {
+  return providerID.trim().toLowerCase() === "omnirush-claude" ? "omnirush" : providerID;
+}
+
+/** Order within a group: the gateway's own models (GPT, Kimi) first, Claude's after them, then by title. */
+export function compareGroupModels(a: { providerID: string; title: string }, b: { providerID: string; title: string }) {
+  const claude = (option: { providerID: string }) => (providerDisplayGroup(option.providerID) === option.providerID ? 0 : 1);
+  return claude(a) - claude(b) || a.title.localeCompare(b.title);
+}
+
 export function providerCatalogRank(providerID: string) {
   const normalized = providerID.trim().toLowerCase();
   if (isInternalModelProvider(normalized)) return 0;
