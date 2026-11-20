@@ -524,6 +524,79 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(reconnect).toContain("Needs attention");
   });
 
+  test("other email and calendar: the form opens from Connect, tries the login, shows the server's refusal in words", async () => {
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const sent: unknown[] = [];
+      const opened: string[] = [];
+      let refuse = true;
+      const rows = [row({ id: "imap", label: "Other email (IMAP)", mode: "credentials" }), row({ id: "caldav", label: "Other calendar (CalDAV or link)", mode: "credentials" })];
+      const client = {
+        baseUrl: "http://form.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async () => { throw new Error("no OAuth for a form source"); },
+        connectWorkCredentials: async (id: string, form: unknown) => {
+          sent.push([id, form]);
+          if (refuse) throw new OmniRushServerError(400, "login_failed", "The server said the password is wrong. Most providers need an app password here.");
+          return { ok: true, account: "me@icloud.com" };
+        },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={(url) => opened.push(url)} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label)!;
+      const type = async (key: string, value: string) => {
+        const input = document.querySelector<HTMLInputElement>(`[data-testid="work-credentials-imap"] [data-credentials-field="${key}"]`)!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      };
+      expect(document.querySelector('[data-testid="work-credentials-imap"]')).toBeNull();
+      await act(async () => button("Connect Other email (IMAP)").click());
+      const form = document.querySelector('[data-testid="work-credentials-imap"]')!;
+      // iCloud first: no server fields, a user name, an app password and where to make one.
+      expect(form.querySelector('[data-credentials-field="host"]')).toBeNull();
+      expect(form.querySelector('[data-credentials-field="password"]')?.getAttribute("type")).toBe("password");
+      expect(form.querySelector('[data-testid="work-credentials-note"]')?.textContent).toContain("app password");
+      await act(async () => form.querySelector<HTMLButtonElement>('[data-testid="work-credentials-help"]')!.click());
+      expect(opened).toEqual(["https://support.apple.com/en-us/102654"]);
+      const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-credentials-save"]')!;
+      expect(save().disabled).toBe(true);
+      await type("username", "me@icloud.com");
+      await type("password", "abcd-efgh-ijkl-mnop");
+      expect(save().disabled).toBe(false);
+      await act(async () => save().click());
+      expect(sent).toEqual([["imap", { preset: "icloud", username: "me@icloud.com", password: "abcd-efgh-ijkl-mnop" }]]);
+      expect(form.querySelector('[data-testid="work-credentials-error"]')?.textContent).toBe("The server said the password is wrong. Most providers need an app password here.");
+      refuse = false;
+      await act(async () => save().click());
+      expect(document.querySelector('[data-testid="work-credentials-imap"]')).toBeNull();
+      // The calendar form starts on iCloud too; a form source never starts an OAuth sign-in.
+      await act(async () => button("Connect Other calendar (CalDAV or link)").click());
+      expect(document.querySelector('[data-testid="work-credentials-caldav"] [data-credentials-field="username"]')).not.toBeNull();
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
+  test("a form source is left out of the first-run connect step and named in words", () => {
+    const rows = [row({ id: "google" }), row({ id: "imap", label: "Other email (IMAP)", mode: "credentials" })];
+    expect(connectOrder(rows).map((item) => item.id)).toEqual(["google"]);
+    expect(connectorAccess("imap")).toContain("IMAP");
+    expect(connectorAccess("caldav")).toContain(".ics");
+  });
+
   test("organization: owner and member views, leave rules", () => {
     const client = { baseUrl: "http://org.test" } as never;
     const members = (you_role: "owner" | "member"): OmniRushWorkMembers => ({

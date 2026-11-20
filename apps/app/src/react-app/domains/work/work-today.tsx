@@ -9,10 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
-import type { OmniRushWorkFeed, OmniRushWorkFeedItem } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkConnector, OmniRushWorkFeed, OmniRushWorkFeedItem } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutItemPrompt, connectorLabel, relativeTime, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
+import { askAboutItemPrompt, connectorLabel, relativeTime, signsInWithForm, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
@@ -240,7 +240,7 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
         <SourceAttention
           sources={sources}
           busy={reconnect.isPending ? reconnect.variables ?? null : retry.isPending ? retry.variables ?? null : null}
-          onReconnect={(id) => reconnect.mutate(id)}
+          onReconnect={(id) => (signsInWithForm(queryClient.getQueryData<OmniRushWorkConnector[]>(workConnectorsKey(props.client)), id) ? props.onOpenConnectors() : reconnect.mutate(id))}
           onRetry={(id) => retry.mutate(id)}
           onSetup={props.onOpenConnectors}
         />

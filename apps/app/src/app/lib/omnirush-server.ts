@@ -703,10 +703,13 @@ export type OmniRushWorkConnector = {
   attention?: OmniRushWorkAttention | null;
   coverage?: { records: number; by_kind?: Record<string, number> } | null;
   skipped_records?: number;
-  /** "import": no sign-in, the data comes from an uploaded export (WhatsApp); absent for OAuth sources. */
-  mode?: "import" | string;
+  /** "import": no sign-in, the data comes from an uploaded export (WhatsApp); "credentials": a server and a password
+   *  (other email over IMAP, other calendar over CalDAV or a link), connected with `connectWorkCredentials`; absent for OAuth sources. */
+  mode?: "import" | "credentials" | string;
   last_import_at?: string | null;
 };
+/** The connect form of a "credentials" source (POST /omnirush/work/connectors/{id}/connect). */
+export type OmniRushWorkCredentials = { preset: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string };
 /** One chat-per-day record the desktop reads from the Mac's local chat.db
  *  and pushes to POST /omnirush/work/imessage (contract Addendum D5). */
 export type OmniRushIMessageRecord = {
@@ -2519,6 +2522,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<OmniRushWorkConnector[]>(baseUrl, "/work/connectors", { token, hostToken, timeoutMs: timeouts.config }),
     startWorkConnector: (id: string) =>
       requestJson<{ auth_url: string }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/start`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    connectWorkCredentials: (id: string, form: OmniRushWorkCredentials) =>
+      requestJson<{ ok: boolean; account: string | null }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/connect`, { token, hostToken, method: "POST", body: form, timeoutMs: 60_000 }),
     disconnectWorkConnector: (id: string) =>
       requestJson<unknown>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/disconnect`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
     setWorkConnectorSync: (id: string, syncEnabled: boolean) =>
