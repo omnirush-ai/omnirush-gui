@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Info, Kanban, LifeBuoy, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
+  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Inbox, Info, Kanban, LifeBuoy, Mail, MessageCircle, MessageSquare, MessagesSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
-import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStart, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
 import type { WorkChatSyncSource, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
@@ -46,6 +46,7 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   gmail: Mail, outlook: Mail, drive: FileText, onedrive: FileText, calendar: Calendar, qbo: Calculator, teams: MessageSquare,
   whatsapp: MessageCircle, whatsapp_business: MessageCircle, telegram: Send, imessage: MessageSquare, meetings: Phone, zoom: Phone,
   imap: AtSign, caldav: Calendar, stripe: CreditCard, freshdesk: LifeBuoy, pipedrive: Handshake, hook: Webhook, hook_org: Webhook,
+  zendesk: LifeBuoy, intercom: MessagesSquare, front: Inbox,
 };
 
 // Company marks in their brand colour (simple-icons paths, CC0).
@@ -590,6 +591,67 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
   );
 }
 
+const REGIONS = [
+  { value: "us", label: () => t("work.start.region_us") },
+  { value: "eu", label: () => t("work.start.region_eu") },
+  { value: "au", label: () => t("work.start.region_au") },
+] as const;
+
+/** What a sign-in source asks before its sign-in page opens (`start_fields`): Zendesk's address, Intercom's region. */
+export function StartForm(props: { connector: OmniRushWorkConnector; busy: boolean; onStart: (form: OmniRushWorkStart) => void; onCancel: () => void }) {
+  const id = props.connector.id;
+  const fields = props.connector.start_fields ?? [];
+  const name = connectorLabel(id, props.connector.label);
+  const [host, setHost] = useState("");
+  const [region, setRegion] = useState<OmniRushWorkStart["region"]>("us");
+  const asksHost = fields.includes("host");
+  const asksRegion = fields.includes("region");
+  const ready = !asksHost || Boolean(host.trim());
+  const items = REGIONS.map((item) => ({ value: item.value, label: item.label() }));
+  return (
+    <form
+      className="flex flex-col gap-3 border-b border-border bg-muted/30 px-4 py-3 last:border-b-0"
+      data-testid={`work-start-${id}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (ready && !props.busy) props.onStart({ ...(asksHost ? { host: host.trim() } : {}), ...(asksRegion ? { region } : {}) });
+      }}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        {asksHost ? (
+          <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+            {t("work.start.host", { name })}
+            <Input
+              className="h-8"
+              value={host}
+              disabled={props.busy}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={`yourcompany.${id}.com`}
+              onChange={(event) => setHost(event.target.value)}
+              data-start-field="host"
+            />
+          </label>
+        ) : null}
+        {asksRegion ? (
+          <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+            {t("work.start.region", { name })}
+            <Select value={region} items={items} onValueChange={(value) => { if (value) setRegion(value as OmniRushWorkStart["region"]); }}>
+              <SelectTrigger className="h-8" aria-label={t("work.start.region", { name })} data-start-field="region"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>{items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
+            </Select>
+          </label>
+        ) : null}
+      </div>
+      <p className="text-[12px] text-muted-foreground">{asksHost ? t("work.start.host_note", { name }) : t("work.start.region_note", { name })}</p>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={props.busy} onClick={props.onCancel}>{t("common.cancel")}</Button>
+        <Button type="submit" size="sm" disabled={!ready || props.busy} data-testid="work-start-continue">{t("work.start.continue")}</Button>
+      </div>
+    </form>
+  );
+}
+
 const HOOK_TOOLS = [
   { id: "zapier", label: "Zapier", steps: () => t("work.hook.howto_zapier") },
   { id: "make", label: "Make", steps: () => t("work.hook.howto_make") },
@@ -1100,10 +1162,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   };
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
   const connect = useMutation({
-    mutationFn: (id: string) => props.client!.startWorkConnector(id),
-    onSuccess: (answer, id) => {
+    mutationFn: ({ id, form: start }: { id: string; form?: OmniRushWorkStart }) => props.client!.startWorkConnector(id, start),
+    onSuccess: (answer, { id }) => {
       connectStarted.current = Date.now();
       setConnecting(id);
+      setForm((current) => (current === id ? null : current));
       props.openLink(answer.auth_url);
     },
     onError,
@@ -1145,7 +1208,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const add = (id: string) => {
     if (isImportKind(id)) document.querySelector<HTMLInputElement>(`[data-import-input="${id}"]`)?.click();
     else if (signsInWithForm(query.data, id)) setForm(id);
-    else if (canAdd(id) && !busy) connect.mutate(id);
+    else if (canAdd(id) && !busy) connect.mutate({ id });
   };
   const failure = query.error ? workFailure(query.error) : null;
   return (
@@ -1176,7 +1239,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               connector={row}
               connecting={connecting === row.id}
               busy={busy}
-              onConnect={() => (row.mode === "credentials" || row.mode === "key" ? setForm(form === row.id ? null : row.id) : connect.mutate(row.id))}
+              onConnect={() => (row.mode === "credentials" || row.mode === "key" || row.start_fields?.length ? setForm(form === row.id ? null : row.id) : connect.mutate({ id: row.id }))}
               onDisconnect={() => setConfirmDisconnect(row)}
               onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
               onSetup={row.setup_url ? () => props.openLink(row.setup_url!) : undefined}
@@ -1196,6 +1259,9 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
                   onDone: () => { setForm(null); void refresh(); void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) }); },
                   onCancel: () => setForm(null),
                 };
+                if (row.start_fields?.length) {
+                  return <StartForm key={`${row.id}-form`} connector={row} busy={connect.isPending} onStart={(start) => connect.mutate({ id: row.id, form: start })} onCancel={() => setForm(null)} />;
+                }
                 return row.mode === "key" ? <KeyForm key={`${row.id}-form`} {...formProps} /> : <CredentialsForm key={`${row.id}-form`} {...formProps} />;
               })()
             ) : null,

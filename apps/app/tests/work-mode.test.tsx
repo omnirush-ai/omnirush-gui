@@ -246,8 +246,8 @@ describe("Work mode", () => {
     const off = renderToStaticMarkup(<ConnectorRow connector={row({ id: "slack", label: "Slack" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
     expect(off).toContain(connectorAccess("slack"));
     expect(off).toContain('aria-label="Connect Slack"');
-    for (const id of ["google", "microsoft", "slack", "hubspot", "quickbooks", "notion", "jira", "confluence", "linear", "github"]) expect(connectorAccess(id)).toContain("after you approve");
-    expect(connectorAccess("zendesk")).toContain("asks you before");
+    for (const id of ["google", "microsoft", "slack", "hubspot", "quickbooks", "notion", "jira", "confluence", "linear", "github", "zendesk", "intercom", "front"]) expect(connectorAccess(id)).toContain("after you approve");
+    expect(connectorAccess("acmedesk")).toContain("asks you before");
   });
 
   test("GitHub with its install link: Choose repositories, and a hint while nothing is visible", () => {
@@ -262,9 +262,9 @@ describe("Work mode", () => {
   });
 
   test("new connectors get their icon, an unknown id the generic one", () => {
-    for (const id of ["jira", "confluence", "linear", "github"]) expect(renderToStaticMarkup(<ConnectorIcon id={id} />)).toContain(`data-connector-icon="${id}"`);
-    expect(renderToStaticMarkup(<ConnectorIcon id="zendesk" />)).toContain('data-connector-icon="generic"');
-    expect(renderToStaticMarkup(<ConnectorRow connector={row({ id: "zendesk", label: "" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />)).toContain(">zendesk<");
+    for (const id of ["jira", "confluence", "linear", "github", "zendesk", "intercom", "front"]) expect(renderToStaticMarkup(<ConnectorIcon id={id} />)).toContain(`data-connector-icon="${id}"`);
+    expect(renderToStaticMarkup(<ConnectorIcon id="acmedesk" />)).toContain('data-connector-icon="generic"');
+    expect(renderToStaticMarkup(<ConnectorRow connector={row({ id: "acmedesk", label: "" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />)).toContain(">acmedesk<");
   });
 
   test("an entity shows keys, sources, remembered facts (retired hidden), a timeline newest first and related entities", () => {
@@ -586,6 +586,74 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       await act(async () => button("Connect Other calendar (CalDAV or link)").click());
       expect(document.querySelector('[data-testid="work-credentials-caldav"] [data-credentials-field="username"]')).not.toBeNull();
       expect(document.querySelector('[data-testid="work-credentials-caldav"] [data-testid="work-credentials-outlook"]')).toBeNull();
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
+  test("a sign-in that asks first: Zendesk's address and Intercom's region go with the start", async () => {
+    const rows = [
+      row({ id: "zendesk", label: "Zendesk", start_fields: ["host"] }),
+      row({ id: "intercom", label: "Intercom", start_fields: ["region"] }),
+      row({ id: "front", label: "Front" }),
+    ];
+    // The first-run step has no address form: Zendesk waits for Connectors.
+    expect(connectOrder(rows).map((item) => item.id)).toEqual(["intercom", "front"]);
+    expect(workToolPermission("omnirush-work_zendesk_comment")?.label).toBe("Add a comment (Zendesk)");
+    expect(workToolPermission("omnirush-work_intercom_reply")?.label).toBe("Reply (Intercom)");
+    expect(connectorAccess("front")).toContain("shared inboxes");
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const started: unknown[] = [];
+      const opened: string[] = [];
+      const client = {
+        baseUrl: "http://start.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async (id: string, form?: unknown) => {
+          started.push(form === undefined ? [id] : [id, form]);
+          return { auth_url: `https://${id}.example/oauth` };
+        },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={(url) => { opened.push(url); }} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
+      await act(async () => button("Connect Zendesk")!.click());
+      const form = document.querySelector('[data-testid="work-start-zendesk"]')!;
+      const go = () => form.querySelector<HTMLButtonElement>('[data-testid="work-start-continue"]')!;
+      expect(started).toEqual([]);
+      expect(go().disabled).toBe(true);
+      const input = form.querySelector<HTMLInputElement>('[data-start-field="host"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, " acme.zendesk.com ");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(go().disabled).toBe(false);
+      await act(async () => go().click());
+      expect(started).toEqual([["zendesk", { host: "acme.zendesk.com" }]]);
+      expect(opened).toEqual(["https://zendesk.example/oauth"]);
+      expect(document.querySelector('[data-testid="work-start-zendesk"]')).toBeNull();
+      // Intercom asks where the workspace is (US unless picked).
+      await act(async () => button("Connect Intercom")!.click());
+      const intercom = document.querySelector('[data-testid="work-start-intercom"]')!;
+      expect(intercom.querySelector('[data-start-field="host"]')).toBeNull();
+      expect(intercom.querySelector('[data-start-field="region"]')).not.toBeNull();
+      await act(async () => intercom.querySelector<HTMLButtonElement>('[data-testid="work-start-continue"]')!.click());
+      expect(started[1]).toEqual(["intercom", { region: "us" }]);
+      // Front asks nothing first: straight to its sign-in page.
+      await act(async () => button("Connect Front")!.click());
+      expect(document.querySelector('[data-testid="work-start-front"]')).toBeNull();
+      expect(started[2]).toEqual(["front"]);
       await act(async () => root.unmount());
       queries.clear();
     } finally {

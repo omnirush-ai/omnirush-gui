@@ -712,7 +712,13 @@ export type OmniRushWorkConnector = {
   /** What a source that picks could read (Asana's workspaces), once its first sync has seen them; `picked` is true for all
    *  until the user picks (`setWorkConnectorPicked`). */
   choices?: { id: string; name: string; picked: boolean }[];
+  /** What a sign-in source asks before its sign-in page (Zendesk: "host", the account's address; Intercom: "region"),
+   *  sent with `startWorkConnector`. */
+  start_fields?: string[];
 };
+/** What `startWorkConnector` sends for a source with `start_fields`. A reconnect may send nothing: the server keeps the
+ *  address or region the source has. */
+export type OmniRushWorkStart = { host?: string; region?: "us" | "eu" | "au" };
 /** The connect form of a "credentials" or "key" source (POST /omnirush/work/connectors/{id}/connect). */
 export type OmniRushWorkCredentials = { preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string };
 /** One chat-per-day record the desktop reads from the Mac's local chat.db
@@ -2525,8 +2531,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<{ workspaceId: string; path: string }>(baseUrl, "/work/workspace", { token, hostToken, method: "POST", timeoutMs: timeouts.activateWorkspace }),
     listWorkConnectors: () =>
       requestJson<OmniRushWorkConnector[]>(baseUrl, "/work/connectors", { token, hostToken, timeoutMs: timeouts.config }),
-    startWorkConnector: (id: string) =>
-      requestJson<{ auth_url: string }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/start`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    startWorkConnector: (id: string, form?: OmniRushWorkStart) =>
+      requestJson<{ auth_url: string }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/start`, { token, hostToken, method: "POST", ...(form ? { body: form } : {}), timeoutMs: timeouts.config }),
     connectWorkCredentials: (id: string, form: OmniRushWorkCredentials) =>
       requestJson<{ ok: boolean; account: string | null }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/connect`, { token, hostToken, method: "POST", body: form, timeoutMs: 60_000 }),
     /** A new inbound URL for "hook" / "hook_org" (the one before stops working); the URL is shown this once. */
