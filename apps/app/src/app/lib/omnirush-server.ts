@@ -705,7 +705,7 @@ export type OmniRushWorkConnector = {
   skipped_records?: number;
   /** "import": no sign-in, the data comes from an uploaded export (WhatsApp); "credentials": a server and a password
    *  (other email over IMAP, other calendar over CalDAV or a link), connected with `connectWorkCredentials`; "key": a pasted
-   *  API key (Stripe, Freshdesk, Pipedrive), also `connectWorkCredentials`; "hook": the account's inbound URL for Zapier,
+   *  API key (Stripe, Freshdesk, Pipedrive, ClickUp, monday.com; Trello: a key and a token), also `connectWorkCredentials`; "hook": the account's inbound URL for Zapier,
    *  Make or n8n (`createWorkHook`); absent for OAuth sources. */
   mode?: "import" | "credentials" | "key" | "hook" | string;
   last_import_at?: string | null;
@@ -714,7 +714,7 @@ export type OmniRushWorkConnector = {
   choices?: { id: string; name: string; picked: boolean }[];
 };
 /** The connect form of a "credentials" or "key" source (POST /omnirush/work/connectors/{id}/connect). */
-export type OmniRushWorkCredentials = { preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string };
+export type OmniRushWorkCredentials = { preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string; token?: string };
 /** One chat-per-day record the desktop reads from the Mac's local chat.db
  *  and pushes to POST /omnirush/work/imessage (contract Addendum D5). */
 export type OmniRushIMessageRecord = {

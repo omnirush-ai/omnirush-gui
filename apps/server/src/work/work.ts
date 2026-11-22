@@ -30,6 +30,7 @@ export const WORK_READ_TOOLS = [
   "slack_search", "slack_read_channel", "slack_read_thread", "hubspot_search", "hubspot_read",
   "qbo_query", "qbo_read", "notion_search", "notion_read", "work_search", "mock_search", "mock_read",
   "jira_search", "jira_read", "confluence_search", "confluence_read", "linear_search", "linear_read", "github_search", "github_read",
+  "trello_search", "trello_read", "clickup_tasks", "clickup_read", "monday_search", "monday_read",
   // The context graph: briefing and lookup only; work_remember and work_forget ask like every write.
   "work_context", "work_entity",
   // Full read of one record, counts across many, and deals (contract D1-D3): reads only.

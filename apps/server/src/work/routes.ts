@@ -7,7 +7,7 @@
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
  *   POST  /work/connectors/:id/start       { auth_url }
- *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key? } -> { ok, account }
+ *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key?, token? } -> { ok, account }
  *                                          (imap and caldav, and the pasted-key sources: the server tries the login or key, then saves and syncs)
  *   POST  /work/connectors/:id/hook        { url }: a new inbound URL for Zapier, Make or n8n (hook, hook_org), shown once
  *   POST  /work/connectors/:id/disconnect
@@ -242,7 +242,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
     const body = await deps.readJsonBody(ctx.request);
     const form: Record<string, string | number> = {};
-    for (const key of ["preset", "host", "security", "url", "username", "password", "api_key"]) {
+    for (const key of ["preset", "host", "security", "url", "username", "password", "api_key", "token"]) {
       const value = body[key];
       if (typeof value === "string" && value) form[key] = value;
     }
