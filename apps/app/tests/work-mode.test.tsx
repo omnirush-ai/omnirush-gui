@@ -746,6 +746,16 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(live).toContain("2 records");
   });
 
+  test("Discord: company mark, server-manager copy, and the post's approval label", () => {
+    const icon = renderToStaticMarkup(<ConnectorIcon id="discord" />);
+    expect(icon).toContain('data-connector-icon="discord"');
+    expect(icon).toContain('<path fill="#5865F2"');
+    expect(connectorAccess("discord")).toContain("server you manage");
+    expect(connectorAccess("discord")).toContain("only after you approve");
+    expect(connectorAccess("discord")).not.toMatch(/[\u2013\u2014]/);
+    expect(workToolPermission("omnirush-work_discord_post")).toEqual({ label: "Post a message (Discord)", scope: "Your Discord account" });
+  });
+
   test("key and hook sources are left out of the first-run connect step and say what they read", () => {
     const rows = [row({ id: "google" }), row({ id: "stripe", mode: "key" }), row({ id: "hook", mode: "hook" })];
     expect(connectOrder(rows).map((item) => item.id)).toEqual(["google"]);

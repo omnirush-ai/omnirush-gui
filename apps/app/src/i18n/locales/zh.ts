@@ -2720,6 +2720,7 @@ export default {
   "work.connector.access_google": "读取 Gmail、云端硬盘和日历。只有在你批准后才会起草和发送邮件、创建日程。",
   "work.connector.access_microsoft": "读取 Outlook、OneDrive、SharePoint 和 Teams 聊天（工作或学校账户）。只有在你批准后才会发送和发布。",
   "work.connector.access_slack": "读取你能看到的频道、私信和文件。只有在你批准后才会以你的身份发布。",
+  "work.connector.access_discord": "把 OmniRush Work 应用加入你管理的服务器，读取你在那里能看到的频道、子区和论坛帖子。只有在你批准后才会以该应用的名义发布。",
   "work.connector.access_hubspot": "读取联系人、公司、交易和工单。只有在你批准后才会添加备注和任务、更新交易。",
   "work.connector.access_quickbooks": "读取客户、发票、账单和付款。只有在你批准后才会创建发票草稿。",
   "work.connector.access_notion": "只读取你在连接时共享给 OmniRush 的页面。只有在你批准后才会创建页面。",

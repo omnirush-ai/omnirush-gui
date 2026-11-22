@@ -2713,6 +2713,7 @@ export default {
   "work.connector.access_google": "Reads Gmail, Drive and Calendar. Drafts and sends e-mail and creates events only after you approve.",
   "work.connector.access_microsoft": "Reads Outlook, OneDrive, SharePoint and Teams chats (work or school account). Sends and posts only after you approve.",
   "work.connector.access_slack": "Reads the channels, DMs and files you can see. Posts as you only after you approve.",
+  "work.connector.access_discord": "Adds the OmniRush Work app to a server you manage and reads the channels, threads and forum posts you can see there. Posts as the app only after you approve.",
   "work.connector.access_hubspot": "Reads contacts, companies, deals and tickets. Adds notes and tasks and updates deals only after you approve.",
   "work.connector.access_quickbooks": "Reads customers, invoices, bills and payments. Creates invoice drafts only after you approve.",
   "work.connector.access_notion": "Reads only the pages you share with OmniRush when you connect. Creates pages only after you approve.",
