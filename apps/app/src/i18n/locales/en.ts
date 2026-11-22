@@ -2708,6 +2708,7 @@ export default {
   "work.tool.forget": "Forget saved knowledge",
   "work.tool.knowledge_scope": "Your Work knowledge",
   "work.tool.account_scope": "Your {name} account",
+  "work.tool.app_scope": "The OmniRush Work app in your {name} server",
   "work.connector.mock": "Test source",
   "work.connector.demo": "Sample data",
   "work.connector.access_google": "Reads Gmail, Drive and Calendar. Drafts and sends e-mail and creates events only after you approve.",

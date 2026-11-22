@@ -2715,6 +2715,7 @@ export default {
   "work.tool.forget": "删除已保存的知识",
   "work.tool.knowledge_scope": "你的 Work 知识",
   "work.tool.account_scope": "你的 {name} 账户",
+  "work.tool.app_scope": "你的 {name} 服务器中的 OmniRush Work 应用",
   "work.connector.mock": "测试数据源",
   "work.connector.demo": "示例数据",
   "work.connector.access_google": "读取 Gmail、云端硬盘和日历。只有在你批准后才会起草和发送邮件、创建日程。",

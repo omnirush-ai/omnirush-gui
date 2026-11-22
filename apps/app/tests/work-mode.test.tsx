@@ -753,7 +753,12 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(connectorAccess("discord")).toContain("server you manage");
     expect(connectorAccess("discord")).toContain("only after you approve");
     expect(connectorAccess("discord")).not.toMatch(/[\u2013\u2014]/);
-    expect(workToolPermission("omnirush-work_discord_post")).toEqual({ label: "Post a message (Discord)", scope: "Your Discord account" });
+    // The app's bot posts, not the person: the approval says so.
+    expect(workToolPermission("omnirush-work_discord_post")).toEqual({
+      label: "Post a message (Discord)",
+      scope: "The OmniRush Work app in your Discord server",
+    });
+    expect(workToolPermission("omnirush-work_slack_post")?.scope).toBe("Your Slack account");
   });
 
   test("key and hook sources are left out of the first-run connect step and say what they read", () => {
