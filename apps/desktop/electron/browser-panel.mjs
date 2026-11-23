@@ -72,6 +72,9 @@ const PAGE_SELECTION_LIMIT = 4000;
 /** How long the app waits for a picture of the page before a menu covers it anyway. */
 const PAGE_STILL_TIMEOUT_MS = 600;
 const BROWSER_TARGET_RESOLVE_TIMEOUT_MS = 2500;
+// Downloads a tab may save to the Downloads folder without asking, per half minute (the Work browser's own tabs).
+const QUIET_DOWNLOAD_LIMIT = 5;
+const QUIET_DOWNLOAD_WINDOW_MS = 30_000;
 const MENU_OVERLAY_HTML = "overlay.html";
 const MENU_OVERLAY_WIDTH = 196;
 const MENU_OVERLAY_HEIGHT = 176;
@@ -110,7 +113,8 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       tab.downloads.add(item);
       item.once("done", () => tab.downloads.delete(item));
       // The person's own tab in Work: straight to the Downloads folder, listed, and marked as from the internet.
-      if (personalTab(tab.tabId)) downloads.track(item, { referrer: contents.getURL() });
+      // A page that starts more than a few at once gets the Save dialog for each, so it cannot fill the folder unseen.
+      if (personalTab(tab.tabId) && quietDownloadAllowed(tab)) downloads.track(item, { referrer: contents.getURL() });
     });
     browserSessionHooksInstalled = true;
     if (!checkPolicy) return;
@@ -1524,6 +1528,14 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
   // pages they open, kept in their own library on this computer. Never on an
   // agent's tab, and nothing here is sent to the agent or uploaded.
   // ---------------------------------------------------------------------------
+
+  function quietDownloadAllowed(tab) {
+    const now = Date.now();
+    tab.quietDownloads = (tab.quietDownloads ?? []).filter((at) => now - at < QUIET_DOWNLOAD_WINDOW_MS);
+    if (tab.quietDownloads.length >= QUIET_DOWNLOAD_LIMIT) return false;
+    tab.quietDownloads.push(now);
+    return true;
+  }
 
   /** One of the person's tabs, in a Work account. */
   function personalTab(tabId) {

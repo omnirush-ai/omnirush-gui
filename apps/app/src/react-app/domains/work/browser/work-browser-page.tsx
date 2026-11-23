@@ -501,6 +501,8 @@ function MoreMenu({ tab, openExternal, pageTabId, downloads, onFind, onPrint }: 
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"menu" | "bookmarks" | "downloads">("menu");
   const downloading = downloads.filter((download) => download.state === "progressing").length;
+  // Find in page takes the keyboard to its own field: the menu must not hand it back to "..".
+  const keepFocusRef = React.useRef(false);
   const [importOpen, setImportOpen] = React.useState(false);
   const page = tab && /^https?:\/\//i.test(tab.url) ? tab.url : null;
   // Closing from a sub-view (bookmarks, downloads) opens on the menu next time.
@@ -524,7 +526,7 @@ function MoreMenu({ tab, openExternal, pageTabId, downloads, onFind, onPrint }: 
       />,
     ],
     [
-      <MenuRow key="find" icon={<Search />} label={t("work_browser.find")} disabled={!pageTabId} onClick={() => { close(); onFind(); }} trailing={<Hint letter="f" />} testId="work-browser-menu-find" />,
+      <MenuRow key="find" icon={<Search />} label={t("work_browser.find")} disabled={!pageTabId} onClick={() => { keepFocusRef.current = true; close(); onFind(); }} trailing={<Hint letter="f" />} testId="work-browser-menu-find" />,
       <ZoomRow key="zoom" tabId={pageTabId} open={open && view === "menu"} />,
       <MenuRow key="print" icon={<Printer />} label={t("work_browser.print")} disabled={!pageTabId} onClick={() => { close(); onPrint(); }} trailing={<Hint letter="p" />} testId="work-browser-menu-print" />,
       <MenuRow
@@ -561,7 +563,7 @@ function MoreMenu({ tab, openExternal, pageTabId, downloads, onFind, onPrint }: 
   ];
   return (
     <>
-      <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setView("menu"); }}>
+      <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setView("menu"); else keepFocusRef.current = false; }}>
         <Tooltip>
           <TooltipTrigger
             render={(
@@ -576,7 +578,7 @@ function MoreMenu({ tab, openExternal, pageTabId, downloads, onFind, onPrint }: 
           />
           <TooltipContent>{t("work_browser.more")}</TooltipContent>
         </Tooltip>
-        <PopoverContent align="end" sideOffset={6} className="w-72 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-0" data-browser-occluder="" data-work-browser="" data-testid="work-browser-menu">
+        <PopoverContent align="end" sideOffset={6} className="w-72 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-0" finalFocus={() => !keepFocusRef.current} data-browser-occluder="" data-work-browser="" data-testid="work-browser-menu">
           {view === "bookmarks" ? (
             <BookmarkBrowser sessionId={USER_TABS_OWNER} tab={null} onDone={close} onImport={() => setImportOpen(true)} onBack={() => setView("menu")} />
           ) : view === "downloads" ? (

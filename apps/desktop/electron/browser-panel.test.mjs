@@ -1895,6 +1895,10 @@ test("downloads from the person's tab go to the Downloads folder, are marked as 
   browserSession.emit("will-download", {}, theirs, chat.contents);
   assert.equal(theirs.savePath, null, "Electron asks where to save, as before");
   assert.deepEqual(invoke("omnirush:browser:downloads"), []);
+  // A page that starts many at once: after 5, each one asks where to save (Electron's dialog), so nothing piles up unseen.
+  const burst = Array.from({ length: 6 }, (_value, index) => new FakeDownload(`part-${index}.bin`, `https://files.example.com/part-${index}.bin`));
+  for (const part of burst) browserSession.emit("will-download", {}, part, contents);
+  assert.deepEqual(burst.map((part) => part.savePath === null), [false, false, false, false, true, true], "report.pdf counted as the first of five");
 });
 
 test("pages the person opens in their own tabs reach their library; a chat's tab, or a consumer account, never", async () => {

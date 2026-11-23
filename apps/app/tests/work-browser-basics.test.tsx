@@ -320,6 +320,9 @@ describe("Work browser basics", () => {
       await act(() => byTestId("work-browser-more")!.click());
       await act(() => byTestId("work-browser-menu-find")!.click());
       expect(byTestId("work-browser-find")).not.toBeNull();
+      // The menu does not take the keyboard back from the find field when it closes.
+      await act(() => wait(300));
+      expect(document.activeElement).toBe(byTestId("work-browser-find-input"));
     }, { browser: fake.browser, browserLibrary: libraryBridge() });
   });
 
