@@ -453,6 +453,12 @@ describe("views (design 2.5)", () => {
     expect(body).toMatchObject({ kind: "meeting", connector: "google", title: "Slots call", attendees: ["maria@cold.test"], video: "meet", send_invites: true });
     expect(meetingBody({ connector: "microsoft", title: "x", date: "2026-11-26", start: "10:00", end: "10:30", attendees: [], video: true, description: "" })?.video).toBe("teams");
     expect(meetingBody({ connector: "google", title: "x", date: "2026-11-26", start: "11:00", end: "10:30", attendees: [], video: false, description: "" })).toBeNull();
+    // Late in the evening the next half hour runs past midnight: it ends the next day.
+    const late = nextSlot(new Date("2026-11-23T23:10:00"));
+    const overnight = meetingBody({ connector: "google", title: "x", date: "2026-11-23", start: "23:30", end: "00:00", attendees: [], video: false, description: "" });
+    expect(overnight).not.toBeNull();
+    expect(new Date(overnight!.end).getTime() - new Date(overnight!.start).getTime()).toBe(30 * 60_000);
+    expect(late.end.getTime() - late.start.getTime()).toBe(30 * 60_000);
   });
 
   test("every view and the shortcut map have their words in English and Chinese", () => {

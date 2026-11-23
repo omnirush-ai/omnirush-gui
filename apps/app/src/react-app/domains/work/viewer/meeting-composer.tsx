@@ -30,7 +30,13 @@ export function nextSlot(now = new Date()): { start: Date; end: Date } {
 /** POST /work/compose for a meeting. */
 export function meetingBody(input: { connector: Calendar; title: string; date: string; start: string; end: string; attendees: string[]; video: boolean; description: string }) {
   const start = localInstant(input.date, input.start);
-  const end = localInstant(input.date, input.end);
+  let end = localInstant(input.date, input.end);
+  // An end earlier in the day than the start, up to 12 hours on, is past midnight (23:30 to 00:00 ends the next day).
+  if (start && end && new Date(end) <= new Date(start)) {
+    const next = new Date(end);
+    next.setDate(next.getDate() + 1);
+    end = next.getTime() - new Date(start).getTime() <= 12 * 3_600_000 ? next.toISOString() : null;
+  }
   if (!start || !end || new Date(end) <= new Date(start) || !input.title.trim()) return null;
   return {
     kind: "meeting" as const,
