@@ -15,6 +15,7 @@ import type { OmniRushWorkAction, OmniRushWorkSettings } from "@/app/lib/omnirus
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { cn } from "@/lib/utils";
 
+import { ListMore, useListCap } from "./list-cap";
 import { connectorLabel, relativeTime, useWorkActions, useWorkSettings, workActionsKey, workFailure, workSettingsKey, workStateKey, type WorkClient } from "./work-mode";
 
 /** The one-screen plain-language grants shown before a user turns an automation on. */
@@ -30,36 +31,42 @@ function SettingRow(props: { title: string; description: ReactNode; control: Rea
     <div className="flex items-start justify-between gap-4 px-4 py-3.5">
       <div className="min-w-0">
         <div className="text-[14px] font-medium text-foreground">{props.title}</div>
-        <p className="mt-0.5 text-[12px] leading-5 text-muted-foreground">{props.description}</p>
+        <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">{props.description}</p>
       </div>
       <div className="shrink-0 pt-0.5">{props.control}</div>
     </div>
   );
 }
 
-const RESULT_BADGE: Record<OmniRushWorkAction["result"], { label: () => string; className: string; Icon: typeof Check }> = {
-  done: { label: () => t("work.automation.result_done"), className: "border-green-6 bg-green-3 text-green-11", Icon: Check },
-  failed: { label: () => t("work.automation.result_failed"), className: "border-red-6 bg-red-3 text-red-11", Icon: X },
-  undone: { label: () => t("work.automation.result_undone"), className: "border-border bg-muted text-muted-foreground", Icon: RotateCcw },
+/** Rows the activity log shows before "Show N more". */
+export const ACTIVITY_ROWS = 20;
+
+const RESULT_BADGE: Record<OmniRushWorkAction["result"], { label: () => string; icon: string; Icon: typeof Check }> = {
+  done: { label: () => t("work.automation.result_done"), icon: "text-green-11", Icon: Check },
+  failed: { label: () => t("work.automation.result_failed"), icon: "text-red-11", Icon: X },
+  undone: { label: () => t("work.automation.result_undone"), icon: "text-muted-foreground", Icon: RotateCcw },
 };
 
+/** The outcome as words in the foreground colour; only the icon carries the colour. */
 function ResultBadge(props: { result: OmniRushWorkAction["result"] }) {
-  const badge = RESULT_BADGE[props.result];
+  const badge = RESULT_BADGE[props.result] ?? RESULT_BADGE.done;
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium", badge.className)} data-result={props.result}>
-      <badge.Icon aria-hidden className="size-3" />{badge.label()}
+    <span className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-background px-2 text-[12px] font-medium text-foreground" data-result={props.result}>
+      <badge.Icon aria-hidden className={cn("size-3.5", badge.icon)} />{badge.label()}
     </span>
   );
 }
 
 function ActionRow(props: { action: OmniRushWorkAction; now: number; onUndo: (id: string) => void; undoing: boolean }) {
   const action = props.action;
-  const where = [connectorLabel(action.source), action.target.trim()].filter(Boolean).join(" · ");
+  // Older rows (and failed writes) can have no target at all.
+  const where = [connectorLabel(action.source), (action.target ?? "").trim()].filter(Boolean).join(" · ");
+  const meta = `${where}${where ? " · " : ""}${relativeTime(action.created_at, props.now)}`;
   return (
-    <li className="flex items-start justify-between gap-4 border-b border-border px-4 py-3.5 last:border-b-0" data-action={action.id}>
+    <li className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0" data-action={action.id}>
       <div className="min-w-0">
-        <div className="text-[13px] text-foreground">{action.summary}</div>
-        <div className="mt-0.5 truncate text-[12px] text-muted-foreground">{where}{where ? " · " : ""}{relativeTime(action.created_at, props.now)}</div>
+        <div className="truncate text-[13px] text-foreground" title={action.summary}>{action.summary}</div>
+        <div className="mt-0.5 truncate text-[12px] text-muted-foreground" title={meta}>{meta}</div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <ResultBadge result={action.result} />
@@ -102,6 +109,7 @@ export function WorkAutomationPage(props: { client: WorkClient | null; onBack: (
   // Full Access keeps autopilot on (the server enforces it), so the autopilot switch is locked on while it is set.
   const autopilotLocked = settings?.full_access === true;
   const actions = actionsQuery.data?.actions ?? [];
+  const cap = useListCap(actions.length, ACTIVITY_ROWS);
   const settingsFailure = settingsQuery.error && !settings ? workFailure(settingsQuery.error) : null;
   const actionsFailure = actionsQuery.error ? workFailure(actionsQuery.error) : null;
 
@@ -181,7 +189,7 @@ export function WorkAutomationPage(props: { client: WorkClient | null; onBack: (
           <div className="flex items-end justify-between gap-3">
             <div>
               <h2 className="text-[15px] font-semibold">{t("work.automation.recent")}</h2>
-              <p className="text-[12px] text-muted-foreground">{t("work.automation.recent_body")}</p>
+              <p className="text-[13px] text-muted-foreground">{t("work.automation.recent_body")}</p>
             </div>
             <Button variant="ghost" size="sm" disabled={actionsQuery.isFetching} onClick={() => void actionsQuery.refetch()} aria-label={t("work.automation.refresh")}><RotateCw className="size-3.5" /></Button>
           </div>
@@ -200,11 +208,14 @@ export function WorkAutomationPage(props: { client: WorkClient | null; onBack: (
               {actionsFailure.retry ? <Button variant="outline" size="sm" onClick={() => void actionsQuery.refetch()}><RotateCw className="size-3.5" />{t("work.common.try_again")}</Button> : null}
             </div>
           ) : actions.length ? (
-            <ul className="rounded-xl border border-border bg-background">
-              {actions.map((action) => (
-                <ActionRow key={action.id} action={action} now={now} undoing={undo.isPending && undo.variables === action.id} onUndo={(id) => undo.mutate(id)} />
-              ))}
-            </ul>
+            <>
+              <ul className="rounded-xl border border-border bg-background">
+                {actions.slice(0, cap.shown).map((action) => (
+                  <ActionRow key={action.id} action={action} now={now} undoing={undo.isPending && undo.variables === action.id} onUndo={(id) => undo.mutate(id)} />
+                ))}
+              </ul>
+              <ListMore cap={cap} testId="work-automation-more" />
+            </>
           ) : (
             <div className="rounded-xl border border-border px-4 py-10 text-center text-sm text-muted-foreground" data-testid="work-automation-empty">
               {t("work.automation.empty")}

@@ -2,10 +2,11 @@
 // The Work home's Today view (contract Addendum C2): sources that need a fix, the sources as filter chips, then
 // Needs you / Today / Recent from GET /work/feed (empty sections stay out). Each row opens at its source or starts a Work chat about it.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarPlus, Check, Mail, MessageSquare, Plus, RotateCw } from "lucide-react";
+import { AlertCircle, CalendarPlus, Check, ChevronDown, Loader2, Mail, MessageSquare, Plus, RotateCw } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
@@ -17,6 +18,7 @@ import { BrandTile, ConnectorIcon } from "./brand-icon";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { canOpen, isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
+import { ListSearch, matchesQuery } from "./list-cap";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
 /** Rows a section shows before "Show N more". */
@@ -36,35 +38,72 @@ export function sourceDot(source: Pick<FeedSource, "status" | "attention">): "ok
   return source.status === "syncing" ? "syncing" : "ok";
 }
 
-const DOT_CLASS = { ok: "bg-green-9", syncing: "bg-blue-9 animate-pulse", attention: "bg-amber-9", error: "bg-red-9" } as const;
-const dotLabel = (dot: keyof typeof DOT_CLASS) => (dot === "ok" ? t("work.today.dot_ok") : dot === "syncing" ? t("work.today.dot_syncing") : t("work.today.dot_attention"));
+/** A source's status in words (the same words as the sidebar and Connectors). */
+const statusWord = (source: Pick<FeedSource, "status" | "attention">): string => {
+  const dot = sourceDot(source);
+  if (dot === "ok") return t("work.today.dot_ok");
+  if (dot === "syncing") return t("work.today.dot_syncing");
+  return source.attention?.kind === "reconnect" ? t("work.sidebar.reconnect") : t("work.today.dot_attention");
+};
 
 function localZone(): string | undefined {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; }
 }
 
-/** One row: an "All" chip and one chip per source that shows its status dot and filters the feed. Add sits at the end.
- * With one source there is nothing to filter: its pill only shows the status. */
-export function SourceStrip(props: { sources: FeedSource[]; selected: string | null; onSelect: (id: string | null) => void; onAdd: () => void }) {
+/** Source chips the strip shows before More. */
+export const STRIP_SOURCES = 6;
+
+/** The strip's chips: every source when they fit, else the picked one and the ones with the most items in view
+ *  (ties keep the server's order), up to STRIP_SOURCES; the rest go under More. */
+export function stripSources<T extends { id: string }>(sources: T[], counts: Record<string, number>, selected: string | null): { shown: T[]; rest: T[] } {
+  if (sources.length <= STRIP_SOURCES + 1) return { shown: sources, rest: [] };
+  const ranked = sources
+    .map((source, index) => ({ source, index }))
+    .sort((a, b) => Number(b.source.id === selected) - Number(a.source.id === selected) || (counts[b.source.id] ?? 0) - (counts[a.source.id] ?? 0) || a.index - b.index)
+    .map((entry) => entry.source);
+  const shown = new Set(ranked.slice(0, STRIP_SOURCES).map((source) => source.id));
+  return { shown: sources.filter((source) => shown.has(source.id)), rest: sources.filter((source) => !shown.has(source.id)) };
+}
+
+/** Items in view per source, from the unfiltered feed. */
+export function sourceCounts(feed: Pick<OmniRushWorkFeed, "groups"> | undefined): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of [...(feed?.groups.needs_you ?? []), ...(feed?.groups.today ?? []), ...(feed?.groups.fyi ?? [])]) counts[item.source] = (counts[item.source] ?? 0) + 1;
+  return counts;
+}
+
+/** A problem shows as an icon beside the name (a shape, not a colour alone); fine sources show none. */
+function ChipState(props: { source: FeedSource }) {
+  const dot = sourceDot(props.source);
+  if (dot === "ok") return null;
+  const Icon = dot === "syncing" ? Loader2 : AlertCircle;
+  return <Icon role="img" aria-label={statusWord(props.source)} className={cn("size-3.5 shrink-0", dot === "syncing" ? "text-muted-foreground motion-safe:animate-spin" : dot === "error" ? "text-red-11" : "text-amber-11")} />;
+}
+
+/** One row that never wraps: "All", up to six source chips and More (every other source, with search), then Add.
+ *  With one source there is nothing to filter: its pill only shows the status. */
+export function SourceStrip(props: { sources: FeedSource[]; selected: string | null; onSelect: (id: string | null) => void; onAdd: () => void; counts?: Record<string, number> }) {
   const solo = props.sources.length === 1;
+  const { shown, rest } = stripSources(props.sources, props.counts ?? {}, props.selected);
   const chip = (active: boolean) => cn(
-    "flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] text-foreground transition-colors",
+    "flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
     active ? "border-foreground/20 bg-muted font-medium" : "border-border bg-background hover:bg-muted/50",
   );
+  const name = (source: FeedSource) => connectorLabel(source.id, source.label.replace(/\s*\(.*\)$/, ""));
   return (
-    <div className="flex flex-wrap items-center gap-1.5" data-testid="work-source-strip">
-      <div className="flex flex-wrap items-center gap-1.5" {...(solo ? {} : { role: "radiogroup", "aria-label": t("work.today.filter") })}>
+    <div className="flex min-w-0 items-center gap-1.5 overflow-hidden" data-testid="work-source-strip">
+      <div className="flex min-w-0 items-center gap-1.5 overflow-hidden" {...(solo ? {} : { role: "radiogroup", "aria-label": t("work.today.filter") })}>
         {solo ? null : <button type="button" role="radio" aria-checked={props.selected === null} data-feed-filter="all" onClick={() => props.onSelect(null)} className={chip(props.selected === null)}>{t("work.today.all")}</button>}
-        {props.sources.map((source) => {
+        {shown.map((source) => {
           const dot = sourceDot(source);
           const active = props.selected === source.id;
-          const pill = { "data-work-source": source.id, "data-dot": dot, title: source.attention?.message ?? dotLabel(dot) };
+          const pill = { "data-work-source": source.id, "data-dot": dot, title: `${connectorLabel(source.id, source.label)} · ${source.attention?.message ?? statusWord(source)}` };
           const body = (
             <>
               <BrandTile id={source.id} size="chip" className="-ms-1.5 rounded-full" />
               {/* "Google (Gmail, Drive, Calendar)" reads as "Google" on a chip. */}
-              <span className="max-w-[10rem] truncate">{connectorLabel(source.id, source.label.replace(/\s*\(.*\)$/, ""))}</span>
-              <span aria-label={dotLabel(dot)} role="img" className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
+              <span className="max-w-[9rem] truncate">{name(source)}</span>
+              <ChipState source={source} />
             </>
           );
           return solo ? <span key={source.id} {...pill} className={cn(chip(false), "hover:bg-background")}>{body}</span> : (
@@ -72,16 +111,59 @@ export function SourceStrip(props: { sources: FeedSource[]; selected: string | n
           );
         })}
       </div>
+      {rest.length ? <MoreSources sources={rest} selected={props.selected} onSelect={props.onSelect} name={name} chip={chip(false)} /> : null}
       <button
         type="button"
         onClick={props.onAdd}
         data-testid="work-source-add"
-        className="flex h-8 items-center gap-1 rounded-full border border-dashed border-border px-3 text-[12px] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground"
+        className="flex h-8 shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-3 text-[13px] text-muted-foreground outline-none transition-colors hover:border-foreground/25 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         <Plus aria-hidden className="size-3.5" />
         {t("common.add")}
       </button>
     </div>
+  );
+}
+
+/** More: the sources that are not on the strip, with search, each with its status in words. */
+function MoreSources(props: { sources: FeedSource[]; selected: string | null; onSelect: (id: string) => void; name: (source: FeedSource) => string; chip: string }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const found = props.sources.filter((source) => matchesQuery(query, source.label, props.name(source)));
+  return (
+    <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(""); }}>
+      <PopoverTrigger
+        render={(
+          <button type="button" className={props.chip} data-testid="work-source-more" aria-label={t("work.today.more_sources", { count: props.sources.length, n: props.sources.length })}>
+            {t("work.today.more")}
+            <span className="tabular-nums text-muted-foreground">{props.sources.length}</span>
+            <ChevronDown aria-hidden className="size-3.5 text-muted-foreground" />
+          </button>
+        )}
+      />
+      <PopoverContent align="start" className="w-72 gap-2 p-2" data-testid="work-source-more-list">
+        <ListSearch value={query} onChange={setQuery} label={t("work.today.search_sources")} />
+        <ul className="flex max-h-72 flex-col overflow-y-auto" role="listbox" aria-label={t("work.today.filter")}>
+          {found.map((source) => (
+            <li key={source.id} role="option" aria-selected={props.selected === source.id}>
+              <button
+                type="button"
+                onClick={() => { props.onSelect(source.id); setOpen(false); setQuery(""); }}
+                className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-start text-[13px] outline-none hover:bg-muted focus-visible:bg-muted"
+                data-feed-filter={source.id}
+                data-work-source={source.id}
+                data-dot={sourceDot(source)}
+              >
+                <BrandTile id={source.id} size="chip" />
+                <span className="min-w-0 flex-1 truncate" title={connectorLabel(source.id, source.label)}>{props.name(source)}</span>
+                <span className="shrink-0 text-[12px] text-muted-foreground">{statusWord(source)}</span>
+              </button>
+            </li>
+          ))}
+          {found.length ? null : <li className="px-2 py-3 text-[13px] text-muted-foreground">{t("work.today.no_sources_found")}</li>}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -96,9 +178,10 @@ export function SourceAttention(props: { sources: FeedSource[]; busy: string | n
     <div className="flex flex-col divide-y divide-border rounded-xl border border-border" data-testid="work-source-attention">
       {many ? (
         <div className="flex items-center justify-between gap-3 px-3 py-2" data-testid="work-attention-summary">
-          <span className="flex min-w-0 items-center gap-2 text-[12px] text-foreground">
-            <span className="flex shrink-0 items-center gap-1">{needs.map((source) => <ConnectorIcon key={source.id} id={source.id} className="size-3.5" />)}</span>
-            <span className="truncate">{t("work.today.attention_count", { count: needs.length })}</span>
+          <span className="flex min-w-0 items-center gap-2 text-[13px] text-foreground">
+            <AlertCircle aria-hidden className="size-4 shrink-0 text-amber-11" />
+            <span className="truncate" title={needs.map((source) => connectorLabel(source.id, source.label)).join(", ")}>{t("work.today.attention_count", { count: needs.length })}</span>
+            <span className="flex shrink-0 items-center gap-1">{needs.slice(0, 5).map((source) => <ConnectorIcon key={source.id} id={source.id} className="size-3.5" />)}</span>
           </span>
           <Button variant="outline" size="sm" aria-expanded={open} aria-controls={open ? rowsId : undefined} onClick={() => setOpen(!open)}>{open ? t("common.hide") : t("work.today.review")}</Button>
         </div>
@@ -108,9 +191,9 @@ export function SourceAttention(props: { sources: FeedSource[]; busy: string | n
         const label = action === "reconnect" ? t("work.connectors.reconnect") : action === "retry" ? t("common.retry") : t("work.today.fix");
         return (
           <div key={source.id} data-work-attention={source.id} className="flex items-center justify-between gap-3 px-3 py-2">
-            <span className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-2 text-[13px] text-foreground">
               <ConnectorIcon id={source.id} className="size-3.5 shrink-0" />
-              <span className="truncate">{source.attention!.message}</span>
+              <span className="truncate" title={source.attention!.message}>{source.attention!.message}</span>
             </span>
             <Button
               variant="outline"
@@ -280,7 +363,7 @@ export function WorkToday(props: {
           onSetup={props.onOpenConnectors}
         />
       ) : null}
-      {sources.length ? <SourceStrip sources={sources} selected={source} onSelect={pick} onAdd={props.onOpenConnectors} /> : null}
+      {sources.length ? <SourceStrip sources={sources} selected={source} onSelect={pick} onAdd={props.onOpenConnectors} counts={sourceCounts(all ?? feed.data)} /> : null}
       {props.checklist}
       {feed.isLoading ? <FeedSkeleton /> : failure ? (
         <div className="flex flex-col items-start gap-2 rounded-xl border border-border px-4 py-4" data-testid="work-feed-error">
@@ -309,13 +392,13 @@ export function WorkToday(props: {
               <section key={section.id} data-feed-section={section.id} aria-label={section.label} className="flex flex-col gap-2">
                 <h2 className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
                   {section.label}
-                  {recent ? null : <span className="rounded-full bg-muted px-1.5 text-[11px] font-medium text-muted-foreground" data-testid="work-feed-count">{all.length}</span>}
+                  {recent ? null : <span className="rounded-full bg-muted px-1.5 text-[12px] font-medium text-foreground" data-testid="work-feed-count">{all.length}</span>}
                 </h2>
                 <ul className="overflow-hidden rounded-xl border border-border bg-background" data-work-list onKeyDown={listKeys}>
                   {items.map((item) => <FeedRow key={item.id} item={same ? { ...item, reason: null } : item} now={now} busy={asking} selected={Boolean(openId && item.source_id === openId)} onOpen={openFeedItem} onAsk={(picked) => void ask(picked)} />)}
                 </ul>
                 {capped ? (
-                  <button type="button" aria-expanded={Boolean(more[section.id])} onClick={() => setMore({ ...more, [section.id]: !more[section.id] })} data-testid="work-feed-more" className="self-start text-[12px] text-muted-foreground transition-colors hover:text-foreground">
+                  <button type="button" aria-expanded={Boolean(more[section.id])} onClick={() => setMore({ ...more, [section.id]: !more[section.id] })} data-testid="work-feed-more" className="self-start rounded-md px-1 text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
                     {more[section.id] ? t("work.today.show_less") : t("work.today.show_more", { count: all.length - SECTION_ROWS })}
                   </button>
                 ) : null}

@@ -2,7 +2,7 @@
 // Work > Insights (owner only): the manager's view of how the team is working: aggregate activity and smart alerts
 // from GET /omnirush/work/org/insights. It never shows message content: only counts, trends, meetings and flags.
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, RotateCw } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ChevronDown, RotateCw } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { t } from "@/i18n";
 import type { OmniRushWorkInsights, OmniRushWorkInsightsAlert, OmniRushWorkInsightsMember } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
+import { ListMore, ListSearch, matchesQuery, useListCap } from "./list-cap";
 import { relativeTime, useWorkOrgInsights, workFailure, workRoleLabel, type WorkClient } from "./work-mode";
 
 const RANGES = [7, 14, 30, 90] as const;
@@ -43,6 +44,11 @@ export function sortMembers(members: OmniRushWorkInsightsMember[]): OmniRushWork
     .map((entry) => entry.member);
 }
 
+/** No tracked activity in the window: folded into one line under the list. */
+export const isIdle = (member: Pick<OmniRushWorkInsightsMember, "activity" | "alerts">) => member.activity === 0;
+/** People the list shows before "Show N more". */
+export const INSIGHTS_PEOPLE = 10;
+
 /** A compact daily-activity sparkline: a 2px baseline-anchored line over a faint fill; flat line when the window is empty. */
 function Sparkline(props: { data: OmniRushWorkInsightsMember["daily"]; label: string }) {
   const values = props.data.map((point) => point.n);
@@ -72,14 +78,14 @@ function Sparkline(props: { data: OmniRushWorkInsightsMember["daily"]; label: st
   );
 }
 
-/** The signed change vs the previous window, as an arrow (not colour alone) plus percent. */
+/** The signed change vs the previous window, as an arrow (not colour alone) plus percent in the foreground colour. */
 function Trend(props: { trend: number }) {
-  if (props.trend === 0) return <span className="text-[12px] text-muted-foreground">{t("work.insights.no_change")}</span>;
+  if (props.trend === 0) return <span className="text-[13px] text-muted-foreground">{t("work.insights.no_change")}</span>;
   const up = props.trend > 0;
   const Icon = up ? ArrowUp : ArrowDown;
   return (
-    <span className={cn("inline-flex items-center gap-0.5 text-[12px] font-medium", up ? "text-green-11" : "text-red-11")} aria-label={up ? t("work.insights.trend_up", { n: Math.abs(props.trend) }) : t("work.insights.trend_down", { n: Math.abs(props.trend) })}>
-      <Icon aria-hidden className="size-3" />{up ? "+" : ""}{props.trend}%
+    <span className="inline-flex items-center gap-0.5 text-[13px] font-medium text-foreground" aria-label={up ? t("work.insights.trend_up", { n: Math.abs(props.trend) }) : t("work.insights.trend_down", { n: Math.abs(props.trend) })}>
+      <Icon aria-hidden className={cn("size-3.5", up ? "text-green-11" : "text-red-11")} />{up ? "+" : ""}{props.trend}%
     </span>
   );
 }
@@ -88,14 +94,8 @@ function AlertBadge(props: { alert: OmniRushWorkInsightsAlert; member: OmniRushW
   const serious = props.alert.level === "serious";
   const Icon = serious ? AlertTriangle : AlertCircle;
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[12px]",
-        serious ? "border-red-6 bg-red-3 text-red-11" : "border-amber-6 bg-amber-3 text-amber-11",
-      )}
-      data-alert-level={props.alert.level}
-    >
-      <Icon aria-hidden className="size-3.5 shrink-0" />
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-[12px] font-medium text-foreground" data-alert-level={props.alert.level}>
+      <Icon aria-hidden className={cn("size-3.5 shrink-0", serious ? "text-red-11" : "text-amber-11")} />
       <span>{alertText(props.alert, props.member)}</span>
     </span>
   );
@@ -104,19 +104,26 @@ function AlertBadge(props: { alert: OmniRushWorkInsightsAlert; member: OmniRushW
 function Stat(props: { label: string; value: string | number; tone?: "default" | "alert" }) {
   return (
     <div className="flex flex-col gap-0.5 rounded-xl border border-border px-4 py-3">
-      <span className="text-[12px] text-muted-foreground">{props.label}</span>
-      <span className={cn("text-[20px] font-semibold tabular-nums leading-tight", props.tone === "alert" && "text-red-11")}>{props.value}</span>
+      <span className="text-[13px] text-muted-foreground">{props.label}</span>
+      <span className={cn("flex items-center gap-1.5 text-[20px] font-semibold tabular-nums leading-tight text-foreground")}>
+        {props.tone === "alert" ? <AlertTriangle aria-hidden className="size-4 text-red-11" /> : null}{props.value}
+      </span>
     </div>
   );
+}
+
+/** A work area's label without the server's type prefix ("email:ana@x.com" reads "ana@x.com"). */
+export function focusLabel(label: string): string {
+  return label.replace(/^(email|domain|person|company|org|deal|project|channel|repo|topic):/i, "");
 }
 
 function FocusChips(props: { focus: OmniRushWorkInsightsMember["focus"] }) {
   if (!props.focus.length) return null;
   return (
     <div className="flex flex-wrap gap-1.5" data-testid="work-insights-focus">
-      {props.focus.map(([label, count]) => (
-        <span key={label} className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2.5 py-0.5 text-[12px] text-foreground">
-          <span className="max-w-[12rem] truncate">{label}</span>
+      {props.focus.slice(0, 5).map(([label, count]) => (
+        <span key={label} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-background px-2.5 py-0.5 text-[12px] text-foreground" title={`${focusLabel(label)} · ${count}`}>
+          <span className="max-w-[14rem] truncate">{focusLabel(label)}</span>
           <span className="tabular-nums text-muted-foreground">{count}</span>
         </span>
       ))}
@@ -132,11 +139,11 @@ function MemberCard(props: { member: OmniRushWorkInsightsMember; now: number }) 
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="truncate text-[14px] font-medium text-foreground" title={name.primary}>{name.primary}</div>
-          {name.secondary ? <div className="truncate text-[12px] text-muted-foreground">{name.secondary}</div> : null}
+          {name.secondary ? <div className="truncate text-[13px] text-muted-foreground" title={name.secondary}>{name.secondary}</div> : null}
         </div>
         <Sparkline data={member.daily} label={name.primary} />
       </div>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
         <span><span className="font-medium tabular-nums text-foreground">{member.activity}</span> {t("work.insights.activity_unit")}</span>
         <Trend trend={member.trend} />
         <span><span className="font-medium tabular-nums text-foreground">{member.meetings}</span> {t("work.insights.meetings_unit", { count: member.meetings })}</span>
@@ -180,6 +187,15 @@ export function WorkInsightsPage(props: { client: WorkClient | null; onBack: () 
   const query = useWorkOrgInsights(props.client, days, Boolean(props.client));
   const data: OmniRushWorkInsights | undefined = query.data;
   const members = data ? sortMembers(data.members) : [];
+  const [search, setSearch] = useState("");
+  const [showIdle, setShowIdle] = useState(false);
+  const found = members.filter((member) => matchesQuery(search, member.email, member.job_role, ...member.focus.map(([label]) => focusLabel(label))));
+  // People with no tracked activity fold into one line (searching shows everyone who matches).
+  const idle = search.trim() ? [] : found.filter(isIdle);
+  const active = search.trim() ? found : found.filter((member) => !isIdle(member));
+  const cap = useListCap(active.length, INSIGHTS_PEOPLE);
+  // Alerts worth a look: "no tracked activity" is the idle line, not an alert per person.
+  const openAlerts = data ? data.members.reduce((sum, member) => sum + member.alerts.filter((alert) => alert.kind !== "idle").length, 0) : 0;
   const failure = query.error && !data ? workFailure(query.error) : null;
   const now = Date.now();
   const rangeChip = (active: boolean) => cn(
@@ -218,12 +234,36 @@ export function WorkInsightsPage(props: { client: WorkClient | null; onBack: () 
               <Stat label={t("work.insights.active_members")} value={`${data.team.active_members} / ${data.team.members}`} />
               <Stat label={t("work.insights.activity")} value={data.team.total_activity} />
               <Stat label={t("work.insights.meetings")} value={data.team.meetings} />
-              <Stat label={t("work.insights.open_alerts")} value={data.team.alerts} tone={data.team.alerts > 0 ? "alert" : "default"} />
+              <Stat label={t("work.insights.open_alerts")} value={openAlerts} tone={data.members.some((member) => member.alerts.some((alert) => alert.level === "serious" && alert.kind !== "idle")) ? "alert" : "default"} />
             </div>
             {members.length ? (
-              <ul className="rounded-xl border border-border bg-background" data-testid="work-insights-members">
-                {members.map((member) => <MemberCard key={member.user_id} member={member} now={now} />)}
-              </ul>
+              <div className="flex flex-col gap-3">
+                {members.length > INSIGHTS_PEOPLE ? (
+                  <ListSearch value={search} onChange={(value) => { setSearch(value); cap.reset(); }} label={t("work.insights.search")} testId="work-insights-search" />
+                ) : null}
+                {active.length ? (
+                  <ul className="rounded-xl border border-border bg-background" data-testid="work-insights-members">
+                    {active.slice(0, cap.shown).map((member) => <MemberCard key={member.user_id} member={member} now={now} />)}
+                  </ul>
+                ) : search.trim() ? <p className="text-[14px] text-muted-foreground" data-testid="work-insights-no-match">{t("work.insights.no_match")}</p> : null}
+                <ListMore cap={cap} testId="work-insights-more" />
+                {idle.length ? (
+                  <div className="rounded-xl border border-border bg-background" data-testid="work-insights-idle">
+                    <button type="button" aria-expanded={showIdle} onClick={() => setShowIdle(!showIdle)} className="flex w-full items-center gap-2 rounded-xl px-4 py-3 text-start text-[13px] text-foreground outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring">
+                      <ChevronDown aria-hidden className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", !showIdle && "-rotate-90")} />
+                      <span className="min-w-0 flex-1 truncate">{t("work.insights.idle_line", { count: idle.length, n: idle.length.toLocaleString() })}</span>
+                    </button>
+                    {showIdle ? (
+                      <ul className="flex flex-col border-t border-border px-4 py-2" data-testid="work-insights-idle-list">
+                        {idle.slice(0, 50).map((member) => (
+                          <li key={member.user_id} className="truncate py-1 text-[13px] text-muted-foreground" title={member.email} data-member={member.user_id}>{member.email}</li>
+                        ))}
+                        {idle.length > 50 ? <li className="py-1 text-[13px] text-muted-foreground">{t("work.insights.idle_more", { n: (idle.length - 50).toLocaleString() })}</li> : null}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <div className="rounded-xl border border-border px-4 py-10 text-center text-sm text-muted-foreground" data-testid="work-insights-empty">
                 {t("work.insights.empty")}

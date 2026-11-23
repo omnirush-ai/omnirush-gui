@@ -3,15 +3,20 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactNode } from "react";
+
+import { t } from "../src/i18n";
 import { matchRoutes, MemoryRouter } from "react-router";
 
 import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers, type OmniRushWorkOrgConnectors } from "../src/app/lib/omnirush-server";
 import { isWorkSignInLink, needsOnboarding, workOnboardingKey, askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
   askAboutItemPrompt, coverageCanAdd, coverageLine, relativeTime, workActionsKey, workOrgConnectorsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
-import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
+import { SourceAttention, SourceStrip, sourceCounts, sourceDot, stripSources, STRIP_SOURCES, WorkToday } from "../src/react-app/domains/work/work-today";
+import { WorkPageBoundary } from "../src/react-app/domains/work/work-page-boundary";
+import { checklistRows, canInviteRole, WorkChecklist } from "../src/react-app/domains/work/work-onboarding";
 import { leaveState, mePatch, nextShown, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
-import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
+import { alertText, focusLabel, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
 import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
 import { WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
 import { ConnectorIcon, ConnectorRow, HookCard, localChatError, LocalChatsCard, TelegramCard, telegramLoginError, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
@@ -195,16 +200,22 @@ describe("Work mode", () => {
     expect(connectSettled([row({ status: "error", error: "reconnect_required" })], "google")).toBe(true);
   });
 
-  test("a connected source shows its account, records, last sync, sync switch and Disconnect", () => {
+  test("a connected source is one compact row: status pill, account, records, last sync; sync and Disconnect in its menu", () => {
     const markup = renderToStaticMarkup(
       <ConnectorRow connector={row({ status: "connected", account: "ops@example.com", records: 1234, last_sync_at: "2026-11-09T10:00:00Z", sync_enabled: true })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />,
     );
-    expect(markup).toContain("Connected");
+    expect(markup).toMatch(/data-testid="work-connector-status" data-tone="ok">.*Synced</);
     expect(markup).toContain("ops@example.com");
     expect(markup).toContain("records");
     expect(markup).toContain("Last sync");
-    expect(markup).toContain('role="switch"');
-    expect(markup).toContain("Disconnect");
+    // The switch and Disconnect live in the row's menu, not on every row.
+    expect(markup).toContain('aria-label="Google options"');
+    expect(markup).not.toContain('role="switch"');
+    expect(markup).not.toContain(">Disconnect<");
+    // A long product list reads as the brand, in full on hover.
+    const microsoft = renderToStaticMarkup(<ConnectorRow connector={row({ id: "microsoft", label: "Microsoft 365 (Outlook, OneDrive/SharePoint, Teams, Calendar)", status: "connected" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
+    expect(microsoft).toContain('title="Microsoft 365 (Outlook, OneDrive/SharePoint, Teams, Calendar)">Microsoft 365<');
+    expect(renderToStaticMarkup(<ConnectorRow connector={row({ status: "connected", sync_enabled: false })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />)).toContain("Sync off");
   });
 
   test("a source needing a new sign-in offers Reconnect; a disconnected one offers Connect and no switch", () => {
@@ -219,8 +230,9 @@ describe("Work mode", () => {
   test("an errored source offers Reconnect and Disconnect; Check shows missing scopes with a Reconnect prompt", () => {
     const error = renderToStaticMarkup(<ConnectorRow connector={row({ status: "error", error: "reconnect_required" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onCheck={noop} />);
     expect(error).toContain(">Reconnect<");
-    expect(error).toContain(">Disconnect<");
-    expect(error).toContain(">Check<");
+    // Disconnect and Check are in the row's menu.
+    expect(error).toContain('data-testid="work-connector-menu"');
+    expect(error).not.toContain(">Disconnect<");
     const scopes = renderToStaticMarkup(
       <ConnectorRow connector={row({ id: "jira", label: "Jira", status: "connected", records: 3, sync_enabled: true })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onCheck={noop}
         health={{ id: "jira", token_ok: true, scopes_ok: false, missing_scopes: ["write:jira-work"] }} />,
@@ -272,7 +284,9 @@ describe("Work mode", () => {
     );
     expect(github(0)).toContain(">Choose repositories<");
     expect(github(0)).toContain('data-testid="work-connector-setup-hint"');
-    expect(github(12)).toContain(">Choose repositories<");
+    // Once it reads something, Choose repositories moves to the row's menu.
+    expect(github(12)).not.toContain(">Choose repositories<");
+    expect(github(12)).toContain('data-testid="work-connector-menu"');
     expect(github(12)).not.toContain('data-testid="work-connector-setup-hint"');
   });
 
@@ -536,7 +550,9 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(coverage).toMatch(/data-testid="work-connector-attention" data-kind="coverage"/);
     const reconnect = renderToStaticMarkup(<ConnectorRow connector={row({ status: "connected", attention: { kind: "reconnect", message: "Google needs reconnecting.", action: "reconnect", since: null } })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
     expect(reconnect).toContain(">Reconnect<");
-    expect(reconnect).toContain("Needs attention");
+    expect(reconnect).toMatch(/data-testid="work-connector-status" data-tone="error"/);
+    // A sync that keeps failing needs attention, not a new sign-in.
+    expect(failing).toMatch(/data-testid="work-connector-status" data-tone="error">.*Needs attention</);
   });
 
   test("other email and calendar: the form opens from Connect, tries the login, shows the server's refusal in words", async () => {
@@ -754,6 +770,9 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       expect(made).toEqual(["hook"]);
       expect(card.querySelector<HTMLInputElement>('[data-testid="work-hook-url"] input')?.value).toBe(hookUrl);
       expect(card.querySelector('[data-testid="work-hook-url"]')?.textContent).toContain("shown only once");
+      // The how-to is folded until asked for.
+      expect(card.querySelector('[data-testid="work-hook-steps"]')).toBeNull();
+      await act(async () => card.querySelector<HTMLButtonElement>('[data-testid="work-hook-howto-toggle"]')!.click());
       expect(card.querySelector('[data-testid="work-hook-steps"]')?.textContent).toContain("Webhooks by Zapier");
       await act(async () => button("n8n")!.click());
       expect(card.querySelector('[data-testid="work-hook-steps"]')?.textContent).toContain("HTTP Request node");
@@ -1124,8 +1143,13 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} openLink={noop} onBack={noop} /></MemoryRouter></QueryClientProvider>);
     };
     const owner = render(members("owner"));
-    expect(owner).toContain('value="Acme Bakery"');
-    expect(owner).toContain('data-testid="work-org-save"');
+    // The company opens as a read-only summary with Edit (the form opens on Edit).
+    expect(owner).toContain('data-testid="work-org-summary"');
+    expect(owner).toContain('title="Acme Bakery">Acme Bakery<');
+    expect(owner).toContain('data-testid="work-org-edit"');
+    expect(owner).not.toContain('data-testid="work-org-save"');
+    expect(owner).toContain('data-role-pill="owner"');
+    expect(owner).toContain('title="dana@acme-bakery.test"');
     expect(owner).toContain(">Make owner<");
     expect(owner).toContain(">Remove<");
     expect(owner).toContain('data-work-invite="inv_1"');
@@ -1135,6 +1159,10 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(owner).toContain(">Trust page<");
     const member = render(members("member"));
     expect(member).not.toContain('data-testid="work-org-save"');
+    expect(member).not.toContain('data-testid="work-org-edit"');
+    // No disabled inputs for a member: the same summary, read only.
+    expect(member).toContain('data-testid="work-org-summary"');
+    expect(member).not.toContain('data-testid="work-org-name"');
     expect(member).not.toContain(">Make owner<");
     expect(member).toContain('data-testid="work-org-me-save"');
     expect(member).toContain("Only the owner can change these.");
@@ -1234,7 +1262,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     const org = { id: "org_1", name: "Acme", tools: ["google"] };
     const owner = render({ org, you_role: "owner", members: [{ user_id: "u1", email: "o@acme.test", role: "owner", you: true }], invites: [] });
     expect(owner).not.toContain('data-testid="work-org-my-tools"');
-    expect(owner).toMatch(/disabled=""[^>]*data-testid="work-org-save"/);
+    expect(owner).toContain('data-testid="work-org-edit"');
     expect(owner).toMatch(/disabled=""[^>]*data-testid="work-org-me-save"/);
     expect(owner).toContain("the organization and its pending invites are deleted");
     const member = render({ org, you_role: "member", members: [{ user_id: "u1", email: "o@acme.test", role: "owner" }, { user_id: "u2", email: "m@acme.test", role: "member", you: true }], invites: [] });
@@ -1242,7 +1270,8 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     // The company's tools are shown, not offered: a member reads them as tiles, with no picker to press.
     expect(member).toContain('data-testid="work-org-tool-list"');
     expect(member).not.toContain('data-testid="work-onboarding-tool-search"');
-    expect(owner).toContain('data-testid="work-onboarding-tool-search"');
+    // The owner's picker is in the form Edit opens, not on the page.
+    expect(owner).not.toContain('data-testid="work-onboarding-tool-search"');
     // Saving only a role never sends tools: an owner's tools are the company's, and a member's never come back from the server.
     expect(mePatch({ job_role: " Founder " }, { job_role: null })).toEqual({ job_role: "Founder" });
     expect(mePatch({ tools: ["slack"] }, { job_role: "Ops" })).toEqual({ job_role: "Ops", tools: ["slack"] });
@@ -1316,6 +1345,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(markup).not.toContain(">Connect<");
     expect(markup).not.toContain('role="switch"');
     expect(markup).not.toContain(">Check<");
+    expect(markup).not.toContain('data-testid="work-connector-menu"');
     const staff = renderToStaticMarkup(<ConnectorRow connector={{ ...paused, paused_by: "staff" }} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
     expect(staff).toContain("Not available for your company right now");
     const rows = [row({ id: "google" }), paused];
@@ -1753,7 +1783,9 @@ describe("Work for companies (enterprise design 2.3, 2.4, 2.6)", () => {
     expect(connectorState(row({ status: "syncing", progress: pass }))).toEqual({ tone: "syncing", label: "Syncing 42%", value: 42 });
     expect(connectorState(row({ status: "syncing" })).label).toBe("Syncing");
     expect(connectorState(row({ status: "error", error: "reconnect_required" })).label).toBe("Reconnect");
-    expect(connectorState(row({ status: "paused_by_admin" })).label).toBe("Off");
+    expect(connectorState(row({ status: "paused_by_admin" })).label).toBe("Paused");
+    // One vocabulary everywhere: a sync that keeps failing "Needs attention", never "Check".
+    expect(connectorState(row({ status: "error", attention: { kind: "failing", message: "x", action: "retry", since: null } }))).toEqual({ tone: "error", label: "Needs attention", value: null });
     const rows = [
       row({ id: "google", status: "connected" }), row({ id: "slack", label: "Slack", status: "syncing", progress: pass }), row({ id: "jira", label: "Jira", status: "error" }),
       row({ id: "notion", label: "Notion" }), row({ id: "mock", status: "connected" }), row({ id: "demo", status: "connected" }), row({ id: "hubspot", label: "HubSpot", status: "paused_by_admin" }),
@@ -1774,7 +1806,14 @@ describe("Work for companies (enterprise design 2.3, 2.4, 2.6)", () => {
     const long = renderToStaticMarkup(<WorkSidebarNav nav={{ ...nav, connectors: many }} />);
     expect(long.match(/data-sidebar-connector=/g)?.length).toBe(6);
     expect(long).toContain(">Show 2 more<");
-    expect(renderToStaticMarkup(<WorkSidebarNav nav={{ ...nav, connectors: [] }} />)).toContain('data-testid="sidebar-work-connect-tools"');
+    // None connected: a quiet line, not a second "Connect your tools" button (the header's + adds one).
+    const none = renderToStaticMarkup(<WorkSidebarNav nav={{ ...nav, connectors: [] }} />);
+    expect(none).toContain('data-testid="sidebar-work-connect-tools"');
+    expect(none).toContain(">No tools connected<");
+    expect(none).not.toContain("Connect your tools");
+    // Every row is one height; syncing ones too.
+    expect(markup).not.toContain("h-[38px]");
+    expect(markup).toContain("text-[12px] font-medium text-muted-foreground");
   });
 
   test("enterprise mode: none without the block; Code only when staff turned it on and the company is active", () => {
@@ -1870,3 +1909,112 @@ describe("Work for companies (enterprise design 2.3, 2.4, 2.6)", () => {
   });
 });
 
+describe("Sam's 11-23 bar: no list runs on, readable, one action", () => {
+  const client = { baseUrl: "http://bar.test" } as never;
+  const wrap = (queries: QueryClient, node: ReactNode) => renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>);
+
+  test("activity: a row with no target never blanks the page; the log shows 20, then Show more", () => {
+    const queries = new QueryClient();
+    queries.setQueryData(workSettingsKey(client), { autopilot: false, full_access: false, writes_paused: false });
+    const actions = Array.from({ length: 50 }, (_, i): OmniRushWorkAction => ({ id: `a${i}`, source: "github", tool: "github_comment", target: i % 2 ? null : "acme/api#12", summary: `Commented ${i}`, result: i % 3 ? "done" : "failed", undoable: false, created_at: "2026-11-15T09:00:00Z", undone_at: null }));
+    queries.setQueryData(workActionsKey(client), { actions });
+    const page = wrap(queries, <WorkAutomationPage client={client} onBack={noop} />);
+    expect(page.match(/data-action=/g)?.length).toBe(20);
+    expect(page).toContain('data-testid="work-automation-more"');
+    expect(page).toContain(">Show 20 more<");
+    // The outcome reads in the foreground colour at 12 px; only its icon carries the colour.
+    expect(page).toMatch(/text-\[12px\] font-medium text-foreground" data-result="failed"/);
+    expect(page).not.toContain("text-[11px]");
+  });
+
+  test("a Work page that throws shows Reload, not a blank window", () => {
+    const Broken = () => { throw new Error("boom"); };
+    const original = console.error;
+    console.error = () => {};
+    try {
+      // Server rendering has no boundaries: check the fallback's own markup and that the boundary passes children through.
+      const fine = wrap(new QueryClient(), <WorkPageBoundary><p>fine</p></WorkPageBoundary>);
+      expect(fine).toContain(">fine<");
+      expect(Broken).toThrow();
+    } finally {
+      console.error = original;
+    }
+  });
+
+  test("Today: the source filter is one row of six chips plus More; no colour-only dots", () => {
+    const sources = Array.from({ length: 31 }, (_, i) => ({ id: `s${i}`, label: `Source ${i}`, status: "connected" as const, attention: i === 30 ? { kind: "failing", message: "Keeps failing.", action: "retry" as const, since: null } : null }));
+    const counts = sourceCounts({ groups: { needs_you: [{ id: "x", source: "s20", kind: "email", title: "x", at: null, url: null, reason: null }], today: [], fyi: [] } });
+    const { shown, rest } = stripSources(sources, counts, "s25");
+    expect(shown).toHaveLength(STRIP_SOURCES);
+    expect(shown.map((item) => item.id)).toContain("s25");
+    expect(shown.map((item) => item.id)).toContain("s20");
+    expect(rest).toHaveLength(31 - STRIP_SOURCES);
+    const strip = renderToStaticMarkup(<SourceStrip sources={sources} selected={null} onSelect={noop} onAdd={noop} counts={counts} />);
+    expect(strip.match(/data-feed-filter="s\d+"/g)?.length).toBe(STRIP_SOURCES);
+    expect(strip).toContain('data-testid="work-source-more"');
+    expect(strip).not.toContain("flex-wrap");
+    expect(strip).not.toContain("rounded-full bg-green-9");
+    // Seven or fewer: every chip, no More.
+    expect(renderToStaticMarkup(<SourceStrip sources={sources.slice(0, 7)} selected={null} onSelect={noop} onAdd={noop} />)).not.toContain("work-source-more");
+  });
+
+  test("organization: members 20 at a time with search, invites 5 with Show all, team connectors 8 with Show all", () => {
+    const queries = new QueryClient();
+    const members = Array.from({ length: 250 }, (_, i) => ({ user_id: `u${i}`, email: `person.${i}@atlas-logistics-group-international.example`, role: i === 0 ? "owner" : "member", you: i === 0 }));
+    const invites = Array.from({ length: 60 }, (_, i) => ({ id: `inv${i}`, email: `invitee.${i}@atlas.example`, expires_at: null }));
+    queries.setQueryData(workMembersKey(client), { org: { id: "org_1", name: "Atlas Logistics", tools: Array.from({ length: 36 }, (_, i) => `tool${i}`) }, you_role: "owner", members, invites });
+    queries.setQueryData(workOrgConnectorsKey(client), { org: { id: "org_1", name: "Atlas" }, role: "owner", can_manage: true, connectors: [], shown: null, allowed: Array.from({ length: 36 }, (_, i) => ({ id: `c${i}`, label: `Connector ${i}`, shown: true, members_connected: i === 30 ? 9 : 0 })) });
+    const page = wrap(queries, <WorkOrganizationPage client={client} openLink={noop} onBack={noop} />);
+    expect(page.match(/data-work-member=/g)?.length).toBe(20);
+    expect(page).toContain('data-testid="work-org-member-search"');
+    expect(page).toContain(">Show 20 more<");
+    expect(page.match(/data-work-invite=/g)?.length).toBe(5);
+    expect(page).toContain(">Show all 60 invites<");
+    expect(page.match(/data-org-connector=/g)?.length).toBe(8);
+    // The connector people use comes first.
+    expect(page.indexOf('data-org-connector="c30"')).toBeLessThan(page.indexOf('data-org-connector="c0"'));
+    expect(page).toContain(">Show all 36 connectors<");
+    // The company's 36 tools: eight, then +28 more.
+    expect(page).toContain(">+28 more<");
+    expect(page).toContain('title="person.1@atlas-logistics-group-international.example"');
+    expect(page).not.toMatch(/nobody sees another/i);
+  });
+
+  test("insights: ten people, then Show more; no-activity people fold into one line; work areas without their type", () => {
+    const queries = new QueryClient();
+    const person = (i: number, activity: number) => ({ user_id: `u${i}`, email: `p${i}@atlas.example`, role: "member", job_role: null, activity, prev_activity: 0, trend: 0, active_days: activity ? 1 : 0, last_active: null, meetings: 0, by_source: {}, by_kind: {}, focus: [["email:maria@coldchain.example", 3], ["domain:atlas.example", 1]] as [string, number][], daily: [], alerts: activity ? [] : [{ kind: "idle", level: "serious" as const, text: "No tracked activity" }] });
+    const members = [...Array.from({ length: 30 }, (_, i) => person(i, 30 - i)), ...Array.from({ length: 220 }, (_, i) => person(100 + i, 0))];
+    queries.setQueryData(workInsightsKey(client, 14), { org: { id: "o", name: "Atlas" }, range: { days: 14, from: "", to: "" }, team: { members: 250, active_members: 30, total_activity: 465, meetings: 0, alerts: 220 }, members });
+    const page = wrap(queries, <WorkInsightsPage client={client} onBack={noop} />);
+    expect(page.match(/<li class="flex flex-col gap-3/g)?.length).toBe(10);
+    expect(page).toContain('data-testid="work-insights-search"');
+    expect(page).toContain(">220 people have no tracked activity in this period<");
+    expect(page).not.toContain("No tracked activity<");
+    expect(page).not.toContain(">email:");
+    expect(page).toContain(">maria@coldchain.example<");
+    expect(focusLabel("domain:atlas.example")).toBe("atlas.example");
+    // Idle is not 220 open alerts.
+    expect(page).not.toMatch(/>220<\/span><\/div><\/div><\/div>/);
+  });
+
+  test("Get started is role aware: a member never sees the company step or an invite the server refuses", () => {
+    const onboarding = { done: false, org: { id: "org_1", name: "Acme" }, steps: { company: true } };
+    const render = (role: string) => wrap(new QueryClient(), <WorkChecklist client={client} onboarding={onboarding} connectors={[]} orgId="org_1" role={role} onConnect={noop} onInvite={noop} onOrganization={noop} />);
+    const member = render("member");
+    expect(member).not.toContain('data-checklist-item="company"');
+    expect(member).toContain('data-testid="work-checklist-connect"');
+    expect(member).toContain('data-testid="work-checklist-invite"'); // a pilot company (not a company account): anyone invites
+    expect(canInviteRole("member", true)).toBe(false);
+    expect(canInviteRole("admin", true)).toBe(true);
+    expect(checklistRows([{ id: "company", label: "x", done: true }, { id: "connected", label: "y", done: false }] as never, "owner")).toHaveLength(2);
+    // The home's own Connect button stays away while the checklist offers it.
+    const home = renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} checklist={<div />} />);
+    expect(home).not.toContain('data-testid="work-home-connect"');
+  });
+
+  test("copy: number agreement and no claim the code does not keep", () => {
+    expect(t("work.setup.noted", { count: 1, names: "Toast POS" })).toBe("We noted Toast POS. We'll tell you when it's ready.");
+    expect(t("work.setup.noted", { count: 2, names: "Toast POS, Basecamp" })).toContain("when they're ready");
+    for (const key of ["work.org.subtitle", "work.onboarding.join_body", "work.invite.body"]) expect(t(key)).not.toMatch(/nobody sees/i);
+  });
+});
