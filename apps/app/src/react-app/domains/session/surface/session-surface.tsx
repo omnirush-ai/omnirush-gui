@@ -3707,6 +3707,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}
           fullPermissionsControl={<FullPermissionsToggle client={props.client} workspaceId={props.workspaceId} />}
           sandboxControl={<SandboxStatusChip client={props.client} workspaceId={props.workspaceId} sessionId={props.sessionId ?? null} model={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} onOpenSettings={() => props.onOpenSettingsSection?.("sandbox")} />}
+          work={Boolean(props.workChat)}
           subagentModelControl={props.workChat ? <WorkConnectorsChip workChat client={props.client} /> : <SubagentModelMenu client={props.client} chatModel={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} />}
           voiceClient={props.client}
           voiceWorkspaceId={props.workspaceId}

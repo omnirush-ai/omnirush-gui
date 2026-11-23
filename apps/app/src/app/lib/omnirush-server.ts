@@ -646,6 +646,8 @@ export type OmniRushWorkInsightsAlert = { kind: string; level: "warn" | "serious
 export type OmniRushWorkInsightsMember = {
   user_id: string;
   email: string;
+  /** The display name when the server sends one (the app also takes it from the members list). */
+  name?: string | null;
   role: string | null;
   job_role: string | null;
   activity: number;
@@ -678,7 +680,7 @@ export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | nu
 export type OmniRushWorkOnboardingInput = { company: string; domain?: string; size?: string; industry?: string; role?: string; tools: string[]; custom_tools?: string[] };
 export type OmniRushWorkOnboardingResult = { org: OmniRushWorkOrg; recommended_sources?: string[]; starters?: OmniRushWorkStarter[] };
 /** GET /omnirush/work/org/members (contract Addendum B2, C1 adds `you_role` and `org.tools`). */
-export type OmniRushWorkMember = { user_id: string; email: string; role: "owner" | "admin" | "member" | string; job_role?: string | null; tools?: string[] | null; you?: boolean };
+export type OmniRushWorkMember = { user_id: string; email: string; name?: string | null; role: "owner" | "admin" | "member" | string; job_role?: string | null; tools?: string[] | null; you?: boolean };
 export type OmniRushWorkInvite = { id: string; email: string; created_at?: string | null; expires_at?: string | null; link?: string | null };
 export type OmniRushWorkMembers = { org: OmniRushWorkOrg | null; members: OmniRushWorkMember[]; invites: OmniRushWorkInvite[]; you_role?: "owner" | "admin" | "member" | string };
 /** GET /omnirush/work/org/connectors: the connectors the company shows its members. Owners and admins (`can_manage`) also
