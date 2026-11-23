@@ -35,7 +35,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
@@ -221,6 +221,7 @@ function statusLabel(status: OmniRushWorkConnector["status"]): string {
   if (status === "syncing") return t("work.connectors.status_syncing");
   if (status === "error") return t("work.today.dot_attention");
   if (status === "disconnected") return t("work.error.not_connected");
+  if (status === "paused_by_admin") return t("work.connectors.status_paused");
   return t("work.connectors.status_unavailable");
 }
 
@@ -256,6 +257,8 @@ export function ConnectorRow(props: {
   const row = props.connector;
   const name = connectorLabel(row.id, row.label);
   const connected = row.status === "connected" || row.status === "syncing" || row.status === "error";
+  // Turned off by the company: what was connected stays, and Disconnect is the only button.
+  const paused = isPausedByAdmin(row);
   const problem = healthProblem(props.health ?? null);
   // The server's own account of a problem (contract Addendum C1) decides the button when it sends one.
   const attention = connected ? row.attention ?? null : null;
@@ -270,7 +273,7 @@ export function ConnectorRow(props: {
       <div className="min-w-[16rem] flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{name}</span>
-          <Badge variant={row.status === "error" || attention?.kind === "reconnect" || attention?.kind === "failing" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
+          <Badge variant={row.status === "error" || attention?.kind === "reconnect" || attention?.kind === "failing" ? "destructive" : row.status === "disconnected" || paused ? "outline" : "secondary"} data-testid="work-connector-status">
             {props.connecting ? t("work.common.waiting_sign_in") : attention ? statusLabel("error") : statusLabel(row.status)}
           </Badge>
         </div>
@@ -279,8 +282,15 @@ export function ConnectorRow(props: {
             ? sourceErrorText(row.error)
             : connected
               ? [row.account, coverage ?? countLabel(row.records, "work.count.records"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
-              : connectorAccess(row.id)}
+              : paused
+                ? [row.account, countLabel(row.records, "work.count.records")].filter(Boolean).join(" · ")
+                : connectorAccess(row.id)}
         </div>
+        {paused ? (
+          <div className="mt-0.5 break-words text-[12px] text-amber-11" data-testid="work-connector-paused" data-by={row.paused_by}>
+            {row.paused_by === "staff" ? t("work.connectors.paused_by_staff") : t("work.connectors.paused_by_org")}
+          </div>
+        ) : null}
         {attention ? (
           <div
             className={cn("mt-0.5 break-words text-[12px]", attention.kind === "reconnect" || attention.kind === "failing" ? "text-destructive" : "text-amber-11")}
@@ -333,7 +343,7 @@ export function ConnectorRow(props: {
       {connected && reconnect ? (
         <Button size="sm" aria-label={t("work.connectors.reconnect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.connectors.reconnect")}</Button>
       ) : null}
-      {connected ? (
+      {connected || paused ? (
         <Button variant="outline" size="sm" aria-label={t("work.connectors.disconnect_name", { name })} disabled={props.busy} onClick={props.onDisconnect}>{t("work.connectors.disconnect")}</Button>
       ) : (
         <Button size="sm" aria-label={t("work.connectors.connect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.common.connect")}</Button>
@@ -1209,7 +1219,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
       <ConfirmModal
         open={confirmDisconnect !== null}
         title={t("work.connectors.disconnect_title", { name: confirmDisconnect ? connectorLabel(confirmDisconnect.id, confirmDisconnect.label) : "" })}
-        message={t("work.connectors.disconnect_body")}
+        message={confirmDisconnect && isPausedByAdmin(confirmDisconnect) ? t("work.connectors.disconnect_body_paused") : t("work.connectors.disconnect_body")}
         confirmLabel={t("work.connectors.disconnect")}
         cancelLabel={t("common.cancel")}
         variant="danger"

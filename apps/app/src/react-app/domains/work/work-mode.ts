@@ -54,6 +54,7 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
+  | "getWorkOrgConnectors" | "setWorkOrgConnectors" | "setWorkMemberRole"
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
   | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
   | "importIMessage" | "getIMessageCount" | "getWhatsAppLocalCount" | "getTelegramCount"
@@ -66,6 +67,7 @@ export const workOnboardingKey = (client: WorkClient | null) => ["omnirush-work-
 export const workEntityKey = (client: WorkClient | null, id: string) => ["omnirush-work-entity", client?.baseUrl?.trim() || "default", id];
 export const workFeedKey = (client: WorkClient | null, source: string | null) => ["omnirush-work-feed", client?.baseUrl?.trim() || "default", source ?? "all"];
 export const workMembersKey = (client: WorkClient | null) => ["omnirush-work-members", client?.baseUrl?.trim() || "default"];
+export const workOrgConnectorsKey = (client: WorkClient | null) => ["omnirush-work-org-connectors", client?.baseUrl?.trim() || "default"];
 export const workChatToolsKey = (client: WorkClient | null) => ["omnirush-work-chat-tools", client?.baseUrl?.trim() || "default"];
 export const workInsightsKey = (client: WorkClient | null, days: number) => ["omnirush-work-insights", client?.baseUrl?.trim() || "default", days];
 export const workSettingsKey = (client: WorkClient | null) => ["omnirush-work-settings", client?.baseUrl?.trim() || "default"];
@@ -219,6 +221,8 @@ export const useWorkSetupStore = create<WorkSetupStore>()(
 export const DEMO_SOURCE = "demo";
 const LINKED = new Set(["connected", "syncing", "error"]);
 export const isLinked = (row: Pick<OmniRushWorkConnector, "status">) => LINKED.has(row.status);
+/** Turned off by the company (or OmniRush): the connection is kept, and Disconnect is the only thing it offers. */
+export const isPausedByAdmin = (row: Pick<OmniRushWorkConnector, "status">) => row.status === "paused_by_admin";
 export const hasSampleData = (onboarding: OmniRushWorkOnboarding | null | undefined) => onboarding?.sample_data === true;
 /** A real (non-sample) source is connected. */
 export const hasRealSource = (rows: OmniRushWorkConnector[] | null | undefined) => visibleConnectors(rows).some((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && isLinked(row));
@@ -235,7 +239,7 @@ export function domainFromEmail(email: string | null | undefined): string {
  *  pasted key) or inbound hook (both on Connectors). */
 export function connectOrder(rows: OmniRushWorkConnector[] | null | undefined, recommended: string[] = []): OmniRushWorkConnector[] {
   const rank = (id: string) => { const at = recommended.indexOf(id); return at === -1 ? recommended.length : at; };
-  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && !["import", "credentials", "key", "hook"].includes(row.mode ?? "")).sort((a, b) => rank(a.id) - rank(b.id));
+  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && !isPausedByAdmin(row) && !["import", "credentials", "key", "hook"].includes(row.mode ?? "")).sort((a, b) => rank(a.id) - rank(b.id));
 }
 
 /** A source connected with a form on Connectors (a server and password, or a pasted key), not a sign-in page. */
@@ -244,7 +248,7 @@ export const signsInWithForm = (rows: OmniRushWorkConnector[] | null | undefined
 
 /** A coverage "+" chip has somewhere to go on Connectors: an import card, or a row that signs in (Meetings has neither). */
 export const coverageCanAdd = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
-  isImportKind(id) || visibleConnectors(rows).some((row) => row.id === id && row.mode !== "import");
+  isImportKind(id) || visibleConnectors(rows).some((row) => row.id === id && row.mode !== "import" && !isPausedByAdmin(row));
 
 /** The first-run checklist: company, a source connected (or sample data), a first chat. */
 export function checklistItems(onboarding: OmniRushWorkOnboarding | null | undefined, rows: OmniRushWorkConnector[] | null | undefined) {
