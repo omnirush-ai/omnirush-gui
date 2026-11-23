@@ -43,6 +43,16 @@ describe("Electron distribution configs", () => {
     });
   });
 
+  it("lets macOS ask for the camera and microphone for calls in the built-in browser", async () => {
+    const config = await readConfig("electron-builder.base.yml");
+    assert.match(config.mac.extendInfo.NSCameraUsageDescription, /camera/);
+    assert.match(config.mac.extendInfo.NSMicrophoneUsageDescription, /microphone/);
+    const entitlements = await readFile(path.resolve(dirname, "..", "build", "entitlements.mac.plist"), "utf8");
+    const keys = [...entitlements.matchAll(/<key>([^<]+)<\/key>\s*<true\/>/g)].map((match) => match[1]);
+    assert.ok(keys.includes("com.apple.security.device.camera"));
+    assert.ok(keys.includes("com.apple.security.device.audio-input"));
+  });
+
   it("disables the Node debugging and NODE_OPTIONS fuses but keeps run-as-node", async () => {
     const config = await readConfig("electron-builder.base.yml");
     assert.deepEqual(config.electronFuses, {

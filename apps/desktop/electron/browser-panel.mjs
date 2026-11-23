@@ -4,6 +4,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import * as electronApi from "electron";
 import { app, BrowserWindow, WebContentsView, clipboard, dialog, session, shell } from "electron";
 import {
   BACKGROUND_TAB_VIEWPORT,
@@ -14,6 +15,7 @@ import {
 import { runDetachedTask } from "./process-resilience.mjs";
 import { listInstalledBrowsers } from "./installed-browsers.mjs";
 import { BrowserTaskError, createBrowserTaskHost } from "./browser-task.mjs";
+import { createSitePermissionStore, createSitePermissions, SITE_PROMPTS_ARGUMENT, USER_TAB_OWNER } from "./media-permissions.mjs";
 import { createWebMcpBroker } from "./webmcp-host.mjs";
 import { createWebMcpFramePolicy } from "./webmcp-policy.mjs";
 import { installBrowserPanelPermissionHandlers } from "./media-permissions.mjs";
@@ -128,7 +130,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       // Capture the first response, before a view can load any document.
       webMcpFramePolicy = createWebMcpFramePolicy(browserSession);
       webMcpFramePolicy.install();
-      installBrowserPanelPermissionHandlers(browserSession, { confirmExternal: confirmExternalProtocol });
+      installBrowserPanelPermissionHandlers(browserSession, { confirmExternal: confirmExternalProtocol, sitePermissions });
     }
     return browserSession;
   }
@@ -415,6 +417,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       canGoForward: webContents.canGoForward(),
       ownerSessionId: registry.ownerOf(tabId),
       browserApproval: tab.browserApproval ?? null,
+      sitePrompt: tab.sitePrompt ?? null,
       browserTask: tab.browserTask ?? { status: "idle", operation: null },
       siteToolCount: Number.isInteger(tab.webMcpToolCount) ? tab.webMcpToolCount : 0,
       siteTools: Array.isArray(tab.webMcpTools) ? tab.webMcpTools : [],
@@ -754,6 +757,120 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
   }
 
   const approvals = new Map();
+
+  // Calls and alerts (Work): camera, microphone, notifications and screen
+  // sharing ask per site in the person's own tabs; an agent's tab keeps them
+  // denied (media-permissions.mjs). The app turns them on for Work accounts.
+  let sitePromptsEnabled = false;
+  const sitePermissions = createSitePermissions({
+    store: createSitePermissionStore({ filePath: () => path.join(app.getPath("userData"), "browser-site-permissions.json") }),
+    enabled: () => sitePromptsEnabled,
+    tabFor: (contents) => {
+      const tab = [...browserTabs.values()].find((candidate) => candidate.view.webContents === contents);
+      return tab ? { tabId: tab.tabId, user: registry.ownerOf(tab.tabId) === USER_TAB_OWNER } : null;
+    },
+    contentsForFrame: (frame) => electronApi.webContents?.fromFrame?.(frame) ?? null,
+    show: (tabId, prompt) => {
+      const tab = browserTabs.get(tabId);
+      if (!tab) return;
+      const wasScreen = tab.sitePrompt?.kinds?.[0] === "screen";
+      tab.sitePrompt = prompt;
+      // The screen picker covers the page, like an approval; the bar sits above it.
+      const screen = prompt?.kinds?.[0] === "screen";
+      if ((screen || wasScreen) && !tab.view.webContents.isDestroyed() && !approvals.has(tabId)) tab.view.setVisible(!screen);
+      sendBrowserState();
+    },
+    systemAccess: async (kinds) => {
+      const prefs = electronApi.systemPreferences;
+      if (process.platform !== "darwin" && process.platform !== "win32") return true;
+      for (const kind of kinds) {
+        const device = kind === "camera" ? "camera" : "microphone";
+        const status = prefs?.getMediaAccessStatus?.(device) ?? "granted";
+        if (status === "granted") continue;
+        if (status === "not-determined" && process.platform === "darwin" && await prefs.askForMediaAccess(device)) continue;
+        if (status === "not-determined" && process.platform === "win32") continue;
+        return false;
+      }
+      return true;
+    },
+    onChange: () => {
+      for (const tab of browserTabs.values()) {
+        try {
+          if (!tab.view.webContents.isDestroyed()) tab.view.webContents.send("omnirush:browser:site-permissions-changed");
+        } catch { /* closing */ }
+      }
+      sendToRenderer("omnirush:browser:site-permissions-changed", {});
+    },
+  });
+
+  /** Screens and windows for the picker, each with a small preview. */
+  async function screenShareSources() {
+    const options = { types: ["screen", "window"], thumbnailSize: { width: 320, height: 200 }, fetchWindowIcons: false };
+    // macOS has no "not asked yet" for screen recording: anything but granted reads as denied. Listing sources makes
+    // macOS ask the first time; the picker then says where to turn it on (the app restarts after that).
+    if (process.platform === "darwin" && electronApi.systemPreferences?.getMediaAccessStatus?.("screen") !== "granted") {
+      runDetachedTask("ask for screen recording", () => electronApi.desktopCapturer.getSources(options));
+      return { access: "denied", sources: [] };
+    }
+    const found = await electronApi.desktopCapturer.getSources(options);
+    const sources = found
+      .filter((source) => source.id.startsWith("screen:") || source.name.trim())
+      .map((source) => ({
+        id: source.id,
+        name: source.name.trim().slice(0, 200),
+        kind: source.id.startsWith("screen:") ? "screen" : "window",
+        thumbnail: source.thumbnail && !source.thumbnail.isEmpty() ? source.thumbnail.toDataURL() : null,
+      }));
+    return { access: "granted", sources };
+  }
+
+  /** Where a computer turns the app's camera, microphone or screen recording on. */
+  function systemSettingsUrl(kind) {
+    if (process.platform === "darwin") {
+      const pane = kind === "camera" ? "Privacy_Camera" : kind === "screen" ? "Privacy_ScreenCapture" : "Privacy_Microphone";
+      return `x-apple.systempreferences:com.apple.preference.security?${pane}`;
+    }
+    if (process.platform === "win32") return kind === "camera" ? "ms-settings:privacy-webcam" : "ms-settings:privacy-microphone";
+    return null;
+  }
+
+  function registerSitePermissionIpc(ipcMain) {
+    const fromApp = (event) => event.sender === window()?.webContents && event.senderFrame === window()?.webContents.mainFrame;
+    ipcMain.handle("omnirush:browser:setSitePrompts", (event, enabled) => {
+      if (!fromApp(event)) return false;
+      sitePromptsEnabled = enabled === true;
+      if (!sitePromptsEnabled) sitePermissions.cancelAll();
+      return sitePromptsEnabled;
+    });
+    ipcMain.handle("omnirush:browser:answerSitePrompt", (event, tabId, promptId, choice) => {
+      if (!fromApp(event)) return false;
+      return sitePermissions.answer(String(tabId ?? ""), String(promptId ?? ""), choice);
+    });
+    ipcMain.handle("omnirush:browser:screenSources", async (event, tabId, promptId) => {
+      if (!fromApp(event)) return { access: "denied", sources: [] };
+      const prompt = sitePermissions.promptFor(String(tabId ?? ""));
+      if (!prompt || prompt.id !== promptId || prompt.kinds[0] !== "screen") return { access: "granted", sources: [] };
+      return screenShareSources();
+    });
+    ipcMain.handle("omnirush:browser:openSystemSettings", async (event, kind) => {
+      if (!fromApp(event)) return false;
+      const url = systemSettingsUrl(kind === "camera" || kind === "screen" ? kind : "microphone");
+      if (!url) return false;
+      await shell.openExternal(url);
+      return true;
+    });
+    ipcMain.handle("omnirush:browser:sitePermissions", (event) => (fromApp(event) ? sitePermissions.list() : []));
+    ipcMain.handle("omnirush:browser:forgetSitePermission", (event, origin) => (fromApp(event) ? sitePermissions.forget(String(origin ?? "")) : false));
+    // From a page's isolated world (browser-content-preload.cjs): never trusted for more than its own frame's state.
+    const fromTab = (event) => [...browserTabs.values()].some((tab) => tab.view.webContents === event.sender);
+    ipcMain.handle("omnirush:browser:site-permission-state", (event) => (
+      fromTab(event) ? sitePermissions.frameState(event.sender, event.senderFrame?.origin ?? event.senderFrame?.url ?? null) : null
+    ));
+    ipcMain.handle("omnirush:browser:screen-intent", (event) => (
+      fromTab(event) ? sitePermissions.noteScreenIntent(event.sender, event.senderFrame?.origin ?? event.senderFrame?.url ?? null) : false
+    ));
+  }
+
   function browserTabVisible(tabId) {
     const tab = getBrowserTab(tabId);
     return !!tab && browserViewVisible && registry.onScreenTabId() === tabId
@@ -903,6 +1020,8 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
         ...BROWSER_SECURITY_PREFERENCES,
         preload: path.join(__dirname, "browser-content-preload.cjs"),
         partition: BROWSER_SESSION_PARTITION,
+        // The person's own tabs, with Work's calls and alerts on: the page-world permission helper loads there only.
+        additionalArguments: ownerSessionId === USER_TAB_OWNER && sitePromptsEnabled ? [SITE_PROMPTS_ARGUMENT] : [],
       },
     });
     const tab = {
@@ -925,6 +1044,12 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     });
     view.webContents.on("media-started-playing", () => { tab.mediaPlaying = true; });
     view.webContents.on("media-paused", () => { tab.mediaPlaying = false; });
+    // A page's open questions about calls and alerts end when it leaves.
+    const contentsId = view.webContents.id;
+    view.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace && tab.sitePrompt) sitePermissions.cancelTab(tabId);
+    });
+    view.webContents.once("destroyed", () => sitePermissions.forgetContents(contentsId));
     view.webContents.on("will-prevent-unload", () => {
       // Do not preventDefault: the page's beforeunload veto must win.
       if (!tab.suspending || browserTabs.get(tabId) !== tab) return;
@@ -1290,6 +1415,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     const tab = getBrowserTab(tabId);
     if (!registry.has(tabId)) return null;
     approvals.get(tabId)?.finish(false);
+    sitePermissions.cancelTab(tabId);
     taskHost.invalidate(tabId, { closed: true });
     if (!preserve) suspendedTabs.delete(tabId);
     if (menuOverlayRequest?.tabId === tabId) hideMenuOverlay();
@@ -1678,10 +1804,13 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       invalidateWebMcpTab(tab);
       scheduleWebMcpToolCountRefresh(tab.tabId);
     });
+    registerSitePermissionIpc(ipcMain);
   }
 
   return {
     destroy: destroyBrowserView,
+    // Signing out of a company account clears these with the rest of the browser.
+    clearSitePermissions: () => sitePermissions.clear(),
     setMainWindowConcealed,
     isMainWindowAllowedNavigation,
     setMainWindowEntryUrl,

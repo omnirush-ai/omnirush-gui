@@ -1500,3 +1500,64 @@ test("minimizing the window parks the displayed tab and restoring brings it back
   assert.deepEqual(view.getBounds(), PANEL_BOUNDS);
   assert.equal(invoke("omnirush:browser:state").backgroundWindowCount, 0);
 });
+
+test("calls and alerts: the person's own tab asks and remembers, a conversation's tab is always refused", async () => {
+  const { invoke, emit, views, mainContents } = createPanel();
+  const USER = "__omnirush_no_session__";
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const user = invoke("omnirush:browser:createTab", "https://meet.google.com/abc-defg-hij", USER);
+  const agent = invoke("omnirush:browser:createTab", "https://meet.google.com/abc-defg-hij", "A");
+  await flush();
+  const [userContents, agentContents] = views().map((view) => view.webContents);
+  assert.equal(userContents.getURL(), "https://meet.google.com/abc-defg-hij");
+  assert.equal(agentContents.getURL(), "https://meet.google.com/abc-defg-hij");
+  assert.deepEqual(invoke("omnirush:browser:state").tabs.map((tab) => tab.ownerSessionId), [USER, "A"]);
+  const details = { mediaTypes: ["video", "audio"], requestingUrl: "https://meet.google.com/abc-defg-hij", isMainFrame: true };
+  /** @param {any} contents @param {string} [permission] @param {any} [extra] */
+  const request = (contents, permission = "media", extra = details) => new Promise((resolve) => browserSession.permissionRequest(contents, permission, resolve, extra));
+  const promptOf = (tabId) => invoke("omnirush:browser:state").tabs.find((tab) => tab.id === tabId)?.sitePrompt ?? null;
+
+  // Off until the app says the account has Work: everything stays denied, nothing is asked.
+  assert.equal(await request(userContents), false);
+  assert.equal(promptOf(user.tabId), null);
+  assert.equal(emit("omnirush:browser:setSitePrompts", { sender: {}, senderFrame: {} }, true), false, "only the app's own window turns it on");
+  assert.equal(invoke("omnirush:browser:setSitePrompts", true), true);
+
+  assert.equal(await request(agentContents), false, "a conversation's tab is refused without a question");
+  assert.equal(promptOf(agent.tabId), null);
+
+  const pending = request(userContents);
+  await flush();
+  const prompt = promptOf(user.tabId);
+  assert.deepEqual({ ...prompt, id: "x" }, { id: "x", origin: "https://meet.google.com", kinds: ["camera", "microphone"] });
+  assert.equal(emit("omnirush:browser:answerSitePrompt", { sender: userContents, senderFrame: {} }, user.tabId, prompt.id, "allow"), false, "a page cannot answer its own question");
+  assert.equal(invoke("omnirush:browser:answerSitePrompt", user.tabId, prompt.id, "allow"), true);
+  assert.equal(await pending, true);
+  assert.equal(promptOf(user.tabId), null);
+  assert.deepEqual(invoke("omnirush:browser:sitePermissions").map((entry) => [entry.origin, entry.camera, entry.microphone, entry.notifications]), [["https://meet.google.com", "allow", "allow", null]]);
+
+  // The same site in the agent's tab still gets nothing, through a request or a check.
+  assert.equal(await request(agentContents), false);
+  assert.equal(browserSession.permissionCheck(agentContents, "media", "https://meet.google.com/", { mediaType: "video", isMainFrame: true }), false);
+  assert.equal(browserSession.permissionCheck(userContents, "media", "https://meet.google.com/", { mediaType: "video", isMainFrame: true }), true);
+  assert.equal(await request(userContents), true, "remembered");
+
+  // The page world learns only its own frame's state; another sender learns nothing.
+  const frame = { origin: "https://meet.google.com" };
+  assert.deepEqual(await emit("omnirush:browser:site-permission-state", { sender: userContents, senderFrame: frame }), { camera: "allow", microphone: "allow", notifications: "ask" });
+  assert.equal(await emit("omnirush:browser:site-permission-state", { sender: agentContents, senderFrame: frame }), null);
+  assert.equal(await emit("omnirush:browser:site-permission-state", { sender: mainContents, senderFrame: mainContents.mainFrame }), null);
+
+  // Forgetting asks again; closing the tab answers its open question with no.
+  assert.equal(invoke("omnirush:browser:forgetSitePermission", "https://meet.google.com"), true);
+  const again = request(userContents, "notifications", { requestingUrl: "https://meet.google.com/abc-defg-hij", isMainFrame: true });
+  await flush();
+  assert.deepEqual(promptOf(user.tabId).kinds, ["notifications"]);
+  invoke("omnirush:browser:closeTab", user.tabId);
+  assert.equal(await again, false);
+
+  // Turning it off (another account signed in) refuses what was waiting.
+  invoke("omnirush:browser:setSitePrompts", false);
+  assert.equal(browserSession.permissionCheck(agentContents, "notifications", "https://meet.google.com/", { isMainFrame: true }), false);
+  invoke("omnirush:browser:closeAllTabs");
+});

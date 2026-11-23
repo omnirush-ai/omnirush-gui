@@ -318,6 +318,20 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
     clear() { return ipcRenderer.invoke("omnirush:browser-library:clear"); },
     openFullDiskAccess() { return ipcRenderer.invoke("omnirush:browser-library:openFullDiskAccess"); },
   },
+  // Calls and alerts in the built-in browser (Work): per-site camera, microphone, notifications and screen sharing.
+  browserSites: {
+    setPrompts(enabled) { return ipcRenderer.invoke("omnirush:browser:setSitePrompts", enabled === true); },
+    answer(tabId, promptId, choice) { return ipcRenderer.invoke("omnirush:browser:answerSitePrompt", tabId, promptId, choice); },
+    screenSources(tabId, promptId) { return ipcRenderer.invoke("omnirush:browser:screenSources", tabId, promptId); },
+    openSystemSettings(kind) { return ipcRenderer.invoke("omnirush:browser:openSystemSettings", kind); },
+    list() { return ipcRenderer.invoke("omnirush:browser:sitePermissions"); },
+    forget(origin) { return ipcRenderer.invoke("omnirush:browser:forgetSitePermission", origin); },
+    onChanged(callback) {
+      const handler = () => callback();
+      ipcRenderer.on("omnirush:browser:site-permissions-changed", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser:site-permissions-changed", handler);
+    },
+  },
   terminal: {
     shells() { return ipcRenderer.invoke("omnirush:terminal:shells"); },
     create(options) { return ipcRenderer.invoke("omnirush:terminal:create", options); },

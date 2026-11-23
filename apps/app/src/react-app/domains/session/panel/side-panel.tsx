@@ -48,6 +48,7 @@ import {
 } from "./utils";
 import { LoginSyncCard } from "../../browser-logins/login-sync-card";
 import { RecordPanel, RecordTabIcon } from "../../work/viewer/record-panel-entry";
+import { ScreenSharePicker, SitePermissionBar } from "../../browser-logins/site-permission-bar";
 
 type SidePanelProps = {
   sessionId: string;
@@ -509,6 +510,7 @@ function BrowserPanelContent({
           <X />
         </Button>
       </div>
+      <SitePermissionBar tab={tab} />
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {isAvailable ? (
           <div ref={contentRef} className="h-full overflow-hidden">
@@ -521,6 +523,7 @@ function BrowserPanelContent({
             ) : null}
           </div>
         ) : null}
+        <ScreenSharePicker tab={tab} />
         {tab.browserApproval ? (
           <div className="absolute inset-0 z-10 flex flex-col justify-center gap-3 overflow-y-auto bg-background p-5 text-sm" role="region" aria-label="Browser permission request">
             <h3 className="font-semibold">{tab.browserApproval.title}</h3>

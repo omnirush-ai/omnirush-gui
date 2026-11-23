@@ -227,6 +227,37 @@ export type BrowserLibraryBridge = {
 
 export type { BrowserStatePayload } from "@omnirush/browser-tabs";
 
+/** What a site may be allowed or blocked (remembered per site); screen sharing is asked every time. */
+export type BrowserSiteKind = "camera" | "microphone" | "notifications";
+
+/** One site's remembered choices in the built-in browser, kept on this computer only. */
+export type BrowserSitePermission = {
+  origin: string;
+  camera: "allow" | "block" | null;
+  microphone: "allow" | "block" | null;
+  notifications: "allow" | "block" | null;
+  at: number;
+};
+
+/** A screen or window the person can share with a page. */
+export type BrowserScreenSource = { id: string; name: string; kind: "screen" | "window"; thumbnail: string | null };
+
+/**
+ * Calls and alerts in the built-in browser (Work): camera, microphone, notifications and screen sharing ask per site,
+ * in the person's own tabs only.
+ */
+export type BrowserSitesBridge = {
+  /** Work accounts turn the questions on; everyone else keeps every one of them denied. */
+  setPrompts: (enabled: boolean) => Promise<boolean>;
+  /** The answer to a tab's question: remembered for the site ("allow", "block"), this time only, or a screen to share. */
+  answer: (tabId: string, promptId: string, choice: "allow" | "block" | "dismiss" | { share: { id: string; name: string } }) => Promise<boolean>;
+  screenSources: (tabId: string, promptId: string) => Promise<{ access: "granted" | "denied"; sources: BrowserScreenSource[] }>;
+  openSystemSettings: (kind: "camera" | "microphone" | "screen") => Promise<boolean>;
+  list: () => Promise<BrowserSitePermission[]>;
+  forget: (origin: string) => Promise<boolean>;
+  onChanged: (callback: () => void) => () => void;
+};
+
 export type BrowserProxyState = {
   proxy: { rules: string; authenticated: boolean } | null;
 };
@@ -447,6 +478,7 @@ declare global {
       };
       browserLogins?: BrowserLoginSyncBridge;
       browserLibrary?: BrowserLibraryBridge;
+      browserSites?: BrowserSitesBridge;
       terminal?: {
         shells?: () => Promise<Array<{ id: string; label: string }>>;
         create?: (options: { cwd: string; cols: number; rows: number; workspaceId?: string; shellId?: string | null }) => Promise<{ terminalId: string; shellId?: string; shellLabel?: string; cwd?: string }>;

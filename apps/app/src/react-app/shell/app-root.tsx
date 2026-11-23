@@ -28,6 +28,7 @@ import { ForcedSigninPage } from "../domains/cloud/forced-signin-page";
 import { EnterpriseActivationGate } from "../domains/cloud/enterprise-activation-gate";
 import { OmniRushWebAccessGate } from "../domains/cloud/omnirush-web-access-gate";
 import { OrgOnboardingPage } from "../domains/cloud/org-onboarding-page";
+import { BrowserSitePrompts } from "../domains/browser-logins/site-permission-bar";
 import { NewProvidersListener } from "./new-providers-listener";
 import { BudgetWrapConsent } from "./budget-wrap-consent";
 import { AutoCompactNotice } from "./auto-compact-notice";
@@ -540,6 +541,7 @@ export function AppRoot() {
                   <AllowanceHelpDialog />
                   {isDesktopRuntime() ? <ConsumerOnly><BuildathonLayer /></ConsumerOnly> : null}
                   {isDesktopRuntime() ? <TurnRunningSync /> : null}
+                  {isDesktopRuntime() ? <BrowserSitePrompts /> : null}
                 </CloudWorkspaceStatusProvider>
               </OmniRushWebAccessGate>
             </DenSigninGate>

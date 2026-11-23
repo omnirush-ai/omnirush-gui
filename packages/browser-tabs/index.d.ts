@@ -31,6 +31,11 @@ export type BrowserPanelTab = {
   /** Conversation (session) that opened the tab; null for shared/legacy tabs. */
   ownerSessionId: string | null;
   browserApproval?: { id: string; title: string; message: string; detail: string; approveLabel?: string } | null;
+  /**
+   * A page in the person's own tab asks for its camera, microphone, notifications or a screen to share (one question
+   * at a time). `system`: the computer blocks the app itself, so the bar says where to turn it on.
+   */
+  sitePrompt?: { id: string; origin: string; kinds: Array<"camera" | "microphone" | "notifications" | "screen">; system?: boolean } | null;
   browserTask?: { status: "idle" | "running" | "paused" | "needs_attention"; operation: string | null };
   siteToolCount: number;
   siteTools: Array<{

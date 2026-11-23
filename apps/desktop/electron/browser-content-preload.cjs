@@ -299,6 +299,117 @@ function installWebMcpRuntime() {
   return true;
 }
 
+// Calls and alerts (Work, the person's own tabs). Electron can only tell a page
+// "granted" or "denied" when it checks a permission, so a site the person has
+// not answered yet would read "denied" and never ask. In the page's world this
+// reports "prompt" (and Notification.permission "default") for those, from the
+// state the app gives this frame; the app still answers every real request.
+// getDisplayMedia also tells the app it is the caller first: Electron hands a
+// page that uses the old chromeMediaSource constraint the whole screen with no
+// picker, so the app lets a screen request through only right after it.
+// Serialized into the page's main world: keep it self-contained.
+function installSitePermissionRuntime() {
+  const bridge = globalThis.__omnirushSitePermissionsV1;
+  if (!bridge || typeof bridge.state !== "function") return false;
+  const asking = (name) => {
+    try {
+      return bridge.state()?.[name] === "ask";
+    } catch {
+      return false;
+    }
+  };
+  try {
+    const Notice = globalThis.Notification;
+    const descriptor = Notice ? Object.getOwnPropertyDescriptor(Notice, "permission") : null;
+    if (descriptor?.get && descriptor.configurable) {
+      const read = descriptor.get;
+      Object.defineProperty(Notice, "permission", {
+        configurable: true,
+        enumerable: descriptor.enumerable,
+        get: { permission() {
+          const value = read.call(this);
+          return value === "denied" && asking("notifications") ? "default" : value;
+        } }.permission,
+      });
+    }
+  } catch {}
+  try {
+    const PermissionsApi = globalThis.Permissions;
+    const Status = globalThis.PermissionStatus;
+    const query = PermissionsApi?.prototype?.query;
+    const stateOf = Status ? Object.getOwnPropertyDescriptor(Status.prototype, "state")?.get : null;
+    const names = { camera: "camera", microphone: "microphone", notifications: "notifications" };
+    if (typeof query === "function" && stateOf) {
+      PermissionsApi.prototype.query = { query(descriptor) {
+        const name = descriptor && typeof descriptor === "object" && Object.prototype.hasOwnProperty.call(names, descriptor.name) ? names[descriptor.name] : undefined;
+        return query.call(this, descriptor).then((status) => {
+          if (name && status && typeof status === "object") {
+            Object.defineProperty(status, "state", {
+              configurable: true,
+              enumerable: true,
+              get() {
+                const value = stateOf.call(this);
+                return value === "denied" && asking(name) ? "prompt" : value;
+              },
+            });
+          }
+          return status;
+        });
+      } }.query;
+    }
+  } catch {}
+  try {
+    const Devices = globalThis.MediaDevices;
+    const display = Devices?.prototype?.getDisplayMedia;
+    if (typeof display === "function") {
+      Devices.prototype.getDisplayMedia = { getDisplayMedia(...args) {
+        let intent;
+        try {
+          intent = Promise.resolve(bridge.screenIntent?.());
+        } catch {
+          intent = Promise.resolve();
+        }
+        return intent.catch(() => undefined).then(() => display.apply(this, args));
+      } }.getDisplayMedia;
+    }
+  } catch {}
+  return true;
+}
+
+/**
+ * The isolated half: this frame's state from the app, kept fresh, and the getDisplayMedia notice. Only in the
+ * person's own tabs with Work's calls and alerts on (the app passes --omnirush-site-prompts); every other page,
+ * an agent's tab included, keeps the browser exactly as it was.
+ */
+function installSitePermissionBridge() {
+  if (typeof contextBridge?.exposeInMainWorld !== "function" || !ipcRenderer?.invoke) return;
+  const argv = typeof process !== "undefined" && Array.isArray(process.argv) ? process.argv : [];
+  if (!argv.includes("--omnirush-site-prompts")) return;
+  let protocol = "";
+  try {
+    protocol = String(location.protocol);
+  } catch {}
+  if (protocol !== "https:" && protocol !== "http:") return;
+  let state = null;
+  const pick = (value) => (value === "ask" || value === "allow" || value === "block" ? value : "block");
+  const refresh = () => ipcRenderer.invoke("omnirush:browser:site-permission-state").then((value) => {
+    state = value && typeof value === "object"
+      ? { camera: pick(value.camera), microphone: pick(value.microphone), notifications: pick(value.notifications) }
+      : null;
+  }, () => { state = null; });
+  void refresh();
+  ipcRenderer.on?.("omnirush:browser:site-permissions-changed", () => { void refresh(); });
+  contextBridge.exposeInMainWorld("__omnirushSitePermissionsV1", {
+    state: () => (state ? { ...state } : null),
+    screenIntent: () => ipcRenderer.invoke("omnirush:browser:screen-intent").then(() => undefined, () => undefined),
+  });
+  if (typeof contextBridge.executeInMainWorld === "function") {
+    contextBridge.executeInMainWorld({ func: installSitePermissionRuntime });
+  } else if (typeof webFrame?.executeJavaScript === "function") {
+    void webFrame.executeJavaScript(`(${installSitePermissionRuntime.toString()})()`);
+  }
+}
+
 function dismissMenuOverlay() {
   ipcRenderer?.send("omnirush:menu-overlay:dismiss");
 }
@@ -363,6 +474,11 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   } catch (error) {
     console.warn("[browser] could not install the WebMCP compatibility runtime", error);
   }
+  try {
+    installSitePermissionBridge();
+  } catch (error) {
+    console.warn("[browser] could not install the site permission helper", error);
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", installDismissListeners, { once: true });
@@ -372,4 +488,4 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   installToolChangeRelay();
 }
 
-if (typeof module !== "undefined") module.exports = { installWebMcpRuntime };
+if (typeof module !== "undefined") module.exports = { installWebMcpRuntime, installSitePermissionRuntime };

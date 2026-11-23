@@ -239,3 +239,117 @@ test("aborting while registration is pending rejects and unregisters atomically"
     realm.restore();
   }
 });
+
+// Calls and alerts (Work): the page-world helper.
+const { installSitePermissionRuntime } = require("./browser-content-preload.cjs");
+
+function sitePermissionRealm(state, { intent = async () => {} } = {}) {
+  const calls = [];
+  const realm = {};
+  class PermissionStatus {
+    constructor(value) { this.value = value; }
+    get state() { return this.value; }
+  }
+  class Permissions {
+    query(descriptor) { calls.push(["query", descriptor.name]); return Promise.resolve(new PermissionStatus("denied")); }
+  }
+  class MediaDevices {
+    getDisplayMedia(options) { calls.push(["getDisplayMedia", options]); return Promise.resolve("stream"); }
+  }
+  class Notification {
+    static get permission() { return realm.notificationPermission; }
+  }
+  realm.notificationPermission = "denied";
+  const script = `(${installSitePermissionRuntime.toString()})()`;
+  const context = {
+    Notification, Permissions, PermissionStatus, MediaDevices,
+    __omnirushSitePermissionsV1: {
+      state: () => (typeof state === "function" ? state() : state),
+      screenIntent: () => { calls.push(["intent"]); return intent(); },
+    },
+  };
+  context.globalThis = context;
+  const installed = runInNewContext(script, context);
+  return { context, calls, installed, realm };
+}
+
+test("a site the person has not answered reads as 'ask', not 'blocked', so it can ask", async () => {
+  const { context, installed } = sitePermissionRealm({ camera: "ask", microphone: "allow", notifications: "ask" });
+  assert.equal(installed, true);
+  assert.equal(context.Notification.permission, "default");
+  const permissions = new context.Permissions();
+  assert.equal((await permissions.query({ name: "camera" })).state, "prompt");
+  assert.equal((await permissions.query({ name: "notifications" })).state, "prompt");
+  // Not "ask": the browser's own answer stands (a remembered block, or an allow the browser already reports).
+  assert.equal((await permissions.query({ name: "microphone" })).state, "denied");
+  assert.equal((await permissions.query({ name: "geolocation" })).state, "denied");
+});
+
+test("blocked sites, agents' tabs and accounts without Work keep the browser's own 'denied'", async () => {
+  for (const state of [{ camera: "block", microphone: "block", notifications: "block" }, null]) {
+    const { context } = sitePermissionRealm(state);
+    assert.equal(context.Notification.permission, "denied");
+    assert.equal((await new context.Permissions().query({ name: "camera" })).state, "denied");
+  }
+  const thrower = sitePermissionRealm(() => { throw new Error("bridge gone"); });
+  assert.equal(thrower.context.Notification.permission, "denied");
+  // No bridge at all: nothing is installed.
+  assert.equal(runInNewContext(`(${installSitePermissionRuntime.toString()})()`, { globalThis: {} }), false);
+});
+
+test("getDisplayMedia tells the app first, then asks the browser with the page's own arguments", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { context, calls } = sitePermissionRealm({ camera: "ask", microphone: "ask", notifications: "ask" }, { intent: () => gate });
+  const devices = new context.MediaDevices();
+  const result = devices.getDisplayMedia({ video: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [["intent"]], "the browser is not asked before the app heard");
+  release();
+  assert.equal(await result, "stream");
+  assert.deepEqual(calls, [["intent"], ["getDisplayMedia", { video: true }]]);
+  const failing = sitePermissionRealm(null, { intent: () => Promise.reject(new Error("no app")) });
+  assert.equal(await new failing.context.MediaDevices().getDisplayMedia({ video: true }), "stream", "a failed notice still lets the browser answer (and refuse)");
+});
+
+test("the helper loads only in the person's own tabs with calls and alerts on, and reads only its own frame's state", async () => {
+  function load(argv, protocol = "https:") {
+    const exposed = {};
+    const invoked = [];
+    const listeners = new Map();
+    const executed = [];
+    runInNewContext(readFileSync(require.resolve("./browser-content-preload.cjs"), "utf8"), {
+      require: () => ({
+        ipcRenderer: {
+          on: (channel, handler) => listeners.set(channel, handler),
+          send() {},
+          invoke: async (...args) => { invoked.push(args); return args[0] === "omnirush:browser:site-permission-state" ? { camera: "ask", microphone: "allow", notifications: "nonsense" } : { originKeyed: false }; },
+        },
+        contextBridge: {
+          exposeInMainWorld: (name, api) => { exposed[name] = api; },
+          executeInMainWorld: (script) => executed.push(script.func?.name),
+        },
+      }),
+      process: { argv },
+      window: { addEventListener() {}, frames: [] }, document: { readyState: "complete", addEventListener() {} },
+      location: { protocol, hostname: "meet.google.com" }, URL,
+    });
+    return { exposed, invoked, listeners, executed };
+  }
+  const off = load(["electron"]);
+  assert.equal(off.exposed.__omnirushSitePermissionsV1, undefined, "an agent's tab or a consumer's page gets nothing new");
+  assert.deepEqual(off.invoked.filter(([channel]) => channel.startsWith("omnirush:browser:")), []);
+  assert.deepEqual(off.executed, ["installWebMcpRuntime"]);
+  assert.equal(load(["electron", "--omnirush-site-prompts"], "about:").exposed.__omnirushSitePermissionsV1, undefined);
+
+  const on = load(["electron", "--omnirush-site-prompts"]);
+  const bridge = on.exposed.__omnirushSitePermissionsV1;
+  assert.deepEqual([...Object.keys(bridge)].sort(), ["screenIntent", "state"]);
+  assert.deepEqual(on.executed, ["installWebMcpRuntime", "installSitePermissionRuntime"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(on.invoked.filter(([channel]) => channel.startsWith("omnirush:browser:")), [["omnirush:browser:site-permission-state"]], "no page data goes with it");
+  assert.deepEqual(JSON.parse(JSON.stringify(bridge.state())), { camera: "ask", microphone: "allow", notifications: "block" }, "an unknown answer reads as blocked");
+  await bridge.screenIntent("page data is ignored");
+  assert.deepEqual(on.invoked.at(-1), ["omnirush:browser:screen-intent"]);
+  assert.ok(on.listeners.has("omnirush:browser:site-permissions-changed"));
+});
