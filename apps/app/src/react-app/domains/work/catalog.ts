@@ -24,6 +24,15 @@ export type CatalogGroup = { id: string; label: string; tools: CatalogTool[] };
 export type LocalPlatform = { mac: boolean; desktop: boolean };
 
 const BUILT_IN_CATEGORIES = ["email", "chat", "docs", "projects", "sales", "finance", "automation"] as const;
+const CATEGORY_LABEL_KEYS: Record<(typeof BUILT_IN_CATEGORIES)[number], string> = {
+  email: "work.catalog.email",
+  chat: "work.catalog.chat",
+  docs: "work.catalog.docs",
+  projects: "work.catalog.projects",
+  sales: "work.catalog.sales",
+  finance: "work.catalog.finance",
+  automation: "work.catalog.automation",
+};
 
 type BuiltIn = Omit<CatalogTool, "offered"> & { local?: "mac" | "desktop" };
 const tool = (id: string, label: string, category: string, extra: Partial<BuiltIn> = {}): BuiltIn => ({ id, label, category, ...extra });
@@ -104,7 +113,7 @@ export function builtInCatalog(sources: readonly string[]): OmniRushWorkCatalog 
   return {
     version: 0,
     sizes: [...WORK_SIZES],
-    categories: BUILT_IN_CATEGORIES.map((id) => ({ id, label: t(`work.catalog.${id}`) })),
+    categories: BUILT_IN_CATEGORIES.map((id) => ({ id, label: t(CATEGORY_LABEL_KEYS[id]) })),
     connectors: BUILT_IN_TOOLS.map(({ local: _local, ...row }) => ({ ...row, label: generic[row.id] ?? row.label, offered: listed.has(row.id) })),
   };
 }
