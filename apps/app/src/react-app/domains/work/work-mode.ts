@@ -286,7 +286,7 @@ export const WORK_TOOL_PREFIX = "omnirush-work_";
 const WORK_APPS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
   slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
-  linear: "Linear", github: "GitHub",
+  linear: "Linear", github: "GitHub", salesforce: "Salesforce", xero: "Xero",
 };
 function workAction(action: string): string | undefined {
   const actions: Record<string, string> = {
@@ -316,7 +316,7 @@ const CONNECTOR_LABELS: Record<string, string> = {
   notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", asana: "Asana", dropbox: "Dropbox", zoom: "Zoom",
   whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
   imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)", stripe: "Stripe", freshdesk: "Freshdesk", pipedrive: "Pipedrive",
-  hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)",
+  hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)", salesforce: "Salesforce", xero: "Xero",
 };
 export const connectorLabel = (id: string, label?: string | null) =>
   label?.trim() || CONNECTOR_LABELS[id] || (id === "mock" ? t("work.connector.mock") : id === "demo" ? t("work.connector.demo") : id);
@@ -342,6 +342,8 @@ export function connectorAccess(id: string): string {
     stripe: t("work.connector.access_stripe"),
     freshdesk: t("work.connector.access_freshdesk"),
     pipedrive: t("work.connector.access_pipedrive"),
+    salesforce: t("work.connector.access_salesforce"),
+    xero: t("work.connector.access_xero"),
   };
   return access[id] ?? t("work.connector.access_other");
 }

@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { matchRoutes, MemoryRouter } from "react-router";
 
 import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, checklistItems, connectorAccess, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
+import { askAboutPrompt, checklistItems, connectorAccess, connectorLabel, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
   askAboutItemPrompt, coverageLine, relativeTime, workActionsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
@@ -679,6 +679,33 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     } finally {
       if (registered) await GlobalRegistrator.unregister();
     }
+  });
+
+  test("Salesforce and Xero: company marks, copy, tool names, and Xero's organisation picker", () => {
+    for (const id of ["salesforce", "xero"]) {
+      const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);
+      expect(icon).toContain(`data-connector-icon="${id}"`);
+      expect(icon).toMatch(/<path fill="#[0-9A-F]{6}"/);
+      expect(connectorAccess(id)).toContain("only after you approve");
+      expect(connectorAccess(id)).not.toMatch(/[\u2013\u2014]/);
+    }
+    expect(connectorLabel("salesforce")).toBe("Salesforce");
+    expect(connectorLabel("xero")).toBe("Xero");
+    expect(workToolPermission("omnirush-work_salesforce_create_task")?.label).toBe("Create a task (Salesforce)");
+    expect(workToolPermission("omnirush-work_salesforce_comment")?.label).toBe("Add a comment (Salesforce)");
+    expect(workToolPermission("omnirush-work_xero_note")?.label).toBe("Add a note (Xero)");
+    expect(workToolPermission("omnirush-work_xero_create_invoice_draft")?.label).toBe("Create an invoice draft (Xero)");
+    const choices = [
+      { id: "t1", name: "Acme Ltd", picked: true },
+      { id: "t2", name: "Acme Holdings", picked: true },
+    ];
+    const markup = (id: string, label: string) =>
+      renderToStaticMarkup(
+        <ConnectorRow connector={row({ id, label, status: "connected", records: 3, sync_enabled: true, choices })}
+          connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onPick={noop} />,
+      );
+    expect(markup("xero", "Xero")).toContain("Organisations to read");
+    expect(markup("asana", "Asana")).toContain("Workspaces to read");
   });
 
   test("Asana, Dropbox and Zoom: company marks, read-only copy, and Asana's workspace picker", async () => {
