@@ -235,8 +235,8 @@ export function EventView(props: { record: WorkRecord }) {
               <li key={person.email ?? person.name ?? index} className="flex items-center gap-2.5 py-1">
                 <Avatar person={person} size="sm" />
                 <PersonName person={person} className="min-w-0 text-[13px] text-foreground" />
-                {person.organizer ? <span className="shrink-0 text-[11px] text-muted-foreground">{t("work.viewer.organizer_tag")}</span> : null}
-                {person.optional ? <span className="shrink-0 text-[11px] text-muted-foreground">{t("work.viewer.optional")}</span> : null}
+                {person.organizer ? <span className="shrink-0 text-[12px] text-muted-foreground">{t("work.viewer.organizer_tag")}</span> : null}
+                {person.optional ? <span className="shrink-0 text-[12px] text-muted-foreground">{t("work.viewer.optional")}</span> : null}
                 <span className="ms-auto flex shrink-0 items-center gap-1 text-[12px] text-muted-foreground"><AnswerMark answer={person.response} />{answerLabel(person.response)}</span>
               </li>
             ))}

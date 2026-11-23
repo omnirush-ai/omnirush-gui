@@ -25,7 +25,7 @@ import {
 import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkOrgConnectors, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workRoleLabel, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
 import { BrandTile } from "./brand-icon";
 import { pickerGroups, sizeLabel, toolLabel, useWorkCatalog } from "./catalog";
-import { ListMore, ListSearch, matchesQuery, PersonAvatar, useListCap } from "./list-cap";
+import { ListMore, ListSearch, matchesQuery, PersonAvatar, useListCap, WORK_DESTRUCTIVE } from "./list-cap";
 import { useEnterpriseFlags } from "./enterprise-mode";
 import { SizeChips, ToolPicker } from "./onboarding-steps";
 import { TRUST_URL, WorkInviteDialog } from "./work-onboarding";
@@ -256,6 +256,8 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const owner = data?.you_role === "owner";
   const admin = data?.you_role === "admin";
   const canInvite = !enterprise.on || owner || admin;
+  // The owner and the admins change the company profile (the server's `update_org` takes both).
+  const canEdit = owner || admin;
   const canRemove = (member: OmniRushWorkMember) => owner || (enterprise.on && admin && member.role === "member");
   const you = data?.members.find((member) => member.you) ?? null;
   // The company's connector list; an older server has none (404), so the page stays as it was: no section, no admins.
@@ -334,7 +336,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   });
   const leaving = leaveState(data);
   const allMembers = data?.members ?? [];
-  const foundMembers = allMembers.filter((member) => matchesQuery(memberQuery, member.email, member.job_role, workRoleLabel(member.role)));
+  const foundMembers = allMembers.filter((member) => matchesQuery(memberQuery, member.name, member.email, member.job_role, workRoleLabel(member.role)));
   const memberCap = useListCap(foundMembers.length, MEMBERS_SHOWN);
   const invites = data?.invites ?? [];
   const inviteCap = useListCap(invites.length, INVITES_SHOWN, invites.length);
@@ -368,11 +370,11 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
           <>
             <Section
               title={t("work.org.company")}
-              description={owner ? undefined : t("work.org.owner_only")}
+              description={canEdit ? undefined : t("work.org.owner_only")}
               testId="work-org-company"
-              actions={owner && !editing ? <Button size="sm" variant="outline" onClick={() => setEditing(true)} data-testid="work-org-edit"><Pencil className="size-3.5" />{t("work.org.edit")}</Button> : null}
+              actions={canEdit && !editing ? <Button size="sm" variant="outline" onClick={() => setEditing(true)} data-testid="work-org-edit"><Pencil className="size-3.5" />{t("work.org.edit")}</Button> : null}
             >
-              {owner && editing ? (
+              {canEdit && editing ? (
                 <form
                   className="flex flex-col gap-4 rounded-xl border border-border px-4 py-4"
                   onSubmit={(event) => { event.preventDefault(); if (company.name.trim() && companyChanged && !saveOrg.isPending) saveOrg.mutate(); }}
@@ -448,10 +450,15 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
               <ul className="rounded-xl border border-border">
                 {foundMembers.slice(0, memberCap.shown).map((member) => (
                   <li key={member.user_id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-member={member.user_id} data-role={member.role}>
-                    <PersonAvatar name={member.email} />
+                    <PersonAvatar name={member.name || member.email} />
                     <div className="min-w-[12rem] flex-1">
-                      <div className="truncate text-[14px] font-medium" title={member.email}>{member.email}{member.you ? <span className="font-normal text-muted-foreground"> {t("work.org.you_tag")}</span> : null}</div>
-                      {member.job_role ? <div className="truncate text-[13px] text-muted-foreground" title={member.job_role}>{member.job_role}</div> : null}
+                      <div className="truncate text-[14px] font-medium" title={member.name?.trim() ? `${member.name.trim()} (${member.email})` : member.email}>{member.name?.trim() || member.email}{member.you ? <span className="font-normal text-muted-foreground"> {t("work.org.you_tag")}</span> : null}</div>
+                      {/* The e-mail under a name, then the job role; only the job role when there is no name. */}
+                      {member.name?.trim() || member.job_role ? (
+                        <div className="truncate text-[13px] text-muted-foreground" title={[member.name?.trim() ? member.email : null, member.job_role].filter(Boolean).join(" · ")}>
+                          {[member.name?.trim() ? member.email : null, member.job_role].filter(Boolean).join(" · ")}
+                        </div>
+                      ) : null}
                     </div>
                     <RolePill role={member.role} />
                     {owner && !member.you ? (
@@ -538,7 +545,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
             <Section title={t("work.org.leave_title")} testId="work-org-leave">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
                 <span className="max-w-[32rem] text-[14px] text-muted-foreground">{leaving.message}</span>
-                <Button variant="destructive" size="sm" disabled={leaving.blocked || leave.isPending} onClick={() => setConfirm({ kind: "leave" })} data-testid="work-org-leave-button">{t("work.org.leave")}</Button>
+                <Button variant="destructive" size="sm" className={WORK_DESTRUCTIVE} disabled={leaving.blocked || leave.isPending} onClick={() => setConfirm({ kind: "leave" })} data-testid="work-org-leave-button">{t("work.org.leave")}</Button>
               </div>
             </Section>
           </>
