@@ -135,7 +135,7 @@ const WORK_ERRORS: Record<string, string> = {
   bad_redirect: "The calendar server sent us to an address that does not work. Check the URL.",
   key_not_restricted: "Use a restricted key (it starts with rk_), not your secret key.",
   missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Refunds, and Events.",
-  no_bases: "That token has no bases. Add the bases to read to the token in Airtable.",
+  no_bases: "That token has no bases with records you can read. Add the bases to read to the token in Airtable.",
   no_links: "Add at least one Figma team, project or file link.",
   bad_link: "That is not a Figma team, project or file link. Copy it from the address bar in Figma.",
   too_many_links: "That is more than 20 links. A team link covers all its projects.",

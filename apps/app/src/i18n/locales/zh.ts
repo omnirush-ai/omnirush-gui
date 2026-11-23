@@ -2777,7 +2777,7 @@ export default {
   "work.connector.access_figma": "读取你链接的 Figma 团队、项目和文件中的文件，包括版本和评论。只有在你批准后才会评论。",
   "work.key.label_token": "个人访问令牌",
   "work.key.where_airtable": "在 Airtable 中打开 Builder hub，再打开“Personal access tokens”，创建一个令牌。添加权限 data.records:read、data.recordComments:read 和 schema.bases:read；如需让助手添加记录和评论，再加上 data.records:write 和 data.recordComments:write。添加 user.email:read 可显示你的邮箱。然后添加要读取的 Base。令牌以 pat 开头。",
-  "work.key.where_calendly": "在 Calendly 中打开个人资料菜单，再打开“Developer”和“Personal access tokens”，创建一个令牌。给它 users:read、scheduled_events:read 和 event_types:read；如需预约链接，再加上 scheduling_links:write。Calendly 只显示一次。",
+  "work.key.where_calendly": "在 Calendly 中打开“Integrations & apps”，再打开“API and webhooks”，创建一个个人访问令牌（Personal access token）。给它 users:read、scheduled_events:read 和 event_types:read；如需预约链接，再加上 scheduling_links:write。Calendly 只显示一次。",
   "work.key.where_figma": "在 Figma 中打开“设置”，再打开“安全”，生成个人访问令牌。给它 current_user:read、folders:read、file_metadata:read、file_comments:read 和 file_versions:read；如需读取页面和添加评论，再加上 file_content:read 和 file_comments:write。Figma 令牌最长有效 90 天。",
   "work.key.links_figma": "要读取的团队、项目或文件链接，每行一个。Figma 无法为我们列出所有文件。一个团队链接包含它的所有项目。之后要更改，请断开后重新连接。",
   "work.key.note_token_write": "令牌会在保存前检查，并在我们的服务器上加密保存。未经你批准，不会发布或创建任何内容。",
