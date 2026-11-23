@@ -52,8 +52,8 @@
 import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
-import type { ServerConfig, WorkspaceInfo } from "../types.js";
 import { registerWorkCloudRoutes } from "./cloud-routes.js";
+import type { ServerConfig, WorkspaceInfo } from "../types.js";
 import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {

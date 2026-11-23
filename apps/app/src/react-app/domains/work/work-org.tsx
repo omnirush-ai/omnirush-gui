@@ -25,10 +25,10 @@ import {
 
 import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkOrgConnectors, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workRoleLabel, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
 import { BrandTile } from "./brand-icon";
-import { OrgCloudSection } from "./cloud/org-cloud";
-import { workCloud } from "./cloud/cloud-model";
 import { pickerGroups, toolLabel, useWorkCatalog } from "./catalog";
 import { useEnterpriseFlags } from "./enterprise-mode";
+import { OrgCloudSection } from "./cloud/org-cloud";
+import { workCloud } from "./cloud/cloud-model";
 import { SizeChips, ToolPicker } from "./onboarding-steps";
 import { TRUST_URL, WorkInviteDialog } from "./work-onboarding";
 

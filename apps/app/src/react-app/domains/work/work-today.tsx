@@ -14,10 +14,10 @@ import { cn } from "@/lib/utils";
 
 import { askAboutItemPrompt, connectorLabel, relativeTime, signsInWithForm, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
 import { BrandTile, ConnectorIcon } from "./brand-icon";
+import { CloudTodayStrip } from "./cloud/cloud-card";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { canOpen, isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
-import { CloudTodayStrip } from "./cloud/cloud-card";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
 /** Rows a section shows before "Show N more". */

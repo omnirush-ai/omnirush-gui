@@ -4,10 +4,10 @@
 // "Syncing 42%", "Reconnect": always words beside the dot). A connector opens Home filtered to its items; Manage opens
 // Work > Connectors. Sections fold, remembered, so the chat list keeps its height on a small window.
 import { Activity, Building2, ChevronRight, Handshake, Home, Library, Mic, MoreHorizontal, Plug, Plus, Search, Settings2, Zap, type LucideIcon } from "lucide-react";
-import { Cloud } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Cloud } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
