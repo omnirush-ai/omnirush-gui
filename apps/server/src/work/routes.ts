@@ -135,7 +135,17 @@ const WORK_ERRORS: Record<string, string> = {
   bad_redirect: "The calendar server sent us to an address that does not work. Check the URL.",
   key_not_restricted: "Use a restricted key (it starts with rk_), not your secret key.",
   missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Refunds, and Events.",
+  no_bases: "That token has no bases. Add the bases to read to the token in Airtable.",
+  no_links: "Add at least one Figma team, project or file link.",
+  bad_link: "That is not a Figma team, project or file link. Copy it from the address bar in Figma.",
+  too_many_links: "That is more than 20 links. A team link covers all its projects.",
+  link_refused: "Figma would not open one of those links with this token. Check the link and that your account can see it.",
 };
+
+/** A token's missing scope (Airtable, Calendly, Figma: the reason has a colon, like `users:read`); Stripe's names a list. */
+function missingScope(reason: unknown): string | null {
+  return typeof reason === "string" && /^[a-z_.]+:[a-z_]+$/i.test(reason) ? `That token is missing the ${reason} permission. Make a new token that has it.` : null;
+}
 
 const CONNECTOR = WORK_SOURCE_ID;
 /** The server refuses a chat export over 50 MB (contract D5). */
@@ -171,7 +181,8 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
   // The app's client reads `code` and `message` (never a bare code); the server's own `detail` is kept as it came.
   if (response.status >= 400 && data && typeof data === "object" && !Array.isArray(data)) {
     const detail = (data as { detail?: unknown }).detail;
-    if (typeof detail === "string") data = { ...data, code: detail, message: WORK_ERRORS[detail] ?? "That didn't work. Try again." };
+    const reason = (data as { reason?: unknown }).reason;
+    if (typeof detail === "string") data = { ...data, code: detail, message: (detail === "missing_permission" && missingScope(reason)) || WORK_ERRORS[detail] || "That didn't work. Try again." };
     else if (Array.isArray(detail)) data = { ...data, code: "invalid_request", message: "That request wasn't accepted." };
   }
   return { status: response.status, data, response: jsonResponse(data, response.status) };

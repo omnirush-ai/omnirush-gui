@@ -681,6 +681,93 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     }
   });
 
+  test("Airtable, Calendly and Figma: marks, copy that says what needs approval, Figma's links field, picker titles", async () => {
+    for (const id of ["airtable", "calendly", "figma"]) {
+      const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);
+      expect(icon).toContain(`data-connector-icon="${id}"`);
+      expect(icon).toMatch(/<path fill="#[0-9A-F]{6}"/);
+      expect(connectorAccess(id)).toContain("only after you approve");
+      expect(connectorAccess(id)).not.toMatch(/[\u2013\u2014]/);
+    }
+    expect(workToolPermission("omnirush-work_airtable_create_record")).toEqual({ label: "Create a record (Airtable)", scope: "Your Airtable account" });
+    expect(workToolPermission("omnirush-work_calendly_create_link")?.label).toBe("Make a booking link (Calendly)");
+    expect(workToolPermission("omnirush-work_figma_comment")?.label).toBe("Add a comment (Figma)");
+    const choices = [{ id: "appA", name: "Sales", picked: true }, { id: "appB", name: "Hiring", picked: true }];
+    const picker = (id: string) => renderToStaticMarkup(
+      <ConnectorRow connector={row({ id, label: id, status: "connected", records: 3, sync_enabled: true, choices })}
+        connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onPick={noop} />,
+    );
+    expect(picker("airtable")).toContain("Bases to read");
+    expect(picker("figma")).toContain("Projects to read");
+    expect(picker("asana")).toContain("Workspaces to read");
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const sent: unknown[] = [];
+      const opened: string[] = [];
+      const rows = [
+        row({ id: "airtable", label: "Airtable", mode: "key" }),
+        row({ id: "calendly", label: "Calendly", mode: "key" }),
+        row({ id: "figma", label: "Figma", mode: "key" }),
+      ];
+      const client = {
+        baseUrl: "http://tokens.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async () => { throw new Error("no OAuth for a key source"); },
+        connectWorkCredentials: async (id: string, form: unknown) => { sent.push([id, form]); return { ok: true, account: "sam@acme.example" }; },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={(url) => opened.push(url)} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
+      const type = async (form: Element, key: string, value: string) => {
+        const input = form.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-key-field="${key}"]`)!;
+        const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      };
+      // Figma: a token and the links to follow; Test and save waits for both.
+      await act(async () => button("Connect Figma")!.click());
+      const form = document.querySelector('[data-testid="work-key-figma"]')!;
+      expect(form.querySelector('[data-testid="work-key-where"]')?.textContent).toContain("90 days");
+      expect(form.querySelector('[data-key-field="api_key"]')?.getAttribute("type")).toBe("password");
+      expect(form.querySelector('textarea[data-key-field="url"]')).not.toBeNull();
+      expect(form.textContent).toContain("Nothing is posted or created without your approval.");
+      await act(async () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-help"]')!.click());
+      expect(opened).toEqual(["https://developers.figma.com/docs/rest-api/personal-access-tokens/"]);
+      const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!;
+      await type(form, "api_key", " figd_token ");
+      expect(save().disabled).toBe(true);
+      await type(form, "url", "https://www.figma.com/files/team/42/Acme\n");
+      expect(save().disabled).toBe(false);
+      await act(async () => save().click());
+      expect(sent).toEqual([["figma", { api_key: "figd_token", url: "https://www.figma.com/files/team/42/Acme" }]]);
+      // Airtable and Calendly: one token, no links.
+      await act(async () => button("Connect Airtable")!.click());
+      const airtableForm = document.querySelector('[data-testid="work-key-airtable"]')!;
+      expect(airtableForm.querySelector('[data-key-field="url"]')).toBeNull();
+      expect(airtableForm.textContent).toContain("schema.bases:read");
+      await type(airtableForm, "api_key", "patAbc.def");
+      await act(async () => airtableForm.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!.click());
+      expect(sent.at(-1)).toEqual(["airtable", { api_key: "patAbc.def" }]);
+      await act(async () => button("Connect Calendly")!.click());
+      expect(document.querySelector('[data-testid="work-key-calendly"] [data-testid="work-key-where"]')?.textContent).toContain("scheduled_events:read");
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
   test("Asana, Dropbox and Zoom: company marks, read-only copy, and Asana's workspace picker", async () => {
     for (const id of ["asana", "dropbox", "zoom"]) {
       const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);

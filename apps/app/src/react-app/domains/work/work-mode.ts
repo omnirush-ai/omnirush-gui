@@ -286,13 +286,14 @@ export const WORK_TOOL_PREFIX = "omnirush-work_";
 const WORK_APPS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
   slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
-  linear: "Linear", github: "GitHub",
+  linear: "Linear", github: "GitHub", airtable: "Airtable", calendly: "Calendly", figma: "Figma",
 };
 function workAction(action: string): string | undefined {
   const actions: Record<string, string> = {
     send: t("work.tool.send"), draft: t("work.tool.draft"), post: t("work.tool.post"), create: t("work.tool.create"), note: t("work.tool.note"),
     create_task: t("work.tool.create_task"), update_deal: t("work.tool.update_deal"), create_invoice_draft: t("work.tool.create_invoice_draft"),
     create_page: t("work.tool.create_page"), comment: t("work.tool.comment"), create_issue: t("work.tool.create_issue"),
+    create_record: t("work.tool.create_record"), create_link: t("work.tool.create_link"),
   };
   return actions[action];
 }
@@ -316,7 +317,7 @@ const CONNECTOR_LABELS: Record<string, string> = {
   notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", asana: "Asana", dropbox: "Dropbox", zoom: "Zoom",
   whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
   imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)", stripe: "Stripe", freshdesk: "Freshdesk", pipedrive: "Pipedrive",
-  hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)",
+  hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)", airtable: "Airtable", calendly: "Calendly", figma: "Figma",
 };
 export const connectorLabel = (id: string, label?: string | null) =>
   label?.trim() || CONNECTOR_LABELS[id] || (id === "mock" ? t("work.connector.mock") : id === "demo" ? t("work.connector.demo") : id);
@@ -342,8 +343,17 @@ export function connectorAccess(id: string): string {
     stripe: t("work.connector.access_stripe"),
     freshdesk: t("work.connector.access_freshdesk"),
     pipedrive: t("work.connector.access_pipedrive"),
+    airtable: t("work.connector.access_airtable"),
+    calendly: t("work.connector.access_calendly"),
+    figma: t("work.connector.access_figma"),
   };
   return access[id] ?? t("work.connector.access_other");
+}
+
+/** What a picking source's choices are: Airtable's are bases, Figma's projects, the others' workspaces. */
+export function connectorChoicesTitle(id: string): string {
+  const titles: Record<string, string> = { airtable: t("work.connectors.choices_bases"), figma: t("work.connectors.choices_projects") };
+  return titles[id] ?? t("work.connectors.choices_title");
 }
 
 /** A connector's setup link label: GitHub's is where the user picks repositories. */
