@@ -191,6 +191,9 @@ function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0, 
       getZoomFactor: () => 1,
       focused: 0,
       focus() { this.focused += 1; },
+      handlers: new Map(),
+      on(name, handler) { this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]); },
+      emitEvent(name, ...args) { for (const handler of this.handlers.get(name) ?? []) handler(...args); },
       isDestroyed: () => false,
       send(channel, payload) { sent.push({ channel, payload }); },
     },
@@ -1775,6 +1778,12 @@ test("browser shortcuts on the person's tab act only while the Work browser page
   assert.equal(press(contents, { key: "r", code: "KeyR", meta: true }), 0);
   assert.equal(press(contents, { key: "t", code: "KeyT", meta: true }), 0);
   invoke("omnirush:browser:userTabTools", { page: true });
+  // The app's window reloads: no Work browser page until it opens again.
+  mainContents.emitEvent("did-start-navigation", {}, "http://localhost/index.html", false, true);
+  assert.equal(press(contents, { key: "r", code: "KeyR", meta: true }), 0);
+  mainContents.emitEvent("did-start-navigation", {}, "http://localhost/index.html#/work", true, true);
+  invoke("omnirush:browser:userTabTools", { page: true });
+  assert.equal(press(contents, { key: "r", code: "KeyR", meta: true }), 1);
   // A chat's tab: never.
   const chat = await chatTab({ invoke, onScreen: panel.onScreen });
   for (const key of ["t", "w", "r", "l", "f", "p"]) assert.equal(press(chat.contents, { key, code: `Key${key.toUpperCase()}`, meta: true }), 0, key);

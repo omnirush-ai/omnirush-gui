@@ -2044,8 +2044,16 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     });
     // The Work browser's basics (the person's own tabs only). Only the app's own window may ask.
     const fromApp = (event) => event.sender === window()?.webContents && event.senderFrame === window()?.webContents.mainFrame;
+    let pageWatched = null;
     ipcMain.handle("omnirush:browser:userTabTools", (event, options) => {
       if (!fromApp(event)) return { ...userTabTools };
+      // A reloaded window has no Work browser page until it opens one again.
+      if (pageWatched !== event.sender && typeof event.sender.on === "function") {
+        pageWatched = event.sender;
+        event.sender.on("did-start-navigation", (_navigation, _url, isInPlace, isMainFrame) => {
+          if (isMainFrame && !isInPlace) userTabTools.page = false;
+        });
+      }
       const value = options && typeof options === "object" ? options : {};
       if (typeof value.tools === "boolean") userTabTools.tools = value.tools;
       if (typeof value.page === "boolean") userTabTools.page = value.page;
