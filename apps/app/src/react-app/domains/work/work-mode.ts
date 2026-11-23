@@ -271,12 +271,16 @@ export function domainFromEmail(email: string | null | undefined): string {
  *  pasted key) or inbound hook (both on Connectors). */
 export function connectOrder(rows: OmniRushWorkConnector[] | null | undefined, recommended: string[] = []): OmniRushWorkConnector[] {
   const rank = (id: string) => { const at = recommended.indexOf(id); return at === -1 ? recommended.length : at; };
-  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && !isPausedByAdmin(row) && !["import", "credentials", "key", "hook"].includes(row.mode ?? "")).sort((a, b) => rank(a.id) - rank(b.id));
+  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && !isPausedByAdmin(row) && !["import", "credentials", "key", "hook"].includes(row.mode ?? "") && !needsAddress(row)).sort((a, b) => rank(a.id) - rank(b.id));
 }
 
-/** A source connected with a form on Connectors (a server and password, or a pasted key), not a sign-in page. */
+/** A sign-in source that asks for its account's address first (Zendesk): only Connectors has the form for it. */
+export const needsAddress = (row: Pick<OmniRushWorkConnector, "start_fields">) => Boolean(row.start_fields?.includes("host"));
+
+/** A source connected with a form on Connectors (a server and password, or a pasted key), not a sign-in page, or one whose
+ *  sign-in asks something first (`start_fields`). */
 export const signsInWithForm = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
-  (rows ?? []).some((row) => row.id === id && (row.mode === "credentials" || row.mode === "key"));
+  (rows ?? []).some((row) => row.id === id && (row.mode === "credentials" || row.mode === "key" || Boolean(row.start_fields?.length)));
 
 /** A coverage "+" chip has somewhere to go on Connectors: an import card, or a row that signs in (Meetings has neither). */
 export const coverageCanAdd = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
@@ -322,7 +326,7 @@ export const WORK_TOOL_PREFIX = "omnirush-work_";
 const WORK_APPS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
   slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
-  linear: "Linear", github: "GitHub", discord: "Discord",
+  linear: "Linear", github: "GitHub", discord: "Discord", zendesk: "Zendesk", intercom: "Intercom", front: "Front",
 };
 /** Connectors whose writes the OmniRush Work app makes (a bot), not the person's own account. */
 const APP_WRITES = new Set(["discord"]);
@@ -331,6 +335,7 @@ function workAction(action: string): string | undefined {
     send: t("work.tool.send"), draft: t("work.tool.draft"), post: t("work.tool.post"), create: t("work.tool.create"), note: t("work.tool.note"),
     create_task: t("work.tool.create_task"), update_deal: t("work.tool.update_deal"), create_invoice_draft: t("work.tool.create_invoice_draft"),
     create_page: t("work.tool.create_page"), comment: t("work.tool.comment"), create_issue: t("work.tool.create_issue"),
+    reply: t("work.tool.reply"),
   };
   return actions[action];
 }
@@ -355,6 +360,7 @@ const CONNECTOR_LABELS: Record<string, string> = {
   notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", asana: "Asana", dropbox: "Dropbox", zoom: "Zoom",
   whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
   imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)", stripe: "Stripe", freshdesk: "Freshdesk", pipedrive: "Pipedrive",
+  zendesk: "Zendesk", intercom: "Intercom", front: "Front",
   hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)",
 };
 export const connectorLabel = (id: string, label?: string | null) =>
@@ -382,6 +388,9 @@ export function connectorAccess(id: string): string {
     stripe: t("work.connector.access_stripe"),
     freshdesk: t("work.connector.access_freshdesk"),
     pipedrive: t("work.connector.access_pipedrive"),
+    zendesk: t("work.connector.access_zendesk"),
+    intercom: t("work.connector.access_intercom"),
+    front: t("work.connector.access_front"),
   };
   return access[id] ?? t("work.connector.access_other");
 }

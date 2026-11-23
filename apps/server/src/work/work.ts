@@ -31,6 +31,7 @@ export const WORK_READ_TOOLS = [
   "qbo_query", "qbo_read", "notion_search", "notion_read", "work_search", "mock_search", "mock_read",
   "jira_search", "jira_read", "confluence_search", "confluence_read", "linear_search", "linear_read", "github_search", "github_read",
   "discord_list_channels", "discord_read_channel", "discord_read_thread",
+  "zendesk_search", "zendesk_search_articles", "zendesk_read", "intercom_search", "intercom_read", "front_inboxes", "front_search", "front_read",
   // The context graph: briefing and lookup only; work_remember and work_forget ask like every write.
   "work_context", "work_entity",
   // Full read of one record, counts across many, and deals (contract D1-D3): reads only.
