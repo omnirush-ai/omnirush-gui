@@ -85,7 +85,7 @@ export function SuggestionChipRow(props: {
   busy?: boolean;
   /** Alt+1..N pick a chip while the composer is focused and empty. */
   shortcuts?: boolean;
-  /** Where tooltips open: below the chips (default) keeps the answer above readable. */
+  /** Where tooltips and the More menu open: below the chips (default) keeps the answer above readable. */
   tooltipSide?: "top" | "bottom";
   testId?: string;
   className?: string;
@@ -285,7 +285,7 @@ export function SuggestionChipRow(props: {
               )}
             />
             <Menu.Portal>
-              <Menu.Positioner side="top" align="start" sideOffset={6} className="isolate z-50 outline-none">
+              <Menu.Positioner side={tipSide} align="start" sideOffset={6} className="isolate z-50 outline-none">
                 <Menu.Popup className={MENU_POPUP} data-testid={props.testId ? `${props.testId}-more` : undefined}>
                   {rest.map((chip) => {
                     const action = chip.tone === "action";
