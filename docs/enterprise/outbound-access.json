@@ -46,6 +46,15 @@
       "override": null
     },
     {
+      "host": "app.clickup.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "ClickUp's API token settings, linked from the Work key form for ClickUp.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
       "host": "cdn.simpleicons.org",
       "kind": "fetched",
       "components": ["renderer"],
@@ -77,6 +86,15 @@
       "kind": "link-only",
       "components": ["renderer"],
       "purpose": "Stripe's API keys page, linked from the Work key form for Stripe.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
+      "host": "developer.monday.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "monday.com's guide to the personal API token, linked from the Work key form for monday.com.",
       "requirement": "optional",
       "blockedEffect": "The help link will not open; connecting still works.",
       "override": null
@@ -356,6 +374,15 @@
       "kind": "link-only",
       "components": ["renderer"],
       "purpose": "Outlook.com's app password page, linked from the Work connect form for other email.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
+      "host": "trello.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Trello's apps admin page (API key and token), linked from the Work key form for Trello.",
       "requirement": "optional",
       "blockedEffect": "The help link will not open; connecting still works.",
       "override": null

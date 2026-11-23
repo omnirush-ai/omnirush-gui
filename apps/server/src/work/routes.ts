@@ -6,8 +6,8 @@
  *                                          (account: "<server origin> <account id>", for the desktop's chat sync)
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
- *   POST  /work/connectors/:id/start       { auth_url }
- *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key?, client_id? } -> { ok, account }
+ *   POST  /work/connectors/:id/start       { host?, region? } -> { auth_url } (Zendesk's address, Intercom's region: `start_fields`)
+ *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key?, client_id?, token? } -> { ok, account }
  *                                          (imap and caldav, and the pasted-key sources: the server tries the login or key, then saves and syncs)
  *   POST  /work/connectors/:id/hook        { url }: a new inbound URL for Zapier, Make or n8n (hook, hook_org), shown once
  *   POST  /work/connectors/:id/disconnect
@@ -22,6 +22,8 @@
  *   PATCH /work/org, PATCH /work/org/me, DELETE /work/org/invites/:id, DELETE /work/org/members/:id,
  *   POST  /work/org/transfer {user_id}, POST /work/org/leave                   the organization (contract Addendum C1)
  *   GET   /work/org/insights?days=         the owner's team insights
+ *   GET   /work/org/connectors, PATCH /work/org/connectors {shown: [...] | null}   what members see (owner or admin)
+ *   PATCH /work/org/members/:id {role: admin | member}                         a member's role (owner)
  *   GET   /work/settings, PATCH /work/settings {autopilot?, full_access?, writes_paused?}   the action layer (Addendum F)
  *   GET   /work/actions?limit=, POST /work/actions/:id/undo                    the activity log and an action's undo
  *   GET   /work/imessage, POST /work/imessage {records}                        the Mac's iMessage records (macOS desktop)
@@ -135,6 +137,11 @@ const WORK_ERRORS: Record<string, string> = {
   bad_redirect: "The calendar server sent us to an address that does not work. Check the URL.",
   key_not_restricted: "Use a restricted key (it starts with rk_), not your secret key.",
   missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Refunds, and Events.",
+  not_admin: "Only your company owner or an admin can change this.",
+  not_allowed: "That connector is not available for your company.",
+  connector_off: "Your company admin has turned this off.",
+  connector_not_allowed: "This connector is not available for your company yet. Ask OmniRush support to turn it on.",
+  cannot_change_owner: "The owner stays the owner. Make someone else the owner first.",
   gitlab_not_found: "No GitLab answered at that address. Leave it empty for gitlab.com, or check your company's GitLab address.",
   gitlab_scope_missing: "That token cannot read GitLab's API. Make one with the read_api scope, or api to also comment and create issues.",
   shopify_not_found: "Shopify could not find that store. Use its address ending in .myshopify.com.",
@@ -145,6 +152,8 @@ const WORK_ERRORS: Record<string, string> = {
 const CONNECTOR = WORK_SOURCE_ID;
 /** The server refuses a chat export over 50 MB (contract D5). */
 const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
+/** A chat push (the desktop's chat sync) is stored in one request; under the desktop's 300 s, so it hears `timeout`. */
+const CHAT_PUSH_TIMEOUT_MS = 290_000;
 /** One meeting audio part: 28 s of 16 kHz mono 16-bit is under 1 MiB; the plan's cap is 2 MiB. */
 const MEETING_PART_MAX_BYTES = 2 * 1024 * 1024;
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -185,11 +194,13 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
 export function registerWorkRoutes(deps: WorkRouteDeps): void {
   const { routes, jsonResponse } = deps;
   // A work_disabled answer: the switch went off since the capabilities were cached (up to 5 min), so the next
-  // /work/state asks again instead of showing Work until the cache expires.
+  // /work/state asks again instead of showing Work until the cache expires. Likewise a connector the company turned off
+  // (connector_off, connector_not_allowed): the state's sources, which the desktop's chat sync follows, are read again.
   let switchStale = false;
   const pass = async (response: Response) => {
     const answer = await passThrough(response, jsonResponse);
-    if ((answer.data as { code?: unknown } | null)?.code === "work_disabled") switchStale = true;
+    const code = (answer.data as { code?: unknown } | null)?.code;
+    if (code === "work_disabled" || code === "connector_off" || code === "connector_not_allowed") switchStale = true;
     return answer;
   };
   const signedOut = () => jsonResponse({ detail: "omnirush_account_required", code: "omnirush_account_required", message: WORK_ERRORS.omnirush_account_required }, 401);
@@ -232,13 +243,33 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     return answer.response;
   });
 
+  // What a sign-in source asks before its sign-in page (`start_fields`): only Zendesk's address and Intercom's region go on.
+  // No body (a reconnect from Today) is fine: the server keeps what the source had.
+  const startForm = async (request: Request) => {
+    let body: unknown = null;
+    try {
+      const raw = await request.text();
+      body = raw.trim() ? JSON.parse(raw) : null;
+    } catch {
+      body = null;
+    }
+    const form: { host?: string; region?: string } = {};
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const { host, region } = body as Record<string, unknown>;
+      if (typeof host === "string" && host.trim()) form.host = host.trim();
+      if (region === "us" || region === "eu" || region === "au") form.region = region;
+    }
+    return form;
+  };
+
   // hook: a new inbound URL (Zapier, Make, n8n), passed to the app once and not kept here.
   for (const action of ["start", "disconnect", "sync", "hook"] as const) {
     addRoute(routes, "POST", `/work/connectors/:id/${action}`, "client", async (ctx) => {
       if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
+      const body = action === "start" ? JSON.stringify(await startForm(ctx.request)) : "{}";
       const found = deps.broker();
       if (!found) return signedOut();
-      return (await pass(await found.workRequest(`connectors/${ctx.params.id}/${action}`, { method: "POST", body: "{}" }))).response;
+      return (await pass(await found.workRequest(`connectors/${ctx.params.id}/${action}`, { method: "POST", body }))).response;
     });
   }
 
@@ -247,7 +278,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
     const body = await deps.readJsonBody(ctx.request);
     const form: Record<string, string | number> = {};
-    for (const key of ["preset", "host", "security", "url", "username", "password", "api_key", "client_id"]) {
+    for (const key of ["preset", "host", "security", "url", "username", "password", "api_key", "client_id", "token"]) {
       const value = body[key];
       if (typeof value === "string" && value) form[key] = value;
     }
@@ -447,6 +478,25 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   addRoute(routes, "GET", "/work/org/members", "client", async () => forward("org/members", "GET"));
   addRoute(routes, "GET", "/work/org/insights", "client", async (ctx) => forward(`org/insights${forwardQuery(ctx.url, ["days"])}`, "GET"));
 
+  // Which connectors the company shows its members (owner or admin; null shows all it may use), and who is an admin.
+  addRoute(routes, "GET", "/work/org/connectors", "client", async () => forward("org/connectors", "GET"));
+  addRoute(routes, "PATCH", "/work/org/connectors", "client", async (ctx) => {
+    const shown = (await deps.readJsonBody(ctx.request)).shown;
+    const list = Array.isArray(shown) ? shown : null;
+    const ids = list?.filter((id): id is string => typeof id === "string" && CONNECTOR.test(id)) ?? null;
+    if (shown !== null && (!list || !ids || list.length > 100 || ids.length !== list.length)) return invalid("shown must be null or a list of connector ids");
+    const answer = await forward("org/connectors", "PATCH", { shown: ids && [...new Set(ids)] });
+    // The account's own sources follow the company's list (the capabilities' work block): read it fresh next time.
+    if (answer.ok) switchStale = true;
+    return answer;
+  });
+  addRoute(routes, "PATCH", "/work/org/members/:id", "client", async (ctx) => {
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "not_found" }, 404);
+    const role = (await deps.readJsonBody(ctx.request)).role;
+    if (role !== "admin" && role !== "member") return invalid("role must be admin or member");
+    return forward(`org/members/${ctx.params.id}`, "PATCH", { role });
+  });
+
   // The action layer: autopilot, full access, the pause switch, and the log of writes with their undo.
   addRoute(routes, "GET", "/work/settings", "client", async () => forward("settings", "GET"));
   addRoute(routes, "PATCH", "/work/settings", "client", async (ctx) => {
@@ -549,27 +599,29 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     return (await pass(await found.workRequest(path, { method: "POST", body: bytes, headers: { "Content-Type": "audio/wav" }, signal: AbortSignal.timeout(150_000) }))).response;
   });
 
+  /** A chat push goes on with a longer wait than the default minute; running out of it answers 504 `timeout`. */
+  const pushChats = async (ctx: { request: Request }, path: "imessage" | "whatsapp-local" | "telegram") => {
+    const records = (await deps.readJsonBody(ctx.request)).records;
+    if (!Array.isArray(records)) return invalid("records must be a list");
+    const found = deps.broker();
+    if (!found) return signedOut();
+    try {
+      return (await pass(await found.workRequest(path, { method: "POST", body: JSON.stringify({ records }), signal: AbortSignal.timeout(CHAT_PUSH_TIMEOUT_MS) }))).response;
+    } catch (error) {
+      if ((error as { name?: unknown } | null)?.name !== "TimeoutError") throw error;
+      return jsonResponse({ detail: "timeout", code: "timeout", message: "omnirush.ai took too long to answer. Try again." }, 504);
+    }
+  };
+
   // iMessage (macOS desktop): the records the desktop read from the Mac's Messages database, and how many the server has.
   addRoute(routes, "GET", "/work/imessage", "client", async () => forward("imessage", "GET"));
-  addRoute(routes, "POST", "/work/imessage", "client", async (ctx) => {
-    const records = (await deps.readJsonBody(ctx.request)).records;
-    if (!Array.isArray(records)) return invalid("records must be a list");
-    return forward("imessage", "POST", { records });
-  });
+  addRoute(routes, "POST", "/work/imessage", "client", async (ctx) => pushChats(ctx, "imessage"));
   // WhatsApp (macOS desktop): the chat-days the desktop read from the WhatsApp Mac app's database.
   addRoute(routes, "GET", "/work/whatsapp-local", "client", async () => forward("whatsapp-local", "GET"));
-  addRoute(routes, "POST", "/work/whatsapp-local", "client", async (ctx) => {
-    const records = (await deps.readJsonBody(ctx.request)).records;
-    if (!Array.isArray(records)) return invalid("records must be a list");
-    return forward("whatsapp-local", "POST", { records });
-  });
+  addRoute(routes, "POST", "/work/whatsapp-local", "client", async (ctx) => pushChats(ctx, "whatsapp-local"));
   // Telegram (desktop): the chat-days the desktop read with the user's own Telegram login (the login stays on the device).
   addRoute(routes, "GET", "/work/telegram", "client", async () => forward("telegram", "GET"));
-  addRoute(routes, "POST", "/work/telegram", "client", async (ctx) => {
-    const records = (await deps.readJsonBody(ctx.request)).records;
-    if (!Array.isArray(records)) return invalid("records must be a list");
-    return forward("telegram", "POST", { records });
-  });
+  addRoute(routes, "POST", "/work/telegram", "client", async (ctx) => pushChats(ctx, "telegram"));
 }
 
 /**

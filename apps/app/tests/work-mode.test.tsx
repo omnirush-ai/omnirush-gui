@@ -5,12 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { matchRoutes, MemoryRouter } from "react-router";
 
-import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, checklistItems, connectorAccess, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
-  askAboutItemPrompt, coverageLine, relativeTime, workActionsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
+import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers, type OmniRushWorkOrgConnectors } from "../src/app/lib/omnirush-server";
+import { askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
+  askAboutItemPrompt, coverageCanAdd, coverageLine, relativeTime, workActionsKey, workOrgConnectorsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
-import { leaveState, mePatch, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
+import { leaveState, mePatch, nextShown, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
 import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
 import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
@@ -246,8 +246,8 @@ describe("Work mode", () => {
     const off = renderToStaticMarkup(<ConnectorRow connector={row({ id: "slack", label: "Slack" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
     expect(off).toContain(connectorAccess("slack"));
     expect(off).toContain('aria-label="Connect Slack"');
-    for (const id of ["google", "microsoft", "slack", "hubspot", "quickbooks", "notion", "jira", "confluence", "linear", "github"]) expect(connectorAccess(id)).toContain("after you approve");
-    expect(connectorAccess("zendesk")).toContain("asks you before");
+    for (const id of ["google", "microsoft", "slack", "hubspot", "quickbooks", "notion", "jira", "confluence", "linear", "github", "zendesk", "intercom", "front"]) expect(connectorAccess(id)).toContain("after you approve");
+    expect(connectorAccess("acmedesk")).toContain("asks you before");
   });
 
   test("GitHub with its install link: Choose repositories, and a hint while nothing is visible", () => {
@@ -262,9 +262,9 @@ describe("Work mode", () => {
   });
 
   test("new connectors get their icon, an unknown id the generic one", () => {
-    for (const id of ["jira", "confluence", "linear", "github"]) expect(renderToStaticMarkup(<ConnectorIcon id={id} />)).toContain(`data-connector-icon="${id}"`);
-    expect(renderToStaticMarkup(<ConnectorIcon id="zendesk" />)).toContain('data-connector-icon="generic"');
-    expect(renderToStaticMarkup(<ConnectorRow connector={row({ id: "zendesk", label: "" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />)).toContain(">zendesk<");
+    for (const id of ["jira", "confluence", "linear", "github", "zendesk", "intercom", "front"]) expect(renderToStaticMarkup(<ConnectorIcon id={id} />)).toContain(`data-connector-icon="${id}"`);
+    expect(renderToStaticMarkup(<ConnectorIcon id="acmedesk" />)).toContain('data-connector-icon="generic"');
+    expect(renderToStaticMarkup(<ConnectorRow connector={row({ id: "acmedesk", label: "" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />)).toContain(">acmedesk<");
   });
 
   test("an entity shows keys, sources, remembered facts (retired hidden), a timeline newest first and related entities", () => {
@@ -593,6 +593,74 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     }
   });
 
+  test("a sign-in that asks first: Zendesk's address and Intercom's region go with the start", async () => {
+    const rows = [
+      row({ id: "zendesk", label: "Zendesk", start_fields: ["host"] }),
+      row({ id: "intercom", label: "Intercom", start_fields: ["region"] }),
+      row({ id: "front", label: "Front" }),
+    ];
+    // The first-run step has no address form: Zendesk waits for Connectors.
+    expect(connectOrder(rows).map((item) => item.id)).toEqual(["intercom", "front"]);
+    expect(workToolPermission("omnirush-work_zendesk_comment")?.label).toBe("Add a comment (Zendesk)");
+    expect(workToolPermission("omnirush-work_intercom_reply")?.label).toBe("Reply (Intercom)");
+    expect(connectorAccess("front")).toContain("shared inboxes");
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const started: unknown[] = [];
+      const opened: string[] = [];
+      const client = {
+        baseUrl: "http://start.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async (id: string, form?: unknown) => {
+          started.push(form === undefined ? [id] : [id, form]);
+          return { auth_url: `https://${id}.example/oauth` };
+        },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={(url) => { opened.push(url); }} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
+      await act(async () => button("Connect Zendesk")!.click());
+      const form = document.querySelector('[data-testid="work-start-zendesk"]')!;
+      const go = () => form.querySelector<HTMLButtonElement>('[data-testid="work-start-continue"]')!;
+      expect(started).toEqual([]);
+      expect(go().disabled).toBe(true);
+      const input = form.querySelector<HTMLInputElement>('[data-start-field="host"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, " acme.zendesk.com ");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(go().disabled).toBe(false);
+      await act(async () => go().click());
+      expect(started).toEqual([["zendesk", { host: "acme.zendesk.com" }]]);
+      expect(opened).toEqual(["https://zendesk.example/oauth"]);
+      expect(document.querySelector('[data-testid="work-start-zendesk"]')).toBeNull();
+      // Intercom asks where the workspace is (US unless picked).
+      await act(async () => button("Connect Intercom")!.click());
+      const intercom = document.querySelector('[data-testid="work-start-intercom"]')!;
+      expect(intercom.querySelector('[data-start-field="host"]')).toBeNull();
+      expect(intercom.querySelector('[data-start-field="region"]')).not.toBeNull();
+      await act(async () => intercom.querySelector<HTMLButtonElement>('[data-testid="work-start-continue"]')!.click());
+      expect(started[1]).toEqual(["intercom", { region: "us" }]);
+      // Front asks nothing first: straight to its sign-in page.
+      await act(async () => button("Connect Front")!.click());
+      expect(document.querySelector('[data-testid="work-start-front"]')).toBeNull();
+      expect(started[2]).toEqual(["front"]);
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
   test("a form source is left out of the first-run connect step and named in words", () => {
     const rows = [row({ id: "google" }), row({ id: "imap", label: "Other email (IMAP)", mode: "credentials" })];
     expect(connectOrder(rows).map((item) => item.id)).toEqual(["google"]);
@@ -811,6 +879,94 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     }
   });
 
+  test("Trello, ClickUp and monday.com: marks, copy that says what needs approval, Trello's token field and board picker", async () => {
+    for (const id of ["trello", "clickup"]) {
+      const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);
+      expect(icon).toContain(`data-connector-icon="${id}"`);
+      expect(icon).toMatch(/<path fill="#[0-9A-F]{6}"/);
+    }
+    expect(renderToStaticMarkup(<ConnectorIcon id="monday" />)).toContain('data-connector-icon="monday"');
+    for (const id of ["trello", "clickup", "monday"]) {
+      expect(connectorAccess(id)).toContain("only after you approve");
+      expect(connectorAccess(id)).not.toMatch(/[\u2013\u2014]/);
+    }
+    expect(workToolPermission("omnirush-work_trello_create_card")).toEqual({ label: "Create a card (Trello)", scope: "Your Trello account" });
+    expect(workToolPermission("omnirush-work_monday_create_item")?.label).toBe("Create an item (monday.com)");
+    expect(workToolPermission("omnirush-work_clickup_comment")?.label).toBe("Add a comment (ClickUp)");
+    const boards = [{ id: "b1", name: "Launch", picked: true }, { id: "b2", name: "Ops", picked: true }];
+    const trelloRow = renderToStaticMarkup(
+      <ConnectorRow connector={row({ id: "trello", label: "Trello", status: "connected", records: 3, sync_enabled: true, choices: boards })}
+        connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onPick={noop} />,
+    );
+    expect(trelloRow).toContain("Boards to read");
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const sent: unknown[] = [];
+      const rows = [
+        row({ id: "trello", label: "Trello", mode: "key" }),
+        row({ id: "clickup", label: "ClickUp", mode: "key" }),
+        row({ id: "monday", label: "monday.com", mode: "key" }),
+      ];
+      const opened: string[] = [];
+      const client = {
+        baseUrl: "http://projects.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async () => { throw new Error("no OAuth for a key source"); },
+        connectWorkCredentials: async (id: string, form: unknown) => { sent.push([id, form]); return { ok: true, account: "ann@acme.example" }; },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={(url) => opened.push(url)} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
+      const type = async (form: Element, key: string, value: string) => {
+        const input = form.querySelector<HTMLInputElement>(`[data-key-field="${key}"]`)!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      };
+      // Trello: a key and a token, both secret; Test and save waits for both.
+      await act(async () => button("Connect Trello")!.click());
+      const form = document.querySelector('[data-testid="work-key-trello"]')!;
+      expect(form.querySelector('[data-testid="work-key-where"]')?.textContent).toContain("Trello Auth");
+      expect(form.querySelector('[data-key-field="token"]')?.getAttribute("type")).toBe("password");
+      expect(form.querySelector('[data-key-field="host"]')).toBeNull();
+      expect(form.textContent).toContain("Nothing is posted or created without your approval.");
+      await act(async () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-help"]')!.click());
+      expect(opened).toEqual(["https://trello.com/apps/admin"]);
+      const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!;
+      await type(form, "api_key", " 0123456789abcdef0123456789abcdef ");
+      expect(save().disabled).toBe(true);
+      await type(form, "token", "ATTAtoken123");
+      expect(save().disabled).toBe(false);
+      await act(async () => save().click());
+      expect(sent).toEqual([["trello", { api_key: "0123456789abcdef0123456789abcdef", token: "ATTAtoken123" }]]);
+      // ClickUp and monday.com: one token.
+      await act(async () => button("Connect ClickUp")!.click());
+      const clickupForm = document.querySelector('[data-testid="work-key-clickup"]')!;
+      expect(clickupForm.querySelector('[data-key-field="token"]')).toBeNull();
+      expect(clickupForm.textContent).toContain("pk_");
+      await type(clickupForm, "api_key", "pk_1_ABC");
+      await act(async () => clickupForm.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!.click());
+      await act(async () => button("Connect monday.com")!.click());
+      const mondayForm = document.querySelector('[data-testid="work-key-monday"]')!;
+      expect(mondayForm.querySelector('[data-testid="work-key-where"]')?.textContent).toContain("Developers");
+      expect(sent.at(-1)).toEqual(["clickup", { api_key: "pk_1_ABC" }]);
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
   test("a company hook row with records but no URL of its own reads No URL yet and offers Create URL", () => {
     const card = (status: OmniRushWorkConnector["status"]) => renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
@@ -825,6 +981,21 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     const live = card("connected");
     expect(live).toContain('data-status="on"');
     expect(live).toContain("2 records");
+  });
+
+  test("Discord: company mark, server-manager copy, and the post's approval label", () => {
+    const icon = renderToStaticMarkup(<ConnectorIcon id="discord" />);
+    expect(icon).toContain('data-connector-icon="discord"');
+    expect(icon).toContain('<path fill="#5865F2"');
+    expect(connectorAccess("discord")).toContain("server you manage");
+    expect(connectorAccess("discord")).toContain("only after you approve");
+    expect(connectorAccess("discord")).not.toMatch(/[\u2013\u2014]/);
+    // The app's bot posts, not the person: the approval says so.
+    expect(workToolPermission("omnirush-work_discord_post")).toEqual({
+      label: "Post a message (Discord)",
+      scope: "The OmniRush Work app in your Discord server",
+    });
+    expect(workToolPermission("omnirush-work_slack_post")?.scope).toBe("Your Slack account");
   });
 
   test("key and hook sources are left out of the first-run connect step and say what they read", () => {
@@ -973,6 +1144,82 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(mePatch({ tools: ["slack"] }, { job_role: "Ops" })).toEqual({ job_role: "Ops", tools: ["slack"] });
   });
 
+  test("connectors for your team: owners and admins switch what members see, with who connected each; admins come with it", () => {
+    const client = { baseUrl: "http://org-connectors.test" } as never;
+    const org = { id: "org_1", name: "Acme Bakery" };
+    const people = (you: "owner" | "admin" | "member"): OmniRushWorkMembers => ({
+      org, you_role: you, invites: [],
+      members: [
+        { user_id: "u1", email: "owner@acme-bakery.test", role: "owner", you: you === "owner" },
+        { user_id: "u2", email: "dana@acme-bakery.test", role: "admin", you: you === "admin" },
+        { user_id: "u3", email: "jo@acme-bakery.test", role: "member", you: you === "member" },
+      ],
+    });
+    const managed: OmniRushWorkOrgConnectors = {
+      org, role: "owner", can_manage: true, connectors: [{ id: "google", label: "Google" }], shown: ["google"], staff_limited: true, members: 3,
+      allowed: [{ id: "google", label: "Google", shown: true, members_connected: 3 }, { id: "slack", label: "Slack", shown: false, members_connected: 1 }, { id: "linear", label: "Linear", shown: false, members_connected: 0 }],
+    };
+    const render = (members: OmniRushWorkMembers, view?: OmniRushWorkOrgConnectors | Error) => {
+      const queries = new QueryClient();
+      queries.setQueryData(workMembersKey(client), members);
+      if (view instanceof Error) failQuery(queries, workOrgConnectorsKey(client), view);
+      else if (view) queries.setQueryData(workOrgConnectorsKey(client), view);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} openLink={noop} onBack={noop} /></MemoryRouter></QueryClientProvider>);
+    };
+    const owner = render(people("owner"), managed);
+    expect(owner).toContain('data-testid="work-org-connectors"');
+    expect(owner).toContain(">Connectors for your team<");
+    expect(owner).toContain("Your team only sees the connectors switched on here.");
+    expect(owner).toContain(">1 of 3 on<");
+    expect(owner).toMatch(/data-org-connector="google" data-shown="true"[\s\S]*?3 people connected it[\s\S]*?aria-checked="true"/);
+    expect(owner).toMatch(/data-org-connector="slack" data-shown="false"[\s\S]*?1 person connected it[\s\S]*?aria-checked="false"/);
+    expect(owner).toContain("Nobody has connected it yet");
+    expect(owner).toContain('aria-label="Show Slack to your team"');
+    expect(owner).toContain('data-testid="work-org-connectors-limited"');
+    // The owner makes admins: Admin badge, Make admin and Remove admin, and a line saying what admins do.
+    expect(owner).toContain(">Admin<");
+    expect(owner).toContain(">Remove admin<");
+    expect(owner).toContain(">Make admin<");
+    expect(owner).toContain("Admins can choose which connectors your team sees.");
+    // An admin manages the list but not the people.
+    const admin = render(people("admin"), { ...managed, role: "admin" });
+    expect(admin).toContain('data-testid="work-org-connectors"');
+    expect(admin).not.toContain(">Make admin<");
+    expect(admin).not.toContain(">Make owner<");
+    // A member gets neither.
+    const member = render(people("member"), { org, role: "member", can_manage: false, connectors: [{ id: "google", label: "Google" }] });
+    expect(member).not.toContain('data-testid="work-org-connectors"');
+    expect(member).not.toContain(">Make admin<");
+    // An older server has no such list: the page is as it was (no section, no admin buttons).
+    const old = render(people("owner"), new OmniRushServerError(404, "Not Found", "That didn't work. Try again."));
+    expect(old).not.toContain('data-testid="work-org-connectors"');
+    expect(old).not.toContain(">Make admin<");
+    expect(old).not.toContain("Admins can choose");
+    expect(old).toContain(">Make owner<");
+    // The saved list after one switch (staff limits this company's list, so only the listed ids go).
+    expect(nextShown(managed, "slack", true)).toEqual(["google", "slack"]);
+    expect(nextShown(managed, "google", false)).toEqual([]);
+  });
+
+  test("a connection the company turned off says so and offers only Disconnect; it is never offered to connect", () => {
+    const paused = row({ id: "slack", label: "Slack", status: "paused_by_admin", paused_by: "org", account: "acme-bakery", records: 5400, sync_enabled: true });
+    const markup = renderToStaticMarkup(<ConnectorRow connector={paused} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onCheck={noop} />);
+    expect(markup).toContain('data-status="paused_by_admin"');
+    expect(markup).toContain(">Paused<");
+    expect(markup).toContain("Turned off by your company admin");
+    expect(markup).toContain("acme-bakery · 5,400 records");
+    expect(markup).toContain(">Disconnect<");
+    expect(markup).not.toContain(">Connect<");
+    expect(markup).not.toContain('role="switch"');
+    expect(markup).not.toContain(">Check<");
+    const staff = renderToStaticMarkup(<ConnectorRow connector={{ ...paused, paused_by: "staff" }} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
+    expect(staff).toContain("Not available for your company right now");
+    const rows = [row({ id: "google" }), paused];
+    expect(connectOrder(rows).map((item) => item.id)).toEqual(["google"]);
+    expect(coverageCanAdd(rows, "slack")).toBe(false);
+    expect(coverageCanAdd(rows, "google")).toBe(true);
+  });
+
   test("insights: alerts in the app's words by kind, roles as labels, a missing route says update with no retry", () => {
     const client = { baseUrl: "http://insights.test" } as never;
     const member = { user_id: "u2", email: "m@acme.test", role: "member", job_role: "Ops", activity: 3, prev_activity: 10, trend: -70, active_days: 1, last_active: null, meetings: 1, by_source: {}, by_kind: {}, focus: [], daily: [{ d: "2026-11-15", n: 3 }], alerts: [{ kind: "drop_off", level: "warn" as const, text: "Activity down 70% vs the previous period" }, { kind: "overdue", level: "serious" as const, text: "2 assigned items overdue" }, { kind: "new_kind", level: "warn" as const, text: "Server words" }] };
@@ -1051,6 +1298,69 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(page).not.toContain('data-testid="work-telegram-card"');
   });
 
+  test("sync progress: a server source's bar while it imports its history; nothing idle or from an older server", () => {
+    const pass = { phase: "backfill", done: 1200, total: 4800, steps_done: null, steps_total: null };
+    expect(connectorProgress(pass)).toEqual({ value: 25, label: "1,200 of 4,800 items" });
+    // A list read one item at a time (GitHub's repositories): by the list, with the count so far.
+    expect(connectorProgress({ ...pass, total: null, steps_done: 3, steps_total: 12 })).toEqual({ value: 25, label: "3 of 12 done · 1,200 items" });
+    expect(connectorProgress({ ...pass, done: 0, total: null, steps_done: 0, steps_total: 4 })).toEqual({ value: 0, label: "0 of 4 done" });
+    // No total: a pulsing bar and a running count.
+    expect(connectorProgress({ ...pass, total: null })).toEqual({ value: null, label: "1,200 items so far" });
+    expect(connectorProgress({ ...pass, done: 0, total: null })).toEqual({ value: null, label: "Starting…" });
+    expect(connectorProgress({ ...pass, done: 5000 })?.value).toBe(100);
+    for (const phase of ["idle", "incremental"]) expect(connectorProgress({ ...pass, phase })).toBeNull();
+    expect(connectorProgress(null)).toBeNull();
+    expect(connectorProgress(undefined)).toBeNull();
+    const shown = (over: Partial<OmniRushWorkConnector>) => renderToStaticMarkup(
+      <ConnectorRow connector={row({ status: "syncing", account: "ops@example.com", records: 1200, sync_enabled: true, ...over })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />,
+    );
+    const running = shown({ progress: pass });
+    expect(running).toContain('data-testid="work-sync-progress"');
+    expect(running).toContain('data-value="25"');
+    expect(running).toContain("1,200 of 4,800 items");
+    expect(running).toContain('aria-label="Google sync progress"');
+    expect(shown({ progress: { ...pass, total: null } })).toContain('data-value="unknown"');
+    expect(shown({ progress: { ...pass, phase: "idle" } })).not.toContain("work-sync-progress");
+    // An older server sends no progress: the row is as before.
+    expect(shown({})).not.toContain("work-sync-progress");
+    expect(shown({ status: "disconnected", progress: pass })).not.toContain("work-sync-progress");
+    expect(running).not.toMatch(/—/);
+  });
+
+  test("chat sync progress: reading, then how many conversation days are sent; a timeout reads as its own line", () => {
+    expect(chatSyncProgress(null, "Reading")).toBeNull();
+    expect(chatSyncProgress({ phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 }, "Reading chats on this Mac")).toEqual({ value: null, label: "Reading chats on this Mac" });
+    expect(chatSyncProgress({ phase: "uploading", pushesDone: 12, pushesTotal: 48, recordsDone: 1200, recordsTotal: 4800 }, "x")).toEqual({ value: 25, label: "Syncing 1,200 of 4,800 conversation days" });
+    expect(chatSyncProgress({ phase: "uploading", pushesDone: 0, pushesTotal: 1, recordsDone: 0, recordsTotal: 1 }, "x")?.label).toBe("Syncing 0 of 1 conversation day");
+    expect(localChatError("whatsapp", "timeout", 2)).toBe("The upload took too long. It tries again on its own from where it stopped. Failed 2 times in a row.");
+    const card = (whatsapp: unknown) => {
+      const queries = new QueryClient();
+      queries.setQueryData(["omnirush-chat-sync"], {
+        imessage: { enabled: true, lastSyncAt: null, lastError: null, failures: 0, running: false, progress: null },
+        whatsapp,
+      });
+      queries.setQueryData(["omnirush-whatsapp-count", "http://connectors.test"], { records: 300 });
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><LocalChatsCard client={{ baseUrl: "http://connectors.test" } as never} openLink={noop} /></QueryClientProvider>);
+    };
+    const base = { enabled: true, lastSyncAt: null, lastError: "timeout", failures: 2 };
+    const uploading = card({ ...base, running: true, progress: { phase: "uploading", pushesDone: 3, pushesTotal: 48, recordsDone: 300, recordsTotal: 4800 } });
+    expect(uploading.match(/data-testid="work-sync-progress"/g)?.length).toBe(1);
+    expect(uploading).toContain("Syncing 300 of 4,800 conversation days");
+    expect(uploading).toContain('aria-label="WhatsApp sync progress"');
+    expect(uploading).toContain("Syncing…");
+    // The last run's error waits while a new one runs.
+    expect(uploading).not.toContain('data-testid="work-local-chat-error"');
+    expect(card({ ...base, running: true, progress: { phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 } })).toContain("Reading chats on this Mac");
+    const failed = card({ ...base, running: false, progress: null });
+    expect(failed).not.toContain("work-sync-progress");
+    expect(failed).toContain("The upload took too long. It tries again on its own from where it stopped. Failed 2 times in a row.");
+    // An older desktop says only `running`: the card is as before.
+    const older = card({ ...base, lastError: null, failures: 0, running: true });
+    expect(older).not.toContain("work-sync-progress");
+    expect(older).toContain("Reading…");
+    for (const html of [uploading, failed, older]) expect(html).not.toMatch(/—/);
+  });
+
   test("Telegram card: hidden without credentials, then sign-in steps, then the signed-in line and its settings", () => {
     const client = { baseUrl: "http://connectors.test" } as never;
     const card = (status: unknown, sync?: unknown) => {
@@ -1079,6 +1389,11 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(signedIn).toContain("First sync goes back");
     expect(signedIn).toContain("Disconnect");
     expect(signedIn).not.toContain('data-testid="work-telegram-input"');
+    const syncing = card({ ...base, step: "signed_in", name: "Sam Rao" }, { telegram: { enabled: true, lastSyncAt: at, lastError: "flood_wait", failures: 0, running: true, progress: { phase: "uploading", pushesDone: 1, pushesTotal: 3, recordsDone: 100, recordsTotal: 250 } } });
+    expect(syncing).toContain("Syncing 100 of 250 conversation days");
+    expect(syncing).toContain('data-value="40"');
+    expect(syncing).not.toContain("Telegram asked to slow down.");
+    expect(card({ ...base, step: "signed_in", name: "Sam Rao" }, { telegram: { enabled: true, lastSyncAt: at, lastError: null, failures: 0, running: true, progress: { phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 } } })).toContain("Reading chats from Telegram");
     const other = card({ ...base, step: "other_account" });
     expect(other).toContain("Telegram is signed in on this computer for another OmniRush account.");
     expect(other).toContain("Disconnect");

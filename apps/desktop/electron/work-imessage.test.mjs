@@ -13,6 +13,7 @@ import {
   readDatabase,
   readIMessage,
   IMessageError,
+  sendOrder,
 } from "./work-imessage.mjs";
 
 // A real streamtyped NSAttributedString body: the text is the first
@@ -149,6 +150,42 @@ test("readDatabase sends a chat's whole day again when a message joins it", () =
     const direct = records.find((r) => r.chat_key === "iMessage;-;+15551230000");
     assert.equal(direct.text.split("\n").length, 3);
     assert.equal(records.length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sendOrder: by the lowest new row per key, days with none last; the position never passes a row not sent", () => {
+  const part = (key, first, name) => ({ record: { name }, key, first });
+  const order = sendOrder([part("a", 7, "a7"), part("b", 3, "b3"), part("a", Infinity, "a-old"), part("a", 2, "a2"), part("b", 9, "b9")], { a: 1, b: 2 }, { a: 20, b: 30, c: 5 });
+  assert.deepEqual(order.records.map((record) => record.name), ["a2", "a7", "a-old", "b3", "b9"]);
+  assert.deepEqual(order.cursorAt(0), { a: 1, b: 2, c: 5 });
+  assert.deepEqual(order.cursorAt(1), { a: 6, b: 2, c: 5 });
+  // Only days with nothing new are left for "a": its position goes to the end of what was read.
+  assert.deepEqual(order.cursorAt(2), { a: 20, b: 2, c: 5 });
+  assert.deepEqual(order.cursorAt(4), { a: 20, b: 8, c: 5 });
+  assert.deepEqual(order.cursorAt(5), { a: 20, b: 30, c: 5 });
+});
+
+test("readDatabase gives a position after each part that landed; reading on from it sends what is left", () => {
+  const { dir, dbPath } = buildFixture();
+  try {
+    const db = new DatabaseSync(dbPath);
+    // A late row (a phone syncing old messages): a newer ROWID on an older day of the direct chat.
+    db.prepare("INSERT INTO message (ROWID, text, attributedBody, is_from_me, date, service, handle_id) VALUES (?,?,?,?,?,?,?)")
+      .run(5, "from last week", null, 0, appleNanos("2026-11-13T08:00:00Z"), "iMessage", 1);
+    db.prepare("INSERT INTO chat_message_join VALUES (?,?)").run(10, 5);
+    db.close();
+    const first = readDatabase(dbPath, 0);
+    assert.deepEqual(first.records.map((r) => `${r.chat_key} ${r.day}`), ["iMessage;-;+15551230000 2026-11-14", "iMessage;+;chat99 2026-11-15", "iMessage;-;+15551230000 2026-11-13"]);
+    assert.deepEqual([0, 1, 2, 3].map(first.cursorAt), [0, 3, 4, 5]);
+    // The first part landed and the run stopped: the next read has the rest (and the direct chat's later day again).
+    const rest = readDatabase(dbPath, first.cursorAt(1));
+    assert.deepEqual(rest.records.map((r) => `${r.chat_key} ${r.day}`), ["iMessage;+;chat99 2026-11-15", "iMessage;-;+15551230000 2026-11-13", "iMessage;-;+15551230000 2026-11-14"]);
+    // Past the group's row only the late row is new; its chat's later day goes too, last, with nothing new in it.
+    const late = readDatabase(dbPath, 4);
+    assert.deepEqual(late.records.map((r) => r.day), ["2026-11-13", "2026-11-14"]);
+    assert.deepEqual([0, 1, 2].map(late.cursorAt), [4, 5, 5]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

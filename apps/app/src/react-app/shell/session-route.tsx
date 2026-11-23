@@ -3950,6 +3950,7 @@ export function SessionRoute() {
             backLabel={workConnectorsFrom ? t("work.common.back_to_chat") : undefined}
             onBack={() => navigate(workConnectorsFrom ?? WORK_HOME_ROUTE)}
             notice={hasSampleData(workOnboarding.data) ? <SampleDataBadge client={client ?? null} /> : null}
+            onOpenOrganization={() => navigate(WORK_ORG_ROUTE, { state: { from: WORK_CONNECTORS_ROUTE } })}
           />
         ) : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? (
           <WorkSearchPage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)} />
