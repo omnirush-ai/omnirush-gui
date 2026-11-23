@@ -3,11 +3,10 @@
 // tools, members, pending invites, removing, transferring and leaving. Each person's connectors stay their own; the owner
 // and admins pick which connectors members see (Connectors for your team), and the owner makes admins.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowUpRight, Copy, RotateCw, UserPlus } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Copy, Pencil, RotateCw, UserPlus } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,7 +24,8 @@ import {
 
 import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkOrgConnectors, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workRoleLabel, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
 import { BrandTile } from "./brand-icon";
-import { pickerGroups, toolLabel, useWorkCatalog } from "./catalog";
+import { pickerGroups, sizeLabel, toolLabel, useWorkCatalog } from "./catalog";
+import { ListMore, ListSearch, matchesQuery, PersonAvatar, useListCap } from "./list-cap";
 import { useEnterpriseFlags } from "./enterprise-mode";
 import { SizeChips, ToolPicker } from "./onboarding-steps";
 import { TRUST_URL, WorkInviteDialog } from "./work-onboarding";
@@ -70,7 +70,7 @@ function Section(props: { title: string; description?: string; actions?: ReactNo
       <div className="flex items-end justify-between gap-3">
         <div>
           <h2 className="text-[15px] font-semibold">{props.title}</h2>
-          {props.description ? <p className="text-[12px] text-muted-foreground">{props.description}</p> : null}
+          {props.description ? <p className="text-[13px] text-muted-foreground">{props.description}</p> : null}
         </div>
         {props.actions}
       </div>
@@ -79,11 +79,18 @@ function Section(props: { title: string; description?: string; actions?: ReactNo
   );
 }
 
+/** Chips a "your tools" picker shows before "Show all". */
+export const TOOL_CHIPS_SHOWN = 12;
+
 function ToolChips(props: { offered: string[]; selected: string[]; onChange: (tools: string[]) => void; disabled?: boolean; testId?: string; label?: (id: string) => string }) {
+  const [all, setAll] = useState(false);
   if (!props.offered.length) return null;
+  // The picked ones first, so a capped list never hides a choice.
+  const ordered = [...props.offered.filter((id) => props.selected.includes(id)), ...props.offered.filter((id) => !props.selected.includes(id))];
+  const shown = all ? ordered : ordered.slice(0, Math.max(TOOL_CHIPS_SHOWN, props.selected.length));
   return (
     <div className="flex flex-wrap gap-1.5" data-testid={props.testId}>
-      {props.offered.map((id) => {
+      {shown.map((id) => {
         const selected = props.selected.includes(id);
         return (
           <button
@@ -102,24 +109,80 @@ function ToolChips(props: { offered: string[]; selected: string[]; onChange: (to
           </button>
         );
       })}
+      {ordered.length > shown.length || all ? (
+        <button type="button" onClick={() => setAll(!all)} aria-expanded={all} className="flex h-8 items-center rounded-full px-3 text-[13px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" data-testid="work-org-tools-all">
+          {all ? t("work.today.show_less") : t("work.org.show_all_tools", { n: ordered.length })}
+        </button>
+      ) : null}
     </div>
   );
 }
 
-/** The company's tools as read-only tiles (everyone but the owner, who edits them). */
+/** Tools a read-only list shows before "+N more". */
+export const TOOL_LIST_SHOWN = 8;
+
+/** The company's tools as read-only tiles: the first eight, then "+N more" to open the rest. */
 function ToolList(props: { ids: string[]; custom: string[]; label: (id: string) => string }) {
+  const [all, setAll] = useState(false);
   if (!props.ids.length && !props.custom.length) return <span className="text-[13px] text-muted-foreground">{t("work.org.no_tools")}</span>;
+  const items = [...props.ids.map((id) => ({ id, custom: false })), ...props.custom.map((name) => ({ id: name, custom: true }))];
+  const shown = all ? items : items.slice(0, TOOL_LIST_SHOWN);
   return (
     <ul className="flex flex-wrap gap-1.5" data-testid="work-org-tool-list">
-      {props.ids.map((id) => (
-        <li key={id} className="flex h-8 items-center gap-1.5 rounded-full border border-border ps-1 pe-3 text-[13px]"><BrandTile id={id} size="chip" className="rounded-full" />{props.label(id)}</li>
+      {shown.map((item) => item.custom ? (
+        <li key={`custom:${item.id}`} className="flex h-8 max-w-[14rem] items-center gap-1.5 rounded-full border border-dashed border-border ps-1 pe-3 text-[13px]" data-custom-tool={item.id} title={item.id}><BrandTile name={item.id} size="chip" className="rounded-full" /><span className="truncate">{item.id}</span></li>
+      ) : (
+        <li key={item.id} className="flex h-8 max-w-[14rem] items-center gap-1.5 rounded-full border border-border ps-1 pe-3 text-[13px]" title={props.label(item.id)}><BrandTile id={item.id} size="chip" className="rounded-full" /><span className="truncate">{props.label(item.id)}</span></li>
       ))}
-      {props.custom.map((name) => (
-        <li key={`custom:${name}`} className="flex h-8 items-center gap-1.5 rounded-full border border-dashed border-border ps-1 pe-3 text-[13px]" data-custom-tool={name}><BrandTile name={name} size="chip" className="rounded-full" />{name}</li>
-      ))}
+      {items.length > TOOL_LIST_SHOWN ? (
+        <li>
+          <button type="button" onClick={() => setAll(!all)} aria-expanded={all} className="flex h-8 items-center rounded-full border border-border px-3 text-[13px] font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" data-testid="work-org-tool-list-more">
+            {all ? t("work.today.show_less") : t("work.org.more_tools", { n: items.length - TOOL_LIST_SHOWN })}
+          </button>
+        </li>
+      ) : null}
     </ul>
   );
 }
+
+/** The company's facts, read only: name, website, industry, size and tools (Edit opens the form for the owner). */
+function CompanySummary(props: { company: { name: string; domain: string; size: string; industry: string; tools: string[]; custom: string[] }; label: (id: string) => string }) {
+  const fact = (label: string, value: string) => (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <dt className="text-[12px] text-muted-foreground">{label}</dt>
+      <dd className="truncate text-[14px] text-foreground" title={value || undefined}>{value || <span className="text-muted-foreground">{t("work.org.not_set")}</span>}</dd>
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-4 rounded-xl border border-border px-4 py-4" data-testid="work-org-summary">
+      <dl className="grid gap-4 sm:grid-cols-2">
+        {fact(t("work.org.company_name"), props.company.name)}
+        {fact(t("work.org.company_website"), props.company.domain)}
+        {fact(t("work.org.industry"), props.company.industry)}
+        {fact(t("work.org.team_size"), props.company.size ? sizeLabel(props.company.size) : "")}
+      </dl>
+      <div className="flex flex-col gap-1.5" data-testid="work-org-tools">
+        <span className="text-[12px] text-muted-foreground">{t("work.org.company_tools")}</span>
+        <ToolList ids={props.company.tools} custom={props.company.custom} label={props.label} />
+      </div>
+    </div>
+  );
+}
+
+/** A role as a neutral pill (foreground words, so it reads in light and dark); the owner's is a little stronger. */
+function RolePill(props: { role: string }) {
+  return (
+    <span className={cn("inline-flex h-6 shrink-0 items-center rounded-full border px-2 text-[12px] text-foreground", props.role === "owner" ? "border-foreground/30 font-semibold" : "border-border font-medium")} data-role-pill={props.role}>
+      {workRoleLabel(props.role)}
+    </span>
+  );
+}
+
+/** Team connector rows shown before "Show all". */
+export const TEAM_CONNECTORS_SHOWN = 8;
+/** Members and invites shown before "Show N more". */
+export const MEMBERS_SHOWN = 20;
+export const INVITES_SHOWN = 5;
 
 /** Connectors for your team (owner or admin): every connector the company may use, a switch each and how many people
  *  connected it. Members only see the ones switched on. `pending` is the list being saved, shown at once. */
@@ -127,6 +190,10 @@ function TeamConnectors(props: { view: OmniRushWorkOrgConnectors; pending: strin
   const allowed = props.view.allowed ?? [];
   const isOn = (row: OmniRushWorkOrgConnector) => (props.pending === undefined ? row.shown : props.pending === null || props.pending.includes(row.id));
   const on = allowed.filter(isOn).length;
+  // The ones people use first; the rest fold under "Show all" so 36 switches never fill the page.
+  const ranked = allowed.map((row, index) => ({ row, index })).sort((a, b) => b.row.members_connected - a.row.members_connected || a.index - b.index).map((entry) => entry.row);
+  const [all, setAll] = useState(false);
+  const rows = all ? ranked : ranked.slice(0, TEAM_CONNECTORS_SHOWN);
   return (
     <Section
       title={t("work.org.team_connectors")}
@@ -135,25 +202,32 @@ function TeamConnectors(props: { view: OmniRushWorkOrgConnectors; pending: strin
       actions={allowed.length ? <span className="shrink-0 text-[12px] text-muted-foreground" data-testid="work-org-connectors-count">{t("work.org.team_on", { on, total: allowed.length })}</span> : null}
     >
       {allowed.length ? (
-        <ul className="rounded-xl border border-border">
-          {allowed.map((row) => {
-            const name = connectorLabel(row.id, row.label);
-            return (
-              <li key={row.id} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0" data-org-connector={row.id} data-shown={isOn(row)}>
-                <BrandTile id={row.id} name={name} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{name}</div>
-                  <div className="truncate text-[12px] text-muted-foreground">{t("work.org.team_connected", { count: row.members_connected, n: row.members_connected.toLocaleString() })}</div>
-                </div>
-                <Switch aria-label={t("work.org.team_switch_for", { name })} checked={isOn(row)} disabled={props.busy} onCheckedChange={(checked: boolean) => props.onChange(row, checked)} />
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <ul className="rounded-xl border border-border">
+            {rows.map((row) => {
+              const name = connectorLabel(row.id, row.label);
+              return (
+                <li key={row.id} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0" data-org-connector={row.id} data-shown={isOn(row)}>
+                  <BrandTile id={row.id} name={name} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[14px] font-medium" title={name}>{name.replace(/\s*\(.*\)$/, "") || name}</div>
+                    <div className="truncate text-[13px] text-muted-foreground">{t("work.org.team_connected", { count: row.members_connected, n: row.members_connected.toLocaleString() })}</div>
+                  </div>
+                  <Switch aria-label={t("work.org.team_switch_for", { name })} checked={isOn(row)} disabled={props.busy} onCheckedChange={(checked: boolean) => props.onChange(row, checked)} />
+                </li>
+              );
+            })}
+          </ul>
+          {ranked.length > TEAM_CONNECTORS_SHOWN ? (
+            <button type="button" onClick={() => setAll(!all)} aria-expanded={all} className="self-start rounded-md px-1 text-[13px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" data-testid="work-org-connectors-all">
+              {all ? t("work.today.show_less") : t("work.org.show_all_connectors", { n: ranked.length })}
+            </button>
+          ) : null}
+        </>
       ) : (
         <div className="rounded-xl border border-border px-4 py-3 text-[13px] text-muted-foreground">{t("work.connectors.none")}</div>
       )}
-      {props.view.staff_limited ? <p className="text-[12px] text-muted-foreground" data-testid="work-org-connectors-limited">{t("work.org.team_connectors_limited")}</p> : null}
+      {props.view.staff_limited ? <p className="text-[13px] text-muted-foreground" data-testid="work-org-connectors-limited">{t("work.org.team_connectors_limited")}</p> : null}
     </Section>
   );
 }
@@ -173,6 +247,9 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const links = useWorkInviteLinks((store) => store.links);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
+  // The company opens as a read-only summary; the owner's Edit opens the form.
+  const [editing, setEditing] = useState(false);
+  const [memberQuery, setMemberQuery] = useState("");
   const query = useQuery({ queryKey: workMembersKey(props.client), queryFn: () => props.client!.listWorkMembers(), enabled: Boolean(props.client), retry: false });
   const data = query.data;
   const org = data?.org ?? null;
@@ -211,7 +288,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
       ...(!sameList(company.custom, saved.custom) ? { custom_tools: company.custom } : {}),
       ...(company.domain.trim() ? { domain: company.domain.trim() } : {}), ...(company.size ? { size: company.size } : {}), ...(company.industry.trim() ? { industry: company.industry.trim() } : {}),
     }),
-    onSuccess: () => { toast.success(t("work.org.company_saved")); setCompany(null); refresh(); },
+    onSuccess: () => { toast.success(t("work.org.company_saved")); setCompany(null); setEditing(false); refresh(); },
     onError,
   });
   const saveMine = useMutation({
@@ -256,6 +333,11 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
     onError,
   });
   const leaving = leaveState(data);
+  const allMembers = data?.members ?? [];
+  const foundMembers = allMembers.filter((member) => matchesQuery(memberQuery, member.email, member.job_role, workRoleLabel(member.role)));
+  const memberCap = useListCap(foundMembers.length, MEMBERS_SHOWN);
+  const invites = data?.invites ?? [];
+  const inviteCap = useListCap(invites.length, INVITES_SHOWN, invites.length);
   const failure = query.error && !data ? workFailure(query.error) : null;
 
   return (
@@ -284,43 +366,52 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
           </div>
         ) : (
           <>
-            <Section title={t("work.org.company")} description={owner ? undefined : t("work.org.owner_only")} testId="work-org-company">
-              <form
-                className="flex flex-col gap-4 rounded-xl border border-border px-4 py-4"
-                onSubmit={(event) => { event.preventDefault(); if (owner && company.name.trim() && companyChanged && !saveOrg.isPending) saveOrg.mutate(); }}
-              >
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-                    {t("work.org.company_name")}
-                    <Input required maxLength={200} disabled={!owner} value={company.name} onChange={(event) => setCompany({ ...company, name: event.target.value })} data-testid="work-org-name" />
-                  </label>
-                  <label className="flex flex-col gap-1.5 text-[13px] font-medium">
-                    {t("work.org.company_website")}
-                    <Input maxLength={253} disabled={!owner} value={company.domain} onChange={(event) => setCompany({ ...company, domain: event.target.value })} placeholder="example.com" />
-                  </label>
-                  <label className="flex flex-col gap-1.5 text-[13px] font-medium sm:col-span-2">
-                    {t("work.org.industry")}
-                    <Input maxLength={100} disabled={!owner} value={company.industry} onChange={(event) => setCompany({ ...company, industry: event.target.value })} placeholder={t("work.org.industry_placeholder")} />
-                  </label>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <span id={sizeLabelId} className="text-[13px] font-medium">{t("work.org.team_size")}</span>
-                  <SizeChips sizes={sizes} value={company.size || null} disabled={!owner} labelId={sizeLabelId} onChange={(size) => setCompany({ ...company, size: size ?? "" })} />
-                </div>
-                <div className="flex flex-col gap-1.5" data-testid="work-org-tools">
-                  <span className="text-[13px] font-medium">{t("work.org.company_tools")}</span>
-                  {owner && groups.length ? (
-                    <ToolPicker groups={groups} selected={company.tools} custom={company.custom} onToggle={(id) => setCompany({ ...company, tools: toggle(company.tools, id) })} onCustom={(custom) => setCompany({ ...company, custom })} />
-                  ) : (
-                    <ToolList ids={company.tools} custom={company.custom} label={label} />
-                  )}
-                </div>
-                {owner ? (
-                  <div className="flex justify-end">
+            <Section
+              title={t("work.org.company")}
+              description={owner ? undefined : t("work.org.owner_only")}
+              testId="work-org-company"
+              actions={owner && !editing ? <Button size="sm" variant="outline" onClick={() => setEditing(true)} data-testid="work-org-edit"><Pencil className="size-3.5" />{t("work.org.edit")}</Button> : null}
+            >
+              {owner && editing ? (
+                <form
+                  className="flex flex-col gap-4 rounded-xl border border-border px-4 py-4"
+                  onSubmit={(event) => { event.preventDefault(); if (company.name.trim() && companyChanged && !saveOrg.isPending) saveOrg.mutate(); }}
+                  onKeyDown={(event) => { if (event.key === "Escape") { setCompany(null); setEditing(false); } }}
+                >
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1.5 text-[13px] font-medium">
+                      {t("work.org.company_name")}
+                      <Input required autoFocus maxLength={200} value={company.name} onChange={(event) => setCompany({ ...company, name: event.target.value })} data-testid="work-org-name" />
+                    </label>
+                    <label className="flex flex-col gap-1.5 text-[13px] font-medium">
+                      {t("work.org.company_website")}
+                      <Input maxLength={253} value={company.domain} onChange={(event) => setCompany({ ...company, domain: event.target.value })} placeholder="example.com" />
+                    </label>
+                    <label className="flex flex-col gap-1.5 text-[13px] font-medium sm:col-span-2">
+                      {t("work.org.industry")}
+                      <Input maxLength={100} value={company.industry} onChange={(event) => setCompany({ ...company, industry: event.target.value })} placeholder={t("work.org.industry_placeholder")} />
+                    </label>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span id={sizeLabelId} className="text-[13px] font-medium">{t("work.org.team_size")}</span>
+                    <SizeChips sizes={sizes} value={company.size || null} labelId={sizeLabelId} onChange={(size) => setCompany({ ...company, size: size ?? "" })} />
+                  </div>
+                  <div className="flex flex-col gap-1.5" data-testid="work-org-tools">
+                    <span className="text-[13px] font-medium">{t("work.org.company_tools")}</span>
+                    {groups.length ? (
+                      <ToolPicker groups={groups} selected={company.tools} custom={company.custom} onToggle={(id) => setCompany({ ...company, tools: toggle(company.tools, id) })} onCustom={(custom) => setCompany({ ...company, custom })} />
+                    ) : (
+                      <ToolList ids={company.tools} custom={company.custom} label={label} />
+                    )}
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" size="sm" variant="ghost" onClick={() => { setCompany(null); setEditing(false); }} data-testid="work-org-edit-cancel">{t("common.cancel")}</Button>
                     <Button type="submit" size="sm" disabled={!company.name.trim() || !companyChanged || saveOrg.isPending} data-testid="work-org-save">{saveOrg.isPending ? t("work.common.saving") : t("common.save")}</Button>
                   </div>
-                ) : null}
-              </form>
+                </form>
+              ) : (
+                <CompanySummary company={saved} label={label} />
+              )}
             </Section>
 
             <Section title={t("work.org.you")} description={owner ? t("work.org.you_hint_owner") : t("work.org.you_hint")} testId="work-org-me">
@@ -351,14 +442,18 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
               testId="work-org-members"
               actions={canInvite ? <Button size="sm" variant="outline" onClick={() => setInviteOpen(true)} data-testid="work-org-invite"><UserPlus className="size-4" />{t("work.org.invite")}</Button> : null}
             >
+              {allMembers.length > MEMBERS_SHOWN ? (
+                <ListSearch value={memberQuery} onChange={(value) => { setMemberQuery(value); memberCap.reset(); }} label={t("work.org.search_members")} testId="work-org-member-search" />
+              ) : null}
               <ul className="rounded-xl border border-border">
-                {(data?.members ?? []).map((member) => (
+                {foundMembers.slice(0, memberCap.shown).map((member) => (
                   <li key={member.user_id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-member={member.user_id} data-role={member.role}>
+                    <PersonAvatar name={member.email} />
                     <div className="min-w-[12rem] flex-1">
-                      <div className="truncate text-sm font-medium">{member.email}{member.you ? <span className="font-normal text-muted-foreground"> {t("work.org.you_tag")}</span> : null}</div>
-                      {member.job_role ? <div className="truncate text-[12px] text-muted-foreground">{member.job_role}</div> : null}
+                      <div className="truncate text-[14px] font-medium" title={member.email}>{member.email}{member.you ? <span className="font-normal text-muted-foreground"> {t("work.org.you_tag")}</span> : null}</div>
+                      {member.job_role ? <div className="truncate text-[13px] text-muted-foreground" title={member.job_role}>{member.job_role}</div> : null}
                     </div>
-                    <Badge variant={member.role === "owner" ? "default" : "secondary"}>{workRoleLabel(member.role)}</Badge>
+                    <RolePill role={member.role} />
                     {owner && !member.you ? (
                       <div className="flex flex-wrap items-center gap-1">
                         {rolesKnown && member.role !== "owner" ? (
@@ -373,26 +468,34 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                           </Button>
                         ) : null}
                         <Button variant="ghost" size="sm" onClick={() => setConfirm({ kind: "transfer", member })}>{t("work.org.make_owner")}</Button>
-                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirm({ kind: "remove", member })}>{t("common.remove")}</Button>
+                        <Button variant="ghost" size="sm" className="text-red-11 hover:text-red-11" onClick={() => setConfirm({ kind: "remove", member })}>{t("common.remove")}</Button>
                       </div>
                     ) : !member.you && canRemove(member) ? (
-                      <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirm({ kind: "remove", member })} data-testid="work-org-member-remove">{t("common.remove")}</Button>
+                      <Button variant="ghost" size="sm" className="text-red-11 hover:text-red-11" onClick={() => setConfirm({ kind: "remove", member })} data-testid="work-org-member-remove">{t("common.remove")}</Button>
                     ) : null}
                   </li>
                 ))}
+                {foundMembers.length ? null : <li className="px-4 py-3 text-[13px] text-muted-foreground" data-testid="work-org-member-none">{t("work.org.no_member_match")}</li>}
               </ul>
+              <ListMore cap={memberCap} testId="work-org-members-more" />
             </Section>
 
-            {(data?.invites ?? []).length ? (
-              <Section title={t("work.org.pending_invites")} description={t("work.org.pending_invites_hint")} testId="work-org-invites">
+            {invites.length ? (
+              <Section
+                title={t("work.org.pending_invites")}
+                description={t("work.org.pending_invites_hint")}
+                testId="work-org-invites"
+                actions={<span className="shrink-0 text-[13px] tabular-nums text-muted-foreground">{invites.length.toLocaleString()}</span>}
+              >
                 <ul className="rounded-xl border border-border">
-                  {(data?.invites ?? []).map((invite) => {
+                  {invites.slice(0, inviteCap.shown).map((invite) => {
                     const link = invite.link ?? links[invite.id] ?? null;
                     return (
                       <li key={invite.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-invite={invite.id}>
+                        <PersonAvatar name={invite.email} className="border-dashed bg-background text-muted-foreground" />
                         <div className="min-w-[12rem] flex-1">
-                          <div className="truncate text-sm">{invite.email}</div>
-                          {invite.expires_at ? <div className="text-[12px] text-muted-foreground">{t("work.org.expires", { date: new Date(invite.expires_at).toLocaleDateString() })}</div> : null}
+                          <div className="truncate text-[14px]" title={invite.email}>{invite.email}</div>
+                          {invite.expires_at ? <div className="text-[13px] text-muted-foreground">{t("work.org.expires", { date: new Date(invite.expires_at).toLocaleDateString() })}</div> : null}
                         </div>
                         {link ? (
                           <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard.writeText(link).then(() => toast.success(t("work.common.link_copied")))}><Copy className="size-3.5" />{t("work.org.copy_link")}</Button>
@@ -404,6 +507,11 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                     );
                   })}
                 </ul>
+                {invites.length > INVITES_SHOWN ? (
+                  <button type="button" onClick={inviteCap.expanded ? inviteCap.showLess : inviteCap.showMore} aria-expanded={inviteCap.expanded} className="self-start rounded-md px-1 text-[13px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" data-testid="work-org-invites-all">
+                    {inviteCap.expanded ? t("work.today.show_less") : t("work.org.show_all_invites", { n: invites.length.toLocaleString() })}
+                  </button>
+                ) : null}
               </Section>
             ) : null}
 
@@ -414,7 +522,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
             {enterprise.on && enterprise.portalUrl && (owner || admin) ? (
               <Section title={t("work.ent.manage_portal")} testId="work-org-portal">
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
-                  <span className="max-w-[32rem] text-[13px] text-muted-foreground">{t("work.ent.manage_portal_body")}</span>
+                  <span className="max-w-[32rem] text-[14px] text-muted-foreground">{t("work.ent.manage_portal_body")}</span>
                   <Button variant="outline" size="sm" onClick={() => props.openLink(enterprise.portalUrl!)} data-testid="work-org-portal-open">{t("work.ent.manage_open")}<ArrowUpRight className="size-4" /></Button>
                 </div>
               </Section>
@@ -422,15 +530,15 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
 
             <Section title={t("work.org.security")} testId="work-org-security">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
-                <span className="max-w-[32rem] text-[13px] text-muted-foreground" data-testid="work-org-privacy">{t("work.setup.privacy_line")}</span>
+                <span className="max-w-[32rem] text-[14px] text-muted-foreground" data-testid="work-org-privacy">{t("work.setup.privacy_line")}</span>
                 <Button variant="outline" size="sm" onClick={() => props.openLink(TRUST_URL)} data-testid="work-org-trust">{t("work.org.trust_page")}</Button>
               </div>
             </Section>
 
             <Section title={t("work.org.leave_title")} testId="work-org-leave">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
-                <span className="max-w-[32rem] text-[13px] text-muted-foreground">{leaving.message}</span>
-                <Button variant="outline" size="sm" className="text-destructive" disabled={leaving.blocked || leave.isPending} onClick={() => setConfirm({ kind: "leave" })} data-testid="work-org-leave-button">{t("work.org.leave")}</Button>
+                <span className="max-w-[32rem] text-[14px] text-muted-foreground">{leaving.message}</span>
+                <Button variant="destructive" size="sm" disabled={leaving.blocked || leave.isPending} onClick={() => setConfirm({ kind: "leave" })} data-testid="work-org-leave-button">{t("work.org.leave")}</Button>
               </div>
             </Section>
           </>

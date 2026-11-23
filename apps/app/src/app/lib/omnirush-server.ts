@@ -633,7 +633,8 @@ export type OmniRushWorkAction = {
   id: string;
   source: string;
   tool: string;
-  target: string;
+  /** Null on older rows and on writes that failed before a target was known. */
+  target: string | null;
   summary: string;
   result: OmniRushWorkActionResult;
   undoable: boolean;

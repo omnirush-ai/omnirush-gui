@@ -185,7 +185,7 @@ import type { OmniRushServerClient } from "../../../../app/lib/omnirush-server";
 import { LocalWorkflowsPanel } from "../../local-workflows/local-workflows-panel";
 import { useEnterpriseFlags } from "../../work/enterprise-mode";
 import { companyUsageLimit } from "../../work/company-limit";
-import { WorkSidebarNav, type WorkNavigation } from "./work-sidebar-nav";
+import { WORK_SECTION_LABEL, WorkSidebarNav, type WorkNavigation } from "./work-sidebar-nav";
 
 /** Paper Desktop: unread #2FBE54, needs-action #E8933A (14px artboard → ~8px app). */
 const OUTCOME_DOT_UNREAD = "#2FBE54";
@@ -1637,7 +1637,7 @@ export function AppSidebar(props: AppSidebarProps) {
                   type="button"
                   aria-expanded={!workChatsCollapsed}
                   onClick={() => toggleWorkSection("chats")}
-                  className={cn("-ms-1 flex items-center gap-1 rounded px-1 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring", SIDEBAR_SECTION_LABEL)}
+                  className={cn("-ms-1 flex items-center gap-1 rounded px-1 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring", WORK_SECTION_LABEL)}
                   data-testid="sidebar-work-chats-toggle"
                 >
                   {t("work.sidebar.chats")}

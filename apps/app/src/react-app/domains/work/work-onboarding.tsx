@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 
 import { BrandTile } from "./brand-icon";
 import { pickerGroups, useWorkCatalog, type CatalogTool } from "./catalog";
+import { useEnterpriseFlags } from "./enterprise-mode";
 import { companyFromDomain, EmailChips, MoreConnectors, onboardingSteps, SizeChips, StarterRows, StepActions, StepBar, StepHeading, ToolPicker, type OnboardingStep } from "./onboarding-steps";
 import {
   checklistItems, connectorLabel, connectorProgress, connectOrder, domainFromEmail, isLinked, isPausedByAdmin, setupLabel, useWorkInviteLinks, useWorkInviteStore, useWorkOnboarding, useWorkSetupStore,
@@ -466,7 +467,7 @@ export function WorkOnboarding(props: {
                 <span>{t("work.org.your_role")} <span className="font-normal text-muted-foreground">{t("work.onboarding.optional")}</span></span>
                 <Input autoFocus maxLength={100} value={jobRole} onChange={(event) => setJobRole(event.target.value)} placeholder={t("work.org.role_placeholder")} data-testid="work-onboarding-role" />
               </label>
-              <p className="rounded-lg bg-muted/60 px-3 py-2.5 text-[12px] leading-[18px] text-muted-foreground" data-testid="work-onboarding-privacy">{t("work.setup.privacy_line")}</p>
+              <p className="rounded-lg bg-muted/60 px-3 py-2.5 text-[13px] leading-5 text-muted-foreground" data-testid="work-onboarding-privacy">{t("work.setup.privacy_line")}</p>
               <StepActions primary={<Button type="submit" disabled={saveWelcome.isPending} data-testid="work-onboarding-continue">{t("work.common.continue")}<ArrowRight className="size-4" /></Button>} />
             </form>
           ) : step === "tools" ? (
@@ -511,7 +512,7 @@ export function WorkOnboarding(props: {
                   ) : (
                     <p className="rounded-xl border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground" data-testid="work-onboarding-connect-none">{t("work.setup.connect_none")}</p>
                   )}
-                  {customPicked.length ? <p className="text-[12px] text-muted-foreground" data-testid="work-onboarding-noted">{t("work.setup.noted", { names: customPicked.join(", ") })}</p> : null}
+                  {customPicked.length ? <p className="text-[13px] text-muted-foreground" data-testid="work-onboarding-noted">{t("work.setup.noted", { count: customPicked.length, names: customPicked.join(", ") })}</p> : null}
                   {flow.includes("tools") || flow[0] === "connect" ? (
                     <button type="button" onClick={() => go("tools")} className="self-start text-[13px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline" data-testid="work-onboarding-change-tools">{t("work.setup.change_tools")}</button>
                   ) : null}
@@ -582,37 +583,58 @@ export function WorkOnboarding(props: {
   );
 }
 
-/** The home's small first-run checklist (company, connected, first chat), until dismissed or done. */
-export function WorkChecklist(props: { client: WorkClient | null; onboarding: Parameters<typeof checklistItems>[0]; connectors: OmniRushWorkConnector[] | undefined; orgId: string; onConnect: () => void; onInvite: () => void; onOrganization?: () => void }) {
-  const hidden = useWorkSetupStore((state) => Boolean(state.checklistHidden[props.orgId]));
+/** Who may invite: anyone in a pilot company, the owner and admins of a company account (the server checks too). */
+export const canInviteRole = (role: string | null | undefined, enterprise: boolean) => !enterprise || role === "owner" || role === "admin";
+
+/** The checklist's rows for this person: "Add your company" only for the owner, invites only for those who may. */
+export function checklistRows(items: ReturnType<typeof checklistItems>, role: string | null | undefined) {
+  return items.filter((item) => item.id !== "company" || role === "owner");
+}
+
+/** Whether the home shows the checklist now (not dismissed on this device, something left). */
+export function useChecklistShown(onboarding: Parameters<typeof checklistItems>[0], connectors: OmniRushWorkConnector[] | undefined, orgId: string | null, role: string | null | undefined): boolean {
+  const hidden = useWorkSetupStore((state) => Boolean(orgId && state.checklistHidden[orgId]));
+  if (!orgId || hidden) return false;
+  return checklistRows(checklistItems(onboarding, connectors), role).some((item) => !item.done);
+}
+
+/** The home's small first-run checklist (company, connected, first chat), until dismissed or done. Role aware: a
+ *  member never sees the company step or an invite the server would refuse. */
+export function WorkChecklist(props: { client: WorkClient | null; onboarding: Parameters<typeof checklistItems>[0]; connectors: OmniRushWorkConnector[] | undefined; orgId: string; role?: string | null; onConnect: () => void; onInvite: () => void; onOrganization?: () => void }) {
   const hide = useWorkSetupStore((state) => state.hideChecklist);
-  const items = checklistItems(props.onboarding, props.connectors);
-  if (hidden || items.every((item) => item.done)) return null;
+  const enterprise = useEnterpriseFlags();
+  const shown = useChecklistShown(props.onboarding, props.connectors, props.orgId, props.role);
+  const items = checklistRows(checklistItems(props.onboarding, props.connectors), props.role);
+  const invite = Boolean(props.role) && canInviteRole(props.role, enterprise.on);
+  if (!shown) return null;
+  const link = "rounded text-start outline-none underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring";
   return (
     <div className="rounded-xl border border-border bg-background px-4 py-3" data-testid="work-checklist">
       <div className="flex items-center justify-between">
-        <span className="text-[13px] font-medium">{t("work.checklist.title")}</span>
-        <button type="button" aria-label={t("work.checklist.hide")} onClick={() => hide(props.orgId)} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><X className="size-3.5" /></button>
+        <span className="text-[14px] font-semibold">{t("work.checklist.title")}</span>
+        <button type="button" aria-label={t("work.checklist.hide")} onClick={() => hide(props.orgId)} className="flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"><X className="size-3.5" /></button>
       </div>
-      <ul className="mt-1.5 flex flex-col gap-1">
+      <ul className="mt-1.5 flex flex-col gap-1.5">
         {items.map((item) => (
           <li key={item.id} data-checklist-item={item.id} data-done={item.done} className="flex items-center gap-2 text-[13px]">
             <span className={cn("flex size-4 shrink-0 items-center justify-center rounded-full border", item.done ? "border-transparent bg-foreground text-background" : "border-border")}>
               {item.done ? <Check aria-hidden className="size-3" /> : null}
             </span>
             {item.id === "connected" && !item.done
-              ? <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onConnect}>{item.label}</button>
+              ? <button type="button" className={cn(link, "font-medium")} onClick={props.onConnect} data-testid="work-checklist-connect">{item.label}</button>
               : <span className={item.done ? "text-muted-foreground line-through" : ""}>{item.label}</span>}
           </li>
         ))}
-        <li className="flex items-center gap-2 text-[13px]">
-          <UserPlus aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onInvite} data-testid="work-checklist-invite">{t("work.invite.title")}</button>
-        </li>
+        {invite ? (
+          <li className="flex items-center gap-2 text-[13px]">
+            <UserPlus aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <button type="button" className={link} onClick={props.onInvite} data-testid="work-checklist-invite">{t("work.invite.title")}</button>
+          </li>
+        ) : null}
         {props.onOrganization ? (
           <li className="flex items-center gap-2 text-[13px]">
             <Building2 aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            <button type="button" className="text-start underline-offset-2 hover:underline" onClick={props.onOrganization} data-testid="work-checklist-organization">{t("work.checklist.organization")}</button>
+            <button type="button" className={link} onClick={props.onOrganization} data-testid="work-checklist-organization">{t("work.checklist.organization")}</button>
           </li>
         ) : null}
       </ul>

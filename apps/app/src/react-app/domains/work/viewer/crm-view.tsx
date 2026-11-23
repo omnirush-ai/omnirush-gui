@@ -8,6 +8,7 @@ import { useState } from "react";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
+import { money } from "./finance-view";
 import { CommentList } from "./issue-view";
 import { AttachmentChips, Body, FieldGrid, PersonName, SectionTitle } from "./parts";
 import type { RecordField, RecordFile, WorkRecord } from "./records";
@@ -44,12 +45,28 @@ function AllProperties(props: { fields: RecordField[] }) {
   );
 }
 
+const MONEY_LABEL = /^(amount|value|deal value|balance|total|price|revenue|annual revenue)$/i;
+
+/** A deal's money fields with their currency ("$48,000.00"), from its Currency field or the synced
+ *  `deal_currency_code`; the Currency field itself then goes. Without a known currency the fields stay as they are. */
+export function crmFields(fields: RecordField[] | undefined, properties: RecordField[] | null): RecordField[] {
+  const list = fields ?? [];
+  const named = list.find((field) => /^currency$/i.test(field.label.trim()))?.value
+    ?? properties?.find((field) => /^(deal currency code|currency)$/i.test(field.label.trim()))?.value
+    ?? "";
+  const currency = named.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) return list;
+  return list
+    .filter((field) => !/^currency$/i.test(field.label.trim()))
+    .map((field) => (MONEY_LABEL.test(field.label.trim()) ? { ...field, value: money(field.value, currency) || field.value } : field));
+}
+
 export function CrmView(props: { record: WorkRecord; onPreview: (file: RecordFile, sourceId: string) => void }) {
   const record = props.record;
   const properties = propertyLines(record.body?.content);
   return (
     <div className="flex flex-col gap-5 px-4 py-4" data-testid="work-crm-view">
-      <FieldGrid fields={record.fields} />
+      <FieldGrid fields={crmFields(record.fields, properties)} />
       {properties ? <AllProperties fields={properties} /> : record.body?.content?.trim() ? (
         <section aria-label={t("work.viewer.notes")}>
           <SectionTitle>{t("work.viewer.notes")}</SectionTitle>

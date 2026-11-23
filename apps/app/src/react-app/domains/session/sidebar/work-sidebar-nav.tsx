@@ -18,7 +18,10 @@ import { ConnectorIcon } from "@/react-app/domains/work/brand-icon";
 import { connectorLabel, connectorProgress, isLinked, isPausedByAdmin, relativeTime, visibleConnectors } from "@/react-app/domains/work/work-mode";
 import { useUiStateStore } from "@/react-app/shell/ui-state-store";
 
-import { SIDEBAR_SECTION_LABEL, SIDEBAR_SECTION_LANE } from "./sidebar-lanes";
+import { SIDEBAR_SECTION_LANE } from "./sidebar-lanes";
+
+/** Work's section labels (Work, Connectors, Chats): 12 px, a step above the Code sidebar's 11 px labels. */
+export const WORK_SECTION_LABEL = "text-[12px] font-medium text-muted-foreground";
 
 export type WorkNavigation = {
   onOpenHome: () => void; homeActive?: boolean;
@@ -46,13 +49,14 @@ export type ConnectorState = { tone: "ok" | "syncing" | "attention" | "error" | 
 /** Where a connector stands, in words and a tone for its dot. A sync's percent when the server says how far it got. */
 export function connectorState(row: OmniRushWorkConnector): ConnectorState {
   if (isPausedByAdmin(row)) return { tone: "off", label: t("work.sidebar.off"), value: null };
-  if (row.status === "error" || row.attention?.action === "reconnect" || row.attention?.kind === "reconnect") return { tone: "error", label: t("work.sidebar.reconnect"), value: null };
+  // "Reconnect" only when a new sign-in is the fix; a sync that keeps failing needs attention (Retry), not a sign-in.
+  if (row.attention?.action === "reconnect" || row.attention?.kind === "reconnect" || (row.status === "error" && !row.attention)) return { tone: "error", label: t("work.sidebar.reconnect"), value: null };
   const progress = connectorProgress(row.progress);
   if (row.status === "syncing" || progress) {
     const value = progress?.value ?? null;
     return { tone: "syncing", label: value === null ? t("work.sidebar.syncing") : t("work.sidebar.syncing_percent", { n: value }), value };
   }
-  if (row.attention) return { tone: "attention", label: t("work.sidebar.check"), value: null };
+  if (row.attention) return { tone: row.attention.kind === "failing" || row.status === "error" ? "error" : "attention", label: t("work.sidebar.check"), value: null };
   return { tone: "ok", label: t("work.sidebar.synced"), value: null };
 }
 
@@ -67,7 +71,8 @@ export function sidebarConnectors(rows: OmniRushWorkConnector[] | null | undefin
 }
 
 const DOT = { ok: "bg-green-9", syncing: "bg-amber-9", attention: "bg-amber-9", error: "bg-red-9", off: "bg-muted-foreground/40" } as const;
-const TEXT = { ok: "text-muted-foreground", syncing: "text-muted-foreground", attention: "text-amber-11", error: "text-red-11", off: "text-muted-foreground" } as const;
+// The words stay in the readable muted colour; the dot beside them carries the tone.
+const TEXT = { ok: "text-muted-foreground", syncing: "text-muted-foreground", attention: "text-foreground", error: "text-foreground", off: "text-muted-foreground" } as const;
 
 function Section(props: { id: string; label: string; action?: ReactNode; children: ReactNode; testId?: string }) {
   const collapsed = useUiStateStore((state) => state.collapsedWorkSections.includes(props.id));
@@ -79,7 +84,7 @@ function Section(props: { id: string; label: string; action?: ReactNode; childre
           type="button"
           aria-expanded={!collapsed}
           onClick={() => toggle(props.id)}
-          className={cn("-ms-1 flex min-w-0 items-center gap-1 rounded px-1 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring", SIDEBAR_SECTION_LABEL)}
+          className={cn("-ms-1 flex min-w-0 items-center gap-1 rounded px-1 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring", WORK_SECTION_LABEL)}
         >
           <span className="truncate">{props.label}</span>
           <ChevronRight aria-hidden className={cn("size-3 opacity-0 transition-[opacity,transform] group-hover/work-section:opacity-100 group-focus-within/work-section:opacity-100 motion-reduce:transition-none", !collapsed && "rotate-90", collapsed && "opacity-100")} />
@@ -133,8 +138,8 @@ function ConnectorRow(props: { row: OmniRushWorkConnector; active: boolean; onOp
       data-active={props.active ? "" : undefined}
       aria-label={`${name}, ${state.label}`}
       className={cn(
-        "flex w-full flex-col justify-center rounded-md px-2.5 text-start outline-none transition-colors",
-        state.tone === "syncing" ? "h-[38px]" : "h-[30px]",
+        // One height for every row; a sync's bar sits along the row's bottom edge.
+        "relative flex h-[30px] w-full flex-col justify-center rounded-md px-2.5 text-start outline-none transition-colors",
         "hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring data-active:bg-sidebar-accent",
         "mac:hover:bg-black/5 mac:data-active:bg-black/5 dark:mac:hover:bg-white/10 dark:mac:data-active:bg-white/10",
       )}
@@ -142,13 +147,13 @@ function ConnectorRow(props: { row: OmniRushWorkConnector; active: boolean; onOp
       <span className="flex w-full items-center gap-2">
         <ConnectorIcon id={props.row.id} className="size-4" />
         <span className={cn("min-w-0 flex-1 truncate text-[13px] text-sidebar-foreground/85", props.active && "font-medium text-sidebar-accent-foreground")}>{name}</span>
-        <span className={cn("flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums transition-opacity group-focus-within/connector:opacity-0 group-hover/connector:opacity-0", TEXT[state.tone])} data-testid="sidebar-connector-status">
+        <span className={cn("flex shrink-0 items-center gap-1.5 text-[12px] tabular-nums transition-opacity group-focus-within/connector:opacity-0 group-hover/connector:opacity-0", TEXT[state.tone])} data-testid="sidebar-connector-status">
           <span aria-hidden className={cn("size-1.5 rounded-full", DOT[state.tone], state.tone === "syncing" && "motion-safe:animate-pulse")} />
           {state.label}
         </span>
       </span>
       {state.tone === "syncing" ? (
-        <span aria-hidden className="ms-6 mt-1 block h-0.5 overflow-hidden rounded-full bg-sidebar-border">
+        <span aria-hidden className="absolute inset-x-2.5 bottom-0.5 ms-6 block h-0.5 overflow-hidden rounded-full bg-sidebar-border">
           <span className={cn("block h-full rounded-full bg-foreground/45", state.value === null && "w-1/4 motion-safe:animate-pulse")} style={state.value === null ? undefined : { width: `${Math.max(4, state.value)}%` }} />
         </span>
       ) : null}
@@ -215,9 +220,9 @@ export function WorkSidebarNav(props: { nav: WorkNavigation }) {
             aria-label={t("work.sidebar.add_connector")}
             title={t("work.sidebar.add_connector")}
             data-testid="sidebar-work-connectors"
-            className={cn("flex size-5 items-center justify-center rounded text-muted-foreground/70 outline-none transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring", nav.connectorsActive && "bg-sidebar-accent text-foreground")}
+            className={cn("flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring", nav.connectorsActive && "bg-sidebar-accent text-foreground")}
           >
-            <Plus className="size-3.5" />
+            <Plus className="size-4" />
           </button>
         )}
       >
@@ -233,13 +238,16 @@ export function WorkSidebarNav(props: { nav: WorkNavigation }) {
               />
             ))}
             {more > 0 || all ? (
-              <button type="button" onClick={() => setAll(!all)} aria-expanded={all} className="flex h-[26px] items-center rounded-md px-2.5 ps-[34px] text-start text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring" data-testid="sidebar-connectors-more">
+              <button type="button" onClick={() => setAll(!all)} aria-expanded={all} className="flex h-[28px] items-center rounded-md px-2.5 ps-[34px] text-start text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring" data-testid="sidebar-connectors-more">
                 {all ? t("work.today.show_less") : t("work.sidebar.show_more", { count: more })}
               </button>
             ) : null}
           </>
         ) : (
-          <NavRow icon={Plug} label={t("work.sidebar.connect_tools")} onClick={() => nav.onOpenConnectors()} testId="sidebar-work-connect-tools" />
+          // Nothing connected yet: a quiet line (the header's + and the home's checklist connect).
+          <span className="flex h-[30px] items-center gap-2 px-2.5 text-[12px] text-muted-foreground" data-testid="sidebar-work-connect-tools">
+            <Plug aria-hidden className="size-4 shrink-0 text-sidebar-foreground/50" />{t("work.sidebar.none_connected")}
+          </span>
         )}
       </Section>
     </div>
