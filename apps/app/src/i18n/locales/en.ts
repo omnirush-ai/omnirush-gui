@@ -3722,4 +3722,5 @@ export default {
   "work.insights.idle_line_one": "{n} person has no tracked activity in this period",
   "work.insights.idle_line_other": "{n} people have no tracked activity in this period",
   "work.insights.idle_more": "and {n} more",
+  "work.ask.edit_before_sending": "Edit before sending",
 } as const;

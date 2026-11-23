@@ -3729,4 +3729,5 @@ export default {
   "work.insights.idle_line_one": "{n} \u4eba\u5728\u6b64\u671f\u95f4\u6ca1\u6709\u8bb0\u5f55\u7684\u6d3b\u52a8",
   "work.insights.idle_line_other": "{n} \u4eba\u5728\u6b64\u671f\u95f4\u6ca1\u6709\u8bb0\u5f55\u7684\u6d3b\u52a8",
   "work.insights.idle_more": "\u8fd8\u6709 {n} \u4eba",
+  "work.ask.edit_before_sending": "发送前编辑",
 } as const;
