@@ -1554,9 +1554,16 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     const contents = tab.view.webContents;
     const own = () => browserTabs.get(tab.tabId) === tab && personalTab(tab.tabId);
     contents.on("before-input-event", (event, input) => {
-      if (!userTabTools.page || !own() || registry.onScreenTabId() !== tab.tabId) return;
+      if (!own() || registry.onScreenTabId() !== tab.tabId) return;
       const action = browserShortcut(input, platform);
       if (!action) return;
+      // Cmd or Ctrl+Shift+B opens the Work browser from a page too (beside Work pages, or on the page itself).
+      if (action === "open-browser") {
+        event.preventDefault();
+        if (!input.isAutoRepeat) sendToRenderer("omnirush:browser:shortcut", { tabId: tab.tabId, action });
+        return;
+      }
+      if (!userTabTools.page) return;
       // Caught before the page and the app menu see it (Cmd or Ctrl+R would otherwise reload the app).
       event.preventDefault();
       if (input.isAutoRepeat && !REPEATING_ACTIONS.has(action)) return;

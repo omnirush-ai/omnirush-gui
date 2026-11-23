@@ -20,12 +20,13 @@ export const APP_FOCUS_ACTIONS = new Set(["address", "find"]);
 export const REPEATING_ACTIONS = new Set(["back", "forward", "zoom-in", "zoom-out"]);
 
 const LETTER_ACTIONS = { l: "address", t: "new-tab", w: "close-tab", r: "reload", f: "find", p: "print" };
-const CODE_LETTERS = { KeyL: "l", KeyT: "t", KeyW: "w", KeyR: "r", KeyF: "f", KeyP: "p" };
+const CODE_LETTERS = { KeyL: "l", KeyT: "t", KeyW: "w", KeyR: "r", KeyF: "f", KeyP: "p", KeyB: "b" };
 
 /**
  * The browser action a key press asks for while the Work browser has focus, or null, so every other key works as it
  * does anywhere in the app. Cmd on macOS, Ctrl elsewhere (never both, never with Alt): L address, T new tab, W close
- * tab, R reload (Shift too), F find in page, P print, [ back, ] forward, and = + - 0 zoom.
+ * tab, R reload (Shift too), F find in page, P print, [ back, ] forward, and = + - 0 zoom. Shift+B is the app's "open
+ * the Work browser", so it also works while the keyboard is on a page beside Work.
  * @param {{ type?: string, key?: string, code?: string, control?: boolean, meta?: boolean, shift?: boolean, alt?: boolean }} input
  *   Electron's `before-input-event` input.
  * @param {string} [platform]
@@ -42,6 +43,7 @@ export function browserShortcut(input, platform = process.platform) {
   const letter = /^[a-z]$/.test(key) ? key : CODE_LETTERS[code] ?? null;
   if (input.shift === true) {
     if (letter === "r") return "reload";
+    if (letter === "b") return "open-browser";
     if (key === "+" || code === "Equal" || code === "NumpadAdd") return "zoom-in";
     return null;
   }

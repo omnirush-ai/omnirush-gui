@@ -23,6 +23,10 @@ test("browser shortcuts: Cmd on macOS, Ctrl elsewhere, never both or with Alt", 
   assert.equal(browserShortcut({ type: "keyDown", key: "-", code: "Minus", control: true }, "linux"), "zoom-out");
   assert.equal(browserShortcut({ type: "keyDown", key: "0", code: "Digit0", control: true }, "win32"), "zoom-reset");
   assert.equal(browserShortcut(press("r", { meta: true, shift: true }), "darwin"), "reload");
+  // Shift+B is the app's "open the Work browser" (Cmd or Ctrl), so a page beside Work does not swallow it.
+  assert.equal(browserShortcut(press("b", { meta: true, shift: true }), "darwin"), "open-browser");
+  assert.equal(browserShortcut(press("b", { control: true, shift: true }), "win32"), "open-browser");
+  assert.equal(browserShortcut(press("b", { meta: true }), "darwin"), null, "Cmd+B stays the sidebar's");
   // Shift+T stays the app's previous tab, and other letters stay the page's.
   assert.equal(browserShortcut(press("t", { meta: true, shift: true }), "darwin"), null);
   assert.equal(browserShortcut(press("a", { meta: true }), "darwin"), null);

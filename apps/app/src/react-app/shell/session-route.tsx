@@ -717,6 +717,13 @@ export function SessionRoute() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [appMode, codeHidden, location.pathname, navigate, switchAppMode, workBrowserAvailable, workEnabled]);
+  // Cmd/Ctrl+Shift+B pressed while a page beside Work has the keyboard (the desktop app catches it there): the same.
+  useEffect(() => {
+    if (appMode !== "work" || !workBrowserAvailable) return;
+    return window.__OMNIRUSH_ELECTRON__?.browser?.onShortcut?.((payload) => {
+      if (payload.action === "open-browser") navigate(WORK_BROWSER_ROUTE);
+    });
+  }, [appMode, navigate, workBrowserAvailable]);
   // Expand in the side panel of a Work page: the same tab, full size in the Work browser.
   useEffect(() => {
     const expand = () => {

@@ -212,7 +212,7 @@ export type BrowserLibrarySummary = {
 };
 
 /** What a key press, or "Open link in new tab" at the tab limit, asks of the Work browser (browser-page-tools.mjs). */
-export type BrowserShortcutAction = "address" | "new-tab" | "close-tab" | "reload" | "find" | "print" | "back" | "forward" | "zoom-in" | "zoom-out" | "zoom-reset" | "open-tab";
+export type BrowserShortcutAction = "address" | "new-tab" | "close-tab" | "reload" | "find" | "print" | "back" | "forward" | "zoom-in" | "zoom-out" | "zoom-reset" | "open-tab" | "open-browser";
 
 /** A download from the person's own tabs, this session (browser-downloads.mjs). No path: the app shows it by id. */
 export type BrowserDownload = {

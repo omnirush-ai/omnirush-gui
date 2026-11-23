@@ -1777,6 +1777,9 @@ test("browser shortcuts on the person's tab act only while the Work browser page
   invoke("omnirush:browser:userTabTools", { page: false });
   assert.equal(press(contents, { key: "r", code: "KeyR", meta: true }), 0);
   assert.equal(press(contents, { key: "t", code: "KeyT", meta: true }), 0);
+  // But Cmd+Shift+B still opens the Work browser from the page beside Work.
+  assert.equal(press(contents, { key: "b", code: "KeyB", meta: true, shift: true }), 1);
+  assert.deepEqual(messages("omnirush:browser:shortcut").at(-1), { tabId, action: "open-browser" });
   invoke("omnirush:browser:userTabTools", { page: true });
   // The app's window reloads: no Work browser page until it opens again.
   mainContents.emitEvent("did-start-navigation", {}, "http://localhost/index.html", false, true);

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { USER_TABS_OWNER, type BrowserPanelTab, type BrowserStatePayload } from "@omnirush/browser-tabs";
 import { notifyManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -326,6 +326,41 @@ describe("Work browser basics", () => {
     }, { browser: fake.browser, browserLibrary: libraryBridge() });
   });
 
+  test("download notes: a file that ended before the page opened is not news; one that ends while it is open is told once", async () => {
+    const sonner = await import("../src/components/ui/sonner");
+    const told = spyOn(sonner.toast, "success");
+    const { downloadStatus, useDownloadNotices } = await import("../src/react-app/domains/work/browser/browser-downloads");
+    const React = await import("react");
+    let setList: (next: BrowserDownload[] | null) => void = () => undefined;
+    function Notices() {
+      const [list, set] = React.useState<BrowserDownload[] | null>(null);
+      setList = set;
+      useDownloadNotices(list);
+      return null;
+    }
+    const pod: BrowserDownload = { id: "notes-pod", filename: "pod-4471.csv", state: "completed", receivedBytes: 38, totalBytes: 38, startedAt: 1 };
+    const invoice: BrowserDownload = { id: "notes-invoice", filename: "invoice-4471.pdf", state: "progressing", receivedBytes: 10, totalBytes: 100, startedAt: 2 };
+    expect(downloadStatus(pod)).toBe("Done, 38 B");
+    try {
+      await withDom(async ({ mount, act }) => {
+        await mount(<Notices />);
+        // The desktop app answers with what this session already downloaded: no note for it.
+        await act(() => setList([pod]));
+        await act(() => setList([invoice, pod]));
+        await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 100 }, pod]));
+        await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 100 }, pod]));
+      }, { browser: fakeBrowser(page).browser, browserLibrary: libraryBridge() });
+      // The page opens again (Expand from a tab): neither comes back.
+      await withDom(async ({ mount, act }) => {
+        await mount(<Notices />);
+        await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 100 }, pod]));
+      }, { browser: fakeBrowser(page).browser, browserLibrary: libraryBridge() });
+      expect(told.mock.calls.map((call) => call[0])).toEqual(["invoice-4471.pdf is in Downloads"]);
+    } finally {
+      told.mockRestore();
+    }
+  });
+
   test("a Work account switches the basics on for the person's tabs; everyone else keeps the browser as before", async () => {
     const { useWorkBrowserTools } = await import("../src/react-app/domains/work/browser/browser-basics");
     function Tools({ on }: { on: boolean }) {
@@ -355,7 +390,11 @@ describe("Work browser basics", () => {
     expect(workBrowserShortcut(key("k", { metaKey: true }), true)).toBeNull();
     expect(shortcutHint("f", true)).toBe("⌘F");
     expect(shortcutHint("p", false)).toBe("Ctrl+P");
-    expect(formatBytes(0)).toBe("0 KB");
+    expect(formatBytes(0)).toBe("0 B");
+    // A small file is never "0 KB".
+    expect(formatBytes(38)).toBe("38 B");
+    expect(formatBytes(1023)).toBe("1023 B");
+    expect(formatBytes(1024)).toBe("1 KB");
     expect(formatBytes(2048)).toBe("2 KB");
     expect(formatBytes(2_400_000)).toBe("2.3 MB");
     expect(formatBytes(15 * 1024 * 1024)).toBe("15 MB");

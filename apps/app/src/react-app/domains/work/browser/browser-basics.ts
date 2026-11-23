@@ -52,9 +52,10 @@ export function shortcutHint(letter: string, mac = isMacKeyboard()): string {
   return mac ? `⌘${letter.toUpperCase()}` : `Ctrl+${letter.toUpperCase()}`;
 }
 
-/** 2048 -> "2 KB", 2_400_000 -> "2.3 MB". */
+/** 38 -> "38 B", 2048 -> "2 KB", 2_400_000 -> "2.3 MB". A small file never reads as 0 KB. */
 export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
   const units = ["KB", "MB", "GB", "TB"];
   let value = bytes / 1024;
   let unit = 0;
@@ -123,9 +124,9 @@ export function useWorkBrowserShortcuts(
   }, [rootRef]);
 }
 
-/** The person's downloads this session (the last 5), kept in step with the desktop app. */
-export function useBrowserDownloads(): BrowserDownload[] {
-  const [downloads, setDownloads] = React.useState<BrowserDownload[]>([]);
+/** The person's downloads this session (the last 5), kept in step with the desktop app. Null until it answers. */
+export function useBrowserDownloads(): BrowserDownload[] | null {
+  const [downloads, setDownloads] = React.useState<BrowserDownload[] | null>(null);
   React.useEffect(() => {
     const browser = getElectronBrowser();
     if (!browser) return;

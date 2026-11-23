@@ -91,20 +91,34 @@ export function DownloadsView({ downloads, onBack, onDone }: { downloads: Browse
   );
 }
 
-/** A quiet note when a download starts, finishes or stops (the page itself covers the rest of the window). */
-export function useDownloadNotices(downloads: BrowserDownload[]) {
+/** Downloads whose end was told (or had ended before the page saw them): never told again, this launch. */
+const endsTold = new Set<string>();
+
+/**
+ * A quiet note when a download starts, or ends while the page is open (the page itself covers the rest of the window).
+ * Each end is told once: what the page opened with is not news, even after it opens again.
+ */
+export function useDownloadNotices(downloads: BrowserDownload[] | null) {
   const seen = React.useRef<Map<string, BrowserDownload["state"]> | null>(null);
   React.useEffect(() => {
+    // Nothing from the desktop app yet: no list to compare with.
+    if (!downloads) return;
     const previous = seen.current;
-    const next = new Map(downloads.map((download) => [download.id, download.state] as const));
-    seen.current = next;
-    // The list the page opened with is not news.
-    if (!previous) return;
+    seen.current = new Map(downloads.map((download) => [download.id, download.state] as const));
+    if (!previous) {
+      for (const download of downloads) if (download.state !== "progressing") endsTold.add(download.id);
+      return;
+    }
     for (const download of downloads) {
       const before = previous.get(download.id);
       if (before === download.state) continue;
-      if (download.state === "progressing" && before === undefined) toast(t("work_browser.downloading", { name: download.filename }));
-      else if (download.state === "completed") toast.success(t("work_browser.downloaded", { name: download.filename }));
+      if (download.state === "progressing") {
+        if (before === undefined) toast(t("work_browser.downloading", { name: download.filename }));
+        continue;
+      }
+      if (endsTold.has(download.id)) continue;
+      endsTold.add(download.id);
+      if (download.state === "completed") toast.success(t("work_browser.downloaded", { name: download.filename }));
       else if (download.state === "failed") toast.error(t("work_browser.download_failed_toast", { name: download.filename }));
     }
   }, [downloads]);

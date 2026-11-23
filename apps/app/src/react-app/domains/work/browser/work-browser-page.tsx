@@ -58,6 +58,8 @@ const NO_TAB: BrowserPanelTab = {
   ownerSessionId: USER_TABS_OWNER, siteToolCount: 0, siteTools: [], siteToolActivity: [],
 };
 
+const NO_DOWNLOADS: BrowserDownload[] = [];
+
 const isTabLimit = (error: unknown) => /browser tabs open/i.test(error instanceof Error ? error.message : String(error));
 
 export function WorkBrowserPage(props: WorkBrowserPageProps) {
@@ -85,8 +87,9 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
   const findRef = React.useRef<FindBarHandle>(null);
   const [findOpen, setFindOpen] = React.useState(false);
   const focusAddressRef = React.useRef(false);
-  const downloads = useBrowserDownloads();
-  useDownloadNotices(downloads);
+  const loadedDownloads = useBrowserDownloads();
+  useDownloadNotices(loadedDownloads);
+  const downloads = loadedDownloads ?? NO_DOWNLOADS;
   const [pending, setPending] = React.useState<Pending | null>(null);
   const [noneToSuspend, setNoneToSuspend] = React.useState(false);
   const [ask, setAsk] = React.useState<string | null>(null);
