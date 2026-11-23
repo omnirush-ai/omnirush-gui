@@ -1,4 +1,4 @@
-// @omnirush/browser-logins/bookmarks — bookmark trees from other browsers.
+// @omnirush/browser-logins/bookmarks: bookmark trees from other browsers.
 //
 // Every reader returns the same shape: a list of top-level folders, each a
 // tree of `{ kind: "folder", title, children }` and `{ kind: "url", title,

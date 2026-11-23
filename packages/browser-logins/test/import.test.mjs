@@ -312,7 +312,7 @@ describe("profiles on this machine", () => {
     expect(windows.some((entry) => entry.browser === "safari" || entry.browser === "arc")).toBe(false);
     expect(importSourceAvailability("linux").every((entry) => entry.importable)).toBe(true);
     expect(importSourceAvailability("darwin").map((entry) => entry.browser)).toEqual(IMPORT_BROWSERS.map((entry) => entry.browser));
-    for (const entry of windows) expect(entry.reason ?? "").not.toMatch(/[–—]/);
+    for (const entry of windows) expect(entry.reason ?? "").not.toMatch(/[\u2013\u2014]/);
   });
 });
 

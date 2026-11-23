@@ -1,4 +1,4 @@
-// @omnirush/browser-logins/safari — Safari's bookmarks, history and cookies (macOS).
+// @omnirush/browser-logins/safari: Safari's bookmarks, history and cookies (macOS).
 //
 // Safari keeps all three where macOS only lets apps with Full Disk Access read
 // them. The readers here parse what the caller already read: `Bookmarks.plist`

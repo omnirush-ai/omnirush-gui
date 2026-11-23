@@ -155,7 +155,7 @@ describe("browser import", () => {
     const lines = en.split("\n").filter((line) => /"browser_(import|library)\./.test(line));
     expect(lines.length).toBeGreaterThan(80);
     for (const line of lines) {
-      expect(line).not.toMatch(/[–—!]/);
+      expect(line).not.toMatch(/[\u2013\u2014!]/);
       expect(line).not.toMatch(/Oops/i);
     }
   });

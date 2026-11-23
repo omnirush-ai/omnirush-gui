@@ -1,4 +1,4 @@
-// @omnirush/browser-logins/linux-keyring — Chrome-family cookie keys on Linux.
+// @omnirush/browser-logins/linux-keyring: Chrome-family cookie keys on Linux.
 //
 // Chromium on Linux encrypts cookie values two ways: `v10` with a key from the
 // built-in password "peanuts" (no key ring, or `--password-store=basic`) and

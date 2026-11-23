@@ -1,4 +1,4 @@
-// @omnirush/browser-logins/history — recent browsing history from other browsers.
+// @omnirush/browser-logins/history: recent browsing history from other browsers.
 //
 // Each reader takes a `query(sql, params)` over a *copy* of the browser's
 // database and returns `{ url, title, visits, lastVisitAt }` rows (Unix
