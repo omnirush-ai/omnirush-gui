@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink, Eye, EyeOff, History, List, Maximize2, MessageSquarePlus, Minus, Network, Plus, Search, Waypoints, X } from "lucide-react";
+import { ArrowLeft, ExternalLink, Eye, EyeOff, History, List, Maximize2, MessageSquarePlus, Minus, Network, PanelRight, Plus, Search, Waypoints, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,10 +16,12 @@ import type {
 } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutPrompt, connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, keyLabel, workEntityKey, workFailure, type WorkClient } from "./work-mode";
+import { connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, keyLabel, workEntityKey, workFailure, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
+import { requestAsk, type AskOptions } from "./ask/ask-bridge";
+import { refFromEntity, refFromGraphNode, type WorkRef } from "./ask/refs";
 import { useOpenRecordId } from "./viewer/record-tabs";
-import { isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
+import { isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
 import {
   categoryColor, categoryCounts, categoryKey, categoryOf, entityIdOf, GRAPH_CATEGORIES, GRAPH_GROUPS, groupByDay, matchNodes, mergeGraph, searchHits, visibleGraph,
@@ -27,6 +29,10 @@ import {
 import { GRAPH_SURFACE, KnowledgeGraph, type GraphApi } from "./knowledge-graph";
 
 const PAGE = 50;
+
+type AskHandler = (ref: WorkRef, options: AskOptions) => void;
+/** A graph node, or a timeline item (no degree). */
+type NodeLike = Omit<OmniRushWorkGraphNode, "degree"> & { degree?: number };
 
 function when(value: string | null | undefined): string {
   if (!value) return "";
@@ -165,7 +171,7 @@ export function EntityDetail(props: {
   detail: OmniRushWorkEntityDetail;
   busy: boolean;
   openLink: (url: string) => void;
-  onAsk: () => void;
+  onAsk: (options: AskOptions) => void;
   onSelect: (id: string) => void;
   onAddFact: (fact: { text: string; kind: string }) => void;
   onSaveFact: (id: string, text: string) => void;
@@ -197,7 +203,7 @@ export function EntityDetail(props: {
           <h2 className="line-clamp-3 break-words text-xl font-semibold leading-snug tracking-tight" title={entity.name}>{entity.name}</h2>
           <p className="text-sm text-muted-foreground">{[kindLabel(entity.kind), countLabel(entity.record_count, "work.count.records"), when(entity.last_activity_at) && t("work.knowledge.last_activity", { when: when(entity.last_activity_at) })].filter(Boolean).join(" · ")}</p>
         </div>
-        <Button size="sm" className="shrink-0" onClick={props.onAsk} data-testid="work-entity-ask"><MessageSquarePlus className="size-4" />{t("work.knowledge.ask")}</Button>
+        <Button size="sm" className="shrink-0" title={t("work.ask.ask_hint")} onClick={(event) => props.onAsk({ stay: event.shiftKey })} data-testid="work-entity-ask"><MessageSquarePlus className="size-4" />{t("work.knowledge.ask")}</Button>
       </div>
 
       {entity.keys.length || entity.sources.length ? (
@@ -252,7 +258,7 @@ export function EntityDetail(props: {
 }
 
 /** One entity's detail with its saved knowledge (add, edit, retire) and "Ask about this". */
-function EntityPanel(props: { client: WorkClient | null; entityId: string; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onSelect: (id: string) => void }) {
+function EntityPanel(props: { client: WorkClient | null; entityId: string; openLink: (url: string) => void; onAsk: AskHandler; onSelect: (id: string) => void }) {
   const queryClient = useQueryClient();
   const detailKey = workEntityKey(props.client, props.entityId);
   const detail = useQuery({ queryKey: detailKey, queryFn: () => props.client!.getWorkEntity(props.entityId), enabled: Boolean(props.client) });
@@ -264,21 +270,14 @@ function EntityPanel(props: { client: WorkClient | null; entityId: string; openL
     onSuccess: refresh,
     onError,
   });
-  const [asking, setAsking] = useState(false);
-  const ask = async (entity: OmniRushWorkEntitySummary) => {
-    setAsking(true);
-    try { await props.onAsk(askAboutPrompt(entity)); }
-    catch (reason) { onError(reason); }
-    finally { setAsking(false); }
-  };
   if (detail.isLoading) return <div className="text-sm text-muted-foreground">{t("common.loading")}</div>;
   if (detail.error || !detail.data) return <div className="text-sm text-muted-foreground">{detail.error ? workFailure(detail.error).text : t("work.error.try_again")}</div>;
   return (
     <EntityDetail
       detail={detail.data}
-      busy={addFact.isPending || updateFact.isPending || asking}
+      busy={addFact.isPending || updateFact.isPending}
       openLink={props.openLink}
-      onAsk={() => void ask(detail.data.entity)}
+      onAsk={(options) => props.onAsk(refFromEntity(detail.data.entity), options)}
       onSelect={props.onSelect}
       onAddFact={(fact) => addFact.mutate(fact)}
       onSaveFact={(id, text) => updateFact.mutate({ id, patch: { text } })}
@@ -288,7 +287,7 @@ function EntityPanel(props: { client: WorkClient | null; entityId: string; openL
 }
 
 /** The list view (kept for accessibility): entities by kind, the header's search, and the selected entity's detail. */
-function KnowledgeList(props: { client: WorkClient | null; search: string; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; initialEntityId?: string | null }) {
+function KnowledgeList(props: { client: WorkClient | null; search: string; openLink: (url: string) => void; onAsk: AskHandler; initialEntityId?: string | null }) {
   const search = props.search.trim();
   const [kind, setKind] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(props.initialEntityId ?? null);
@@ -393,9 +392,13 @@ function shortDate(value: string | null | undefined, time = false): string {
 }
 
 /** A record or a saved fact in the inspector: what it is, where it came from, and a link to it at its source. */
-export function NodeCard(props: { node: OmniRushWorkGraphNode; dark: boolean; openLink: (url: string) => void }) {
+export function NodeCard(props: { node: NodeLike; dark: boolean; openLink: (url: string) => void; onAsk?: AskHandler }) {
   const { node } = props;
   const key = categoryKey(node);
+  const support = useViewerSupport((state) => state.support);
+  // A record opens in the viewer when the server sent its record id (an older server: at its source only).
+  const record = node.type === "record" && node.source_id && support !== "no" ? node.source_id : null;
+  const ask = props.onAsk ?? requestAsk;
   return (
     <div className="flex flex-col gap-3" data-testid="work-graph-node" data-node={node.id}>
       <div className="flex items-start gap-3">
@@ -408,10 +411,16 @@ export function NodeCard(props: { node: OmniRushWorkGraphNode; dark: boolean; op
         </div>
       </div>
       {node.sub ? <p className="text-sm">{node.sub}</p> : null}
-      <p className="text-[12px] text-muted-foreground">{countLabel(node.degree, "work.count.links")}</p>
-      {node.url ? (
-        <Button variant="outline" size="sm" className="self-start" onClick={() => props.openLink(node.url!)} data-testid="work-graph-open"><ExternalLink className="size-3.5" />{t("work.knowledge.open_source")}</Button>
-      ) : null}
+      {typeof node.degree === "number" ? <p className="text-[12px] text-muted-foreground">{countLabel(node.degree, "work.count.links")}</p> : null}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" title={t("work.ask.ask_hint")} onClick={(event) => ask(refFromGraphNode(node), { stay: event.shiftKey })} data-testid="work-graph-ask"><MessageSquarePlus className="size-4" />{t("work.knowledge.ask")}</Button>
+        {record ? (
+          <Button variant="outline" size="sm" onClick={() => requestOpenRecord({ sourceId: record, source: node.source ?? null, kind: node.kind, title: node.label, url: node.url ?? null })} data-testid="work-graph-view"><PanelRight className="size-3.5" />{t("work.viewer.view_record")}</Button>
+        ) : null}
+        {node.url ? (
+          <Button variant="outline" size="sm" onClick={() => props.openLink(node.url!)} data-testid="work-graph-open"><ExternalLink className="size-3.5" />{t("work.knowledge.open_source")}</Button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -436,7 +445,7 @@ function ViewSwitch(props: { value: KnowledgeView; onChange: (value: KnowledgeVi
 }
 
 /** The timeline view: records and saved facts newest first, by day, filtered by the same categories. */
-function KnowledgeTimeline(props: { client: WorkClient | null; focus: OmniRushWorkGraphNode | null; hidden: ReadonlySet<string>; dark: boolean; search: string; selected: string | null; onSelect: (id: string) => void; onClearFocus: () => void; openLink: (url: string) => void }) {
+function KnowledgeTimeline(props: { client: WorkClient | null; focus: NodeLike | null; hidden: ReadonlySet<string>; dark: boolean; search: string; selected: string | null; onSelect: (id: string, item: NodeLike) => void; onAsk: AskHandler; onClearFocus: () => void; openLink: (url: string) => void }) {
   const base = props.client?.baseUrl?.trim() || "default";
   const timeline = useInfiniteQuery({
     queryKey: ["omnirush-work-timeline", base, props.focus?.id ?? null],
@@ -473,7 +482,14 @@ function KnowledgeTimeline(props: { client: WorkClient | null; focus: OmniRushWo
             <ol className="relative ms-2.5 border-s border-border">
               {day.items.map((item) => (
                 <li key={item.id} className="relative">
-                  <button type="button" onClick={() => props.onSelect(item.id)} data-timeline-item={item.id} aria-current={props.selected === item.id ? "true" : undefined}
+                  <button type="button" onClick={() => props.onSelect(item.id, item)} data-timeline-item={item.id} aria-current={props.selected === item.id ? "true" : undefined}
+                    aria-keyshortcuts="A"
+                    // A asks about the item (Shift+A adds it and stays), as on Today and Search rows.
+                    onKeyDown={(event) => {
+                      if (event.key.toLowerCase() !== "a" || event.metaKey || event.ctrlKey || event.altKey) return;
+                      event.preventDefault();
+                      props.onAsk(refFromGraphNode(item), { stay: event.shiftKey });
+                    }}
                     className={cn("flex w-full items-start gap-3 rounded-md py-2 pe-2 ps-6 text-start hover:bg-muted", props.selected === item.id && "bg-muted")}>
                     <CategorySwatch categoryKey={categoryKey(item)} dark={props.dark} className="absolute -start-2.5 top-2.5 ring-4 ring-background" />
                     <span className="min-w-0 flex-1">
@@ -501,16 +517,18 @@ const useDarkTheme = () => useSyncExternalStore(subscribeToTheme, getResolvedThe
 export function WorkKnowledgePage(props: {
   client: WorkClient | null;
   openLink: (url: string) => void;
-  onAsk: (prompt: string) => Promise<void>;
+  /** Ask about an item: its chip goes to a composer (the session route picks which). */
+  onAsk?: AskHandler;
   onBack?: () => void;
   initialEntityId?: string | null;
 }) {
+  const onAsk = props.onAsk ?? requestAsk;
   const dark = useDarkTheme();
   const [view, setView] = useState<KnowledgeView>("graph");
   const [search, setSearch] = useState("");
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(props.initialEntityId ? `e:${props.initialEntityId}` : null);
-  const [timelineFocus, setTimelineFocus] = useState<OmniRushWorkGraphNode | null>(null);
+  const [timelineFocus, setTimelineFocus] = useState<NodeLike | null>(null);
   const [expansions, setExpansions] = useState<OmniRushWorkGraph[]>([]);
   const api = useRef<GraphApi | null>(null);
   const base = props.client?.baseUrl?.trim() || "default";
@@ -520,7 +538,9 @@ export function WorkKnowledgePage(props: {
   const shown = useMemo(() => (graph ? visibleGraph(graph, hidden) : { nodes: [], edges: [] }), [graph, hidden]);
   const counts = useMemo(() => (graph ? categoryCounts(graph) : new Map<string, number>()), [graph]);
   const matches = useMemo(() => matchNodes(shown.nodes, search), [shown.nodes, search]);
-  const node = graph?.nodes.find((item) => item.id === selected) ?? null;
+  // A timeline item may not be on the graph: the inspector shows the item the timeline picked.
+  const [picked, setPicked] = useState<NodeLike | null>(null);
+  const node: NodeLike | null = graph?.nodes.find((item) => item.id === selected) ?? (picked?.id === selected ? picked : null);
   // The search also asks the server (the list view's entity search): the graph holds only the hubs and what was expanded.
   const [query, setQuery] = useState("");
   const [hitsOpen, setHitsOpen] = useState(false);
@@ -619,7 +639,7 @@ export function WorkKnowledgePage(props: {
       </div>
 
       {view === "list" ? (
-        <KnowledgeList client={props.client} search={search} openLink={props.openLink} onAsk={props.onAsk} initialEntityId={entityId ?? props.initialEntityId} />
+        <KnowledgeList client={props.client} search={search} openLink={props.openLink} onAsk={onAsk} initialEntityId={entityId ?? props.initialEntityId} />
       ) : (
         <div className="flex min-h-0 flex-1">
           <aside className="flex w-64 shrink-0 flex-col gap-4 overflow-y-auto border-e border-border p-3">
@@ -632,7 +652,7 @@ export function WorkKnowledgePage(props: {
           <div className="relative min-w-0 flex-1 overflow-y-auto" style={view === "graph" ? { background: dark ? GRAPH_SURFACE.dark : GRAPH_SURFACE.light } : undefined}>
             {view === "timeline" ? (
               <KnowledgeTimeline client={props.client} focus={timelineFocus} hidden={hidden} dark={dark} search={search} selected={selected}
-                onSelect={select} onClearFocus={() => setTimelineFocus(null)} openLink={props.openLink} />
+                onSelect={(id, item) => { setPicked(item); select(id); }} onAsk={onAsk} onClearFocus={() => setTimelineFocus(null)} openLink={props.openLink} />
             ) : overview.isLoading ? (
               <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>
             ) : overview.error || !graph ? (
@@ -673,8 +693,8 @@ export function WorkKnowledgePage(props: {
                 <button type="button" aria-label={t("common.close")} className="ms-auto rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setSelected(null)}><X className="size-4" /></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-5">
-                {entityId ? <EntityPanel client={props.client} entityId={entityId} openLink={props.openLink} onAsk={props.onAsk} onSelect={(id) => { setSelected(`e:${id}`); api.current?.centerOn(`e:${id}`); }} />
-                  : node ? <NodeCard node={node} dark={dark} openLink={props.openLink} />
+                {entityId ? <EntityPanel client={props.client} entityId={entityId} openLink={props.openLink} onAsk={onAsk} onSelect={(id) => { setSelected(`e:${id}`); api.current?.centerOn(`e:${id}`); }} />
+                  : node ? <NodeCard node={node} dark={dark} openLink={props.openLink} onAsk={onAsk} />
                   : <p className="text-sm text-muted-foreground">{t("work.knowledge.gone")}</p>}
               </div>
             </aside>

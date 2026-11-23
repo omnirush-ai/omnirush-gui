@@ -4,7 +4,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { t } from "@/i18n";
 import type { WorkChatSyncProgress } from "@omnirush/types/desktop-ipc";
-import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkOrgConnectors, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkOrgConnectors, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -141,12 +141,6 @@ export function snippetParts(snippet: string | null | undefined): { text: string
 
 /** Whether to list Deals in the sidebar: only once the server has deals (an error or an older server: no). */
 export const hasDeals = (deals: { items?: OmniRushWorkDeal[] } | null | undefined) => (deals?.items?.length ?? 0) > 0;
-
-/** "Ask about this deal": the brief a Work chat starts with, so the agent reads the deal through work_deals first. */
-export function askAboutDealPrompt(deal: Pick<OmniRushWorkDeal, "source_id" | "name" | "company">): string {
-  const name = deal.name?.trim() || deal.source_id;
-  return `Brief me on the deal "${name}"${deal.company ? ` with ${deal.company}` : ""} (source id ${deal.source_id}). Call work_deals for it first, then tell me where it stands, what puts it at risk, the latest contact on each channel and what I should do next, with links.`;
-}
 
 /** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
 export function useWorkState(client: WorkClient | null) {
@@ -566,11 +560,6 @@ export const FACT_KINDS = [
   { id: "contact_note", get label() { return t("work.fact.contact_note"); } },
 ] as const;
 
-/** "Ask about this": the brief a Work chat starts with, so the agent calls work_context on the entity first. */
-export function askAboutPrompt(entity: Pick<OmniRushWorkEntitySummary, "id" | "kind" | "name">): string {
-  return `Brief me on ${entity.name} (${entity.kind}). Call work_context for "${entity.name}" first (entity id ${entity.id}), then summarise who or what this is, our recent history across every source, open items and anything we decided or agreed to remember, with links to the sources.`;
-}
-
 /** "1,992 emails · 573 files · 1 event": a source's coverage by kind, most first; null without one. */
 export function coverageLine(coverage: OmniRushWorkConnector["coverage"]): string | null {
   const kinds = Object.entries(coverage?.by_kind ?? {}).filter(([, count]) => typeof count === "number" && count > 0).sort((a, b) => b[1] - a[1]);
@@ -626,12 +615,6 @@ export function relativeTime(value: string | null | undefined, now = Date.now())
   if (minutes < 0 && abs < 48 * 60) return t("work.time.yesterday");
   if (minutes > 0 && abs < 48 * 60) return t("work.time.tomorrow");
   return new Date(at).toLocaleDateString(undefined, abs < 7 * 24 * 60 ? { weekday: "short" } : { month: "short", day: "numeric" });
-}
-
-/** "Ask about this" on a feed item: the brief a Work chat starts with. */
-export function askAboutItemPrompt(item: Pick<OmniRushWorkFeedItem, "id" | "source" | "kind" | "title" | "url">): string {
-  const source = connectorLabel(item.source);
-  return `Help me with this ${item.kind.replace(/_/g, " ")} from ${source}: "${item.title}"${item.url ? ` (${item.url})` : ""}, source id ${item.id}. Look it up first, then tell me what it is, what is needed from me and anything related, with links.`;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

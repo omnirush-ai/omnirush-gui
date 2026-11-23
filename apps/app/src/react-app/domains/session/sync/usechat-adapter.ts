@@ -4,6 +4,7 @@ import type { FilePart, Part, TextPart, ToolPart } from "@opencode-ai/sdk/v2/cli
 
 import type { OmniRushSessionSnapshot } from "../../../../app/lib/omnirush-server";
 import { SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX } from "../../../../app/types";
+import { refsFromMetadata } from "../../work/ask/refs";
 import {
   parseDynamicToolUIPart,
   parseStructuredOutputUIPart,
@@ -123,6 +124,9 @@ function mapSnapshotToolParts(part: ToolPart): UIMessage["parts"] {
 /** Recover display-only attachments without sending unsupported binary parts to the model. */
 export function attachmentNoteToUIParts(part: TextPart): UIMessage["parts"] {
   if (!part.synthetic || part.ignored) return [];
+  // A Work reference note: the bubble shows its items as chips (one `data-ref` part).
+  const refs = refsFromMetadata(part.metadata);
+  if (refs.length) return [{ type: "data-ref", id: part.id, data: { refs } }];
   const attachments = part.metadata?.omnirushAttachments;
   if (!Array.isArray(attachments)) return [];
   return attachments.flatMap<UIMessage["parts"][number]>((attachment: unknown, index) => {

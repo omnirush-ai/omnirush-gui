@@ -130,8 +130,13 @@ import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domain
 import { useChecklistShown, WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
 import { enterpriseRedirect, useEnterpriseMode, useEnterpriseStore } from "@/react-app/domains/work/enterprise-mode";
 import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
-import { ASK_WORK_RECORD_EVENT } from "@/react-app/domains/work/viewer/records";
 import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
+import { askTarget, onAskRequest, type AskRequest } from "@/react-app/domains/work/ask/ask-bridge";
+import { useAskStore, useHomeRefs, workHomeRefOwner } from "@/react-app/domains/work/ask/ask-store";
+import { AskAnnouncer, OPEN_WORK_ENTITY_EVENT, WorkRefChips } from "@/react-app/domains/work/ask/ref-chip";
+import { addRef, defaultQuestion, refPlaceholder, refsOnlyTitle, starterQuestions, type AddRefResult, type WorkRef } from "@/react-app/domains/work/ask/refs";
+import { SuggestionChipRow } from "@/react-app/domains/work/ask/suggestion-chips";
+import { getComposerRefs } from "@/react-app/domains/session/surface/composer-state-store";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -1734,6 +1739,9 @@ export function SessionRoute() {
                 });
                 assertCurrent();
                 onPrepared?.();
+                // A first question of only Work chips: the chat is named after the item, not "Brief me on this".
+                const chipsTitle = refsOnlyTitle(draft, chatStarted(targetSessionId));
+                if (chipsTitle) await opencodeClient.session.update({ sessionID: targetSessionId, title: chipsTitle, directory: selectedWorkspaceRoot || undefined }).catch(() => undefined);
                 const result = await opencodeClient.session.promptAsync({
                   sessionID: targetSessionId,
                   messageID: draft.messageId,
@@ -2075,6 +2083,8 @@ export function SessionRoute() {
                 });
                 assertCurrent();
                 onPrepared?.();
+                const chipsTitle = refsOnlyTitle(draft, chatStarted(targetSessionId));
+                if (chipsTitle) await workspaceOpencodeClient.session.update({ sessionID: targetSessionId, title: chipsTitle, directory: workspaceRoot || undefined }).catch(() => undefined);
                 const result = await workspaceOpencodeClient.session.promptAsync({
                   sessionID: targetSessionId,
                   messageID: draft.messageId,
@@ -3821,27 +3831,89 @@ export function SessionRoute() {
     }
   }, [client, local, refreshRouteState]);
 
-  const startWorkChat = async (prompt: string, attachments: ComposerAttachment[] = []) => {
+  // Knowledge opened at an entity (a chip in a sent question).
+  const routeState: unknown = location.state;
+  const workKnowledgeEntity = routeState && typeof routeState === "object" && "entityId" in routeState && typeof routeState.entityId === "string" ? routeState.entityId : null;
+  // The Work home composer's reference chips (memory only, like its attachments).
+  const workHomeOwner = workWorkspace ? workHomeRefOwner(workWorkspace.id) : null;
+  const workHomeRefs = useHomeRefs(workHomeOwner);
+  /** A Work chat with the home's text, attachments and chips; `refs` defaults to the home's chips (they move). */
+  const startWorkChat = async (prompt: string, attachments: ComposerAttachment[] = [], refs?: WorkRef[]) => {
     const workspaceId = workWorkspace?.id;
     if (!workspaceId) throw new Error(t("work.home.not_ready"));
+    const homeOwner = workHomeRefOwner(workspaceId);
+    const chips = refs ?? useAskStore.getState().home[homeOwner] ?? [];
     const sessionId = await handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary");
     if (!sessionId) throw new Error(t("work.home.chat_failed"));
     // Attachment chips live in memory only, so the stored fallback draft drops their tokens (as Code's new task does).
     saveSessionDraft(sessionDraftScope, workspaceId, sessionId, { text: prompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
     useComposerStateStore.getState().setDraft(sessionId, prompt);
     if (attachments.length) useComposerStateStore.getState().setAttachments(sessionId, attachments);
+    // The chips move with the question: the new chat sends them, the home lets them go.
+    if (chips.length) {
+      useComposerStateStore.getState().setRefs(sessionId, chips);
+      if (!refs) useAskStore.getState().take(homeOwner);
+    }
     markComposerAutoSend(sessionId);
   };
-  // "Ask" in a record viewer: a Work chat about that record.
-  const startWorkChatRef = useRef(startWorkChat);
-  startWorkChatRef.current = startWorkChat;
+  // "Ask" on a Work item (Today, Search, Deals, Knowledge, Meetings, the record viewer): its chip goes to the composer
+  // of the Work chat on screen, else the Work home composer (design 2.1); nothing is sent.
+  const askRoute = useRef({ workChatActive, selectedSessionId, claude: false, pathname: location.pathname, workHomeOwner, navigate });
+  askRoute.current = {
+    workChatActive,
+    selectedSessionId,
+    claude: workChatActive && isClaudeModel(activeComposerModel),
+    pathname: location.pathname,
+    workHomeOwner,
+    navigate,
+  };
+  useEffect(() => onAskRequest((request: AskRequest) => {
+    const route = askRoute.current;
+    const workRoute = route.pathname === WORK_HOME_ROUTE ? "home" : route.pathname.startsWith(`${WORK_HOME_ROUTE}/`) ? "page" : null;
+    const target = askTarget({
+      workChatSessionId: route.workChatActive ? route.selectedSessionId ?? null : null,
+      claudeChat: route.claude,
+      workRoute,
+      hasWorkHome: Boolean(route.workHomeOwner),
+    });
+    if (target.kind === "none" || (target.kind === "home" && !route.workHomeOwner)) {
+      toast.error(t("work.home.not_ready"));
+      return;
+    }
+    const owner = target.kind === "chat" ? target.sessionId : route.workHomeOwner ?? "";
+    let outcome: AddRefResult;
+    if (target.kind === "chat") {
+      const store = useComposerStateStore.getState();
+      outcome = addRef(getComposerRefs(store, owner), request.ref);
+      if (outcome.result === "added") store.setRefs(owner, outcome.refs);
+    } else {
+      outcome = useAskStore.getState().add(owner, request.ref);
+    }
+    const ask = useAskStore.getState();
+    if (outcome.result === "full") {
+      toast.info(t("work.ask.max"));
+      return;
+    }
+    if (outcome.result === "duplicate") ask.markFlash(owner, outcome.key);
+    else ask.say(t("work.ask.added", { title: request.ref.title }));
+    const leave = target.kind === "home" && target.navigate;
+    if (target.kind === "home" && target.reason === "claude") toast.info(t("work.ask.claude_home"));
+    if (request.stay) {
+      if (outcome.result === "added") toast.success(t("work.ask.added_toast"), leave ? { action: { label: t("work.ask.open"), onClick: () => route.navigate(WORK_HOME_ROUTE) } } : undefined);
+      return;
+    }
+    // A history push: Back returns to the page the item was asked from.
+    if (leave) route.navigate(WORK_HOME_ROUTE);
+    window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), leave ? 120 : 30);
+  }), []);
+  // A chip in a sent question opens its entity in Knowledge.
   useEffect(() => {
-    const ask = (event: Event) => {
-      const prompt = (event as CustomEvent<string>).detail;
-      if (typeof prompt === "string" && prompt.trim()) void startWorkChatRef.current(prompt).catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+    const open = (event: Event) => {
+      const entityId = (event as CustomEvent<{ entityId?: unknown }>).detail?.entityId;
+      if (typeof entityId === "string" && entityId) askRoute.current.navigate(WORK_KNOWLEDGE_ROUTE, { state: { entityId } });
     };
-    window.addEventListener(ASK_WORK_RECORD_EVENT, ask);
-    return () => window.removeEventListener(ASK_WORK_RECORD_EVENT, ask);
+    window.addEventListener(OPEN_WORK_ENTITY_EVENT, open);
+    return () => window.removeEventListener(OPEN_WORK_ENTITY_EVENT, open);
   }, []);
   // The checklist's "Connect a tool" is the home's one Connect action while it shows.
   const workChecklistShown = useChecklistShown(workOnboarding.data, workConnectorRows.data, workOrgId, workRole);
@@ -3897,6 +3969,7 @@ export function SessionRoute() {
       workspaceId={selectedWorkspaceEndpoint?.workspaceId ?? ""}
       selectedWorkspaceRoot={selectedWorkspaceRoot}
     >
+    {workEnabled ? <AskAnnouncer /> : null}
     {opencodeClient && selectedWorkspaceEndpoint && opencodeBaseUrl && selectedWorkspaceServerToken ? (
       <ReactSessionRuntime
         // Use the server-side workspace id (the one without the `rem_`
@@ -4021,7 +4094,7 @@ export function SessionRoute() {
         ) : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? (
           <WorkSearchPage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)} initialQuery={new URLSearchParams(location.search).get("q") ?? undefined} />
         ) : location.pathname.startsWith(WORK_DEALS_ROUTE) ? (
-          <WorkDealsPage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} />
+          <WorkDealsPage client={client ?? null} openLink={(url) => platform.openLink(url)} />
         ) : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? (
           <MeetingsPage client={client ?? null} />
         ) : location.pathname.startsWith(WORK_ORG_ROUTE) ? (
@@ -4037,7 +4110,7 @@ export function SessionRoute() {
         ) : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? (
           <WorkAutomationPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
-          <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
+          <WorkKnowledgePage key={workKnowledgeEntity ?? "knowledge"} client={client ?? null} openLink={(url) => platform.openLink(url)} initialEntityId={workKnowledgeEntity} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? (
           <WorkOnboarding
             client={client ?? null}
@@ -4053,7 +4126,7 @@ export function SessionRoute() {
             busy={!workWorkspace}
             message={workState.data?.message ?? null}
             onStart={startWorkChat}
-            starters={workStarters}
+            starters={workHomeRefs.length ? undefined : workStarters}
             checklist={workChecklist}
             onConnect={workChecklistShown ? undefined : () => navigate(WORK_CONNECTORS_ROUTE)}
             pending={workConnectorRows.isPending || workOnboarding.isPending}
@@ -4061,7 +4134,6 @@ export function SessionRoute() {
               <WorkToday
                 client={client ?? null}
                 openLink={(url) => platform.openLink(url)}
-                onAsk={startWorkChat}
                 onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)}
                 source={workHomeSource}
                 onSourceChange={(id) => navigate(id ? `${WORK_HOME_ROUTE}?source=${encodeURIComponent(id)}` : WORK_HOME_ROUTE, { replace: true })}
@@ -4076,6 +4148,22 @@ export function SessionRoute() {
                 busy={!workWorkspace}
                 context={workHomeComposer}
                 workChat
+                refContext={workHomeOwner && workHomeRefs.length ? {
+                  slot: <WorkRefChips owner={workHomeOwner} refs={workHomeRefs} onRemove={(key) => { useAskStore.getState().remove(workHomeOwner, key); window.dispatchEvent(new Event("omnirush:focusPrompt")); }} />,
+                  placeholder: refPlaceholder(workHomeRefs),
+                  prompt: defaultQuestion(workHomeRefs),
+                  above: workHomeDraft.trim() ? undefined : (
+                    <SuggestionChipRow
+                      chips={starterQuestions(workHomeRefs).map((label, index) => ({ id: `starter-${index}`, label }))}
+                      label={t("work.ask.questions_label")}
+                      onSend={(text) => void startWorkChat(text).catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))}
+                      onFill={(text) => { setWorkHomeDraft(text); window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), 30); }}
+                      shortcuts
+                      testId="work-ask-starters"
+                      className="mb-2 px-1"
+                    />
+                  ),
+                } : null}
               />
             )}
           />

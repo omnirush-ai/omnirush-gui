@@ -109,6 +109,9 @@ import { QueuedMessagesPanel } from "@/react-app/domains/session/modals/queued-m
 import { GoodSessionChecklistBar, noteUserStop } from "@/react-app/domains/quality/good-session";
 import { PlacementTurnFooter } from "@/react-app/domains/placements/placements";
 import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode";
+import { refUIParts, WorkRefChips } from "@/react-app/domains/work/ask/ref-chip";
+import { defaultQuestion, refKey, refPlaceholder, refsFromMetadata, starterQuestions, type WorkRef } from "@/react-app/domains/work/ask/refs";
+import { SuggestionChipRow } from "@/react-app/domains/work/ask/suggestion-chips";
 import { SideAnswers } from "./side-answers";
 import { parseSideQuestion, type SideAnswer } from "./side-question";
 import { FeedbackTurnPrompt } from "@/react-app/domains/feedback/feedback";
@@ -134,6 +137,7 @@ import {
   getComposerMentions,
   getComposerPasteParts,
   getComposerQueuedDrafts,
+  getComposerRefs,
   getComposerRevertMessageId,
   getComposerSessionDraftScope,
   persistableComposerDraftText,
@@ -1145,6 +1149,7 @@ export function composerHoldsSubmission(
   if (!current) return false;
   if (current.draft.trim() !== submitted.draft.trim()) return false;
   if (current.attachments.length !== submitted.attachments.length) return false;
+  if ((current.refs ?? []).map(refKey).join("\n") !== (submitted.refs ?? []).map(refKey).join("\n")) return false;
   const submittedIds = new Set(submitted.attachments.map((attachment) => attachment.id));
   return current.attachments.every((attachment) => submittedIds.has(attachment.id));
 }
@@ -1154,12 +1159,13 @@ function revokeAttachmentPreview(attachment: { previewUrl?: string | undefined }
   URL.revokeObjectURL(attachment.previewUrl);
 }
 
-function draftWithEditedText(draft: ComposerDraft, text: string): ComposerDraft {
+export function draftWithEditedText(draft: ComposerDraft, text: string): ComposerDraft {
   return {
     ...draft,
     text,
     resolvedText: text,
-    parts: [{ type: "text", text }],
+    // Work reference chips stay with the queued message.
+    parts: [...draft.parts.filter((part) => part.type === "ref"), { type: "text", text }],
     command: undefined,
   };
 }
@@ -1176,8 +1182,11 @@ function composerSessionHasContent(state: ComposerSessionState | undefined) {
     || Object.keys(state.mentions).length
     || state.pasteParts.length
     || state.revertMessageId
+    || state.refs?.length
   ));
 }
+
+const NO_REFS: WorkRef[] = [];
 
 /** Messages a chat's snapshot asks the engine for, newest first; "Load earlier messages" adds this many more. */
 const SNAPSHOT_PAGE = 140;
@@ -1206,6 +1215,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
   );
   const draft = useComposerStateStore((state) => getComposerDraft(state, props.sessionId));
   const attachments = useComposerStateStore((state) => getComposerAttachments(state, props.sessionId));
+  // Work items attached as reference chips (Work chats only).
+  const composerRefs = useComposerStateStore((state) => getComposerRefs(state, props.sessionId));
+  const refs = props.workChat ? composerRefs : NO_REFS;
   const computerUseHint = useComputerUseHint(draft);
   // True while a send with attachments is in flight (compression + inbox
   // upload + prompt POST); drives the uploading overlay on composer chips.
@@ -1721,20 +1733,27 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const pending: UIMessage[] = unmatchedPendingMessages.map(({ draft: item }) => ({
       id: item.messageId,
       role: "user",
-      parts: [{ type: "text", text: item.resolvedText ?? item.text }],
+      parts: [
+        ...refUIParts(item.parts.flatMap((part) => (part.type === "ref" ? [part.ref] : [])), `${item.messageId}:refs`),
+        { type: "text", text: item.resolvedText ?? item.text },
+      ],
     }));
     if (autoSending) {
       const pendingComposer = autoSendPayload?.composer;
       const pendingText = pendingComposer?.draft ?? draft;
       const pendingPasteParts = pendingComposer?.pasteParts ?? pasteParts;
-      if (pendingText.trim() || (pendingComposer?.attachments.length ?? attachments.length)) pending.push({
+      const pendingRefs = props.workChat ? (pendingComposer ? pendingComposer.refs ?? NO_REFS : refs) : NO_REFS;
+      if (pendingText.trim() || (pendingComposer?.attachments.length ?? attachments.length) || pendingRefs.length) pending.push({
         id: `${props.sessionId}:first-send`,
         role: "user",
-        parts: [{ type: "text", text: resolvePastedTextPlaceholders(pendingText, pendingPasteParts).replace(/\[attachment [^\]]+\]/g, "") }],
+        parts: [
+          ...refUIParts(pendingRefs, `${props.sessionId}:first-send:refs`),
+          { type: "text", text: resolvePastedTextPlaceholders(pendingText, pendingPasteParts).replace(/\[attachment [^\]]+\]/g, "") || (pendingRefs.length ? defaultQuestion(pendingRefs) : "") },
+        ],
       });
     }
     return [...baseRenderedMessages, ...pending, ...evalMarkdownMessages];
-  }, [attachments.length, autoSendPayload, autoSending, baseRenderedMessages, draft, evalMarkdownMessages, pasteParts, props.sessionId, unmatchedPendingMessages]);
+  }, [attachments.length, autoSendPayload, autoSending, baseRenderedMessages, draft, evalMarkdownMessages, pasteParts, props.sessionId, props.workChat, refs, unmatchedPendingMessages]);
   const renderedMessagesRef = useRef(renderedMessages);
   useEffect(() => {
     renderedMessagesRef.current = renderedMessages;
@@ -2161,6 +2180,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   ): ComposerDraft => {
     const sourceMentions = sourceComposer?.mentions ?? mentions;
     const sourcePasteParts = sourceComposer?.pasteParts ?? pasteParts;
+    const sourceRefs = props.workChat ? (sourceComposer ? sourceComposer.refs ?? NO_REFS : refs) : NO_REFS;
     const parts: ComposerPart[] = text.split(/(\[attachment [^\]]+\]|\[pasted text [^\]]+\]|\[connect-skill [^\]]+\]|\[skill [^\]]+\]|@[^\s@]+)/).flatMap((segment, index, segments) => {
       if (!segment) return [] as ComposerDraft["parts"];
       const attachmentMatch = segment.match(/^\[attachment (.+)\]$/);
@@ -2211,7 +2231,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const slashCommand = text.trimStart().startsWith("[connect-skill ") ? null : parseSlashCommandInvocation(resolved);
     return {
       mode: "prompt",
-      parts,
+      parts: sourceRefs.length ? [...sourceRefs.map((ref) => ({ type: "ref" as const, ref })), ...parts] : parts,
       attachments: nextAttachments,
       text,
       resolvedText: resolved,
@@ -2220,7 +2240,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         ? sourceComposer.revertMessageId ?? undefined
         : getComposerRevertMessageId(useComposerStateStore.getState(), props.sessionId) ?? undefined,
     };
-  }, [mentions, pasteParts, props.sessionId]);
+  }, [mentions, pasteParts, props.sessionId, props.workChat, refs]);
 
   const handleComposerDraftChange = useCallback((value: string) => {
     setComposerDraft(props.sessionId, value);
@@ -2328,7 +2348,9 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if ([...pendingSendsRef.current.values()].includes(sessionOwner)) return;
     const originalDraft = sourceComposer?.draft ?? draft;
     const sourceAttachments = sourceComposer?.attachments ?? attachments;
-    const text = originalDraft.trim();
+    const sourceRefs = props.workChat ? (sourceComposer ? sourceComposer.refs ?? NO_REFS : refs) : NO_REFS;
+    // Only chips: the bubble says the default question ("Brief me on this") and the agent gets the brief.
+    const text = originalDraft.trim() || (sourceRefs.length && !sourceAttachments.length ? defaultQuestion(sourceRefs) : "");
     if (!text && sourceAttachments.length === 0) return;
     // A placeholder whose pasted text or quote is gone (only its token left) is never sent as the token itself.
     if (unresolvedPasteLabels(text, sourceComposer?.pasteParts ?? getComposerPasteParts(useComposerStateStore.getState(), props.sessionId)).length) {
@@ -2443,9 +2465,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
     } finally {
       setAttachmentsUploading(false);
     }
-  }, [askSideFromDraft, attachments, baseRenderedMessages, buildDraft, clearComposer, draft, liveStatus.type, persistedDraftKey, props.onDraftChange, props.sessionId, revertMessageId, revertedMessageCount, sendDraft, sessionOwner]);
+  }, [askSideFromDraft, attachments, baseRenderedMessages, buildDraft, clearComposer, draft, liveStatus.type, persistedDraftKey, props.onDraftChange, props.sessionId, props.workChat, refs, revertMessageId, revertedMessageCount, sendDraft, sessionOwner]);
 
-  // A chat command from a button ("/review", "/fix 1, 3"): sent like a typed one, the composer's draft left alone.
+  // A chat command from a button ("/review", "/fix 1, 3"): sent like a typed one, the composer's draft left alone
+  // (its Work chips too: they are neither sent nor cleared).
   const runChatCommand = useCallback(async (text: string) => {
     await handleSend({ draft: text, attachments: [], mentions: {}, pasteParts: [], revertMessageId: null });
   }, [handleSend]);
@@ -2465,16 +2488,16 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (sessionModelUnavailable) return;
     const sourceComposer = autoSendPayload?.composer;
     if (sourceComposer) {
-      if (!sourceComposer.draft.trim() && !sourceComposer.attachments.length) return;
+      if (!sourceComposer.draft.trim() && !sourceComposer.attachments.length && !sourceComposer.refs?.length) return;
       const payload = consumeComposerAutoSendPayload(props.sessionId, sessionOwner);
       if (!payload) return;
       void handleSend(payload.composer);
       return;
     }
-    if (!draft.trim() && !attachments.length) return;
+    if (!draft.trim() && !attachments.length && !refs.length) return;
     if (!consumeComposerAutoSend(props.sessionId)) return;
     void handleSend();
-  }, [attachments.length, autoSendPayload, chatStreaming, draft, handleSend, model.transitionState, sessionModelUnavailable, props.sessionId, sessionOwner]);
+  }, [attachments.length, autoSendPayload, chatStreaming, draft, handleSend, model.transitionState, refs.length, sessionModelUnavailable, props.sessionId, sessionOwner]);
 
   const handleSteer = useCallback(async () => {
     setSteering(true);
@@ -2496,7 +2519,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const handleQueue = useCallback(() => {
     if (askSideFromDraft(draft)) return;
     if ([...pendingSendsRef.current.values()].includes(sessionOwner)) return;
-    const text = draft.trim();
+    const text = draft.trim() || (refs.length && !attachments.length ? defaultQuestion(refs) : "");
     if (!text && attachments.length === 0) return;
     const queuedDraft = withoutRevertTarget(buildDraft(text, attachments));
     if (!queuedDraft) return;
@@ -2504,7 +2527,28 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (draftHasLostPaste(queuedDraft)) { toast.error(LOST_PASTE_MESSAGE); return; }
     appendQueuedDraft(props.sessionId, queuedDraft);
     clearComposer();
-  }, [appendQueuedDraft, askSideFromDraft, attachments, buildDraft, clearComposer, draft, props.sessionId, sessionOwner]);
+  }, [appendQueuedDraft, askSideFromDraft, attachments, buildDraft, clearComposer, draft, props.sessionId, refs, sessionOwner]);
+
+  // A question offered for the attached Work items: sent with them (the composer is empty while they show). A busy
+  // chat queues it.
+  const sendStarter = useCallback((text: string) => {
+    setComposerDraft(props.sessionId, text);
+    const current = useComposerStateStore.getState().sessions[props.sessionId];
+    if (!current) return;
+    if (chatStreaming) {
+      const queuedDraft = withoutRevertTarget(buildDraft(text, current.attachments, current));
+      if (!queuedDraft) return;
+      appendQueuedDraft(props.sessionId, queuedDraft);
+      clearComposer();
+      return;
+    }
+    void handleSend(current);
+  }, [appendQueuedDraft, buildDraft, chatStreaming, clearComposer, handleSend, props.sessionId, setComposerDraft]);
+  const removeRef = useCallback((key: string) => {
+    const store = useComposerStateStore.getState();
+    store.setRefs(props.sessionId, getComposerRefs(store, props.sessionId).filter((ref) => refKey(ref) !== key));
+    window.dispatchEvent(new Event("omnirush:focusPrompt"));
+  }, [props.sessionId]);
 
   const removeQueuedDraft = useCallback((id: string) => {
     const target = queuedItems.find((item) => item.id === id);
@@ -3301,8 +3345,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const handleEditUserMessage = useCallback((messageId: string, text: string) => {
     // Preserve the boundary with the draft; the destructive revert is deferred
     // until the replacement prompt is actually sent.
+    if (props.workChat) {
+      // The message's Work items come back as chips with its text.
+      const message = renderedMessagesRef.current.find((item) => item.id === messageId);
+      const sent = message?.parts.flatMap((part) => (part.type === "data-ref" ? refsFromMetadata(part.data) : [])) ?? [];
+      useComposerStateStore.getState().setRefs(props.sessionId, sent);
+    }
     void typeComposerText(text, messageId);
-  }, [typeComposerText]);
+  }, [props.sessionId, props.workChat, typeComposerText]);
 
   const handleRestoreRevertedSession = useCallback(() => {
     if (!props.onRestoreRevertedSession || restoringRevertedMessages) return;
@@ -3774,6 +3824,22 @@ export function SessionSurface(props: SessionSurfaceProps) {
         isRemoteWorkspace={props.isRemoteWorkspace}
           isSandboxWorkspace={props.isSandboxWorkspace}
           onUploadInboxFiles={props.onUploadInboxFiles ?? handleUploadInboxFiles}
+          {...(props.workChat && refs.length && !autoSending ? {
+            contextSlot: <WorkRefChips owner={props.sessionId} refs={refs} onRemove={removeRef} />,
+            hasContext: true,
+            placeholder: refPlaceholder(refs),
+            aboveSlot: draft.trim() ? undefined : (
+              <SuggestionChipRow
+                chips={starterQuestions(refs).map((label, index) => ({ id: `starter-${index}`, label }))}
+                label={t("work.ask.questions_label")}
+                onSend={sendStarter}
+                onFill={(text) => void typeComposerText(text)}
+                shortcuts
+                testId="work-ask-starters"
+                className="mb-2 px-1"
+              />
+            ),
+          } : {})}
           compactTopSpacing={Boolean(showCompactionProgress || props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0 || hasComputerUse || computerUseHint !== null)}
           topAccessory={
             showCompactionProgress || props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedItems.length > 0 || hasComputerUse || computerUseHint !== null ? (

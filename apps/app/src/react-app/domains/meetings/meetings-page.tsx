@@ -1,13 +1,15 @@
 /** @jsxImportSource react */
 // Work > Meetings, M1: Take notes, the two streams' levels, Pause/Resume and Stop. Shown only while the server
 // transcribes meeting audio (capabilities.work.meetings). The meeting list and the live transcript come in M2.
-import { Mic, Pause, Play, Square } from "lucide-react";
+import { MessageSquare, Mic, Pause, Play, Square } from "lucide-react";
 import { create } from "zustand";
 
 import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { WorkClient } from "@/react-app/domains/work/work-mode";
+import { requestAsk } from "@/react-app/domains/work/ask/ask-bridge";
+import { refFromMeeting } from "@/react-app/domains/work/ask/refs";
 
 import { MeetingRecorder, type MeetingClient, type RecorderState, type StreamState } from "./recorder";
 
@@ -102,7 +104,17 @@ export function MeetingsPage(props: { client: MeetingsClient | null }) {
         )}
         {lines.length ? (
           <ul className="flex flex-col gap-1 text-[13px] text-muted-foreground" data-testid="work-meeting-lines">
-            {lines.map((line) => <li key={line.key} data-line={line.key}>{line.text}</li>)}
+            {lines.map((line) => (
+              <li key={line.key} data-line={line.key} className={line.key === "saved" && state?.meetingId ? "flex items-center gap-3" : undefined}>
+                {line.text}
+                {/* A saved meeting is a Work record: ask about it like any other. */}
+                {line.key === "saved" && state?.meetingId ? (
+                  <Button variant="outline" size="sm" title={t("work.ask.ask_hint")} onClick={(event) => requestAsk(refFromMeeting(state.meetingId!), { stay: event.shiftKey })} data-testid="work-meeting-ask">
+                    <MessageSquare className="size-3.5" />{t("work.today.ask")}
+                  </Button>
+                ) : null}
+              </li>
+            ))}
           </ul>
         ) : null}
       </div>

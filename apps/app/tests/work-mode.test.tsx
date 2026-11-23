@@ -9,8 +9,8 @@ import { t } from "../src/i18n";
 import { matchRoutes, MemoryRouter } from "react-router";
 
 import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers, type OmniRushWorkOrgConnectors } from "../src/app/lib/omnirush-server";
-import { isWorkSignInLink, needsOnboarding, workOnboardingKey, askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
-  askAboutItemPrompt, coverageCanAdd, coverageLine, relativeTime, workActionsKey, workOrgConnectorsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
+import { isWorkSignInLink, needsOnboarding, workOnboardingKey, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
+  coverageCanAdd, coverageLine, relativeTime, workActionsKey, workOrgConnectorsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { fitStrip, SourceAttention, SourceStrip, sourceCounts, sourceDot, stripSources, STRIP_SOURCES, WorkToday } from "../src/react-app/domains/work/work-today";
 import { WorkPageBoundary } from "../src/react-app/domains/work/work-page-boundary";
@@ -22,6 +22,7 @@ import { WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/wor
 import { ConnectorIcon, ConnectorRow, HookCard, localChatError, LocalChatsCard, TelegramCard, telegramLoginError, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 import { BrandTile } from "../src/react-app/domains/work/brand-icon";
+import { refFromEntity, refFromFeedItem, refPromptText } from "../src/react-app/domains/work/ask/refs";
 import { addCustomTool, builtInCatalog, customToolName, matchTool, pickerGroups, readCatalog, searchTools, sizeLabel, toolLabel, WORK_SIZES } from "../src/react-app/domains/work/catalog";
 import { CONSUMER, enterpriseMode, enterpriseRedirect, useEnterpriseStore } from "../src/react-app/domains/work/enterprise-mode";
 import { ConsumerOnly, enterpriseWaitingCopy, EnterpriseWaiting } from "../src/react-app/domains/work/enterprise-ui";
@@ -329,9 +330,10 @@ describe("Work mode", () => {
     expect(actorNames([{ name: "Dana" }, { email: "x@y.test" }, "Sam", 5])).toBe("Dana, x@y.test, Sam");
   });
 
-  test("Ask about this briefs the chat through work_context on that entity", () => {
-    const prompt = askAboutPrompt({ id: "ent_1", kind: "company", name: "Acme Bakery" });
-    expect(prompt).toContain("work_context");
+  test("Ask about this attaches the entity: the agent looks it up with work_entity by id, nothing more is forced", () => {
+    const prompt = refPromptText([refFromEntity({ id: "ent_1", kind: "company", name: "Acme Bakery" })], { brief: true });
+    expect(prompt).toContain("work_entity (id)");
+    expect(prompt).not.toContain("work_context");
     expect(prompt).toContain("Acme Bakery");
     expect(prompt).toContain("ent_1");
   });
@@ -458,9 +460,11 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(busy).toMatch(/data-testid="work-feed-count">8</);
     expect(busy).toMatch(/aria-expanded="false"[^>]*>Show 3 more</);
     expect(markup).not.toMatch(/—|farm|stock/i);
-    const prompt = askAboutItemPrompt(feed.groups.needs_you[0]!);
+    // The feed row's id is not the record: an item without source_id is looked up by search.
+    const prompt = refPromptText([refFromFeedItem(feed.groups.needs_you[0]!)], { brief: false });
     expect(prompt).toContain("Fix invoice rounding");
-    expect(prompt).toContain("github:pr:12");
+    expect(prompt).not.toContain("github:pr:12");
+    expect(prompt).toContain("work_search");
   });
 
   test("Today: Review opens the fixes, Show more opens Recent, a source filter folds it back", async () => {

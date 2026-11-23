@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Agent } from "@opencode-ai/sdk/v2/client";
 
 import type { CloudImportedPlugin } from "@/app/cloud/import-state";
@@ -94,6 +94,8 @@ export type NewTaskComposerProps = {
   context: NewTaskComposerContext | null;
   /** A Work chat's composer: the Connectors chip in place of the sub-agent model menu (as in the running Work chat). */
   workChat?: boolean;
+  /** Work: attached items (reference chips) at the top of the card; the draft may then be sent without text. */
+  refContext?: { slot: ReactNode; above?: ReactNode; placeholder?: string; prompt: string } | null;
 };
 
 export type NewTaskComposerHandoff = {
@@ -402,7 +404,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
   };
 
   const handleRunTask = async () => {
-    if (submittingRef.current || props.busy || failedSubmission || (!props.draft.trim() && !attachments.length)) return;
+    if (submittingRef.current || props.busy || failedSubmission || (!props.draft.trim() && !attachments.length && !props.refContext)) return;
     submittingRef.current = true;
     const submissionHolder = continuationHolderRef.current;
     const originalDraft = submissionHolder.state.draft;
@@ -411,7 +413,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     const resolved = resolvePastedTextPlaceholders(originalDraft, submitted.pasteParts);
     const submittedDraftScope = draftScope;
     const submittedWorkspaceId = workspaceId;
-    if (!submitted.attachments.length) setPendingPrompt(resolved.replace(/\[attachment [^\]]+\]/g, ""));
+    if (!submitted.attachments.length) setPendingPrompt(resolved.replace(/\[attachment [^\]]+\]/g, "") || props.refContext?.prompt || "");
     setPreparingAttachments(submitted.attachments.length > 0);
     setSubmissionError(null);
     // Attachment drafts stay visible through session creation and are handed
@@ -480,6 +482,10 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       mentions={mentions}
       onDraftChange={handleDraftChange}
       onSend={handleRunTask}
+      contextSlot={props.refContext?.slot}
+      aboveSlot={props.refContext?.above}
+      hasContext={Boolean(props.refContext)}
+      placeholder={props.refContext?.placeholder}
       onSteer={noop}
       onQueue={noop}
       onStop={noop}

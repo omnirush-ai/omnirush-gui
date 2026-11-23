@@ -9,6 +9,7 @@ import type {
 } from "@opencode-ai/sdk/v2/client";
 import type { createClient } from "./lib/opencode";
 import type { OpencodeConfigFile, WorkspaceInfo } from "./lib/desktop-types";
+import type { WorkRef } from "../react-app/domains/work/ask/refs";
 
 export type Client = ReturnType<typeof createClient>;
 
@@ -105,7 +106,9 @@ export type ComposerPart =
   /** A macOS app targeted via Computer Use (composer "@App" mention). */
   | { type: "app"; name: string }
   | { type: "computer"; target: "cloud" | "desktop" }
-  | { type: "paste"; id: string; label: string; text: string; lines: number };
+  | { type: "paste"; id: string; label: string; text: string; lines: number }
+  /** A Work item attached as a reference chip (Work chats): the agent gets one note for all of a draft's refs. */
+  | { type: "ref"; ref: WorkRef };
 
 export type ComposerAttachment = {
   id: string;

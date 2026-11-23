@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import { createPromptMessageID } from "../../../../app/lib/opencode";
 import type { ComposerAttachment, ComposerDraft } from "../../../../app/types";
+import type { WorkRef } from "../../work/ask/refs";
 import type { ComposerMentionKind } from "./composer/mention-encoding";
 import { resolvePastedTextPlaceholders, type PastedTextChip } from "./composer/pasted-text";
 
@@ -23,6 +24,8 @@ export type ComposerSessionState = {
   mentions: Record<string, ComposerMentionKind>;
   pasteParts: ComposerPastePart[];
   revertMessageId: string | null;
+  /** Work items attached as reference chips (Work chats only; memory only, like attachments). */
+  refs?: WorkRef[];
 };
 
 export function snapshotComposerSessionState(state: ComposerSessionState): ComposerSessionState {
@@ -32,6 +35,7 @@ export function snapshotComposerSessionState(state: ComposerSessionState): Compo
     mentions: { ...state.mentions },
     pasteParts: state.pasteParts.map((part) => ({ ...part })),
     revertMessageId: state.revertMessageId,
+    ...(state.refs?.length ? { refs: state.refs.map((ref) => ({ ...ref })) } : {}),
   };
 }
 
@@ -54,6 +58,7 @@ export type ComposerStateStore = {
   setAttachments: (sessionId: string, attachments: ComposerAttachment[]) => void;
   setMentions: (sessionId: string, mentions: Record<string, ComposerMentionKind>) => void;
   setPasteParts: (sessionId: string, pasteParts: ComposerPastePart[]) => void;
+  setRefs: (sessionId: string, refs: WorkRef[]) => void;
   appendHistory: (sessionId: string, text: string) => void;
   appendQueuedDraft: (sessionId: string, draft: ComposerDraft) => void;
   removeQueuedDraft: (sessionId: string, id: string) => void;
@@ -67,6 +72,7 @@ export type ComposerStateStore = {
 const EMPTY_ATTACHMENTS: ComposerAttachment[] = [];
 const EMPTY_MENTIONS: Record<string, ComposerMentionKind> = {};
 const EMPTY_PASTE_PARTS: ComposerPastePart[] = [];
+const EMPTY_REFS: WorkRef[] = [];
 const EMPTY_HISTORY: string[] = [];
 const EMPTY_QUEUED_DRAFTS: QueuedComposerItem[] = [];
 const HISTORY_LIMIT = 50;
@@ -152,6 +158,7 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
       && Object.keys(current.mentions).length === 0
       && current.pasteParts.length === 0
       && current.revertMessageId === null
+      && !current.refs?.length
     ) return state;
     return {
       sessions: {
@@ -184,6 +191,13 @@ export const useComposerStateStore = create<ComposerStateStore>((set) => ({
     const current = getWritableSession(state, sessionId);
     if (current.pasteParts === pasteParts) return state;
     return { sessions: { ...state.sessions, [sessionId]: { ...current, pasteParts } } };
+  }),
+  setRefs: (sessionId, refs) => set((state) => {
+    const current = getWritableSession(state, sessionId);
+    if (current.refs === refs || (!current.refs?.length && !refs.length)) return state;
+    const next: ComposerSessionState = { ...current, refs };
+    if (!refs.length) delete next.refs;
+    return { sessions: { ...state.sessions, [sessionId]: next } };
   }),
   appendHistory: (sessionId, text) => set((state) => {
     const trimmed = text.trim();
@@ -267,6 +281,10 @@ export function getComposerMentions(state: ComposerStateStore, sessionId: string
 
 export function getComposerPasteParts(state: ComposerStateStore, sessionId: string): ComposerPastePart[] {
   return state.sessions[sessionId]?.pasteParts ?? EMPTY_PASTE_PARTS;
+}
+
+export function getComposerRefs(state: ComposerStateStore, sessionId: string): WorkRef[] {
+  return state.sessions[sessionId]?.refs ?? EMPTY_REFS;
 }
 
 export function getComposerHistory(state: ComposerStateStore, sessionId: string): string[] {

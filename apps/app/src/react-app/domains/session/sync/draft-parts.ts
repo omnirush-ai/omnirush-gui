@@ -19,6 +19,20 @@ import {
 import { mentionPromptParts } from "./mention-parts";
 import { parseConnectSkillToken } from "../surface/composer/connect-skill-token";
 import { decodeComposerMentionValue } from "../surface/composer/mention-encoding";
+import { defaultQuestion, draftRefs, refPromptText } from "../../work/ask/refs";
+
+/** A draft's Work reference chips as the one note the agent reads first (synthetic: the bubble shows chips instead,
+ *  rebuilt from `metadata.refs`). The brief line only when the visible text is the default question. */
+export function refNotePart(draft: Pick<ComposerDraft, "parts" | "text">): (TextPartInput & { synthetic: true }) | null {
+  const refs = draftRefs(draft);
+  if (!refs.length) return null;
+  return {
+    type: "text",
+    synthetic: true,
+    metadata: { refs },
+    text: refPromptText(refs, { brief: draft.text.trim() === defaultQuestion(refs) }),
+  };
+}
 
 // All workspace-scoped server URLs/clients/tokens come from
 // `resolveWorkspaceEndpoint` in apps/app/src/app/lib/workspace-endpoint.ts.
@@ -31,6 +45,8 @@ export async function draftToParts(
 ) {
   const parts: Array<TextPartInput | FilePartInput | AgentPartInput> = [];
   const root = workspaceRoot.trim();
+  const refNote = refNotePart(draft);
+  if (refNote) parts.push(refNote);
 
   const toAbsolutePath = (path: string) => {
     const trimmed = path.trim();

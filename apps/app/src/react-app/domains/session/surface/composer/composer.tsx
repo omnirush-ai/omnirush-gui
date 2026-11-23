@@ -133,6 +133,14 @@ type ComposerProps = {
   work?: boolean;
   /** The Linux sandbox indicator (only while the project's sandbox is on or offered), after Full permissions. */
   sandboxControl?: ReactNode;
+  /** Work: the attached items' chips, at the top of the card (Code never sets it). */
+  contextSlot?: ReactNode;
+  /** Work: the draft has attached items, so it can be sent without text. */
+  hasContext?: boolean;
+  /** Work: the questions offered for the attached items, just above the card. */
+  aboveSlot?: ReactNode;
+  /** Replaces the default placeholder (Work, while items are attached). */
+  placeholder?: string;
   /** Voice dictation's local server hop; without it there is no mic button. */
   voiceClient?: VoiceClient | null;
   /** The workspace whose repository and branch hint the transcription. */
@@ -397,7 +405,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       void voice.stop();
       return;
     }
-    const hasContent = props.draft.trim().length > 0 || props.attachments.length > 0;
+    const hasContent = props.draft.trim().length > 0 || props.attachments.length > 0 || Boolean(props.hasContext);
     if (!hasContent) return;
     if (props.submissionPreparing) return;
     if (props.busy) {
@@ -406,7 +414,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       return;
     }
     void props.onSend();
-  }, [props.busy, props.draft, props.attachments, props.onSend, props.onSteer, props.onQueue, props.submissionPreparing, voice.active, voice.stop]);
+  }, [props.busy, props.draft, props.attachments, props.hasContext, props.onSend, props.onSteer, props.onQueue, props.submissionPreparing, voice.active, voice.stop]);
 
   useEffect(() => {
     if (voiceAutoSendPrompt === null || props.draft !== voiceAutoSendPrompt) return;
@@ -824,7 +832,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   const activePlugin = toolMenuSection.startsWith("plugin:")
     ? importedPlugins.find((plugin) => `plugin:${plugin.pluginId}` === toolMenuSection) ?? null
     : null;
-  const canSend = props.draft.trim().length > 0 || props.attachments.length > 0;
+  const canSend = props.draft.trim().length > 0 || props.attachments.length > 0 || Boolean(props.hasContext);
 
   const renderConnectionRows = () => {
     const servers = connectionInventory.servers;
@@ -1346,6 +1354,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       }}
     >
       <div className={props.flush ? "" : COMPOSER_WIDTH}>
+        {props.aboveSlot}
         {/* Main composer panel */}
         <div
           data-composer-panel
@@ -1375,6 +1384,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
           ) : null}
 
           <div className="px-4 pt-3 pb-2">
+            {props.contextSlot ? <div className="mb-2">{props.contextSlot}</div> : null}
             {/* Editor */}
             <LexicalPromptEditor
               ref={editorRef}
@@ -1383,7 +1393,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
               pastedText={pastedTextTokens}
               attachments={attachmentTokens}
               submitDisabled={props.disabled}
-              placeholder={t("composer.placeholder")}
+              placeholder={props.placeholder || t("composer.placeholder")}
               onChange={props.onDraftChange}
               onSubmit={handleEditorSubmit}
               onExpandPastedText={handleExpandPastedText}

@@ -475,13 +475,77 @@ function mapV2MessageParts(
     });
   }
   const text = readString(value, "text");
-  return text === undefined ? [] : [{
+  if (text === undefined) return [];
+  const split = splitRefPromptText(text, readRecord(readRecord(value, "metadata"), "omnirush")?.textParts);
+  if (split) {
+    return split.flatMap<Part>((entry, index) => (entry.text || entry.synthetic ? [{
+      id: `${messageID}:${index}`,
+      messageID,
+      sessionID,
+      type: "text",
+      text: entry.text,
+      ...(entry.synthetic ? { synthetic: true } : {}),
+      ...(entry.metadata ? { metadata: entry.metadata } : {}),
+    }] : []));
+  }
+  return [{
     id: `${messageID}:0`,
     messageID,
     sessionID,
     type: "text",
     text,
   }];
+}
+
+/** The separator between a prompt's Work reference note and the typed text in the one text a 2.x message keeps. */
+const REF_PROMPT_SEPARATOR = "\n\n";
+
+type PromptTextEntry = { text: string; synthetic?: boolean; metadata?: Record<string, unknown> };
+type PromptTextLayout = { length: number; synthetic?: boolean; metadata?: Record<string, unknown> };
+
+/**
+ * A prompt carrying Work reference chips (a synthetic text part with `metadata.refs`): 2.x keeps one text per prompt,
+ * so the note goes first, then the rest exactly as it is joined today, and the layout (length, synthetic flag and
+ * metadata per entry) rides in the message metadata (`omnirush.textParts`, as engine2/shapes.ts reads it), so reads
+ * split the note back out of the bubble. Null for every other prompt: those are sent as before.
+ */
+export function refPromptPayload(parts: readonly { type?: unknown; text?: unknown; synthetic?: unknown; metadata?: unknown }[]): { text: string; textParts: PromptTextLayout[] } | null {
+  const texts = parts.filter((part) => part.type === "text" && typeof part.text === "string");
+  const notes = texts.filter((part) => part.synthetic === true && isRecord(part.metadata) && Array.isArray(part.metadata.refs) && part.metadata.refs.length > 0);
+  if (!notes.length) return null;
+  const rest = texts.filter((part) => !notes.includes(part)).map((part) => String(part.text)).join("");
+  const entries: PromptTextEntry[] = [
+    ...notes.map((part) => ({ text: String(part.text), synthetic: true, ...(isRecord(part.metadata) ? { metadata: part.metadata } : {}) })),
+    { text: rest },
+  ];
+  return {
+    text: entries.map((entry) => entry.text).join(REF_PROMPT_SEPARATOR),
+    textParts: entries.map((entry) => ({ length: entry.text.length, ...(entry.synthetic ? { synthetic: true } : {}), ...(entry.metadata ? { metadata: entry.metadata } : {}) })),
+  };
+}
+
+/** A stored prompt's text split back by its layout, only when the layout carries Work refs and still matches. */
+export function splitRefPromptText(text: string, layout: unknown): PromptTextEntry[] | null {
+  if (!Array.isArray(layout) || layout.length < 2) return null;
+  if (!layout.some((entry) => isRecord(entry) && isRecord(entry.metadata) && Array.isArray(entry.metadata.refs))) return null;
+  const entries: PromptTextEntry[] = [];
+  let offset = 0;
+  for (const [index, entry] of layout.entries()) {
+    const length = isRecord(entry) ? entry.length : undefined;
+    if (!isRecord(entry) || typeof length !== "number" || !Number.isInteger(length) || length < 0) return null;
+    if (index > 0) {
+      if (text.slice(offset, offset + REF_PROMPT_SEPARATOR.length) !== REF_PROMPT_SEPARATOR) return null;
+      offset += REF_PROMPT_SEPARATOR.length;
+    }
+    if (offset + length > text.length) return null;
+    entries.push({
+      text: text.slice(offset, offset + length),
+      ...(entry.synthetic === true ? { synthetic: true } : {}),
+      ...(isRecord(entry.metadata) ? { metadata: entry.metadata } : {}),
+    });
+    offset += length;
+  }
+  return offset === text.length ? entries : null;
 }
 
 function mapV2Message(value: unknown, sessionID: string): V2MappedMessage | null {
@@ -1699,7 +1763,8 @@ export function createClientV2(
           { value: parameters.system }, options?.signal);
         if (!instructions.response.ok) return failedResult(instructions);
       }
-      const text = (parameters.parts ?? [])
+      const refPrompt = refPromptPayload(parameters.parts ?? []);
+      const text = refPrompt ? refPrompt.text : (parameters.parts ?? [])
         .filter((part) => part.type === "text" && typeof part.text === "string")
         .map((part) => typeof part.text === "string" ? part.text : "")
         .join("");
@@ -1714,7 +1779,7 @@ export function createClientV2(
         "POST",
         `/api/session/${encodeURIComponent(parameters.sessionID)}/prompt`,
         // The UI's id becomes the saved user message, so an uncertain send can be checked by id.
-        { text, ...(files.length ? { files } : {}), ...(parameters.messageID?.startsWith("msg_") ? { id: parameters.messageID } : {}) },
+        { text, ...(files.length ? { files } : {}), ...(parameters.messageID?.startsWith("msg_") ? { id: parameters.messageID } : {}), ...(refPrompt ? { metadata: { omnirush: { textParts: refPrompt.textParts } } } : {}) },
         options?.signal,
       );
       return promptResult.response.ok ? successfulResult(promptResult, {}) : failedResult(promptResult);

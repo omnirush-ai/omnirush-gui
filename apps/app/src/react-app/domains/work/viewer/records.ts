@@ -107,6 +107,7 @@ export type OpenRecordRequest = RecordRef & {
 };
 
 export const OPEN_WORK_RECORD_EVENT = "omnirush-open-work-record";
+/** "Ask" on a Work item: its reference chip goes to a composer (work/ask/ask-bridge.ts). */
 export const ASK_WORK_RECORD_EVENT = "omnirush-ask-work-record";
 export const RECORD_TAB_PREFIX = "record:";
 /** A record's tab is the record's; each new mail or meeting gets a tab of its own. */
@@ -140,11 +141,6 @@ export function onOpenRecordRequest(handler: (request: OpenRecordRequest) => voi
   };
   window.addEventListener(OPEN_WORK_RECORD_EVENT, listener);
   return () => window.removeEventListener(OPEN_WORK_RECORD_EVENT, listener);
-}
-/** "Ask" in a viewer: a Work chat about the record (the session route starts it). */
-export function requestAskAbout(prompt: string) {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent<string>(ASK_WORK_RECORD_EVENT, { detail: prompt }));
 }
 
 /** A row's open: in the panel when the item has a record id and the server has viewers, else at its source as before.
@@ -558,13 +554,6 @@ export const isHeld = (sourceId: string) => useHeldSends.getState().held.some((h
 export function replaceable(sourceId: string | undefined): boolean {
   if (!sourceId) return true;
   return !hasDraft(sourceId) && !isHeld(sourceId);
-}
-
-/** Prompt for "Ask": the same words as Ask on a Today row. */
-export function askPrompt(record: Pick<WorkRecord, "source" | "kind" | "subject" | "url" | "source_id">): string {
-  const source = connectorLabel(record.source);
-  const title = record.subject?.trim() || record.kind;
-  return `Help me with this ${record.kind.replace(/_/g, " ")} from ${source}: "${title}"${record.url ? ` (${record.url})` : ""}, source id ${record.source_id}. Look it up first, then tell me what it is, what is needed from me and anything related, with links.`;
 }
 
 /** One write from a view: the action, its args, what the toast says, and whether it waits out the undo window

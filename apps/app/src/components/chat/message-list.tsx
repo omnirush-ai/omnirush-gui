@@ -144,6 +144,8 @@ import type { AnyToolPart } from "@/lib/tool-aggregate"
 import { commandTemplateLabel, reviewForTurn } from "@/react-app/domains/session/commands/review-message"
 import { useSessionCommandBridge, useSessionCommandsStore } from "@/react-app/domains/session/commands/session-commands-store"
 import { ReviewFixBar } from "@/react-app/domains/session/commands/review-fix-bar"
+import { WorkRefMessageChips } from "@/react-app/domains/work/ask/ref-chip"
+import { refsFromMetadata } from "@/react-app/domains/work/ask/refs"
 import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/connector-tool-identity"
 
 const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
@@ -741,6 +743,11 @@ const UserMessage = React.memo(
       [message.parts],
     )
     const hasContent = inlineParts.length > 0
+    // Work items the question was about (a reference note's `metadata.refs`), shown as chips above the bubble.
+    const refs = React.useMemo(
+      () => message.parts.flatMap((part) => (part.type === "data-ref" ? refsFromMetadata(part.data) : [])),
+      [message.parts],
+    )
 
     return (
       <Message
@@ -757,6 +764,7 @@ const UserMessage = React.memo(
                 className="group flex w-full flex-col items-end gap-1 !select-text"
                 style={{ userSelect: "text" }}
               >
+                {refs.length ? <WorkRefMessageChips refs={refs} /> : null}
                 {hasContent ? (
                   <MessageContent
                     className="bg-muted text-foreground max-w-[85%] rounded-3xl px-4 py-2.5 leading-6 sm:max-w-[75%] !select-text not-prose"

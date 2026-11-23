@@ -8,12 +8,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { createOmniRushServerClient, OmniRushServerError, type OmniRushWorkConnector, type OmniRushWorkCoverage, type OmniRushWorkDeal, type OmniRushWorkDealDetail, type OmniRushWorkImport, type OmniRushWorkSearch } from "../src/app/lib/omnirush-server";
 import {
-  askAboutDealPrompt, coverageAdds, coverageCanAdd, hasDeals, isWorkSearchShortcut, periodStart, snippetParts, workConnectorsKey, workCoverageKey, workDealKey, workDealsKey, workImportsKey, workOnboardingKey,
+  coverageAdds, coverageCanAdd, hasDeals, isWorkSearchShortcut, periodStart, snippetParts, workConnectorsKey, workCoverageKey, workDealKey, workDealsKey, workImportsKey, workOnboardingKey,
   WORK_DEALS_ROUTE, WORK_SEARCH_ROUTE,
 } from "../src/react-app/domains/work/work-mode";
 import { ChatImportCard, WorkConnectorsPage, WorkCoverageMeter } from "../src/react-app/domains/work/work-views";
 import { WorkSearchPage } from "../src/react-app/domains/work/work-search";
 import { DealPanel, WorkDealsPage } from "../src/react-app/domains/work/work-deals";
+import { refFromDeal, refPromptText } from "../src/react-app/domains/work/ask/refs";
 
 const noop = () => {};
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,10 +115,10 @@ describe("Work search, deals and coverage (contract D6)", () => {
     expect(hasDeals({ items: deals })).toBe(true);
     expect(hasDeals({ items: [] })).toBe(false);
     expect(hasDeals(undefined)).toBe(false);
-    const brief = askAboutDealPrompt(deals[0]!);
+    const brief = refPromptText([refFromDeal(deals[0]!)], { brief: true });
     expect(brief).toContain('"Summit Gear wholesale" with Summit Gear');
     expect(brief).toContain("demo:hubspot:deal:9001");
-    expect(brief).toContain("work_deals");
+    expect(brief).toContain("work_deals (deal = the source_id)");
   });
 
   test("coverage meter: N of M with + chips; hidden while loading, when complete, and when the route fails (404)", () => {

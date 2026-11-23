@@ -13,7 +13,9 @@ import { t } from "@/i18n";
 import type { OmniRushWorkConnector, OmniRushWorkFeed, OmniRushWorkFeedItem } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutItemPrompt, connectorLabel, relativeTime, signsInWithForm, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
+import { connectorLabel, relativeTime, signsInWithForm, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
+import { requestAsk, type AskOptions } from "./ask/ask-bridge";
+import { refFromFeedItem, type WorkRef } from "./ask/refs";
 import { BrandTile, ConnectorIcon } from "./brand-icon";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { canOpen, isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
@@ -262,7 +264,7 @@ export function SourceAttention(props: { sources: FeedSource[]; busy: string | n
 
 /** One feed row: source, title, who and when, why it is here. The whole row opens the item (in the viewer panel when
  *  the server has it, Cmd/Ctrl+click at its source); Ask takes the reason's place on hover or focus. */
-export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy: boolean; selected?: boolean; onOpen: (item: OmniRushWorkFeedItem, options: { external: boolean; newTab: boolean }) => void; onAsk: (item: OmniRushWorkFeedItem) => void }) {
+export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy: boolean; selected?: boolean; onOpen: (item: OmniRushWorkFeedItem, options: { external: boolean; newTab: boolean }) => void; onAsk: (item: OmniRushWorkFeedItem, options: AskOptions) => void }) {
   const item = props.item;
   const when = relativeTime(item.starts_at ?? item.due_at ?? item.at, props.now);
   const open = canOpen({ sourceId: item.source_id ?? undefined, url: item.url }) ? (options: { external: boolean; newTab: boolean }) => props.onOpen(item, options) : null;
@@ -293,7 +295,7 @@ export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy:
         <div className="truncate text-[12px] text-muted-foreground">{[item.who, when, folder].filter(Boolean).join(" · ")}</div>
       </div>
       {item.reason ? <span className="hidden shrink-0 text-[12px] text-muted-foreground transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 sm:inline" data-testid="work-feed-reason">{item.reason}</span> : null}
-      <Button variant="ghost" size="sm" className="absolute right-3 top-1/2 -translate-y-1/2 bg-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 disabled:opacity-0" aria-label={t("work.today.ask_about", { title: item.title })} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onAsk(item); }}>
+      <Button variant="ghost" size="sm" className="absolute right-3 top-1/2 -translate-y-1/2 bg-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 disabled:opacity-0" aria-label={t("work.today.ask_about", { title: item.title })} disabled={props.busy} title={t("work.ask.ask_hint")} onClick={(event) => { event.stopPropagation(); props.onAsk(item, { stay: event.shiftKey }); }}>
         <MessageSquare className="size-3.5" />{t("work.today.ask")}
       </Button>
     </li>
@@ -322,14 +324,15 @@ function FeedSkeleton() {
 
 /** The Today view: fixes, source filters and the non-empty sections (re-read on focus and every 5 minutes). */
 export function WorkToday(props: {
-  client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void; checklist?: React.ReactNode;
+  client: WorkClient | null; openLink: (url: string) => void; onOpenConnectors: () => void; checklist?: React.ReactNode;
+  /** Ask about an item: its chip goes to a composer (the session route picks which). */
+  onAsk?: (ref: WorkRef, options: AskOptions) => void;
   /** The filter kept by the caller (the route's `?source=`, so a sidebar connector opens Home filtered to it). */
   source?: string | null; onSourceChange?: (id: string | null) => void;
 }) {
   const queryClient = useQueryClient();
   const [ownSource, setOwnSource] = useState<string | null>(null);
   const source = props.onSourceChange ? props.source ?? null : ownSource;
-  const [asking, setAsking] = useState(false);
   // Rows each section shows now (SECTION_ROWS until "Show N more").
   const [more, setMore] = useState<Record<string, number>>({});
   const pick = (id: string | null) => { if (props.onSourceChange) props.onSourceChange(id); else setOwnSource(id); setMore({}); };
@@ -364,11 +367,7 @@ export function WorkToday(props: {
     onSuccess: () => { toast.success(t("work.common.sync_started")); refresh(); },
     onError,
   });
-  const ask = async (item: OmniRushWorkFeedItem) => {
-    if (asking) return;
-    setAsking(true);
-    try { await props.onAsk(askAboutItemPrompt(item)); } catch (reason) { onError(reason); } finally { setAsking(false); }
-  };
+  const ask = (item: OmniRushWorkFeedItem, options: AskOptions) => (props.onAsk ?? requestAsk)(refFromFeedItem(item), options);
   const groupsNow = { needs_you: feed.data?.groups.needs_you ?? [], today: feed.data?.groups.today ?? [], fyi: feed.data?.groups.fyi ?? [] };
   // Every row on screen, in order, so [ and ] in the viewer step through what the page shows.
   const refs: RecordRef[] = [...groupsNow.needs_you, ...groupsNow.today, ...groupsNow.fyi]
@@ -376,9 +375,13 @@ export function WorkToday(props: {
     .map((item) => ({ sourceId: item.source_id!, source: item.source, kind: item.kind, title: item.title, url: item.url ?? null }));
   const openFeedItem = (item: OmniRushWorkFeedItem, options: { external: boolean; newTab: boolean }) =>
     openItem({ sourceId: item.source_id ?? "", source: item.source, kind: item.kind, title: item.title, url: item.url ?? null, list: refs }, props.openLink, options);
+  const rowItem = (row: HTMLElement) => [...groupsNow.needs_you, ...groupsNow.today, ...groupsNow.fyi].find((entry) => (entry.source_id ?? entry.id) === row.dataset.recordRow);
   const listKeys = useListKeys((row, options) => {
-    const item = [...groupsNow.needs_you, ...groupsNow.today, ...groupsNow.fyi].find((entry) => (entry.source_id ?? entry.id) === row.dataset.recordRow);
+    const item = rowItem(row);
     if (item) openFeedItem(item, options);
+  }, (row, options) => {
+    const item = rowItem(row);
+    if (item) ask(item, options);
   });
   const openId = useOpenRecordId();
   const support = useViewerSupport((state) => state.support);
@@ -449,7 +452,7 @@ export function WorkToday(props: {
                   {recent ? null : <span className="rounded-full bg-muted px-1.5 text-[12px] font-medium text-foreground" data-testid="work-feed-count">{all.length}</span>}
                 </h2>
                 <ul className="overflow-hidden rounded-xl border border-border bg-background" data-work-list onKeyDown={listKeys}>
-                  {items.map((item) => <FeedRow key={item.id} item={same ? { ...item, reason: null } : item} now={now} busy={asking} selected={Boolean(openId && item.source_id === openId)} onOpen={openFeedItem} onAsk={(picked) => void ask(picked)} />)}
+                  {items.map((item) => <FeedRow key={item.id} item={same ? { ...item, reason: null } : item} now={now} busy={false} selected={Boolean(openId && item.source_id === openId)} onOpen={openFeedItem} onAsk={ask} />)}
                 </ul>
                 {capped ? (
                   // A page of SECTION_STEP rows at a time, so a long day never draws hundreds of rows at once.

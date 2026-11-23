@@ -21,6 +21,7 @@ export const RECORD_SHORTCUTS: Shortcut[] = [
   { id: "undo", keys: ["Mod", "Z"], label: "work.viewer.key_undo" },
   { id: "format", keys: ["Mod", "B", "I", "K"], label: "work.viewer.key_format" },
   { id: "o", keys: ["O"], label: "work.viewer.key_open_source" },
+  { id: "ask", keys: ["A"], label: "work.viewer.key_ask" },
   { id: "esc", keys: ["Esc"], label: "work.viewer.key_close" },
   { id: "help", keys: ["?"], label: "work.viewer.key_help" },
 ];
@@ -29,8 +30,9 @@ export function shortcutKeys(keys: string[], mac: boolean): string[] {
   return keys.map((key) => (key === "Mod" ? (mac ? "⌘" : "Ctrl") : key === "Shift" ? (mac ? "⇧" : "Shift") : key === "Enter" ? (mac ? "↵" : "Enter") : key));
 }
 
-/** Keys for a list of openable rows (`data-record-row` on each focusable row, `data-work-list` on the list). */
-export function useListKeys(open: (row: HTMLElement, options: { external: boolean; newTab: boolean }) => void) {
+/** Keys for a list of openable rows (`data-record-row` on each focusable row, `data-work-list` on the list). `ask`: A on
+ *  a row asks about it (Shift+A adds it to the question and stays). */
+export function useListKeys(open: (row: HTMLElement, options: { external: boolean; newTab: boolean }) => void, ask?: (row: HTMLElement, options: { stay: boolean }) => void) {
   return useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
     if (event.altKey || isEditable(event.target)) return;
     const row = (event.target as HTMLElement).closest<HTMLElement>("[data-record-row]");
@@ -51,6 +53,12 @@ export function useListKeys(open: (row: HTMLElement, options: { external: boolea
     if (key === "Enter" && row && event.target === row) {
       event.preventDefault();
       open(row, { external: mod, newTab: event.shiftKey });
+      return;
     }
-  }, [open]);
+    if (ask && !mod && row && event.target === row && key.toLowerCase() === "a") {
+      event.preventDefault();
+      event.stopPropagation();
+      ask(row, { stay: event.shiftKey });
+    }
+  }, [ask, open]);
 }

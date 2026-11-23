@@ -21,6 +21,8 @@ import { usePlatform } from "@/react-app/kernel/platform";
 
 import { usePanelTabStore, type RecordPanelTab } from "../../session/panel/panel-tab-store";
 import { useCreateTab } from "../../session/panel/use-side-panel-tabs";
+import { requestAsk } from "../ask/ask-bridge";
+import { refFromRecord } from "../ask/refs";
 import { BrandTile } from "../brand-icon";
 import { workConnectorsKey, workFailure, WORK_ACTIVITY_ROUTE } from "../work-mode";
 import { issueRef, issueState } from "./issue-view";
@@ -31,8 +33,8 @@ import { ActionArea, holdsSend, type ComposerMode, type SubmitPayload } from "./
 import { openRecordTab } from "./record-tabs";
 import { RecordView } from "./record-view";
 import {
-  actionArgs, askPrompt, clientActionId, draftKey, holdSend, isEditable, isMac, isMissingRoute, neighbour, personName, recordList,
-  connectorName, requestAskAbout, sourceLabel, sourceMark, useRecordDrafts, useUndoSendStore, useViewerSupport, workRecordKey,
+  actionArgs, clientActionId, draftKey, holdSend, isEditable, isMac, isMissingRoute, neighbour, personName, recordList,
+  connectorName, sourceLabel, sourceMark, useRecordDrafts, useUndoSendStore, useViewerSupport, workRecordKey,
   type RecordFile, type RecordRef, type SendFn, type SendInput, type WorkRecord,
 } from "./records";
 import { RECORD_SHORTCUTS, shortcutKeys } from "./shortcuts";
@@ -79,10 +81,10 @@ function stateWord(record: WorkRecord): string | null {
   return null;
 }
 
-function HeaderButton(props: { label: string; keys?: string; onPress: () => void; children: ReactNode; disabled?: boolean; testId?: string }) {
+function HeaderButton(props: { label: string; keys?: string; onPress: (event?: { shiftKey: boolean }) => void; children: ReactNode; disabled?: boolean; testId?: string }) {
   return (
     <Tooltip>
-      <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label={props.label} onClick={props.onPress} disabled={props.disabled} data-testid={props.testId}>{props.children}</Button>} />
+      <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label={props.label} onClick={(event) => props.onPress(event)} disabled={props.disabled} data-testid={props.testId}>{props.children}</Button>} />
       <TooltipContent>{props.keys ? `${props.label} (${props.keys})` : props.label}</TooltipContent>
     </Tooltip>
   );
@@ -305,6 +307,8 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
       if (key === "[") return go(() => step(-1));
       if (key === "]") return go(() => step(1));
       if (key.toLowerCase() === "o" && data.url) return go(() => openLink(data.url!));
+      // A in the panel asks about this record (Shift+A adds it and stays); on a list row the list asks about the row.
+      if (key.toLowerCase() === "a" && !inList) return go(() => requestAsk(refFromRecord(data), { stay: event.shiftKey }));
       if (data.view === "mail") {
         if (key === "r" && offered.has("reply")) return go(() => setMode({ action: "reply" }));
         if (key === "R" && offered.has("reply_all")) return go(() => setMode({ action: "reply_all" }));
@@ -383,7 +387,7 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
                 <HeaderButton label={t("work.viewer.next")} keys="]" onPress={() => step(1)} disabled={at >= list.length - 1}><ChevronDown /></HeaderButton>
               </span>
             ) : null}
-            <HeaderButton label={t("work.viewer.ask")} onPress={() => requestAskAbout(askPrompt(data))} testId="work-viewer-ask"><MessageSquare /></HeaderButton>
+            <HeaderButton label={t("work.viewer.ask")} keys="A" onPress={(event) => requestAsk(refFromRecord(data), { stay: Boolean(event?.shiftKey) })} testId="work-viewer-ask"><MessageSquare /></HeaderButton>
             {data.url ? <HeaderButton label={t("work.viewer.open_source", { name: label })} keys="O" onPress={() => openLink(data.url!)} testId="work-viewer-open"><ExternalLink /></HeaderButton> : null}
             <DropdownMenu>
               <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={t("work.viewer.more")} data-testid="work-viewer-menu"><MoreHorizontal /></Button>} />

@@ -7,12 +7,13 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
 import type { OmniRushWorkDeal, OmniRushWorkDealDetail, OmniRushWorkDealFilter } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutDealPrompt, connectorLabel, relativeTime, workDealKey, workDealsKey, workFailure, type WorkClient } from "./work-mode";
+import { connectorLabel, relativeTime, workDealKey, workDealsKey, workFailure, type WorkClient } from "./work-mode";
+import { requestAsk, type AskOptions } from "./ask/ask-bridge";
+import { refFromDeal, type WorkRef } from "./ask/refs";
 import { SECTION_ROWS } from "./work-today";
 import { ConnectorIcon } from "./work-views";
 import { isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
@@ -51,7 +52,7 @@ function LastTouch(props: { touch: OmniRushWorkDeal["last_touch"]; now?: number 
 }
 
 /** One deal opened beside the list: details, people, the latest records per channel, risks and Ask about this deal. */
-export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWorkDeal; openLink: (url: string) => void; onAsk: () => void; asking: boolean; onOpenRecord?: (ref: RecordRef & { list?: RecordRef[] }, options: { external: boolean; newTab: boolean }) => void }) {
+export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWorkDeal; openLink: (url: string) => void; onAsk: (options: AskOptions) => void; asking: boolean; onOpenRecord?: (ref: RecordRef & { list?: RecordRef[] }, options: { external: boolean; newTab: boolean }) => void }) {
   const detail = useQuery<OmniRushWorkDealDetail>({
     queryKey: workDealKey(props.client, props.deal.source_id),
     queryFn: () => props.client!.getWorkDeal(props.deal.source_id),
@@ -120,7 +121,7 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
         </>
       )}
       <div className="mt-auto flex flex-wrap gap-2 pt-2">
-        <Button size="sm" disabled={props.asking} onClick={props.onAsk} data-testid="work-deal-ask"><MessageSquare className="size-3.5" />{t("work.deals.ask")}</Button>
+        <Button size="sm" disabled={props.asking} title={t("work.ask.ask_hint")} onClick={(event) => props.onAsk({ stay: event.shiftKey })} data-testid="work-deal-ask"><MessageSquare className="size-3.5" />{t("work.deals.ask")}</Button>
         {props.onOpenRecord ? <Button variant="outline" size="sm" onClick={() => props.onOpenRecord!({ sourceId: deal.source_id, source: deal.source_id.split(":")[0] ?? null, kind: "deal", title: deal.name ?? null, url: deal.url ?? null }, { external: false, newTab: false })} data-testid="work-deal-view"><PanelRight className="size-3.5" />{t("work.viewer.view_record")}</Button> : null}
         {deal.url ? <Button variant="outline" size="sm" onClick={() => props.openLink(deal.url!)}><ExternalLink className="size-3.5" />{t("work.search.open")}</Button> : null}
       </div>
@@ -129,11 +130,14 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
 }
 
 /** Work > Deals: Open, At risk or Closing soon; the table drops stage and close date on a narrow window and shows 5 rows before "Show more". */
-export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void> }) {
+export function WorkDealsPage(props: {
+  client: WorkClient | null; openLink: (url: string) => void;
+  /** Ask about a deal: its chip goes to a composer (the session route picks which). */
+  onAsk?: (ref: WorkRef, options: AskOptions) => void;
+}) {
   const [filter, setFilter] = useState<OmniRushWorkDealFilter>("open");
   const [picked, setPicked] = useState<OmniRushWorkDeal | null>(null);
   const [more, setMore] = useState(false);
-  const [asking, setAsking] = useState(false);
   const deals = useQuery({
     queryKey: workDealsKey(props.client, filter),
     queryFn: () => props.client!.listWorkDeals(filter),
@@ -141,11 +145,8 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
     placeholderData: keepPreviousData,
     retry: false,
   });
-  const ask = async (deal: OmniRushWorkDeal) => {
-    if (asking) return;
-    setAsking(true);
-    try { await props.onAsk(askAboutDealPrompt(deal)); setPicked(null); } catch (reason) { toast.error(workFailure(reason).text); } finally { setAsking(false); }
-  };
+  // The panel stays open: the user may read on, or come Back to it from the composer.
+  const ask = (deal: OmniRushWorkDeal, options: AskOptions) => (props.onAsk ?? requestAsk)(refFromDeal(deal), options);
   const failure = deals.error && !deals.data ? workFailure(deals.error) : null;
   const items = deals.data?.items ?? [];
   const capped = items.length > SECTION_ROWS;
@@ -227,7 +228,7 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
                 <SheetTitle className="text-base font-semibold">{picked.name || picked.source_id}</SheetTitle>
                 {picked.company ? <SheetDescription>{picked.company}</SheetDescription> : null}
               </SheetHeader>
-              <DealPanel client={props.client} deal={picked} openLink={props.openLink} onAsk={() => void ask(picked)} asking={asking} onOpenRecord={(ref, options) => { if (!options.external) setPicked(null); openItem(ref, props.openLink, options); }} />
+              <DealPanel client={props.client} deal={picked} openLink={props.openLink} onAsk={(options) => ask(picked, options)} asking={false} onOpenRecord={(ref, options) => { if (!options.external) setPicked(null); openItem(ref, props.openLink, options); }} />
             </>
           ) : null}
         </SheetContent>

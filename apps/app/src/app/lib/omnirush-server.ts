@@ -847,6 +847,8 @@ export type OmniRushWorkGraphNode = {
   occurred_at?: string | null;
   degree: number;
   url?: string | null;
+  /** A record node's record id (what work_read and the viewer take); an older server sends none. */
+  source_id?: string | null;
 };
 export type OmniRushWorkGraphEdge = { a: string; b: string; kind: "mentions" | "link" | "related" | "about" | string; reason?: string | null };
 export type OmniRushWorkGraph = { nodes: OmniRushWorkGraphNode[]; edges: OmniRushWorkGraphEdge[]; counts: Record<string, number>; truncated: boolean };

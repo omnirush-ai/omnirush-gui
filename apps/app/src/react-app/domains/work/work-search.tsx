@@ -12,10 +12,12 @@ import { t } from "@/i18n";
 import type { OmniRushWorkSearch, OmniRushWorkSearchGroup, OmniRushWorkSearchItem } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutItemPrompt, coverageCanAdd, periodStart, relativeTime, snippetParts, workConnectorsKey, workFailure, workSearchKey, WORK_SEARCH_FOCUS_EVENT, type SearchPeriod, type WorkClient } from "./work-mode";
+import { coverageCanAdd, periodStart, relativeTime, snippetParts, workConnectorsKey, workFailure, workSearchKey, WORK_SEARCH_FOCUS_EVENT, type SearchPeriod, type WorkClient } from "./work-mode";
 import { ConnectorIcon, useCoverageMeter, WorkCoverageMeter } from "./work-views";
 import { ListMore, ListSearch, matchesQuery, useListCap } from "./list-cap";
 import { fitStrip, stripSources } from "./work-today";
+import { requestAsk, type AskOptions } from "./ask/ask-bridge";
+import { refFromSearchItem, type WorkRef } from "./ask/refs";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { canOpen, isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
@@ -141,7 +143,7 @@ function Snippet(props: { text: string | null | undefined }) {
 
 /** One hit: subject and when, then who and the snippet. The row opens the item in the viewer panel (Cmd/Ctrl+click or
  *  Open: at its source); Open and Ask show on hover or focus. */
-export function SearchRow(props: { item: OmniRushWorkSearchItem; label: string; now?: number; busy: boolean; selected?: boolean; onOpen: (item: OmniRushWorkSearchItem, options: { external: boolean; newTab: boolean }) => void; onAsk: (item: OmniRushWorkSearchItem) => void }) {
+export function SearchRow(props: { item: OmniRushWorkSearchItem; label: string; now?: number; busy: boolean; selected?: boolean; onOpen: (item: OmniRushWorkSearchItem, options: { external: boolean; newTab: boolean }) => void; onAsk: (item: OmniRushWorkSearchItem, options: AskOptions) => void }) {
   const item = props.item;
   const title = item.subject?.trim() || props.label;
   const open = canOpen({ sourceId: item.source_id, url: item.url }) ? (options: { external: boolean; newTab: boolean }) => props.onOpen(item, options) : null;
@@ -167,7 +169,7 @@ export function SearchRow(props: { item: OmniRushWorkSearchItem; label: string; 
       </div>
       <div className="absolute right-3 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
         {item.url ? <Button variant="ghost" size="sm" className="bg-muted" aria-label={t("work.search.open_name", { title })} onClick={(event) => { event.stopPropagation(); props.onOpen(item, { external: true, newTab: false }); }}><ExternalLink className="size-3.5" />{t("work.search.open")}</Button> : null}
-        <Button variant="ghost" size="sm" className="bg-muted disabled:opacity-0" aria-label={t("work.today.ask_about", { title })} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onAsk(item); }}>
+        <Button variant="ghost" size="sm" className="bg-muted disabled:opacity-0" aria-label={t("work.today.ask_about", { title })} disabled={props.busy} title={t("work.ask.ask_hint")} onClick={(event) => { event.stopPropagation(); props.onAsk(item, { stay: event.shiftKey }); }}>
           <MessageSquare className="size-3.5" />{t("work.today.ask")}
         </Button>
       </div>
@@ -189,7 +191,14 @@ function ResultsSkeleton() {
 }
 
 /** Work > Search: type to search (after a short pause), narrow by channel and period, Ask starts a Work chat with the question. */
-export function WorkSearchPage(props: { client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void; initialQuery?: string }) {
+export function WorkSearchPage(props: {
+  client: WorkClient | null; openLink: (url: string) => void; onOpenConnectors: () => void;
+  /** The search box's Ask: the typed question starts a Work chat as it is. */
+  onAsk: (prompt: string) => Promise<void>;
+  /** Ask on a result: its chip goes to a composer (the session route picks which). */
+  onAskItem?: (ref: WorkRef, options: AskOptions) => void;
+  initialQuery?: string;
+}) {
   const queryClient = useQueryClient();
   const input = useRef<HTMLInputElement>(null);
   // Opened with a question (`/work/search?q=...`): it is in the field and searched at once.
@@ -235,16 +244,26 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
     setAsking(true);
     try { await props.onAsk(prompt); } catch (reason) { toast.error(workFailure(reason).text); } finally { setAsking(false); }
   };
-  const askItem = (item: OmniRushWorkSearchItem, label: string) =>
-    void ask(askAboutItemPrompt({ id: item.source_id, source: label, kind: item.kind, title: item.subject?.trim() || label, url: item.url ?? null }));
+  const askItem = (item: OmniRushWorkSearchItem, label: string, options: AskOptions) =>
+    (props.onAskItem ?? requestAsk)(refFromSearchItem({ ...item, subject: item.subject?.trim() || label }), options);
   const now = Date.now();
   // Every hit on screen, in order, for [ and ] in the viewer.
   const refs: RecordRef[] = groups.flatMap((group) => (channel ? group.items : group.items.slice(0, GROUP_ROWS)).map((item) => ({ sourceId: item.source_id, source: item.channel, kind: item.kind, title: item.subject?.trim() || group.label, url: item.url ?? null })));
   const openHit = (item: OmniRushWorkSearchItem, options: { external: boolean; newTab: boolean }) =>
     openItem({ sourceId: item.source_id, source: item.channel, kind: item.kind, title: item.subject?.trim() || item.channel, url: item.url ?? null, list: refs }, props.openLink, options);
+  const rowHit = (row: HTMLElement) => {
+    for (const group of groups) {
+      const item = group.items.find((entry) => entry.source_id === row.dataset.recordRow);
+      if (item) return { item, label: group.label };
+    }
+    return null;
+  };
   const listKeys = useListKeys((row, options) => {
-    const item = groups.flatMap((group) => group.items).find((entry) => entry.source_id === row.dataset.recordRow);
-    if (item) openHit(item, options);
+    const hit = rowHit(row);
+    if (hit) openHit(hit.item, options);
+  }, (row, options) => {
+    const hit = rowHit(row);
+    if (hit) askItem(hit.item, hit.label, options);
   });
   const openId = useOpenRecordId();
   return (
@@ -299,7 +318,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
           <div className={cn("flex flex-col gap-6", results.isPlaceholderData && "opacity-60")} data-testid="work-search-results">
             {groups.map((group) => {
               const items = channel ? group.items : group.items.slice(0, GROUP_ROWS);
-              const row = (item: OmniRushWorkSearchItem) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} selected={openId === item.source_id} onOpen={openHit} onAsk={(picked) => askItem(picked, group.label)} />;
+              const row = (item: OmniRushWorkSearchItem) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} selected={openId === item.source_id} onOpen={openHit} onAsk={(picked, options) => askItem(picked, group.label, options)} />;
               return (
                 <section key={group.channel} data-search-group={group.channel} aria-label={group.label} className="flex flex-col gap-2">
                   <h2 className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
