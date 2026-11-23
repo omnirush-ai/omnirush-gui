@@ -372,10 +372,11 @@ describe("work routes", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/imap/connect", "connectors/hook/hook", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
       "org/insights", "org/connectors", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
-      "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio"]) expect(WORK_PATH.test(path)).toBe(true);
+      "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio", "catalog", "records/detail", "records/attachment", "records/action", "compose"]) expect(WORK_PATH.test(path)).toBe(true);
     for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "org/connectors/x", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
       "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "whatsapp-local/x", "whatsapp", "telegram/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
-      "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin", "hooks/h1/orh_x", "connectors/hook/hook/x"]) expect(WORK_PATH.test(path)).toBe(false);
+      "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin", "hooks/h1/orh_x", "connectors/hook/hook/x",
+      "catalog/x", "records", "records/x", "records/detail/x", "records/../admin", "compose/mail", "xcatalog", "catalogx"]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("search, coverage and deals are forwarded with only their parameters; a chat export goes on as multipart", async () => {
@@ -644,6 +645,39 @@ describe("work routes", () => {
     expect((await (await call("GET", "/work/state")).json()).enabled).toBe(false);
     await call("GET", "/work/state");
     expect(asked).toEqual([undefined, { maxAgeMs: 0 }, undefined]);
+  });
+
+  test("the catalog, a record, its attachment, an action and a new mail are checked, then forwarded", async () => {
+    const { calls, call } = setup((path) => path.startsWith("records/attachment")
+      ? new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": path.includes("n=1") ? "image/svg+xml" : "application/pdf", "content-disposition": "attachment; filename=\"a.pdf\"" } })
+      : json({ ok: true }));
+    expect((await call("GET", "/work/catalog")).status).toBe(200);
+    expect((await call("GET", `/work/records/detail?id=${encodeURIComponent("github:acme/app#12")}&live=auto&evil=1`)).status).toBe(200);
+    expect((await call("GET", "/work/records/detail?id=")).status).toBe(404);
+    expect((await call("GET", "/work/records/detail?id=x&live=maybe")).status).toBe(400);
+    const pdf = await call("GET", `/work/records/attachment?id=${encodeURIComponent("gmail:18c2")}&n=0`);
+    expect(pdf.headers.get("content-type")).toBe("application/pdf");
+    expect(pdf.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(pdf.headers.get("content-security-policy")).toBe("sandbox");
+    expect([...new Uint8Array(await pdf.arrayBuffer())]).toEqual([1, 2, 3]);
+    // Anything but png, jpeg, gif, webp, pdf and plain text is a download (an SVG could run script).
+    expect((await call("GET", "/work/records/attachment?id=gmail%3A18c2&n=1")).headers.get("content-type")).toBe("application/octet-stream");
+    expect((await call("GET", "/work/records/attachment?id=gmail%3A18c2&n=-1")).status).toBe(404);
+    expect((await call("POST", "/work/records/action", { source_id: "gmail:18c2", action: "reply_all", args: { body: "Thanks" }, client_action_id: "c_1", evil: 1 })).status).toBe(200);
+    expect((await call("POST", "/work/records/action", { source_id: "gmail:18c2", action: "Reply All" })).status).toBe(400);
+    expect((await call("POST", "/work/records/action", { source_id: "gmail:18c2", action: "reply", args: [1] })).status).toBe(400);
+    expect((await call("POST", "/work/compose", { kind: "mail", connector: "google", to: ["a@b.co"] })).status).toBe(200);
+    expect((await call("POST", "/work/compose", { kind: "fax", connector: "google" })).status).toBe(400);
+    expect(calls).toEqual([
+      "GET catalog ",
+      "GET records/detail?id=github%3Aacme%2Fapp%2312&live=auto ",
+      "GET records/attachment?id=gmail%3A18c2&n=0 ",
+      "GET records/attachment?id=gmail%3A18c2&n=1 ",
+      `POST records/action ${JSON.stringify({ source_id: "gmail:18c2", action: "reply_all", args: { body: "Thanks" }, client_action_id: "c_1" })}`,
+      `POST compose ${JSON.stringify({ kind: "mail", connector: "google", to: ["a@b.co"] })}`,
+    ]);
+    const failed = setup(() => json({ detail: "unknown_record" }, 404));
+    expect(await (await failed.call("GET", "/work/records/attachment?id=x&n=0")).json()).toMatchObject({ code: "unknown_record", message: "That item is no longer available." });
   });
 
   test("the engine's MCP call is forwarded as POST with its MCP headers; GET is 405", async () => {

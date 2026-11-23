@@ -60,7 +60,8 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
   | "importIMessage" | "getIMessageCount" | "getWhatsAppLocalCount" | "getTelegramCount"
   | "searchWork" | "getWorkCoverage" | "listWorkDeals" | "getWorkDeal" | "listWorkImports" | "importWorkChat"
-  | "createWorkMeeting" | "getWorkMeeting" | "updateWorkMeeting" | "uploadWorkMeetingAudio"> & { baseUrl?: string };
+  | "createWorkMeeting" | "getWorkMeeting" | "updateWorkMeeting" | "uploadWorkMeetingAudio"
+  | "getWorkCatalog" | "getWorkRecord" | "getWorkRecordAttachment" | "runWorkRecordAction" | "composeWork"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];

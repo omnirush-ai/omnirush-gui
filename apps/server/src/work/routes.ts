@@ -41,6 +41,11 @@
  *   POST  /work/meetings {title?, started_at?}, GET /work/meetings/:id, PATCH /work/meetings/:id {title?, ended_at?}
  *   POST  /work/meetings/:id/audio?speaker=me|them&part=&offset_ms=   one audio part (raw 16 kHz mono WAV, <= 2 MiB), transcribed
  *                                                                     while it waits (meetings, contract D4)
+ *   GET   /work/catalog                    the connector catalog (labels, categories, sizes) the pickers show
+ *   GET   /work/records/detail?id=&live=   one record for the viewer (ids go in the query: they hold : / # !)
+ *   GET   /work/records/attachment?id=&n=  one attachment's bytes, as the server typed them
+ *   POST  /work/records/action {source_id, action, args, client_action_id?}   reply, comment, RSVP ... on a record
+ *   POST  /work/compose {kind: mail | meeting, connector, ...}               a new mail or meeting
  *
  * The engine's hosted MCP calls (POST /omnirush/work/mcp with the engine's token) are forwarded by server.ts.
  */
@@ -152,6 +157,19 @@ const WORK_ERRORS: Record<string, string> = {
   bad_link: "That is not a Figma team, project or file link. Copy it from the address bar in Figma.",
   too_many_links: "That is more than 20 links. A team link covers all its projects.",
   link_refused: "Figma would not open one of those links with this token. Check the link and that your account can see it.",
+  unknown_record: "That item is no longer available.",
+  writes_paused: "Actions are paused. Turn them back on in Settings > Work.",
+  not_supported: "This can't be done from OmniRush yet. Open it in its app instead.",
+  needs_permission: "OmniRush doesn't have permission to do that there yet.",
+  needs_install: "OmniRush isn't installed there yet. Ask an owner to install it.",
+  repo_not_installed: "OmniRush can't see that repository. Choose it in the app's GitHub settings.",
+  issue_locked: "That conversation is locked.",
+  org_not_active: "Your company isn't active yet.",
+  seats_full: "Your company has used all its seats. Ask your admin for more.",
+  has_org: "You're already part of a company.",
+  account_restricted: "Ask OmniRush support to join this company.",
+  work_company_not_active: "Your company isn't active yet.",
+  sample_data_retired: "Sample data is no longer offered. Connect a tool instead.",
 };
 
 /** A token's missing scope (Airtable, Calendly, Figma: the reason has a colon, like `users:read`); Stripe's names a list. */
@@ -171,6 +189,11 @@ const RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const FACT_KINDS = ["decision", "preference", "policy", "fact", "contact_note"];
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,189}\.[^\s@]{2,}$/;
+/** A record's id as the server names it (`gmail:18c2…`, `github:owner/repo#12`): any printable text, kept short. */
+const SOURCE_ID = /^[^\u0000-\u001f\u007f]{1,512}$/;
+const ACTION_ID = /^[a-z][a-z0-9_]{0,39}$/;
+/** What an attachment answer may be shown as; everything else is a download. */
+const INLINE_TYPES = /^(?:image\/(?:png|jpeg|gif|webp)|application\/pdf|text\/plain)(?:;|$)/i;
 
 /** The query a list route forwards: only the named parameters, each short. */
 function forwardQuery(url: URL, names: string[], max = 200): string {
@@ -633,6 +656,57 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   // Telegram (desktop): the chat-days the desktop read with the user's own Telegram login (the login stays on the device).
   addRoute(routes, "GET", "/work/telegram", "client", async () => forward("telegram", "GET"));
   addRoute(routes, "POST", "/work/telegram", "client", async (ctx) => pushChats(ctx, "telegram"));
+
+  // The connector catalog (labels, categories, team sizes): the app keeps a built-in copy for an older server.
+  addRoute(routes, "GET", "/work/catalog", "client", async () => forward("catalog", "GET"));
+
+  // Record viewers: one record, an attachment, an action on it, a new mail or meeting.
+  addRoute(routes, "GET", "/work/records/detail", "client", async (ctx) => {
+    const id = ctx.url.searchParams.get("id") ?? "";
+    if (!SOURCE_ID.test(id)) return jsonResponse({ detail: "unknown_record", code: "unknown_record", message: WORK_ERRORS.unknown_record }, 404);
+    const live = ctx.url.searchParams.get("live");
+    if (live !== null && live !== "auto" && live !== "1" && live !== "0") return invalid("live must be auto, 1 or 0");
+    return forward(`records/detail${forwardQuery(ctx.url, ["id", "live"], 512)}`, "GET");
+  });
+
+  addRoute(routes, "GET", "/work/records/attachment", "client", async (ctx) => {
+    const id = ctx.url.searchParams.get("id") ?? "";
+    const n = Number(ctx.url.searchParams.get("n") ?? "x");
+    if (!SOURCE_ID.test(id) || !Number.isInteger(n) || n < 0 || n > 999) return jsonResponse({ detail: "unknown_record", code: "unknown_record", message: WORK_ERRORS.unknown_record }, 404);
+    const found = deps.broker();
+    if (!found) return signedOut();
+    const upstream = await found.workRequest(`records/attachment?${new URLSearchParams({ id, n: String(n) })}`, { method: "GET", signal: AbortSignal.timeout(120_000) });
+    if (!upstream.ok) return (await pass(upstream)).response;
+    const type = upstream.headers.get("content-type") ?? "";
+    const headers = new Headers({
+      "content-type": INLINE_TYPES.test(type) ? type : "application/octet-stream",
+      "content-disposition": upstream.headers.get("content-disposition") ?? "attachment",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "sandbox",
+      "cache-control": "no-store",
+    });
+    const length = upstream.headers.get("content-length");
+    if (length) headers.set("content-length", length);
+    return new Response(upstream.body, { status: 200, headers });
+  });
+
+  addRoute(routes, "POST", "/work/records/action", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    if (typeof body.source_id !== "string" || !SOURCE_ID.test(body.source_id)) return invalid("source_id is not valid");
+    if (typeof body.action !== "string" || !ACTION_ID.test(body.action)) return invalid("action is not valid");
+    const args = body.args === undefined ? {} : body.args;
+    if (!args || typeof args !== "object" || Array.isArray(args)) return invalid("args must be an object");
+    const clientActionId = body.client_action_id === undefined ? null : body.client_action_id;
+    if (clientActionId !== null && (typeof clientActionId !== "string" || !RECORD_ID.test(clientActionId))) return invalid("client_action_id is not valid");
+    return forward("records/action", "POST", { source_id: body.source_id, action: body.action, args, ...(clientActionId ? { client_action_id: clientActionId } : {}) });
+  });
+
+  addRoute(routes, "POST", "/work/compose", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    if (body.kind !== "mail" && body.kind !== "meeting") return invalid("kind must be mail or meeting");
+    if (typeof body.connector !== "string" || !CONNECTOR.test(body.connector)) return invalid("connector is not valid");
+    return forward("compose", "POST", body);
+  });
 }
 
 /**

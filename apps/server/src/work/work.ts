@@ -17,11 +17,45 @@ export const WORK_PRESET = "work";
 /** A connector id as the server names it (google, jira, …): new ids the app does not know yet still work. */
 export const WORK_SOURCE_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 
-/** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the graph, the timeline,
- *  the MCP server, the Today feed, the tryout and company setup (enable, onboarding, demo, the org, its invites, members,
- *  insights and connectors), iMessage, WhatsApp from the Mac app, Telegram from the desktop, search, coverage, deals, chat-export imports, meetings (one, and its audio parts), and the action
- *  layer (settings, the activity log and an action's undo). */
-export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|connect|disconnect|sync|hook))?)?|entities(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|facts(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|deals(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|meetings(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}(?:\/audio)?)?|health|graph|timeline|feed|mcp|enable|onboarding|demo|settings|imessage|whatsapp-local|telegram|search|coverage|imports|actions(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/undo)?|org(?:\/(?:me|leave|transfer|insights|connectors|invites(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|members(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?))?)$/;
+const ID = "[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}";
+
+/** The `/omnirush/work/` paths the app calls (the contract's), one pattern per line so lanes add theirs without touching
+ *  another's: connectors, entities, facts, health, the graph, the timeline, the MCP server, the Today feed, the tryout and
+ *  company setup (enable, onboarding, demo, the org, its invites, members, insights and connectors), iMessage, WhatsApp
+ *  from the Mac app, Telegram from the desktop, search, coverage, deals, chat-export imports, meetings (one, and its audio
+ *  parts), the action layer (settings, the activity log and an action's undo), the connector catalog, and the record
+ *  viewers (a record, an attachment, an action on it, and a new mail or meeting). */
+export const WORK_PATHS: readonly string[] = [
+  "connectors(?:/[a-z][a-z0-9_-]{0,31}(?:/(?:start|connect|disconnect|sync|hook))?)?",
+  `entities(?:/${ID})?`,
+  `facts(?:/${ID})?`,
+  `deals(?:/${ID})?`,
+  `meetings(?:/${ID}(?:/audio)?)?`,
+  "health",
+  "graph",
+  "timeline",
+  "feed",
+  "mcp",
+  "enable",
+  "onboarding",
+  "demo",
+  "settings",
+  "imessage",
+  "whatsapp-local",
+  "telegram",
+  "search",
+  "coverage",
+  "imports",
+  `actions(?:/${ID}/undo)?`,
+  `org(?:/(?:me|leave|transfer|insights|connectors|invites(?:/${ID})?|members(?:/${ID})?))?`,
+  "catalog",
+  "records/detail",
+  "records/attachment",
+  "records/action",
+  "compose",
+];
+
+export const WORK_PATH = new RegExp(`^(?:${WORK_PATHS.join("|")})$`);
 
 /** The hosted server's tools that only read (the contract's table): every other tool asks first, in every mode. */
 export const WORK_READ_TOOLS = [

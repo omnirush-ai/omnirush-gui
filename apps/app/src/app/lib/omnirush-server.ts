@@ -902,6 +902,56 @@ export type OmniRushWorkMeeting = {
 };
 /** One audio part's answer: its segments, or `duplicate` when the server already has it. */
 export type OmniRushWorkMeetingPartAnswer = { status: "done" | "duplicate"; speaker: string; part: number; seconds?: number; segments?: OmniRushWorkMeetingSegment[] };
+/** GET /omnirush/work/catalog: the connectors the pickers show, grouped, with the team sizes (an older server: 404, the
+ *  app's built-in copy is used). */
+export type OmniRushWorkCatalogConnector = {
+  id: string;
+  label: string;
+  short?: string | null;
+  category: string;
+  mode?: string | null;
+  includes?: string[];
+  offered: boolean;
+  local_only?: boolean;
+};
+export type OmniRushWorkCatalog = {
+  version: string | number;
+  sizes: string[];
+  categories: { id: string; label: string }[];
+  connectors: OmniRushWorkCatalogConnector[];
+};
+/** GET /omnirush/work/records/detail: one record for the viewer (an older server: 404, the item opens its URL). */
+export type OmniRushWorkRecordView = "mail" | "chat" | "issue" | "doc" | "event" | "crm" | "ticket" | "finance" | "meeting" | "code" | "generic";
+export type OmniRushWorkRecordActor = { name?: string | null; email?: string | null; role?: string | null };
+export type OmniRushWorkRecordBody = { format: "html" | "markdown" | "text" | string; content: string; truncated?: boolean; origin?: "stored" | "live" | string };
+export type OmniRushWorkRecordAttachment = { n: number; name: string; size?: number | null; content_type?: string | null; available?: boolean };
+export type OmniRushWorkRecordDetail = {
+  source_id: string;
+  source: string;
+  channel?: string | null;
+  kind: string;
+  view: OmniRushWorkRecordView | string;
+  subject?: string | null;
+  url?: string | null;
+  occurred_at?: string | null;
+  state?: Record<string, unknown> | null;
+  actors?: OmniRushWorkRecordActor[];
+  body?: OmniRushWorkRecordBody | null;
+  attachments?: OmniRushWorkRecordAttachment[];
+  thread?: Record<string, unknown>[];
+  comments?: Record<string, unknown>[];
+  fields?: Record<string, unknown>[];
+  event?: Record<string, unknown> | null;
+  links?: { source_id: string; kind: string; subject?: string | null }[];
+  actions?: { id: string }[];
+  writes_paused?: boolean;
+  can_live?: boolean;
+  live_error?: string | null;
+};
+/** POST /omnirush/work/records/action and /compose: the write tool's result, and whether it can be undone. */
+export type OmniRushWorkRecordActionInput = { source_id: string; action: string; args?: Record<string, unknown>; client_action_id?: string };
+export type OmniRushWorkComposeInput = { kind: "mail" | "meeting"; connector: string } & Record<string, unknown>;
+export type OmniRushWorkRecordActionResult = { ok: boolean; action_id?: string | null; result?: unknown; undo?: { available: boolean } | null };
 
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
@@ -2707,6 +2757,18 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<{ style: OmniRushWorkAnswerStyle }>(baseUrl, "/work/answer-style", { token, hostToken, timeoutMs: timeouts.config }),
     setWorkAnswerStyle: (style: OmniRushWorkAnswerStyle) =>
       requestJson<{ style: OmniRushWorkAnswerStyle }>(baseUrl, "/work/answer-style", { token, hostToken, method: "PUT", body: { style }, timeoutMs: timeouts.config }),
+    /** The connector catalog; an older server answers 404 (use the built-in copy). */
+    getWorkCatalog: () =>
+      requestJson<OmniRushWorkCatalog>(baseUrl, "/work/catalog", { token, hostToken, timeoutMs: timeouts.config }),
+    /** One record for the viewer; `live` reads it from the source again ("auto": when the saved copy is short). */
+    getWorkRecord: (id: string, live?: "auto" | "1" | "0") =>
+      requestJson<OmniRushWorkRecordDetail>(baseUrl, `/work/records/detail?${new URLSearchParams({ id, ...(live ? { live } : {}) })}`, { token, hostToken, timeoutMs: 60_000 }),
+    getWorkRecordAttachment: (id: string, n: number) =>
+      requestBinary(baseUrl, `/work/records/attachment?${new URLSearchParams({ id, n: String(n) })}`, { token, hostToken, timeoutMs: 120_000 }),
+    runWorkRecordAction: (input: OmniRushWorkRecordActionInput) =>
+      requestJson<OmniRushWorkRecordActionResult>(baseUrl, "/work/records/action", { token, hostToken, method: "POST", body: input, timeoutMs: 60_000 }),
+    composeWork: (input: OmniRushWorkComposeInput) =>
+      requestJson<OmniRushWorkRecordActionResult>(baseUrl, "/work/compose", { token, hostToken, method: "POST", body: input, timeoutMs: 60_000 }),
     getWebSearch: () =>
       requestJson<OmniRushWebSearchState>(baseUrl, "/omnirush/web-search", { token, hostToken, timeoutMs: timeouts.config }),
     setWebSearch: (enabled: boolean) =>
