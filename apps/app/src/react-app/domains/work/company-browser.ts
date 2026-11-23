@@ -2,13 +2,13 @@
 // company): the apps everyone gets, whether people may import bookmarks and history, and sign-ins, from other
 // browsers, and where Work links open. A missing block (no company, an older server) is the defaults, so every other
 // account keeps the browser as it was. Nothing here is about anyone's browsing.
-import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 
-import type { OmniRushWorkBrowser, OmniRushWorkBrowserApp, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkBrowserApp, OmniRushWorkState } from "@/app/lib/omnirush-server";
 import { isElectronRuntime } from "@/app/utils";
 
 import { BRAND_MARKS } from "./brands";
+import { useCachedWorkState } from "./work-state-cache";
 
 export const WORK_BROWSER_MAX_APPS = 24;
 export const WORK_BROWSER_NAME_MAX = 60;
@@ -52,31 +52,14 @@ export function workLinksInApp(policy: Pick<WorkBrowserPolicy, "linksInApp" | "l
   return policy.linksLocked || choice === null ? policy.linksInApp : choice;
 }
 
-/** The first Work state the app holds with Work on and a company block (one per server), without a client. */
-function cachedBrowserBlock(queryClient: ReturnType<typeof useQueryClient>): string {
-  const found = queryClient.getQueriesData<OmniRushWorkState>({ queryKey: ["omnirush-work-state"] })
-    .map(([, data]) => data)
-    .find((data) => data?.enabled === true && data.browser);
-  return found?.browser ? JSON.stringify(found.browser) : "";
-}
-
 /**
  * The company's browser settings for components with no Work client (the browser panel, the import screens, the link
- * router): what the last Work state said, read again whenever it changes.
+ * router): what the last Work state said, read again only when it changes.
  */
 export function useWorkBrowserPolicy(): WorkBrowserPolicy {
-  const queryClient = useQueryClient();
-  const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-  const snapshot = useCallback(() => cachedBrowserBlock(queryClient), [queryClient]);
-  const block = useSyncExternalStore(subscribe, snapshot, snapshot);
-  return useMemo(() => {
-    if (!block) return DEFAULT_WORK_BROWSER;
-    try {
-      return workBrowserPolicy({ enabled: true, browser: JSON.parse(block) as OmniRushWorkBrowser });
-    } catch {
-      return DEFAULT_WORK_BROWSER;
-    }
-  }, [block]);
+  const state = useCachedWorkState();
+  const block = state?.browser ?? null;
+  return useMemo(() => workBrowserPolicy(block ? { enabled: true, browser: block } : null), [block]);
 }
 
 let signInsRevoked = false;
