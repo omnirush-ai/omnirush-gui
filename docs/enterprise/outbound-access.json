@@ -109,6 +109,15 @@
       "override": null
     },
     {
+      "host": "docs.gitlab.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "GitLab's guide to personal access tokens, linked from the Work key form for GitLab.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
       "host": "docs.nextcloud.com",
       "kind": "link-only",
       "components": ["renderer"],
@@ -142,6 +151,15 @@
       "purpose": "Gmail API calls for Google Workspace message search, reading, attachments, and draft creation.",
       "requirement": "opt-in",
       "blockedEffect": "Gmail read and draft actions fail for connected Google Workspace accounts.",
+      "override": null
+    },
+    {
+      "host": "help.shopify.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Shopify's guide to custom apps, linked from the Work key form for Shopify.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
       "override": null
     },
     {

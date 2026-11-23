@@ -78,6 +78,18 @@ const BRAND_ICONS: Record<string, { color: string; path: string }> = {
     color: "#0B5CFF",
     path: "M5.033 14.649H.743a.74.74 0 0 1-.686-.458.74.74 0 0 1 .16-.808L3.19 10.41H1.06A1.06 1.06 0 0 1 0 9.35h3.957c.301 0 .57.18.686.458a.74.74 0 0 1-.161.808L1.51 13.59h2.464c.585 0 1.06.475 1.06 1.06zM24 11.338c0-1.14-.927-2.066-2.066-2.066-.61 0-1.158.265-1.537.686a2.061 2.061 0 0 0-1.536-.686c-1.14 0-2.066.926-2.066 2.066v3.311a1.06 1.06 0 0 0 1.06-1.06v-2.251a1.004 1.004 0 0 1 2.013 0v2.251c0 .586.474 1.06 1.06 1.06v-3.311a1.004 1.004 0 0 1 2.012 0v2.251c0 .586.475 1.06 1.06 1.06zM16.265 12a2.728 2.728 0 1 1-5.457 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0zm-4.82 0a2.728 2.728 0 1 1-5.458 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0z",
   },
+  gitlab: {
+    color: "#FC6D26",
+    path: "m23.6004 9.5927-.0337-.0862L20.3.9814a.851.851 0 0 0-.3362-.405.8748.8748 0 0 0-.9997.0539.8748.8748 0 0 0-.29.4399l-2.2055 6.748H7.5375l-2.2057-6.748a.8573.8573 0 0 0-.29-.4412.8748.8748 0 0 0-.9997-.0537.8585.8585 0 0 0-.3362.4049L.4332 9.5015l-.0325.0862a6.0657 6.0657 0 0 0 2.0119 7.0105l.0113.0087.03.0213 4.976 3.7264 2.462 1.8633 1.4995 1.1321a1.0085 1.0085 0 0 0 1.2197 0l1.4995-1.1321 2.4619-1.8633 5.006-3.7489.0125-.01a6.0682 6.0682 0 0 0 2.0094-7.003z",
+  },
+  shopify: {
+    color: "#7AB55C",
+    path: "M15.337 23.979l7.216-1.561s-2.604-17.613-2.625-17.73c-.018-.116-.114-.192-.211-.192s-1.929-.136-1.929-.136-1.275-1.274-1.439-1.411c-.045-.037-.075-.057-.121-.074l-.914 21.104h.023zM11.71 11.305s-.81-.424-1.774-.424c-1.447 0-1.504.906-1.504 1.141 0 1.232 3.24 1.715 3.24 4.629 0 2.295-1.44 3.76-3.406 3.76-2.354 0-3.54-1.465-3.54-1.465l.646-2.086s1.245 1.066 2.28 1.066c.675 0 .975-.545.975-.932 0-1.619-2.654-1.694-2.654-4.359-.034-2.237 1.571-4.416 4.827-4.416 1.257 0 1.875.361 1.875.361l-.945 2.715-.02.01zM11.17.83c.136 0 .271.038.405.135-.984.465-2.064 1.639-2.508 3.992-.656.213-1.293.405-1.889.578C7.697 3.75 8.951.84 11.17.84V.83zm1.235 2.949v.135c-.754.232-1.583.484-2.394.736.466-1.777 1.333-2.645 2.085-2.971.193.501.309 1.176.309 2.1zm.539-2.234c.694.074 1.141.867 1.429 1.755-.349.114-.735.231-1.158.366v-.252c0-.752-.096-1.371-.271-1.871v.002zm2.992 1.289c-.02 0-.06.021-.078.021s-.289.075-.714.21c-.423-1.233-1.176-2.37-2.508-2.37h-.115C12.135.209 11.669 0 11.265 0 8.159 0 6.675 3.877 6.21 5.846c-1.194.365-2.063.636-2.16.674-.675.213-.694.232-.772.87-.075.462-1.83 14.063-1.83 14.063L15.009 24l.927-21.166z",
+  },
+  box: {
+    color: "#0061D5",
+    path: "M.959 5.523c-.54 0-.959.42-.959.899v7.549a4.59 4.59 0 004.613 4.494 4.717 4.717 0 004.135-2.457c.779 1.438 2.337 2.457 4.074 2.457 2.577 0 4.674-2.037 4.674-4.613.06-2.457-2.037-4.495-4.613-4.495-1.738 0-3.295.959-4.074 2.397-.78-1.438-2.338-2.397-4.135-2.397-1.079 0-2.038.36-2.817.899V6.422a.92.92 0 00-.898-.899zM17.602 9.26a.95.95 0 00-.704.158c-.36.3-.479.899-.18 1.318l2.397 3.116-2.396 3.115c-.3.42-.24.96.18 1.26.419.3 1.016.298 1.316-.122l2.039-2.636 2.096 2.697c.3.36.899.419 1.318.12.36-.3.42-.84.121-1.259l-2.338-3.115 2.338-3.057c.3-.419.298-1.018-.121-1.318-.48-.3-1.019-.24-1.318.18l-2.096 2.576-2.04-2.695c-.149-.18-.373-.3-.612-.338zM4.613 11.154c1.558 0 2.817 1.26 2.817 2.758 0 1.558-1.259 2.756-2.817 2.756-1.558 0-2.816-1.198-2.816-2.756 0-1.498 1.258-2.758 2.816-2.758zm8.27 0c1.558 0 2.816 1.26 2.816 2.758-.06 1.558-1.318 2.756-2.816 2.756-1.558 0-2.817-1.198-2.817-2.756 0-1.498 1.259-2.758 2.817-2.758Z",
+  },
 };
 
 /** A connector's icon; an id the app does not know gets the generic plug. */
@@ -587,9 +599,13 @@ export function CredentialsForm(props: { connector: OmniRushWorkConnector; clien
   );
 }
 
-/** The pasted-key sources: where the key is (the steps and a link), its field's name, for Freshdesk the account's address, for
- *  Trello its second secret (the token), and whether the key is also used for writes the user approves. */
-type KeyFormSpec = { help: string; placeholder: string; where: () => string; label: () => string; host?: () => string; token?: () => string; writes?: boolean };
+/** The pasted-key sources: where the key is (the steps and a link), its field's name, the account's address where it has one
+ *  (Freshdesk, Shopify; GitLab's is optional: empty is gitlab.com), Shopify's Client ID, Trello's second secret (the token),
+ *  and whether the key is also used for writes the user approves. */
+type KeyFormSpec = {
+  help: string; placeholder: string; where: () => string; label: () => string;
+  host?: () => string; hostPlaceholder?: string; hostOptional?: boolean; clientId?: () => string; token?: () => string; writes?: boolean;
+};
 const KEY_FORMS: Record<string, KeyFormSpec> = {
   stripe: { help: "https://dashboard.stripe.com/apikeys", placeholder: "rk_live_...", where: () => t("work.key.where_stripe"), label: () => t("work.key.label_stripe") },
   freshdesk: {
@@ -616,6 +632,26 @@ const KEY_FORMS: Record<string, KeyFormSpec> = {
     label: () => t("work.key.label_monday"),
     writes: true,
   },
+  gitlab: {
+    help: "https://docs.gitlab.com/user/profile/personal_access_tokens/",
+    placeholder: "glpat-...",
+    where: () => t("work.key.where_gitlab"),
+    label: () => t("work.key.label_gitlab"),
+    host: () => t("work.key.host_gitlab"),
+    hostPlaceholder: "gitlab.com",
+    hostOptional: true,
+    writes: true,
+  },
+  shopify: {
+    help: "https://help.shopify.com/en/manual/apps/app-types/custom-apps",
+    placeholder: "shpss_... or shpat_...",
+    where: () => t("work.key.where_shopify"),
+    label: () => t("work.key.label_shopify"),
+    host: () => t("work.key.host_shopify"),
+    hostPlaceholder: "yourstore.myshopify.com",
+    clientId: () => t("work.key.client_id_shopify"),
+    writes: true,
+  },
 };
 
 /** A source connected with a pasted API key (Stripe, Freshdesk, Pipedrive, Trello, ClickUp, monday.com): where to find the key,
@@ -624,23 +660,24 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
   const id = props.connector.id;
   const spec: KeyFormSpec = KEY_FORMS[id] ?? { help: "", placeholder: "", where: () => "", label: () => t("work.key.label_freshdesk") };
   const name = connectorLabel(id, props.connector.label);
-  const [field, setField] = useState({ api_key: "", host: "", token: "" });
+  const [field, setField] = useState({ api_key: "", host: "", client_id: "", token: "" });
   const [error, setError] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: () =>
       props.client!.connectWorkCredentials(id, {
         api_key: field.api_key.trim(),
-        ...(spec.host ? { host: field.host.trim() } : {}),
+        ...(spec.host && field.host.trim() ? { host: field.host.trim() } : {}),
+        ...(spec.clientId && field.client_id.trim() ? { client_id: field.client_id.trim() } : {}),
         ...(spec.token ? { token: field.token.trim() } : {}),
       }),
     onSuccess: () => {
-      setField({ api_key: "", host: "", token: "" });
+      setField({ api_key: "", host: "", client_id: "", token: "" });
       toast.success(t("work.mailcal.connected", { name }));
       props.onDone();
     },
     onError: (reason) => setError(workFailure(reason).text),
   });
-  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || Boolean(field.host.trim())) && (!spec.token || Boolean(field.token.trim()));
+  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || spec.hostOptional || Boolean(field.host.trim())) && (!spec.token || Boolean(field.token.trim()));
   const input = (key: keyof typeof field, label: string, extra: { type?: string; placeholder?: string } = {}) => (
     <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
       {label}
@@ -677,7 +714,8 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
         ) : null}
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
-        {spec.host ? input("host", spec.host(), { placeholder: "yourcompany.freshdesk.com" }) : null}
+        {spec.host ? input("host", spec.host(), { placeholder: spec.hostPlaceholder ?? "yourcompany.freshdesk.com" }) : null}
+        {spec.clientId ? input("client_id", spec.clientId()) : null}
         {input("api_key", spec.label(), { type: "password", placeholder: spec.placeholder })}
         {spec.token ? input("token", spec.token(), { type: "password" }) : null}
       </div>

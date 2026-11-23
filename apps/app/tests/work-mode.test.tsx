@@ -749,6 +749,87 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     }
   });
 
+  test("GitLab, Shopify and Box: company marks, copy, and the GitLab and Shopify key forms", async () => {
+    for (const id of ["gitlab", "shopify", "box"]) {
+      const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);
+      expect(icon).toContain(`data-connector-icon="${id}"`);
+      expect(icon).toMatch(/<path fill="#[0-9A-F]{6}"/);
+      expect(connectorAccess(id)).toContain("only after you approve");
+      expect(connectorAccess(id)).not.toMatch(/[\u2013\u2014]/);
+    }
+    expect(workToolPermission("omnirush-work_gitlab_comment")?.label).toBe("Add a comment (GitLab)");
+    expect(workToolPermission("omnirush-work_shopify_note")?.label).toBe("Add a note (Shopify)");
+    expect(workToolPermission("omnirush-work_box_comment")?.label).toBe("Add a comment (Box)");
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const sent: unknown[] = [];
+      const rows = [
+        row({ id: "gitlab", label: "GitLab", mode: "key" }),
+        row({ id: "shopify", label: "Shopify", mode: "key" }),
+        row({ id: "box", label: "Box" }),
+      ];
+      const client = {
+        baseUrl: "http://code.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async () => ({ auth_url: "https://account.box.com/api/oauth2/authorize?x=1" }),
+        connectWorkCredentials: async (id: string, form: unknown) => {
+          sent.push([id, form]);
+          return { ok: true, account: "ann" };
+        },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={noop} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
+      const type = async (form: Element, key: string, value: string) => {
+        const input = form.querySelector<HTMLInputElement>(`[data-key-field="${key}"]`)!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      };
+      // GitLab: the address may stay empty (gitlab.com); the token can write after approval.
+      await act(async () => button("Connect GitLab")!.click());
+      const gitlab = document.querySelector('[data-testid="work-key-gitlab"]')!;
+      expect(gitlab.querySelector('[data-key-field="host"]')?.getAttribute("placeholder")).toBe("gitlab.com");
+      expect(gitlab.querySelector('[data-key-field="client_id"]')).toBeNull();
+      expect(gitlab.textContent).toContain("read_api");
+      expect(gitlab.textContent).toContain("without your approval");
+      const saveGitlab = gitlab.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!;
+      await type(gitlab, "api_key", "glpat-abc");
+      expect(saveGitlab.disabled).toBe(false);
+      await act(async () => saveGitlab.click());
+      expect(sent).toEqual([["gitlab", { api_key: "glpat-abc" }]]);
+      // Shopify: the store address is needed; the Client ID goes with the app's secret.
+      await act(async () => button("Connect Shopify")!.click());
+      const shopify = document.querySelector('[data-testid="work-key-shopify"]')!;
+      expect(shopify.querySelector('[data-key-field="host"]')?.getAttribute("placeholder")).toBe("yourstore.myshopify.com");
+      expect(shopify.textContent).toContain("Dev Dashboard");
+      const saveShopify = shopify.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!;
+      await type(shopify, "client_id", "abc123def456");
+      await type(shopify, "api_key", "shpss_secret");
+      expect(saveShopify.disabled).toBe(true);
+      await type(shopify, "host", "acme.myshopify.com");
+      expect(saveShopify.disabled).toBe(false);
+      await act(async () => saveShopify.click());
+      expect(sent.at(-1)).toEqual(["shopify", { api_key: "shpss_secret", host: "acme.myshopify.com", client_id: "abc123def456" }]);
+      // Box signs in with OAuth: no key form.
+      expect(document.querySelector('[data-testid="work-key-box"]')).toBeNull();
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
   test("Asana, Dropbox and Zoom: company marks, read-only copy, and Asana's workspace picker", async () => {
     for (const id of ["asana", "dropbox", "zoom"]) {
       const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);

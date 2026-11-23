@@ -720,7 +720,7 @@ export type OmniRushWorkConnector = {
   skipped_records?: number;
   /** "import": no sign-in, the data comes from an uploaded export (WhatsApp); "credentials": a server and a password
    *  (other email over IMAP, other calendar over CalDAV or a link), connected with `connectWorkCredentials`; "key": a pasted
-   *  API key (Stripe, Freshdesk, Pipedrive, ClickUp, monday.com; Trello: a key and a token), also `connectWorkCredentials`; "hook": the account's inbound URL for Zapier,
+   *  API key (Stripe, Freshdesk, Pipedrive, ClickUp, monday.com, GitLab, Shopify; Trello: a key and a token), also `connectWorkCredentials`; "hook": the account's inbound URL for Zapier,
    *  Make or n8n (`createWorkHook`); absent for OAuth sources. */
   mode?: "import" | "credentials" | "key" | "hook" | string;
   last_import_at?: string | null;
@@ -750,7 +750,13 @@ export type OmniRushWorkSyncProgress = {
  *  address or region the source has. */
 export type OmniRushWorkStart = { host?: string; region?: "us" | "eu" | "au" };
 /** The connect form of a "credentials" or "key" source (POST /omnirush/work/connectors/{id}/connect). */
-export type OmniRushWorkCredentials = { preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string; token?: string };
+export type OmniRushWorkCredentials = {
+  preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string;
+  /** Shopify: the Client ID of the store's Dev Dashboard app (`api_key` is then its secret). */
+  client_id?: string;
+  /** Trello: the user token (`api_key` is the app's key). */
+  token?: string;
+};
 /** One chat-per-day record the desktop reads from the Mac's local chat.db
  *  and pushes to POST /omnirush/work/imessage (contract Addendum D5). */
 export type OmniRushIMessageRecord = {

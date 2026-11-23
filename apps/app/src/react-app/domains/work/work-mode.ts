@@ -327,6 +327,7 @@ const WORK_APPS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
   slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
   linear: "Linear", github: "GitHub", discord: "Discord", zendesk: "Zendesk", intercom: "Intercom", front: "Front", trello: "Trello", clickup: "ClickUp", monday: "monday.com",
+  gitlab: "GitLab", shopify: "Shopify", box: "Box",
 };
 /** Connectors whose writes the OmniRush Work app makes (a bot), not the person's own account. */
 const APP_WRITES = new Set(["discord"]);
@@ -363,6 +364,7 @@ const CONNECTOR_LABELS: Record<string, string> = {
   imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)", stripe: "Stripe", freshdesk: "Freshdesk", pipedrive: "Pipedrive",
   zendesk: "Zendesk", intercom: "Intercom", front: "Front",
   hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)", trello: "Trello", clickup: "ClickUp", monday: "monday.com",
+  gitlab: "GitLab", shopify: "Shopify", box: "Box",
 };
 export const connectorLabel = (id: string, label?: string | null) =>
   label?.trim() || CONNECTOR_LABELS[id] || (id === "mock" ? t("work.connector.mock") : id === "demo" ? t("work.connector.demo") : id);
@@ -395,6 +397,9 @@ export function connectorAccess(id: string): string {
     trello: t("work.connector.access_trello"),
     clickup: t("work.connector.access_clickup"),
     monday: t("work.connector.access_monday"),
+    gitlab: t("work.connector.access_gitlab"),
+    shopify: t("work.connector.access_shopify"),
+    box: t("work.connector.access_box"),
   };
   return access[id] ?? t("work.connector.access_other");
 }
