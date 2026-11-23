@@ -645,6 +645,21 @@
   ],
   "desktop": [
     {
+      "version": "3.9.1",
+      "date": "2026-11-23",
+      "new": [
+        "Work can now connect to Discord, ClickUp, monday.com and GitLab. Add them in Work > Connectors.",
+        "Company owners and admins choose which connectors the team sees, in Work > Organization. Owners can make teammates admins."
+      ],
+      "improved": [
+        "Work > Connectors shows a progress bar while your chats sync and while a connector brings in its history.",
+        "Work chats read your Discord channels without asking first. Posting still asks."
+      ],
+      "fixed": [
+        "WhatsApp and iMessage sync on the Mac, and Telegram sync, no longer fail on a big first sync and pick up where they stopped."
+      ]
+    },
+    {
       "version": "3.9.0",
       "date": "2026-11-20",
       "new": [
