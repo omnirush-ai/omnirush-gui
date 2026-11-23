@@ -112,6 +112,9 @@ import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode";
 import { refUIParts, WorkRefChips } from "@/react-app/domains/work/ask/ref-chip";
 import { defaultQuestion, refKey, refPlaceholder, refsFromMetadata, starterQuestions, type WorkRef } from "@/react-app/domains/work/ask/refs";
 import { SuggestionChipRow } from "@/react-app/domains/work/ask/suggestion-chips";
+import { createRepliesDisplay, lastAnswerReplies } from "@/react-app/domains/work/ask/replies";
+import { lastTurnSignals, NO_SIGNALS } from "@/react-app/domains/work/ask/action-chips";
+import { WorkRepliesContext, type WorkRepliesValue } from "@/react-app/domains/work/ask/reply-row";
 import { SideAnswers } from "./side-answers";
 import { parseSideQuestion, type SideAnswer } from "./side-question";
 import { FeedbackTurnPrompt } from "@/react-app/domains/feedback/feedback";
@@ -1758,6 +1761,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
   useEffect(() => {
     renderedMessagesRef.current = renderedMessages;
   }, [renderedMessages]);
+  // Work chats: the agent's replies block never shows in the transcript (it becomes chips under the newest answer).
+  // Memoized per message, so only the message that changed gets a new object; Code chats are not transformed.
+  const repliesDisplay = useMemo(() => createRepliesDisplay(), []);
+  const transcriptMessages = useMemo(
+    () => (props.workChat ? repliesDisplay(renderedMessages, status === "streaming" || status === "retrying") : renderedMessages),
+    [props.workChat, renderedMessages, repliesDisplay, status],
+  );
   const seedMarkdownPrimitiveControlAction = useMemo<OmniRushControlAction | null>(() => {
     if (!import.meta.env.DEV) return null;
 
@@ -2257,7 +2267,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
 
   const handleCopyTranscript = async () => {
     try {
-      await navigator.clipboard.writeText(transcriptToText(renderedMessages));
+      await navigator.clipboard.writeText(transcriptToText(transcriptMessages));
     } catch (nextError) {
       setError({ message: nextError instanceof Error ? nextError.message : "Failed to copy transcript." });
     }
@@ -2907,6 +2917,28 @@ export function SessionSurface(props: SessionSurfaceProps) {
     replaceComposerDraft(props.sessionId, text, revertMessageId);
     await waitForControl(40);
   }, [props.sessionId, replaceComposerDraft]);
+
+  // Suggested replies under the newest answer (Work chats): only while the chat is idle with nothing to approve or
+  // answer, no error, no queued message and no items attached to the composer (then its questions show instead).
+  // A reply chip sends at once as a chat command (the composer is left alone); its edit puts it in the composer.
+  const workRepliesShown = Boolean(props.workChat) && !chatCommandBusy && !sending && !autoSending
+    && !props.activeQuestion && !props.activePermission && !error && effectiveActivityStatus !== "error"
+    && !revertMessageId && queuedItems.length === 0 && refs.length === 0;
+  const fillReply = useCallback((text: string) => {
+    const state = useComposerStateStore.getState();
+    const current = getComposerDraft(state, props.sessionId).replace(/\s+$/, "");
+    void typeComposerText(current ? `${current} ${text}` : text, getComposerRevertMessageId(state, props.sessionId));
+  }, [props.sessionId, typeComposerText]);
+  const sendReply = useCallback((text: string) => { void runChatCommand(text); }, [runChatCommand]);
+  const workReplies = useMemo<WorkRepliesValue | null>(() => (props.workChat ? {
+    show: workRepliesShown,
+    replies: workRepliesShown ? lastAnswerReplies(renderedMessages) : [],
+    signals: workRepliesShown ? lastTurnSignals(renderedMessages) : NO_SIGNALS,
+    client: props.client,
+    onSend: sendReply,
+    onFill: fillReply,
+    busy: chatCommandBusy,
+  } : null), [chatCommandBusy, fillReply, props.client, props.workChat, renderedMessages, sendReply, workRepliesShown]);
 
   const composerSetTextControlAction = useMemo<OmniRushControlAction>(() => ({
     id: "composer.set_text",
@@ -3585,13 +3617,15 @@ export function SessionSurface(props: SessionSurfaceProps) {
                       onMcpRetry={handleMcpRetry}
                       onRunCommand={runChatCommand}
                     >
-                      <MessageList
-                        messages={renderedMessages}
-                        status={status}
-                        activityStatus={effectiveActivityStatus}
-                        retryStatus={liveStatus.type === "retry" ? liveStatus : null}
-                        syncHealth={runSyncHealth}
-                      />
+                      <WorkRepliesContext.Provider value={workReplies}>
+                        <MessageList
+                          messages={transcriptMessages}
+                          status={status}
+                          activityStatus={effectiveActivityStatus}
+                          retryStatus={liveStatus.type === "retry" ? liveStatus : null}
+                          syncHealth={runSyncHealth}
+                        />
+                      </WorkRepliesContext.Provider>
                     </MessageListProvider>
                   </EnvironmentVariableProvider>
                 </OpenTargetProvider>

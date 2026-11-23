@@ -145,6 +145,7 @@ import { commandTemplateLabel, reviewForTurn } from "@/react-app/domains/session
 import { useSessionCommandBridge, useSessionCommandsStore } from "@/react-app/domains/session/commands/session-commands-store"
 import { ReviewFixBar } from "@/react-app/domains/session/commands/review-fix-bar"
 import { WorkRefMessageChips } from "@/react-app/domains/work/ask/ref-chip"
+import { WorkReplySlot } from "@/react-app/domains/work/ask/reply-row"
 import { refsFromMetadata } from "@/react-app/domains/work/ask/refs"
 import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/connector-tool-identity"
 
@@ -1341,7 +1342,7 @@ function collectWorkNotices(items: UIMessageWithIndex[]): string[] {
   for (const item of items) {
     if (item.message.role !== "assistant" || isSessionErrorMessage(item.message)) continue
     for (const part of item.message.parts) {
-      if (part.type === "dynamic-tool" && part.state === "output-available") for (const notice of workToolNotices(part)) notices.add(notice)
+      if (part.type === "dynamic-tool" && (part.state === "output-available" || part.state === "output-error")) for (const notice of workToolNotices(part)) notices.add(notice)
     }
   }
   return [...notices]
@@ -1532,6 +1533,8 @@ function MessageGroup({
         </Message>
       ) : null}
       {renderItems(proseItems, stepItems.length, collapseSteps)}
+      {/* A Work chat's suggested replies and fixes, under the newest finished answer only (none in Code chats). */}
+      {isLastGroup && !isStreaming && lastItem.message.role === "assistant" && !isSessionErrorMessage(lastItem.message) ? <WorkReplySlot /> : null}
       {lastTextMessage && !isStreaming && (
         <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100 md:px-8">
           <MessageActions className="flex gap-0">
