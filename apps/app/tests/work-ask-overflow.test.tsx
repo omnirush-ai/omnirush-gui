@@ -173,8 +173,8 @@ describe("attached chips", () => {
 
   test("the placeholder clips a long title so it stays on one line", () => {
     const text = refPlaceholder([LONG[0]!]);
-    expect(text.startsWith("Ask about Cold chain lanes for Q1")).toBe(true);
-    expect(text.length).toBeLessThanOrEqual(70);
+    expect(text).toBe("Ask about Cold chain lanes fo…, or press Enter for a brief");
+    expect(text.length).toBeLessThanOrEqual(60);
   });
 });
 

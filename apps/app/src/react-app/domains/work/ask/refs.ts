@@ -39,7 +39,7 @@ export type WorkRef = {
 export const MAX_REFS = 5;
 const TITLE_MAX = 120;
 const NOTE_MAX = 200;
-const PLACEHOLDER_TITLE_MAX = 28;
+const PLACEHOLDER_TITLE_MAX = 20;
 
 /** One line, no control characters, at most `max` characters. */
 export function oneLine(value: string | null | undefined, max = TITLE_MAX): string {
