@@ -2,8 +2,9 @@
 // Browser home: what a new tab shows for a Work account, in the Work browser and in the side panel. Three groups, each
 // hidden when empty: "From <company>" (the apps an owner or admin set for everyone), "Your apps" (the sites the person
 // uses most, from the imported library and their own bookmarks) and "Recent". Tiles stop at 8 and Recent at 5 rows,
-// then "Show all (n)"; a filter appears once a group passes 12. Marks are the app's own brand logos or the site's
-// letter: no icon is fetched from anywhere. Everything here is read on this computer.
+// then "Show all (n)" (Recent past 50 pages: "Show more", 50 rows, and a filter that searches all 30 days); a filter
+// appears once a group passes 12. Marks are the app's own brand logos or the site's letter: no icon is fetched from
+// anywhere. Everything here is read on this computer.
 import { useQuery } from "@tanstack/react-query";
 import { Clock, Download, Search } from "lucide-react";
 import * as React from "react";
@@ -16,7 +17,7 @@ import { BrowserImportDialog } from "../../browser-logins/import-dialog";
 import { BROWSER_LIBRARY_KEY, browserLibraryKeys, getBrowserLibraryBridge, useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
 import { BrandTile } from "../brand-icon";
 import { relativeTime } from "../work-mode";
-import { type CompanyApp, HOME_RECENT_SHOWN, HOME_SEARCH_FROM, HOME_TILES_SHOWN, siteBrand, siteHost } from "./work-browser";
+import { type CompanyApp, HOME_RECENT_LIMIT, HOME_RECENT_SHOWN, HOME_SEARCH_FROM, HOME_TILES_SHOWN, siteBrand, siteHost } from "./work-browser";
 
 export type BrowserHomeProps = {
   /** The company's name for "From <company>"; null for an account without one. */
@@ -42,7 +43,7 @@ export function BrowserHome(props: BrowserHomeProps) {
   });
   const recent = useQuery({
     queryKey: [...BROWSER_LIBRARY_KEY, "recent"],
-    queryFn: () => getBrowserLibraryBridge()!.recent!({ limit: 50 }),
+    queryFn: () => getBrowserLibraryBridge()!.recent!({ limit: HOME_RECENT_LIMIT }),
     enabled: library && typeof getBrowserLibraryBridge()?.recent === "function",
     retry: false,
   });
@@ -105,6 +106,8 @@ function GroupHeader(props: {
   expanded: boolean;
   onToggle: () => void;
   filter?: { query: string; setQuery: (value: string) => void } | null;
+  /** In place of "Show all (n)" when not all n can be listed. */
+  moreLabel?: string;
 }) {
   return (
     <div className="flex min-h-7 items-center gap-3">
@@ -130,7 +133,7 @@ function GroupHeader(props: {
           className="shrink-0 rounded-md px-1.5 py-0.5 text-[13px] text-dls-secondary outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           data-testid={`browser-home-more-${props.id}`}
         >
-          {props.expanded ? t("work_browser.show_less") : t("work_browser.show_all", { n: props.total })}
+          {props.expanded ? t("work_browser.show_less") : props.moreLabel ?? t("work_browser.show_all", { n: props.total })}
         </button>
       ) : null}
     </div>
@@ -205,10 +208,35 @@ function TileGroup(props: { id: string; title: string; tiles: Tile[]; compact?: 
   );
 }
 
+/** `value`, once it has stayed the same for `ms`. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = React.useState(value);
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(value), ms);
+    return () => window.clearTimeout(timer);
+  }, [ms, value]);
+  return settled;
+}
+
+/**
+ * The newest pages: 5 rows, then the 50 newest. The count is the true one; past 50 the header says "Show more" (the
+ * list never claims to be all of them) and the filter asks the library, so any page of the last 30 days can be found.
+ */
 function RecentGroup(props: { pages: Array<{ url: string; title: string; lastVisitAt: number }>; total: number; onOpen: BrowserHomeProps["onOpen"] }) {
   const [expanded, setExpanded] = React.useState(false);
-  const filter = useFilter(props.pages, expanded, (page) => `${page.title} ${page.url}`);
-  const shown = expanded ? filter.filtered : props.pages.slice(0, HOME_RECENT_SHOWN);
+  const [query, setQuery] = React.useState("");
+  const searchable = expanded && props.total > HOME_SEARCH_FROM;
+  const needle = useSettled(searchable ? query.trim() : "", 200);
+  const found = useQuery({
+    queryKey: [...BROWSER_LIBRARY_KEY, "recent", needle],
+    queryFn: () => getBrowserLibraryBridge()!.recent!({ limit: HOME_RECENT_LIMIT, query: needle }),
+    enabled: Boolean(needle) && typeof getBrowserLibraryBridge()?.recent === "function",
+    retry: false,
+  });
+  const listed = needle ? found.data?.pages ?? [] : props.pages;
+  const shown = expanded ? listed.slice(0, HOME_RECENT_LIMIT) : props.pages.slice(0, HOME_RECENT_SHOWN);
+  const allListed = props.total <= props.pages.length;
+  const filter = { query, setQuery };
   return (
     <section aria-labelledby="browser-home-recent" data-testid="browser-home-recent">
       <GroupHeader
@@ -217,8 +245,12 @@ function RecentGroup(props: { pages: Array<{ url: string; title: string; lastVis
         total={props.total}
         shown={Math.min(props.pages.length, HOME_RECENT_SHOWN)}
         expanded={expanded}
-        onToggle={() => setExpanded(!expanded)}
-        filter={filter.searchable ? filter : null}
+        onToggle={() => {
+          setExpanded(!expanded);
+          setQuery("");
+        }}
+        filter={searchable ? filter : null}
+        moreLabel={allListed ? undefined : t("work_browser.show_more")}
       />
       <div className="mt-2 flex flex-col">
         {shown.map((page) => (
@@ -239,7 +271,10 @@ function RecentGroup(props: { pages: Array<{ url: string; title: string; lastVis
           </button>
         ))}
       </div>
-      {expanded && filter.filtered.length === 0 ? <p className="mt-2 px-2 text-[13px] text-dls-secondary">{t("work_browser.no_match")}</p> : null}
+      {expanded && needle && found.isSuccess && listed.length === 0 ? <p className="mt-2 px-2 text-[13px] text-dls-secondary">{t("work_browser.no_match")}</p> : null}
+      {expanded && !needle && !allListed ? (
+        <p className="mt-2 px-2 text-[13px] text-dls-secondary" data-testid="browser-home-recent-note">{t("work_browser.recent_more_note", { n: HOME_RECENT_LIMIT })}</p>
+      ) : null}
     </section>
   );
 }

@@ -38,6 +38,7 @@ import {
   BrowserAgentStrip,
   BrowserApprovalOverlay,
   BrowserNavButtons,
+  BrowserPageStill,
   BrowserSuspendedNotice,
   reportBrowserError,
   useNativeBrowserView,
@@ -47,9 +48,10 @@ import {
   getElectronBrowser,
   getNativeMenuPoint,
 } from "./utils";
-import { LoginSyncCard } from "../../browser-logins/login-sync-card";
+import { LoginSyncCard, useImportOfferVisit } from "../../browser-logins/login-sync-card";
 import { useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
 import { BrowserHome } from "../../work/browser/browser-home";
+import { TabMark } from "../../work/browser/tab-mark";
 import { useCompanyApps } from "../../work/browser/use-work-browser";
 import { isBrowserHomeTab, WORK_BROWSER_EXPAND_EVENT } from "../../work/browser/work-browser";
 import { RecordPanel, RecordTabIcon } from "../../work/viewer/record-panel-entry";
@@ -98,6 +100,8 @@ type SidePanelTabProps = {
 
 function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
   const dragControls = useDragControls();
+  // The person's own tabs beside Work: the same marks as the Work browser (never an empty icon).
+  const work = useBrowserLibraryAvailable();
   const tabRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -149,7 +153,7 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
           aria-label={`Select tab: ${tab.label}`}
         >
           {tab.type === "browser" ? (
-            tab.favicon ? (
+            work && tab.ownerSessionId === NO_SESSION_SIDE_PANEL_KEY ? <TabMark tab={tab} /> : tab.favicon ? (
               <img src={tab.favicon} alt="" className="size-3.5 shrink-0 rounded-[2px]" />
             ) : tab.status === "loading" ? (
               <Loader2 className="animate-spin" />
@@ -185,12 +189,14 @@ function BrowserPanelContent({
   const suspended = tab.status === "suspended";
   const contentRef = React.useRef<HTMLDivElement>(null);
   const urlInputRef = React.useRef<HTMLInputElement>(null);
-  const isAvailable = useNativeBrowserView(contentRef, sessionId);
   // A Work account's own tabs (Work pages, no conversation): a new tab shows Browser home, Expand moves the tab to
-  // the Work browser, and the agent strip shows only while an agent works in the tab.
+  // the Work browser, the agent strip shows only while an agent works in the tab, and a menu over the page leaves a
+  // picture of it in place.
   const work = useBrowserLibraryAvailable();
   const userTabs = work && sessionId === NO_SESSION_SIDE_PANEL_KEY;
   const home = work && isBrowserHomeTab(tab);
+  const [still, setStill] = React.useState<string | null>(null);
+  const isAvailable = useNativeBrowserView(contentRef, sessionId, false, userTabs ? { onStill: setStill } : undefined);
 
   const suspend = React.useCallback(() => {
     void getElectronBrowser()?.suspendTab?.(tab.id).catch(reportBrowserError);
@@ -306,8 +312,9 @@ function BrowserPanelContent({
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {isAvailable ? (
-          <div ref={contentRef} className="h-full overflow-hidden">
+          <div ref={contentRef} className="relative h-full overflow-hidden">
             {suspended ? <BrowserSuspendedNotice tab={tab} /> : null}
+            {userTabs && !suspended && !home ? <BrowserPageStill still={still} /> : null}
           </div>
         ) : null}
         {isAvailable && home ? (
@@ -343,6 +350,9 @@ export function SidePanel({
   const { tabs } = useSessionPanelState(sessionId);
   const activeTab = useActivePanelTab(sessionId);
   const isBrowserAvailable = Boolean(getElectronBrowser());
+  // Beside Work pages (the person's own tabs): one look at the import offer per time the panel is open.
+  const userPanel = useBrowserLibraryAvailable() && sessionId === NO_SESSION_SIDE_PANEL_KEY;
+  useImportOfferVisit(userPanel);
 
   const { createTab, closeTab, selectTab, reorderTabs } = useSidePanelTabs(sessionId);
 
@@ -588,7 +598,7 @@ export function SidePanel({
         ) : null}
         {activeTab?.type === "browser" ? (
           <>
-            <LoginSyncCard />
+            <LoginSyncCard visit={userPanel} />
             <BrowserPanelContent sessionId={sessionId} tab={activeTab} onClose={onClose} />
           </>
         ) : activeTab?.type === "record" ? (

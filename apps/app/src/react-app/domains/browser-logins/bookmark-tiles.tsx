@@ -1,11 +1,14 @@
 /** @jsxImportSource react */
 // Top bookmarks on the panel's start page (the most visited, then the user's own), one click to open in the browser.
-// Work accounts with a library only; nothing shows until there are bookmarks.
+// Work accounts with a library only; nothing shows until there are bookmarks. Tiles carry the same marks as Browser
+// home (brands.ts by host, else the first letter of the bookmark's name).
 import { useQuery } from "@tanstack/react-query";
 
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
+import { BrandTile } from "../work/brand-icon";
+import { siteBrand } from "../work/browser/work-browser";
 import { browserLibraryKeys, getBrowserLibraryBridge, useBrowserLibraryAvailable } from "./use-browser-library";
 
 const TILE_COUNT = 8;
@@ -73,7 +76,8 @@ function Tiles({ onOpen }: { onOpen: (url: string) => void }) {
                 "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               )}
             >
-              <SiteMonogram url={tile.url} size="md" />
+              {/* The same marks as Browser home: the app's own logo for a known site, else the letter of its name. */}
+              <BrandTile id={siteBrand(tile.url)} name={tile.title || name} className="size-8 rounded-[9px]" />
               <span className="min-w-0">
                 <span className="block truncate text-[13px] font-medium leading-5 text-foreground">{tile.title || name}</span>
                 <span className="block truncate text-xs leading-4 text-muted-foreground">{name}</span>

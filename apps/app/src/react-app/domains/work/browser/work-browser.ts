@@ -6,6 +6,23 @@ import type { BrowserPanelTab } from "@omnirush/browser-tabs";
 /** Sent by the side panel's Expand: the shell opens the Work browser with the same tab. */
 export const WORK_BROWSER_EXPAND_EVENT = "omnirush:work-browser-expand";
 
+/**
+ * "Site settings" in the Work browser's ".." menu: the site's camera, microphone and notification choices. Sent with
+ * the page's address; the app's site permissions (Settings > Browser) answer it. Offered only where the desktop app
+ * keeps those choices.
+ */
+export const WORK_BROWSER_SITE_SETTINGS_EVENT = "omnirush:work-browser-site-settings";
+
+export function siteSettingsAvailable(): boolean {
+  if (typeof window === "undefined") return false;
+  const electron = (window as { __OMNIRUSH_ELECTRON__?: Record<string, unknown> }).__OMNIRUSH_ELECTRON__;
+  return Boolean(electron && typeof electron === "object" && electron.browserSites);
+}
+
+export function openSiteSettings(url: string) {
+  window.dispatchEvent(new CustomEvent<{ url: string }>(WORK_BROWSER_SITE_SETTINGS_EVENT, { detail: { url } }));
+}
+
 /** A new tab for a Work account opens Browser home (drawn by the app over a blank page), not a search site. */
 export const WORK_BROWSER_NEW_TAB_URL = "about:blank";
 
@@ -13,6 +30,8 @@ export const WORK_BROWSER_NEW_TAB_URL = "about:blank";
 export const HOME_TILES_SHOWN = 8;
 export const HOME_RECENT_SHOWN = 5;
 export const HOME_SEARCH_FROM = 12;
+/** Rows Recent lists when shown in full (the library answers at most this many; its filter finds the rest). */
+export const HOME_RECENT_LIMIT = 50;
 
 /** Live tabs the app keeps at once (browser-panel.mjs). Restored and suspended tabs hold no page and do not count. */
 export const LIVE_TAB_LIMIT = 12;

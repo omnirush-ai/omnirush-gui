@@ -45,6 +45,7 @@ function fakeBrowser(initial: BrowserStatePayload, answers: { suspendOldest?: st
     suspendOldest: async (owner: string) => { calls.oldest.push(owner); return answers.suspendOldest === undefined ? "u1" : answers.suspendOldest; },
     restoreSaved: async (entries: Array<{ url: string; title: string }>, owner: string, active: number) => { calls.restored.push({ entries, owner, active }); return entries.map((_entry, index) => `r${index + 1}`); },
     pageContext: async (id: string) => { calls.context.push(id); return { title: "Shipment 4471", url: "https://tms.example.com/s/4471", selection: "ETA moved to Friday\nCall Northwind" }; },
+    pageStill: async () => "data:image/jpeg;base64,c3RpbGw=",
   };
   const emit = (next: BrowserStatePayload) => {
     state = next;
@@ -72,7 +73,7 @@ function libraryBridge(overrides: Partial<BrowserLibraryBridge> = {}): BrowserLi
   };
 }
 
-type Electron = { browser?: unknown; browserLibrary?: BrowserLibraryBridge };
+type Electron = { browser?: unknown; browserLibrary?: BrowserLibraryBridge; browserSites?: unknown };
 
 async function withDom(
   run: (helpers: { mount: (node: ReactNode) => Promise<void>; act: (work: () => unknown) => Promise<void>; queries: QueryClient }) => Promise<void>,
@@ -205,6 +206,28 @@ describe("work browser rules", () => {
     expect(userTabsFrom(null)).toMatchObject({ tabs: [], activeTab: null, liveCount: 0 });
   });
 
+  test("the Work state is read from its own query only, and never mid-render", async () => {
+    const { cachedWorkState, subscribeWorkState } = await import("../src/react-app/domains/work/work-state-cache");
+    const queries = new QueryClient();
+    let heard = 0;
+    const stop = subscribeWorkState(queries, () => { heard += 1; });
+    queries.setQueryData(["omnirush-deals", "x"], { rows: [] });
+    queries.setQueryData(["browser-library", "summary"], { imports: [] });
+    await wait(5);
+    expect(heard).toBe(0);
+    queries.setQueryData(["omnirush-work-state", "http://work.test"], { enabled: true, browser: { apps: [] } });
+    // Heard after the change, not while it happened (a render that adds the query never updates another one).
+    expect(heard).toBe(0);
+    await wait(5);
+    expect(heard).toBe(1);
+    const first = cachedWorkState(queries);
+    expect(first).toMatchObject({ enabled: true });
+    queries.setQueryData(["omnirush-deals", "x"], { rows: [1] });
+    expect(cachedWorkState(queries)).toBe(first);
+    stop();
+    queries.clear();
+  });
+
   test("Cmd or Ctrl+Shift+B opens the Work browser", async () => {
     const { isWorkBrowserShortcut, WORK_BROWSER_ROUTE } = await import("../src/react-app/domains/work/work-mode");
     expect(WORK_BROWSER_ROUTE).toBe("/work/browser");
@@ -240,6 +263,20 @@ describe("work browser rules", () => {
       expect(line).not.toMatch(/[\u2013\u2014!]/);
       expect(line).not.toMatch(/\bAI\b|default browser\?/);
     }
+  });
+});
+
+describe("bookmark tiles", () => {
+  test("the panel's bookmark tiles carry the same marks as Browser home", async () => {
+    const { BookmarkTiles } = await import("../src/react-app/domains/browser-logins/bookmark-tiles");
+    const library = libraryBridge({ topBookmarks: async () => [{ url: "https://northwind.zendesk.com/agent", title: "Zendesk" }, { url: "https://tms.acme.example/", title: "Acme TMS" }] });
+    await withDom(async ({ mount }) => {
+      await mount(<BookmarkTiles onOpen={() => undefined} />);
+      const tiles = [...document.querySelectorAll('[data-testid="browser-bookmark-tiles"] [data-brand-tile]')];
+      expect(tiles.map((entry) => entry.getAttribute("data-brand-tile"))).toEqual(["zendesk", "custom"]);
+      // No brand: the letter of the bookmark's name (A for Acme TMS), never the host's first label.
+      expect(tiles[1]?.textContent).toBe("A");
+    }, { browserLibrary: library, browser: fakeBrowser(stateOf([])).browser });
   });
 });
 
@@ -322,6 +359,34 @@ describe("browser home", () => {
     }, { browserLibrary: library, browser: fakeBrowser(stateOf([])).browser });
   });
 
+  test("Recent past 50 pages: the true count, Show more with no number, 50 rows, and a filter that asks the library", async () => {
+    const { BrowserHome } = await import("../src/react-app/domains/work/browser/browser-home");
+    const asked: Array<{ limit?: number; query?: string }> = [];
+    const library = libraryBridge({
+      recent: async (request) => {
+        asked.push(request);
+        if (request.query) return { pages: [{ url: "https://tms.example.com/shipments/1599", title: "Shipment 1599", lastVisitAt: Date.now() - 86_400_000 * 20 }], total: 1 };
+        return { pages: pages(50), total: 1600 };
+      },
+    });
+    await withDom(async ({ mount, act }) => {
+      await mount(<BrowserHome companyName={null} apps={[]} onOpen={() => undefined} />);
+      expect(allByTestId("browser-home-recent-row")).toHaveLength(5);
+      // Not "Show all (50)": there are 1,600, and the list shows 50 of them.
+      expect(byTestId("browser-home-more-recent")?.textContent).toBe("Show more");
+      await act(() => byTestId("browser-home-more-recent")!.click());
+      expect(allByTestId("browser-home-recent-row")).toHaveLength(50);
+      expect(byTestId("browser-home-recent-note")?.textContent).toBe("The 50 most recent pages. Filter to find any page from the last 30 days.");
+      await act(async () => {
+        typeInto(byTestId("browser-home-filter-recent") as HTMLInputElement, "1599");
+        await wait(260);
+      });
+      expect(asked.at(-1)).toEqual({ limit: 50, query: "1599" });
+      expect(allByTestId("browser-home-recent-row").map((row) => row.textContent)).toEqual([expect.stringContaining("Shipment 1599")]);
+      expect(byTestId("browser-home-recent-note")).toBeNull();
+    }, { browserLibrary: library, browser: fakeBrowser(stateOf([])).browser });
+  });
+
   test("nothing yet: one calm line and one action; no company group without apps", async () => {
     const { BrowserHome } = await import("../src/react-app/domains/work/browser/browser-home");
     await withDom(async ({ mount }) => {
@@ -381,6 +446,79 @@ describe("the Work browser page", () => {
     }, { browser: none.browser, browserLibrary: libraryBridge() });
   });
 
+  test("every tab has a mark: the app's logo, else the page's icon, else a globe when that icon does not load", async () => {
+    const { WorkBrowserPage } = await import("../src/react-app/domains/work/browser/work-browser-page");
+    const fake = fakeBrowser(stateOf([
+      tab("u1", USER_TABS_OWNER, "https://linear.app/acme", { label: "Ops board" }),
+      tab("u2", USER_TABS_OWNER, "https://tms.example.com/s/4471", { label: "Shipment 4471", favicon: "https://tms.example.com/favicon.ico" }),
+      tab("u3", USER_TABS_OWNER, "https://tms.example.com/s/4472", { label: "Shipment 4472" }),
+    ], { [USER_TABS_OWNER]: "u1" }));
+    await withDom(async ({ mount, act }) => {
+      await mount(<WorkBrowserPage onAsk={async () => undefined} openExternal={() => undefined} />);
+      const marks = allByTestId("work-browser-tab").map((entry) => entry.querySelector("svg, img"));
+      expect(marks.every(Boolean)).toBe(true);
+      expect(marks[0]?.getAttribute("data-connector-icon")).toBe("linear");
+      expect(marks[1]?.tagName).toBe("IMG");
+      expect(marks[2]?.getAttribute("data-testid")).toBe("work-browser-tab-globe");
+      await act(() => { marks[1]!.dispatchEvent(new Event("error")); });
+      expect(allByTestId("work-browser-tab")[1]?.querySelector('[data-testid="work-browser-tab-globe"]')).not.toBeNull();
+    }, { browser: fake.browser, browserLibrary: libraryBridge() });
+  });
+
+  test("Site settings in .. opens this site's choices; it is offered only where the app keeps them", async () => {
+    const { WorkBrowserPage } = await import("../src/react-app/domains/work/browser/work-browser-page");
+    const { WORK_BROWSER_SITE_SETTINGS_EVENT } = await import("../src/react-app/domains/work/browser/work-browser");
+    const opened: string[] = [];
+    const onOpen = (event: Event) => opened.push((event as CustomEvent<{ url: string }>).detail.url);
+    window.addEventListener(WORK_BROWSER_SITE_SETTINGS_EVENT, onOpen);
+    await withDom(async ({ mount, act }) => {
+      await mount(<WorkBrowserPage onAsk={async () => undefined} openExternal={() => undefined} />);
+      await act(() => byTestId("work-browser-more")!.click());
+      await act(() => byTestId("work-browser-menu-site-settings")!.click());
+      expect(opened).toEqual(["https://tms.example.com/s/4471"]);
+    }, { browser: fakeBrowser(withChat).browser, browserLibrary: libraryBridge(), browserSites: { list: async () => [] } });
+    window.removeEventListener(WORK_BROWSER_SITE_SETTINGS_EVENT, onOpen);
+    await withDom(async ({ mount, act }) => {
+      await mount(<WorkBrowserPage onAsk={async () => undefined} openExternal={() => undefined} />);
+      await act(() => byTestId("work-browser-more")!.click());
+      expect(byTestId("work-browser-menu-site-settings")).toBeNull();
+    }, { browser: fakeBrowser(withChat).browser, browserLibrary: libraryBridge() });
+  });
+
+  test("the import offer: one bar at a time, gone after an import from anywhere, and seen after one visit", async () => {
+    const { WorkBrowserPage } = await import("../src/react-app/domains/work/browser/work-browser-page");
+    const { usePersistedBrowserLoginsStore } = await import("../src/react-app/domains/browser-logins/browser-logins-store");
+    const chrome = { platform: "darwin" as const, historyDays: 90, browsers: [{ browser: "chrome" as const, label: "Google Chrome", short: "Chrome", profiles: [{ id: "chrome:Default", name: "Work", has: { bookmarks: true, history: true, signIns: true } }], signIns: { importable: true } }] };
+    const sources = async () => chrome as unknown as Awaited<ReturnType<BrowserLibraryBridge["sources"]>>;
+    // At the tab limit the limit bar is the one bar: the offer waits.
+    usePersistedBrowserLoginsStore.setState({ importOffer: null });
+    const chats = Array.from({ length: 10 }, (_value, index) => tab(`c${index}`, `ses_${index}`, `https://agent${index}.example/`));
+    const full = fakeBrowser(stateOf([...userTabs, ...chats], { [USER_TABS_OWNER]: "u1" }));
+    await withDom(async ({ mount, act }) => {
+      await mount(<WorkBrowserPage onAsk={async () => undefined} openExternal={() => undefined} />);
+      const offer = byTestId("browser-import-offer");
+      expect(offer).not.toBeNull();
+      for (const button of offer!.querySelectorAll("button")) expect(button.className).toContain("text-[13px]");
+      await act(() => byTestId("work-browser-new-tab")!.click());
+      expect(byTestId("work-browser-limit")).not.toBeNull();
+      expect(byTestId("browser-import-offer")).toBeNull();
+    }, { browser: full.browser, browserLibrary: libraryBridge({ sources }) });
+    // Shown during that visit: resolved once the page closed, so the next visit has no offer.
+    expect(usePersistedBrowserLoginsStore.getState().importOffer).toBe("seen");
+    await withDom(async ({ mount }) => {
+      await mount(<WorkBrowserPage onAsk={async () => undefined} openExternal={() => undefined} />);
+      expect(byTestId("browser-import-offer")).toBeNull();
+    }, { browser: fakeBrowser(withChat).browser, browserLibrary: libraryBridge({ sources }) });
+    // An import made anywhere else (Settings, Browser home): no offer, and it never comes back.
+    usePersistedBrowserLoginsStore.setState({ importOffer: null });
+    await withDom(async ({ mount }) => {
+      await mount(<WorkBrowserPage onAsk={async () => undefined} openExternal={() => undefined} />);
+      expect(byTestId("browser-import-offer")).toBeNull();
+    }, { browser: fakeBrowser(withChat).browser, browserLibrary: libraryBridge({ sources, summary: async () => ({ imports: [{ sourceId: "chrome:Default", browser: "chrome", label: "Google Chrome", name: "Work", importedAt: Date.now(), bookmarks: 3, history: 3, signIns: null }], bookmarks: 3, history: 3 }) }) });
+    expect(usePersistedBrowserLoginsStore.getState().importOffer).toBe("imported");
+    usePersistedBrowserLoginsStore.setState({ importOffer: null });
+  });
+
   test("Ask fills the composer with the title, address and selection; nothing is sent until Send", async () => {
     const { WorkBrowserPage } = await import("../src/react-app/domains/work/browser/work-browser-page");
     const fake = fakeBrowser(withChat);
@@ -424,6 +562,35 @@ describe("the Work browser page", () => {
 });
 
 describe("the side panel", () => {
+  test("beside an Ask chat it shows the person's own tab (still theirs), and the chat's own tabs once that ends", async () => {
+    const { SidePanel: Panel } = await import("../src/react-app/domains/session/panel/side-panel");
+    const { DenAuthProvider } = await import("../src/react-app/domains/cloud/den-auth-provider");
+    const { sidePanelContentKey, useAskBesideStore } = await import("../src/react-app/domains/work/browser/use-work-browser");
+    const { usePanelTabStore } = await import("../src/react-app/domains/session/panel/panel-tab-store");
+    const SidePanel = (props: Parameters<typeof Panel>[0]) => <DenAuthProvider><Panel {...props} /></DenAuthProvider>;
+    const asked = tab("u1", USER_TABS_OWNER, "https://tms.example.com/s/4471", { label: "Shipment 4471" });
+    const agent = tab("c1", "ses_ask", "https://agent.example/", { label: "Agent page" });
+    usePanelTabStore.getState().openTab(USER_TABS_OWNER, asked);
+    usePanelTabStore.getState().openTab("ses_ask", agent);
+    useAskBesideStore.getState().add("ses_ask");
+    const beside = useAskBesideStore.getState().sessions.ses_ask === true;
+    expect(sidePanelContentKey("ses_ask", beside)).toBe(USER_TABS_OWNER);
+    const fake = fakeBrowser(stateOf([asked, agent], { [USER_TABS_OWNER]: "u1", ses_ask: "c1" }));
+    await withDom(async ({ mount }) => {
+      await mount(<SidePanel sessionId={sidePanelContentKey("ses_ask", beside)} client={null} workspaceId={null} workspaceRoot="" onClose={() => undefined} />);
+      expect(document.body.textContent).toContain("Shipment 4471");
+      expect(document.body.textContent).not.toContain("Agent page");
+      // The person's own panel (their key: the agent cannot list or drive it): Expand, and no agent strip.
+      expect(byTestId("browser-expand")).not.toBeNull();
+      expect(document.body.textContent).not.toContain("Built-in browser");
+    }, { browser: fake.browser, browserLibrary: libraryBridge() });
+    useAskBesideStore.getState().end("ses_ask");
+    expect(useAskBesideStore.getState().sessions.ses_ask).toBeUndefined();
+    expect(sidePanelContentKey("ses_ask", false)).toBe("ses_ask");
+    usePanelTabStore.getState().clearSession(USER_TABS_OWNER);
+    usePanelTabStore.getState().clearSession("ses_ask");
+  });
+
   test("for a chat it is unchanged; on Work pages a blank tab shows Browser home, Expand moves the tab, and no agent strip", async () => {
     const { SidePanel: Panel } = await import("../src/react-app/domains/session/panel/side-panel");
     const { DenAuthProvider } = await import("../src/react-app/domains/cloud/den-auth-provider");

@@ -252,6 +252,7 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
     suspendOldest(sessionId) { return ipcRenderer.invoke("omnirush:browser:suspendOldest", sessionId); },
     restoreSaved(entries, sessionId, activeIndex) { return ipcRenderer.invoke("omnirush:browser:restoreSaved", entries, sessionId, activeIndex); },
     pageContext(tabId) { return ipcRenderer.invoke("omnirush:browser:pageContext", tabId); },
+    pageStill() { return ipcRenderer.invoke("omnirush:browser:pageStill"); },
     restoreTab(tabId, sessionId) { return ipcRenderer.invoke("omnirush:browser:restoreTab", tabId, sessionId); },
     releaseTab(tabId, sessionId) { return ipcRenderer.invoke("omnirush:browser:releaseTab", tabId, sessionId); },
     closeAllTabs() { return ipcRenderer.invoke("omnirush:browser:closeAllTabs"); },

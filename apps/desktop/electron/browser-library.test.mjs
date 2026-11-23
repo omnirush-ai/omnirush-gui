@@ -252,6 +252,27 @@ test("Recent for the Work browser: newest visits of the last 30 days, one row pe
   assert.equal((await ipc.call("omnirush:browser-library:recent", "junk")).total, 3);
 });
 
+test("Recent counts every page of the last 30 days and its filter finds any of them; it lists at most 50", async () => {
+  const fixture = fixtureHome();
+  const history = new DatabaseSync(join(fixture.home, "Library", "Application Support", "Google", "Chrome", "Default", "History"));
+  const insert = history.prepare("INSERT INTO urls (url, title, visit_count, typed_count, last_visit_time) VALUES (?, ?, 1, 0, ?)");
+  for (let index = 0; index < 1600; index += 1) insert.run(`https://tms.example.com/shipments/${index}`, `Shipment ${index}`, chromiumTime(nowSeconds - 7_200 - index * 60));
+  history.close();
+  const { library } = setup({ fixture });
+  await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
+  const recent = await library.recent();
+  assert.equal(recent.pages.length, 50);
+  // The true count (1,600 shipments and 3 more pages), never the 50 listed.
+  assert.equal(recent.total, 1_603);
+  // The oldest shipment is found by the filter though it is far past the 50 listed.
+  const oldest = await library.recent({ query: "shipments/1599" });
+  assert.deepEqual(oldest.pages.map((page) => page.url), ["https://tms.example.com/shipments/1599"]);
+  assert.equal(oldest.total, 1);
+  const many = await library.recent({ query: "shipment 15" });
+  assert.equal(many.pages.length, 50);
+  assert.equal(many.total, 111, "Shipment 15 and 150 to 159 and 1500 to 1599");
+});
+
 test("the star adds and removes a page; clearing imports keeps starred pages", async () => {
   const { library } = setup();
   await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });

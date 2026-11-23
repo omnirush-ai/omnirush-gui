@@ -18,15 +18,34 @@ export function reportBrowserError(error: unknown) {
   toast.error(error instanceof Error ? error.message : String(error));
 }
 
+export type NativeBrowserViewOptions = {
+  /**
+   * The person's own tabs (the Work browser, the panel beside Work pages): while a menu or dialog covers the page, the
+   * page steps aside and this gets a picture of it to show in its place (null once the page is back), so the page
+   * never goes blank under a menu. A chat's panel leaves it out and keeps the page hidden as before.
+   */
+  onStill?: (still: string | null) => void;
+};
+
 /**
  * Keeps the native page view on top of `contentRef`: shown for `ownerKey` (the conversation, or the person's own
  * tabs), sized to the box, hidden while a dialog or menu covers it and when `hidden`.
  */
-export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement | null>, ownerKey: string, hidden = false) {
+export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement | null>, ownerKey: string, hidden = false, options: NativeBrowserViewOptions = {}) {
   const isAvailable = Boolean(getElectronBrowser());
   const shownRef = React.useRef(false);
   const boundsFrameRef = React.useRef<number | null>(null);
   const lastBoundsRef = React.useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const onStillRef = React.useRef(options.onStill);
+  onStillRef.current = options.onStill;
+  // Taking the page's picture before it steps aside: nothing else moves the view meanwhile.
+  const steppingAsideRef = React.useRef(false);
+  const stillShownRef = React.useRef(false);
+  const setStill = React.useCallback((still: string | null) => {
+    if (!still && !stillShownRef.current) return;
+    stillShownRef.current = Boolean(still);
+    onStillRef.current?.(still);
+  }, []);
 
   React.useLayoutEffect(() => {
     const browser = getElectronBrowser();
@@ -52,6 +71,7 @@ export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement 
       browser?.hide?.();
       shownRef.current = false;
       lastBoundsRef.current = null;
+      setStill(null);
 
       if (boundsFrameRef.current != null) {
         window.cancelAnimationFrame(boundsFrameRef.current);
@@ -76,10 +96,25 @@ export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement 
     };
 
     const syncBounds = () => {
+      if (steppingAsideRef.current) return;
       const bounds = computeBounds(content);
+      const occluded = hasNativeBrowserOccluder();
 
-      if (bounds.width < 1 || bounds.height < 1 || hasNativeBrowserOccluder()) {
+      if (bounds.width < 1 || bounds.height < 1 || occluded) {
         if (shownRef.current) {
+          const takeStill = occluded && bounds.width >= 1 && bounds.height >= 1 && onStillRef.current && browser.pageStill;
+          if (takeStill) {
+            // The page's picture goes in its place first, then the page steps aside for the menu.
+            steppingAsideRef.current = true;
+            void browser.pageStill!().catch(() => null).then((still) => {
+              if (!disposed && still) setStill(still);
+              if (!disposed) browser.hide?.();
+              shownRef.current = false;
+              lastBoundsRef.current = null;
+              steppingAsideRef.current = false;
+            });
+            return;
+          }
           browser.hide?.();
           shownRef.current = false;
           lastBoundsRef.current = null;
@@ -91,9 +126,16 @@ export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement 
       if (!shownRef.current) {
         // Naming the owner lets the native browser put that owner's tabs on
         // screen and keep every other conversation's tabs silently in the background.
-        void browser.show?.(bounds, ownerKey).catch(reportBrowserError);
+        const shown = browser.show?.(bounds, ownerKey);
+        void shown?.catch(reportBrowserError);
         shownRef.current = true;
         lastBoundsRef.current = bounds;
+        // The picture goes once the page is back on top of it.
+        if (stillShownRef.current) {
+          void Promise.resolve(shown).catch(() => undefined).then(() => {
+            window.requestAnimationFrame(() => { if (!disposed && shownRef.current) setStill(null); });
+          });
+        }
         return;
       }
 
@@ -130,10 +172,27 @@ export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement 
       browser.hide?.();
       shownRef.current = false;
       lastBoundsRef.current = null;
+      steppingAsideRef.current = false;
+      setStill(null);
     };
-  }, [contentRef, hidden, isAvailable, ownerKey]);
+  }, [contentRef, hidden, isAvailable, ownerKey, setStill]);
 
   return isAvailable;
+}
+
+/** The picture of the page shown in its place while a menu covers it (see `NativeBrowserViewOptions.onStill`). */
+export function BrowserPageStill({ still }: { still: string | null }) {
+  if (!still) return null;
+  return (
+    <img
+      src={still}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className="pointer-events-none absolute inset-0 size-full select-none object-cover object-left-top"
+      data-testid="browser-page-still"
+    />
+  );
 }
 
 /** Back, forward and reload (reload on a suspended tab loads its saved address again). */

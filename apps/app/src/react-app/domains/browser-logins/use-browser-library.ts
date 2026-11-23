@@ -3,13 +3,13 @@
 // Work feature: an account with Work on (a company account, or Work turned on for it). Everyone else keeps the
 // browser exactly as before.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback } from "react";
 
 import type { BrowserImportSources, BrowserLibraryBridge } from "@/app/lib/desktop";
-import type { OmniRushWorkState } from "@/app/lib/omnirush-server";
 import { isElectronRuntime } from "@/app/utils";
 
 import { useEnterpriseFlags } from "../work/enterprise-mode";
+import { useCachedWorkState } from "../work/work-state-cache";
 
 export function getBrowserLibraryBridge(): BrowserLibraryBridge | null {
   if (!isElectronRuntime()) return null;
@@ -27,18 +27,10 @@ export const browserLibraryKeys = {
   inspect: (sourceId: string) => [...BROWSER_LIBRARY_KEY, "inspect", sourceId] as const,
 };
 
-/** The Work state answers the app already holds (one per server), read without a client. */
-function workOnInCache(queryClient: ReturnType<typeof useQueryClient>): boolean {
-  return queryClient.getQueriesData<OmniRushWorkState>({ queryKey: ["omnirush-work-state"] }).some(([, data]) => data?.enabled === true);
-}
-
-/** Whether this account has Work: a company account, or Work turned on for it. */
+/** Whether this account has Work: a company account, or Work turned on for it (the Work state the app holds). */
 export function useWorkUser(): boolean {
-  const queryClient = useQueryClient();
   const enterprise = useEnterpriseFlags();
-  const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-  const snapshot = useCallback(() => workOnInCache(queryClient), [queryClient]);
-  const workOn = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const workOn = useCachedWorkState() !== null;
   return enterprise.on || workOn;
 }
 

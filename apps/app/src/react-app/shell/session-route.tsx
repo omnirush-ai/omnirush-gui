@@ -133,7 +133,7 @@ import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
 import { ASK_WORK_RECORD_EVENT } from "@/react-app/domains/work/viewer/records";
 import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
 import { WorkBrowserPage } from "@/react-app/domains/work/browser/work-browser-page";
-import { useWorkBrowserRestore } from "@/react-app/domains/work/browser/use-work-browser";
+import { useAskBesideStore, useWorkBrowserRestore } from "@/react-app/domains/work/browser/use-work-browser";
 import { WORK_BROWSER_EXPAND_EVENT } from "@/react-app/domains/work/browser/work-browser";
 import { useBrowserLibraryAvailable } from "@/react-app/domains/browser-logins/use-browser-library";
 import { NO_SESSION_SIDE_PANEL_KEY } from "@/react-app/domains/session/panel/side-panel-session";
@@ -3845,11 +3845,16 @@ export function SessionRoute() {
     }
   }, [client, local, refreshRouteState]);
 
-  const startWorkChat = async (prompt: string, attachments: ComposerAttachment[] = []) => {
+  const startWorkChat = async (prompt: string, attachments: ComposerAttachment[] = [], options: { pageBeside?: boolean } = {}) => {
     const workspaceId = workWorkspace?.id;
     if (!workspaceId) throw new Error(t("work.home.not_ready"));
     const sessionId = await handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary");
     if (!sessionId) throw new Error(t("work.home.chat_failed"));
+    // Ask in the Work browser: the chat opens with the page beside it (the person's own tab, never the agent's).
+    if (options.pageBeside) {
+      useAskBesideStore.getState().add(sessionId);
+      useUiStateStore.getState().setSidePanelState(sessionId, "panel");
+    }
     // Attachment chips live in memory only, so the stored fallback draft drops their tokens (as Code's new task does).
     saveSessionDraft(sessionDraftScope, workspaceId, sessionId, { text: prompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
     useComposerStateStore.getState().setDraft(sessionId, prompt);
@@ -4064,7 +4069,7 @@ export function SessionRoute() {
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
           <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : workBrowserActive ? (
-          <WorkBrowserPage onAsk={(prompt) => startWorkChat(prompt)} openExternal={(url) => platform.openLink(url)} />
+          <WorkBrowserPage onAsk={(prompt) => startWorkChat(prompt, [], { pageBeside: true })} openExternal={(url) => platform.openLink(url)} />
         ) : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? (
           <WorkOnboarding
             client={client ?? null}

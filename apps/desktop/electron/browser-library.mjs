@@ -580,7 +580,8 @@ export function createBrowserLibrary({
   /**
    * Pages for the Work browser's Recent list: the newest visits of the last 30
    * days, one row per address, at most 50, optionally filtered by what was
-   * typed. `total` counts the same window (capped at 50) for "Show all".
+   * typed (across the whole 30 days, not only the rows listed). `total` counts
+   * every page in the same window, so the list never claims fewer than there are.
    */
   function recent({ limit = RECENT_LIMIT, query = "" } = {}) {
     const size = Math.max(1, Math.min(RECENT_LIMIT, Math.trunc(Number(limit) || RECENT_LIMIT)));
@@ -592,7 +593,7 @@ export function createBrowserLibrary({
     const pages = store.prepare(`SELECT url, MAX(title) AS title, MAX(last_visit_at) AS last FROM history WHERE last_visit_at >= ?${filter} GROUP BY url ORDER BY last DESC LIMIT ?`)
       .all(...args, size)
       .map((row) => ({ url: String(row.url), title: String(row.title ?? ""), lastVisitAt: Number(row.last) * 1000 }));
-    const total = Number(store.prepare(`SELECT COUNT(*) AS n FROM (SELECT url FROM history WHERE last_visit_at >= ?${filter} GROUP BY url LIMIT ${RECENT_LIMIT})`).get(...args)?.n ?? 0);
+    const total = Number(store.prepare(`SELECT COUNT(DISTINCT url) AS n FROM history WHERE last_visit_at >= ?${filter}`).get(...args)?.n ?? 0);
     return { pages, total };
   }
 

@@ -6,7 +6,8 @@ export const BROWSER_LOGIN_SYNC_STORE_KEY = "omnirush:browser-login-sync:v1";
 export type LoginSyncPromptOutcome = "synced" | "dismissed";
 
 /** The one-line "bring your bookmarks" offer in the built-in browser (Work accounts): shown until imported or dismissed. */
-export type BrowserImportOfferOutcome = "imported" | "dismissed";
+/** How the import offer ended: imported (from it or anywhere else), Not now, or shown in one Work browser visit. */
+export type BrowserImportOfferOutcome = "imported" | "dismissed" | "seen";
 
 /**
  * Local memory for the one-time sync setup offer.

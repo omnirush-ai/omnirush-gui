@@ -82,6 +82,7 @@ export class WebContentsView {
       getTitle() { return ""; },
       isLoading() { return this.loading; },
       isCurrentlyAudible() { return this.audible; },
+      async capturePage() { return { isEmpty: () => false, toJPEG: () => Buffer.from("still of " + this.url) }; },
       canGoBack() { return false; },
       canGoForward() { return false; },
       destinations: [],
@@ -272,6 +273,43 @@ test("showing the panel sizes the active tab and resets viewport emulation left 
   assert.deepEqual(commands(view), [...BACKGROUND_SEQUENCE, ...FOREGROUND_SEQUENCE]);
   assert.equal(invoke("omnirush:browser:state").backgroundWindowCount, 0, "the hidden host is released");
   assert.equal(view.webContents.debugger.isAttached(), false, "the temporary debugger session is released");
+});
+
+test("a new tab for a page loads that page once and first; a blank new tab still starts blank", async () => {
+  const { invoke, views } = createPanel();
+  invoke("omnirush:browser:show", PANEL_BOUNDS);
+  for (const url of ["https://tms.example/shipments/4471", "linear.example/ops"]) {
+    const before = views().length;
+    invoke("omnirush:browser:createTab", url, "__omnirush_no_session__");
+    await flush();
+    const view = views().at(-1);
+    assert.equal(views().length, before + 1);
+    // Exactly one load, for that page: no about:blank queued ahead of it to abort it (ERR_ABORTED, a blank tab).
+    assert.deepEqual(view.webContents.loads, [url.startsWith("https://") ? url : `https://${url}`]);
+  }
+  invoke("omnirush:browser:createTab", "about:blank", "__omnirush_no_session__");
+  await flush();
+  assert.deepEqual(views().at(-1).webContents.loads, ["about:blank"]);
+  invoke("omnirush:browser:destroy");
+});
+
+test("a picture of the person's page on screen goes to the app's own window only, never of a chat's tab", async () => {
+  const user = createPanel();
+  user.invoke("omnirush:browser:setVisibleSession", "__omnirush_no_session__");
+  user.invoke("omnirush:browser:show", PANEL_BOUNDS, "__omnirush_no_session__");
+  user.invoke("omnirush:browser:createTab", "https://tms.example/s/4471", "__omnirush_no_session__");
+  await flush();
+  assert.equal(await user.invoke("omnirush:browser:pageStill"), `data:image/jpeg;base64,${Buffer.from("still of https://tms.example/s/4471").toString("base64")}`);
+  // Anything but the app's own window gets nothing.
+  assert.equal(await user.emit("omnirush:browser:pageStill", { sender: {}, senderFrame: {} }), null);
+  user.invoke("omnirush:browser:destroy");
+  const chat = createPanel();
+  chat.invoke("omnirush:browser:setVisibleSession", "ses_a");
+  chat.invoke("omnirush:browser:show", PANEL_BOUNDS, "ses_a");
+  chat.invoke("omnirush:browser:createTab", "https://agent.example/", "ses_a");
+  await flush();
+  assert.equal(await chat.invoke("omnirush:browser:pageStill"), null);
+  chat.invoke("omnirush:browser:destroy");
 });
 
 test("selecting a tab from the tab strip resets that tab only", async () => {

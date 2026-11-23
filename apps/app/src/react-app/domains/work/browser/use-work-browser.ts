@@ -2,15 +2,37 @@
 // on this computer, and the new-tab address for a Work account. The person's tabs use the panel key no conversation
 // owns (USER_TABS_OWNER), so no agent ever lists or drives them.
 import { USER_TABS_OWNER, type BrowserPanelTab, type BrowserStatePayload } from "@omnirush/browser-tabs";
-import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-
-import type { OmniRushWorkState } from "@/app/lib/omnirush-server";
+import { create } from "zustand";
 
 import { useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
 import { getElectronBrowser } from "../../session/panel/utils";
 import { useEnterpriseFlags } from "../enterprise-mode";
+import { useCachedWorkState } from "../work-state-cache";
 import { type CompanyApp, companyApps, liveTabCount, readSavedTabs, savedTabsFrom, WORK_BROWSER_NEW_TAB_URL, writeSavedTabs } from "./work-browser";
+
+/**
+ * Work chats started from Ask in the Work browser (this launch): the chat opens with the person's own tabs in its side
+ * panel, the page they asked about on screen beside it. The tabs stay theirs (the panel key no conversation owns), so
+ * the chat's agent never lists, reads or drives them. It ends when the chat's own browser or a record needs the panel,
+ * or the panel closes.
+ */
+type AskBeside = { sessions: Record<string, true>; add: (sessionId: string) => void; end: (sessionId: string) => void };
+export const useAskBesideStore = create<AskBeside>()((set) => ({
+  sessions: {},
+  add: (sessionId) => set((state) => ({ sessions: { ...state.sessions, [sessionId]: true } })),
+  end: (sessionId) => set((state) => {
+    if (!state.sessions[sessionId]) return state;
+    const sessions = { ...state.sessions };
+    delete sessions[sessionId];
+    return { sessions };
+  }),
+}));
+
+/** Which tabs a chat's side panel shows: the person's own beside an Ask chat, else the chat's. */
+export function sidePanelContentKey(chatKey: string, pageBeside: boolean): string {
+  return pageBeside ? USER_TABS_OWNER : chatKey;
+}
 
 /** Tabs that came back from the restore list this launch and have not loaded yet: they load when shown. */
 export const restoredTabIds = new Set<string>();
@@ -100,14 +122,8 @@ export function useNewBrowserTabUrl(): string | undefined {
 
 /** The company's apps and name for Browser home, from the Work state the app already holds (no request of its own). */
 export function useCompanyApps(): { companyName: string | null; apps: CompanyApp[] } {
-  const queryClient = useQueryClient();
   const enterprise = useEnterpriseFlags();
-  const subscribe = React.useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-  const snapshot = React.useCallback(
-    () => queryClient.getQueriesData<OmniRushWorkState>({ queryKey: ["omnirush-work-state"] }).find(([, data]) => data?.enabled)?.[1] ?? null,
-    [queryClient],
-  );
-  const state = React.useSyncExternalStore(subscribe, snapshot, snapshot);
+  const state = useCachedWorkState();
   const apps = React.useMemo(() => companyApps(state), [state]);
   return { companyName: enterprise.orgName, apps };
 }

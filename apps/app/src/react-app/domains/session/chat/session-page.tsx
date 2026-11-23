@@ -89,6 +89,7 @@ import { SidePanel } from "../panel/side-panel";
 import { getSidePanelSessionKey, NO_SESSION_SIDE_PANEL_KEY } from "../panel/side-panel-session";
 import { useCreateTab } from "../panel/use-side-panel-tabs";
 import { useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
+import { sidePanelContentKey, useAskBesideStore } from "../../work/browser/use-work-browser";
 import { WORK_BROWSER_NEW_TAB_URL } from "../../work/browser/work-browser";
 import { TerminalDock } from "../terminal/terminal-dock";
 import { LazyEditorPanel } from "../editor/editor-entry";
@@ -478,6 +479,13 @@ export function SessionPage(props: SessionPageProps) {
   const sidebarOpen = useUiStateStore((state) => state.sidebarOpen);
   const setSidebarOpen = useUiStateStore((state) => state.setSidebarOpen);
   const sidePanelSessionKey = getSidePanelSessionKey(props.selectedSessionId);
+  // A Work account in the desktop app: the Work browser (Browser home on new tabs, the Globe with no tabs).
+  const workBrowser = useBrowserLibraryAvailable();
+  // A Work chat started from Ask in the Work browser: its panel shows the person's own tabs (the page they asked
+  // about), never handed to the agent, until the chat's own browser or a record needs the panel.
+  const askedBeside = useAskBesideStore((state) => Boolean(props.selectedSessionId && state.sessions[props.selectedSessionId]));
+  const pageBeside = workBrowser && askedBeside;
+  const panelContentKey = sidePanelContentKey(sidePanelSessionKey, pageBeside);
   const sessionSidePanel = useUiStateStore((state) => (
     state.sidePanelState[sidePanelSessionKey] ?? null
   ));
@@ -489,8 +497,8 @@ export function SessionPage(props: SessionPageProps) {
   const transcriptTargets = usePanelTabStore((state) => (
     props.selectedSessionId ? state.transcriptArtifactTargets[props.selectedSessionId] ?? EMPTY_TRANSCRIPT_TARGETS : EMPTY_TRANSCRIPT_TARGETS
   ));
-  const sessionPanelState = useSessionPanelState(sidePanelSessionKey);
-  const activePanelTab = useActivePanelTab(sidePanelSessionKey);
+  const sessionPanelState = useSessionPanelState(panelContentKey);
+  const activePanelTab = useActivePanelTab(panelContentKey);
   const [hiddenTargetRevision, setHiddenTargetRevision] = useState(0);
   const hiddenAccessibleTargetIds = useMemo(
     () => readHiddenAccessibleTargetIds(props.selectedWorkspaceId, props.selectedSessionId),
@@ -505,8 +513,6 @@ export function SessionPage(props: SessionPageProps) {
   const hasArtifactTargets = artifactTargetCount > 0;
   const hasBrowserTabs = sessionPanelState.tabs.some((tab) => tab.type === "browser");
   const activeSidePanel = props.workBrowserPage ? null : sessionSidePanel;
-  // A Work account in the desktop app: the Work browser (Browser home on new tabs, the Globe with no tabs).
-  const workBrowser = useBrowserLibraryAvailable();
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
   // A Work record in the panel reads best at 400 px or more.
@@ -648,18 +654,19 @@ export function SessionPage(props: SessionPageProps) {
   }, [sidePanelSessionKey, toggleSidePanelState]);
 
   // Which conversation's browser tabs may take the screen. Every other
-  // conversation's tabs keep loading silently in the background.
+  // conversation's tabs keep loading silently in the background. The person's
+  // own tabs take it while the Work browser shows them, or this panel does with
+  // no conversation selected or beside an Ask chat (a blank tab under Browser
+  // home never attaches a page that would say so).
+  const userTabsOnScreen = props.workBrowserPage === true || (workBrowser && (!props.selectedSessionId || pageBeside) && sidePanelOpen);
   useEffect(() => {
     if (!isElectronRuntime()) return;
-    void (window as Window).__OMNIRUSH_ELECTRON__?.browser?.setVisibleSession?.(props.selectedSessionId ?? null);
-  }, [props.selectedSessionId]);
-  // With no conversation selected, the person's own tabs take the screen while the Work browser or this panel shows
-  // them (a blank tab under Browser home never attaches a page that would say so).
-  const userTabsOnScreen = props.workBrowserPage === true || (workBrowser && !props.selectedSessionId && sidePanelOpen);
-  useEffect(() => {
-    if (!isElectronRuntime() || !userTabsOnScreen) return;
-    void (window as Window).__OMNIRUSH_ELECTRON__?.browser?.setVisibleSession?.(NO_SESSION_SIDE_PANEL_KEY);
+    void (window as Window).__OMNIRUSH_ELECTRON__?.browser?.setVisibleSession?.(userTabsOnScreen ? NO_SESSION_SIDE_PANEL_KEY : props.selectedSessionId ?? null);
   }, [props.selectedSessionId, userTabsOnScreen]);
+  // The page beside an Ask chat goes when the panel closes; the next open shows the chat's own tabs.
+  useEffect(() => {
+    if (askedBeside && !sidePanelOpen && props.selectedSessionId) useAskBesideStore.getState().end(props.selectedSessionId);
+  }, [askedBeside, props.selectedSessionId, sidePanelOpen]);
 
   // Open the side panel of the conversation that owns a browser event. For the
   // conversation on screen that is the visible panel; for a background
@@ -684,6 +691,8 @@ export function SessionPage(props: SessionPageProps) {
     if (!browser) return;
     const unsubOpen = browser.onPanelOpened?.((payload) => {
       const ownerSessionId = payload?.ownerSessionId ?? props.selectedSessionId;
+      // The chat's own browser needs its panel (an agent's page, its website question): the page beside it steps back.
+      if (payload?.ownerSessionId) useAskBesideStore.getState().end(payload.ownerSessionId);
       if (ownerSessionId && payload?.tab) {
         // A requested navigation selects its page, even when an artifact was
         // active. Passive title/loading updates still preserve that artifact.
@@ -1052,10 +1061,11 @@ export function SessionPage(props: SessionPageProps) {
   }, [setCurrentSidePanel]);
   // A Work item (Today, Search, Deals, Knowledge, a Work chat's sources) opens in this panel's record viewer.
   useEffect(() => onOpenRecordRequest((request) => {
+    if (props.selectedSessionId) useAskBesideStore.getState().end(props.selectedSessionId);
     openRecordTab(sidePanelSessionKey, request);
     setCurrentSidePanel("panel");
     if (isMobile) selectNarrowPane("panel");
-  }), [isMobile, selectNarrowPane, setCurrentSidePanel, sidePanelSessionKey]);
+  }), [isMobile, props.selectedSessionId, selectNarrowPane, setCurrentSidePanel, sidePanelSessionKey]);
   const [showDelayedSessionLoadingState, setShowDelayedSessionLoadingState] = useState(false);
 
   const selectedSessionTitle = useMemo(
@@ -1524,7 +1534,7 @@ export function SessionPage(props: SessionPageProps) {
     </div>
   ) : activeSidePanel === "panel" ? (
     <SidePanel
-      sessionId={sidePanelSessionKey}
+      sessionId={panelContentKey}
       client={props.omnirushServerClient}
       workspaceId={props.runtimeWorkspaceId}
       workspaceRoot={props.selectedWorkspaceRoot}

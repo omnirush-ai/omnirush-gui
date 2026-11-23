@@ -6,7 +6,7 @@
 // their oldest tab; nothing is closed or suspended without that choice. Ask fills a Work chat composer with the page's
 // title, address and selected text; nothing is sent until Send.
 import { USER_TABS_OWNER, type BrowserPanelTab } from "@omnirush/browser-tabs";
-import { BookMarked, ChevronDown, ChevronRight, Copy, ExternalLink, Globe, Loader2, MessageSquareText, Moon, MoreHorizontal, Plus, X } from "lucide-react";
+import { BookMarked, ChevronDown, ChevronRight, Copy, ExternalLink, Globe, Loader2, MessageSquareText, Moon, MoreHorizontal, Plus, SlidersHorizontal, X } from "lucide-react";
 import * as React from "react";
 
 import { PanelTab, PanelTabClose, PanelTabItem, PanelTabList } from "@/components/panel-tabs";
@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
-import { LoginSyncCard } from "../../browser-logins/login-sync-card";
+import { LoginSyncCard, useImportOfferVisit } from "../../browser-logins/login-sync-card";
 import { BrowserImportDialog } from "../../browser-logins/import-dialog";
 import { BookmarkBrowser, BrowserLibraryBar } from "../../session/panel/browser-library-bar";
 import {
@@ -26,14 +26,15 @@ import {
   BrowserAgentStrip,
   BrowserApprovalOverlay,
   BrowserNavButtons,
+  BrowserPageStill,
   reportBrowserError,
   useNativeBrowserView,
 } from "../../session/panel/browser-surface";
 import { getElectronBrowser } from "../../session/panel/utils";
-import { ConnectorIcon } from "../brand-icon";
 import { BrowserHome } from "./browser-home";
+import { TabMark } from "./tab-mark";
 import { restoredTabIds, useCompanyApps, useUserBrowserTabs } from "./use-work-browser";
-import { askPagePrompt, isBrowserHomeTab, LIVE_TAB_LIMIT, siteBrand, siteHost, WORK_BROWSER_NEW_TAB_URL } from "./work-browser";
+import { askPagePrompt, isBrowserHomeTab, LIVE_TAB_LIMIT, openSiteSettings, siteHost, siteSettingsAvailable, WORK_BROWSER_NEW_TAB_URL } from "./work-browser";
 
 export type WorkBrowserPageProps = {
   /** Starts a Work chat with this text. Called only when the person presses Send in Ask. */
@@ -77,12 +78,16 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
   const [pending, setPending] = React.useState<Pending | null>(null);
   const [noneToSuspend, setNoneToSuspend] = React.useState(false);
   const [ask, setAsk] = React.useState<string | null>(null);
+  // While a menu or dialog covers the page, a picture of it stays in its place (the page itself steps aside).
+  const [still, setStill] = React.useState<string | null>(null);
   const tab = activeTab ?? NO_TAB;
   const home = !activeTab || isBrowserHomeTab(activeTab);
   const unloaded = activeTab?.status === "suspended";
   // A tab back from the last session loads by itself once it is on screen, unless the limit holds it.
   const restoring = Boolean(unloaded && activeTab && restoredTabIds.has(activeTab.id) && !pending);
-  useNativeBrowserView(contentRef, USER_TABS_OWNER, !activeTab || home);
+  useNativeBrowserView(contentRef, USER_TABS_OWNER, !activeTab || home, { onStill: setStill });
+  // The import offer shows in one visit to this page at most.
+  useImportOfferVisit();
 
   // The person's tabs take the screen while this page is open (the side panel of Work pages uses the same key).
   React.useEffect(() => {
@@ -153,6 +158,23 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
   }, [activeTab]);
   const pageOpen = Boolean(activeTab && /^https?:\/\//i.test(activeTab.url) && activeTab.status !== "suspended");
 
+  // One bar under the toolbar at a time: whatever needs an answer, in this order, and the offer to import only when
+  // nothing else does.
+  const notice = [
+    pending ? (
+      <LimitBar
+        none={noneToSuspend}
+        onSuspend={() => void suspendOldest()}
+        onDismiss={() => {
+          // A held tab from the last session now waits for Load page instead of loading by itself.
+          if (pending.kind === "select") restoredTabIds.delete(pending.tabId);
+          setPending(null);
+          setNoneToSuspend(false);
+        }}
+      />
+    ) : null,
+  ].find(Boolean) ?? (activeTab && !home ? <LoginSyncCard visit /> : null);
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="work-browser">
       <TabStrip tabs={tabs} activeTab={activeTab} onSelect={selectTab} onNew={() => newTab()} />
@@ -183,23 +205,12 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
         )}
         <MoreMenu tab={activeTab} openExternal={openExternal} />
       </div>
-      {activeTab && !home ? <LoginSyncCard /> : null}
-      {pending ? (
-        <LimitBar
-          none={noneToSuspend}
-          onSuspend={() => void suspendOldest()}
-          onDismiss={() => {
-            // A held tab from the last session now waits for Load page instead of loading by itself.
-            if (pending.kind === "select") restoredTabIds.delete(pending.tabId);
-            setPending(null);
-            setNoneToSuspend(false);
-          }}
-        />
-      ) : null}
+      {notice}
       {activeTab && agentWorkingIn(activeTab) ? <BrowserAgentStrip tab={activeTab} /> : null}
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-          <div ref={contentRef} className="h-full overflow-hidden" data-browser-page="">
+          <div ref={contentRef} className="relative h-full overflow-hidden" data-browser-page="">
+            {activeTab && !home && !unloaded ? <BrowserPageStill still={still} /> : null}
             {activeTab && unloaded ? (
               restoring ? (
                 <div className="flex h-full items-center justify-center gap-2 text-[13px] text-dls-secondary">
@@ -220,15 +231,6 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
       </div>
     </div>
   );
-}
-
-function TabMark({ tab }: { tab: BrowserPanelTab }) {
-  if (tab.status === "loading" || tab.status === "restoring") return <Loader2 className="animate-spin" />;
-  if (isBrowserHomeTab(tab)) return <Globe />;
-  const brand = siteBrand(tab.url);
-  if (brand) return <ConnectorIcon id={brand} className="size-3.5" />;
-  if (tab.favicon) return <img src={tab.favicon} alt="" className="size-3.5 shrink-0 rounded-[2px]" />;
-  return <Globe />;
 }
 
 function tabTitle(tab: BrowserPanelTab): string {
@@ -356,7 +358,7 @@ function MenuRow(props: { icon: React.ReactNode; label: string; onClick: () => v
 
 /**
  * Everything that is not on the toolbar row. Groups, in order: the library (bookmarks), the tab (suspend), page tools
- * (find in page, zoom, print and downloads join this group), and leaving the app (default browser, copy link).
+ * (find in page, zoom, print and downloads join this group), and the site (its settings, default browser, copy link).
  */
 function MoreMenu({ tab, openExternal }: { tab: BrowserPanelTab | null; openExternal: (url: string) => void }) {
   const [open, setOpen] = React.useState(false);
@@ -382,6 +384,9 @@ function MoreMenu({ tab, openExternal }: { tab: BrowserPanelTab | null; openExte
     // Page tools: find in page, zoom, print and downloads.
     [],
     [
+      ...(siteSettingsAvailable() ? [
+        <MenuRow key="site" icon={<SlidersHorizontal />} label={t("work_browser.site_settings")} disabled={!page} onClick={() => { close(); if (page) openSiteSettings(page); }} testId="work-browser-menu-site-settings" />,
+      ] : []),
       <MenuRow key="external" icon={<ExternalLink />} label={t("work_browser.open_default")} disabled={!page} onClick={() => { close(); if (page) openExternal(page); }} testId="work-browser-menu-external" />,
       <MenuRow
         key="copy"

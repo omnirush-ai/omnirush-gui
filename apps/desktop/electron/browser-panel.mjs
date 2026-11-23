@@ -67,6 +67,8 @@ const RESTORED_TABS_LIMIT = 30;
 // read in a world of our own so the page's scripts cannot answer for it.
 const PAGE_CONTEXT_WORLD_ID = 1031;
 const PAGE_SELECTION_LIMIT = 4000;
+/** How long the app waits for a picture of the page before a menu covers it anyway. */
+const PAGE_STILL_TIMEOUT_MS = 600;
 const BROWSER_TARGET_RESOLVE_TIMEOUT_MS = 2500;
 const MENU_OVERLAY_HTML = "overlay.html";
 const MENU_OVERLAY_WIDTH = 196;
@@ -1471,6 +1473,27 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     return { title: contents.getTitle().slice(0, 300), url, selection };
   }
 
+  /**
+   * A picture of the person's page on screen (their own tabs only), for the app to show in the page's place while a
+   * menu or dialog covers it: the page itself always paints above the app, so it steps aside and the picture stays.
+   * It goes only to the app's own window. Null when there is no such page or it could not be taken in time.
+   */
+  async function userPageStill() {
+    const tabId = registry.onScreenTabId();
+    const tab = tabId ? browserTabs.get(tabId) : null;
+    if (!tab || tab.background || tab.view.webContents.isDestroyed() || registry.ownerOf(tab.tabId) !== USER_TABS_OWNER) return null;
+    try {
+      const image = await Promise.race([
+        tab.view.webContents.capturePage(),
+        new Promise((resolve) => { setTimeout(() => resolve(null), PAGE_STILL_TIMEOUT_MS).unref?.(); }),
+      ]);
+      if (!image || image.isEmpty()) return null;
+      return `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}`;
+    } catch {
+      return null;
+    }
+  }
+
   // Known live contents can identify their target without replacing the document
   // with a marker. Task protection is held by the page until explicit release.
   async function restoreBrowserTab(tabId, protect = false) {
@@ -1697,7 +1720,8 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     ipcMain.handle("omnirush:browser:createTab", (_event, url, sessionId) => {
       const target = typeof url === "string" && url.trim() ? url : BROWSER_NEW_TAB_URL;
       const ownerSessionId = sessionId === undefined ? registry.visibleSessionId() : normalizeSessionId(sessionId);
-      const tab = createBrowserTab(target, { select: true, ownerSessionId });
+      // A tab for a page loads that page first: a queued about:blank would abort it and leave the tab blank.
+      const tab = createBrowserTab(target, { select: true, ownerSessionId, initializeBlank: normalizeBrowserUrl(target, "about:blank") === "about:blank" });
       return { tabId: tab.tabId };
     });
     ipcMain.handle("omnirush:browser:closeTab", (_event, tabId) => closeBrowserTab(tabId == null ? undefined : String(tabId)));
@@ -1713,6 +1737,10 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     ipcMain.handle("omnirush:browser:pageContext", (event, tabId) => {
       if (event.sender !== window()?.webContents || event.senderFrame !== window()?.webContents.mainFrame) throw new Error("Use the browser toolbar.");
       return userPageContext(tabId);
+    });
+    ipcMain.handle("omnirush:browser:pageStill", (event) => {
+      if (event.sender !== window()?.webContents || event.senderFrame !== window()?.webContents.mainFrame) return null;
+      return userPageStill();
     });
     ipcMain.handle("omnirush:browser:restoreTab", async (_event, tabId, sessionId) => {
       requireTabOwner(tabId, sessionId);
