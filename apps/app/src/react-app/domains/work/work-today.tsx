@@ -3,7 +3,7 @@
 // Needs you / Today / Recent from GET /work/feed (empty sections stay out). Each row opens at its source or starts a Work chat about it.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, ChevronDown, Loader2, MessageSquare, Plus, RotateCw } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -62,6 +62,33 @@ export function stripSources<T extends { id: string }>(sources: T[], counts: Rec
   return { shown: sources.filter((source) => shown.has(source.id)), rest: sources.filter((source) => !shown.has(source.id)) };
 }
 
+const STRIP_GAP = 6;
+/** Room kept for the More chip when some sources do not fit. */
+const MORE_WIDTH = 96;
+/** A chip not measured yet (it appeared after the first layout). */
+const CHIP_GUESS = 120;
+
+/** The chips that fit whole in `room` px (null: not measured yet, so every candidate), the rest under More; the
+ *  picked source always stays on the row. */
+export function fitStrip<T extends { id: string }>(ranked: { shown: T[]; rest: T[] }, room: number | null, width: (id: string) => number | undefined, selected: string | null): { shown: T[]; rest: T[] } {
+  if (room === null) return ranked;
+  const size = (item: T) => (width(item.id) ?? CHIP_GUESS) + STRIP_GAP;
+  const total = ranked.shown.reduce((sum, item) => sum + size(item), 0);
+  if (!ranked.rest.length && total <= room) return ranked;
+  let used = MORE_WIDTH;
+  let fit = 0;
+  for (const item of ranked.shown) {
+    if (used + size(item) > room) break;
+    used += size(item);
+    fit += 1;
+  }
+  let shown = ranked.shown.slice(0, fit);
+  const picked = ranked.shown.find((item) => item.id === selected);
+  if (picked && !shown.includes(picked)) shown = [...shown.slice(0, Math.max(0, fit - 1)), picked];
+  const kept = new Set(shown.map((item) => item.id));
+  return { shown: ranked.shown.filter((item) => kept.has(item.id)), rest: [...ranked.shown.filter((item) => !kept.has(item.id)), ...ranked.rest] };
+}
+
 /** Items in view per source, from the unfiltered feed. */
 export function sourceCounts(feed: Pick<OmniRushWorkFeed, "groups"> | undefined): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -81,20 +108,40 @@ function ChipState(props: { source: FeedSource }) {
  *  With one source there is nothing to filter: its pill only shows the status. */
 export function SourceStrip(props: { sources: FeedSource[]; selected: string | null; onSelect: (id: string | null) => void; onAdd: () => void; counts?: Record<string, number> }) {
   const solo = props.sources.length === 1;
-  const { shown, rest } = stripSources(props.sources, props.counts ?? {}, props.selected);
+  const ranked = stripSources(props.sources, props.counts ?? {}, props.selected);
+  // Only whole chips: the row measures its room and the chips' widths, and what does not fit goes under More.
+  const stripRef = useRef<HTMLDivElement>(null);
+  const widths = useRef(new Map<string, number>());
+  const [room, setRoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      // Not laid out (hidden, or a test DOM without layout): every candidate chip, as before measuring.
+      if (!strip.clientWidth) return setRoom(null);
+      strip.querySelectorAll<HTMLElement>("[data-strip-chip]").forEach((chip) => { if (chip.offsetWidth) widths.current.set(chip.dataset.stripChip ?? "", chip.offsetWidth); });
+      const fixed = [...strip.querySelectorAll<HTMLElement>("[data-strip-fixed]")].reduce((sum, node) => sum + node.offsetWidth + STRIP_GAP, 0);
+      setRoom(strip.clientWidth - fixed);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, []);
+  const { shown, rest } = fitStrip(ranked, room, (id) => widths.current.get(id), props.selected);
   const chip = (active: boolean) => cn(
     "flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
     active ? "border-foreground/20 bg-muted font-medium" : "border-border bg-background hover:bg-muted/50",
   );
   const name = (source: FeedSource) => connectorLabel(source.id, source.label.replace(/\s*\(.*\)$/, ""));
   return (
-    <div className="flex min-w-0 items-center gap-1.5 overflow-hidden" data-testid="work-source-strip">
+    <div ref={stripRef} className="flex min-w-0 items-center gap-1.5 overflow-hidden" data-testid="work-source-strip">
       <div className="flex min-w-0 items-center gap-1.5 overflow-hidden" {...(solo ? {} : { role: "radiogroup", "aria-label": t("work.today.filter") })}>
-        {solo ? null : <button type="button" role="radio" aria-checked={props.selected === null} data-feed-filter="all" onClick={() => props.onSelect(null)} className={chip(props.selected === null)}>{t("work.today.all")}</button>}
+        {solo ? null : <button type="button" role="radio" aria-checked={props.selected === null} data-feed-filter="all" data-strip-fixed="" onClick={() => props.onSelect(null)} className={chip(props.selected === null)}>{t("work.today.all")}</button>}
         {shown.map((source) => {
           const dot = sourceDot(source);
           const active = props.selected === source.id;
-          const pill = { "data-work-source": source.id, "data-dot": dot, title: `${connectorLabel(source.id, source.label)} · ${source.attention?.message ?? statusWord(source)}` };
+          const pill = { "data-work-source": source.id, "data-strip-chip": source.id, "data-dot": dot, title: `${connectorLabel(source.id, source.label)} · ${source.attention?.message ?? statusWord(source)}` };
           const body = (
             <>
               <BrandTile id={source.id} size="chip" className="-ms-1.5 rounded-full" />
@@ -113,6 +160,7 @@ export function SourceStrip(props: { sources: FeedSource[]; selected: string | n
         type="button"
         onClick={props.onAdd}
         data-testid="work-source-add"
+        data-strip-fixed=""
         className="flex h-8 shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-3 text-[13px] text-muted-foreground outline-none transition-colors hover:border-foreground/25 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         <Plus aria-hidden className="size-3.5" />

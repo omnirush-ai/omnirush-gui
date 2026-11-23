@@ -235,7 +235,7 @@ function useRunEnded(running: boolean, done: () => void) {
   });
 }
 
-/** A connector's status pill on the Connectors page: the sidebar's words (Synced, Syncing 42%, Needs attention,
+/** A connector's status pill on the Connectors page: the sidebar's words (Synced, Syncing 42%, Attention,
  *  Reconnect, Paused), or Not connected / Waiting for sign-in. */
 export function connectorPill(row: OmniRushWorkConnector, connecting: boolean): { tone: PillTone; label: string } {
   if (connecting) return { tone: "syncing", label: t("work.common.waiting_sign_in") };
