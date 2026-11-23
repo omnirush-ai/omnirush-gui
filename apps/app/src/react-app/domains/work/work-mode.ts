@@ -322,8 +322,10 @@ export const WORK_TOOL_PREFIX = "omnirush-work_";
 const WORK_APPS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
   slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
-  linear: "Linear", github: "GitHub",
+  linear: "Linear", github: "GitHub", discord: "Discord",
 };
+/** Connectors whose writes the OmniRush Work app makes (a bot), not the person's own account. */
+const APP_WRITES = new Set(["discord"]);
 function workAction(action: string): string | undefined {
   const actions: Record<string, string> = {
     send: t("work.tool.send"), draft: t("work.tool.draft"), post: t("work.tool.post"), create: t("work.tool.create"), note: t("work.tool.note"),
@@ -343,12 +345,13 @@ export function workToolPermission(permission: string): { label: string; scope: 
   const [app, ...rest] = tool.split("_");
   const action = workAction(rest.join("_")) ?? (rest.join(" ") || tool).replace(/^./, (c) => c.toUpperCase());
   const name = app === "mock" ? t("work.connector.mock") : WORK_APPS[app] ?? app;
-  return { label: `${action} (${name})`, scope: t("work.tool.account_scope", { name }) };
+  const scope = APP_WRITES.has(app) ? t("work.tool.app_scope", { name }) : t("work.tool.account_scope", { name });
+  return { label: `${action} (${name})`, scope };
 }
 
 /** Connector names for ids the server lists without a label; an unknown id shows as it is (with a generic icon). */
 const CONNECTOR_LABELS: Record<string, string> = {
-  google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
+  google: "Google", microsoft: "Microsoft 365", slack: "Slack", discord: "Discord", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
   notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", asana: "Asana", dropbox: "Dropbox", zoom: "Zoom",
   whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
   imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)", stripe: "Stripe", freshdesk: "Freshdesk", pipedrive: "Pipedrive",
@@ -363,6 +366,7 @@ export function connectorAccess(id: string): string {
     google: t("work.connector.access_google"),
     microsoft: t("work.connector.access_microsoft"),
     slack: t("work.connector.access_slack"),
+    discord: t("work.connector.access_discord"),
     hubspot: t("work.connector.access_hubspot"),
     quickbooks: t("work.connector.access_quickbooks"),
     notion: t("work.connector.access_notion"),

@@ -158,6 +158,9 @@ describe("work prompt and tools", () => {
   test("context tools read without asking; remember and forget ask; the prompt briefs and remembers", () => {
     for (const tool of ["work_context", "work_entity", "jira_search", "github_read", "work_read", "work_count", "work_deals"]) expect(WORK_READ_TOOLS).toContain(tool);
     for (const tool of ["work_remember", "work_forget", "jira_comment", "github_create_issue"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+    // Discord: listing and reading channels and threads run; a post asks.
+    for (const tool of ["discord_list_channels", "discord_read_channel", "discord_read_thread"]) expect(WORK_READ_TOOLS).toContain(tool);
+    expect(WORK_READ_TOOLS).not.toContain("discord_post");
     for (const style of ["brief", "detailed"] as const) {
       expect(workPrompt(style)).toContain("call work_context once with the task and a budget");
       expect(workPrompt(style)).toContain("pass max_tokens on searches");
