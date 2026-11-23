@@ -134,6 +134,7 @@ import { ASK_WORK_RECORD_EVENT } from "@/react-app/domains/work/viewer/records";
 import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
 import { WorkBrowserPage } from "@/react-app/domains/work/browser/work-browser-page";
 import { useAskBesideStore, useWorkBrowserRestore } from "@/react-app/domains/work/browser/use-work-browser";
+import { useWorkBrowserTools } from "@/react-app/domains/work/browser/browser-basics";
 import { WORK_BROWSER_EXPAND_EVENT } from "@/react-app/domains/work/browser/work-browser";
 import { useBrowserLibraryAvailable } from "@/react-app/domains/browser-logins/use-browser-library";
 import { NO_SESSION_SIDE_PANEL_KEY } from "@/react-app/domains/session/panel/side-panel-session";
@@ -580,6 +581,7 @@ export function SessionRoute() {
   const workBrowserAvailable = useBrowserLibraryAvailable();
   const workBrowserActive = workRouteActive && workBrowserAvailable && location.pathname.startsWith(WORK_BROWSER_ROUTE);
   useWorkBrowserRestore(workBrowserAvailable);
+  useWorkBrowserTools(workBrowserAvailable);
   // The tryout: Work is off but this account may turn it on ("Try Work"), then onboarding runs.
   const workAvailable = !workEnabled && workState.data?.available === true;
   const workOnboarding = useWorkOnboarding(client ?? null, workEnabled);

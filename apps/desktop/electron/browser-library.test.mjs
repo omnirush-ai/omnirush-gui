@@ -273,6 +273,27 @@ test("Recent counts every page of the last 30 days and its filter finds any of t
   assert.equal(many.total, 111, "Shipment 15 and 150 to 159 and 1500 to 1599");
 });
 
+test("pages the person opens in their own Work browser tabs join the library; Clear browsing data removes them", async () => {
+  const { library } = setup();
+  assert.equal(library.recordVisit({ url: "https://tms.example.com/s/4471", title: "" }), true);
+  assert.equal(library.recordVisit({ url: "https://tms.example.com/s/4471", title: "Shipment\n 4471", visit: false }), true);
+  assert.equal(library.recordVisit({ url: "https://tms.example.com/s/4471" }), true, "a second visit keeps the title");
+  library.recordVisit({ url: "https://linear.app/acme/issue/OPS-482", title: "OPS-482" });
+  for (const url of ["file:///etc/passwd", "javascript:alert(1)", "https://user:secret@intranet.example/", "", null]) {
+    assert.equal(library.recordVisit({ url, title: "x" }), false, String(url));
+  }
+  const recent = library.recent();
+  assert.deepEqual(recent.pages.map((page) => [page.url, page.title]).sort(), [["https://linear.app/acme/issue/OPS-482", "OPS-482"], ["https://tms.example.com/s/4471", "Shipment 4471"]]);
+  assert.equal(recent.total, 2);
+  assert.deepEqual(library.suggest("tms").map((entry) => entry.url), ["https://tms.example.com/s/4471"]);
+  assert.equal(library.summary().history, 2);
+  // Only the desktop app records a visit; the window has no way to write history.
+  assert.equal(ipcHarness(library).channels.some((channel) => /visit|history/i.test(channel)), false);
+  assert.deepEqual(library.clear(), { imports: [], bookmarks: 0, history: 0 });
+  assert.deepEqual(library.recent(), { pages: [], total: 0 });
+  assert.deepEqual(library.suggest("tms"), []);
+});
+
 test("the star adds and removes a page; clearing imports keeps starred pages", async () => {
   const { library } = setup();
   await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });

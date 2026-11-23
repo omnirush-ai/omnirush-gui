@@ -28,6 +28,7 @@ import {
   LayoutSectionItemHeader,
   LayoutSectionItemTitle,
 } from "../settings/settings-layout";
+import { getElectronBrowser } from "../session/panel/utils";
 import { SettingsSection } from "../settings/settings-section";
 import { BrowserTile } from "./browser-marks";
 import { BrowserImportDialog } from "./import-dialog";
@@ -142,7 +143,7 @@ function ImportSection() {
               <Lock aria-hidden className="size-3.5 shrink-0" />
               {t("browser_import.section_privacy")}
             </p>
-            {imports.length > 0 || (summary.data?.bookmarks ?? 0) > 0 ? (
+            {imports.length > 0 || (summary.data?.bookmarks ?? 0) > 0 || (summary.data?.history ?? 0) > 0 ? (
               <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setConfirmClear(true)} data-testid="browser-import-clear">
                 {t("browser_import.clear")}
               </Button>
@@ -171,6 +172,8 @@ function ImportSection() {
                 setClearing(true);
                 try {
                   await getBrowserLibraryBridge()?.clear();
+                  // The Work browser's downloads list goes too (the files stay in the Downloads folder).
+                  await getElectronBrowser()?.clearDownloads?.()?.catch(() => undefined);
                   await invalidate();
                 } finally {
                   setClearing(false);

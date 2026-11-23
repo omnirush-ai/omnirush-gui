@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { register } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 // Keep Electron and installed-browser discovery in memory: these guards must
@@ -23,7 +25,13 @@ export const session = { fromPartition() {
   if (!controls.ready) throw new Error("Session can only be received when app is ready");
   return browserSession;
 } };
-export const shell = { async openExternal(url) { effects.push({ type: "external", url }); } };
+export const shell = {
+  async openExternal(url) { effects.push({ type: "external", url }); },
+  showItemInFolder(file) { effects.push({ type: "show", file }); },
+  async openPath(file) { effects.push({ type: "open-folder", file }); return ""; },
+};
+export const menus = [];
+export const Menu = { buildFromTemplate(template) { return { popup() { menus.push(template); } }; } };
 export const createdViews = [];
 export const navigation = { load: async () => {} };
 export class BrowserWindow {
@@ -45,6 +53,7 @@ export class BrowserWindow {
 export class WebContentsView {
   constructor(options) {
     createdViews.push(this);
+    this.options = options;
     const listeners = new EventEmitter();
     const requestHook = options?.webPreferences?.partition === "persist:omnirush-browser" ? requestHooks.at(-1) : null;
     let attached = false;
@@ -74,6 +83,7 @@ export class WebContentsView {
       once(event, handler) { listeners.once(event, handler); },
       removeListener(event, handler) { listeners.removeListener(event, handler); },
       emit(event, ...args) { listeners.emit(event, null, ...args); },
+      emitWith(event, eventObject, ...args) { listeners.emit(event, eventObject, ...args); },
       setWindowOpenHandler(handler) { this.windowOpenHandler = handler; },
       destroyed: false,
       isDestroyed() { return this.destroyed; },
@@ -145,7 +155,7 @@ export function load(url, context, next) {
 register(`data:text/javascript,${encodeURIComponent(hooks)}`);
 const { createBrowserPanel } = await import("./browser-panel.mjs");
 // @ts-expect-error The registered test-only Electron stub exports its witnesses.
-const { createdViews, effects, controls, browserSession, navigation, requestHooks } = await import("electron");
+const { createdViews, effects, controls, browserSession, navigation, requestHooks, menus } = await import("electron");
 
 const PANEL_BOUNDS = { x: 800, y: 40, width: 400, height: 900 };
 const LINK = { url: "https://example.com/a%2Fb?x=one%20two&x=%2F#section", point: { x: 20, y: 30 }, sessionId: "A" };
@@ -154,7 +164,7 @@ const RESET_SEQUENCE = [
   { method: "Emulation.clearDeviceMetricsOverride", params: undefined },
 ];
 
-function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0) {
+function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0, options = {}) {
   effects.length = 0;
   controls.confirm = async () => 0;
   controls.beforeLoad = async () => {};
@@ -179,6 +189,8 @@ function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0) 
       mainFrame: {},
       getURL: () => "http://localhost/index.html",
       getZoomFactor: () => 1,
+      focused: 0,
+      focus() { this.focused += 1; },
       isDestroyed: () => false,
       send(channel, payload) { sent.push({ channel, payload }); },
     },
@@ -195,6 +207,7 @@ function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0) 
     checkPolicy: async (request) => { policies.push(request); await checkPolicy(request); },
     // These journeys cover the per-origin and per-act reviews, which only Careful keeps.
     permissionMode: () => "careful",
+    ...options,
   });
   panel.registerIpc(ipcMain);
   const mainContents = mainWindow.webContents;
@@ -1644,4 +1657,270 @@ test("Ask reads only the title, address and selection of the person's tab on scr
   await flush();
   await assert.rejects(invoke("omnirush:browser:pageContext", chat), /Select this tab/);
   await assert.rejects(invoke("omnirush:browser:pageContext", tabId), /Select this tab/, "only the tab on screen");
+});
+
+// The Work browser's basics on the person's tabs: find, zoom, print, the page menu, shortcuts, downloads, own visits.
+const fromElsewhere = { sender: {}, senderFrame: {} };
+const keyEvent = () => ({ prevented: 0, preventDefault() { this.prevented += 1; } });
+
+async function basicsPanel(options = {}) {
+  const panel = createPanel(undefined, 0, options);
+  panel.invoke("omnirush:browser:userTabTools", { tools: true, page: true, language: "en" });
+  panel.invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const { tabId } = panel.invoke("omnirush:browser:createTab", "https://tms.example.com/s/4471", USER);
+  await flush();
+  return { ...panel, tabId, contents: panel.onScreen().webContents };
+}
+
+async function chatTab(panel) {
+  panel.invoke("omnirush:browser:show", PANEL_BOUNDS, "ses_chat");
+  const { tabId } = panel.invoke("omnirush:browser:createTab", "https://chat.example/", "ses_chat");
+  await flush();
+  return { tabId, contents: panel.onScreen().webContents };
+}
+
+test("find in page counts the matches on the person's tab, and is never offered on a chat's tab", async () => {
+  const { invoke, emit, messages, tabId, contents, ...panel } = await basicsPanel();
+  const finds = [];
+  contents.findInPage = (text, options) => { finds.push([text, options]); return finds.length; };
+  contents.stopFindInPage = (action) => { finds.push(["stop", action]); };
+  assert.equal(invoke("omnirush:browser:find", tabId, "pallet"), 1);
+  assert.deepEqual(finds[0], ["pallet", { forward: true, findNext: true, matchCase: false }], "a new search");
+  contents.emit("found-in-page", { requestId: 1, matches: 3, activeMatchOrdinal: 1, finalUpdate: true });
+  assert.deepEqual(messages("omnirush:browser:find-result").at(-1), { tabId, requestId: 1, matches: 3, active: 1, final: true });
+  assert.equal(invoke("omnirush:browser:find", tabId, "pallet", { next: true, forward: false }), 2);
+  assert.deepEqual(finds[1][1], { forward: false, findNext: false, matchCase: false }, "the previous match of the same search");
+  assert.equal(invoke("omnirush:browser:find", tabId, ""), null);
+  assert.deepEqual(finds[2], ["stop", "clearSelection"]);
+  assert.equal(invoke("omnirush:browser:stopFind", tabId), true);
+  assert.throws(() => emit("omnirush:browser:find", fromElsewhere, tabId, "x"), /toolbar/);
+
+  const chat = await chatTab({ invoke, onScreen: panel.onScreen });
+  chat.contents.findInPage = () => assert.fail("never on a chat's tab");
+  assert.throws(() => invoke("omnirush:browser:find", chat.tabId, "x"), /Select this tab/);
+  assert.equal(invoke("omnirush:browser:stopFind", chat.tabId), false);
+  const results = messages("omnirush:browser:find-result").length;
+  chat.contents.emit("found-in-page", { requestId: 9, matches: 1, activeMatchOrdinal: 1, finalUpdate: true });
+  assert.equal(messages("omnirush:browser:find-result").length, results);
+});
+
+test("zoom steps the person's tab, from the menu, the keyboard and Ctrl and the wheel", async () => {
+  const { invoke, emit, tabId, contents, ...panel } = await basicsPanel({ platform: "darwin" });
+  let factor = 1;
+  contents.getZoomFactor = () => factor;
+  contents.setZoomFactor = (value) => { factor = value; };
+  assert.deepEqual(invoke("omnirush:browser:zoom", tabId), { factor: 1 }, "no action reads it");
+  assert.deepEqual(invoke("omnirush:browser:zoom", tabId, "in"), { factor: 1.1 });
+  assert.deepEqual(invoke("omnirush:browser:zoom", tabId, "in"), { factor: 1.25 });
+  assert.deepEqual(invoke("omnirush:browser:zoom", tabId, "out"), { factor: 1.1 });
+  assert.deepEqual(invoke("omnirush:browser:zoom", tabId, "reset"), { factor: 1 });
+  contents.emit("zoom-changed", "in");
+  assert.equal(factor, 1.1);
+  const event = keyEvent();
+  contents.emitWith("before-input-event", event, { type: "keyDown", key: "-", code: "Minus", meta: true });
+  assert.equal(event.prevented, 1, "the app menu never zooms the app instead");
+  assert.equal(factor, 1);
+  assert.throws(() => emit("omnirush:browser:zoom", fromElsewhere, tabId, "in"), /toolbar/);
+
+  const chat = await chatTab({ invoke, onScreen: panel.onScreen });
+  let chatFactor = 1;
+  chat.contents.getZoomFactor = () => chatFactor;
+  chat.contents.setZoomFactor = (value) => { chatFactor = value; };
+  chat.contents.emit("zoom-changed", "in");
+  assert.equal(chatFactor, 1, "a chat's tab is not zoomed by the wheel");
+  assert.throws(() => invoke("omnirush:browser:zoom", chat.tabId, "in"), /Select this tab/);
+});
+
+test("print opens the system dialog for the person's page only", async () => {
+  const { invoke, tabId, contents } = await basicsPanel();
+  const prints = [];
+  contents.print = (options, callback) => { prints.push(options); callback(true, ""); };
+  assert.equal(invoke("omnirush:browser:print", tabId), true);
+  assert.equal(prints.length, 1);
+  contents.url = "about:blank";
+  assert.equal(invoke("omnirush:browser:print", tabId), false);
+  assert.equal(prints.length, 1);
+});
+
+test("browser shortcuts on the person's tab act only while the Work browser page is open; elsewhere the app's keys are unchanged", async () => {
+  const { invoke, messages, mainContents, tabId, contents, ...panel } = await basicsPanel({ platform: "darwin" });
+  const press = (target, input) => {
+    const event = keyEvent();
+    target.emitWith("before-input-event", event, { type: "keyDown", ...input });
+    return event.prevented;
+  };
+  assert.equal(press(contents, { key: "t", code: "KeyT", meta: true }), 1);
+  assert.deepEqual(messages("omnirush:browser:shortcut").at(-1), { tabId, action: "new-tab" });
+  assert.equal(press(contents, { key: "r", code: "KeyR", meta: true }), 1, "Cmd+R reloads the page, not the app");
+  assert.deepEqual(messages("omnirush:browser:shortcut").at(-1), { tabId, action: "reload" });
+  const focused = mainContents.focused;
+  assert.equal(press(contents, { key: "l", code: "KeyL", meta: true }), 1);
+  assert.equal(mainContents.focused, focused + 1, "the address field is the app's: the keyboard goes back to it");
+  assert.equal(press(contents, { key: "f", code: "KeyF", meta: true }), 1);
+  assert.equal(mainContents.focused, focused + 2);
+  const sent = messages("omnirush:browser:shortcut").length;
+  assert.equal(press(contents, { key: "t", code: "KeyT", meta: true, isAutoRepeat: true }), 1, "held: caught, not repeated");
+  assert.equal(messages("omnirush:browser:shortcut").length, sent);
+  // Keys that are not the browser's stay the page's and the app's.
+  assert.equal(press(contents, { key: "t", code: "KeyT", control: true }), 0, "Ctrl+T on macOS (thinking mode)");
+  assert.equal(press(contents, { key: "t", code: "KeyT", meta: true, shift: true }), 0, "Shift+T: previous tab");
+  assert.equal(press(contents, { key: "k", code: "KeyK", meta: true }), 0);
+  assert.equal(press(contents, { key: "a", code: "KeyA", meta: true }), 0);
+  const up = keyEvent();
+  contents.emitWith("before-input-event", up, { type: "keyUp", key: "t", code: "KeyT", meta: true });
+  assert.equal(up.prevented, 0);
+
+  // The Work browser page closed (a Work page's side panel shows the same tabs): today's keys.
+  invoke("omnirush:browser:userTabTools", { page: false });
+  assert.equal(press(contents, { key: "r", code: "KeyR", meta: true }), 0);
+  assert.equal(press(contents, { key: "t", code: "KeyT", meta: true }), 0);
+  invoke("omnirush:browser:userTabTools", { page: true });
+  // A chat's tab: never.
+  const chat = await chatTab({ invoke, onScreen: panel.onScreen });
+  for (const key of ["t", "w", "r", "l", "f", "p"]) assert.equal(press(chat.contents, { key, code: `Key${key.toUpperCase()}`, meta: true }), 0, key);
+  // A consumer account (no Work): never.
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  invoke("omnirush:browser:userTabTools", { tools: false });
+  assert.equal(press(contents, { key: "t", code: "KeyT", meta: true }), 0);
+  assert.deepEqual(panel.emit("omnirush:browser:userTabTools", fromElsewhere, { tools: true }), { tools: false, page: true, language: "en" }, "only the app's window may switch them on");
+});
+
+test("the page menu on the person's tab: a link opens in a new tab behind, copies, downloads; never on a chat's tab", async () => {
+  const { invoke, tabId, contents, ...panel } = await basicsPanel();
+  menus.length = 0;
+  effects.length = 0;
+  contents.emit("context-menu", { linkURL: "https://linear.app/acme/issue/OPS-482", pageURL: "https://tms.example.com/s/4471", x: 4, y: 8, editFlags: {} });
+  const menu = menus.at(-1);
+  assert.deepEqual(menu.map((item) => item.label), ["Open link in new tab", "Open link in default browser", "Copy link address", "Download link"]);
+  menu[0].click();
+  await flush();
+  const state = invoke("omnirush:browser:state");
+  const mine = state.tabs.filter((tab) => tab.ownerSessionId === USER);
+  assert.deepEqual(mine.map((tab) => tab.url), ["https://tms.example.com/s/4471", "https://linear.app/acme/issue/OPS-482"]);
+  assert.equal(state.activeTabIdByOwner[USER], tabId, "the new tab opens behind the one being read");
+  menu[2].click();
+  assert.deepEqual(effects.at(-1), { type: "copy", url: "https://linear.app/acme/issue/OPS-482" });
+  const downloaded = [];
+  contents.downloadURL = (url) => downloaded.push(url);
+  menu[3].click();
+  assert.deepEqual(downloaded, ["https://linear.app/acme/issue/OPS-482"]);
+  menu[1].click();
+  await flush();
+  assert.deepEqual(effects.at(-1), { type: "external", url: "https://linear.app/acme/issue/OPS-482" });
+
+  // The page itself: back, forward, reload, find (the Work browser is open), print, copy address.
+  contents.emit("context-menu", { pageURL: "https://tms.example.com/s/4471", editFlags: {} });
+  assert.deepEqual(menus.at(-1).map((item) => item.label ?? "-"), ["Back", "Forward", "Reload", "-", "Find in page", "Print", "Copy page address"]);
+  menus.at(-1)[4].click();
+  assert.deepEqual(panel.messages("omnirush:browser:shortcut").at(-1), { tabId, action: "find" });
+  invoke("omnirush:browser:userTabTools", { language: "zh" });
+  contents.emit("context-menu", { pageURL: "https://tms.example.com/s/4471", editFlags: {} });
+  assert.equal(menus.at(-1)[0].label, "后退");
+
+  const count = menus.length;
+  const chat = await chatTab({ invoke, onScreen: panel.onScreen });
+  chat.contents.emit("context-menu", { linkURL: "https://a.example/", editFlags: {} });
+  assert.equal(menus.length, count, "a chat's tab keeps no page menu");
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  invoke("omnirush:browser:userTabTools", { tools: false });
+  contents.emit("context-menu", { linkURL: "https://a.example/", editFlags: {} });
+  assert.equal(menus.length, count, "nor a consumer account");
+});
+
+test("Open link in new tab at the live tab limit hands the choice to the Work browser page", async () => {
+  const { invoke, contents, messages } = await basicsPanel();
+  for (let i = 0; i < 11; i++) invoke("omnirush:browser:createTab", "about:blank", `ses_${i}`);
+  menus.length = 0;
+  contents.emit("context-menu", { linkURL: "https://linear.app/acme", editFlags: {} });
+  menus.at(-1)[0].click();
+  assert.deepEqual(messages("omnirush:browser:shortcut").at(-1), { tabId: null, action: "open-tab", url: "https://linear.app/acme" });
+});
+
+class FakeDownload {
+  constructor(filename, url) {
+    this.listeners = new Map();
+    this.filename = filename;
+    this.url = url;
+    this.savePath = null;
+  }
+  on(event, handler) { this.listeners.set(event, handler); }
+  once(event, handler) { const previous = this.listeners.get(`once:${event}`) ?? []; this.listeners.set(`once:${event}`, [...previous, handler]); }
+  finish(state) { for (const handler of this.listeners.get("once:done") ?? []) handler({}, state); }
+  getFilename() { return this.filename; }
+  getURL() { return this.url; }
+  getTotalBytes() { return 4096; }
+  getReceivedBytes() { return 4096; }
+  setSavePath(value) { this.savePath = value; }
+  cancel() {}
+}
+
+test("downloads from the person's tab go to the Downloads folder, are marked as from the internet, and are listed; a chat's tab is unchanged", async () => {
+  const marks = [];
+  const dir = join(tmpdir(), "omnirush-w3-downloads-that-do-not-exist");
+  const { invoke, emit, contents, messages, ...panel } = await basicsPanel({
+    platform: "darwin",
+    downloadsDir: () => dir,
+    markDownload: async (file, info) => { marks.push([file, info]); return { mark: "quarantine", added: true }; },
+  });
+  effects.length = 0;
+  const item = new FakeDownload("report.pdf", "https://files.example.com/report.pdf");
+  browserSession.emit("will-download", {}, item, contents);
+  assert.equal(item.savePath, join(dir, "report.pdf"), "no Save dialog: straight to Downloads");
+  assert.deepEqual(invoke("omnirush:browser:downloads").map((entry) => [entry.filename, entry.state]), [["report.pdf", "progressing"]]);
+  item.finish("completed");
+  await flush();
+  await flush();
+  assert.deepEqual(marks, [[join(dir, "report.pdf"), { platform: "darwin", url: "https://files.example.com/report.pdf", referrer: "https://tms.example.com/s/4471" }]]);
+  const [entry] = messages("omnirush:browser:downloads").at(-1);
+  assert.equal(entry.state, "completed");
+  invoke("omnirush:browser:downloadAction", entry.id, "show");
+  assert.deepEqual(effects.at(-1), { type: "show", file: join(dir, "report.pdf") });
+  invoke("omnirush:browser:downloadAction", "", "folder");
+  await flush();
+  assert.deepEqual(effects.at(-1), { type: "open-folder", file: dir });
+  assert.throws(() => emit("omnirush:browser:downloadAction", fromElsewhere, entry.id, "show"), /toolbar/);
+  assert.deepEqual(invoke("omnirush:browser:clearDownloads"), []);
+
+  const chat = await chatTab({ invoke, onScreen: panel.onScreen });
+  const theirs = new FakeDownload("agent.csv", "https://chat.example/agent.csv");
+  browserSession.emit("will-download", {}, theirs, chat.contents);
+  assert.equal(theirs.savePath, null, "Electron asks where to save, as before");
+  assert.deepEqual(invoke("omnirush:browser:downloads"), []);
+});
+
+test("pages the person opens in their own tabs reach their library; a chat's tab, or a consumer account, never", async () => {
+  const visits = [];
+  const { invoke, contents, ...panel } = await basicsPanel({ onVisit: (visit) => visits.push(visit) });
+  contents.getTitle = () => "";
+  contents.emit("did-navigate", "https://tms.example.com/s/4471");
+  contents.getTitle = () => "Shipment 4471";
+  contents.emit("page-title-updated", "Shipment 4471");
+  contents.emit("did-navigate", "https://tms.example.com/s/4471");
+  contents.emit("did-navigate-in-page", "https://tms.example.com/s/4471#notes", true);
+  contents.emit("did-navigate-in-page", "https://ads.example/frame", false);
+  contents.emit("did-navigate", "chrome-error://chromewebdata/");
+  assert.deepEqual(visits, [
+    { url: "https://tms.example.com/s/4471", title: "", visit: true },
+    { url: "https://tms.example.com/s/4471", title: "Shipment 4471", visit: false },
+    { url: "https://tms.example.com/s/4471#notes", title: "Shipment 4471", visit: true },
+  ]);
+  const chat = await chatTab({ invoke, onScreen: panel.onScreen });
+  chat.contents.emit("did-navigate", "https://agent.example/page");
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  invoke("omnirush:browser:userTabTools", { tools: false });
+  contents.emit("did-navigate", "https://linear.app/acme");
+  assert.equal(visits.length, 3);
+});
+
+test("every tab keeps the sandbox and no plugins (PDFs show in Chromium's own viewer)", async () => {
+  const { invoke } = await basicsPanel();
+  invoke("omnirush:browser:createTab", "https://agent.example/", "ses_chat");
+  const prefs = createdViews.slice(-2).map((view) => view.options.webPreferences);
+  for (const webPreferences of prefs) {
+    assert.equal(webPreferences.sandbox, true);
+    assert.equal(webPreferences.contextIsolation, true);
+    assert.equal(webPreferences.nodeIntegration, false);
+    assert.equal("plugins" in webPreferences, false);
+    assert.equal(webPreferences.partition, "persist:omnirush-browser");
+  }
 });

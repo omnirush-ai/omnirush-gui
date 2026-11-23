@@ -211,6 +211,22 @@ export type BrowserLibrarySummary = {
   history: number;
 };
 
+/** What a key press, or "Open link in new tab" at the tab limit, asks of the Work browser (browser-page-tools.mjs). */
+export type BrowserShortcutAction = "address" | "new-tab" | "close-tab" | "reload" | "find" | "print" | "back" | "forward" | "zoom-in" | "zoom-out" | "zoom-reset" | "open-tab";
+
+/** A download from the person's own tabs, this session (browser-downloads.mjs). No path: the app shows it by id. */
+export type BrowserDownload = {
+  id: string;
+  filename: string;
+  state: "progressing" | "completed" | "cancelled" | "failed";
+  receivedBytes: number;
+  totalBytes: number;
+  startedAt: number;
+};
+
+/** Find in page: how many matches, and which one is selected (1-based; 0 when none). */
+export type BrowserFindResult = { tabId: string; requestId: number; matches: number; active: number; final: boolean };
+
 /** The built-in browser's bookmarks and history, and importing them from other browsers. */
 export type BrowserLibraryBridge = {
   sources: () => Promise<BrowserImportSources>;
@@ -452,6 +468,22 @@ declare global {
         getProxy?: () => Promise<BrowserProxyState>;
         setControlEnabled?: (enabled: boolean) => Promise<boolean>;
         showTabContextMenu?: (tabId: string, point?: { x: number; y: number }) => Promise<void>;
+        /** The Work browser's basics on the person's tabs: `tools` for a Work account, `page` while its page is open. */
+        setUserTabTools?: (options: { tools?: boolean; page?: boolean; language?: string }) => Promise<{ tools: boolean; page: boolean; language: string | null }>;
+        /** Find in page on the person's tab on screen; results arrive through `onFindResult`. Empty text stops. */
+        find?: (tabId: string, text: string, options?: { forward?: boolean; next?: boolean }) => Promise<number | null>;
+        stopFind?: (tabId: string) => Promise<boolean>;
+        /** Zoom the person's tab on screen (kept per site); no action reads the zoom. */
+        zoom?: (tabId: string, action?: "in" | "out" | "reset") => Promise<{ factor: number }>;
+        print?: (tabId: string) => Promise<boolean>;
+        /** The keyboard goes back to the page (after the find bar closes). */
+        focusPage?: (tabId: string) => Promise<boolean>;
+        downloads?: () => Promise<BrowserDownload[]>;
+        downloadAction?: (downloadId: string, action: "show" | "cancel" | "folder") => Promise<BrowserDownload[]>;
+        clearDownloads?: () => Promise<BrowserDownload[]>;
+        onFindResult?: (callback: (result: BrowserFindResult) => void) => () => void;
+        onShortcut?: (callback: (payload: { tabId: string | null; action: BrowserShortcutAction; url?: string }) => void) => () => void;
+        onDownloadsChange?: (callback: (downloads: BrowserDownload[]) => void) => () => void;
         destroy?: () => Promise<void>;
         onStateChange?: (callback: (state: BrowserStatePayload) => void) => () => void;
         onPanelOpened?: (callback: (payload?: BrowserPanelOwnerPayload) => void) => () => void;

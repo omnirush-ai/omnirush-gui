@@ -4,7 +4,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, WebContentsView, clipboard, dialog, session, shell } from "electron";
+import { app, BrowserWindow, Menu, WebContentsView, clipboard, dialog, session, shell } from "electron";
 import {
   BACKGROUND_TAB_VIEWPORT,
   backgroundTabEmulationCommands,
@@ -18,6 +18,8 @@ import { BrowserTaskError, createBrowserTaskHost } from "./browser-task.mjs";
 import { createWebMcpBroker } from "./webmcp-host.mjs";
 import { createWebMcpFramePolicy } from "./webmcp-policy.mjs";
 import { installBrowserPanelPermissionHandlers } from "./media-permissions.mjs";
+import { createBrowserDownloads } from "./browser-downloads.mjs";
+import { APP_FOCUS_ACTIONS, REPEATING_ACTIONS, browserShortcut, nextZoomFactor, pageMenuItems } from "./browser-page-tools.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROWSER_SESSION_PARTITION = "persist:omnirush-browser";
@@ -85,9 +87,17 @@ const BROWSER_SECURITY_PREFERENCES = Object.freeze({
   webSecurity: true,
   allowRunningInsecureContent: false,
   webviewTag: false,
+  // No `plugins`: Electron shows PDFs in Chromium's own viewer without it, inside this same sandbox.
 });
 
-export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, checkPolicy, permissionMode, actApproval }) {
+export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, checkPolicy, permissionMode, actApproval,
+  // The Work browser's basics on the person's own tabs (browser-page-tools.mjs, browser-downloads.mjs):
+  // a page the person opened in one of their tabs, for their own library on this computer (browser-library.mjs).
+  onVisit = null,
+  downloadsDir = () => app.getPath("downloads"),
+  markDownload = undefined,
+  popupMenu = (template) => Menu.buildFromTemplate(template).popup({ window: getWindow?.() ?? undefined }),
+  platform = /** @type {string} */ (process.platform) }) {
   let browserSessionHooksInstalled = false;
   function installBrowserSessionHooks() {
     if (browserSessionHooksInstalled) return;
@@ -99,6 +109,8 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       if (!tab) return;
       tab.downloads.add(item);
       item.once("done", () => tab.downloads.delete(item));
+      // The person's own tab in Work: straight to the Downloads folder, listed, and marked as from the internet.
+      if (personalTab(tab.tabId)) downloads.track(item, { referrer: contents.getURL() });
     });
     browserSessionHooksInstalled = true;
     if (!checkPolicy) return;
@@ -171,6 +183,16 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
   let menuOverlayReadyResolvers = [];
   let menuOverlayShowSerial = 0;
   const webMcpRefreshTimers = new Map();
+  // Set by the app: `tools` for a Work account (downloads, the page menu, own visits on the person's tabs), `page`
+  // while the Work browser page is open (its keyboard shortcuts), `language` for the page menu.
+  const userTabTools = { tools: false, page: false, language: /** @type {string | null} */ (null) };
+  const downloads = createBrowserDownloads({
+    downloadsDir,
+    platform,
+    ...(markDownload ? { mark: markDownload } : {}),
+    onChange: (list) => sendToRenderer("omnirush:browser:downloads", list),
+    onFinished: (filePath) => { if (platform === "darwin") app.dock?.downloadFinished?.(filePath); },
+  });
 
   function window() {
     return getWindow?.() ?? null;
@@ -1029,6 +1051,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       scheduleWebMcpToolCountRefresh(tabId);
     });
     view.webContents.on("focus", () => resetViewportEmulation(view));
+    installUserTabBasics(tab);
     view.webContents.once("destroyed", () => {
       // CDP Target.closeTarget and page-initiated close bypass our tab-strip
       // handler; they must release the native parent and owner state too.
@@ -1494,6 +1517,200 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // The Work browser's basics on the person's own tabs: find in page, zoom per
+  // site (Chromium keeps it per site in this browser's profile), print, the page
+  // menu, keyboard shortcuts while the Work browser has focus, downloads, and the
+  // pages they open, kept in their own library on this computer. Never on an
+  // agent's tab, and nothing here is sent to the agent or uploaded.
+  // ---------------------------------------------------------------------------
+
+  /** One of the person's tabs, in a Work account. */
+  function personalTab(tabId) {
+    return userTabTools.tools && registry.ownerOf(tabId) === USER_TABS_OWNER;
+  }
+
+  function onScreenUserTab(tabId) {
+    const tab = browserTabs.get(String(tabId ?? ""));
+    if (!tab || tab.view.webContents.isDestroyed() || tab.suspending || tab.tabId !== registry.onScreenTabId() || registry.ownerOf(tab.tabId) !== USER_TABS_OWNER) {
+      throw new Error("Select this tab first.");
+    }
+    return tab;
+  }
+
+  function installUserTabBasics(tab) {
+    const contents = tab.view.webContents;
+    const own = () => browserTabs.get(tab.tabId) === tab && personalTab(tab.tabId);
+    contents.on("before-input-event", (event, input) => {
+      if (!userTabTools.page || !own() || registry.onScreenTabId() !== tab.tabId) return;
+      const action = browserShortcut(input, platform);
+      if (!action) return;
+      // Caught before the page and the app menu see it (Cmd or Ctrl+R would otherwise reload the app).
+      event.preventDefault();
+      if (input.isAutoRepeat && !REPEATING_ACTIONS.has(action)) return;
+      runUserTabShortcut(tab, action);
+    });
+    contents.on("context-menu", (_event, params) => {
+      if (own()) showPageMenu(tab, params);
+    });
+    contents.on("zoom-changed", (_event, direction) => {
+      if (own()) zoomUserTab(tab, direction === "in" ? "in" : "out");
+    });
+    contents.on("found-in-page", (_event, result) => {
+      if (!own()) return;
+      sendToRenderer("omnirush:browser:find-result", {
+        tabId: tab.tabId, requestId: result.requestId, matches: result.matches, active: result.activeMatchOrdinal, final: result.finalUpdate,
+      });
+    });
+    const visit = (url, counted, title = contents.getTitle()) => {
+      if (typeof onVisit !== "function" || !own() || !/^https?:\/\//i.test(String(url ?? ""))) return;
+      if (counted) {
+        if (tab.lastVisitUrl === url) return;
+        tab.lastVisitUrl = url;
+      } else if (tab.lastVisitUrl !== url) return;
+      try {
+        onVisit({ url, title: typeof title === "string" ? title : "", visit: counted });
+      } catch (error) {
+        console.warn("[browser] could not keep a visit in the library", error instanceof Error ? error.message : error);
+      }
+    };
+    contents.on("did-navigate", (_event, url) => visit(url, true));
+    contents.on("did-navigate-in-page", (_event, url, isMainFrame) => { if (isMainFrame) visit(url, true); });
+    contents.on("page-title-updated", (_event, title) => visit(contents.getURL(), false, title));
+  }
+
+  /** A shortcut caught on the person's tab: zoom here, everything else in the Work browser page. */
+  function runUserTabShortcut(tab, action) {
+    if (action === "zoom-in" || action === "zoom-out" || action === "zoom-reset") {
+      zoomUserTab(tab, action.slice("zoom-".length));
+      return;
+    }
+    // The address field and the find bar are the app's: the keyboard goes back to the app first.
+    if (APP_FOCUS_ACTIONS.has(action)) {
+      try { window()?.webContents.focus(); } catch { /* window closing */ }
+    }
+    sendToRenderer("omnirush:browser:shortcut", { tabId: tab.tabId, action });
+  }
+
+  function zoomUserTab(tab, action) {
+    const contents = tab.view.webContents;
+    if (action === "in" || action === "out" || action === "reset") contents.setZoomFactor(nextZoomFactor(contents.getZoomFactor(), action));
+    return { factor: contents.getZoomFactor() };
+  }
+
+  function findInUserTab(tabId, text, options) {
+    const contents = onScreenUserTab(tabId).view.webContents;
+    const query = typeof text === "string" ? text.slice(0, 500) : "";
+    if (!query) {
+      contents.stopFindInPage("clearSelection");
+      return null;
+    }
+    const value = options && typeof options === "object" ? options : {};
+    // Electron's `findNext: true` starts a new search; the next and previous match continue it.
+    return contents.findInPage(query, { forward: value.forward !== false, findNext: value.next !== true, matchCase: false });
+  }
+
+  function printUserTab(tab) {
+    const contents = tab.view.webContents;
+    if (!/^https?:\/\//i.test(contents.getURL())) return false;
+    contents.print({}, () => undefined);
+    return true;
+  }
+
+  /** "Open link in new tab": a new tab of the person's own, behind the one they are reading. */
+  function openUserTabBehind(url) {
+    try {
+      createBrowserTab(url, { select: false, initializeBlank: false, ownerSessionId: USER_TABS_OWNER });
+    } catch (error) {
+      // At the live tab limit the Work browser offers to suspend the oldest tab, as for any new tab.
+      if (userTabTools.page && error instanceof BrowserTaskError && error.code === "tab_limit") {
+        sendToRenderer("omnirush:browser:shortcut", { tabId: null, action: "open-tab", url });
+        return;
+      }
+      runDetachedTask("show could not open tab", async () => {
+        const mainWindow = window();
+        const options = { type: /** @type {"error"} */ ("error"), message: error instanceof Error ? error.message : String(error) };
+        if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, options);
+      });
+    }
+  }
+
+  function showPageMenu(tab, params) {
+    const contents = tab.view.webContents;
+    const items = pageMenuItems(params, {
+      canGoBack: contents.canGoBack(),
+      canGoForward: contents.canGoForward(),
+      find: userTabTools.page && registry.onScreenTabId() === tab.tabId,
+      language: userTabTools.language,
+    });
+    popupMenu(items.map((item) => (item.type === "separator" ? { type: "separator" } : {
+      label: String(item.label),
+      enabled: item.enabled !== false,
+      click: () => runPageMenuItem(tab, item, params),
+    })));
+  }
+
+  function runPageMenuItem(tab, item, params) {
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed() || browserTabs.get(tab.tabId) !== tab) return;
+    const value = typeof item.value === "string" ? item.value : "";
+    switch (item.id) {
+      case "open-link-tab":
+      case "open-image-tab":
+        openUserTabBehind(value);
+        return;
+      case "open-link-default":
+        runDetachedTask("open link in the default browser", async () => {
+          await checkPolicy?.({ url: value, external: true });
+          await shell.openExternal(value);
+        });
+        return;
+      case "copy-link":
+      case "copy-image-address":
+      case "copy-page":
+        clipboard.writeText(value);
+        return;
+      case "download-link":
+      case "download-image":
+        contents.downloadURL(value);
+        return;
+      case "copy-image":
+        contents.copyImageAt(params.x, params.y);
+        return;
+      case "spelling":
+        contents.replaceMisspelling(value);
+        return;
+      case "add-word":
+        contents.session.addWordToSpellCheckerDictionary(value);
+        return;
+      case "undo": contents.undo(); return;
+      case "redo": contents.redo(); return;
+      case "cut": contents.cut(); return;
+      case "copy": contents.copy(); return;
+      case "paste": contents.paste(); return;
+      case "select-all": contents.selectAll(); return;
+      case "back":
+        taskHost.manualNavigation(tab.tabId);
+        if (contents.canGoBack()) contents.goBack();
+        return;
+      case "forward":
+        taskHost.manualNavigation(tab.tabId);
+        if (contents.canGoForward()) contents.goForward();
+        return;
+      case "reload":
+        taskHost.manualNavigation(tab.tabId);
+        contents.reload();
+        return;
+      case "print":
+        printUserTab(tab);
+        return;
+      case "find":
+        runUserTabShortcut(tab, "find");
+        return;
+      default:
+    }
+  }
+
   // Known live contents can identify their target without replacing the document
   // with a marker. Task protection is held by the page until explicit release.
   async function restoreBrowserTab(tabId, protect = false) {
@@ -1825,6 +2042,54 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       invalidateWebMcpTab(tab);
       scheduleWebMcpToolCountRefresh(tab.tabId);
     });
+    // The Work browser's basics (the person's own tabs only). Only the app's own window may ask.
+    const fromApp = (event) => event.sender === window()?.webContents && event.senderFrame === window()?.webContents.mainFrame;
+    ipcMain.handle("omnirush:browser:userTabTools", (event, options) => {
+      if (!fromApp(event)) return { ...userTabTools };
+      const value = options && typeof options === "object" ? options : {};
+      if (typeof value.tools === "boolean") userTabTools.tools = value.tools;
+      if (typeof value.page === "boolean") userTabTools.page = value.page;
+      if (typeof value.language === "string") userTabTools.language = value.language.slice(0, 16);
+      return { ...userTabTools };
+    });
+    ipcMain.handle("omnirush:browser:find", (event, tabId, text, options) => {
+      if (!fromApp(event)) throw new Error("Use the browser toolbar.");
+      return findInUserTab(tabId, text, options);
+    });
+    ipcMain.handle("omnirush:browser:stopFind", (event, tabId) => {
+      const tab = browserTabs.get(String(tabId ?? ""));
+      if (!fromApp(event) || !tab || tab.view.webContents.isDestroyed() || registry.ownerOf(tab.tabId) !== USER_TABS_OWNER) return false;
+      tab.view.webContents.stopFindInPage("clearSelection");
+      return true;
+    });
+    ipcMain.handle("omnirush:browser:zoom", (event, tabId, action) => {
+      if (!fromApp(event)) throw new Error("Use the browser toolbar.");
+      return zoomUserTab(onScreenUserTab(tabId), action);
+    });
+    ipcMain.handle("omnirush:browser:print", (event, tabId) => {
+      if (!fromApp(event)) throw new Error("Use the browser toolbar.");
+      return printUserTab(onScreenUserTab(tabId));
+    });
+    ipcMain.handle("omnirush:browser:focusPage", (event, tabId) => {
+      if (!fromApp(event)) return false;
+      try {
+        onScreenUserTab(tabId).view.webContents.focus();
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    ipcMain.handle("omnirush:browser:downloads", () => downloads.list());
+    ipcMain.handle("omnirush:browser:downloadAction", (event, downloadId, action) => {
+      if (!fromApp(event)) throw new Error("Use the browser toolbar.");
+      if (action === "cancel") downloads.cancel(downloadId);
+      else if (action === "show") {
+        const file = downloads.savedPath(downloadId);
+        if (file) shell.showItemInFolder(file);
+      } else if (action === "folder") runDetachedTask("open the downloads folder", () => shell.openPath(downloadsDir()));
+      return downloads.list();
+    });
+    ipcMain.handle("omnirush:browser:clearDownloads", (event) => (fromApp(event) ? downloads.clear() : downloads.list()));
   }
 
   return {

@@ -6,7 +6,9 @@
 // bar and the bookmarks menu. What never does: file paths, cookie values
 // (sign-ins go through the login sync, which returns counts only) and saved
 // passwords, which are never read. Nothing here is uploaded or added to a
-// chat; the agent does not see the library.
+// chat; the agent does not see the library. Pages the person opens in their
+// own Work browser tabs are kept here too (never an agent's tab), so the
+// address bar and Recent learn; Clear browsing data removes them.
 import { chmodSync, closeSync, openSync } from "node:fs";
 import { copyFile, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -597,6 +599,33 @@ export function createBrowserLibrary({
     return { pages, total };
   }
 
+  /**
+   * A page the person opened in one of their own Work browser tabs (browser-panel.mjs; never an agent's tab).
+   * `visit` counts it; otherwise only its title is brought up to date. Web pages only, never ones with a user name
+   * or password in the address.
+   * @param {{ url?: unknown, title?: unknown, visit?: unknown }} [request]
+   */
+  function recordVisit({ url, title, visit = true } = {}) {
+    const clean = importableUrl(url);
+    if (!clean) return false;
+    try {
+      const parsed = new URL(clean);
+      if (parsed.username || parsed.password) return false;
+    } catch {
+      return false;
+    }
+    const label = typeof title === "string" ? title.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300) : "";
+    const store = database();
+    if (visit !== true) {
+      if (label) store.prepare("UPDATE history SET title = ? WHERE url = ? AND source = ?").run(label, clean, USER_SOURCE);
+      return true;
+    }
+    store.prepare(`INSERT INTO history (url, title, visits, last_visit_at, source) VALUES (?, ?, 1, ?, ?)
+      ON CONFLICT(url, source) DO UPDATE SET visits = visits + 1, last_visit_at = excluded.last_visit_at,
+      title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE history.title END`).run(clean, label, Math.trunc(now() / 1000), USER_SOURCE);
+    return true;
+  }
+
   function isBookmarked(url) {
     const clean = importableUrl(url);
     if (!clean) return false;
@@ -638,7 +667,7 @@ export function createBrowserLibrary({
     return { imports, bookmarks, history };
   }
 
-  /** Forget imported bookmarks and history. Starred pages and sign-ins stay (sign out of sites in the list below). */
+  /** Clear browsing data: imported bookmarks, all history (imported and visited here). Starred pages and sign-ins stay. */
   function clear() {
     transaction((store) => {
       store.prepare("DELETE FROM bookmarks WHERE source <> ?").run(USER_SOURCE);
@@ -687,6 +716,7 @@ export function createBrowserLibrary({
     recent,
     isBookmarked,
     toggleBookmark,
+    recordVisit,
     summary,
     clear,
     openFullDiskAccess,

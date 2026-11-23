@@ -4,10 +4,13 @@
 // toolbar row (back, forward, reload, address, star, Ask, ".."); everything else is in "..". A new tab is Browser home.
 // Tabs come back after a restart unloaded and load when shown. At the live tab limit the person chooses to suspend
 // their oldest tab; nothing is closed or suspended without that choice. Ask fills a Work chat composer with the page's
-// title, address and selected text; nothing is sent until Send.
+// title, address and selected text; nothing is sent until Send. Find in page, zoom, print and downloads are in "..";
+// the browser's keyboard shortcuts act only while this page has focus (browser-basics.ts).
 import { USER_TABS_OWNER, type BrowserPanelTab } from "@omnirush/browser-tabs";
-import { BookMarked, ChevronDown, ChevronRight, Copy, ExternalLink, Globe, Loader2, MessageSquareText, Moon, MoreHorizontal, Plus, SlidersHorizontal, X } from "lucide-react";
+import { BookMarked, ChevronDown, ChevronRight, Copy, Download, ExternalLink, Globe, Loader2, MessageSquareText, Minus, Moon, MoreHorizontal, Plus, Printer, Search, SlidersHorizontal, X, ZoomIn } from "lucide-react";
 import * as React from "react";
+
+import type { BrowserDownload, BrowserShortcutAction } from "@/app/lib/desktop";
 
 import { PanelTab, PanelTabClose, PanelTabItem, PanelTabList } from "@/components/panel-tabs";
 import { Button } from "@/components/ui/button";
@@ -32,6 +35,9 @@ import {
 } from "../../session/panel/browser-surface";
 import { getElectronBrowser } from "../../session/panel/utils";
 import { BrowserHome } from "./browser-home";
+import { shortcutHint, useBrowserDownloads, useWorkBrowserShortcuts, zoomPercent } from "./browser-basics";
+import { DownloadsView, useDownloadNotices } from "./browser-downloads";
+import { FindBar, type FindBarHandle } from "./find-bar";
 import { TabMark } from "./tab-mark";
 import { restoredTabIds, useCompanyApps, useUserBrowserTabs } from "./use-work-browser";
 import { askPagePrompt, isBrowserHomeTab, LIVE_TAB_LIMIT, openSiteSettings, siteHost, siteSettingsAvailable, WORK_BROWSER_NEW_TAB_URL } from "./work-browser";
@@ -75,6 +81,12 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
   const company = useCompanyApps();
   const contentRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const findRef = React.useRef<FindBarHandle>(null);
+  const [findOpen, setFindOpen] = React.useState(false);
+  const focusAddressRef = React.useRef(false);
+  const downloads = useBrowserDownloads();
+  useDownloadNotices(downloads);
   const [pending, setPending] = React.useState<Pending | null>(null);
   const [noneToSuspend, setNoneToSuspend] = React.useState(false);
   const [ask, setAsk] = React.useState<string | null>(null);
@@ -157,6 +169,68 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
     }
   }, [activeTab]);
   const pageOpen = Boolean(activeTab && /^https?:\/\//i.test(activeTab.url) && activeTab.status !== "suspended");
+  const pageTabId = pageOpen && activeTab ? activeTab.id : null;
+
+  // The browser's keys while this page has focus. Keys pressed on the web page itself arrive from the desktop app.
+  const runShortcut = React.useCallback((action: BrowserShortcutAction, url?: string) => {
+    const browser = getElectronBrowser();
+    switch (action) {
+      case "address":
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        return;
+      case "new-tab":
+      case "open-tab":
+        focusAddressRef.current = action === "new-tab";
+        newTab(url);
+        return;
+      case "close-tab":
+        if (activeTab) void browser?.closeTab?.(activeTab.id)?.catch(reportBrowserError);
+        return;
+      case "reload":
+        if (activeTab?.status === "suspended") selectTab(activeTab);
+        else if (pageTabId) void browser?.reload?.()?.catch(reportBrowserError);
+        return;
+      case "back":
+        if (activeTab?.canGoBack) void browser?.back?.()?.catch(reportBrowserError);
+        return;
+      case "forward":
+        if (activeTab?.canGoForward) void browser?.forward?.()?.catch(reportBrowserError);
+        return;
+      case "find":
+        if (!pageTabId) return;
+        if (findOpen) findRef.current?.focus();
+        else setFindOpen(true);
+        return;
+      case "print":
+        if (pageTabId) void browser?.print?.(pageTabId)?.catch(reportBrowserError);
+        return;
+      case "zoom-in":
+      case "zoom-out":
+      case "zoom-reset":
+        if (pageTabId) void browser?.zoom?.(pageTabId, action === "zoom-in" ? "in" : action === "zoom-out" ? "out" : "reset")?.catch(reportBrowserError);
+        return;
+      default:
+    }
+  }, [activeTab, findOpen, newTab, pageTabId, selectTab]);
+  useWorkBrowserShortcuts(rootRef, runShortcut);
+
+  // The browser takes the keyboard when it opens (unless the person is typing somewhere), so its keys work at once.
+  React.useEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+    rootRef.current?.focus({ preventScroll: true });
+  }, []);
+  // A new tab from the keyboard: the address field, ready to type in.
+  React.useEffect(() => {
+    if (!focusAddressRef.current || !home) return;
+    focusAddressRef.current = false;
+    inputRef.current?.focus();
+  }, [activeTab?.id, home]);
+  // Find belongs to the page it searched: another tab, or no page, closes it.
+  React.useEffect(() => {
+    setFindOpen(false);
+  }, [activeTab?.id]);
 
   // One bar under the toolbar at a time: whatever needs an answer, in this order, and the offer to import only when
   // nothing else does.
@@ -176,7 +250,7 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
   ].find(Boolean) ?? (activeTab && !home ? <LoginSyncCard visit /> : null);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background" data-testid="work-browser">
+    <div ref={rootRef} tabIndex={-1} className="flex h-full min-h-0 flex-col bg-background outline-none" data-testid="work-browser" data-work-browser="">
       <TabStrip tabs={tabs} activeTab={activeTab} onSelect={selectTab} onNew={() => newTab()} />
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-2" data-testid="work-browser-toolbar">
         <BrowserNavButtons tab={tab} />
@@ -204,8 +278,16 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
             <TooltipContent>{t("work_browser.ask_title")}</TooltipContent>
           </Tooltip>
         )}
-        <MoreMenu tab={activeTab} openExternal={openExternal} />
+        <MoreMenu
+          tab={activeTab}
+          openExternal={openExternal}
+          pageTabId={pageTabId}
+          downloads={downloads}
+          onFind={() => runShortcut("find")}
+          onPrint={() => runShortcut("print")}
+        />
       </div>
+      {findOpen && pageTabId && activeTab ? <FindBar ref={findRef} tabId={pageTabId} url={activeTab.url} onClose={() => setFindOpen(false)} /> : null}
       {notice}
       {activeTab && agentWorkingIn(activeTab) ? <BrowserAgentStrip tab={activeTab} /> : null}
       <div className="flex min-h-0 flex-1">
@@ -316,7 +398,7 @@ function AllTabs(props: { tabs: BrowserPanelTab[]; activeId: string | null; onSe
           </Button>
         )}
       />
-      <PopoverContent align="end" sideOffset={6} className="w-80 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-1" data-browser-occluder="">
+      <PopoverContent align="end" sideOffset={6} className="w-80 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-1" data-browser-occluder="" data-work-browser="">
         <div className="max-h-96 overflow-y-auto" role="list">
           {props.tabs.map((tab) => (
             <button
@@ -357,16 +439,75 @@ function MenuRow(props: { icon: React.ReactNode; label: string; onClick: () => v
   );
 }
 
+/** The zoom of the page on screen: out, the percentage (back to 100%), in. Kept per site. */
+function ZoomRow({ tabId, open }: { tabId: string | null; open: boolean }) {
+  const [factor, setFactor] = React.useState(1);
+  React.useEffect(() => {
+    if (!open || !tabId) return;
+    let current = true;
+    void getElectronBrowser()?.zoom?.(tabId)?.then((value) => { if (current) setFactor(value.factor); }).catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [open, tabId]);
+  const zoom = (action: "in" | "out" | "reset") => {
+    if (!tabId) return;
+    void getElectronBrowser()?.zoom?.(tabId, action)?.then((value) => setFactor(value.factor)).catch(reportBrowserError);
+  };
+  const disabled = !tabId;
+  const percent = zoomPercent(factor);
+  return (
+    <div className={cn("flex h-9 items-center gap-2.5 rounded-lg ps-2.5 pe-1 text-[13px] text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-dls-secondary", disabled && "opacity-50")} data-testid="work-browser-menu-zoom">
+      <ZoomIn aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{t("work_browser.zoom")}</span>
+      <Button variant="ghost" size="icon-sm" className="size-7" disabled={disabled || percent <= 50} onClick={() => zoom("out")} aria-label={t("work_browser.zoom_out")} title={t("work_browser.zoom_out")} data-testid="work-browser-zoom-out">
+        <Minus />
+      </Button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => zoom("reset")}
+        title={t("work_browser.zoom_reset")}
+        aria-label={`${t("work_browser.zoom_reset")} (${percent}%)`}
+        className="h-7 min-w-12 rounded-md px-1 text-center text-[13px] tabular-nums text-foreground hover:bg-muted focus-visible:bg-muted focus-visible:outline-none disabled:pointer-events-none"
+        data-testid="work-browser-zoom-value"
+      >
+        {percent}%
+      </button>
+      <Button variant="ghost" size="icon-sm" className="size-7" disabled={disabled || percent >= 300} onClick={() => zoom("in")} aria-label={t("work_browser.zoom_in")} title={t("work_browser.zoom_in")} data-testid="work-browser-zoom-in">
+        <Plus />
+      </Button>
+    </div>
+  );
+}
+
+const Hint = ({ letter }: { letter: string }) => <span className="shrink-0 text-xs text-dls-secondary">{shortcutHint(letter)}</span>;
+
+type MoreMenuProps = {
+  tab: BrowserPanelTab | null;
+  openExternal: (url: string) => void;
+  /** The tab when it shows a web page (find, zoom and print need one). */
+  pageTabId: string | null;
+  downloads: BrowserDownload[];
+  onFind: () => void;
+  onPrint: () => void;
+};
+
 /**
  * Everything that is not on the toolbar row. Groups, in order: the library (bookmarks), the tab (suspend), page tools
- * (find in page, zoom, print and downloads join this group), and the site (its settings, default browser, copy link).
+ * (find in page, zoom, print, downloads), and the site (its settings, default browser, copy link).
  */
-function MoreMenu({ tab, openExternal }: { tab: BrowserPanelTab | null; openExternal: (url: string) => void }) {
+function MoreMenu({ tab, openExternal, pageTabId, downloads, onFind, onPrint }: MoreMenuProps) {
   const [open, setOpen] = React.useState(false);
-  const [view, setView] = React.useState<"menu" | "bookmarks">("menu");
+  const [view, setView] = React.useState<"menu" | "bookmarks" | "downloads">("menu");
+  const downloading = downloads.filter((download) => download.state === "progressing").length;
   const [importOpen, setImportOpen] = React.useState(false);
   const page = tab && /^https?:\/\//i.test(tab.url) ? tab.url : null;
-  const close = () => setOpen(false);
+  // Closing from a sub-view (bookmarks, downloads) opens on the menu next time.
+  const close = () => {
+    setOpen(false);
+    setView("menu");
+  };
   const groups: React.ReactNode[][] = [
     [<MenuRow key="bookmarks" icon={<BookMarked />} label={t("browser_library.bookmarks")} onClick={() => setView("bookmarks")} trailing={<ChevronRight className="size-3.5!" />} testId="work-browser-menu-bookmarks" />],
     [
@@ -382,8 +523,24 @@ function MoreMenu({ tab, openExternal }: { tab: BrowserPanelTab | null; openExte
         testId="work-browser-menu-suspend"
       />,
     ],
-    // Page tools: find in page, zoom, print and downloads.
-    [],
+    [
+      <MenuRow key="find" icon={<Search />} label={t("work_browser.find")} disabled={!pageTabId} onClick={() => { close(); onFind(); }} trailing={<Hint letter="f" />} testId="work-browser-menu-find" />,
+      <ZoomRow key="zoom" tabId={pageTabId} open={open && view === "menu"} />,
+      <MenuRow key="print" icon={<Printer />} label={t("work_browser.print")} disabled={!pageTabId} onClick={() => { close(); onPrint(); }} trailing={<Hint letter="p" />} testId="work-browser-menu-print" />,
+      <MenuRow
+        key="downloads"
+        icon={<Download />}
+        label={t("work_browser.downloads")}
+        onClick={() => setView("downloads")}
+        trailing={(
+          <span className="flex shrink-0 items-center gap-1 text-xs text-dls-secondary">
+            {downloading ? t("work_browser.downloads_active", { n: downloading }) : null}
+            <ChevronRight className="size-3.5!" />
+          </span>
+        )}
+        testId="work-browser-menu-downloads"
+      />,
+    ],
     [
       ...(siteSettingsAvailable() ? [
         <MenuRow key="site" icon={<SlidersHorizontal />} label={t("work_browser.site_settings")} disabled={!page} onClick={() => { close(); if (page) openSiteSettings(page); }} testId="work-browser-menu-site-settings" />,
@@ -419,9 +576,11 @@ function MoreMenu({ tab, openExternal }: { tab: BrowserPanelTab | null; openExte
           />
           <TooltipContent>{t("work_browser.more")}</TooltipContent>
         </Tooltip>
-        <PopoverContent align="end" sideOffset={6} className="w-72 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-0" data-browser-occluder="" data-testid="work-browser-menu">
+        <PopoverContent align="end" sideOffset={6} className="w-72 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-0" data-browser-occluder="" data-work-browser="" data-testid="work-browser-menu">
           {view === "bookmarks" ? (
             <BookmarkBrowser sessionId={USER_TABS_OWNER} tab={null} onDone={close} onImport={() => setImportOpen(true)} onBack={() => setView("menu")} />
+          ) : view === "downloads" ? (
+            <DownloadsView downloads={downloads} onBack={() => setView("menu")} onDone={close} />
           ) : (
             <div className="flex flex-col p-1">
               {groups.filter((group) => group.length > 0).map((group, index) => (

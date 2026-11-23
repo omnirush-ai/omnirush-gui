@@ -1204,6 +1204,8 @@ browserPanel = createBrowserPanel({
   actApproval: browserActApproval,
   getWindow: () => mainWindow,
   onDeepLink: (urls) => queueDeepLinks(urls),
+  // Pages the person opens in their own Work browser tabs, kept in their library on this computer only.
+  onVisit: (visit) => browserLibrary.recordVisit(visit),
   checkPolicy: async (input) => {
     const server = await runtimeManager.omnirushServerInfo();
     if (!server.baseUrl || !(server.clientToken ?? server.ownerToken)) throw new Error("OmniRush.ai policy service is unavailable.");

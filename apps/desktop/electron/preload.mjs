@@ -268,6 +268,15 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
     getProxy() { return ipcRenderer.invoke("omnirush:browser:getProxy"); },
     setControlEnabled(enabled) { return ipcRenderer.invoke("omnirush:browser:setControlEnabled", enabled); },
     showTabContextMenu(tabId, point) { return ipcRenderer.invoke("omnirush:browser:tabContextMenu", tabId, point); },
+    setUserTabTools(options) { return ipcRenderer.invoke("omnirush:browser:userTabTools", options); },
+    find(tabId, text, options) { return ipcRenderer.invoke("omnirush:browser:find", tabId, text, options); },
+    stopFind(tabId) { return ipcRenderer.invoke("omnirush:browser:stopFind", tabId); },
+    zoom(tabId, action) { return ipcRenderer.invoke("omnirush:browser:zoom", tabId, action); },
+    print(tabId) { return ipcRenderer.invoke("omnirush:browser:print", tabId); },
+    focusPage(tabId) { return ipcRenderer.invoke("omnirush:browser:focusPage", tabId); },
+    downloads() { return ipcRenderer.invoke("omnirush:browser:downloads"); },
+    downloadAction(downloadId, action) { return ipcRenderer.invoke("omnirush:browser:downloadAction", downloadId, action); },
+    clearDownloads() { return ipcRenderer.invoke("omnirush:browser:clearDownloads"); },
     destroy() { return ipcRenderer.invoke("omnirush:browser:destroy"); },
     onStateChange(callback) {
       const handler = (_event, state) => callback(state);
@@ -283,6 +292,21 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
       const handler = (_event, payload) => callback(payload);
       ipcRenderer.on("omnirush:browser:panel-closed", handler);
       return () => ipcRenderer.removeListener("omnirush:browser:panel-closed", handler);
+    },
+    onFindResult(callback) {
+      const handler = (_event, payload) => callback(payload);
+      ipcRenderer.on("omnirush:browser:find-result", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser:find-result", handler);
+    },
+    onShortcut(callback) {
+      const handler = (_event, payload) => callback(payload);
+      ipcRenderer.on("omnirush:browser:shortcut", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser:shortcut", handler);
+    },
+    onDownloadsChange(callback) {
+      const handler = (_event, payload) => callback(payload);
+      ipcRenderer.on("omnirush:browser:downloads", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser:downloads", handler);
     },
   },
   browserLogins: {
