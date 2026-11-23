@@ -109,6 +109,8 @@ import { QueuedMessagesPanel } from "@/react-app/domains/session/modals/queued-m
 import { GoodSessionChecklistBar, noteUserStop } from "@/react-app/domains/quality/good-session";
 import { PlacementTurnFooter } from "@/react-app/domains/placements/placements";
 import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode";
+import { companyLimitPresentation } from "@/react-app/domains/work/company-limit";
+import { useAccountStatusStore } from "@/app/lib/quality";
 import { SideAnswers } from "./side-answers";
 import { parseSideQuestion, type SideAnswer } from "./side-question";
 import { FeedbackTurnPrompt } from "@/react-app/domains/feedback/feedback";
@@ -1046,7 +1048,10 @@ function SessionErrorCard({ error, developerMode, onDismiss, onChangeModel, onOp
   onChangeModel?: (model: { providerID: string; modelID: string }) => void;
   onOpenModelPicker?: () => void;
 }) {
-  const presentation = presentOpencodeSessionError(error.message);
+  // An OmniRush Work company account: a usage limit reads as its company's.
+  const enterprise = useEnterpriseFlags().on;
+  const usage = useAccountStatusStore((store) => (enterprise ? store.status?.usage ?? null : null));
+  const presentation = companyLimitPresentation(presentOpencodeSessionError(error.message), enterprise, {}, usage);
   return (
     <div className="mx-auto max-w-[720px] px-3 py-3 sm:px-5" data-testid="session-error-card" role="alert">
       <div className="rounded-2xl border border-red-6/30 bg-red-3/15 px-5 py-4">

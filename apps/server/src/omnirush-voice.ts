@@ -10,7 +10,8 @@ import { gitChildEnv } from "./git-env.js";
 import { execFile } from "node:child_process";
 import path from "node:path";
 
-import { grantExhaustedCopy, type OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
+import { COMPANY_LIMIT_OWNER, LIMIT_OWNER_HEADER } from "@omnirush/types/gateway-errors";
+import { companyGrantCopy, grantExhaustedCopy, type OmniRushGatewayBroker } from "./omnirush-gateway-broker.js";
 
 /** 125 s of 16 kHz mono WAV plus multipart overhead; the backend enforces the same cap. */
 export const VOICE_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
@@ -60,7 +61,8 @@ export function voiceStatusFromBody(body: unknown): VoiceAvailabilityState {
   };
 }
 
-type VoiceBroker = Pick<OmniRushGatewayBroker, "enabled" | "consoleUrl" | "modelCatalog" | "voiceStatus" | "transcribe">;
+/** `company`: an OmniRush Work company account (the broker's; absent in a double is "no"). */
+type VoiceBroker = Pick<OmniRushGatewayBroker, "enabled" | "consoleUrl" | "modelCatalog" | "voiceStatus" | "transcribe"> & { readonly company?: boolean };
 type VoiceLog = (level: "info" | "warn", message: string, attributes?: Record<string, unknown>) => void;
 
 export class OmniRushVoiceService {
@@ -175,6 +177,17 @@ export class OmniRushVoiceService {
     // A 404 from an older backend means the route does not exist yet.
     if (response.status === 404 && !code) {
       return Response.json({ error: { code: "voice_unavailable", message: "Voice input is not available on this account yet." } }, { status: 503 });
+    }
+    // A company account's spent voice budget or grant (the gateway's mark, or this app's enterprise mode): the company's
+    // usage limit, with its reset (the grant's, or the budget's at the next UTC midnight, its Retry-After).
+    if ((code === "daily_grant_exhausted" || code === "voice_daily_budget_exhausted")
+      && (response.headers.get(LIMIT_OWNER_HEADER)?.trim().toLowerCase() === COMPANY_LIMIT_OWNER || this.broker.company === true)) {
+      const seconds = Number(retryAfter);
+      const now = this.now();
+      const message = code === "daily_grant_exhausted"
+        ? companyGrantCopy(response.headers.get("x-omnirush-grant-scope"), response.headers.get("x-omnirush-grant-resets-at"), { now })
+        : companyGrantCopy("day", Number.isFinite(seconds) && seconds > 0 ? new Date(now + seconds * 1000).toISOString() : null, { now });
+      return Response.json({ error: { code, message } }, { status: response.status, headers });
     }
     // Voice runs on the model grant: say which limit ran out and when it resets.
     const grant = code === "daily_grant_exhausted" ? grantExhaustedCopy(response.headers, this.broker.consoleUrl) : null;

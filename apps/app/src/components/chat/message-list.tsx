@@ -8,6 +8,7 @@ import {
   Check,
   ChevronRight,
   CirclePause,
+  Clock,
   Copy,
   Download,
   FileDiff,
@@ -40,6 +41,9 @@ import { openTargetFromUrl } from "@/react-app/domains/session/artifacts/open-ta
 import { sessionErrorPresentationFromUIMessage } from "@/react-app/domains/session/sync/session-error"
 import { gatewayRefusalEvent } from "@/app/lib/gateway-refusal"
 import { AllowanceHelpLink } from "@/react-app/domains/quality/allowance-help"
+import { companyLimitLine, companyLimitPresentation, isUsageLimitText } from "@/react-app/domains/work/company-limit"
+import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode"
+import { useAccountStatusStore } from "@/app/lib/quality"
 import { ApplyPatchTool } from "@/components/tools/apply-patch"
 import { BashTool } from "@/components/tools/bash"
 import { ComputerUseToolLine } from "@/components/tools/computer-use"
@@ -902,18 +906,7 @@ type MessageComponentProps = {
 const MessageComponent = React.memo(
   ({ message, isLastMessage, isStreaming, isLastStep, hideReasoning }: MessageComponentProps) => {
     if (isSessionErrorMessage(message)) {
-      const presentation = sessionErrorPresentationFromUIMessage(message)
-      return (
-        <ErrorMessage
-          error={getMessagesText([message]) || "Session failed"}
-          description={presentation?.description}
-          showDescriptionOnResume={presentation?.kind === "provider-incomplete"}
-          resumePrompt={presentation?.recoveryPrompt}
-          technicalDetails={presentation?.technicalDetails}
-          action={presentation?.action}
-          allowanceHelp={isAllowanceLimit(presentation)}
-        />
-      )
+      return <SessionErrorMessage message={message} />
     }
 
     if (isEmptyMessage(message)) {
@@ -1013,6 +1006,8 @@ interface ErrorMessageProps {
   action?: { label: string; link: string } | null
   /** An out-of-tokens or paused-session refusal: link the allowance help. */
   allowanceHelp?: boolean
+  /** An OmniRush Work company account's usage limit: a calm notice until it resets, not an error. */
+  companyLimit?: boolean
 }
 
 /**
@@ -1077,13 +1072,39 @@ function SessionErrorTechnicalDetails({ details, tone }: { details: string; tone
   )
 }
 
+/**
+ * A failed turn's error card. An OmniRush Work company account reads a usage limit as its company's
+ * (domains/work/company-limit.ts): the reset on the user's clock, no allowance help and no console link.
+ */
+function SessionErrorMessage({ message }: { message: UIMessage }) {
+  const enterprise = useEnterpriseFlags().on
+  // The account's usage says when the limit resets where the error itself does not (the 2.x engine keeps only the code).
+  const usage = useAccountStatusStore((store) => (enterprise ? store.status?.usage ?? null : null))
+  const stored = sessionErrorPresentationFromUIMessage(message)
+  const presentation = stored ? companyLimitPresentation(stored, enterprise, {}, usage) : null
+  const text = getMessagesText([message]) || "Session failed"
+  const companyLimit = enterprise && (stored ? presentation !== stored : isUsageLimitText(text))
+  return (
+    <ErrorMessage
+      companyLimit={companyLimit}
+      error={presentation && presentation !== stored ? presentation.title : companyLimitLine(text, enterprise, usage)}
+      description={presentation?.description}
+      showDescriptionOnResume={presentation?.kind === "provider-incomplete"}
+      resumePrompt={presentation?.recoveryPrompt}
+      technicalDetails={presentation?.technicalDetails}
+      action={presentation?.action}
+      allowanceHelp={!enterprise && isAllowanceLimit(stored)}
+    />
+  )
+}
+
 /** Whether a session error is omnirush.ai's allowance (tokens used up, weekly cap) or a paused session. */
 function isAllowanceLimit(presentation: Parameters<typeof gatewayRefusalEvent>[0]): boolean {
   const limit = gatewayRefusalEvent(presentation)?.properties.limit_type
   return limit === "tokens" || limit === "session_cap"
 }
 
-function ErrorMessage({ error, description, showDescriptionOnResume, resumePrompt, technicalDetails, action, allowanceHelp }: ErrorMessageProps) {
+function ErrorMessage({ error, description, showDescriptionOnResume, resumePrompt, technicalDetails, action, allowanceHelp, companyLimit }: ErrorMessageProps) {
   const { onResumeInterrupted, developerMode } = useMessageList()
   // Status codes, provider names, and response bodies are for developers,
   // admins, and support — not the plain-language card end users see. They
@@ -1118,6 +1139,25 @@ function ErrorMessage({ error, description, showDescriptionOnResume, resumePromp
           </p>
         ) : null}
         {details ? <SessionErrorTechnicalDetails details={details} tone="line" /> : null}
+      </Message>
+    )
+  }
+
+  // A company account's usage limit is a state that ends at its reset, not a failure: neutral, with the reset in words.
+  if (companyLimit) {
+    return (
+      <Message className="not-prose mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-0 @min-[40rem]/chatpane:px-10">
+        <div
+          role="status"
+          data-testid="session-error-company-limit"
+          className="flex min-w-0 max-w-full flex-col gap-1.5 rounded-md border border-border bg-muted/50 px-3 py-2 text-sm"
+        >
+          <div className="flex flex-row items-start gap-2">
+            <Clock aria-hidden="true" size={16} className="mt-0.5 shrink-0 text-amber-11" />
+            <p className="whitespace-pre-wrap text-foreground">{error}</p>
+          </div>
+          {details ? <SessionErrorTechnicalDetails details={details} tone="card" /> : null}
+        </div>
       </Message>
     )
   }
@@ -1173,6 +1213,9 @@ function RetryActionButton(props: { label: string; onClick: () => void }) {
 
 const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
   const { dispatchAction } = useMessageList()
+  // An OmniRush Work company account: a usage limit reads as its company's.
+  const enterprise = useEnterpriseFlags().on
+  const usage = useAccountStatusStore((store) => (enterprise ? store.status?.usage ?? null : null))
   const [seconds, setSeconds] = React.useState(() => retryDelaySeconds(status))
 
   React.useEffect(() => {
@@ -1202,7 +1245,7 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
             <LoaderCircle size={16} className="mt-0.5 shrink-0 animate-spin text-warning" />
             <div className="min-w-0 space-y-1">
               <p className="whitespace-pre-wrap text-sm font-medium text-amber-12">
-                {freeModelLimit ? t("message.free_model_busy") : status.message}
+                {freeModelLimit ? t("message.free_model_busy") : companyLimitLine(status.message, enterprise, usage)}
               </p>
               <p className="text-xs text-amber-12/80">{info}</p>
             </div>

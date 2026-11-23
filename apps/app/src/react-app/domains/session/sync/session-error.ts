@@ -18,6 +18,8 @@ export type OmniRushErrorDetails = {
   /** false: the same request cannot succeed before the user acts or the allowance resets. */
   retry?: boolean;
   retry_after?: number;
+  /** Whose usage limit it is: `company` for an OmniRush Work company account (domains/work/company-limit.ts). */
+  owner?: string;
 };
 
 export type OpencodeSessionErrorPresentation = {
@@ -54,6 +56,7 @@ export function omnirushErrorDetails(value: unknown): OmniRushErrorDetails | nul
   if (typeof source.resets_at === "string" && source.resets_at.trim()) details.resets_at = source.resets_at.trim();
   if (typeof source.retry === "boolean") details.retry = source.retry;
   if (typeof source.retry_after === "number" && Number.isFinite(source.retry_after)) details.retry_after = source.retry_after;
+  if (typeof source.owner === "string" && source.owner.trim()) details.owner = source.owner.trim();
   return details;
 }
 

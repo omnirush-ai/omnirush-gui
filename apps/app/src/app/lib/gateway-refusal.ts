@@ -17,6 +17,8 @@ const GRANT_DAY = /today[’']s tokens are used up|used today[’']s model allow
 const GRANT_WEEK = /this week[’']s cap is reached/i;
 const GRANT_EMPTY = /you have no tokens left/i;
 const GRANT = /daily_grant_exhausted/i;
+// An OmniRush Work company account's usage limit (the local server's words for it).
+const COMPANY = /company[’']s usage limit is reached/i;
 const SESSION_CAP = /session_quality_cap/i;
 
 /** `error.omnirush.code` -> the event and its `limit_type` (null: the policy refusal). */
@@ -45,7 +47,7 @@ function fromText(text: string): GatewayRefusalEvent | null {
   if (GRANT_DAY.test(text)) return { event: "limit_shown", properties: { limit_type: "tokens", scope: "day", ...fallback } };
   if (GRANT_WEEK.test(text)) return { event: "limit_shown", properties: { limit_type: "tokens", scope: "week", ...fallback } };
   if (GRANT_EMPTY.test(text)) return { event: "limit_shown", properties: { limit_type: "tokens", scope: "empty", ...fallback } };
-  if (GRANT.test(text)) return { event: "limit_shown", properties: { limit_type: "tokens", scope: "unknown", ...fallback } };
+  if (GRANT.test(text) || COMPANY.test(text)) return { event: "limit_shown", properties: { limit_type: "tokens", scope: "unknown", ...fallback } };
   if (SESSION_CAP.test(text)) return { event: "limit_shown", properties: { limit_type: "session_cap", scope: "session", ...fallback } };
   return null;
 }

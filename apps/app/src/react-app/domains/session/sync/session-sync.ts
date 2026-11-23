@@ -4,9 +4,11 @@ import { create } from "zustand";
 import type { FilePart, Part, PermissionRequest, PermissionV2Request, QuestionRequest, Session, SessionStatus, Todo } from "@opencode-ai/sdk/v2/client";
 
 import { getReactQueryClient } from "../../../infra/query-client";
-import { closeSessionBrowserTabs } from "@/app/lib/desktop";
+import { closeSessionBrowserTabs, omnirushAccountStatus } from "@/app/lib/desktop";
 import { captureAnalyticsEvent, takeTaskRunStart } from "@/app/lib/analytics";
 import { gatewayRefusalEvent } from "@/app/lib/gateway-refusal";
+import { refreshAccountStatus, useAccountStatusStore } from "@/app/lib/quality";
+import { companyAccountNow, companyLimitPresentation } from "@/react-app/domains/work/company-limit";
 import { trackTaskCompleted, trackTaskFailed } from "@/app/lib/den-telemetry";
 import { observeModelsTaskEvent } from "@/app/lib/models-task-analytics";
 import { unwrap } from "@/app/lib/opencode";
@@ -948,8 +950,15 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const sessionId = sessionIdFromProperties(event.properties);
     if (sessionId) {
       const sessionError = sessionErrorFromProperties(event.properties);
+      // The transcript keeps the error as the engine reported it (the snapshot's copy of it must match, or the turn
+      // shows two cards); the chat card reads it again when it renders (message-list.tsx).
       const errorPresentation = presentOpencodeSessionError(sessionError);
-      const errorText = describeOpencodeSessionError(sessionError);
+      // An OmniRush Work company account reads a usage limit as its company's in the notification and the chat list.
+      const enterprise = companyAccountNow();
+      const company = companyLimitPresentation(errorPresentation, enterprise, {}, enterprise ? useAccountStatusStore.getState().status?.usage : null);
+      const errorText = company === errorPresentation ? describeOpencodeSessionError(sessionError) : company.title;
+      // The sidebar and Settings show the company's limit from the account status: read it now, not at the next focus.
+      if (company !== errorPresentation) void Promise.resolve().then(() => refreshAccountStatus(omnirushAccountStatus)).catch(() => undefined);
       const runStartedAt = takeTaskRunStart(sessionId);
       // Once per shown error: the run this app started, or a session it follows.
       const refusal = gatewayRefusalEvent(errorPresentation);

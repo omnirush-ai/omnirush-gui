@@ -83,3 +83,19 @@ export function gatewayErrorMessage(code: string, detail?: string | null): strin
 export function unknownGatewayErrorMessage(code: string): string {
   return `omnirush.ai could not complete the model request (${code}).`
 }
+
+/**
+ * OmniRush Work company accounts: a usage limit is the company's (judge S13). omnirush.ai marks one with this header and
+ * `error.omnirush.owner` = COMPANY_LIMIT_OWNER; an older server sends neither, so the app's own enterprise mode counts
+ * too. Every other account's limits read as before.
+ */
+export const LIMIT_OWNER_HEADER = "x-omnirush-limit-owner";
+export const COMPANY_LIMIT_OWNER = "company";
+
+/**
+ * The company account's usage limit, in the words the app shows (`work.ent.limit_resets` / `work.ent.limit` in the
+ * app's English strings): `when` is the reset as the consumer copy writes it ("5:30 AM (in 3 h)"), null when unknown.
+ */
+export function companyLimitCopy(when: string | null): string {
+  return when ? `Your company's usage limit is reached for now. It resets ${when}.` : "Your company's usage limit is reached for now.";
+}

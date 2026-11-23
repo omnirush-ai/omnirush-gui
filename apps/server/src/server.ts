@@ -193,7 +193,7 @@ import { askSideQuestion, brokerSideCall } from "./side-question.js";
 import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/desktop.js";
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
 import { findWorkWorkspace, forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./work/routes.js";
-import { isWorkRoot, rememberedAnswerStyle, rememberedWorkSwitch, rememberWorkSwitch, workDir } from "./work/work.js";
+import { isWorkRoot, rememberedAnswerStyle, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkSwitch, workDir } from "./work/work.js";
 import { isV2WorkRoot, withV2WorkPermissions } from "./work/engine.js";
 import { workPrompt } from "./work/prompt.js";
 import {
@@ -1395,6 +1395,8 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const gatewayBroker = new OmniRushGatewayBroker({
     // Every fresh capabilities answer refreshes the remembered Work switch, so a stale "off" can't hide the Work tools.
     onCapabilities: (capabilities) => workSwitchSeen(config, capabilities),
+    // An OmniRush Work company account (the enterprise block last seen): its spent grant is the company's usage limit.
+    companyAccount: () => rememberedWorkEnterprise(workDir(runtimeStorageDir(config))) !== null,
     onModelResponse: (sessionId, headers) => budgetWrap?.noteResponse(sessionId, headers),
     contextWrap: (sessionId) => budgetWrap?.contextWrap(sessionId) ?? false,
     sessionModelsFile: join(runtimeStorageDir(config), "chat-models.json"),

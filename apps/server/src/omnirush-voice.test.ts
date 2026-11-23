@@ -199,3 +199,49 @@ describe("voice project context", () => {
     expect(await voiceProjectContext(null)).toEqual({ repo: null, branch: null });
   });
 });
+
+describe("voice for an OmniRush Work company account", () => {
+  function companyBroker(answer: () => Response, company: boolean) {
+    return new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "device-access", refreshToken: "device-refresh" },
+      engineToken: "local-engine-token",
+      fetch: async () => answer(),
+      companyAccount: () => company,
+    });
+  }
+  const COMPANY = /^Your company's usage limit is reached for now\. It resets \d{1,2}:\d{2}( [AP]M)? \(in 3 h\)\.$/;
+
+  test("a spent voice budget or grant is the company's usage limit, by the gateway's mark or enterprise mode", async () => {
+    const now = Date.parse("2037-09-23T21:00:00Z");
+    const budget = (headers: Record<string, string>, company: boolean) => new OmniRushVoiceService(companyBroker(() => Response.json(
+      { detail: "voice_daily_budget_exhausted" },
+      { status: 429, headers: { "retry-after": "10800", ...headers } },
+    ), company), { now: () => now });
+    for (const [headers, company] of [[{ "x-omnirush-limit-owner": "company" }, false], [{}, true]] as const) {
+      const answer = await budget(headers, company).transcribe(segmentUpload());
+      expect(answer.status).toBe(429);
+      expect(answer.headers.get("retry-after")).toBe("10800");
+      const body = (await answer.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("voice_daily_budget_exhausted");
+      // 21:00 UTC + 3 h: the next UTC midnight, on this machine's clock.
+      expect(body.error.message).toStartWith("Your company's usage limit is reached for now. It resets ");
+      expect(body.error.message).toEndWith("(in 3 h).");
+    }
+    const grant = new OmniRushVoiceService(companyBroker(() => Response.json(
+      { detail: "daily_grant_exhausted" },
+      { status: 429, headers: { "retry-after": "10800", "x-omnirush-grant-scope": "day", "x-omnirush-grant-resets-at": new Date(Date.now() + 3 * 3_600_000).toISOString(), "x-omnirush-limit-owner": "company" } },
+    ), false));
+    const spent = (await (await grant.transcribe(segmentUpload())).json()) as { error: { message: string } };
+    expect(spent.error.message).toMatch(COMPANY);
+  });
+
+  test("a consumer's spent voice budget passes as it came", async () => {
+    const service = new OmniRushVoiceService(companyBroker(() => Response.json(
+      { detail: "voice_daily_budget_exhausted" },
+      { status: 429, headers: { "retry-after": "10800" } },
+    ), false));
+    const answer = await service.transcribe(segmentUpload());
+    expect(answer.status).toBe(429);
+    expect(await answer.json()).toEqual({ detail: "voice_daily_budget_exhausted" });
+  });
+});

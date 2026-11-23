@@ -20,6 +20,7 @@ import {
 import { openDesktopUrl } from "../../../app/lib/desktop";
 import { omnirushUsageSummary } from "../../../app/lib/omnirush-usage";
 import { useAccountStatusStore } from "../../../app/lib/quality";
+import { useEnterpriseFlags } from "../work/enterprise-mode";
 
 export type AllowanceHelpTab = "allowance" | "good-session";
 
@@ -90,7 +91,10 @@ export function AllowanceHelpBody(props: {
 
 /** The help dialog, mounted once over the app. */
 export function AllowanceHelpDialog() {
-  const tab = useAllowanceHelpStore((store) => store.tab);
+  // The consumer allowance's help: never over an OmniRush Work company account (it has no allowance to explain).
+  const enterprise = useEnterpriseFlags().on;
+  const opened = useAllowanceHelpStore((store) => store.tab);
+  const tab = enterprise ? null : opened;
   const status = useAccountStatusStore((store) => store.status);
   const usageLine = tab && status?.connected && status.usage ? omnirushUsageSummary(status.usage).line : null;
   const link = tab === "good-session" ? ALLOWANCE_GUIDE_GOOD_SESSION_URL : ALLOWANCE_GUIDE_URL;

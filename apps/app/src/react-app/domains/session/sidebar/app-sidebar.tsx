@@ -184,6 +184,7 @@ import { useAuditTrailController } from "../../audit/use-audit-trail-controller"
 import type { OmniRushServerClient } from "../../../../app/lib/omnirush-server";
 import { LocalWorkflowsPanel } from "../../local-workflows/local-workflows-panel";
 import { useEnterpriseFlags } from "../../work/enterprise-mode";
+import { companyUsageLimit } from "../../work/company-limit";
 import { WorkSidebarNav, type WorkNavigation } from "./work-sidebar-nav";
 
 /** Paper Desktop: unread #2FBE54, needs-action #E8933A (14px artboard → ~8px app). */
@@ -1138,6 +1139,8 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
     ? status?.displayName?.trim() || status?.email?.trim() || t("sidebar.your_account")
     : t("sidebar.sign_in_lower");
   const usage = connected && status?.usage && !enterprise.on ? omnirushUsageSummary(status.usage) : null;
+  // Its usage limit, only while it is reached: the company's sentence in place of the company name (no meter).
+  const companyLimit = connected && enterprise.on ? companyUsageLimit(status?.usage) : null;
   const quality = connected && !enterprise.on ? status?.quality ?? null : null;
   // A hackathon running now: the card above the account, a flag in the tools row once it is hidden for the day.
   const events = connected && !enterprise.on ? status?.events ?? null : null;
@@ -1147,7 +1150,7 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
   // only matters while connected; a signed-out footer keeps the sign-in hint.
   const serverHost = connected ? status?.gatewayHost?.trim() || null : null;
   const accountDetail = enterprise.on && connected
-    ? enterprise.orgName ?? status?.email?.trim() ?? t("sidebar.models_ready")
+    ? companyLimit ?? enterprise.orgName ?? status?.email?.trim() ?? t("sidebar.models_ready")
     : usage
     ? `${usage.short}${serverHost ? ` · ${serverHost}` : ""}`
     : connected
@@ -1158,7 +1161,9 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
         ? t("sidebar.sign_in_again")
         : t("sidebar.use_models_with_account");
   const accountTooltip = connected
-    ? serverHost
+    ? companyLimit
+      ? `${accountLabel} · ${companyLimit}`
+      : serverHost
       ? `${accountLabel} · ${serverHost}`
       : accountLabel
     : t("sidebar.sign_in");
@@ -1176,6 +1181,7 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
             aria-label={connected ? t("sidebar.account_label", { name: accountLabel }) : t("sidebar.sign_in")}
             data-testid="native-account-profile"
             data-account-server={serverHost ?? undefined}
+            data-usage-limit={companyLimit ? "company" : undefined}
           >
             <span
               className={cn(
@@ -1188,7 +1194,7 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
               <span
                 className={cn(
                   "absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-sidebar",
-                  connected ? "bg-highlight" : "bg-muted-foreground/50",
+                  companyLimit ? "bg-amber-9" : connected ? "bg-highlight" : "bg-muted-foreground/50",
                 )}
               />
             </span>

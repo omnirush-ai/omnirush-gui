@@ -24,6 +24,8 @@ import { useSessionCommandsStore } from "./session-commands-store";
 import { chatUndoKey } from "./undo-key";
 import { useCachedQueryData, useUndoRedo, visibleMessages, type SessionCommandTarget } from "./use-session-commands";
 import { t } from "@/i18n";
+import { companyUsageLimit } from "@/react-app/domains/work/company-limit";
+import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode";
 
 export type SessionCommandModelProps = {
   selectedModel: ModelRef;
@@ -238,6 +240,8 @@ function StatusRows(props: SessionCommandControlsProps) {
   const cached = useCachedQueryData<OmniRushSessionSnapshot>(snapshotKey(props.workspaceId, props.sessionId));
   const snapshot = cached?.session.id === props.sessionId ? cached : null;
   const account = useAccountStatusStore((store) => store.status);
+  // An OmniRush Work company account: no token meter; its company's usage limit only while it is reached.
+  const enterprise = useEnterpriseFlags().on;
   const [pending, setPending] = useState<OmniRushPendingUploads | null>(null);
   const [pendingFailed, setPendingFailed] = useState(false);
 
@@ -272,10 +276,14 @@ function StatusRows(props: SessionCommandControlsProps) {
   if (context) rows.push({ label: "Context", value: context.text, tone: context.warning ? "warning" : undefined, detail: context.warning ? "The chat is close to its limit; it will be compacted soon." : null });
   else rows.push({ label: "Context", value: "nothing used yet" });
 
-  const usage = account?.connected && account.usage ? omnirushUsageSummary(account.usage) : null;
-  rows.push(usage
-    ? { label: "Tokens left", value: usage.short, detail: usage.line !== usage.short ? usage.line : null }
-    : { label: "Tokens left", value: account?.connected ? "unknown" : "sign in to see" });
+  const companyLimit = enterprise && account?.connected ? companyUsageLimit(account.usage) : null;
+  const usage = !enterprise && account?.connected && account.usage ? omnirushUsageSummary(account.usage) : null;
+  if (companyLimit) rows.push({ label: t("work.ent.usage"), value: companyLimit, tone: "warning" });
+  else if (!enterprise) {
+    rows.push(usage
+      ? { label: "Tokens left", value: usage.short, detail: usage.line !== usage.short ? usage.line : null }
+      : { label: "Tokens left", value: account?.connected ? "unknown" : "sign in to see" });
+  }
 
   return (
     <div className="flex flex-col py-2">

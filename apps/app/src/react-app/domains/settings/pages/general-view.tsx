@@ -56,6 +56,7 @@ import { BuildathonTrackCard } from "../../buildathon/buildathon";
 import { ComputerUseSettingsCard } from "../../session/surface/computer-use/setup";
 import { EventsJoinedList } from "../../events/event-badge";
 import { useEnterpriseFlags } from "../../work/enterprise-mode";
+import { companyUsageLimit } from "../../work/company-limit";
 import { enterpriseSettingsTabs } from "../shell/settings-tabs";
 
 export type GeneralSettingsViewProps = {
@@ -476,6 +477,8 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
 
   const serverLine = account ? accountServerLine(account) : null;
   const usage = account?.connected && account.usage && !enterprise.on ? omnirushUsageSummary(account.usage) : null;
+  // A company account's usage limit, only while it is reached (no meter, no allowance help).
+  const companyLimit = account?.connected && enterprise.on ? companyUsageLimit(account.usage) : null;
 
   return (
     <div className="w-full max-w-3xl space-y-8">
@@ -513,6 +516,12 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                       : t("settings.account_sign_in_hint")
                     : t("settings.account_not_configured"))}
               </div>
+              {companyLimit ? (
+                <div className="mt-1 flex items-start gap-1.5 text-[11px] leading-4 text-dls-text" data-testid="account-company-limit">
+                  <span aria-hidden="true" className="mt-[5px] size-1.5 shrink-0 rounded-full bg-amber-9" />
+                  <span>{companyLimit}</span>
+                </div>
+              ) : null}
               {account.connected && account.credentialStorage === "file" ? (
                 <div className="mt-0.5 text-[11px] text-dls-secondary" data-testid="account-credential-storage">
                   {t("settings.account_file_storage")}

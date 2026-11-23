@@ -1902,3 +1902,110 @@ describe("OmniRush gateway broker upload keys, account and integrity", () => {
     expect(calls).toBe(1);
   });
 });
+
+describe("an OmniRush Work company account's usage limit", () => {
+  const COMPANY = /^Your company's usage limit is reached for now\. It resets \d{1,2}:\d{2}( [AP]M)? \(in 3 h\)\.$/;
+  const consumerWords = /omnirush\.ai|tokens|allowance|console|Discord|GitHub|refill/i;
+
+  function spentBroker(status: number, body: string, headers: Record<string, string>, company?: () => boolean) {
+    return new OmniRushGatewayBroker({
+      credentials: { gatewayUrl: "https://gateway.example/omnirush/v1", accessToken: "access-token", refreshToken: "refresh-token" },
+      engineToken: "local-engine-token",
+      fetch: async () => new Response(body, { status, headers }),
+      ...(company ? { companyAccount: company } : {}),
+    });
+  }
+
+  const inHours = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
+  const spentHeaders = (scope: string | null, resetsAt: string | null, owner: boolean) => ({
+    "content-type": "application/json",
+    "retry-after": "10800",
+    "x-should-retry": "false",
+    "x-ratelimit-limit-tokens": "5000000",
+    "x-ratelimit-remaining-tokens": "0",
+    ...(scope ? { "x-omnirush-grant-scope": scope } : {}),
+    ...(resetsAt ? { "x-omnirush-grant-resets-at": resetsAt } : {}),
+    ...(owner ? { "x-omnirush-limit-owner": "company" } : {}),
+  });
+  const spentBody = (scope: string, resetsAt: string, owner: boolean) => JSON.stringify({
+    detail: "daily_grant_exhausted",
+    error: { code: "daily_grant_exhausted", omnirush: { code: "limit_tokens", scope, resets_at: resetsAt, ...(owner ? { owner: "company" } : {}), retry: false, retry_after: 10800 } },
+  });
+  const ask = (broker: OmniRushGatewayBroker) => broker.handle(gatewayRequest({ model: "gpt-6-astra", input: "hi", stream: true }), "responses");
+  const errorOf = async (response: Response) => (await response.json() as { error: { message: string; code: string; omnirush?: Record<string, unknown> } }).error;
+
+  test("the gateway's mark: the company's sentence with the reset on the user's clock, final, error.omnirush kept", async () => {
+    const resetsAt = inHours(3);
+    const response = await ask(spentBroker(429, spentBody("day", resetsAt, true), spentHeaders("day", resetsAt, true)));
+    expect(response.status).toBe(403);
+    expect(response.headers.get("x-omnirush-gateway-status")).toBe("429");
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("x-omnirush-limit-owner")).toBe("company");
+    const error = await errorOf(response);
+    expect(error.code).toBe("daily_grant_exhausted");
+    expect(error.message).toMatch(COMPANY);
+    expect(error.message).not.toMatch(consumerWords);
+    expect(error.omnirush).toMatchObject({ code: "limit_tokens", owner: "company", scope: "day" });
+  });
+
+  test("an older server (no mark) in enterprise mode: still the company's, for every scope", async () => {
+    const company = () => true;
+    const day = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), spentHeaders("day", inHours(3), false), company)));
+    expect(day.message).toMatch(COMPANY);
+    const week = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), spentHeaders("week", new Date(Date.now() + 4 * 86_400_000).toISOString(), false), company)));
+    expect(week.message).toMatch(/^Your company's usage limit is reached for now\. It resets [A-Z][a-z]+day \d{1,2}:\d{2}( [AP]M)? \(in 4 days\)\.$/);
+    for (const scope of ["empty", "session"]) {
+      const none = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), spentHeaders(scope, null, false), company)));
+      expect(none.message).toBe("Your company's usage limit is reached for now.");
+    }
+    // No grant headers at all: the day's reset as the consumer copy writes an unknown one.
+    const bare = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), { "content-type": "application/json" }, company)));
+    expect(bare.message).toBe("Your company's usage limit is reached for now. It resets 00:00 UTC.");
+    // A per-model cap resets at the next UTC midnight: a day.
+    const model = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), spentHeaders("model", inHours(3), false), company)));
+    expect(model.message).toMatch(COMPANY);
+  });
+
+  test("a consumer's spent grant reads exactly as before, and other refusals of a company account do too", async () => {
+    let asked = 0;
+    const consumer = () => { asked += 1; return false; };
+    const day = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), spentHeaders("day", inHours(3), false), consumer)));
+    expect(day.message).toMatch(/^omnirush\.ai: today's tokens are used up\. They refill at \d{1,2}:\d{2}( [AP]M)? \(in 3 h\)\.$/);
+    const empty = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), spentHeaders("empty", null, false), consumer)));
+    expect(empty.message).toBe("omnirush.ai: you have no tokens left. Link Discord or connect GitHub in the console to earn tokens every day: https://gateway.example/console/account");
+    expect(asked).toBeGreaterThan(0);
+    // A company account's other refusals keep their own copy.
+    const busy = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "model_concurrency_limited" }), { "content-type": "application/json", "retry-after": "5" }, () => true)));
+    expect(busy.message).toContain("Wait for one to finish");
+    const inactive = await errorOf(await ask(spentBroker(403, JSON.stringify({ detail: "work_company_not_active" }), { "content-type": "application/json" }, () => true)));
+    expect(inactive.message).toContain("your company's OmniRush Work account is not active yet");
+    // A failing read of the Work state is "not a company account".
+    const broken = await errorOf(await ask(spentBroker(429, JSON.stringify({ detail: "daily_grant_exhausted" }), spentHeaders("day", inHours(3), false), () => { throw new Error("unreadable"); })));
+    expect(broken.message).toStartWith("omnirush.ai: today's tokens are used up.");
+  });
+
+  test("inside a stream: the company's sentence from error.omnirush, by the mark or by enterprise mode; read only for a spent grant", async () => {
+    const created = 'event: response.created\ndata: {"response":{"id":"resp_1"},"sequence_number":0,"type":"response.created"}\n\n';
+    const resetsAt = inHours(3);
+    const frame = (owner: boolean) => `event: error\ndata: ${JSON.stringify({ type: "error", sequence_number: -1, error: { type: "invalid_request_error", code: "daily_grant_exhausted", message: "OmniRush could not complete this request (daily_grant_exhausted).", omnirush: { code: "limit_tokens", scope: "day", resets_at: resetsAt, ...(owner ? { owner: "company" } : {}), retry: false } } })}\n\n`;
+    let asked = 0;
+    const run = async (text: string, company: () => boolean) => {
+      const upstream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } });
+      const out = await new Response(guardEventStream(upstream, { company: () => { asked += 1; return company(); } })).text();
+      return eventPayloads(out) as Array<{ error?: { code: string; message: string; param: string } }>;
+    };
+    const marked = (await run(created + frame(true), () => false))[1]!;
+    expect(marked.error!.code).toBe("invalid_prompt");
+    expect(marked.error!.message).toMatch(COMPANY);
+    expect(JSON.parse(marked.error!.param).omnirush.owner).toBe("company");
+    const older = (await run(created + frame(false), () => true))[1]!;
+    expect(older.error!.message).toMatch(COMPANY);
+    const consumer = (await run(created + frame(false), () => false))[1]!;
+    expect(consumer.error!.message).toStartWith("omnirush.ai: you have used today's model allowance");
+    // An ordinary stream never asks.
+    asked = 0;
+    const done = 'event: response.completed\ndata: {"response":{"id":"resp_1"},"sequence_number":1,"type":"response.completed"}\n\n';
+    await run(created + done, () => true);
+    expect(asked).toBe(0);
+  });
+});

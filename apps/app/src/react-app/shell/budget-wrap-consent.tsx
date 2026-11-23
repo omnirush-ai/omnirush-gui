@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useControlAction, type OmniRushControlAction } from "./control/control-provider";
+import { t } from "@/i18n";
+import { companyAccountNow } from "../domains/work/company-limit";
+import { useEnterpriseFlags } from "../domains/work/enterprise-mode";
 
 // The same rules as the engine plugin and the CLI (apps/server/src/
 // opencode-plugins/budget-wrap-rules.ts): one question per session and
@@ -82,6 +85,8 @@ function retryWrap(sessionID: string, offerID: string) {
 export function BudgetWrapConsent() {
   const offers = useWrapStore((state) => state.offers);
   const pending = offers.find((entry) => entry.choice === "pending" && !entry.held);
+  // An OmniRush Work company account's limit is its company's: no token allowance in the question.
+  const enterprise = useEnterpriseFlags().on;
 
   const updateAction = useMemo<OmniRushControlAction>(() => ({
     id: "budget.wrap.update",
@@ -101,7 +106,8 @@ export function BudgetWrapConsent() {
       if (operation === "hold") store.hold(parsed.sessionID, parsed.offerID);
       else if (operation === "finish") {
         store.choose(parsed.sessionID, parsed.offerID, "done");
-        toast.success("Wrap up complete", { description: "Your handoff is saved. You can keep working while tokens remain." });
+        // An OmniRush Work company account has no tokens of its own: the company's words.
+        toast.success("Wrap up complete", { description: companyAccountNow() ? t("work.ent.wrap_done") : "Your handoff is saved. You can keep working while tokens remain." });
       } else if (operation === "fail") {
         // Final for this offer: a notice with a retry action, not the question again.
         store.choose(parsed.sessionID, parsed.offerID, "failed");
@@ -127,7 +133,7 @@ export function BudgetWrapConsent() {
       <DialogHeader>
         <DialogTitle>Save a handoff for this session?</DialogTitle>
         <DialogDescription>
-          Your {pending?.scopes.replace(",", " and ") || "token"} allowance is nearly used. A wrap saves a summary of this session so you can resume it later. You can keep working while tokens remain, whether you wrap or not.
+          {enterprise ? t("work.ent.wrap_body") : <>Your {pending?.scopes.replace(",", " and ") || "token"} allowance is nearly used. A wrap saves a summary of this session so you can resume it later. You can keep working while tokens remain, whether you wrap or not.</>}
         </DialogDescription>
       </DialogHeader>
       <DialogFooter>

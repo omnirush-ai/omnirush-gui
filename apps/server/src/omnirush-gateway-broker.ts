@@ -20,7 +20,7 @@ import { MODE_NOT_BOUND, MODEL_NOT_BOUND, REFUSED_HEADER, SESSION_BIND_UNCONFIRM
 import { ClaudeDeviceAccess, type ClaudeAuthorization, type ClaudeDeviceRequest } from "./claude-code/access.js";
 import { stockMode } from "./stock-mode/stock-mode.mjs";
 import { WORK_HEADER, WORK_PATH } from "./work/work.js";
-import { gatewayErrorMessage, unknownGatewayErrorMessage } from "@omnirush/types/gateway-errors";
+import { COMPANY_LIMIT_OWNER, LIMIT_OWNER_HEADER, companyLimitCopy, gatewayErrorMessage, unknownGatewayErrorMessage } from "@omnirush/types/gateway-errors";
 
 /** A main chat's request on another model than the one it started on (one model per chat). */
 const SESSION_MODEL_FIXED = "session_model_fixed";
@@ -67,6 +67,9 @@ export type SubagentModelFallbackEvent = {
 };
 
 type BrokerOptions = {
+  /** An OmniRush Work company account (the enterprise block last seen): a spent grant reads as the company's usage limit,
+   *  even from a server that does not say so itself. */
+  companyAccount?: () => boolean;
   /** Every capabilities answer the server gave (not a cached one), so switches read from it never go stale (Work mode). */
   onCapabilities?: (capabilities: TraceCapabilities) => void;
   /** Every model response forwarded for a chat (the 2.x engine's quota wrap, engine-v2-budget-wrap.ts). */
@@ -279,6 +282,34 @@ export function grantExhaustedCopy(headers: Headers, consoleUrl: string | null, 
   return scope === "day" ? `Today's tokens are used up. They refill at ${when}.` : `This week's cap is reached. It resets ${when}.`;
 }
 
+/**
+ * A company account's spent grant (OmniRush Work, judge S13): "Your company's usage limit is reached for now. It resets
+ * 5:30 AM (in 3 h)." The reset reads like the consumer copy's (localReset); a day or week without a known time as
+ * 00:00 UTC or Monday 00:00 UTC, as there; a limit nothing resets (nothing granted, a chat's own cap) has no time.
+ * Never names the consumer allowance, the console or how to earn tokens.
+ */
+export function companyGrantCopy(scope: string | null | undefined, resetsAt: string | null | undefined, clock: GrantClock = {}): string {
+  const kind = scope?.trim().toLowerCase() ?? "";
+  if (kind === "empty" || kind === "session") return companyLimitCopy(null);
+  const period = kind === "week" ? "week" : "day";
+  const at = Date.parse(resetsAt ?? "");
+  return companyLimitCopy(Number.isFinite(at) ? localReset(at, period, clock) : period === "day" ? "00:00 UTC" : "Monday 00:00 UTC");
+}
+
+/** Whether the gateway marked a refusal the company's (header, or `error.omnirush.owner`). */
+function companyOwned(headers: Headers | null, error: Record<string, unknown> | null): boolean {
+  if (headers?.get(LIMIT_OWNER_HEADER)?.trim().toLowerCase() === COMPANY_LIMIT_OWNER) return true;
+  return Boolean(error && isRecord(error.omnirush) && error.omnirush.owner === COMPANY_LIMIT_OWNER);
+}
+
+/** A spent grant in a stream frame, as the company's usage limit (its reset from `error.omnirush`); null for anything else. */
+function companyStreamLimit(code: string | null, detail: string | null, nested: Record<string, unknown> | null): string | null {
+  const details = nested && isRecord(nested.omnirush) ? nested.omnirush : null;
+  const spent = code === "daily_grant_exhausted" || detail === "daily_grant_exhausted" || details?.code === "limit_tokens";
+  if (!spent) return null;
+  return companyGrantCopy(stringField(details?.scope), stringField(details?.resets_at));
+}
+
 /** "5:30 AM (in 3 h)", or "Monday 5:30 AM (in 4 days)" for the week: English words, the user's time zone and 12/24-hour style. */
 function localReset(at: number, scope: "day" | "week", clock: GrantClock): string {
   const { timeZone } = clock;
@@ -441,16 +472,19 @@ function turnEndingEvent(code: string, sequence: unknown, omnirush: { omnirush?:
   return new TextEncoder().encode(`event: error\ndata: ${JSON.stringify(frame)}\n\n`);
 }
 
-function errorEvent(block: Uint8Array, payload: Record<string, unknown>): Uint8Array {
+function errorEvent(block: Uint8Array, payload: Record<string, unknown>, company: () => boolean = () => false): Uint8Array {
   const nested = isRecord(payload.error) ? payload.error : null;
   const code = stringField(nested ? nested.code : payload.code);
   const baseCode = code?.replace(/^upstream_/, "") ?? null;
   const omnirush = omnirushField(nested);
   if (baseCode && TURN_ENDING_STREAM_CODES.has(baseCode)) return turnEndingEvent(baseCode, payload.sequence_number, omnirush);
   const original = stringField(nested ? nested.message : payload.message);
-  // model_not_in_mode names the kind of project the model runs in: the gateway's words.
-  const readable = baseCode === MODEL_NOT_IN_MODE && original ? original : code ? gatewayErrorMessage(code, original) : null;
   const detail = stringField(payload.detail);
+  // A company account's spent grant (the gateway's mark, or this app's enterprise mode): the company's usage limit.
+  const spent = companyStreamLimit(baseCode, detail, nested);
+  const limit = spent && (companyOwned(null, nested) || company()) ? spent : null;
+  // model_not_in_mode names the kind of project the model runs in: the gateway's words.
+  const readable = limit ?? (baseCode === MODEL_NOT_IN_MODE && original ? original : code ? gatewayErrorMessage(code, original) : null);
   if (retryRefused(nested) || (detail && FINAL_STREAM_CODES.has(detail)) || (baseCode && FINAL_STREAM_CODES.has(baseCode))) {
     const named = detail ?? baseCode ?? "omnirush_refused";
     return finalStreamEvent(payload, nested, code, readable ?? original ?? `omnirush.ai could not complete the model request (${named}).`);
@@ -499,6 +533,8 @@ function sseEventFields(block: Uint8Array): { name: string | null; data: string 
  */
 class SseEventFramer {
   terminal = false;
+  /** Whether this is an OmniRush Work company account's stream (asked only for a spent grant's frame). */
+  constructor(private readonly company: () => boolean = () => false) {}
   private buffer = new Uint8Array(4096);
   private length = 0;
   /** Where the blank-line scan resumes, and whether that offset starts a line. */
@@ -610,7 +646,7 @@ class SseEventFramer {
     }
     if (type === "error" || (type === undefined && (name === "error" || isRecord(payload.error)))) {
       this.terminal = true;
-      return errorEvent(block, payload);
+      return errorEvent(block, payload, this.company);
     }
     return block;
   }
@@ -627,11 +663,11 @@ class SseEventFramer {
 
 export function guardEventStream(
   body: ReadableStream<Uint8Array>,
-  options: { idleMs?: number; requestId?: string; onInterrupted?: (reason: StreamInterruption) => void } = {},
+  options: { idleMs?: number; requestId?: string; onInterrupted?: (reason: StreamInterruption) => void; company?: () => boolean } = {},
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const idleMs = options.idleMs ?? STREAM_IDLE_TIMEOUT_MS;
-  const events = new SseEventFramer();
+  const events = new SseEventFramer(options.company);
   const interrupt = (controller: ReadableStreamDefaultController<Uint8Array>, reason: StreamInterruption) => {
     options.onInterrupted?.(reason);
     controller.enqueue(interruptedEvent(reason, options.requestId));
@@ -697,7 +733,7 @@ export function guardEventStream(
  * reads its message from. Null leaves the body as it came. `grant` is a
  * spent grant's copy (grantExhaustedCopy), used for `daily_grant_exhausted`.
  */
-function readableErrorBody(text: string, grant: string | null): { error: Record<string, unknown>; code: string; final: boolean } | null {
+function readableErrorBody(text: string, grant: string | null, company = false, headers: Headers | null = null): { error: Record<string, unknown>; code: string; final: boolean } | null {
   let payload: unknown;
   try {
     payload = JSON.parse(text);
@@ -709,7 +745,13 @@ function readableErrorBody(text: string, grant: string | null): { error: Record<
   const bareCode = stringField(payload.detail) ?? stringField(payload.error);
   const code = bareCode ?? stringField(nested?.code);
   if (!code) return null;
-  const message = (grant && code === "daily_grant_exhausted" ? `omnirush.ai: ${grant.charAt(0).toLowerCase()}${grant.slice(1)}` : null)
+  // A company account's spent grant: the company's usage limit, never the consumer allowance or the console.
+  const details = nested && isRecord(nested.omnirush) ? nested.omnirush : null;
+  const companyLimit = code === "daily_grant_exhausted" && (company || companyOwned(headers, nested))
+    ? companyGrantCopy(headers?.get("x-omnirush-grant-scope") ?? stringField(details?.scope), headers?.get("x-omnirush-grant-resets-at") ?? stringField(details?.resets_at))
+    : null;
+  const message = companyLimit
+    ?? (grant && code === "daily_grant_exhausted" ? `omnirush.ai: ${grant.charAt(0).toLowerCase()}${grant.slice(1)}` : null)
     // The server names the version to install, or the kind of project the model runs in; keep its words.
     ?? (OWN_WORDS.has(code) ? stringField(nested?.message) ?? stringField(payload.message) : null)
     ?? gatewayErrorMessage(code, stringField(nested?.message))
@@ -733,9 +775,9 @@ function errorBodyRefusesRetry(text: string): boolean {
   }
 }
 
-async function readableErrorResponse(response: Response, consoleUrl: string | null): Promise<Response> {
+async function readableErrorResponse(response: Response, consoleUrl: string | null, company = false): Promise<Response> {
   const text = await response.text().catch(() => "");
-  const readable = readableErrorBody(text, grantExhaustedCopy(response.headers, consoleUrl));
+  const readable = readableErrorBody(text, grantExhaustedCopy(response.headers, consoleUrl), company, response.headers);
   const headers = responseHeaders(response.headers);
   // A spent grant stays spent until its reset: the engine would otherwise
   // resend the request ten times, each after the 429's Retry-After (60 s).
@@ -1389,6 +1431,7 @@ export class OmniRushGatewayBroker {
   }
 
   private readonly onModelResponse?: BrokerOptions["onModelResponse"];
+  private readonly companyAccount?: BrokerOptions["companyAccount"];
   private readonly onCapabilities?: BrokerOptions["onCapabilities"];
   private readonly contextWrap?: BrokerOptions["contextWrap"];
 
@@ -1403,6 +1446,7 @@ export class OmniRushGatewayBroker {
       : null;
     this.engineToken = options.engineToken?.trim() ?? "";
     this.onModelResponse = options.onModelResponse;
+    this.companyAccount = options.companyAccount;
     this.onCapabilities = options.onCapabilities;
     this.contextWrap = options.contextWrap;
     this.sessionModelsFile = options.sessionModelsFile;
@@ -1487,6 +1531,15 @@ export class OmniRushGatewayBroker {
   /** The account's server, as an origin (Work's chat sync keys its read position by it). */
   get serverOrigin(): string | null {
     return this.state ? originOf(this.state.gatewayUrl) : null;
+  }
+
+  /** An OmniRush Work company account, as this app last saw it (never throws: a failed read is "no"). */
+  get company(): boolean {
+    try {
+      return this.companyAccount?.() === true;
+    } catch {
+      return false;
+    }
   }
 
   /** The console's Account page on the account's server (where Discord and GitHub are linked). */
@@ -1577,7 +1630,7 @@ export class OmniRushGatewayBroker {
     // Sign-in failures keep their own answer above; every other gateway
     // refusal reaches the user as readable copy instead of a bare code.
     if (!response.ok && response.status !== 401 && contentType.includes("application/json")) {
-      return await readableErrorResponse(response, this.consoleUrl);
+      return await readableErrorResponse(response, this.consoleUrl, this.company);
     }
     const streamed = response.ok && response.body && contentType.includes("text/event-stream");
     let upstreamBody: ReadableStream<Uint8Array> | null = response.body;
@@ -1591,6 +1644,7 @@ export class OmniRushGatewayBroker {
     const responseBody = streamed && upstreamBody
       ? guardEventStream(upstreamBody, {
           requestId,
+          company: () => this.company,
           onInterrupted: (reason) => this.log?.("warn", "omnirush.ai model stream interrupted", {
             reason, path: normalizedPath, clientRequestId: requestId,
           }),

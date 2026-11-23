@@ -70,7 +70,8 @@ export function voiceErrorFromResponse(status: number, code: string | null, retr
       "rate_limited",
       code === "daily_grant_exhausted"
         ? message ?? "You have used today's model allowance, which voice falls back on. It refills at 00:00 UTC."
-        : budget ? "You have used today's voice allowance. It refills at 00:00 UTC." : "Voice is busy. Try again in a moment.",
+        // The service's words when it gives them (a company account's usage limit), else the voice allowance's.
+        : budget ? message ?? "You have used today's voice allowance. It refills at 00:00 UTC." : "Voice is busy. Try again in a moment.",
       { status, retryable: !budget, retryAfterMs: retryAfter },
     );
   }
