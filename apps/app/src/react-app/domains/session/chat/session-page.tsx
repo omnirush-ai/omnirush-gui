@@ -93,6 +93,8 @@ import { LazyEditorPanel } from "../editor/editor-entry";
 import { DEFAULT_IDE_CHAT_WIDTH, tabId, useEditorStore, type EditorTab, type LayoutMode } from "../editor/editor-store";
 import { ChatPanelButton, ChatSwitcher, LayoutModeToggle, RailDestinations, shortcutLabel, WorkspaceSwitcher, type RailDestination } from "../editor/ide-chrome";
 import { useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
+import { openRecordTab } from "../../work/viewer/record-tabs";
+import { onOpenRecordRequest } from "../../work/viewer/records";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
 import { useControlAction, type OmniRushControlAction } from "../../../shell/control/control-provider";
 import { cn } from "@/lib/utils";
@@ -501,6 +503,8 @@ export function SessionPage(props: SessionPageProps) {
   const activeSidePanel = sessionSidePanel;
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
+  // A Work record in the panel reads best at 400 px or more.
+  const recordTabActive = activeSidePanel === "panel" && activePanelTab?.type === "record";
   // The editor needs the local server's file routes: desktop, local workspaces.
   const editorAvailable = isElectronRuntime()
     && Boolean(props.omnirushServerClient && props.runtimeWorkspaceId)
@@ -1022,6 +1026,12 @@ export function SessionPage(props: SessionPageProps) {
     window.addEventListener("omnirush-close-right-pane", handler);
     return () => window.removeEventListener("omnirush-close-right-pane", handler);
   }, [setCurrentSidePanel]);
+  // A Work item (Today, Search, Deals, Knowledge, a Work chat's sources) opens in this panel's record viewer.
+  useEffect(() => onOpenRecordRequest((request) => {
+    openRecordTab(sidePanelSessionKey, request);
+    setCurrentSidePanel("panel");
+    if (isMobile) selectNarrowPane("panel");
+  }), [isMobile, selectNarrowPane, setCurrentSidePanel, sidePanelSessionKey]);
   const [showDelayedSessionLoadingState, setShowDelayedSessionLoadingState] = useState(false);
 
   const selectedSessionTitle = useMemo(
@@ -1208,11 +1218,11 @@ export function SessionPage(props: SessionPageProps) {
     if (sidePanelOpen) {
       options.push({
         id: "panel",
-        label: activeSidePanel === "extensions" ? "Extensions" : "Tools",
+        label: activeSidePanel === "extensions" ? "Extensions" : recordTabActive ? t("work.viewer.pane") : "Tools",
       });
     }
     return options;
-  }, [activeSidePanel, sidePanelOpen, splitSession]);
+  }, [activeSidePanel, recordTabActive, sidePanelOpen, splitSession]);
   const showNarrowPaneSwitcher = shouldShowNarrowPaneSwitcher(
     isMobile,
     Boolean(splitSession),
@@ -2341,8 +2351,8 @@ export function SessionPage(props: SessionPageProps) {
                 <ResizableHandle className="hidden bg-transparent lg:flex" />
                 <ResizablePanel
                   panelRef={browserPanelRef}
-                  defaultSize={`${activeSidePanel === "extensions" ? Math.max(browserPanelDefaultWidth, 480) : activeSidePanel === "editor" ? Math.max(browserPanelDefaultWidth, 560) : browserPanelDefaultWidth}px`}
-                  minSize={activeSidePanel === "extensions" ? "420px" : activeSidePanel === "editor" ? "420px" : "320px"}
+                  defaultSize={`${activeSidePanel === "extensions" ? Math.max(browserPanelDefaultWidth, 480) : activeSidePanel === "editor" ? Math.max(browserPanelDefaultWidth, 560) : recordTabActive ? Math.max(browserPanelDefaultWidth, 480) : browserPanelDefaultWidth}px`}
+                  minSize={activeSidePanel === "extensions" ? "420px" : activeSidePanel === "editor" ? "420px" : recordTabActive ? "400px" : "320px"}
                   maxSize="70%"
                   className="min-h-0 overflow-hidden pl-2 lg:flex lg:flex-col"
                 >

@@ -74,6 +74,8 @@ export const WORK_READ_TOOLS = [
   "work_context", "work_entity",
   // Full read of one record, counts across many, and deals (contract D1-D3): reads only.
   "work_read", "work_count", "work_deals",
+  // Salesforce and Xero reads, and what needs the user today (judge M13): reads only, never asked.
+  "salesforce_query", "salesforce_read", "salesforce_search", "xero_read", "xero_search", "work_today",
 ];
 
 /** The engine's own tools a Work chat does not get (no shell, no code editing). */

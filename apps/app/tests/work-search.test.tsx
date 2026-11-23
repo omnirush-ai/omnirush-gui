@@ -261,8 +261,8 @@ describe("Work search, deals and coverage (contract D6)", () => {
       expect(byTest("work-search-indexing")?.textContent).toBe("Indexing for search: 4,210 of 9,800");
       expect(byTest("work-search-note")?.textContent).toContain("WhatsApp isn't connected");
       expect(document.querySelectorAll("[data-search-channel]").length).toBe(3);
-      // A hit without a subject reads as its channel, and one without a link opens nothing.
-      expect(document.querySelector('[data-search-item="slack:9"]')?.getAttribute("role")).toBeNull();
+      // A hit without a subject reads as its channel; one without a link still opens in the record viewer (its id).
+      expect(document.querySelector('[data-search-item="slack:9"]')?.getAttribute("role")).toBe("button");
       const showAll = byTest("work-search-show-all") as HTMLButtonElement;
       expect(showAll.textContent).toBe("Show all 5");
       await act(async () => { showAll.click(); await sleep(0); });

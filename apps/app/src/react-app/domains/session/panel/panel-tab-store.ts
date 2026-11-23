@@ -2,10 +2,11 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { isCollectibleArtifactTarget, type OpenTarget, type OpenTargetPreview } from "../artifacts/open-target";
+import type { RecordCompose } from "../../work/viewer/records";
 
 export const PERSISTED_PANEL_TAB_STORE_KEY = "omnirush:panel-tabs:v1";
 
-export type PanelTabType = "artifact" | "browser" | "app";
+export type PanelTabType = "artifact" | "browser" | "app" | "record";
 
 export type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
 import type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
@@ -20,7 +21,22 @@ export type ArtifactPanelTab = {
 
 export type AppPanelTab = { id: string; type: "app"; label: string; appId: string; revisionId?: string; receiptId?: string };
 
-export type PanelTab = BrowserPanelTab | ArtifactPanelTab | AppPanelTab;
+/** A Work record (a mail thread, an issue, an event ...) or a new mail or meeting, in the record viewer
+ *  (domains/work/viewer). Kept in memory only, like artifacts. */
+export type RecordPanelTab = {
+  id: string;
+  type: "record";
+  label: string;
+  sourceId: string;
+  source?: string | null;
+  /** The mark the tab shows (Gmail, Outlook, Teams for Google and Microsoft records). */
+  mark?: string | null;
+  kind?: string | null;
+  url?: string | null;
+  compose?: RecordCompose;
+};
+
+export type PanelTab = BrowserPanelTab | ArtifactPanelTab | AppPanelTab | RecordPanelTab;
 
 export type SessionPanelState = {
   tabs: PanelTab[];
@@ -45,6 +61,8 @@ export type PanelTabStore = {
   sessions: Record<string, SessionPanelState>;
   transcriptArtifactTargets: Record<string, OpenTarget[]>;
   openTab: (sessionId: string, tab: PanelTab) => void;
+  /** Puts `tab` where `tabId` is (the record viewer stepping to the next item in place). */
+  replaceTab: (sessionId: string, tabId: string, tab: PanelTab) => void;
   closeTab: (sessionId: string, tabId: string) => void;
   selectTab: (sessionId: string, tabId: string) => void;
   reorderTabs: (sessionId: string, tabIds: string[]) => void;
@@ -144,6 +162,10 @@ function isSameTab(left: PanelTab, right: PanelTab) {
       && left.target?.id === right.target?.id
       && left.target?.updatedAt === right.target?.updatedAt
     );
+  }
+
+  if (left.type === "record" && right.type === "record") {
+    return left.label === right.label && left.sourceId === right.sourceId && left.source === right.source && left.mark === right.mark && left.url === right.url && left.compose === right.compose;
   }
 
   if (left.type === "app" && right.type === "app") {
@@ -248,6 +270,17 @@ export const usePanelTabStore = create<PanelTabStore>()(
           tabs: [...session.tabs, tab],
           activeTabId: tab.id,
         });
+      }),
+      replaceTab: (sessionId, tabId, tab) => set((state) => {
+        const session = getWritableSession(state, sessionId);
+        const at = session.tabs.findIndex((entry) => entry.id === tabId);
+        if (at < 0) {
+          return updateSession(state, sessionId, { tabs: [...session.tabs.filter((entry) => entry.id !== tab.id), tab], activeTabId: tab.id });
+        }
+        // The new tab may already be open elsewhere in the strip: it moves here.
+        const tabs = session.tabs.filter((entry, index) => index === at || entry.id !== tab.id);
+        tabs[tabs.findIndex((entry) => entry.id === tabId)] = tab;
+        return updateSession(state, sessionId, { tabs, activeTabId: tab.id });
       }),
       closeTab: (sessionId, tabId) => set((state) => {
         const session = getWritableSession(state, sessionId);

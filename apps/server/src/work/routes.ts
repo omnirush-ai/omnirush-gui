@@ -212,6 +212,17 @@ export function findWorkWorkspace(workspaces: WorkspaceInfo[]): WorkspaceInfo | 
   return workspaces.find((workspace) => workspace.preset === WORK_PRESET && workspace.workspaceType !== "remote") ?? null;
 }
 
+/** The parts of a Work error the app shows: the server's plain reason, a fix link, the field, the wait. */
+function errorExtras(data: Record<string, unknown>): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {};
+  for (const key of ["reason", "setup_url", "field", "retry_after", "owner"]) {
+    const value = data[key];
+    if ((typeof value === "string" && value.length <= 1000) || typeof value === "number") out[key] = value;
+  }
+  if (typeof out.setup_url === "string" && !/^https:\/\//.test(out.setup_url)) delete out.setup_url;
+  return Object.keys(out).length ? out : null;
+}
+
 async function passThrough(response: Response, jsonResponse: WorkRouteDeps["jsonResponse"]): Promise<{ status: number; data: unknown; response: Response }> {
   const text = await response.text().catch(() => "");
   let data: unknown = null;
@@ -222,6 +233,9 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
     const reason = (data as { reason?: unknown }).reason;
     if (typeof detail === "string") data = { ...data, code: detail, message: (detail === "missing_permission" && missingScope(reason)) || WORK_ERRORS[detail] || "That didn't work. Try again." };
     else if (Array.isArray(detail)) data = { ...data, code: "invalid_request", message: "That request wasn't accepted." };
+    // What fixes it (a GitHub install link, the field to check, when to retry) reaches the app as `details`.
+    const extras = errorExtras(data as Record<string, unknown>);
+    if (extras && !(data as { details?: unknown }).details) data = { ...(data as object), details: extras };
   }
   return { status: response.status, data, response: jsonResponse(data, response.status) };
 }

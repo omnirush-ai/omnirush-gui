@@ -18,6 +18,9 @@ import { cn } from "@/lib/utils";
 
 import { askAboutPrompt, connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, keyLabel, workEntityKey, workFailure, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
+import { useOpenRecordId } from "./viewer/record-tabs";
+import { isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
+import { useListKeys } from "./viewer/shortcuts";
 import {
   categoryColor, categoryCounts, categoryKey, categoryOf, entityIdOf, GRAPH_CATEGORIES, GRAPH_GROUPS, groupByDay, matchNodes, mergeGraph, searchHits, visibleGraph,
 } from "./graph-model";
@@ -83,18 +86,30 @@ function Section(props: { title: string; children: React.ReactNode; action?: Rea
   );
 }
 
-function RecordRow(props: { record: OmniRushWorkEntityRecord; openLink: (url: string) => void }) {
+function RecordRow(props: { record: OmniRushWorkEntityRecord; openLink: (url: string) => void; list?: RecordRef[]; selected?: boolean }) {
   const record = props.record;
   const people = actorNames(record.actors);
+  const ref: RecordRef = { sourceId: record.source_id, source: record.source, kind: record.kind, title: record.subject ?? null, url: record.url ?? null };
+  const open = (options: { external: boolean; newTab: boolean }) => openItem({ ...ref, list: props.list }, props.openLink, options);
   return (
-    <li className="flex gap-3 border-b border-border py-2 last:border-b-0" data-work-record={record.source_id}>
+    <li
+      className={cn("relative -mx-2 flex cursor-pointer gap-3 rounded-lg border-b border-border px-2 py-2 outline-none last:border-b-0 hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring", props.selected && "bg-muted/70")}
+      data-work-record={record.source_id}
+      data-record-row={record.source_id}
+      role="button"
+      tabIndex={0}
+      aria-current={props.selected ? "true" : undefined}
+      aria-label={t("work.today.open_item", { title: record.subject || record.kind })}
+      onClick={(event) => open(openModifiers(event, isMac()))}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === " ") { event.preventDefault(); open({ external: false, newTab: false }); } }}
+    >
       <ConnectorIcon id={record.source} className="mt-0.5" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{record.subject || record.kind}</span>
           <span className="shrink-0 text-[12px] text-muted-foreground">{when(record.occurred_at)}</span>
           {record.url ? (
-            <button type="button" aria-label={t("work.knowledge.open_source")} className="shrink-0 text-muted-foreground hover:text-foreground" onClick={() => props.openLink(record.url!)}>
+            <button type="button" aria-label={t("work.knowledge.open_source")} className="shrink-0 text-muted-foreground hover:text-foreground" onClick={(event) => { event.stopPropagation(); props.openLink(record.url!); }}>
               <ExternalLink className="size-3.5" />
             </button>
           ) : null}
@@ -162,6 +177,13 @@ export function EntityDetail(props: {
   const [kind, setKind] = useState<string>("fact");
   const active = facts.filter((fact) => fact.status !== "retired");
   const timeline = [...records].sort((a, b) => String(b.occurred_at ?? "").localeCompare(String(a.occurred_at ?? "")));
+  // The timeline's records, for [ and ] in the viewer and J/K here.
+  const refs: RecordRef[] = timeline.map((record) => ({ sourceId: record.source_id, source: record.source, kind: record.kind, title: record.subject ?? null, url: record.url ?? null }));
+  const openId = useOpenRecordId();
+  const listKeys = useListKeys((row, options) => {
+    const ref = refs.find((entry) => entry.sourceId === row.dataset.recordRow);
+    if (ref) openItem({ ...ref, list: refs }, props.openLink, options);
+  });
   const add = () => {
     if (!text.trim()) return;
     props.onAddFact({ text: text.trim(), kind });
@@ -209,7 +231,7 @@ export function EntityDetail(props: {
 
       <Section title={t("work.knowledge.timeline")}>
         {timeline.length ? (
-          <ul className="flex flex-col">{timeline.map((record) => <RecordRow key={record.source_id} record={record} openLink={props.openLink} />)}</ul>
+          <ul className="flex flex-col" data-work-list onKeyDown={listKeys}>{timeline.map((record) => <RecordRow key={record.source_id} record={record} openLink={props.openLink} list={refs} selected={openId === record.source_id} />)}</ul>
         ) : <p className="text-sm text-muted-foreground">{t("work.knowledge.no_records")}</p>}
       </Section>
 

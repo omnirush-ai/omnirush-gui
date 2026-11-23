@@ -2,7 +2,7 @@
 // The Work home's Today view (contract Addendum C2): sources that need a fix, the sources as filter chips, then
 // Needs you / Today / Recent from GET /work/feed (empty sections stay out). Each row opens at its source or starts a Work chat about it.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, MessageSquare, Plus, RotateCw } from "lucide-react";
+import { CalendarPlus, Check, Mail, MessageSquare, Plus, RotateCw } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,9 @@ import { cn } from "@/lib/utils";
 
 import { askAboutItemPrompt, connectorLabel, relativeTime, signsInWithForm, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
 import { BrandTile, ConnectorIcon } from "./brand-icon";
+import { useOpenRecordId } from "./viewer/record-tabs";
+import { canOpen, isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
+import { useListKeys } from "./viewer/shortcuts";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
 /** Rows a section shows before "Show N more". */
@@ -124,11 +127,12 @@ export function SourceAttention(props: { sources: FeedSource[]; busy: string | n
   );
 }
 
-/** One feed row: source, title, who and when, why it is here. The whole row opens the item; Ask takes the reason's place on hover or focus. */
-export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy: boolean; onOpen: (url: string) => void; onAsk: (item: OmniRushWorkFeedItem) => void }) {
+/** One feed row: source, title, who and when, why it is here. The whole row opens the item (in the viewer panel when
+ *  the server has it, Cmd/Ctrl+click at its source); Ask takes the reason's place on hover or focus. */
+export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy: boolean; selected?: boolean; onOpen: (item: OmniRushWorkFeedItem, options: { external: boolean; newTab: boolean }) => void; onAsk: (item: OmniRushWorkFeedItem) => void }) {
   const item = props.item;
   const when = relativeTime(item.starts_at ?? item.due_at ?? item.at, props.now);
-  const open = item.url ? () => props.onOpen(item.url!) : null;
+  const open = canOpen({ sourceId: item.source_id ?? undefined, url: item.url }) ? (options: { external: boolean; newTab: boolean }) => props.onOpen(item, options) : null;
   // A GitHub path (owner/repo/dir/file) reads as its name, with repo/dir in the meta line. Drive names may hold "/" and stay whole.
   const cut = item.kind === "file" && item.source === "github" ? item.title.lastIndexOf("/") : -1;
   const [name, folder] = cut > 0 && cut < item.title.length - 1 ? [item.title.slice(cut + 1), item.title.slice(0, cut).replace(/^[^/]+\//, "")] : [item.title, null];
@@ -136,12 +140,19 @@ export function FeedRow(props: { item: OmniRushWorkFeedItem; now?: number; busy:
     <li
       data-feed-item={item.id}
       data-source={item.source}
-      {...(open ? { role: "button", tabIndex: 0, "aria-label": t("work.today.open_item", { title: item.title }), onClick: open, onKeyDown: (event: React.KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } } } : {})}
+      {...(open ? {
+        role: "button", tabIndex: 0, "data-record-row": item.source_id ?? item.id, "aria-current": props.selected ? "true" : undefined,
+        "aria-label": t("work.today.open_item", { title: item.title }),
+        onClick: (event: React.MouseEvent) => open(openModifiers(event, isMac())),
+        onKeyDown: (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && event.key === " ") { event.preventDefault(); open({ external: false, newTab: false }); } },
+      } : {})}
       className={cn(
         "group relative flex items-center gap-3 border-b border-border px-3 py-2.5 last:border-b-0",
-        open && "cursor-pointer outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring",
+        open && "cursor-pointer outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        props.selected && "bg-muted/70 hover:bg-muted/70",
       )}
     >
+      {props.selected ? <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-foreground/70" /> : null}
       <ConnectorIcon id={item.source} />
       {/* Room for Ask while it shows, so a long title ends in an ellipsis before it. */}
       <div className="min-w-0 flex-1 group-focus-within:pr-[4.5rem] group-hover:pr-[4.5rem]">
@@ -224,6 +235,20 @@ export function WorkToday(props: {
     setAsking(true);
     try { await props.onAsk(askAboutItemPrompt(item)); } catch (reason) { onError(reason); } finally { setAsking(false); }
   };
+  const groupsNow = { needs_you: feed.data?.groups.needs_you ?? [], today: feed.data?.groups.today ?? [], fyi: feed.data?.groups.fyi ?? [] };
+  // Every row on screen, in order, so [ and ] in the viewer step through what the page shows.
+  const refs: RecordRef[] = [...groupsNow.needs_you, ...groupsNow.today, ...groupsNow.fyi]
+    .filter((item) => item.source_id)
+    .map((item) => ({ sourceId: item.source_id!, source: item.source, kind: item.kind, title: item.title, url: item.url ?? null }));
+  const openFeedItem = (item: OmniRushWorkFeedItem, options: { external: boolean; newTab: boolean }) =>
+    openItem({ sourceId: item.source_id ?? "", source: item.source, kind: item.kind, title: item.title, url: item.url ?? null, list: refs }, props.openLink, options);
+  const listKeys = useListKeys((row, options) => {
+    const item = [...groupsNow.needs_you, ...groupsNow.today, ...groupsNow.fyi].find((entry) => (entry.source_id ?? entry.id) === row.dataset.recordRow);
+    if (item) openFeedItem(item, options);
+  });
+  const openId = useOpenRecordId();
+  const support = useViewerSupport((state) => state.support);
+  const canCompose = support !== "no" && sources.some((entry) => (entry.id === "google" || entry.id === "microsoft") && entry.status !== "error");
   const today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   const now = Date.now();
   const failure = feed.error && !feed.data ? workFailure(feed.error) : null;
@@ -231,7 +256,7 @@ export function WorkToday(props: {
   const broken = sources.some((item) => (!source || item.id === source) && (item.attention?.action === "reconnect" || item.attention?.action === "retry"));
   // A source in view still on its first import may bring something that needs you: no all-clear yet either.
   const importing = sources.some((item) => (!source || item.id === source) && sourceDot(item) === "syncing");
-  const groups = { needs_you: feed.data?.groups.needs_you ?? [], today: feed.data?.groups.today ?? [], fyi: feed.data?.groups.fyi ?? [] };
+  const groups = groupsNow;
   return (
     <div className="flex w-full flex-col gap-6" data-testid="work-today">
       <div className="flex flex-wrap items-end justify-between gap-2">
@@ -239,6 +264,12 @@ export function WorkToday(props: {
           <h1 className="text-[22px] font-semibold leading-[28px] tracking-[-0.02em] text-foreground">{t("work.today.today")}</h1>
           <span className="text-[13px] text-muted-foreground">{today}</span>
         </div>
+        {canCompose ? (
+          <div className="flex items-center gap-1.5" data-testid="work-today-compose">
+            <Button variant="outline" size="sm" onClick={() => requestOpenRecord({ sourceId: "", compose: { kind: "mail" } })}><Mail className="size-3.5" />{t("work.viewer.new_mail")}</Button>
+            <Button variant="outline" size="sm" onClick={() => requestOpenRecord({ sourceId: "", compose: { kind: "meeting" } })}><CalendarPlus className="size-3.5" />{t("work.viewer.schedule")}</Button>
+          </div>
+        ) : null}
       </div>
       {sources.length ? (
         <SourceAttention
@@ -280,8 +311,8 @@ export function WorkToday(props: {
                   {section.label}
                   {recent ? null : <span className="rounded-full bg-muted px-1.5 text-[11px] font-medium text-muted-foreground" data-testid="work-feed-count">{all.length}</span>}
                 </h2>
-                <ul className="rounded-xl border border-border bg-background">
-                  {items.map((item) => <FeedRow key={item.id} item={same ? { ...item, reason: null } : item} now={now} busy={asking} onOpen={props.openLink} onAsk={(picked) => void ask(picked)} />)}
+                <ul className="overflow-hidden rounded-xl border border-border bg-background" data-work-list onKeyDown={listKeys}>
+                  {items.map((item) => <FeedRow key={item.id} item={same ? { ...item, reason: null } : item} now={now} busy={asking} selected={Boolean(openId && item.source_id === openId)} onOpen={openFeedItem} onAsk={(picked) => void ask(picked)} />)}
                 </ul>
                 {capped ? (
                   <button type="button" aria-expanded={Boolean(more[section.id])} onClick={() => setMore({ ...more, [section.id]: !more[section.id] })} data-testid="work-feed-more" className="self-start text-[12px] text-muted-foreground transition-colors hover:text-foreground">

@@ -703,7 +703,8 @@ export type OmniRushWorkAttention = {
   since: string | null;
 };
 /** GET /omnirush/work/feed (contract Addendum C1). */
-export type OmniRushWorkFeedItem = { id: string; source: string; kind: string; title: string; who?: string | null; at?: string | null; url?: string | null; reason?: string | null; due_at?: string | null; starts_at?: string | null };
+/** `source_id`: the record's id for the viewer (records/detail); an older server leaves it out. */
+export type OmniRushWorkFeedItem = { id: string; source: string; kind: string; title: string; who?: string | null; at?: string | null; url?: string | null; reason?: string | null; due_at?: string | null; starts_at?: string | null; source_id?: string | null };
 export type OmniRushWorkFeed = {
   generated_at: string;
   sources: { id: string; label: string; status: OmniRushWorkConnectorStatus; attention?: OmniRushWorkAttention | null }[];
