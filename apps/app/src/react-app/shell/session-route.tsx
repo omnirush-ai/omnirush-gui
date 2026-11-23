@@ -3901,24 +3901,28 @@ export function SessionRoute() {
     const focusPrompt = (delays: number[]) => {
       for (const delay of delays) window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), delay);
     };
+    // A narrow window shows the chat (or the Work home) and the viewer as tabs: bring the composer's tab forward.
+    const showComposer = () => showAskChat(target.kind === "chat" ? target.sessionId : null);
     if (request.stay) {
-      // One line from the top of the window (never over the button the user may press again), with Open when the
-      // composer is on another page or on the Chat tab of a narrow window.
+      // One line from the top of the window (never over the button the user may press again), with Open: it goes to
+      // the composer's page or tab and focuses it.
       if (outcome.result === "added") {
-        if (leave) toast.undo(t("work.ask.added_toast"), { icon: MessageSquarePlus, undo: { label: t("work.ask.open"), onClick: () => route.navigate(WORK_HOME_ROUTE) }, closeLabel: t("common.close"), duration: 4000 });
-        else if (target.kind === "chat") {
-          const sessionId = target.sessionId;
-          toast.undo(t("work.ask.added_toast"), { icon: MessageSquarePlus, undo: { label: t("work.ask.open"), onClick: () => { showAskChat(sessionId); focusPrompt([60, 300]); } }, closeLabel: t("common.close"), duration: 4000 });
-        } else toast.success(t("work.ask.added_toast"), { duration: 2500 });
+        const open = () => {
+          if (leave) route.navigate(WORK_HOME_ROUTE);
+          showComposer();
+          if (leave) window.setTimeout(showComposer, 150);
+          focusPrompt(leave ? [120, 600] : [60, 300]);
+        };
+        toast.undo(t("work.ask.added_toast"), { icon: MessageSquarePlus, undo: { label: t("work.ask.open"), onClick: open }, closeLabel: t("common.close"), duration: 4000 });
       }
       return;
     }
     // A history push: Back returns to the page the item was asked from.
     if (leave) route.navigate(WORK_HOME_ROUTE);
-    // A narrow window shows the chat and the viewer as tabs: bring the chat (and its composer) forward.
-    if (target.kind === "chat") showAskChat(target.sessionId);
+    showComposer();
+    if (leave) window.setTimeout(showComposer, 150);
     // The composer mounts after the navigation or the tab switch: ask for the focus again once it is there.
-    focusPrompt(leave ? [120, 600] : target.kind === "chat" ? [30, 300] : [30]);
+    focusPrompt(leave ? [120, 600] : [30, 300]);
   }), []);
   // A chip in a sent question opens its entity in Knowledge.
   useEffect(() => {

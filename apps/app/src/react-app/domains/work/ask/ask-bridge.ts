@@ -14,13 +14,13 @@ export function requestAsk(ref: WorkRef, options: AskOptions = {}) {
   window.dispatchEvent(new CustomEvent<AskRequest>(ASK_WORK_RECORD_EVENT, { detail: { ref, stay: Boolean(options.stay) } }));
 }
 
-/** An Ask added a chip to this chat's composer: a narrow window that shows the chat and the viewer as tabs brings the
- *  Chat tab forward (session-page listens). */
+/** An Ask added a chip to a composer: a narrow window that shows the chat (or the Work home) and the viewer as tabs
+ *  brings the composer's tab forward (session-page listens). `sessionId` is the chat's, null for the Work home. */
 export const WORK_ASK_SHOW_CHAT_EVENT = "omnirush-work-ask-show-chat";
 
-export function showAskChat(sessionId: string) {
+export function showAskChat(sessionId: string | null) {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent<{ sessionId: string }>(WORK_ASK_SHOW_CHAT_EVENT, { detail: { sessionId } }));
+  window.dispatchEvent(new CustomEvent<{ sessionId: string | null }>(WORK_ASK_SHOW_CHAT_EVENT, { detail: { sessionId } }));
 }
 
 export function onAskRequest(handler: (request: AskRequest) => void): () => void {

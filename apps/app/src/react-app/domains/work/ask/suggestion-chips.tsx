@@ -57,7 +57,7 @@ function emptyComposerFocused(root: HTMLElement | null): boolean {
 }
 
 // Chips: 32 px tall, 13 px text, the source-chip look. Focus is a 3:1 ring on the chip.
-const CHIP_SHELL = "group/chip relative inline-flex h-8 min-w-0 max-w-[280px] shrink-0 items-center rounded-full border border-border bg-background transition-colors has-focus-visible:ring-2 has-focus-visible:ring-foreground/60";
+const CHIP_SHELL = "group/chip relative inline-flex h-8 min-w-0 max-w-[320px] shrink-0 items-center rounded-full border border-border bg-background transition-colors has-focus-visible:ring-2 has-focus-visible:ring-foreground/60";
 const CHIP_BUTTON = "flex h-full min-w-0 items-center gap-1.5 rounded-full text-[13px] leading-none text-foreground outline-none";
 const MORE_BUTTON = "inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-border bg-background ps-3 pe-2.5 text-[13px] leading-none text-foreground outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-foreground/60 data-popup-open:bg-muted/60";
 const MENU_POPUP = "z-50 min-w-48 max-w-[min(22rem,calc(100vw-2rem))] origin-(--transform-origin) rounded-xl border border-border bg-popover p-1 text-popover-foreground outline-none";
@@ -91,7 +91,8 @@ export function SuggestionChipRow(props: {
   className?: string;
 }) {
   const chips = props.chips;
-  const signature = chips.map((chip) => `${chip.id}\u0000${chipText(chip)}\u0000${chip.disabledReason ?? ""}`).join("\u0001");
+  // Which chips the row shows (a countdown in a disabled chip's reason does not make it a new row).
+  const signature = chips.map((chip) => `${chip.id}\u0000${chipText(chip)}`).join("\u0001");
   // Action chips lead the row and always show.
   const pinned = useMemo(() => {
     let count = 0;

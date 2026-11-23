@@ -640,15 +640,18 @@ export function SessionPage(props: SessionPageProps) {
     return () => window.cancelAnimationFrame(frame);
   }, [isMobile, narrowPane]);
 
-  // Ask in the record viewer of a narrow window (chat and viewer are tabs): the chip went to this chat's composer, so
-  // the Chat tab comes forward and the session route focuses the composer. Shift+click stays on the viewer.
+  // Ask in the record viewer of a narrow window (chat and viewer are tabs): the chip went to this chat's (or the Work
+  // home's) composer, so the Chat tab comes forward and the session route focuses the composer. Shift+click stays on
+  // the viewer until its toast's Open.
   const narrowAskRef = useRef({ isMobile, narrowPane, sessionId: props.selectedSessionId, selectNarrowPane });
   narrowAskRef.current = { isMobile, narrowPane, sessionId: props.selectedSessionId, selectNarrowPane };
   useEffect(() => {
     const show = (event: Event) => {
       const current = narrowAskRef.current;
       const sessionId = (event as CustomEvent<{ sessionId?: unknown }>).detail?.sessionId;
-      if (!current.isMobile || current.narrowPane === "chat" || sessionId !== current.sessionId) return;
+      if (!current.isMobile || current.narrowPane === "chat") return;
+      // A chat's chip brings that chat forward; the Work home's (no session) brings the main pane forward.
+      if (typeof sessionId === "string" && sessionId !== current.sessionId) return;
       narrowPaneForComposerRef.current = true;
       current.selectNarrowPane("chat");
     };
