@@ -3914,7 +3914,7 @@ export function SessionRoute() {
     if (request.stay) {
       // One line from the top of the window (never over the button the user may press again), updated in place by
       // later adds, with Open.
-      if (outcome.result === "added") showAskAdded(owner, open);
+      if (outcome.result === "added") showAskAdded(outcome.refs.length, open);
       return;
     }
     // A history push: Back returns to the page the item was asked from.

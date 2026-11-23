@@ -26,10 +26,10 @@ const close = (id: string, how: "onDismiss" | "onAutoClose" = "onDismiss") => {
 describe("Ask toasts", () => {
   test("5 quick adds and 2 refused adds leave one Ask line", () => {
     const open = () => {};
-    for (let i = 0; i < 5; i += 1) showAskAdded("home", open);
+    for (let attached = 1; attached <= 5; attached += 1) showAskAdded(attached, open);
     let shown = askToasts();
     expect(shown.map((item) => item.id)).toEqual([ASK_ADDED_TOAST_ID]);
-    expect(text(shown[0]!)).toContain("Added 5 items to your question");
+    expect(text(shown[0]!)).toContain("5 items in your question");
     expect(text(shown[0]!)).toContain("Open");
     showAskFull(open);
     showAskFull(open);
@@ -41,28 +41,28 @@ describe("Ask toasts", () => {
     expect(askToasts()).toEqual([]);
   });
 
-  test("the count starts again once the line has gone or the adds go to another composer", () => {
+  test("the line says how many items the question holds; a new add after the full line replaces it", () => {
     const open = () => {};
-    showAskAdded("home", open);
+    showAskAdded(1, open);
     expect(text(askToasts()[0]!)).toContain("Added to your question");
-    showAskAdded("home", open);
-    expect(text(askToasts()[0]!)).toContain("Added 2 items to your question");
+    showAskAdded(3, open);
+    expect(askToasts().length).toBe(1);
+    expect(text(askToasts()[0]!)).toContain("3 items in your question");
     close(ASK_ADDED_TOAST_ID, "onAutoClose");
-    showAskAdded("home", open);
-    expect(askToasts().length).toBe(1);
-    expect(text(askToasts()[0]!)).toContain("Added to your question");
-    showAskAdded("ses_1", open);
-    expect(askToasts().length).toBe(1);
-    expect(text(askToasts()[0]!)).toContain("Added to your question");
+    showAskFull(open);
+    showAskAdded(4, open);
+    expect(askToasts().map((item) => item.id)).toEqual([ASK_ADDED_TOAST_ID]);
     close(ASK_ADDED_TOAST_ID);
   });
 
-  test("the Claude note has its own fixed id, so repeats do not stack", () => {
+  test("the Claude note has its own fixed id, so repeats do not stack; the added copy stays short", () => {
     showAskClaudeHome();
     showAskClaudeHome();
     expect(askToasts().map((item) => item.id)).toEqual([ASK_CLAUDE_TOAST_ID]);
     sonner.dismiss(ASK_CLAUDE_TOAST_ID);
     expect(askAddedTitle(1)).toBe("Added to your question");
-    expect(askAddedTitle(3)).toBe("Added 3 items to your question");
+    expect(askAddedTitle(3)).toBe("3 items in your question");
+    // Whole beside Open at the toast's width (the 30-character "Added 2 items to your question" was clipped).
+    for (let attached = 1; attached <= 5; attached += 1) expect(askAddedTitle(attached).length).toBeLessThanOrEqual(24);
   });
 });

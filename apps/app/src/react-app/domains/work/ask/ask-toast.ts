@@ -1,5 +1,5 @@
 // The toasts an Ask shows. Each kind has one fixed id, so a run of Shift+click adds updates one line in place
-// ("Added 3 items to your question") and a refused add takes its place: at most one Ask line, never a pile of cards.
+// ("3 items in your question") and a refused add takes its place: at most one Ask line, never a pile of cards.
 import { MessageSquarePlus } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
@@ -9,23 +9,23 @@ export const ASK_FULL_TOAST_ID = "work-ask-full";
 export const ASK_CLAUDE_TOAST_ID = "work-ask-claude";
 const DURATION_MS = 4000;
 
-/** What is on screen: the added line (with how many adds it counts, for one composer) and the full line. */
-const shown = { added: false, owner: "", count: 0, full: false };
+/** Which Ask lines are on screen. */
+const shown = { added: false, full: false };
 
-export function askAddedTitle(count: number): string {
-  return count > 1 ? t("work.ask.added_toast_many", { count }) : t("work.ask.added_toast");
+/** The added line: short enough to stay whole beside Open at the toast's width. */
+export function askAddedTitle(attached: number): string {
+  return attached > 1 ? t("work.ask.added_toast_many", { count: attached }) : t("work.ask.added_toast");
 }
 
-/** A chip was added and the user stays on the page: one line from the top with Open (to the composer). */
-export function showAskAdded(owner: string, open: () => void) {
+/** A chip was added and the user stays on the page: one line from the top that says how many items the question
+ *  now holds, with Open (to the composer). */
+export function showAskAdded(attached: number, open: () => void) {
   if (shown.full) {
     shown.full = false;
     toast.dismiss(ASK_FULL_TOAST_ID);
   }
-  shown.count = shown.added && shown.owner === owner ? shown.count + 1 : 1;
-  shown.owner = owner;
   shown.added = true;
-  toast.undo(askAddedTitle(shown.count), {
+  toast.undo(askAddedTitle(attached), {
     id: ASK_ADDED_TOAST_ID,
     icon: MessageSquarePlus,
     undo: { label: t("work.ask.open"), onClick: open },
@@ -33,7 +33,6 @@ export function showAskAdded(owner: string, open: () => void) {
     duration: DURATION_MS,
     onClose: () => {
       shown.added = false;
-      shown.count = 0;
     },
   });
 }
@@ -42,7 +41,6 @@ export function showAskAdded(owner: string, open: () => void) {
 export function showAskFull(open: () => void) {
   if (shown.added) {
     shown.added = false;
-    shown.count = 0;
     toast.dismiss(ASK_ADDED_TOAST_ID);
   }
   shown.full = true;
