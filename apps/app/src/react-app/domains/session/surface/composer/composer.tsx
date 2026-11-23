@@ -128,6 +128,9 @@ type ComposerProps = {
   fullPermissionsControl?: ReactNode;
   /** The "Sub-agents" model and effort menu, shown right after the model selector. */
   subagentModelControl?: ReactNode;
+  /** A Work chat or Work home: the toolbar's labels (model, effort, permission, connectors) read in gray-11, which
+   *  reaches 4.5:1 in light and dark. Code chats keep their colours. */
+  work?: boolean;
   /** The Linux sandbox indicator (only while the project's sandbox is on or offered), after Full permissions. */
   sandboxControl?: ReactNode;
   /** Voice dictation's local server hop; without it there is no mic button. */
@@ -141,6 +144,9 @@ type ComposerProps = {
 export const COMPOSER_GUTTER = "px-4 max-lg:px-3 lg:px-8";
 export const COMPOSER_WIDTH = "max-w-[800px] mx-auto";
 export const COMPOSER_BOTTOM = "pb-[max(0.5rem,calc(env(safe-area-inset-bottom)+var(--keyboard-inset,0px)))]";
+/** Work only: the toolbar's gray-9 and gray-10 labels in gray-11 (a hovered gray-10 control keeps its gray-12). */
+export const WORK_TOOLBAR_TEXT = "[&_[data-composer-toolbar]_.text-gray-9]:text-gray-11 [&_[data-composer-toolbar]_.text-gray-10:not(:hover)]:text-gray-11";
+
 // The chat surface wraps the composer in a pb-2 shell (session-surface data-composer-shell); homes add mb-2 to match.
 /** The homes' glide into that place on send. */
 export const COMPOSER_GLIDE = "transition-all duration-200 ease-out motion-reduce:transition-none";
@@ -1343,7 +1349,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
         {/* Main composer panel */}
         <div
           data-composer-panel
-          className={`@container/composer relative overflow-visible rounded-[18px] border border-dls-border bg-dls-surface transition-all ${panelRoundedClass}`}
+          className={`@container/composer relative overflow-visible rounded-[18px] border border-dls-border bg-dls-surface transition-all ${panelRoundedClass}${props.work ? ` ${WORK_TOOLBAR_TEXT}` : ""}`}
         >
           {props.topAccessory ? <div className="relative z-10">{props.topAccessory}</div> : null}
           <VoicePermissionCard voice={voice} />

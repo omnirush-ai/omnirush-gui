@@ -83,7 +83,7 @@ function SendButton(props: { disabled: boolean; onClick: () => void; label?: str
   return (
     <Button type="button" size="sm" disabled={props.disabled} onClick={props.onClick} data-testid={props.testId ?? "work-composer-send"}>
       {props.label ?? t("work.viewer.send")}
-      <kbd className="ms-0.5 hidden font-sans text-[11px] opacity-60 @[24rem]/viewer:inline">{SEND_KEYS()}</kbd>
+      <kbd className="ms-0.5 hidden font-sans text-[12px] opacity-60 @[24rem]/viewer:inline">{SEND_KEYS()}</kbd>
     </Button>
   );
 }
@@ -407,7 +407,7 @@ export function ActionArea(props: {
             >
               <MessageSquare className="size-3.5" aria-hidden />
               <span className="flex-1">{first.id === "reply" ? t("work.viewer.reply_customer_placeholder") : first.id === "note" ? (view === "ticket" ? t("work.viewer.note_placeholder") : t("work.viewer.add_note_placeholder")) : t("work.viewer.comment_placeholder")}</span>
-              <kbd className="rounded border border-border px-1 font-sans text-[11px]">C</kbd>
+              <kbd className="rounded border border-border px-1 font-sans text-[12px]">C</kbd>
             </button>
           ) : null}
           {textual.length > 1 || other.length ? (

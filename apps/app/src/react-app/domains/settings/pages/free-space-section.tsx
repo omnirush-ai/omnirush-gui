@@ -25,6 +25,8 @@ export type FreeSpaceSectionProps = {
   available?: boolean;
   /** Test seam. */
   deps?: FreeSpaceDeps;
+  /** A company account (OmniRush Work): a 12 px label and 13 px text instead of 11 px. */
+  work?: boolean;
 };
 
 /**
@@ -53,12 +55,13 @@ export function FreeSpaceSection(props: FreeSpaceSectionProps) {
     }
   }
 
-  const buttonClass = "inline-flex items-center gap-1.5 rounded-lg border border-dls-border px-3 py-2 text-[12px] text-dls-text hover:bg-dls-hover disabled:opacity-50";
+  const buttonClass = `inline-flex items-center gap-1.5 rounded-lg border border-dls-border px-3 py-2 ${props.work ? "text-[13px]" : "text-[12px]"} text-dls-text hover:bg-dls-hover disabled:opacity-50`;
   const listed = result?.items ?? [];
+  const small = props.work ? "text-[13px]" : "text-[11px]";
 
   return (
     <div className="space-y-3" data-testid="settings-free-space">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
+      <div className={`${props.work ? "text-[12px]" : "text-[11px]"} font-semibold uppercase tracking-[0.15em] text-dls-secondary`}>
         {t("settings.free_space_section_title")}
       </div>
       <div className="flex items-start gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
@@ -68,7 +71,7 @@ export function FreeSpaceSection(props: FreeSpaceSectionProps) {
         <div className="min-w-0 flex-1 space-y-3">
           <div>
             <div className="text-[13px] font-medium text-dls-text">{t("settings.free_space_card_title")}</div>
-            <div className="text-[11px] text-dls-secondary">{t("settings.free_space_card_desc")}</div>
+            <div className={`${small} text-dls-secondary`}>{t("settings.free_space_card_desc")}</div>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={buttonClass} disabled={busy !== null} onClick={() => void run(true)}>
@@ -82,9 +85,9 @@ export function FreeSpaceSection(props: FreeSpaceSectionProps) {
           </div>
           {result ? (
             <div className="space-y-1" role="status" data-testid="settings-free-space-status">
-              <div className="text-[11px] text-dls-secondary">{freeSpaceMessage(result)}</div>
+              <div className={`${small} text-dls-secondary`}>{freeSpaceMessage(result)}</div>
               {listed.length > 0 ? (
-                <ul className="max-h-40 space-y-0.5 overflow-auto text-[11px] text-dls-secondary">
+                <ul className={`max-h-40 space-y-0.5 overflow-auto ${props.work ? "text-[12px]" : "text-[11px]"} text-dls-secondary`}>
                   {listed.map((item) => (
                     <li key={item.path} className="truncate" title={item.path}>
                       {item.inUse ? t("settings.free_space_in_use") : item.size} · {item.reason} · {item.path}
@@ -94,7 +97,7 @@ export function FreeSpaceSection(props: FreeSpaceSectionProps) {
               ) : null}
             </div>
           ) : null}
-          {error ? <div className="text-[11px] text-red-400" role="status">{t("settings.free_space_failed")}: {error}</div> : null}
+          {error ? <div className={`${small} text-red-400`} role="status">{t("settings.free_space_failed")}: {error}</div> : null}
         </div>
       </div>
     </div>

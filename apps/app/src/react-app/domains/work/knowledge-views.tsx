@@ -205,7 +205,7 @@ export function EntityDetail(props: {
           {entity.sources.map((source) => (
             <Badge key={`s:${source}`} variant="secondary" className="gap-1"><ConnectorIcon id={source} className="size-3" />{connectorLabel(source)}</Badge>
           ))}
-          {entity.keys.map((key) => <Badge key={`k:${key}`} variant="outline" className="font-mono text-[11px]">{keyLabel(key)}</Badge>)}
+          {entity.keys.map((key) => <Badge key={`k:${key}`} variant="outline" className="font-mono text-[12px]">{keyLabel(key)}</Badge>)}
         </div>
       ) : null}
 
@@ -354,9 +354,9 @@ export function CategoryPanel(props: { counts: Map<string, number>; hidden: Read
         return (
           <section key={group.id} aria-label={group.label}>
             <div className="flex items-center gap-2 px-2 pb-1">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{group.label}</h3>
-              <span className="text-[11px] tabular-nums text-muted-foreground">{total.toLocaleString()}</span>
-              <button type="button" className="ms-auto text-[11px] text-muted-foreground hover:text-foreground" aria-pressed={allShown} data-graph-group={group.id}
+              <h3 className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">{group.label}</h3>
+              <span className="text-[12px] tabular-nums text-muted-foreground">{total.toLocaleString()}</span>
+              <button type="button" className="ms-auto rounded-md px-1 text-[12px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" aria-pressed={allShown} data-graph-group={group.id}
                 onClick={() => props.onToggle(keys, !allShown)}>
                 {allShown ? t("work.knowledge.hide_all") : t("work.knowledge.show_all")}
               </button>
@@ -608,7 +608,7 @@ export function WorkKnowledgePage(props: {
                     onMouseDown={(event) => event.preventDefault()} onClick={() => focusHit(hit.id)}>
                     <CategorySwatch categoryKey={categoryKey(hit)} dark={dark} className="size-4 [&_svg]:size-2.5" />
                     <span className="min-w-0 flex-1 truncate" title={hit.label}>{hit.label}</span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">{hit.loaded ? kindLabel(hit.kind) : t("work.knowledge.add_to_graph")}</span>
+                    <span className="shrink-0 text-[12px] text-muted-foreground">{hit.loaded ? kindLabel(hit.kind) : t("work.knowledge.add_to_graph")}</span>
                   </button>
                 </li>
               ))}
@@ -623,7 +623,7 @@ export function WorkKnowledgePage(props: {
       ) : (
         <div className="flex min-h-0 flex-1">
           <aside className="flex w-64 shrink-0 flex-col gap-4 overflow-y-auto border-e border-border p-3">
-            <p className="rounded-lg bg-muted/60 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
+            <p className="rounded-lg bg-muted/60 px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
               {t("work.knowledge.graph_hint")}
             </p>
             <CategoryPanel counts={counts} hidden={hidden} dark={dark} onToggle={toggle} />
@@ -653,7 +653,7 @@ export function WorkKnowledgePage(props: {
                   {expand.isPending ? <span className="rounded-md border border-border bg-background/80 px-2 py-1 backdrop-blur">{t("work.knowledge.expanding")}</span> : null}
                 </div>
                 {/* The inspector narrows the canvas: the hint would cover the count. */}
-                {selected ? null : <p className="pointer-events-none absolute end-3 top-3 hidden rounded-md border border-border bg-background/80 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground backdrop-blur xl:block">
+                {selected ? null : <p className="pointer-events-none absolute end-3 top-3 hidden rounded-md border border-border bg-background/80 px-3 py-2 text-[13px] leading-relaxed text-muted-foreground backdrop-blur xl:block">
                   {t("work.knowledge.canvas_hint")}
                 </p>}
                 <div className="absolute bottom-3 end-3 flex flex-col overflow-hidden rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur" role="group" aria-label={t("work.knowledge.zoom")}>

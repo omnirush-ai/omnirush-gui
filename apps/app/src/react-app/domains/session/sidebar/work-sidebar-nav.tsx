@@ -70,7 +70,8 @@ export function sidebarConnectors(rows: OmniRushWorkConnector[] | null | undefin
     .map((entry) => entry.row);
 }
 
-const DOT = { ok: "bg-green-9", syncing: "bg-amber-9", attention: "bg-amber-9", error: "bg-red-9", off: "bg-muted-foreground/40" } as const;
+// The Connectors page's StatusPill tones: syncing blue, attention amber.
+const DOT = { ok: "bg-green-9", syncing: "bg-blue-9", attention: "bg-amber-9", error: "bg-red-9", off: "bg-muted-foreground/40" } as const;
 // The words stay in the readable muted colour; the dot beside them carries the tone.
 const TEXT = { ok: "text-muted-foreground", syncing: "text-muted-foreground", attention: "text-foreground", error: "text-foreground", off: "text-muted-foreground" } as const;
 
@@ -114,7 +115,7 @@ function NavRow(props: { icon: LucideIcon; label: string; active?: boolean; onCl
     >
       <Icon aria-hidden className="size-4 shrink-0 text-sidebar-foreground/60" />
       <span className="min-w-0 flex-1 truncate">{props.label}</span>
-      {props.hint ? <kbd className="shrink-0 font-sans text-[11px] text-muted-foreground/80">{props.hint}</kbd> : null}
+      {props.hint ? <kbd className="shrink-0 font-sans text-[12px] text-muted-foreground">{props.hint}</kbd> : null}
     </button>
   );
 }

@@ -1,10 +1,11 @@
 /** @jsxImportSource react */
 // Work > Search (contract D6): one box over every connected channel, results grouped by channel, the coverage meter on top.
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, MessageSquare, RotateCw, Search } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ExternalLink, MessageSquare, RotateCw, Search } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
@@ -13,12 +14,119 @@ import { cn } from "@/lib/utils";
 
 import { askAboutItemPrompt, coverageCanAdd, periodStart, relativeTime, snippetParts, workConnectorsKey, workFailure, workSearchKey, WORK_SEARCH_FOCUS_EVENT, type SearchPeriod, type WorkClient } from "./work-mode";
 import { ConnectorIcon, useCoverageMeter, WorkCoverageMeter } from "./work-views";
+import { ListMore, ListSearch, matchesQuery, useListCap } from "./list-cap";
+import { fitStrip, stripSources } from "./work-today";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { canOpen, isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
 
 /** Items a group shows before "Show all". */
 export const GROUP_ROWS = 3;
+/** Rows one channel's view shows before "Show N more". */
+export const CHANNEL_ROWS = 20;
+
+type Channel = { id: string; label: string; count: number };
+const STRIP_GAP = 6;
+
+/** The channel filter as one row that never wraps, like Today's: All, the channels with the most hits that fit whole
+ *  (up to six), then More with search for the rest. The picked channel always stays on the row. */
+export function ChannelStrip(props: { channels: Channel[]; total: number; selected: string | null; onSelect: (id: string | null) => void }) {
+  const counts = Object.fromEntries(props.channels.map((channel) => [channel.id, channel.count]));
+  const ranked = stripSources(props.channels, counts, props.selected);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const widths = useRef(new Map<string, number>());
+  const [room, setRoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      if (!strip.clientWidth) return setRoom(null);
+      strip.querySelectorAll<HTMLElement>("[data-strip-chip]").forEach((chip) => { if (chip.offsetWidth) widths.current.set(chip.dataset.stripChip ?? "", chip.offsetWidth); });
+      const fixed = [...strip.querySelectorAll<HTMLElement>("[data-strip-fixed]")].reduce((sum, node) => sum + node.offsetWidth + STRIP_GAP, 0);
+      setRoom(strip.clientWidth - fixed);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, []);
+  const { shown, rest } = fitStrip(ranked, room, (id) => widths.current.get(id), props.selected);
+  const chip = (active: boolean) => cn(
+    "flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+    active ? "border-foreground/20 bg-muted font-medium" : "border-border bg-background hover:bg-muted/50",
+  );
+  return (
+    <div ref={stripRef} className="flex min-w-0 items-center gap-1.5 overflow-hidden" data-testid="work-search-channels">
+      <div role="radiogroup" aria-label={t("work.search.channels")} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        <button type="button" role="radio" aria-checked={props.selected === null} data-search-channel="all" data-strip-fixed="" onClick={() => props.onSelect(null)} className={chip(props.selected === null)}>
+          {t("work.today.all")}<span className="tabular-nums text-muted-foreground">{props.total.toLocaleString()}</span>
+        </button>
+        {shown.map((channel) => (
+          <button key={channel.id} type="button" role="radio" aria-checked={props.selected === channel.id} data-search-channel={channel.id} data-strip-chip={channel.id} title={`${channel.label} · ${channel.count.toLocaleString()}`} onClick={() => props.onSelect(channel.id)} className={chip(props.selected === channel.id)}>
+            <ConnectorIcon id={channel.id} className="size-3.5 text-current" />
+            <span className="max-w-[9rem] truncate">{channel.label}</span>
+            <span className="tabular-nums text-muted-foreground">{channel.count.toLocaleString()}</span>
+          </button>
+        ))}
+      </div>
+      {rest.length ? <MoreChannels channels={rest} selected={props.selected} onSelect={props.onSelect} chip={chip(false)} /> : null}
+    </div>
+  );
+}
+
+/** More: the channels that are not on the row, with search. */
+function MoreChannels(props: { channels: Channel[]; selected: string | null; onSelect: (id: string) => void; chip: string }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const found = props.channels.filter((channel) => matchesQuery(query, channel.label, channel.id));
+  return (
+    <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(""); }}>
+      <PopoverTrigger
+        render={(
+          <button type="button" className={props.chip} data-testid="work-search-channels-more" aria-label={t("work.search.more_channels", { count: props.channels.length, n: props.channels.length })}>
+            {t("work.today.more")}
+            <span className="tabular-nums text-muted-foreground">{props.channels.length}</span>
+            <ChevronDown aria-hidden className="size-3.5 text-muted-foreground" />
+          </button>
+        )}
+      />
+      <PopoverContent align="start" className="w-72 gap-2 p-2" data-testid="work-search-channels-list">
+        <ListSearch value={query} onChange={setQuery} label={t("work.search.search_channels")} />
+        <ul className="flex max-h-72 flex-col overflow-y-auto" role="listbox" aria-label={t("work.search.channels")}>
+          {found.map((channel) => (
+            <li key={channel.id} role="option" aria-selected={props.selected === channel.id}>
+              <button
+                type="button"
+                onClick={() => { props.onSelect(channel.id); setOpen(false); setQuery(""); }}
+                className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-start text-[13px] outline-none hover:bg-muted focus-visible:bg-muted"
+                data-search-channel={channel.id}
+              >
+                <ConnectorIcon id={channel.id} className="size-3.5" />
+                <span className="min-w-0 flex-1 truncate" title={channel.label}>{channel.label}</span>
+                <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{channel.count.toLocaleString()}</span>
+              </button>
+            </li>
+          ))}
+          {found.length ? null : <li className="px-2 py-3 text-[13px] text-muted-foreground">{t("work.search.no_channel_match")}</li>}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** One channel's hits (the channel view): the first CHANNEL_ROWS, then "Show N more". Keyed by channel, so a new
+ *  channel starts at the first page again. */
+function ChannelItems(props: { items: OmniRushWorkSearchItem[]; render: (item: OmniRushWorkSearchItem) => React.ReactNode; onKeyDown?: React.KeyboardEventHandler<HTMLUListElement> }) {
+  const cap = useListCap(props.items.length, CHANNEL_ROWS);
+  return (
+    <>
+      <ul className="overflow-hidden rounded-xl border border-border bg-background" data-work-list onKeyDown={props.onKeyDown} data-testid="work-search-channel-items">
+        {props.items.slice(0, cap.shown).map(props.render)}
+      </ul>
+      <ListMore cap={cap} testId="work-search-channel-more" />
+    </>
+  );
+}
 const TYPE_PAUSE_MS = 400;
 const PERIODS = [
   { id: "any", get label() { return t("work.search.period_any"); } },
@@ -53,7 +161,7 @@ export function SearchRow(props: { item: OmniRushWorkSearchItem; label: string; 
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" title={title}>{title}</span>
         <span className="shrink-0 text-[12px] text-muted-foreground group-focus-within:hidden group-hover:hidden">{relativeTime(item.occurred_at, props.now)}</span>
       </div>
-      <div className="line-clamp-2 text-[12px] text-muted-foreground group-focus-within:pr-[8.5rem] group-hover:pr-[8.5rem]">
+      <div className="line-clamp-2 text-[13px] text-muted-foreground group-focus-within:pr-[8.5rem] group-hover:pr-[8.5rem]">
         {item.who ? <span className="text-foreground/80">{item.who}{item.snippet ? " · " : ""}</span> : null}
         <Snippet text={item.snippet} />
       </div>
@@ -81,11 +189,12 @@ function ResultsSkeleton() {
 }
 
 /** Work > Search: type to search (after a short pause), narrow by channel and period, Ask starts a Work chat with the question. */
-export function WorkSearchPage(props: { client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void }) {
+export function WorkSearchPage(props: { client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void; initialQuery?: string }) {
   const queryClient = useQueryClient();
   const input = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState("");
-  const [q, setQ] = useState("");
+  // Opened with a question (`/work/search?q=...`): it is in the field and searched at once.
+  const [text, setText] = useState(() => (props.initialQuery ?? "").slice(0, 500));
+  const [q, setQ] = useState(() => (props.initialQuery ?? "").trim().slice(0, 500));
   const [period, setPeriod] = useState<SearchPeriod>("any");
   const [channel, setChannel] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
@@ -138,10 +247,6 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
     if (item) openHit(item, options);
   });
   const openId = useOpenRecordId();
-  const chip = (active: boolean) => cn(
-    "flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12px] text-foreground transition-colors",
-    active ? "border-foreground/20 bg-muted font-medium" : "border-border bg-background hover:bg-muted/50",
-  );
   return (
     <div className="h-full overflow-y-auto" data-testid="work-search">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-10 pt-10">
@@ -181,16 +286,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
           <p className="text-[12px] text-muted-foreground" data-testid="work-search-indexing">{t("work.search.indexing", { embedded: data.indexing.embedded.toLocaleString(), total: data.indexing.total.toLocaleString() })}</p>
         ) : null}
         {all && all.groups.length > 1 ? (
-          <div role="radiogroup" aria-label={t("work.search.channels")} className="flex flex-wrap items-center gap-1.5" data-testid="work-search-channels">
-            <button type="button" role="radio" aria-checked={channel === null} data-search-channel="all" onClick={() => setChannel(null)} className={chip(channel === null)}>
-              {t("work.today.all")}<span className="text-muted-foreground">{all.total}</span>
-            </button>
-            {all.groups.map((group) => (
-              <button key={group.channel} type="button" role="radio" aria-checked={channel === group.channel} data-search-channel={group.channel} onClick={() => setChannel(group.channel)} className={chip(channel === group.channel)}>
-                <ConnectorIcon id={group.channel} className="size-3.5 text-current" />{group.label}<span className="text-muted-foreground">{group.count}</span>
-              </button>
-            ))}
-          </div>
+          <ChannelStrip channels={all.groups.map((group) => ({ id: group.channel, label: group.label, count: group.count }))} total={all.total} selected={channel} onSelect={setChannel} />
         ) : null}
         {!q ? null : results.isLoading ? <ResultsSkeleton /> : failure ? (
           <div className="flex flex-col items-start gap-2 rounded-xl border border-border px-4 py-4" data-testid="work-search-error">
@@ -203,21 +299,22 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
           <div className={cn("flex flex-col gap-6", results.isPlaceholderData && "opacity-60")} data-testid="work-search-results">
             {groups.map((group) => {
               const items = channel ? group.items : group.items.slice(0, GROUP_ROWS);
+              const row = (item: OmniRushWorkSearchItem) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} selected={openId === item.source_id} onOpen={openHit} onAsk={(picked) => askItem(picked, group.label)} />;
               return (
                 <section key={group.channel} data-search-group={group.channel} aria-label={group.label} className="flex flex-col gap-2">
                   <h2 className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
                     <ConnectorIcon id={group.channel} className="size-3.5" />
                     {group.label}
-                    <span className="rounded-full bg-muted px-1.5 text-[11px] font-medium text-muted-foreground">{group.count}</span>
+                    <span className="rounded-full bg-muted px-1.5 text-[12px] font-medium text-foreground">{group.count.toLocaleString()}</span>
                   </h2>
                   {/* The backend fills items only for the top hits overall, so a lower-ranked channel can come with a count and no items. */}
-                  {items.length ? (
-                    <ul className="overflow-hidden rounded-xl border border-border bg-background" data-work-list onKeyDown={listKeys}>
-                      {items.map((item) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} selected={openId === item.source_id} onOpen={openHit} onAsk={(picked) => askItem(picked, group.label)} />)}
-                    </ul>
+                  {items.length && channel ? (
+                    <ChannelItems key={`${group.channel}:${q}:${period}`} items={items} render={row} onKeyDown={listKeys} />
+                  ) : items.length ? (
+                    <ul className="overflow-hidden rounded-xl border border-border bg-background" data-work-list onKeyDown={listKeys}>{items.map(row)}</ul>
                   ) : null}
                   {!channel && group.count > items.length ? (
-                    <button type="button" onClick={() => setChannel(group.channel)} data-testid="work-search-show-all" className="self-start text-[12px] text-muted-foreground transition-colors hover:text-foreground">
+                    <button type="button" onClick={() => setChannel(group.channel)} data-testid="work-search-show-all" className="self-start rounded-md px-1 text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
                       {t("work.search.show_all", { count: group.count })}
                     </button>
                   ) : null}

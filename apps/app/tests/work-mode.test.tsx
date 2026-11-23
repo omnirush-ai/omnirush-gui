@@ -1165,7 +1165,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(member).not.toContain('data-testid="work-org-name"');
     expect(member).not.toContain(">Make owner<");
     expect(member).toContain('data-testid="work-org-me-save"');
-    expect(member).toContain("Only the owner can change these.");
+    expect(member).toContain("Only owners and admins can change these.");
     expect(leaveState({ you_role: "owner", members: [{ user_id: "u1", email: "a", role: "owner", you: true }] }).message).toContain("deleted");
     expect(leaveState(members("member")).blocked).toBe(false);
   });

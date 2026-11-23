@@ -493,7 +493,7 @@ function GraphTooltip(props: { hover: NonNullable<Hover> }) {
     <div className={box} style={style} data-testid="work-graph-tooltip">
       <div className="font-medium">{node.label}</div>
       <div className="mt-0.5 text-muted-foreground">{[node.kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()), node.sub, at && !Number.isNaN(at.getTime()) ? at.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : null].filter(Boolean).join(" · ")}</div>
-      <div className="mt-1 text-[11px] text-muted-foreground">{countLabel(node.degree, "work.count.links")} · {t("work.knowledge.right_click")}</div>
+      <div className="mt-1 text-[12px] text-muted-foreground">{countLabel(node.degree, "work.count.links")} · {t("work.knowledge.right_click")}</div>
     </div>
   );
 }

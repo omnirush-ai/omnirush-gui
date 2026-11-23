@@ -51,7 +51,7 @@ export function Avatar(props: { person: RecordPerson | null | undefined; size?: 
   return (
     <span
       aria-hidden
-      className={cn("flex shrink-0 select-none items-center justify-center rounded-full font-semibold", small ? "size-6 text-[10px]" : "size-8 text-[11px]", tint(props.person))}
+      className={cn("flex shrink-0 select-none items-center justify-center rounded-full font-semibold", small ? "size-6 text-[12px]" : "size-8 text-[12px]", tint(props.person))}
     >
       {initials(props.person)}
     </span>
@@ -112,7 +112,7 @@ export function PlainText(props: { text: string; fold?: boolean; className?: str
               onClick={() => setOpen(!open)}
               aria-expanded={open}
               aria-label={open ? t("work.viewer.hide_quoted") : t("work.viewer.show_quoted")}
-              className="mt-1.5 inline-flex h-5 items-center rounded-md border border-border bg-muted/60 px-1.5 text-[11px] leading-none text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="mt-1.5 inline-flex h-5 items-center rounded-md border border-border bg-muted/60 px-1.5 text-[12px] leading-none text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               •••
             </button>
@@ -136,7 +136,7 @@ export function SectionTitle(props: { children: ReactNode; count?: number; actio
     <div className="flex items-center justify-between gap-2 pb-2">
       <h3 className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
         {props.children}
-        {props.count != null ? <span className="rounded-full bg-muted px-1.5 text-[11px] font-medium normal-case tracking-normal">{props.count}</span> : null}
+        {props.count != null ? <span className="rounded-full bg-muted px-1.5 text-[12px] font-medium normal-case tracking-normal">{props.count}</span> : null}
       </h3>
       {props.action}
     </div>
@@ -159,19 +159,20 @@ export function FieldGrid(props: { fields: RecordField[] | null | undefined; cla
   );
 }
 
-/** A status-like value as a quiet pill. */
+/** A status-like value as a quiet pill: the words in the foreground colour (4.5:1 in light and dark), the tone on a
+ *  small dot and the border, as the shell's StatusPill. */
 export function Pill(props: { children: ReactNode; tone?: "neutral" | "green" | "amber" | "red" | "blue" | "purple"; className?: string; state?: boolean }) {
-  const tone = {
-    neutral: "border-border bg-muted text-muted-foreground",
-    green: "border-green-6 bg-green-3 text-green-11",
-    amber: "border-amber-6 bg-amber-3 text-amber-11",
-    red: "border-red-6 bg-red-3 text-red-11",
-    blue: "border-blue-6 bg-blue-3 text-blue-11",
-    purple: "border-purple-6 bg-purple-3 text-purple-11",
-  }[props.tone ?? "neutral"];
+  const toneId = props.tone ?? "neutral";
+  const border = { neutral: "border-border", green: "border-green-6", amber: "border-amber-6", red: "border-red-6", blue: "border-blue-6", purple: "border-purple-6" }[toneId];
+  const dot = { neutral: "bg-muted-foreground/60", green: "bg-green-9", amber: "bg-amber-9", red: "bg-red-9", blue: "bg-blue-9", purple: "bg-purple-9" }[toneId];
   // A state word reads the same whatever case the source sends ("AUTHORISED", "open"); labels keep their own.
   const children = props.state && typeof props.children === "string" ? stateLabel(props.children) : props.children;
-  return <span className={cn("inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[11px] font-medium leading-none", tone, props.className)}>{children}</span>;
+  return (
+    <span className={cn("inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full border bg-background px-2 text-[12px] font-medium leading-none text-foreground", border, props.className)} data-tone={toneId}>
+      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dot)} />
+      {children}
+    </span>
+  );
 }
 /** A tone for a status word (open, closed, merged, paid, overdue ...). */
 export function statusTone(value: string | null | undefined): "neutral" | "green" | "amber" | "red" | "blue" | "purple" {

@@ -26,7 +26,7 @@ export function CommentList(props: { comments: RecordComment[] | null | undefine
               <div className={cn("min-w-0 flex-1", comment.internal && "rounded-lg border border-amber-6/60 bg-amber-2 px-2.5 py-2 dark:bg-amber-3/40")}>
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <PersonName person={comment.author} className="text-[13px] font-semibold text-foreground" />
-                  {comment.internal ? <span className="text-[11px] font-medium text-amber-11">{t("work.viewer.internal")}</span> : null}
+                  {comment.internal ? <Pill tone="amber">{t("work.viewer.internal")}</Pill> : null}
                   <span className="text-[12px] text-muted-foreground">{shortWhen(comment.at)}</span>
                 </div>
                 <div className="mt-0.5"><Body body={comment.body} fold={false} /></div>

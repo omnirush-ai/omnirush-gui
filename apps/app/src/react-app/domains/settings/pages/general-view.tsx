@@ -121,7 +121,7 @@ function SettingsCard(props: {
   title: string;
   desc: string;
   onClick: () => void;
-  /** A company account (OmniRush Work): 14 px titles and 12 px descriptions. */
+  /** A company account (OmniRush Work): 14 px titles and 13 px descriptions. */
   work?: boolean;
 }) {
   return (
@@ -135,7 +135,7 @@ function SettingsCard(props: {
       </div>
       <div className="min-w-0 flex-1">
         <div className={cn("font-medium text-dls-text", props.work ? "text-[14px]" : "text-[13px]")}>{props.title}</div>
-        <div className={cn("text-dls-secondary", props.work ? "text-[12px]" : "text-[11px]")}>{props.desc}</div>
+        <div className={cn("text-dls-secondary", props.work ? "text-[13px]" : "text-[11px]")}>{props.desc}</div>
       </div>
       <ArrowRight size={14} className="shrink-0 text-dls-secondary" />
     </button>
@@ -355,7 +355,10 @@ export function KeepAwakeCard(props: {
   state: KeepAwakeState | null;
   busy: boolean;
   onToggle: (enabled: boolean) => void;
+  /** A company account (OmniRush Work): a 12 px label and 13 px text instead of 11 px. */
+  work?: boolean;
 }) {
+  const small = props.work ? "text-[13px]" : "text-[11px]";
   const hint = props.state?.forcedOff
     ? t("settings.keep_awake_forced_off")
     : props.state && !props.state.available
@@ -363,16 +366,16 @@ export function KeepAwakeCard(props: {
       : null;
   return (
     <div className="space-y-3">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">{t("settings.power_title")}</div>
+      <div className={cn("font-semibold uppercase tracking-[0.15em] text-dls-secondary", props.work ? "text-[12px]" : "text-[11px]")}>{t("settings.power_title")}</div>
       <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dls-border bg-dls-hover">
           <Coffee size={17} className="text-dls-secondary" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-medium text-dls-text">{t("settings.keep_awake_title")}</div>
-          <div id="keep-awake-help" className="text-[11px] text-dls-secondary">{t("settings.keep_awake_help")}</div>
+          <div id="keep-awake-help" className={cn(small, "text-dls-secondary")}>{t("settings.keep_awake_help")}</div>
           {hint ? (
-            <div className="mt-0.5 text-[11px] text-dls-secondary" role="status" data-testid="keep-awake-status">{hint}</div>
+            <div className={cn("mt-0.5 text-dls-secondary", small)} role="status" data-testid="keep-awake-status">{hint}</div>
           ) : null}
         </div>
         <Switch
@@ -482,12 +485,14 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   const usage = account?.connected && account.usage && !enterprise.on ? omnirushUsageSummary(account.usage) : null;
   // A company account's usage limit, only while it is reached (no meter, no allowance help).
   const companyLimit = account?.connected && enterprise.on ? companyUsageLimit(account.usage) : null;
+  // A company account reads its account lines at 13 px; consumers keep 11 px.
+  const accountSmall = enterprise.on ? "text-[13px]" : "text-[11px]";
 
   return (
     <div className="w-full max-w-3xl space-y-8">
       {isElectronRuntime() && account && (
         <div className="space-y-3">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
+          <div className={cn("font-semibold uppercase tracking-[0.15em] text-dls-secondary", enterprise.on ? "text-[12px]" : "text-[11px]")}>
             {t("settings.tab_cloud_account")}
           </div>
           <div className="flex items-center gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
@@ -499,14 +504,14 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                 {account.connected ? account.displayName || account.email || t("config.status_connected") : t("settings.account_sign_in_title")}
               </div>
               {account.connected && account.email ? (
-                <div className="truncate text-[11px] text-dls-secondary">{account.email}</div>
+                <div className={cn("truncate text-dls-secondary", accountSmall)} title={account.email}>{account.email}</div>
               ) : null}
               {serverLine ? (
-                <div className="truncate text-[11px] text-dls-secondary" data-testid="account-server">
+                <div className={cn("truncate text-dls-secondary", accountSmall)} data-testid="account-server">
                   {serverLine}
                 </div>
               ) : null}
-              <div className="mt-0.5 text-[11px] text-dls-secondary">
+              <div className={cn("mt-0.5 text-dls-secondary", accountSmall)}>
                 {accountMessage || (account.connected
                   ? usage
                     ? usage.line
@@ -520,13 +525,13 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                     : t("settings.account_not_configured"))}
               </div>
               {companyLimit ? (
-                <div className="mt-1 flex items-start gap-1.5 text-[11px] leading-4 text-dls-text" data-testid="account-company-limit">
-                  <span aria-hidden="true" className="mt-[5px] size-1.5 shrink-0 rounded-full bg-amber-9" />
+                <div className="mt-1 flex items-start gap-1.5 text-[13px] leading-5 text-dls-text" data-testid="account-company-limit">
+                  <span aria-hidden="true" className="mt-[7px] size-1.5 shrink-0 rounded-full bg-amber-9" />
                   <span>{companyLimit}</span>
                 </div>
               ) : null}
               {account.connected && account.credentialStorage === "file" ? (
-                <div className="mt-0.5 text-[11px] text-dls-secondary" data-testid="account-credential-storage">
+                <div className={cn("mt-0.5 text-dls-secondary", accountSmall)} data-testid="account-credential-storage">
                   {t("settings.account_file_storage")}
                 </div>
               ) : null}
@@ -557,7 +562,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
       {isElectronRuntime() && account?.connected && account.events && !enterprise.on ? <EventsJoinedList events={account.events} /> : null}
       {/* Workspace settings */}
       {shownWorkspaceCards.length ? <div className="space-y-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
+        <div className={cn("font-semibold uppercase tracking-[0.15em] text-dls-secondary", enterprise.on ? "text-[12px]" : "text-[11px]")}>
           {t("settings.section_workspace")}
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -622,6 +627,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
 
       {isElectronRuntime() ? (
         <KeepAwakeCard
+          work={enterprise.on}
           state={keepAwake.state}
           busy={keepAwake.busy}
           onToggle={(enabled) => void keepAwake.setEnabled(enabled)}
@@ -647,9 +653,9 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
         />
       ) : null}
 
-      <FreeSpaceSection />
+      <FreeSpaceSection work={enterprise.on} />
 
-      <DiagnosticsSection buildBundle={props.buildDiagnosticsBundle} />
+      <DiagnosticsSection buildBundle={props.buildDiagnosticsBundle} work={enterprise.on} />
     </div>
   );
 }
