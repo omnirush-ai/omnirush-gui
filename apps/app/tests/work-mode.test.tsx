@@ -12,7 +12,7 @@ import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnecto
 import { isWorkSignInLink, needsOnboarding, workOnboardingKey, askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
   askAboutItemPrompt, coverageCanAdd, coverageLine, relativeTime, workActionsKey, workOrgConnectorsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
-import { SourceAttention, SourceStrip, sourceCounts, sourceDot, stripSources, STRIP_SOURCES, WorkToday } from "../src/react-app/domains/work/work-today";
+import { fitStrip, SourceAttention, SourceStrip, sourceCounts, sourceDot, stripSources, STRIP_SOURCES, WorkToday } from "../src/react-app/domains/work/work-today";
 import { WorkPageBoundary } from "../src/react-app/domains/work/work-page-boundary";
 import { checklistRows, canInviteRole, WorkChecklist } from "../src/react-app/domains/work/work-onboarding";
 import { leaveState, mePatch, nextShown, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
@@ -552,7 +552,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(reconnect).toContain(">Reconnect<");
     expect(reconnect).toMatch(/data-testid="work-connector-status" data-tone="error"/);
     // A sync that keeps failing needs attention, not a new sign-in.
-    expect(failing).toMatch(/data-testid="work-connector-status" data-tone="error">.*Needs attention</);
+    expect(failing).toMatch(/data-testid="work-connector-status" data-tone="error">.*Attention</);
   });
 
   test("other email and calendar: the form opens from Connect, tries the login, shows the server's refusal in words", async () => {
@@ -1784,8 +1784,8 @@ describe("Work for companies (enterprise design 2.3, 2.4, 2.6)", () => {
     expect(connectorState(row({ status: "syncing" })).label).toBe("Syncing");
     expect(connectorState(row({ status: "error", error: "reconnect_required" })).label).toBe("Reconnect");
     expect(connectorState(row({ status: "paused_by_admin" })).label).toBe("Paused");
-    // One vocabulary everywhere: a sync that keeps failing "Needs attention", never "Check".
-    expect(connectorState(row({ status: "error", attention: { kind: "failing", message: "x", action: "retry", since: null } }))).toEqual({ tone: "error", label: "Needs attention", value: null });
+    // One short vocabulary everywhere (sidebar, Connectors, Today): a sync that keeps failing reads "Attention", never "Check".
+    expect(connectorState(row({ status: "error", attention: { kind: "failing", message: "x", action: "retry", since: null } }))).toEqual({ tone: "error", label: "Attention", value: null });
     const rows = [
       row({ id: "google", status: "connected" }), row({ id: "slack", label: "Slack", status: "syncing", progress: pass }), row({ id: "jira", label: "Jira", status: "error" }),
       row({ id: "notion", label: "Notion" }), row({ id: "mock", status: "connected" }), row({ id: "demo", status: "connected" }), row({ id: "hubspot", label: "HubSpot", status: "paused_by_admin" }),
@@ -1954,6 +1954,14 @@ describe("Sam's 11-23 bar: no list runs on, readable, one action", () => {
     expect(strip).toContain('data-testid="work-source-more"');
     expect(strip).not.toContain("flex-wrap");
     expect(strip).not.toContain("rounded-full bg-green-9");
+    // Only whole chips: what does not fit the measured row goes under More, and the picked one stays.
+    const six = { shown: shown, rest };
+    expect(fitStrip(six, null, () => 100, null)).toBe(six);
+    const narrow = fitStrip(six, 96 + 3 * 106 + 10, () => 100, "s25");
+    expect(narrow.shown).toHaveLength(3);
+    expect(narrow.shown.map((item) => item.id)).toContain("s25");
+    expect(narrow.rest).toHaveLength(31 - 3);
+    expect(fitStrip({ shown: sources.slice(0, 3), rest: [] }, 1000, () => 100, null).rest).toHaveLength(0);
     // Seven or fewer: every chip, no More.
     expect(renderToStaticMarkup(<SourceStrip sources={sources.slice(0, 7)} selected={null} onSelect={noop} onAdd={noop} />)).not.toContain("work-source-more");
   });
