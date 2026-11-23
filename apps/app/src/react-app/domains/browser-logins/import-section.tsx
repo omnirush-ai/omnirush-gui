@@ -144,7 +144,7 @@ function ImportSection() {
               {t("browser_import.section_privacy")}
             </p>
             {imports.length > 0 || (summary.data?.bookmarks ?? 0) > 0 || (summary.data?.history ?? 0) > 0 ? (
-              <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setConfirmClear(true)} data-testid="browser-import-clear">
+              <Button size="sm" variant="ghost" className="text-dls-secondary" onClick={() => setConfirmClear(true)} data-testid="browser-import-clear">
                 {t("browser_import.clear")}
               </Button>
             ) : null}

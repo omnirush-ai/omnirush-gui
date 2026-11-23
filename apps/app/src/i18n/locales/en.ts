@@ -2683,7 +2683,7 @@ export default {
   "browser_import.section_privacy": "Stays on this computer. Saved passwords are never imported.",
   "browser_import.clear": "Clear browsing data",
   "browser_import.clear_title": "Clear browsing data?",
-  "browser_import.clear_body": "Imported bookmarks and history, the pages you opened here and the downloads list are removed from OmniRush. Pages you starred and downloaded files stay. Sign-ins stay until you sign out of each site below.",
+  "browser_import.clear_body": "Removes imported bookmarks and history, pages you opened here and the downloads list. Starred pages and downloaded files stay. Sign-ins stay until you sign out of each site below.",
   "browser_import.clear_confirm": "Clear",
   "browser_import.offer": "Bring your bookmarks and sign-ins from {browser}.",
   "browser_import.offer_no_signins": "Bring your bookmarks and history from {browser}.",

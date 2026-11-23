@@ -41,7 +41,7 @@ export function DownloadsView({ downloads, onBack, onDone }: { downloads: Browse
         <p className="min-w-0 flex-1 truncate text-[13px] font-medium">{t("work_browser.downloads")}</p>
       </div>
       {downloads.length === 0 ? (
-        <p className="px-4 py-5 text-center text-[13px] text-muted-foreground" data-testid="work-browser-downloads-empty">{t("work_browser.downloads_empty")}</p>
+        <p className="px-4 py-5 text-center text-[13px] text-dls-secondary" data-testid="work-browser-downloads-empty">{t("work_browser.downloads_empty")}</p>
       ) : (
         <ul className="flex flex-col p-1">
           {downloads.map((download) => {
@@ -49,10 +49,10 @@ export function DownloadsView({ downloads, onBack, onDone }: { downloads: Browse
             const done = download.state === "completed";
             return (
               <li key={download.id} className="group flex min-h-12 items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-muted/60" data-testid="work-browser-download">
-                <File aria-hidden className={cn("size-4 shrink-0", done ? "text-foreground" : "text-muted-foreground")} />
+                <File aria-hidden className={cn("size-4 shrink-0", done ? "text-foreground" : "text-dls-secondary")} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13px] text-foreground" title={download.filename}>{download.filename}</p>
-                  <p className={cn("truncate text-xs", download.state === "failed" ? "text-destructive" : "text-muted-foreground")}>{downloadStatus(download)}</p>
+                  <p className={cn("truncate text-xs", download.state === "failed" ? "font-medium text-foreground" : "text-dls-secondary")}>{downloadStatus(download)}</p>
                   {download.state === "progressing" ? (
                     <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted" aria-hidden>
                       <div className={cn("h-full rounded-full bg-primary", fraction === null && "w-1/3 animate-pulse")} style={fraction === null ? undefined : { width: `${Math.max(4, fraction * 100)}%` }} />
@@ -80,7 +80,7 @@ export function DownloadsView({ downloads, onBack, onDone }: { downloads: Browse
             onDone();
             action("", "folder");
           }}
-          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-foreground hover:bg-muted focus-visible:bg-muted focus-visible:outline-none [&_svg]:size-4 [&_svg]:text-muted-foreground"
+          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-foreground hover:bg-muted focus-visible:bg-muted focus-visible:outline-none [&_svg]:size-4 [&_svg]:text-dls-secondary"
           data-testid="work-browser-downloads-folder"
         >
           <FolderOpen />

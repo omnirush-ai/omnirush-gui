@@ -2689,7 +2689,7 @@ export default {
   "browser_import.section_privacy": "数据保留在这台电脑上。不会导入已保存的密码。",
   "browser_import.clear": "清除浏览数据",
   "browser_import.clear_title": "清除浏览数据？",
-  "browser_import.clear_body": "导入的书签和历史记录、你在这里打开过的网页以及下载列表将从 OmniRush 中移除。你收藏的网页和已下载的文件会保留。登录状态会保留，直到你在下方逐个退出网站。",
+  "browser_import.clear_body": "将移除导入的书签和历史记录、你在这里打开过的网页以及下载列表。收藏的网页和已下载的文件会保留。登录状态会保留，直到你在下方逐个退出网站。",
   "browser_import.clear_confirm": "清除",
   "browser_import.offer": "从 {browser} 带来你的书签和登录状态。",
   "browser_import.offer_no_signins": "从 {browser} 带来你的书签和历史记录。",

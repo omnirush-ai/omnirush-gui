@@ -78,7 +78,7 @@ export const FindBar = React.forwardRef<FindBarHandle, FindBarProps>(function Fi
   return (
     <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-background px-3" role="search" data-testid="work-browser-find">
       <div className="flex h-8 w-[min(380px,55%)] min-w-0 items-center gap-2 rounded-lg border border-input bg-background px-2.5 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
-        <Search aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <Search aria-hidden className="size-4 shrink-0 text-dls-secondary" />
         <input
           ref={inputRef}
           type="text"
@@ -97,12 +97,12 @@ export const FindBar = React.forwardRef<FindBarHandle, FindBarProps>(function Fi
           aria-label={t("work_browser.find_placeholder")}
           spellCheck={false}
           autoComplete="off"
-          className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+          className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-dls-secondary"
           data-testid="work-browser-find-input"
         />
         {count ? (
           <span
-            className={cn("shrink-0 text-xs tabular-nums", result?.matches === 0 ? "text-foreground" : "text-muted-foreground")}
+            className={cn("shrink-0 text-xs tabular-nums", result?.matches === 0 ? "text-foreground" : "text-dls-secondary")}
             role="status"
             data-testid="work-browser-find-count"
           >
