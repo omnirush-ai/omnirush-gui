@@ -187,6 +187,9 @@ describe("work prompt and tools", () => {
     for (const tool of ["gitlab_comment", "gitlab_create_issue", "shopify_note", "box_comment"]) expect(WORK_READ_TOOLS).not.toContain(tool);
     for (const style of ["brief", "detailed"] as const) {
       expect(workPrompt(style)).toContain("call work_context once with the task and a budget");
+      // Attached items are looked up first with their own tool; work_context follows only when needed.
+      expect(workPrompt(style)).toContain('Items listed under "Attached for context" come first: look each one up with the tool named for it (work_read, work_deals, work_entity or work_search) before any other tool, then call work_context only if you still need more.');
+      expect(workPrompt(style).indexOf("Attached for context")).toBeLessThan(workPrompt(style).indexOf("call work_context once"));
       expect(workPrompt(style)).toContain("pass max_tokens on searches");
       expect(workPrompt(style)).toContain("work_remember once they agree");
       expect(workPrompt(style)).toContain("call work_count (terms for names, about for fuzzy conditions)");
@@ -202,7 +205,10 @@ describe("work prompt and tools", () => {
     }
     expect(SUGGESTED_REPLIES.startsWith("## Suggested replies\n")).toBe(true);
     expect(SUGGESTED_REPLIES).toContain("\n<replies>\nSend it\nMake it shorter\n</replies>\n");
-    expect(SUGGESTED_REPLIES).toContain("Never a step the user takes elsewhere");
+    expect(SUGGESTED_REPLIES).toContain("never a step outside this chat");
+    expect(SUGGESTED_REPLIES).toContain("Never a reply where the user promises a step of their own");
+    expect(SUGGESTED_REPLIES).toContain("A message that asks the user something or shows a draft always ends with replies.");
+    expect(SUGGESTED_REPLIES).toContain("offer the likely values from the records or a way you can find it");
     expect(SUGGESTED_REPLIES).toContain("are fine with any answer style");
     // Only the new section is checked: the rest of the prompt names the product on purpose.
     expect(SUGGESTED_REPLIES).not.toMatch(/omnirush|farm|automat|\bbot\b/i);
