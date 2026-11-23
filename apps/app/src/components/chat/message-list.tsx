@@ -38,6 +38,7 @@ import { SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX } from "@/app/types"
 import { t } from "@/i18n"
 import { useOpenTargets } from "@/lib/target-provider"
 import { openTargetFromUrl } from "@/react-app/domains/session/artifacts/open-target"
+import { isWorkTool, WorkSourceChips } from "@/react-app/domains/work/viewer/source-chips"
 import { sessionErrorPresentationFromUIMessage } from "@/react-app/domains/session/sync/session-error"
 import { gatewayRefusalEvent } from "@/app/lib/gateway-refusal"
 import { AllowanceHelpLink } from "@/react-app/domains/quality/allowance-help"
@@ -340,7 +341,7 @@ const ToolMessageInner = ({ part, attachments }: ToolMessageProps) => {
   // Failed calls use the same sentence line with the "failures are
   // instructions" treatment (inline Reconnect/Retry).
   if (part.type === "dynamic-tool") {
-    return (
+    const line = (
       <CapabilityCallLine
         part={part}
         connector={resolveConnectorToolIdentity(part, connectorIdentities)}
@@ -349,6 +350,11 @@ const ToolMessageInner = ({ part, attachments }: ToolMessageProps) => {
         onRetry={onMcpRetry}
       />
     )
+    // A Work tool's records open in the chat's side panel (record viewer).
+    if (isWorkTool(part.toolName) && part.state === "output-available") {
+      return <div className="flex flex-col">{line}<WorkSourceChips output={part.output} /></div>
+    }
+    return line
   }
 
   return (

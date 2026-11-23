@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 // Work > Deals (contract D3/D6): open deals with stage, amount, close date, last touch and risk; a row opens the deal.
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ExternalLink, MessageSquare, RotateCw } from "lucide-react";
+import { ExternalLink, MessageSquare, PanelRight, RotateCw } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { askAboutDealPrompt, connectorLabel, relativeTime, workDealKey, workDealsKey, workFailure, type WorkClient } from "./work-mode";
 import { SECTION_ROWS } from "./work-today";
 import { ConnectorIcon } from "./work-views";
+import { isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
 
 const FILTERS = [
   { id: "open", get label() { return t("work.deals.filter_open"); } },
@@ -50,7 +51,7 @@ function LastTouch(props: { touch: OmniRushWorkDeal["last_touch"]; now?: number 
 }
 
 /** One deal opened beside the list: details, people, the latest records per channel, risks and Ask about this deal. */
-export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWorkDeal; openLink: (url: string) => void; onAsk: () => void; asking: boolean }) {
+export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWorkDeal; openLink: (url: string) => void; onAsk: () => void; asking: boolean; onOpenRecord?: (ref: RecordRef & { list?: RecordRef[] }, options: { external: boolean; newTab: boolean }) => void }) {
   const detail = useQuery<OmniRushWorkDealDetail>({
     queryKey: workDealKey(props.client, props.deal.source_id),
     queryFn: () => props.client!.getWorkDeal(props.deal.source_id),
@@ -97,8 +98,16 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
                   <ul className="flex flex-col">
                     {channel.items.slice(0, 3).map((item) => (
                       <li key={item.source_id} className="flex items-baseline gap-2">
-                        {item.url ? (
-                          <button type="button" className="min-w-0 flex-1 truncate text-start text-foreground hover:underline" onClick={() => props.openLink(item.url!)}>{item.subject || item.kind}</button>
+                        {item.url || props.onOpenRecord ? (
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 truncate text-start text-foreground outline-none hover:underline focus-visible:underline"
+                            onClick={(event) => (props.onOpenRecord
+                              ? props.onOpenRecord({ sourceId: item.source_id, source: channel.channel, kind: item.kind, title: item.subject ?? null, url: item.url ?? null }, openModifiers(event, isMac()))
+                              : props.openLink(item.url!))}
+                          >
+                            {item.subject || item.kind}
+                          </button>
                         ) : <span className="min-w-0 flex-1 truncate text-foreground">{item.subject || item.kind}</span>}
                         <span className="shrink-0 text-[12px] text-muted-foreground">{relativeTime(item.at)}</span>
                       </li>
@@ -112,6 +121,7 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
       )}
       <div className="mt-auto flex flex-wrap gap-2 pt-2">
         <Button size="sm" disabled={props.asking} onClick={props.onAsk} data-testid="work-deal-ask"><MessageSquare className="size-3.5" />{t("work.deals.ask")}</Button>
+        {props.onOpenRecord ? <Button variant="outline" size="sm" onClick={() => props.onOpenRecord!({ sourceId: deal.source_id, source: deal.source_id.split(":")[0] ?? null, kind: "deal", title: deal.name ?? null, url: deal.url ?? null }, { external: false, newTab: false })} data-testid="work-deal-view"><PanelRight className="size-3.5" />{t("work.viewer.view_record")}</Button> : null}
         {deal.url ? <Button variant="outline" size="sm" onClick={() => props.openLink(deal.url!)}><ExternalLink className="size-3.5" />{t("work.search.open")}</Button> : null}
       </div>
     </div>
@@ -217,7 +227,7 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
                 <SheetTitle className="text-base font-semibold">{picked.name || picked.source_id}</SheetTitle>
                 {picked.company ? <SheetDescription>{picked.company}</SheetDescription> : null}
               </SheetHeader>
-              <DealPanel client={props.client} deal={picked} openLink={props.openLink} onAsk={() => void ask(picked)} asking={asking} />
+              <DealPanel client={props.client} deal={picked} openLink={props.openLink} onAsk={() => void ask(picked)} asking={asking} onOpenRecord={(ref, options) => { if (!options.external) setPicked(null); openItem(ref, props.openLink, options); }} />
             </>
           ) : null}
         </SheetContent>

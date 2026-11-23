@@ -12,7 +12,9 @@ import {
   LayoutSectionItemHeader,
   LayoutSectionItemTitle,
 } from "../settings/settings-layout";
+import { SiteMonogram } from "./bookmark-tiles";
 import { LoginSyncDialog } from "./login-sync-dialog";
+import { getBrowserLibraryBridge, useWorkUser } from "./use-browser-library";
 import { getBrowserLoginsBridge, useBrowserLoginSync } from "./use-browser-login-sync";
 import { t } from "@/i18n";
 
@@ -36,9 +38,13 @@ function formatLastSync(value: number | null) {
   return value === null ? "Never" : new Date(value).toLocaleString();
 }
 
-/** Settings controls for explicit, one-way browser login sync. */
+/**
+ * Settings controls for explicit, one-way browser login sync. For a Work account the import section above sets sync
+ * up ("Keep sign-ins in step"), so until sync is set up this shows only the sites the built-in browser is signed in to.
+ */
 export function BrowserLoginsPanel() {
   const loginSync = useBrowserLoginSync();
+  const importFirst = useWorkUser() && getBrowserLibraryBridge() !== null;
   const [syncState, setSyncState] = useState<BrowserLoginSyncState | null>(null);
   const [signedInSites, setSignedInSites] = useState<BrowserLoginSite[] | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -90,6 +96,48 @@ export function BrowserLoginsPanel() {
     ? syncState?.status ?? "not_configured"
     : "policy_off";
   const selectedSites = new Set(syncState?.selectedSites ?? []);
+
+  if (importFirst && syncState && !syncState.configured) {
+    return (
+      <SettingsSection>
+        <LayoutSectionItem>
+          <LayoutSectionItemHeader>
+            <LayoutSectionItemTitle>{t("browser_import.signed_in_title")}</LayoutSectionItemTitle>
+            <LayoutSectionItemDescription>{t("browser_import.signed_in_desc")}</LayoutSectionItemDescription>
+          </LayoutSectionItemHeader>
+          <LayoutSectionItemContent className="gap-3">
+            {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
+            {signedInSites && signedInSites.length > 0 ? (
+              <ul className="overflow-hidden rounded-xl border border-dls-border" aria-label={t("browser_import.signed_in_title")} data-testid="login-sync-signed-in-sites">
+                {signedInSites.map((site) => (
+                  <li key={site.site} className="flex items-center justify-between gap-3 border-b border-dls-border px-4 py-2 last:border-b-0">
+                    <span className="flex min-w-0 items-center gap-2.5 text-[13px] text-dls-text">
+                      <SiteMonogram url={`https://${site.site}`} />
+                      <span className="truncate">{site.site}</span>
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      onClick={() => void runAction(`forget:${site.site}`, async () => {
+                        await getBrowserLoginsBridge()?.forgetSite(site.site);
+                      }, `Could not sign out of ${site.site}.`)}
+                      disabled={busyAction !== null}
+                      aria-label={`Sign out of ${site.site}`}
+                    >
+                      Sign out
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : signedInSites ? (
+              <p className="text-xs text-muted-foreground">{t("browser_logins.none_signed_in")}</p>
+            ) : null}
+          </LayoutSectionItemContent>
+        </LayoutSectionItem>
+      </SettingsSection>
+    );
+  }
 
   return (
     <SettingsSection>

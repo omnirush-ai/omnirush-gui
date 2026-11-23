@@ -1,6 +1,6 @@
 export type SiteCategory = "ordinary" | "finance" | "email" | "identity";
 export type CookieSameSite = "unspecified" | "no_restriction" | "lax" | "strict";
-export type ImportBrowser = "chrome" | "edge" | "brave" | "chromium" | "firefox" | "safari";
+export type ImportBrowser = "chrome" | "edge" | "arc" | "brave" | "vivaldi" | "chromium" | "firefox" | "safari";
 
 /** A cookie in the shape every reader produces and every writer consumes. */
 export type NormalizedCookie = {
@@ -75,4 +75,7 @@ export function groupCookiesIntoSites(cookies: NormalizedCookie[], options?: { n
 export function cookiesForSites(cookies: NormalizedCookie[], sites: string[]): NormalizedCookie[];
 export function toElectronCookie(cookie: NormalizedCookie): ElectronCookieDetails;
 export function fromElectronCookie(cookie: ElectronCookieLike): NormalizedCookie;
+export type ImportBrowserInfo = { browser: ImportBrowser; label: string; short: string; platforms: string[] };
+export const IMPORT_BROWSERS: readonly ImportBrowserInfo[];
 export function importSourceAvailability(platform: NodeJS.Platform | string): ImportSourceAvailability[];
+export function syncSourceAvailability(platform: NodeJS.Platform | string): ImportSourceAvailability[];

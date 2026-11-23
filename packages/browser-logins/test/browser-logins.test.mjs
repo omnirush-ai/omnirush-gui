@@ -12,6 +12,7 @@ import {
   groupCookiesIntoSites,
   importSourceAvailability,
   registrableDomain,
+  syncSourceAvailability,
   toElectronCookie,
 } from "../index.mjs";
 import {
@@ -254,6 +255,11 @@ describe("profile discovery", () => {
     expect(windows.some((entry) => entry.browser === "safari")).toBe(false);
     const mac = importSourceAvailability("darwin");
     expect(mac.find((entry) => entry.browser === "chrome")).toMatchObject({ importable: true });
-    expect(mac.find((entry) => entry.browser === "safari")).toMatchObject({ importable: false });
+    // Safari's sign-ins need Full Disk Access; the importer asks for it when the read is refused.
+    expect(mac.find((entry) => entry.browser === "safari")).toMatchObject({ importable: true });
+    // The sign-in sync setup keeps its own list exactly as before.
+    expect(syncSourceAvailability("darwin").find((entry) => entry.browser === "safari")).toMatchObject({ importable: false });
+    expect(syncSourceAvailability("linux").find((entry) => entry.browser === "chrome")).toMatchObject({ importable: false });
+    expect(syncSourceAvailability("darwin").map((entry) => entry.browser)).toEqual(["chrome", "edge", "brave", "chromium", "firefox", "safari"]);
   });
 });

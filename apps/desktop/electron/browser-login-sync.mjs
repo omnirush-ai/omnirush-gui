@@ -21,6 +21,7 @@ import {
   groupCookiesIntoSites,
   importSourceAvailability,
   registrableDomain,
+  syncSourceAvailability,
   toElectronCookie,
 } from "@omnirush/browser-logins";
 import {
@@ -33,6 +34,8 @@ import {
   readFirefoxCookies,
   sqliteCompanionFiles,
 } from "@omnirush/browser-logins/node";
+import { linuxChromiumKeys, readLinuxKeyringPassword } from "@omnirush/browser-logins/linux-keyring";
+import { isPermissionError, parseBinaryCookies, safariPaths, safariProfile } from "@omnirush/browser-logins/safari";
 
 const require = createRequire(import.meta.url);
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
@@ -142,6 +145,7 @@ function managedCookieIdentity(cookie) {
 
 function syncErrorCode(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (isPermissionError(error) || /full-disk-access/i.test(message)) return "full_disk_access";
   if (/profile is no longer available|ENOENT|no such file/i.test(message)) return "source_missing";
   if (/key-denied/i.test(message)) return "key_denied";
   if (/key-not-found|key-unavailable|no-key/i.test(message)) return "key_unavailable";
@@ -190,6 +194,8 @@ async function describeSourceFiles(sourcePath) {
  *   env?: Record<string, string | undefined>,
  *   statePath?: string | null,
  *   readKeychainPassword?: (service: string) => Promise<string>,
+ *   readLinuxKeyring?: (browser: string) => Promise<string | null>,
+ *   readSourceFile?: (filePath: string) => Promise<Buffer>,
  *   openDatabase?: (filePath: string) => { prepare(sql: string): { all(): Array<Record<string, unknown>> }, close(): void },
  *   getSession?: () => LoginSession,
  *   now?: () => number,
@@ -197,7 +203,7 @@ async function describeSourceFiles(sourcePath) {
  *   watchSource?: typeof watchFileSystem | null,
  *   watchDebounceMs?: number,
  *   initialPolicyAllowed?: boolean,
- *   confirmUserAction?: (input: { action: "discover" | "read" | "configure" | "resume", source: { id: string, browser: string, label: string, profile: string } | null, sites?: string[] }) => Promise<boolean>,
+ *   confirmUserAction?: (input: { action: "discover" | "read" | "configure" | "resume" | "import", source: { id: string, browser: string, label: string, profile: string } | null, sites?: string[] }) => Promise<boolean>,
  * }} [options]
  */
 export function createBrowserLoginSync({
@@ -207,6 +213,8 @@ export function createBrowserLoginSync({
   env = process.env,
   statePath = null,
   readKeychainPassword = defaultReadKeychainPassword,
+  readLinuxKeyring = (browser) => readLinuxKeyringPassword(browser),
+  readSourceFile = (filePath) => readFile(filePath),
   openDatabase = defaultOpenDatabase,
   getSession = () => session.fromPartition(partition),
   now = Date.now,
@@ -306,7 +314,11 @@ export function createBrowserLoginSync({
       ? chromiumProfileCandidates({ platform, home, localAppData: env.LOCALAPPDATA ?? null })
       : [];
     const firefox = firefoxProfileCandidates({ platform, home, appData: env.APPDATA ?? null });
-    return [...chromium, ...firefox, ...testSources];
+    const safari = safariProfile({ platform, home });
+    const safariSource = safari?.files.cookies
+      ? [{ id: safari.id, browser: "safari", label: safari.label, profile: safari.profile, path: safari.files.cookies, keychainService: null }]
+      : [];
+    return [...chromium, ...firefox, ...safariSource, ...testSources];
   }
 
   function resolveSource(sourceId) {
@@ -317,12 +329,39 @@ export function createBrowserLoginSync({
 
   async function chromiumKey(source) {
     if (platform === "win32") throw new Error("app-bound-encryption");
-    if (platform === "linux") throw new Error("key-unavailable");
     if (chromiumKeys.has(source.id)) return chromiumKeys.get(source.id);
-    const password = await readKeychainPassword(source.keychainService);
-    const key = deriveChromiumKey(password, { platform });
+    // Linux: v10 values use the built-in password, v11 the desktop key ring's (GNOME Keyring or KWallet).
+    const key = platform === "linux"
+      ? linuxChromiumKeys(await readLinuxKeyring(source.browser))
+      : deriveChromiumKey(await readKeychainPassword(source.keychainService), { platform });
     chromiumKeys.set(source.id, key);
     return key;
+  }
+
+  /** Safari keeps cookies in one binary file macOS guards with Full Disk Access; it is read whole, never copied. */
+  async function readSafariCookies(source, { sites = null, metadataOnly = false } = {}) {
+    let before;
+    let cookies;
+    // The app container's file on current macOS; the older per-user file when the container has none.
+    const candidates = [...new Set([source.path, safariPaths(home).cookies[1]])];
+    for (const [index, filePath] of candidates.entries()) {
+      try {
+        before = await describeSourceFiles(filePath);
+        cookies = parseBinaryCookies(await readSourceFile(filePath));
+        break;
+      } catch (error) {
+        if (isPermissionError(error)) throw new Error("full-disk-access");
+        if (!(error && typeof error === "object" && error.code === "ENOENT") || index === candidates.length - 1) throw error;
+      }
+    }
+    const chosen = Array.isArray(sites) ? cookiesForSites(cookies, sites) : cookies;
+    const httpOnly = chosen.filter((cookie) => cookie.httpOnly === true);
+    return {
+      cookies: metadataOnly ? httpOnly.map((cookie) => ({ ...cookie, value: "" })) : httpOnly,
+      undecryptable: 0,
+      version: null,
+      fingerprint: before.fingerprint,
+    };
   }
 
   async function copyStableSource(source) {
@@ -347,6 +386,7 @@ export function createBrowserLoginSync({
   }
 
   async function readSourceCookies(source, { sites = null, metadataOnly = false } = {}) {
+    if (source.browser === "safari") return readSafariCookies(source, { sites, metadataOnly });
     const snapshot = await copyStableSource(source);
     try {
       const db = openDatabase(snapshot.copyPath);
@@ -384,9 +424,12 @@ export function createBrowserLoginSync({
       throw new Error("Browser login sync setup was cancelled.");
     }
     assertPolicyAllowed();
+    // The sync setup offers what it always offered; importing (browser-library.mjs) reaches the rest.
+    const availability = syncSourceAvailability(platform);
+    const listed = new Set(availability.filter((entry) => entry.importable).map((entry) => entry.browser));
     return {
-      availability: importSourceAvailability(platform),
-      profiles: discoverProfiles().map(publicSource),
+      availability,
+      profiles: discoverProfiles().filter((source) => listed.has(source.browser)).map(publicSource),
     };
   }
 
@@ -413,6 +456,86 @@ export function createBrowserLoginSync({
       cookieCount: syncableCookies.length,
       undecryptable: result.undecryptable,
     };
+  }
+
+  /**
+   * The import dialog's sign-in list: the same value-free preview, read as
+   * part of an import the user opened. Cookie values are only read by
+   * `importOnce` or `configure`, after the native confirmation.
+   */
+  /** @param {{ sourceId?: unknown }} [request] */
+  async function inspectSignIns({ sourceId } = {}) {
+    await ensureStateLoaded();
+    assertPolicyAllowed();
+    expirePreviews();
+    const source = resolveSource(String(sourceId ?? ""));
+    const result = await readSourceCookies(source, { metadataOnly: true });
+    assertPolicyAllowed();
+    const previewId = randomUUID();
+    const syncableCookies = result.cookies.filter((cookie) => cookie.httpOnly === true);
+    previews.set(previewId, { source, cookies: syncableCookies, undecryptable: result.undecryptable, fingerprint: result.fingerprint, createdAt: now() });
+    return {
+      previewId,
+      source: publicSource(source),
+      sites: groupCookiesIntoSites(syncableCookies, { now: now() }),
+      cookieCount: syncableCookies.length,
+      undecryptable: result.undecryptable,
+    };
+  }
+
+  /**
+   * Copy the chosen sites' sign-ins into the built-in browser once. Nothing
+   * keeps reading the source afterwards and nothing is tracked for sync: the
+   * sites are ordinary sign-ins the user can sign out of in Settings.
+   */
+  /** @param {{ previewId?: unknown, sites?: unknown }} [request] */
+  async function importOnce({ previewId, sites } = {}) {
+    await ensureStateLoaded();
+    assertPolicyAllowed();
+    const entry = typeof previewId === "string" ? previews.get(previewId) : null;
+    if (!entry) throw new Error("This import has expired. Choose the browser again.");
+    const availableSites = new Set(groupCookiesIntoSites(entry.cookies, { now: now() }).map((site) => site.site));
+    const selectedSites = normalizedSites(sites).filter((site) => availableSites.has(site));
+    if (selectedSites.length === 0) throw new Error("Choose at least one site to import.");
+    if (!(await confirmUserAction({ action: "import", source: publicSource(entry.source), sites: selectedSites }))) {
+      throw new Error("Importing sign-ins was cancelled.");
+    }
+    previews.delete(previewId);
+    assertPolicyAllowed();
+    let read;
+    try {
+      read = await readSourceCookies(entry.source, { sites: selectedSites });
+    } catch (error) {
+      throw new Error(`Sign-ins could not be read (${syncErrorCode(error)}).`);
+    }
+    const tallies = new Map(selectedSites.map((site) => [site, { site, synced: 0, failed: 0, removed: 0 }]));
+    const fresh = cookiesForSites(read.cookies, selectedSites)
+      .filter((cookie) => cookie.httpOnly === true)
+      .filter((cookie) => cookie.expiresAt === null || cookie.expiresAt * 1000 >= now());
+    for (const cookie of fresh) {
+      const site = registrableDomain(cookie.host);
+      const tally = tallies.get(site) ?? { site, synced: 0, failed: 0, removed: 0 };
+      tallies.set(site, tally);
+      try {
+        await getSession().cookies.set(toElectronCookie(cookie));
+        tally.synced += 1;
+      } catch {
+        tally.failed += 1;
+      }
+    }
+    await getSession().cookies.flushStore?.();
+    return { sites: [...tallies.values()], undecryptable: read.undecryptable };
+  }
+
+  /** Whether sign-ins may be read on this computer at all (personal Desktop), for the import dialog. */
+  async function signInsAllowed() {
+    await ensureStateLoaded();
+    return policyAllowed;
+  }
+
+  /** Eval-registered sources, so the import dialog lists the same fixture profiles the sync eval uses. */
+  function evalSources() {
+    return testSources.map(publicSource);
   }
 
   async function removeManagedCookie(cookie) {
@@ -913,6 +1036,10 @@ export function createBrowserLoginSync({
     setPolicyAllowed,
     listSources,
     preview,
+    inspectSignIns,
+    importOnce,
+    signInsAllowed,
+    evalSources,
     configure,
     getState,
     syncNow,

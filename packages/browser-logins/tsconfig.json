@@ -10,5 +10,5 @@
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["index.d.ts", "index.mjs", "node.d.ts", "node.mjs"]
+  "include": ["index.d.ts", "index.mjs", "node.d.ts", "node.mjs", "bookmarks.d.ts", "bookmarks.mjs", "history.d.ts", "history.mjs", "safari.d.ts", "safari.mjs", "linux-keyring.d.ts", "linux-keyring.mjs"]
 }

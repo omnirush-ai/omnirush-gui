@@ -2,7 +2,7 @@
   "name": "@omnirush/browser-logins",
   "private": true,
   "type": "module",
-  "description": "Sync selected logins from a browser profile into OmniRush.ai's built-in browser: source discovery, readers, decryption, site grouping, and sensitivity defaults.",
+  "description": "Bring a browser profile into OmniRush.ai's built-in browser: source discovery, cookie readers and decryption, site grouping and sensitivity defaults, bookmarks and history readers.",
   "exports": {
     ".": {
       "types": "./index.d.ts",
@@ -11,13 +11,37 @@
     "./node": {
       "types": "./node.d.ts",
       "default": "./node.mjs"
+    },
+    "./bookmarks": {
+      "types": "./bookmarks.d.ts",
+      "default": "./bookmarks.mjs"
+    },
+    "./history": {
+      "types": "./history.d.ts",
+      "default": "./history.mjs"
+    },
+    "./safari": {
+      "types": "./safari.d.ts",
+      "default": "./safari.mjs"
+    },
+    "./linux-keyring": {
+      "types": "./linux-keyring.d.ts",
+      "default": "./linux-keyring.mjs"
     }
   },
   "files": [
     "index.d.ts",
     "index.mjs",
     "node.d.ts",
-    "node.mjs"
+    "node.mjs",
+    "bookmarks.d.ts",
+    "bookmarks.mjs",
+    "history.d.ts",
+    "history.mjs",
+    "safari.d.ts",
+    "safari.mjs",
+    "linux-keyring.d.ts",
+    "linux-keyring.mjs"
   ],
   "scripts": {
     "test": "bun test",
