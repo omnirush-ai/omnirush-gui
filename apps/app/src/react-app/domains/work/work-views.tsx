@@ -35,7 +35,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type WorkClient,
 } from "./work-mode";
 
@@ -253,6 +253,8 @@ export function ConnectorRow(props: {
   retrying?: boolean;
   /** Saves what a picking source reads (Asana's workspaces; [] is all). */
   onPick?: (picked: string[]) => void;
+  /** The company's owner or an admin: a connector the company turned off says so for the team, and opens Organization. */
+  onManage?: () => void;
 }) {
   const row = props.connector;
   const name = connectorLabel(row.id, row.label);
@@ -288,7 +290,15 @@ export function ConnectorRow(props: {
         </div>
         {paused ? (
           <div className="mt-0.5 break-words text-[12px] text-amber-11" data-testid="work-connector-paused" data-by={row.paused_by}>
-            {row.paused_by === "staff" ? t("work.connectors.paused_by_staff") : t("work.connectors.paused_by_org")}
+            {row.paused_by === "staff" ? t("work.connectors.paused_by_staff") : props.onManage ? t("work.connectors.paused_for_team") : t("work.connectors.paused_by_org")}
+            {row.paused_by !== "staff" && props.onManage ? (
+              <>
+                {" "}
+                <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={props.onManage} data-testid="work-connector-paused-manage">
+                  {t("work.connectors.paused_manage")}
+                </button>
+              </>
+            ) : null}
           </div>
         ) : null}
         {attention ? (
@@ -717,9 +727,15 @@ const FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy
 
 const LOCAL_CHAT_NAMES: Record<WorkChatSyncSource, string> = { imessage: "iMessage", whatsapp: "WhatsApp", telegram: "Telegram" };
 
+/** The server's answer for a source the company (or OmniRush) turned off. */
+const turnedOff = (code: string | null | undefined) => code === "connector_off" || code === "connector_not_allowed";
+
 /** What a chat sync error says on the card; repeated failures are one line with the count. */
 export function localChatError(source: WorkChatSyncSource, code: string | null, failures: number): string | null {
   if (!code) return null;
+  // The company (or OmniRush) turned it off: no failure, and no count of tries.
+  if (code === "connector_off") return t("work.connectors.paused_by_org");
+  if (code === "connector_not_allowed") return t("work.connectors.paused_by_staff");
   const name = LOCAL_CHAT_NAMES[source];
   const text = code === "fda_required" ? t("work.chatsync.fda_needed", { name })
     : code === "no_messages_db" ? t("work.imessage.no_db")
@@ -773,7 +789,7 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
       <div className="min-w-[16rem] flex-1">
         <span className="text-sm font-medium">{name}</span>
         <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-local-chat-line">{line}</div>
-        {error ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
+        {error ? <div className={cn("mt-0.5 text-[12px]", turnedOff(state?.lastError) ? "text-amber-11" : "text-destructive")} data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
         {state?.lastError === "fda_required" ? (
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground" data-testid="work-local-chat-fda">
             {t("work.chatsync.fda_steps")}
@@ -799,12 +815,12 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
   );
 }
 
-/** The chats this Mac syncs on its own (iMessage, the WhatsApp app). */
-export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void }) {
+/** The chats this Mac syncs on its own (iMessage, the WhatsApp app); `off` leaves out the ones the company turned off. */
+export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void; off?: readonly string[] }) {
+  const sources = (["whatsapp", "imessage"] as const).filter((source) => !props.off?.includes(source));
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-local-chats">
-      <LocalChatCard source="whatsapp" client={props.client} openLink={props.openLink} />
-      <LocalChatCard source="imessage" client={props.client} openLink={props.openLink} />
+      {sources.map((source) => <LocalChatCard key={source} source={source} client={props.client} openLink={props.openLink} />)}
     </div>
   );
 }
@@ -1005,8 +1021,9 @@ const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
 const IMPORT_ACCEPT: Record<OmniRushWorkImportKind, string> = { whatsapp: ".txt,.zip,text/plain,application/zip", telegram: ".json,application/json" };
 
 /** WhatsApp and Telegram have no sign-in: a chat export from the phone (or Telegram Desktop) is uploaded instead. Each row says
- *  how to export, Import opens the file picker, and the line under it shows the last import. */
-export function ChatImportCard(props: { client: WorkClient | null }) {
+ *  how to export, Import opens the file picker, and the line under it shows the last import. `off` leaves out the kinds
+ *  the company turned off. */
+export function ChatImportCard(props: { client: WorkClient | null; off?: readonly string[] }) {
   const queryClient = useQueryClient();
   const imports = useQuery({ queryKey: workImportsKey(props.client), queryFn: () => props.client!.listWorkImports(), enabled: Boolean(props.client), retry: false });
   const upload = useMutation({
@@ -1026,9 +1043,11 @@ export function ChatImportCard(props: { client: WorkClient | null }) {
     },
   });
   const latest = (kind: string): OmniRushWorkImport | undefined => (Array.isArray(imports.data) ? imports.data : []).find((item) => (item.source ?? "whatsapp") === kind);
+  const kinds = IMPORT_KINDS.filter((kind) => !props.off?.includes(kind));
+  if (!kinds.length) return null;
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-import-card">
-      {IMPORT_KINDS.map((kind) => {
+      {kinds.map((kind) => {
         const last = latest(kind);
         // A file with no messages in it (a Telegram file that is no export) comes back done with nothing: not read either.
         const failed = last?.status === "failed" || (last?.status === "done" && !last.records);
@@ -1076,8 +1095,9 @@ export function ChatImportCard(props: { client: WorkClient | null }) {
   );
 }
 
-/** Work > Connectors (also reachable from Settings): each source's status, record count, last sync and sync switch. */
-export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string; notice?: ReactNode }) {
+/** Work > Connectors (also reachable from Settings): each source's status, record count, last sync and sync switch.
+ *  `onOpenOrganization` opens Work > Organization (where the owner and admins choose the team's connectors). */
+export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string; notice?: ReactNode; onOpenOrganization?: () => void }) {
   const queryClient = useQueryClient();
   const key = workConnectorsKey(props.client);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -1092,6 +1112,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     enabled: Boolean(props.client),
     refetchInterval: connecting ? CONNECT_POLL_MS : false,
   });
+  // The company's list: the WhatsApp import and the Mac's WhatsApp leave the page while it is turned off. On an older
+  // server (404) nothing is off.
+  const team = useWorkOrgConnectors(props.client);
+  const off = localSourcesOff(query.data, team.data);
+  const manage = team.data?.can_manage ? props.onOpenOrganization : undefined;
   useEffect(() => {
     if (!connecting) return;
     if (connectSettled(query.data, connecting)) {
@@ -1151,7 +1176,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const busy = connect.isPending || disconnect.isPending || sync.isPending || pick.isPending;
   // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker. A source this page does not
   // list (Meetings) gets no chip.
-  const canAdd = (id: string) => coverageCanAdd(query.data, id);
+  const canAdd = (id: string) => !off.includes(id) && coverageCanAdd(query.data, id);
   const add = (id: string) => {
     if (isImportKind(id)) document.querySelector<HTMLInputElement>(`[data-import-input="${id}"]`)?.click();
     else if (signsInWithForm(query.data, id)) setForm(id);
@@ -1196,6 +1221,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               retrying={retry.isPending && retry.variables === row.id}
               onRetry={() => retry.mutate(row.id)}
               onPick={(picked) => pick.mutate({ id: row.id, picked })}
+              onManage={manage}
             />,
             form === row.id ? (
               (() => {
@@ -1212,8 +1238,8 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           ])}
         </div>
         <HookCard rows={hookRows} client={props.client} onChanged={() => void refresh()} />
-        <ChatImportCard client={props.client} />
-        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} /> : null}
+        <ChatImportCard client={props.client} off={off} />
+        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} off={off} /> : null}
         <TelegramCard client={props.client} />
       </div>
       <ConfirmModal

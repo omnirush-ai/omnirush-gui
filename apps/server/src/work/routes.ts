@@ -187,11 +187,13 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
 export function registerWorkRoutes(deps: WorkRouteDeps): void {
   const { routes, jsonResponse } = deps;
   // A work_disabled answer: the switch went off since the capabilities were cached (up to 5 min), so the next
-  // /work/state asks again instead of showing Work until the cache expires.
+  // /work/state asks again instead of showing Work until the cache expires. Likewise a connector the company turned off
+  // (connector_off, connector_not_allowed): the state's sources, which the desktop's chat sync follows, are read again.
   let switchStale = false;
   const pass = async (response: Response) => {
     const answer = await passThrough(response, jsonResponse);
-    if ((answer.data as { code?: unknown } | null)?.code === "work_disabled") switchStale = true;
+    const code = (answer.data as { code?: unknown } | null)?.code;
+    if (code === "work_disabled" || code === "connector_off" || code === "connector_not_allowed") switchStale = true;
     return answer;
   };
   const signedOut = () => jsonResponse({ detail: "omnirush_account_required", code: "omnirush_account_required", message: WORK_ERRORS.omnirush_account_required }, 401);

@@ -3012,6 +3012,8 @@ export default {
   "work.connectors.status_paused": "已暂停",
   "work.connectors.paused_by_org": "已被公司管理员关闭",
   "work.connectors.paused_by_staff": "你的公司暂时无法使用",
+  "work.connectors.paused_for_team": "已为你的团队关闭。",
+  "work.connectors.paused_manage": "在组织中更改",
   "work.connectors.last_sync": "上次同步：{when}",
   "work.connectors.not_synced": "尚未同步",
   "work.connectors.skipped_one": "{n} 项无法导入，已跳过。",

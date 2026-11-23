@@ -20,7 +20,7 @@ import {
   LayoutSectionItem, LayoutSectionItemDescription, LayoutSectionItemHeader, LayoutSectionItemHeaderActions, LayoutSectionItemTitle,
 } from "@/react-app/domains/settings/settings-layout";
 
-import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
+import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkOrgConnectors, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workRoleLabel, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
 import { Chip, sizeOptions, TRUST_URL, TrustBadge, WorkInviteDialog } from "./work-onboarding";
 import { ConnectorIcon } from "./work-views";
 
@@ -38,15 +38,19 @@ export function leaveState(data: Pick<OmniRushWorkMembers, "members" | "you_role
   return { blocked: false, message: t("work.org.leave_member") };
 }
 
-/** The PATCH /work/org/connectors body after one switch: the ids shown, or null once every connector the company may
- *  use is on (null also shows the ones OmniRush allows later, as before any choice was made). */
-export function nextShown(allowed: Pick<OmniRushWorkOrgConnector, "id" | "shown">[], id: string, on: boolean): string[] | null {
-  const shown = allowed.filter((row) => (row.id === id ? on : row.shown)).map((row) => row.id);
-  return shown.length === allowed.length ? null : shown;
+/** The PATCH /work/org/connectors body after one switch. Before any choice (`shown` null) every connector shows, also the
+ *  ones offered later; the first switch turned off makes it a list. Once it is a list, ids on it that this page does not
+ *  offer right now (switched off for everyone, or not set up on this server) stay on it, so a save never changes what
+ *  the page does not show, and no "all" (null) is sent that would bring back ones the company turned off. Staff's own
+ *  list refuses ids outside it, so with one only the listed ids are sent. */
+export function nextShown(view: Pick<OmniRushWorkOrgConnectors, "allowed" | "shown" | "staff_limited">, id: string, on: boolean): string[] | null {
+  const allowed = view.allowed ?? [];
+  const listed = allowed.filter((row) => (row.id === id ? on : row.shown)).map((row) => row.id);
+  if (!Array.isArray(view.shown)) return listed.length === allowed.length ? null : listed;
+  const offered = new Set(allowed.map((row) => row.id));
+  const kept = view.staff_limited ? [] : view.shown.filter((item) => !offered.has(item));
+  return [...new Set([...listed, ...kept])];
 }
-
-/** A role's badge text. */
-const roleLabel = (role: string) => (role === "owner" ? t("work.role.owner") : role === "admin" ? t("work.role.admin") : t("work.role.member"));
 
 /** The PATCH /work/org/me body: the role, and tools only when the person changed them. The server keeps one tools
  *  list per person and an owner's is the company's, so sending an untouched (empty) list would wipe it. */
@@ -135,7 +139,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const owner = data?.you_role === "owner";
   const you = data?.members.find((member) => member.you) ?? null;
   // The company's connector list; an older server has none (404), so the page stays as it was: no section, no admins.
-  const teamQuery = useQuery({ queryKey: workOrgConnectorsKey(props.client), queryFn: () => props.client!.getWorkOrgConnectors(), enabled: Boolean(props.client && org), retry: false });
+  const teamQuery = useWorkOrgConnectors(props.client, Boolean(org));
   const team = teamQuery.data?.can_manage && teamQuery.data.allowed ? teamQuery.data : null;
   const rolesKnown = Boolean(teamQuery.data);
 
@@ -184,7 +188,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const showConnector = (row: OmniRushWorkOrgConnector, on: boolean) => {
     // Turning off one that people use pauses their connection: ask first.
     if (!on && row.members_connected > 0) setConfirm({ kind: "hide", connector: row });
-    else saveShown.mutate(nextShown(team?.allowed ?? [], row.id, on));
+    else if (team) saveShown.mutate(nextShown(team, row.id, on));
   };
   const setRole = useMutation({
     mutationFn: (change: { member: OmniRushWorkMember; role: "admin" | "member" }) => props.client!.setWorkMemberRole(change.member.user_id, change.role),
@@ -307,7 +311,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                       <div className="truncate text-sm font-medium">{member.email}{member.you ? <span className="font-normal text-muted-foreground"> {t("work.org.you_tag")}</span> : null}</div>
                       {member.job_role ? <div className="truncate text-[12px] text-muted-foreground">{member.job_role}</div> : null}
                     </div>
-                    <Badge variant={member.role === "owner" ? "default" : "secondary"}>{roleLabel(member.role)}</Badge>
+                    <Badge variant={member.role === "owner" ? "default" : "secondary"}>{workRoleLabel(member.role)}</Badge>
                     {owner && !member.you ? (
                       <div className="flex flex-wrap items-center gap-1">
                         {rolesKnown && member.role !== "owner" ? (
@@ -400,7 +404,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
         onConfirm={() => {
           if (confirm?.kind === "remove") remove.mutate(confirm.member.user_id);
           else if (confirm?.kind === "transfer") transfer.mutate(confirm.member.user_id);
-          else if (confirm?.kind === "hide") saveShown.mutate(nextShown(team?.allowed ?? [], confirm.connector.id, false));
+          else if (confirm?.kind === "hide" && team) saveShown.mutate(nextShown(team, confirm.connector.id, false));
           else if (confirm?.kind === "leave") leave.mutate();
           setConfirm(null);
         }}

@@ -6,6 +6,8 @@
 // at app start, every 10 minutes and soon after a database's write-ahead log
 // changes, while its "Data sync" switch is on. The switch turns itself on
 // after the first good read (Sync now). One read at a time; errors back off.
+// A source the company turned off (refused with connector_off) is not read
+// again until the Work state's sources list it again.
 // The read position and switch live here (<userData>/work-chat-sync.json),
 // per server and Work account, so an account switch never mixes data.
 
@@ -48,6 +50,9 @@ export function batches(records, maxRecords = BATCH_RECORDS, maxChars = BATCH_CH
 export function backoffMs(failures) {
   return Math.min(SYNC_EVERY_MS * 2 ** Math.min(Math.max(failures - 1, 0), 10), MAX_BACKOFF_MS);
 }
+
+/** A server with company connector lists refuses a source the company (or OmniRush) turned off with these. */
+const TURNED_OFF = new Set(["connector_off", "connector_not_allowed"]);
 
 class SyncError extends Error {
   constructor(code) {
@@ -126,13 +131,13 @@ export function createChatSync(deps) {
     return body;
   }
 
-  /** The local server and the Work account it speaks for; null while signed out, offline or Work is off. */
+  /** The local server, the Work account it speaks for and the account's sources; null while signed out, offline or Work is off. */
   async function who() {
     const server = await localServer().catch(() => null);
     if (!server?.baseUrl || !server.token) return null;
     const state = await call(server, "/work/state?account=1").catch(() => null);
     if (!state?.enabled || typeof state.account !== "string" || !state.account) return null;
-    return { server, account: state.account };
+    return { server, account: state.account, sources: Array.isArray(state.sources) ? state.sources : null };
   }
 
   const floodWaiting = (entry) => entry.lastError === "flood_wait" && Boolean(entry.nextAt) && now() < entry.nextAt;
@@ -145,6 +150,8 @@ export function createChatSync(deps) {
     // Telegram's FLOOD_WAIT holds for Sync now and the switch too: no request before the time it asked for.
     if (floodWaiting(entry)) return { status: "skipped", reason: "flood_wait" };
     if (!manual && (entry.enabled !== true || (entry.nextAt && now() < entry.nextAt))) return { status: "skipped", reason: "off" };
+    // Refused as turned off by the company: nothing is read until the account's sources list it again.
+    if (!manual && TURNED_OFF.has(entry.lastError) && me.sources && !me.sources.includes(source)) return { status: "skipped", reason: "turned_off" };
     lastRunAt = now();
     running = source;
     try {

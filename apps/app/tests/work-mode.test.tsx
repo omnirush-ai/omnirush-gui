@@ -944,10 +944,9 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(old).not.toContain(">Make admin<");
     expect(old).not.toContain("Admins can choose");
     expect(old).toContain(">Make owner<");
-    // The saved list after one switch; every one on is null (all, also those allowed later).
-    expect(nextShown(managed.allowed!, "slack", true)).toEqual(["google", "slack"]);
-    expect(nextShown(managed.allowed!, "google", false)).toEqual([]);
-    expect(nextShown(managed.allowed!.map((item) => ({ ...item, shown: item.id !== "linear" })), "linear", true)).toBeNull();
+    // The saved list after one switch (staff limits this company's list, so only the listed ids go).
+    expect(nextShown(managed, "slack", true)).toEqual(["google", "slack"]);
+    expect(nextShown(managed, "google", false)).toEqual([]);
   });
 
   test("a connection the company turned off says so and offers only Disconnect; it is never offered to connect", () => {

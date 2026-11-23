@@ -3005,6 +3005,8 @@ export default {
   "work.connectors.status_paused": "Paused",
   "work.connectors.paused_by_org": "Turned off by your company admin",
   "work.connectors.paused_by_staff": "Not available for your company right now",
+  "work.connectors.paused_for_team": "Turned off for your team.",
+  "work.connectors.paused_manage": "Change in Organization",
   "work.connectors.last_sync": "Last sync {when}",
   "work.connectors.not_synced": "Not synced yet",
   "work.connectors.skipped_one": "{n} item could not be imported and was skipped.",

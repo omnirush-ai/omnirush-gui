@@ -481,6 +481,17 @@ describe("work routes", () => {
     // The server's refusals read in words.
     const { call: refused } = setup(() => json({ detail: "connector_off", reason: "x" }, 403));
     expect(await (await refused("POST", "/work/connectors/slack/start")).json()).toMatchObject({ code: "connector_off", message: "Your company admin has turned this off." });
+    // A connector the company turned off: the next state reads the sources fresh (the desktop's chat sync follows them).
+    const fresh: unknown[] = [];
+    const { call: offCall } = setup(() => json({ detail: "connector_not_allowed" }, 403), async (options) => {
+      fresh.push(options);
+      return { work: { enabled: true, sources: ["google"] } };
+    });
+    await offCall("GET", "/work/state");
+    expect((await offCall("POST", "/work/whatsapp-local", { records: [] })).status).toBe(403);
+    await offCall("GET", "/work/state");
+    await offCall("GET", "/work/state");
+    expect(fresh).toEqual([undefined, { maxAgeMs: 0 }, undefined]);
     const { call: notAdmin } = setup(() => json({ detail: "not_admin" }, 403));
     expect(await (await notAdmin("PATCH", "/work/org/connectors", { shown: null })).json()).toMatchObject({ code: "not_admin", message: "Only your company owner or an admin can change this." });
   });

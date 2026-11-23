@@ -13,7 +13,7 @@ import { backoffMs, batches, createChatSync, MIN_GAP_MS, SYNC_EVERY_MS, WATCH_QU
 function rig({ read } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "chat-sync-"));
   const file = path.join(dir, "work-chat-sync.json");
-  const server = { enabled: true, account: "https://omnirush.ai acct_a", fail: null, pushed: [], onPush: null };
+  const server = { enabled: true, account: "https://omnirush.ai acct_a", fail: null, pushed: [], onPush: null, sources: undefined };
   const reads = [];
   let clock = Date.parse("2026-11-20T10:00:00Z");
   const timers = [];
@@ -32,7 +32,7 @@ function rig({ read } = {}) {
   const fetchImpl = async (url, init = {}) => {
     const route = url.replace("http://127.0.0.1:1", "");
     assert.equal(init.headers.Authorization, "Bearer client-token");
-    if (route === "/work/state?account=1") return Response.json({ enabled: server.enabled, ...(server.enabled ? { account: server.account } : {}) });
+    if (route === "/work/state?account=1") return Response.json({ enabled: server.enabled, ...(server.enabled ? { account: server.account } : {}), ...(server.sources ? { sources: server.sources } : {}) });
     // A push lands in the account the server has when it arrives; onPush may switch it after.
     const account = server.account;
     server.onPush?.();
@@ -196,6 +196,40 @@ test("a failed push keeps the read position, so the messages go again next time"
     r.server.fail = null;
     await r.sync.run("imessage", { manual: true });
     assert.deepEqual(r.reads.map((read) => read.cursor), [undefined, 1, 1]);
+  } finally {
+    r.done();
+  }
+});
+
+test("a source the company turned off is not read again until the Work sources list it again", async () => {
+  const r = rig();
+  try {
+    r.server.sources = ["google", "whatsapp"];
+    assert.equal((await r.sync.run("whatsapp", { manual: true })).status, "ok");
+    r.server.fail = "connector_off";
+    r.server.sources = ["google"];
+    r.advance(SYNC_EVERY_MS);
+    assert.deepEqual(await r.sync.run("whatsapp"), { status: "error", code: "connector_off" });
+    assert.equal(r.reads.length, 2);
+    // Off for the company: the automatic runs read nothing, however long it stays off.
+    r.advance(7 * 60 * 60_000);
+    assert.deepEqual(await r.sync.run("whatsapp"), { status: "skipped", reason: "turned_off" });
+    assert.equal(r.reads.length, 2);
+    // Other sources go on.
+    r.server.fail = null;
+    assert.equal((await r.sync.setEnabled("imessage", true)).status, "ok");
+    assert.equal(r.reads.length, 3);
+    // On again: the next run reads and clears the error.
+    r.server.sources = ["google", "whatsapp"];
+    assert.equal((await r.sync.run("whatsapp")).status, "ok");
+    assert.equal((await r.sync.status()).whatsapp.lastError, null);
+    // A server with no sources in the state (an older app server) keeps today's backoff only.
+    r.server.fail = "connector_off";
+    r.server.sources = undefined;
+    r.advance(SYNC_EVERY_MS);
+    assert.equal((await r.sync.run("whatsapp")).code, "connector_off");
+    r.advance(backoffMs(1));
+    assert.equal((await r.sync.run("whatsapp")).code, "connector_off");
   } finally {
     r.done();
   }

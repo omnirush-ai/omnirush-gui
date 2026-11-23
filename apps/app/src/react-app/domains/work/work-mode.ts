@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { t } from "@/i18n";
-import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkOrgConnectors, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -143,6 +143,17 @@ export function useWorkState(client: WorkClient | null) {
   });
 }
 
+/** The company's connector list (GET /work/org/connectors). An older server answers 404: no retry, and every caller
+ *  then behaves as before the list existed. */
+export function useWorkOrgConnectors(client: WorkClient | null, enabled = true) {
+  return useQuery<OmniRushWorkOrgConnectors>({
+    queryKey: workOrgConnectorsKey(client),
+    queryFn: () => client!.getWorkOrgConnectors(),
+    enabled: Boolean(client) && enabled,
+    retry: false,
+  });
+}
+
 /** The owner's team insights (aggregate activity + alerts) for the chosen window; read only when owner opens the page. */
 export function useWorkOrgInsights(client: WorkClient | null, days: number, enabled: boolean) {
   return useQuery<OmniRushWorkInsights>({
@@ -223,6 +234,26 @@ const LINKED = new Set(["connected", "syncing", "error"]);
 export const isLinked = (row: Pick<OmniRushWorkConnector, "status">) => LINKED.has(row.status);
 /** Turned off by the company (or OmniRush): the connection is kept, and Disconnect is the only thing it offers. */
 export const isPausedByAdmin = (row: Pick<OmniRushWorkConnector, "status">) => row.status === "paused_by_admin";
+
+/** The sources on the company's list that the app offers outside the server's connector rows: the WhatsApp chat import
+ *  and the Mac's WhatsApp sync. Telegram and iMessage are not on the list (the server never turns them off). */
+const LISTED_LOCAL_SOURCES = ["whatsapp"] as const;
+
+/** Of those, the ones turned off for this account: a paused row in GET /work/connectors, or left out of the company's
+ *  GET /work/org/connectors list. An older server has neither (no paused rows, no list), so nothing is off. */
+export function localSourcesOff(
+  rows: OmniRushWorkConnector[] | null | undefined,
+  view: Pick<OmniRushWorkOrgConnectors, "org" | "connectors"> | null | undefined,
+): string[] {
+  const listed = view?.org && Array.isArray(view.connectors) ? new Set(view.connectors.map((item) => item.id)) : null;
+  const paused = new Set((Array.isArray(rows) ? rows : []).filter(isPausedByAdmin).map((row) => row.id));
+  return LISTED_LOCAL_SOURCES.filter((id) => paused.has(id) || (listed !== null && !listed.has(id)));
+}
+
+/** A company role in words; a role this app does not know reads as the server sent it. */
+export function workRoleLabel(role: string): string {
+  return role === "owner" ? t("work.role.owner") : role === "admin" ? t("work.role.admin") : role === "member" ? t("work.role.member") : role;
+}
 export const hasSampleData = (onboarding: OmniRushWorkOnboarding | null | undefined) => onboarding?.sample_data === true;
 /** A real (non-sample) source is connected. */
 export const hasRealSource = (rows: OmniRushWorkConnector[] | null | undefined) => visibleConnectors(rows).some((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && isLinked(row));
