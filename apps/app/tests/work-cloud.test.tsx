@@ -206,8 +206,8 @@ describe("helpers", () => {
     expect(keys(zh).sort()).toEqual([...enKeys].sort());
     for (const name of enKeys) {
       const text = en[name as keyof typeof en];
-      expect(/[–—]/.test(text)).toBe(false);
-      expect(/[–—]/.test(zh[name as keyof typeof zh])).toBe(false);
+      expect(/[\u2013\u2014]/.test(text)).toBe(false);
+      expect(/[\u2013\u2014]/.test(zh[name as keyof typeof zh])).toBe(false);
       expect(/\p{Extended_Pictographic}/u.test(text + zh[name as keyof typeof zh])).toBe(false);
       // Sentence case: no Capitalised Word after the first word, unless it is a name or a known product.
       const caps = text.replace(/\{[a-z_]+\}/g, "").split(/(?<=[.?!:])\s+/).flatMap((sentence) => sentence.split(/\s+/).slice(1)).filter((word) => /^[A-Z][a-z]/.test(word) && !/^(Work|Organization|Settings|Monday|Invoices)\b/.test(word));
