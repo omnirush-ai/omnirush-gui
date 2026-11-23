@@ -208,7 +208,8 @@ describe("work prompt and tools", () => {
     expect(SUGGESTED_REPLIES).toContain("never a step outside this chat");
     expect(SUGGESTED_REPLIES).toContain("Never a reply where the user promises a step of their own");
     expect(SUGGESTED_REPLIES).toContain("A message that asks the user something or shows a draft always ends with replies.");
-    expect(SUGGESTED_REPLIES).toContain("offer the likely values from the records or a way you can find it");
+    expect(SUGGESTED_REPLIES).toContain("compared options or made a recommendation");
+    expect(SUGGESTED_REPLIES).toContain("offer the likely values from the records or a way you can get it in this chat");
     expect(SUGGESTED_REPLIES).toContain("are fine with any answer style");
     // Only the new section is checked: the rest of the prompt names the product on purpose.
     expect(SUGGESTED_REPLIES).not.toMatch(/omnirush|farm|automat|\bbot\b/i);

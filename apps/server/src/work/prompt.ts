@@ -16,7 +16,7 @@ const STYLES: Record<WorkAnswerStyle, string> = {
  * style, so prompt caching holds; the desktop's parser (domains/work/ask/replies.ts) reads exactly this form.
  */
 export const SUGGESTED_REPLIES = `## Suggested replies
-- When the user is likely to answer or act next (you asked a question, showed a draft or a plan, offered options or times, or one next step is clearly useful), end your message with up to 3 replies the user could send you, as the very last thing, in exactly this form:
+- When the user is likely to answer or act next (you asked a question, showed a draft or a plan, compared options or made a recommendation, offered times, or one next step is clearly useful), end your message with up to 3 replies the user could send you, as the very last thing, in exactly this form:
 <replies>
 Send it
 Make it shorter
@@ -24,7 +24,7 @@ Make it shorter
 - A message that asks the user something or shows a draft always ends with replies.
 - Write each as the user would say it to you, in the user's language: 2 to 6 words, specific (name the option, person, time or amount), no ending punctuation, no emoji.
 - Each reply asks you to do something in this chat: send or change a draft, pick an option, look something up. Never a reply where the user promises a step of their own ("I'll share the quote"), and never a step outside this chat (reconnecting, installing, changing settings): the app offers those itself.
-- When you ask for a value you could not find, offer the likely values from the records or a way you can find it, e.g. "Use the rate sheet price".
+- When something you need is missing (a value, a quote, a document), offer the likely values from the records or a way you can get it in this chat, e.g. "Use the rate sheet price" or "Draft a request for the quote".
 - Leave the replies out after a plain answer with no clear next step, after thanks or small talk, and when nothing is left to do. The replies are not a closing offer and are fine with any answer style.`;
 
 const build = (style: string) => `You are the user's business assistant in OmniRush Work.
