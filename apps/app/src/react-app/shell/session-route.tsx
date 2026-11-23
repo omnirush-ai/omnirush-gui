@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { Archive, ArchiveRestore } from "lucide-react";
+import { Archive, ArchiveRestore, MessageSquarePlus } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { closeWorkspaceTerminals } from "../domains/session/terminal/terminal-runtime";
@@ -3899,8 +3899,12 @@ export function SessionRoute() {
     const leave = target.kind === "home" && target.navigate;
     if (target.kind === "home" && target.reason === "claude") toast.info(t("work.ask.claude_home"));
     if (request.stay) {
-      // Short, so it never sits for long on the button the user may press again.
-      if (outcome.result === "added") toast.success(t("work.ask.added_toast"), { duration: 2500, ...(leave ? { action: { label: t("work.ask.open"), onClick: () => route.navigate(WORK_HOME_ROUTE) } } : {}) });
+      // One line from the top of the window (never over the button the user may press again), with Open when the
+      // composer is on another page.
+      if (outcome.result === "added") {
+        if (leave) toast.undo(t("work.ask.added_toast"), { icon: MessageSquarePlus, undo: { label: t("work.ask.open"), onClick: () => route.navigate(WORK_HOME_ROUTE) }, closeLabel: t("common.close"), duration: 4000 });
+        else toast.success(t("work.ask.added_toast"), { duration: 2500 });
+      }
       return;
     }
     // A history push: Back returns to the page the item was asked from.

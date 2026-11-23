@@ -1080,6 +1080,8 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   }, [props.onDraftChange]);
 
   const handleKeyDownCapture: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+    // The row above the card (Work's questions) handles its own keys: no history recall or Esc-to-stop from there.
+    if (event.target instanceof Element && event.target.closest("[data-composer-above]")) return;
     // IME composition guard — block Enter while IME is mid-character.
     const imeActive =
       imeComposingRef.current ||
@@ -1354,7 +1356,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       }}
     >
       <div className={props.flush ? "" : COMPOSER_WIDTH}>
-        {props.aboveSlot}
+        {props.aboveSlot ? <div data-composer-above>{props.aboveSlot}</div> : null}
         {/* Main composer panel */}
         <div
           data-composer-panel

@@ -139,16 +139,19 @@ export function SuggestionChipRow(props: {
       case "ArrowLeft": event.preventDefault(); focusAt(index - 1); return;
       case "Home": event.preventDefault(); focusAt(0); return;
       case "End": event.preventDefault(); focusAt(shown.length - 1); return;
-      case "Escape":
-        event.preventDefault();
-        window.dispatchEvent(new Event(FOCUS_PROMPT_EVENT));
-        return;
       case "Enter":
       case " ":
         event.preventDefault();
         activate(chip, event.key === "Enter" && event.altKey ? "fill" : "send");
         return;
     }
+  };
+  // Esc goes back to the composer, ahead of the chip's tooltip (which would take the key to close itself).
+  const onKeyDownCapture = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || !buttons.current.some((button) => button === event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    window.dispatchEvent(new Event(FOCUS_PROMPT_EVENT));
   };
   const onClick = (chip: SuggestionChip) => (event: ReactMouseEvent) => activate(chip, event.shiftKey ? "fill" : "send");
   const mac = isMac();
@@ -162,6 +165,7 @@ export function SuggestionChipRow(props: {
       className={cn("flex flex-wrap items-center gap-1.5", props.className)}
       data-testid={props.testId}
       onKeyDown={onKeyDown}
+      onKeyDownCapture={onKeyDownCapture}
     >
       {shown.map((chip, index) => {
         const action = chip.tone === "action";

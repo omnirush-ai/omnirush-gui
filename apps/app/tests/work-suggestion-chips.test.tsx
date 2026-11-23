@@ -108,14 +108,17 @@ test("one click sends once until the row shows other chips; busy blocks sending"
   expect(sent).toEqual(["Send it", "Book Tue 3 pm"]);
 });
 
-test("Esc goes back to the composer", async () => {
-  const { buttons } = await mount(replies("A"));
+test("Esc goes back to the composer, also when the chip has its shortcut tooltip", async () => {
   let focused = 0;
   const onFocus = () => { focused += 1; };
   window.addEventListener("omnirush:focusPrompt", onFocus);
+  const { buttons } = await mount(replies("A"));
   await key(buttons()[0]!, { key: "Escape" });
+  const { buttons: withTips } = await mount(replies("B"), { shortcuts: true });
+  withTips()[0]!.focus();
+  await key(withTips()[0]!, { key: "Escape" });
   window.removeEventListener("omnirush:focusPrompt", onFocus);
-  expect(focused).toBe(1);
+  expect(focused).toBe(2);
 });
 
 function composer(text = "") {

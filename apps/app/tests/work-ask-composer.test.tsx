@@ -193,6 +193,10 @@ test("Work chat chips: handoff, starters, failed send, reply chips, edit; Code c
     expect(container.querySelector('[data-composer-panel] [aria-placeholder]')?.getAttribute("aria-placeholder")).toBe("Ask about Acme renewal, or press Enter for a brief");
     const starters = () => Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid="work-ask-starters"] [data-suggestion-chip]'));
     expect(starters().map((button) => button.textContent)).toEqual(["Where does it stand?", "What puts it at risk?", "Draft a follow-up"]);
+    // Keys in the row stay in the row: ArrowUp there never recalls the sent history into the empty composer.
+    starters()[0]!.focus();
+    await act(async () => { starters()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); });
+    expect(composer()?.draft ?? "").toBe("");
     await act(async () => starters()[1]!.click());
     await waitFor(() => sent.length === 2, "the starter to send");
     expect(sent[1]!.text).toBe("What puts it at risk?");
