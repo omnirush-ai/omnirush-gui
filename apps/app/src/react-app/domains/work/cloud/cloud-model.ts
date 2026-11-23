@@ -126,10 +126,12 @@ export const useCloudClientStore = create<{ client: CloudClient | null; live: bo
 
 // ── words ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** Dates in the app's language; English keeps this computer's own formats (24 h, day before month). */
+const dateLocale = () => (currentLocale() === "en" ? undefined : currentLocale());
+
 /** "Monday" for 0 to "Sunday" for 6, in the app's language (1 Jan 2024 was a Monday). */
 export function weekdayName(index: number, style: "long" | "short" = "long"): string {
-  const day = new Date(2024, 0, 1 + Math.max(0, Math.min(6, index)));
-  try { return day.toLocaleDateString(currentLocale(), { weekday: style }); } catch { return day.toLocaleDateString(undefined, { weekday: style }); }
+  return new Date(2024, 0, 1 + Math.max(0, Math.min(6, index))).toLocaleDateString(dateLocale(), { weekday: style });
 }
 
 export function deviceZone(): string {
@@ -328,7 +330,7 @@ export function fileSize(bytes: number): string {
 export function runWhen(value: string | null | undefined): string {
   const at = value ? new Date(value) : null;
   if (!at || Number.isNaN(at.getTime())) return "";
-  const locale = currentLocale();
+  const locale = dateLocale();
   return `${at.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short" })} ${at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}`;
 }
 
