@@ -93,6 +93,7 @@ describe("ui state store", () => {
       sidebarOpen: true,
       sidePanelState: { ses_1: "extensions" },
       expandedWorkspaceIds: ["ws_1"],
+      collapsedWorkSections: [],
       applicationMenuVisible: false,
       workspaceLeftSidebarWidth: 260,
       workspaceLeftSidebarResizing: false,
@@ -107,6 +108,10 @@ describe("ui state store", () => {
     expect("expandedWorkspaceIds" in parsed).toBe(false);
     expect(objectValue(parsed, "workspaceRightSidebarExpanded")).toBe(true);
     expect(objectValue(parsed, "workspaceRightSidebarExpandedWidth")).toBe(520);
+    // Folded Work sidebar sections are remembered only once one is folded.
+    expect("collapsedWorkSections" in parsed).toBe(false);
+    persistUiState({ ...state, collapsedWorkSections: ["connectors"] });
+    expect(objectValue(requireJsonObject(storage.getItem(PERSISTED_UI_STATE_KEY)), "collapsedWorkSections")).toEqual(["connectors"]);
   });
 
   test("ignores legacy persisted side panel state on startup", () => {

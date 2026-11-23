@@ -114,6 +114,29 @@ test("status carries the account's opaque id (for analytics), never derived from
   assert.equal((await store.status()).accountId, null);
 });
 
+test("Sign in to Work asks for the Work approval page; a plain sign-in sends no surface", async () => {
+  const bodies = [];
+  const opened = [];
+  const options = await storeOptions({
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith("/device/me")) return Response.json({ email: "ana@acme.example", status: "active" });
+      if (String(url).endsWith("/device/authorize")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        bodies.push(body);
+        const page = body.surface === "work" ? "console/enterprise/device" : "console";
+        return Response.json({ device_code: "d", user_code: "U", verification_uri_complete: `http://localhost:5175/${page}?code=U`, interval: 0, expires_in: 60 });
+      }
+      return Response.json({ gateway_url: "http://localhost:8090/omnirush/v1", access_token: "access-token", refresh_token: "refresh-token" });
+    },
+  });
+  const store = createDesktopOmniRushAccountStore(options);
+  await store.authorize({ gatewayUrl: undefined, deviceName: "Test", openVerification: async (url) => { opened.push(url); }, surface: "work" });
+  await store.authorize({ gatewayUrl: undefined, deviceName: "Test", openVerification: async (url) => { opened.push(url); } });
+  assert.equal(bodies[0].surface, "work");
+  assert.equal("surface" in bodies[1], false);
+  assert.deepEqual(opened, ["http://localhost:5175/console/enterprise/device?code=U", "http://localhost:5175/console?code=U"]);
+});
+
 async function authorizeOrigin(env) {
   const requested = [];
   const options = await storeOptions({

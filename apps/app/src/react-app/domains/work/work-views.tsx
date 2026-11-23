@@ -1,9 +1,6 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Inbox, Info, Kanban, LayoutGrid, LifeBuoy, Mail, MessageCircle, MessageSquare, MessagesSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
-  type LucideIcon,
-} from "lucide-react";
+import { ArrowLeft, Briefcase, Calendar, Code2, Copy, Info, Mail, Plug, Plus, Sparkles } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress";
 
@@ -38,86 +35,13 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  chatSyncProgress, connectorAccess, connectorChoicesTitle, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  chatSyncProgress, connectorAccess, connectorChoicesTitle, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
 } from "./work-mode";
 
-// Connectors, and the channels search results and deals name (gmail, drive, qbo, …).
-const CONNECTOR_ICONS: Record<string, LucideIcon> = {
-  google: Mail, microsoft: Cloud, slack: Hash, hubspot: Handshake, quickbooks: Calculator, notion: FileText,
-  jira: Ticket, confluence: BookOpen, linear: Kanban, github: Github, mock: Shapes, demo: Database,
-  gmail: Mail, outlook: Mail, drive: FileText, onedrive: FileText, calendar: Calendar, qbo: Calculator, teams: MessageSquare,
-  whatsapp: MessageCircle, whatsapp_business: MessageCircle, telegram: Send, imessage: MessageSquare, meetings: Phone, zoom: Phone,
-  imap: AtSign, caldav: Calendar, stripe: CreditCard, freshdesk: LifeBuoy, pipedrive: Handshake, hook: Webhook, hook_org: Webhook,
-  zendesk: LifeBuoy, intercom: MessagesSquare, front: Inbox,
-  monday: LayoutGrid,
-};
-
-// Company marks in their brand colour (simple-icons paths, CC0).
-const BRAND_ICONS: Record<string, { color: string; path: string }> = {
-  asana: {
-    color: "#F06A6A",
-    path: "M18.78 12.653c-2.882 0-5.22 2.336-5.22 5.22s2.338 5.22 5.22 5.22 5.22-2.34 5.22-5.22-2.336-5.22-5.22-5.22zm-13.56 0c-2.88 0-5.22 2.337-5.22 5.22s2.338 5.22 5.22 5.22 5.22-2.338 5.22-5.22-2.336-5.22-5.22-5.22zm12-6.525c0 2.883-2.337 5.22-5.22 5.22-2.882 0-5.22-2.337-5.22-5.22 0-2.88 2.338-5.22 5.22-5.22 2.883 0 5.22 2.34 5.22 5.22z",
-  },
-  discord: {
-    color: "#5865F2",
-    path: "M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z",
-  },
-  dropbox: {
-    color: "#0061FF",
-    path: "M6 1.807L0 5.629l6 3.822 6.001-3.822L6 1.807zM18 1.807l-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zM18 9.452l-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z",
-  },
-  trello: {
-    color: "#0052CC",
-    path: "M21.147 0H2.853A2.86 2.86 0 000 2.853v18.294A2.86 2.86 0 002.853 24h18.294A2.86 2.86 0 0024 21.147V2.853A2.86 2.86 0 0021.147 0zM10.34 17.287a.953.953 0 01-.953.953h-4a.954.954 0 01-.954-.953V5.38a.953.953 0 01.954-.953h4a.954.954 0 01.953.953zm9.233-5.467a.944.944 0 01-.953.947h-4a.947.947 0 01-.953-.947V5.38a.953.953 0 01.953-.953h4a.954.954 0 01.953.953z",
-  },
-  clickup: {
-    color: "#7B68EE",
-    path: "M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z",
-  },
-  airtable: {
-    color: "#18BFFF",
-    path: "M11.992 1.966c-.434 0-.87.086-1.28.257L1.779 5.917c-.503.208-.49.908.012 1.116l8.982 3.558a3.266 3.266 0 0 0 2.454 0l8.982-3.558c.503-.196.503-.908.012-1.116l-8.957-3.694a3.255 3.255 0 0 0-1.272-.257zM23.4 8.056a.589.589 0 0 0-.222.045l-10.012 3.877a.612.612 0 0 0-.38.564v8.896a.6.6 0 0 0 .821.552L23.62 18.1a.583.583 0 0 0 .38-.551V8.653a.6.6 0 0 0-.6-.596zM.676 8.095a.644.644 0 0 0-.48.19C.086 8.396 0 8.53 0 8.69v8.355c0 .442.515.737.908.54l6.27-3.006.307-.147 2.969-1.436c.466-.22.43-.908-.061-1.092L.883 8.138a.57.57 0 0 0-.207-.044z",
-  },
-  calendly: {
-    color: "#006BFF",
-    path: "M19.655 14.262c.281 0 .557.023.828.064 0 .005-.005.01-.005.014-.105.267-.234.534-.381.786l-1.219 2.106c-1.112 1.936-3.177 3.127-5.411 3.127h-2.432c-2.23 0-4.294-1.191-5.412-3.127l-1.218-2.106a6.251 6.251 0 0 1 0-6.252l1.218-2.106C6.736 4.832 8.8 3.641 11.035 3.641h2.432c2.23 0 4.294 1.191 5.411 3.127l1.219 2.106c.147.252.271.519.381.786 0 .004.005.009.005.014-.267.041-.543.064-.828.064-1.816 0-2.501-.607-3.291-1.306-.764-.676-1.711-1.517-3.44-1.517h-1.029c-1.251 0-2.387.455-3.2 1.278-.796.805-1.233 1.904-1.233 3.099v1.411c0 1.196.437 2.295 1.233 3.099.813.823 1.949 1.278 3.2 1.278h1.034c1.729 0 2.676-.841 3.439-1.517.791-.703 1.471-1.306 3.287-1.301Zm.005-3.237c.399 0 .794-.036 1.179-.11-.002-.004-.002-.01-.002-.014-.073-.414-.193-.823-.349-1.218.731-.12 1.407-.396 1.986-.819 0-.004-.005-.013-.005-.018-.331-1.085-.832-2.101-1.489-3.03-.649-.915-1.435-1.719-2.331-2.395-1.867-1.398-4.088-2.138-6.428-2.138-1.448 0-2.855.28-4.175.841-1.273.543-2.423 1.315-3.407 2.299S2.878 6.552 2.341 7.83c-.557 1.324-.842 2.726-.842 4.175 0 1.448.281 2.855.842 4.174.542 1.274 1.314 2.423 2.298 3.407s2.129 1.761 3.407 2.299c1.324.556 2.727.841 4.175.841 2.34 0 4.561-.74 6.428-2.137a10.815 10.815 0 0 0 2.331-2.396c.652-.929 1.158-1.949 1.489-3.03 0-.004.005-.014.005-.018-.579-.423-1.255-.699-1.986-.819.161-.395.276-.804.349-1.218.005-.009.005-.014.005-.023.869.166 1.692.506 2.404 1.035.685.505.552 1.075.446 1.416C22.184 20.437 17.619 24 12.221 24c-6.625 0-12-5.375-12-12s5.37-12 12-12c5.398 0 9.963 3.563 11.471 8.464.106.341.239.915-.446 1.421-.717.529-1.535.873-2.404 1.034.128.716.128 1.45 0 2.166-.387-.074-.782-.11-1.182-.11-4.184 0-3.968 2.823-6.736 2.823h-1.029c-1.899 0-3.15-1.357-3.15-3.095v-1.411c0-1.738 1.251-3.094 3.15-3.094h1.034c2.768 0 2.552 2.823 6.731 2.827Z",
-  },
-  figma: {
-    color: "#F24E1E",
-    path: "M15.852 8.981h-4.588V0h4.588c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.491-4.49 4.491zM12.735 7.51h3.117c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-3.117V7.51zm0 1.471H8.148c-2.476 0-4.49-2.014-4.49-4.49S5.672 0 8.148 0h4.588v8.981zm-4.587-7.51c-1.665 0-3.019 1.355-3.019 3.019s1.354 3.02 3.019 3.02h3.117V1.471H8.148zm4.587 15.019H8.148c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h4.588v8.98zM8.148 8.981c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h3.117V8.981H8.148zM8.172 24c-2.489 0-4.515-2.014-4.515-4.49s2.014-4.49 4.49-4.49h4.588v4.441c0 2.503-2.047 4.539-4.563 4.539zm-.024-7.51a3.023 3.023 0 0 0-3.019 3.019c0 1.665 1.365 3.019 3.044 3.019 1.705 0 3.093-1.376 3.093-3.068v-2.97H8.148zm7.704 0h-.098c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h.098c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.49-4.49 4.49zm-.097-7.509c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h.098c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-.098z",
-  },
-  zoom: {
-    color: "#0B5CFF",
-    path: "M5.033 14.649H.743a.74.74 0 0 1-.686-.458.74.74 0 0 1 .16-.808L3.19 10.41H1.06A1.06 1.06 0 0 1 0 9.35h3.957c.301 0 .57.18.686.458a.74.74 0 0 1-.161.808L1.51 13.59h2.464c.585 0 1.06.475 1.06 1.06zM24 11.338c0-1.14-.927-2.066-2.066-2.066-.61 0-1.158.265-1.537.686a2.061 2.061 0 0 0-1.536-.686c-1.14 0-2.066.926-2.066 2.066v3.311a1.06 1.06 0 0 0 1.06-1.06v-2.251a1.004 1.004 0 0 1 2.013 0v2.251c0 .586.474 1.06 1.06 1.06v-3.311a1.004 1.004 0 0 1 2.012 0v2.251c0 .586.475 1.06 1.06 1.06zM16.265 12a2.728 2.728 0 1 1-5.457 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0zm-4.82 0a2.728 2.728 0 1 1-5.458 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0z",
-  },
-  gitlab: {
-    color: "#FC6D26",
-    path: "m23.6004 9.5927-.0337-.0862L20.3.9814a.851.851 0 0 0-.3362-.405.8748.8748 0 0 0-.9997.0539.8748.8748 0 0 0-.29.4399l-2.2055 6.748H7.5375l-2.2057-6.748a.8573.8573 0 0 0-.29-.4412.8748.8748 0 0 0-.9997-.0537.8585.8585 0 0 0-.3362.4049L.4332 9.5015l-.0325.0862a6.0657 6.0657 0 0 0 2.0119 7.0105l.0113.0087.03.0213 4.976 3.7264 2.462 1.8633 1.4995 1.1321a1.0085 1.0085 0 0 0 1.2197 0l1.4995-1.1321 2.4619-1.8633 5.006-3.7489.0125-.01a6.0682 6.0682 0 0 0 2.0094-7.003z",
-  },
-  shopify: {
-    color: "#7AB55C",
-    path: "M15.337 23.979l7.216-1.561s-2.604-17.613-2.625-17.73c-.018-.116-.114-.192-.211-.192s-1.929-.136-1.929-.136-1.275-1.274-1.439-1.411c-.045-.037-.075-.057-.121-.074l-.914 21.104h.023zM11.71 11.305s-.81-.424-1.774-.424c-1.447 0-1.504.906-1.504 1.141 0 1.232 3.24 1.715 3.24 4.629 0 2.295-1.44 3.76-3.406 3.76-2.354 0-3.54-1.465-3.54-1.465l.646-2.086s1.245 1.066 2.28 1.066c.675 0 .975-.545.975-.932 0-1.619-2.654-1.694-2.654-4.359-.034-2.237 1.571-4.416 4.827-4.416 1.257 0 1.875.361 1.875.361l-.945 2.715-.02.01zM11.17.83c.136 0 .271.038.405.135-.984.465-2.064 1.639-2.508 3.992-.656.213-1.293.405-1.889.578C7.697 3.75 8.951.84 11.17.84V.83zm1.235 2.949v.135c-.754.232-1.583.484-2.394.736.466-1.777 1.333-2.645 2.085-2.971.193.501.309 1.176.309 2.1zm.539-2.234c.694.074 1.141.867 1.429 1.755-.349.114-.735.231-1.158.366v-.252c0-.752-.096-1.371-.271-1.871v.002zm2.992 1.289c-.02 0-.06.021-.078.021s-.289.075-.714.21c-.423-1.233-1.176-2.37-2.508-2.37h-.115C12.135.209 11.669 0 11.265 0 8.159 0 6.675 3.877 6.21 5.846c-1.194.365-2.063.636-2.16.674-.675.213-.694.232-.772.87-.075.462-1.83 14.063-1.83 14.063L15.009 24l.927-21.166z",
-  },
-  box: {
-    color: "#0061D5",
-    path: "M.959 5.523c-.54 0-.959.42-.959.899v7.549a4.59 4.59 0 004.613 4.494 4.717 4.717 0 004.135-2.457c.779 1.438 2.337 2.457 4.074 2.457 2.577 0 4.674-2.037 4.674-4.613.06-2.457-2.037-4.495-4.613-4.495-1.738 0-3.295.959-4.074 2.397-.78-1.438-2.338-2.397-4.135-2.397-1.079 0-2.038.36-2.817.899V6.422a.92.92 0 00-.898-.899zM17.602 9.26a.95.95 0 00-.704.158c-.36.3-.479.899-.18 1.318l2.397 3.116-2.396 3.115c-.3.42-.24.96.18 1.26.419.3 1.016.298 1.316-.122l2.039-2.636 2.096 2.697c.3.36.899.419 1.318.12.36-.3.42-.84.121-1.259l-2.338-3.115 2.338-3.057c.3-.419.298-1.018-.121-1.318-.48-.3-1.019-.24-1.318.18l-2.096 2.576-2.04-2.695c-.149-.18-.373-.3-.612-.338zM4.613 11.154c1.558 0 2.817 1.26 2.817 2.758 0 1.558-1.259 2.756-2.817 2.756-1.558 0-2.816-1.198-2.816-2.756 0-1.498 1.258-2.758 2.816-2.758zm8.27 0c1.558 0 2.816 1.26 2.816 2.758-.06 1.558-1.318 2.756-2.816 2.756-1.558 0-2.817-1.198-2.817-2.756 0-1.498 1.259-2.758 2.817-2.758Z",
-  },
-};
-
-/** A connector's icon; an id the app does not know gets the generic plug. */
-export function ConnectorIcon(props: { id: string; className?: string }) {
-  const brand = BRAND_ICONS[props.id];
-  if (brand) {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden className={cn("size-4 shrink-0", props.className)} data-connector-icon={props.id}>
-        <path fill={brand.color} d={brand.path} />
-      </svg>
-    );
-  }
-  const Icon = CONNECTOR_ICONS[props.id] ?? Plug;
-  return <Icon aria-hidden className={cn("size-4 shrink-0 text-muted-foreground", props.className)} data-connector-icon={CONNECTOR_ICONS[props.id] ? props.id : "generic"} />;
-}
+// Connector marks live in brand-icon.tsx (one tile style for every Work list); re-exported for the pages that import them here.
+export { BrandTile, ConnectorIcon } from "./brand-icon";
+import { BrandTile, ConnectorIcon } from "./brand-icon";
 
 /** The Code | Work switch at the top of the sidebar (Cmd/Ctrl+Shift+K). Shown only while Work is on for the account. */
 export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode) => void; shortcut: string }) {
@@ -166,8 +90,6 @@ export function WorkHome(props: {
   busy?: boolean;
   message?: string | null;
   starters?: OmniRushWorkStarter[];
-  /** The "Sample data" badge while the demo source is seeded. */
-  badge?: ReactNode;
   checklist?: ReactNode;
   /** The Today view (work-today.tsx); null while nothing is connected. */
   today?: ReactNode;
@@ -245,7 +167,6 @@ export function WorkHome(props: {
         {starting ? null : (
           <div className="mx-auto flex w-full max-w-[640px] flex-col items-center gap-4 pb-8">
             {starterChips}
-            {props.badge}
             {props.checklist ? <div className="w-full max-w-[420px]">{props.checklist}</div> : null}
             {props.onConnect ? (
               <Button variant="outline" size="sm" onClick={props.onConnect} data-testid="work-home-connect"><Plug className="size-4" />{t("work.home_connect")}</Button>
@@ -352,8 +273,8 @@ export function ConnectorRow(props: {
   // The history import's bar (servers that send `progress`); nothing once it is caught up.
   const progress = connected ? connectorProgress(row.progress) : null;
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
-      <ConnectorIcon id={row.id} />
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 transition-colors duration-500 last:border-b-0 data-highlight:bg-muted/70" data-work-connector={row.id} data-status={row.status}>
+      <BrandTile id={row.id} name={name} />
       {/* The text keeps at least 16rem; on a narrow window the controls wrap under it instead of squeezing it. */}
       <div className="min-w-[16rem] flex-1">
         <div className="flex items-center gap-2">
@@ -873,7 +794,7 @@ export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkCli
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-hook-card">
       <div className="flex items-start gap-4 border-b border-border px-4 py-3">
-        <ConnectorIcon id="hook" />
+        <BrandTile id="hook" />
         <div className="min-w-[16rem] flex-1">
           <span className="text-sm font-medium">{t("work.hook.title")}</span>
           <div className="mt-0.5 text-[12px] text-muted-foreground">{t("work.hook.body")}</div>
@@ -1023,7 +944,7 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
   ].filter(Boolean).join(" · ");
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={source} data-testid={`work-${source}-card`}>
-      <ConnectorIcon id={source} />
+      <BrandTile id={source} />
       <div className="min-w-[16rem] flex-1">
         <span className="text-sm font-medium">{name}</span>
         <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-local-chat-line">{line}</div>
@@ -1138,7 +1059,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-telegram-card" data-step={data.step}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-        <ConnectorIcon id="telegram" />
+        <BrandTile id="telegram" />
         <div className="min-w-[16rem] flex-1">
           <span className="text-sm font-medium">Telegram</span>
           <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-telegram-line">{line}</div>
@@ -1231,21 +1152,17 @@ export function useCoverageMeter(client: WorkClient | null, canAdd?: (id: string
 /** "Ask sees 3 of 4 channels" with a dot per channel group and "+ Slack" chips for what is missing. It never shows an error. */
 export function WorkCoverageMeter(props: { client: WorkClient | null; onAdd?: (id: string) => void; canAdd?: (id: string) => boolean; className?: string }) {
   const { data, adds, shown } = useCoverageMeter(props.client, props.canAdd);
-  // Reads the shell's onboarding query without fetching it. Sample data is no channel, so "0 of 6" would read wrong beside its results.
-  const sampleOnly = hasSampleData(useWorkOnboarding(props.client, false).data) && data?.connected === 0;
   if (!shown || !data) return null;
   return (
     <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-muted-foreground", props.className)} data-testid="work-coverage">
-      {sampleOnly ? <span data-testid="work-coverage-sample">{t("work.coverage.sample")}</span> : (
-        <span className="flex items-center gap-2">
-          <span role="meter" aria-valuemin={0} aria-valuemax={data.total} aria-valuenow={data.connected} aria-label={t("work.coverage.sees", { connected: data.connected, total: data.total })} className="flex items-center gap-0.5">
-            {data.groups.map((group) => (
-              <span key={group.group} title={group.label} data-coverage-group={group.group} data-state={group.state} className={cn("h-1.5 w-3 rounded-full", METER_DOT[group.state as keyof typeof METER_DOT] ?? METER_DOT.missing)} />
-            ))}
-          </span>
-          <span>{t("work.coverage.sees", { connected: data.connected, total: data.total })}</span>
+      <span className="flex items-center gap-2">
+        <span role="meter" aria-valuemin={0} aria-valuemax={data.total} aria-valuenow={data.connected} aria-label={t("work.coverage.sees", { connected: data.connected, total: data.total })} className="flex items-center gap-0.5">
+          {data.groups.map((group) => (
+            <span key={group.group} title={group.label} data-coverage-group={group.group} data-state={group.state} className={cn("h-1.5 w-3 rounded-full", METER_DOT[group.state as keyof typeof METER_DOT] ?? METER_DOT.missing)} />
+          ))}
         </span>
-      )}
+        <span>{t("work.coverage.sees", { connected: data.connected, total: data.total })}</span>
+      </span>
       {adds.map((id) => {
         const label = isImportKind(id) ? t("work.coverage.add_import", { name: connectorLabel(id) }) : connectorLabel(id);
         return props.onAdd ? (
@@ -1299,7 +1216,7 @@ export function ChatImportCard(props: { client: WorkClient | null; off?: readonl
         const busy = upload.isPending && upload.variables?.kind === kind;
         return (
           <div key={kind} className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-import={kind}>
-            <ConnectorIcon id={kind} />
+            <BrandTile id={kind} />
             <div className="min-w-[16rem] flex-1">
               <span className="text-sm font-medium">{connectorLabel(kind)}</span>
               <div className="mt-0.5 text-[12px] text-muted-foreground">{kind === "whatsapp" ? t("work.import.howto_whatsapp") : t("work.import.howto_telegram")}</div>
@@ -1379,6 +1296,18 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     if ((reason as { code?: unknown } | null)?.code === "work_disabled") void queryClient.invalidateQueries({ queryKey: workStateKey(props.client) });
   };
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
+  // Opened at one connector (the sidebar's Manage, `#slack`): scrolled to and marked for a moment once the rows are in.
+  const target = decodeURIComponent(useLocation().hash.slice(1));
+  const rowsIn = Boolean(query.data);
+  useEffect(() => {
+    if (!target || !rowsIn || !/^[a-z][a-z0-9_-]{0,31}$/.test(target)) return;
+    const found = document.querySelector<HTMLElement>(`[data-work-connector="${target}"]`);
+    if (!found) return;
+    found.scrollIntoView({ block: "center" });
+    found.setAttribute("data-highlight", "");
+    const timer = window.setTimeout(() => found.removeAttribute("data-highlight"), 1600);
+    return () => window.clearTimeout(timer);
+  }, [rowsIn, target]);
   const connect = useMutation({
     mutationFn: ({ id, form: start }: { id: string; form?: OmniRushWorkStart }) => props.client!.startWorkConnector(id, start),
     onSuccess: (answer, { id }) => {

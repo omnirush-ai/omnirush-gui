@@ -53,6 +53,7 @@ import { UpdateGate } from "./update-gate";
 import { QualityRewards } from "../domains/quality/quality-notice";
 import { AllowanceHelpDialog } from "../domains/quality/allowance-help";
 import { BuildathonLayer } from "../domains/buildathon/buildathon";
+import { ConsumerOnly } from "../domains/work/enterprise-ui";
 import { BuildathonPromoGate } from "../domains/buildathon/buildathon-promo";
 import { TurnRunningSync } from "../domains/quality/good-session";
 import { SettingsRoute } from "./settings-route";
@@ -534,9 +535,10 @@ export function AppRoot() {
                   </Routes>
                   <LoadingOverlay />
                   <CloudWorkspaceOverlay />
-                  {isDesktopRuntime() ? <QualityRewards /> : null}
+                  {/* Rewards and events are the consumer app's: never for a company account (OmniRush Work). */}
+                  {isDesktopRuntime() ? <ConsumerOnly><QualityRewards /></ConsumerOnly> : null}
                   <AllowanceHelpDialog />
-                  {isDesktopRuntime() ? <BuildathonLayer /> : null}
+                  {isDesktopRuntime() ? <ConsumerOnly><BuildathonLayer /></ConsumerOnly> : null}
                   {isDesktopRuntime() ? <TurnRunningSync /> : null}
                 </CloudWorkspaceStatusProvider>
               </OmniRushWebAccessGate>

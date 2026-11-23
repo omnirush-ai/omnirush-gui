@@ -35,7 +35,7 @@ import {
   Sparkles,
   CircleHelp,
 } from "lucide-react";
-import { Activity, Building2, CalendarClock, Flag, Handshake, Home, LayoutDashboard, Library, Megaphone, MessageSquareText, Mic, Plug, Puzzle, Zap } from "lucide-react";
+import { CalendarClock, Flag, LayoutDashboard, Megaphone, MessageSquareText, Puzzle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -183,6 +183,8 @@ import { AuditTrailMiniPanel } from "../../audit/audit-trail-mini-panel";
 import { useAuditTrailController } from "../../audit/use-audit-trail-controller";
 import type { OmniRushServerClient } from "../../../../app/lib/omnirush-server";
 import { LocalWorkflowsPanel } from "../../local-workflows/local-workflows-panel";
+import { useEnterpriseFlags } from "../../work/enterprise-mode";
+import { WorkSidebarNav, type WorkNavigation } from "./work-sidebar-nav";
 
 /** Paper Desktop: unread #2FBE54, needs-action #E8933A (14px artboard → ~8px app). */
 const OUTCOME_DOT_UNREAD = "#2FBE54";
@@ -930,8 +932,8 @@ function SessionSideChatControl({ workspaceId, sessionId, title }: {
 export type AppSidebarProps = {
   /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
   modeToggle?: React.ReactNode;
-  /** In Work: Home, Knowledge and Connectors take the place of the Code tools row. */
-  workNavigation?: { onOpenHome: () => void; homeActive?: boolean; onOpenSearch?: () => void; searchActive?: boolean; onOpenDeals?: () => void; dealsActive?: boolean; onOpenMeetings?: () => void; meetingsActive?: boolean; onOpenOrganization: () => void; organizationActive: boolean; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean; onOpenActivity: () => void; activityActive: boolean; onOpenInsights?: () => void; insightsActive?: boolean };
+  /** In Work: the places and the connectors as labelled rows (work-sidebar-nav.tsx) take the place of the Code tools row. */
+  workNavigation?: WorkNavigation;
   sessionNumberShortcuts: SessionNumberShortcutsState;
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
@@ -1130,19 +1132,23 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
   }, []);
 
   const connected = status?.connected === true;
+  // A company account (OmniRush Work): no usage meter, rewards, events or release notes; the company under the name.
+  const enterprise = useEnterpriseFlags();
   const accountLabel = connected
     ? status?.displayName?.trim() || status?.email?.trim() || t("sidebar.your_account")
     : t("sidebar.sign_in_lower");
-  const usage = connected && status?.usage ? omnirushUsageSummary(status.usage) : null;
-  const quality = connected ? status?.quality ?? null : null;
+  const usage = connected && status?.usage && !enterprise.on ? omnirushUsageSummary(status.usage) : null;
+  const quality = connected && !enterprise.on ? status?.quality ?? null : null;
   // A hackathon running now: the card above the account, a flag in the tools row once it is hidden for the day.
-  const events = connected ? status?.events ?? null : null;
+  const events = connected && !enterprise.on ? status?.events ?? null : null;
   const event = activeEvent(events);
   const [eventHidden, setEventHidden] = useEventDismissed(event?.name ?? null);
   // The account server label ("omnirush.ai", "localhost:8090 (local API)")
   // only matters while connected; a signed-out footer keeps the sign-in hint.
   const serverHost = connected ? status?.gatewayHost?.trim() || null : null;
-  const accountDetail = usage
+  const accountDetail = enterprise.on && connected
+    ? enterprise.orgName ?? status?.email?.trim() ?? t("sidebar.models_ready")
+    : usage
     ? `${usage.short}${serverHost ? ` · ${serverHost}` : ""}`
     : connected
       ? serverHost
@@ -1245,7 +1251,7 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
             badge={<span aria-hidden="true" className="absolute end-1 top-1 size-1.5 rounded-full bg-highlight" />}
           />
         ) : null}
-        <WhatsNewIconButton />
+        {enterprise.on ? null : <WhatsNewIconButton />}
         <SidebarIconButton icon={Settings} label={t("settings.tab_general")} tooltipSide="top" onClick={onOpenAccountSettings} data-testid="sidebar-settings" />
       </div>
     </SidebarFooter>
@@ -1278,6 +1284,9 @@ export function AppSidebar(props: AppSidebarProps) {
     [expandedWorkspaceIdList],
   );
   const [previewCountByWorkspaceId, setPreviewCountByWorkspaceId] = React.useState<Record<string, number>>({});
+  // Work: the chat list folds like the places and connectors above it (remembered).
+  const workChatsCollapsed = useUiStateStore((state) => Boolean(props.workNavigation) && state.collapsedWorkSections.includes("chats"));
+  const toggleWorkSection = useUiStateStore((state) => state.toggleWorkSection);
   const previousSessionStatusRef = React.useRef<Record<string, string>>({});
   const sessionNumberShortcutByTarget = React.useMemo(
     () => new Map(props.sessionNumberShortcuts.targets.map((target) => [
@@ -1518,28 +1527,11 @@ export function AppSidebar(props: AppSidebarProps) {
                   className="size-8"
                 />
               ) : null}
-              {props.workNavigation?.onOpenDeals ? (
-                <SidebarIconButton icon={Handshake} label={t("work.nav.deals")} active={props.workNavigation.dealsActive} onClick={props.workNavigation.onOpenDeals} data-testid="sidebar-work-deals" className="size-8" />
-              ) : null}
-              {props.workNavigation?.onOpenMeetings ? (
-                <SidebarIconButton icon={Mic} label={t("work.nav.meetings")} active={props.workNavigation.meetingsActive} onClick={props.workNavigation.onOpenMeetings} data-testid="sidebar-work-meetings" className="size-8" />
-              ) : null}
+              {props.workNavigation ? <NotificationBell variant="sidebar-icon" /> : null}
             </SidebarMenuItem>
           </SidebarMenu>
-          {/* One row of icons for the places opened now and then, so the chat list keeps the height. */}
-          {props.workNavigation ? (
-            <div role="group" aria-label={t("work.nav.work")} data-testid="sidebar-work-tools" className="flex items-center gap-0.5">
-              <SidebarIconButton icon={Home} label={t("work.nav.home")} active={props.workNavigation.homeActive} onClick={props.workNavigation.onOpenHome} data-testid="sidebar-work-home" />
-              <SidebarIconButton icon={Library} label={t("work.nav.knowledge")} active={props.workNavigation.knowledgeActive} onClick={props.workNavigation.onOpenKnowledge} data-testid="sidebar-work-knowledge" />
-              <SidebarIconButton icon={Zap} label={t("work.nav.automation")} active={props.workNavigation.activityActive} onClick={props.workNavigation.onOpenActivity} data-testid="sidebar-work-automation" />
-              <SidebarIconButton icon={Building2} label={t("work.nav.organization")} active={props.workNavigation.organizationActive} onClick={props.workNavigation.onOpenOrganization} data-testid="sidebar-work-organization" />
-              {props.workNavigation.onOpenInsights ? (
-                <SidebarIconButton icon={Activity} label={t("work.nav.insights")} active={props.workNavigation.insightsActive} onClick={props.workNavigation.onOpenInsights} data-testid="sidebar-work-insights" />
-              ) : null}
-              <SidebarIconButton icon={Plug} label={t("work.nav.connectors")} active={props.workNavigation.connectorsActive} onClick={props.workNavigation.onOpenConnectors} data-testid="sidebar-work-connectors" />
-              <NotificationBell variant="sidebar-icon" />
-            </div>
-          ) : (
+          {/* In Work the places and connectors are labelled rows above the chats (work-sidebar-nav.tsx). */}
+          {props.workNavigation ? null : (
           <div role="group" aria-label={t("sidebar.tools")} data-testid="sidebar-tools" className="flex items-center gap-0.5">
             <SidebarIconButton
               icon={ShieldCheck}
@@ -1629,13 +1621,27 @@ export function AppSidebar(props: AppSidebarProps) {
             data-session-number-modifier-held={props.sessionNumberShortcuts.modifierHeld ? "true" : undefined}
             className="no-scrollbar flex min-h-0 flex-1 flex-col gap-0 overflow-x-hidden overflow-y-auto [overflow-anchor:none] [--radius:var(--radius-md)] group-data-[collapsible=icon]:overflow-hidden"
           >
+            {props.workNavigation ? <WorkSidebarNav nav={props.workNavigation} /> : null}
             {pinnedSessions.length > 0 ? (
               <GlobalPinnedSessions entries={pinnedSessions} />
             ) : null}
             <div className={cn("group/workspaces-header flex h-6 items-center mt-1", SIDEBAR_SECTION_LANE)}>
+              {props.workNavigation ? (
+                <button
+                  type="button"
+                  aria-expanded={!workChatsCollapsed}
+                  onClick={() => toggleWorkSection("chats")}
+                  className={cn("-ms-1 flex items-center gap-1 rounded px-1 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring", SIDEBAR_SECTION_LABEL)}
+                  data-testid="sidebar-work-chats-toggle"
+                >
+                  {t("work.sidebar.chats")}
+                  <ChevronRight aria-hidden className={cn("size-3 opacity-0 transition-[opacity,transform] group-hover/workspaces-header:opacity-100 motion-reduce:transition-none", !workChatsCollapsed && "rotate-90", workChatsCollapsed && "opacity-100")} />
+                </button>
+              ) : (
               <span className={SIDEBAR_SECTION_LABEL}>
                 {t("workspace_list.title")}
               </span>
+              )}
               {canCreateWorkspaces() && !props.workNavigation ? (
                 <button
                   type="button"
@@ -1648,6 +1654,7 @@ export function AppSidebar(props: AppSidebarProps) {
                 </button>
               ) : null}
             </div>
+            {workChatsCollapsed ? null : (
             <Reorder.Group
               as="div"
               axis="y"
@@ -1665,6 +1672,7 @@ export function AppSidebar(props: AppSidebarProps) {
                 />
               ))}
             </Reorder.Group>
+            )}
             {archivedSessions.length > 0 ? (
               <GlobalArchivedSessions entries={archivedSessions} />
             ) : null}

@@ -25,15 +25,29 @@ export const WORK_MEETINGS_ROUTE = "/work/meetings";
 export const MEETINGS_IN_APP: boolean = false;
 
 /**
- * The token of a Work invite link: the server's `<api>/omnirush/work/invite#t=…` or the app's own
- * `omnirush://work/invite#t=…` (same path and fragment), so the invite page can open the app on Join.
+ * The token of a Work invite link: the company portal's `<site>/console/enterprise/join#t=…`, the server's older
+ * `<api>/omnirush/work/invite#t=…` or the app's own `omnirush://work/invite#t=…` and `omnirush://work/join#t=…` (same
+ * fragment), so the invite page can open the app on Join.
  */
 export function workInviteToken(url: string): string | null {
   let parsed: URL;
   try { parsed = new URL(url.trim()); } catch { return null; }
-  if (!/(^|\/)work\/invite\/?$/.test(parsed.host + parsed.pathname)) return null;
+  if (!/(^|\/)(?:work\/(?:invite|join)|console\/enterprise\/join)\/?$/.test(parsed.host + parsed.pathname)) return null;
   return (new URLSearchParams(parsed.hash.slice(1)).get("t") ?? parsed.searchParams.get("t"))?.trim() || null;
 }
+
+/** `omnirush://work/signin` (the company portal's "Open the app"): the welcome page starts Sign in to Work. */
+export function isWorkSignInLink(url: string): boolean {
+  let parsed: URL;
+  try { parsed = new URL(url.trim()); } catch { return false; }
+  return parsed.protocol === "omnirush:" && /^\/*work\/signin\/?$/.test(parsed.host + parsed.pathname);
+}
+
+/** A Sign in to Work the app was asked for by a link, waiting for the welcome page. */
+export const useWorkSignInRequest = create<{ requested: boolean; setRequested: (requested: boolean) => void }>()((set) => ({
+  requested: false,
+  setRequested: (requested) => set({ requested }),
+}));
 
 /** An invite link the app was opened with, waiting for the Join prompt (shown even while Work is off). */
 export const useWorkInviteStore = create<{ token: string | null; setToken: (token: string | null) => void }>()((set) => ({
@@ -53,7 +67,7 @@ export const useWorkModeStore = create<WorkModeStore>()(
 export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrgInsights" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "connectWorkCredentials" | "createWorkHook" | "disconnectWorkConnector" | "setWorkConnectorSync" | "setWorkConnectorPicked"
   | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact" | "getWorkGraph" | "getWorkTimeline"
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
-  | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
+  | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "inviteWorkMember" | "acceptWorkInvite"
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
   | "getWorkOrgConnectors" | "setWorkOrgConnectors" | "setWorkMemberRole"
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
@@ -216,21 +230,25 @@ type WorkSetupStore = {
   starters: Record<string, OmniRushWorkStarter[]>;
   /** Orgs whose first-run checklist was dismissed. */
   checklistHidden: Record<string, true>;
+  /** Orgs whose setup this person finished or skipped on this device: the home no longer opens it. */
+  onboarded: Record<string, true>;
   setStarters: (org: string, starters: OmniRushWorkStarter[]) => void;
   hideChecklist: (org: string) => void;
+  finishOnboarding: (org: string) => void;
 };
 
 export const useWorkSetupStore = create<WorkSetupStore>()(
   persist((set) => ({
     starters: {},
     checklistHidden: {},
+    onboarded: {},
     setStarters: (org, starters) => set((state) => ({ starters: { ...state.starters, [org]: starters.slice(0, 3) } })),
     hideChecklist: (org) => set((state) => ({ checklistHidden: { ...state.checklistHidden, [org]: true } })),
+    finishOnboarding: (org) => set((state) => ({ onboarded: { ...state.onboarded, [org]: true } })),
   }), { name: "omnirush.workSetup", storage: createJSONStorage(() => localStorage) }),
 );
 
-/** The sample-data source: seeded by "Try with sample data", read-only, removed in one click. The server lists it in
- *  no connector row; GET /work/onboarding says whether it is seeded (`sample_data`). */
+/** The retired sample-data source: never shown, never offered (an account seeded before keeps it out of every list). */
 export const DEMO_SOURCE = "demo";
 const LINKED = new Set(["connected", "syncing", "error"]);
 export const isLinked = (row: Pick<OmniRushWorkConnector, "status">) => LINKED.has(row.status);
@@ -256,7 +274,6 @@ export function localSourcesOff(
 export function workRoleLabel(role: string): string {
   return role === "owner" ? t("work.role.owner") : role === "admin" ? t("work.role.admin") : role === "member" ? t("work.role.member") : role;
 }
-export const hasSampleData = (onboarding: OmniRushWorkOnboarding | null | undefined) => onboarding?.sample_data === true;
 /** A real (non-sample) source is connected. */
 export const hasRealSource = (rows: OmniRushWorkConnector[] | null | undefined) => visibleConnectors(rows).some((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && isLinked(row));
 
@@ -287,14 +304,25 @@ export const signsInWithForm = (rows: OmniRushWorkConnector[] | null | undefined
 export const coverageCanAdd = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
   isImportKind(id) || visibleConnectors(rows).some((row) => row.id === id && row.mode !== "import" && !isPausedByAdmin(row));
 
-/** The first-run checklist: company, a source connected (or sample data), a first chat. */
+/** The first-run checklist: company, a source connected, a first chat. */
 export function checklistItems(onboarding: OmniRushWorkOnboarding | null | undefined, rows: OmniRushWorkConnector[] | null | undefined) {
   const steps = onboarding?.steps ?? {};
   return [
     { id: "company", label: t("work.checklist.company"), done: steps.company === true || Boolean(onboarding?.org) },
-    { id: "connected", label: t("work.checklist.connected"), done: steps.connected === true || hasRealSource(rows) || hasSampleData(onboarding) },
+    { id: "connected", label: t("work.checklist.connected"), done: steps.connected === true || hasRealSource(rows) },
     { id: "first_chat", label: t("work.checklist.first_chat"), done: steps.first_chat === true },
   ] as const;
+}
+
+/** Whether the Work home opens setup: no company yet (any server), or the server says a step is left (`next`, a company
+ *  made on the web starts at Connect) and this person has not finished or skipped setup on this device. */
+export function needsOnboarding(onboarding: OmniRushWorkOnboarding | null | undefined, finished: Record<string, true>): boolean {
+  if (!onboarding) return false;
+  const org = onboarding.org ?? null;
+  if (!org) return !onboarding.done && !onboarding.steps?.company;
+  if (finished[org.id]) return false;
+  const next = onboarding.next;
+  return next === "tools" || next === "connect" || next === "invite";
 }
 
 /** Cmd/Ctrl+Shift+K: switch between Code and Work. */
@@ -304,7 +332,7 @@ export function isWorkModeShortcut(event: Pick<KeyboardEvent, "key" | "metaKey" 
 
 /** The sources shown on the Connectors page: everything the server offers (an `unavailable` one and sample data are hidden). */
 export function visibleConnectors(rows: OmniRushWorkConnector[] | null | undefined): OmniRushWorkConnector[] {
-  // Sample data is no tool to connect: it shows as the "Sample data" badge.
+  // Sample data is no tool to connect.
   return (rows ?? []).filter((row) => row.status !== "unavailable" && row.id !== DEMO_SOURCE);
 }
 

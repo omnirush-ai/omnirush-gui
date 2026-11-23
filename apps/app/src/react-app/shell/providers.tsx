@@ -25,6 +25,7 @@ import { resolveOmniRushConnection } from "./omnirush-connection";
 import { ReloadCoordinatorProvider } from "./reload-coordinator";
 import { FeedbackDialog } from "../domains/feedback/feedback";
 import { WhatsNewSheet, WhatsNewUpdateToast } from "../domains/whats-new/whats-new-sheet";
+import { ConsumerOnly } from "../domains/work/enterprise-ui";
 
 function resolveDefaultServerUrl(): string {
   if (isDesktopRuntime()) return "http://127.0.0.1:4096";
@@ -71,8 +72,9 @@ function EnterpriseAwareAppProviders({ children }: AppProvidersProps) {
                 <ReloadCoordinatorProvider>{children}</ReloadCoordinatorProvider>
                 <Toaster />
                 <FeedbackDialog />
-                <WhatsNewSheet />
-                {isDesktopRuntime() ? <WhatsNewUpdateToast /> : null}
+                {/* Release notes are the consumer app's (CLI parity): a company account (OmniRush Work) never gets them. */}
+                <ConsumerOnly><WhatsNewSheet /></ConsumerOnly>
+                {isDesktopRuntime() ? <ConsumerOnly><WhatsNewUpdateToast /></ConsumerOnly> : null}
               </LocalProvider>
             </RestrictionNoticeProvider>
           </BrandThemeProvider>

@@ -1054,7 +1054,8 @@ export function createDesktopOmniRushAccountStore({
     return accountProfile(payload);
   }
 
-  async function authorize({ gatewayUrl, deviceName, openVerification }) {
+  /** `surface: "work"`: the browser opens the company portal's approval page (OmniRush Work) instead of the console. */
+  async function authorize({ gatewayUrl, deviceName, openVerification, surface = undefined }) {
     const explicitGateway = normalizeCredential(gatewayUrl);
     const configured = explicitGateway ? storeGatewayUrl(explicitGateway) : await configuredGatewayUrl();
     if (explicitGateway && !configured && isReleaseBuild(build)) throw new Error(`${RELEASE_GATEWAY_ERROR} The account server given is not an omnirush.ai address.`);
@@ -1065,7 +1066,7 @@ export function createDesktopOmniRushAccountStore({
     const issuedResponse = await send(authorizeUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_name: deviceName, platform }),
+      body: JSON.stringify({ device_name: deviceName, platform, ...(surface === "work" ? { surface } : {}) }),
       signal: AbortSignal.timeout(20_000),
     });
     if (!issuedResponse.ok) throw new Error(`Could not start account link (${issuedResponse.status})`);

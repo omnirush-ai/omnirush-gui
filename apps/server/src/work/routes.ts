@@ -2,7 +2,7 @@
  * Work mode's local routes, for the app (client scope). The account's credential stays in this server: the
  * app and the engine reach /omnirush/work/* only through here.
  *
- *   GET   /work/state[?account=1]          { enabled, sources, message, autopilot, full_access, writes_paused, workspaceId, account? }
+ *   GET   /work/state[?account=1][&fresh=1] { enabled, sources, message, autopilot, full_access, writes_paused, workspaceId, account?, enterprise? }
  *                                          (account: "<server origin> <account id>", for the desktop's chat sync)
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
@@ -16,9 +16,9 @@
  *   GET   /work/entities?q=&kind=&limit=&cursor=, GET /work/entities/:id   the context graph
  *   GET   /work/facts?entity_id=&status=, POST /work/facts, PATCH /work/facts/:id (retire: status)
  *   POST  /work/enable                     turns Work on for the account (the "Try Work" offer, while `available`)
- *   GET   /work/onboarding, POST /work/onboarding {company, domain?, size?, industry?, role?, tools}
+ *   GET   /work/onboarding, POST /work/onboarding {company, domain?, size?, industry?, role?, tools, custom_tools?}
  *   POST  /work/demo, DELETE /work/demo    seeds or removes the sample data
- *   POST  /work/org/invites {email}, POST /work/org/invites/accept {token}, GET /work/org/members
+ *   POST  /work/org/invites {email, role?, send_email?}, POST /work/org/invites/accept {token}, GET /work/org/members
  *   PATCH /work/org, PATCH /work/org/me, DELETE /work/org/invites/:id, DELETE /work/org/members/:id,
  *   POST  /work/org/transfer {user_id}, POST /work/org/leave                   the organization (contract Addendum C1)
  *   GET   /work/org/insights?days=         the owner's team insights
@@ -53,7 +53,7 @@ import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
-import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
+import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
@@ -189,6 +189,7 @@ const RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const FACT_KINDS = ["decision", "preference", "policy", "fact", "contact_note"];
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,189}\.[^\s@]{2,}$/;
+const CUSTOM_TOOL = /^[\p{L}\p{N} .&+-]{1,40}$/u;
 /** A record's id as the server names it (`gmail:18c2…`, `github:owner/repo#12`): any printable text, kept short. */
 const SOURCE_ID = /^[^\u0000-\u001f\u007f]{1,512}$/;
 const ACTION_ID = /^[a-z][a-z0-9_]{0,39}$/;
@@ -243,7 +244,9 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   addRoute(routes, "GET", "/work/state", "client", async (ctx) => {
     const found = deps.broker();
     if (found) {
-      const capabilities = await found.capabilities(switchStale ? { maxAgeMs: 0 } : undefined).catch(() => null);
+      // `fresh`: the app came back to the front (a company account): a switch staff changed shows within half a minute.
+      const fresh = ctx.url.searchParams.get("fresh") === "1";
+      const capabilities = await found.capabilities(switchStale ? { maxAgeMs: 0 } : fresh ? { maxAgeMs: 30_000 } : undefined).catch(() => null);
       if (capabilities) switchStale = false;
       if (rememberWorkSwitch(deps.workDir(), capabilities)) void deps.applyEngine().catch(() => undefined);
     }
@@ -251,7 +254,9 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     // Only asked for by the desktop's chat sync: learning the account can take a network call.
     const accountId = ctx.url.searchParams.has("account") && setting.enabled && found ? await found.accountId() : null;
     const account = accountId ? { account: `${found?.serverOrigin ?? ""} ${accountId}`.trim() } : {};
-    return jsonResponse({ ...setting, ...rememberedWorkActions(deps.workDir()), workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null, ...account });
+    // A signed-in company account's enterprise block (only then: every other account's answer is as before).
+    const enterprise = found ? rememberedWorkEnterprise(deps.workDir()) : null;
+    return jsonResponse({ ...setting, ...rememberedWorkActions(deps.workDir()), workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null, ...account, ...(enterprise ? { enterprise } : {}) });
   });
 
   addRoute(routes, "POST", "/work/workspace", "client", async () => {
@@ -428,6 +433,12 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
       if (tools.length > 32 || !tools.every((id) => typeof id === "string" && CONNECTOR.test(id))) return "tools must be connector ids";
       out.tools = [...new Set(tools)];
     }
+    // Tools the catalog does not have (Basecamp, Gusto): up to 10 names of 40 characters; sent only when given.
+    if (body.custom_tools !== undefined) {
+      const custom = Array.isArray(body.custom_tools) ? body.custom_tools : null;
+      if (!custom || custom.length > 10 || !custom.every((name) => typeof name === "string" && CUSTOM_TOOL.test(name.trim()))) return "custom_tools must be up to 10 names of 40 characters";
+      out.custom_tools = [...new Set(custom.map((name: string) => name.trim()))];
+    }
     return out;
   };
 
@@ -495,9 +506,12 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
   addRoute(routes, "DELETE", "/work/demo", "client", async () => forward("demo", "DELETE"));
 
   addRoute(routes, "POST", "/work/org/invites", "client", async (ctx) => {
-    const email = text((await deps.readJsonBody(ctx.request)).email);
+    const body = await deps.readJsonBody(ctx.request);
+    const email = text(body.email);
     if (!email || email.length > 254 || !EMAIL.test(email)) return invalid("Enter an e-mail address.");
-    return forward("org/invites", "POST", { email });
+    if (body.role !== undefined && body.role !== "member" && body.role !== "admin") return invalid("role must be member or admin");
+    // A role and "send the e-mail" go on only when asked for: an older server takes the address alone.
+    return forward("org/invites", "POST", { email, ...(body.role ? { role: body.role } : {}), ...(body.send_email === true ? { send_email: true } : {}) });
   });
 
   // Joining a teammate's company: the pasted link (or its token) as it came; the server reads the token from it.

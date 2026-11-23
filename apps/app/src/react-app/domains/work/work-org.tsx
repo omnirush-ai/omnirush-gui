@@ -3,8 +3,8 @@
 // tools, members, pending invites, removing, transferring and leaving. Each person's connectors stay their own; the owner
 // and admins pick which connectors members see (Connectors for your team), and the owner makes admins.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Copy, RotateCw, UserPlus } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ArrowLeft, ArrowUpRight, Copy, RotateCw, UserPlus } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
@@ -15,14 +15,20 @@ import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
 import type { OmniRushWorkMember, OmniRushWorkMembers, OmniRushWorkOrgConnector, OmniRushWorkOrgConnectors } from "@/app/lib/omnirush-server";
+import { isDesktopRuntime } from "@/app/lib/runtime-env";
+import { isMacPlatform } from "@/app/utils";
+import { cn } from "@/lib/utils";
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import {
   LayoutSectionItem, LayoutSectionItemDescription, LayoutSectionItemHeader, LayoutSectionItemHeaderActions, LayoutSectionItemTitle,
 } from "@/react-app/domains/settings/settings-layout";
 
 import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkOrgConnectors, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workRoleLabel, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
-import { Chip, sizeOptions, TRUST_URL, TrustBadge, WorkInviteDialog } from "./work-onboarding";
-import { ConnectorIcon } from "./work-views";
+import { BrandTile } from "./brand-icon";
+import { pickerGroups, toolLabel, useWorkCatalog } from "./catalog";
+import { useEnterpriseFlags } from "./enterprise-mode";
+import { SizeChips, ToolPicker } from "./onboarding-steps";
+import { TRUST_URL, WorkInviteDialog } from "./work-onboarding";
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((item) => b.includes(item));
 const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
@@ -73,17 +79,45 @@ function Section(props: { title: string; description?: string; actions?: ReactNo
   );
 }
 
-function ToolChips(props: { offered: string[]; selected: string[]; onChange: (tools: string[]) => void; disabled?: boolean; testId?: string }) {
+function ToolChips(props: { offered: string[]; selected: string[]; onChange: (tools: string[]) => void; disabled?: boolean; testId?: string; label?: (id: string) => string }) {
   if (!props.offered.length) return null;
   return (
-    <div className="flex flex-wrap gap-2" data-testid={props.testId}>
-      {props.offered.map((id) => (
-        <Chip key={id} selected={props.selected.includes(id)} disabled={props.disabled} onClick={() => props.onChange(toggle(props.selected, id))}>
-          <ConnectorIcon id={id} className="size-3.5 text-current" />
-          {connectorLabel(id)}
-        </Chip>
-      ))}
+    <div className="flex flex-wrap gap-1.5" data-testid={props.testId}>
+      {props.offered.map((id) => {
+        const selected = props.selected.includes(id);
+        return (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={selected}
+            disabled={props.disabled}
+            onClick={() => props.onChange(toggle(props.selected, id))}
+            className={cn(
+              "flex h-8 items-center gap-1.5 rounded-full border ps-1 pe-3 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60",
+              selected ? "border-foreground/50 bg-foreground/[0.06] text-foreground" : "border-border text-foreground/90 hover:border-foreground/30 hover:bg-muted/60",
+            )}
+          >
+            <BrandTile id={id} size="chip" className="rounded-full" />
+            {props.label ? props.label(id) : connectorLabel(id)}
+          </button>
+        );
+      })}
     </div>
+  );
+}
+
+/** The company's tools as read-only tiles (everyone but the owner, who edits them). */
+function ToolList(props: { ids: string[]; custom: string[]; label: (id: string) => string }) {
+  if (!props.ids.length && !props.custom.length) return <span className="text-[13px] text-muted-foreground">{t("work.org.no_tools")}</span>;
+  return (
+    <ul className="flex flex-wrap gap-1.5" data-testid="work-org-tool-list">
+      {props.ids.map((id) => (
+        <li key={id} className="flex h-8 items-center gap-1.5 rounded-full border border-border ps-1 pe-3 text-[13px]"><BrandTile id={id} size="chip" className="rounded-full" />{props.label(id)}</li>
+      ))}
+      {props.custom.map((name) => (
+        <li key={`custom:${name}`} className="flex h-8 items-center gap-1.5 rounded-full border border-dashed border-border ps-1 pe-3 text-[13px]" data-custom-tool={name}><BrandTile name={name} size="chip" className="rounded-full" />{name}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -106,7 +140,7 @@ function TeamConnectors(props: { view: OmniRushWorkOrgConnectors; pending: strin
             const name = connectorLabel(row.id, row.label);
             return (
               <li key={row.id} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0" data-org-connector={row.id} data-shown={isOn(row)}>
-                <ConnectorIcon id={row.id} />
+                <BrandTile id={row.id} name={name} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{name}</div>
                   <div className="truncate text-[12px] text-muted-foreground">{t("work.org.team_connected", { count: row.members_connected, n: row.members_connected.toLocaleString() })}</div>
@@ -130,6 +164,12 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const navigate = useNavigate();
   const state = useWorkState(props.client);
   const offered = (state.data?.sources ?? []).filter((id) => id !== DEMO_SOURCE && id !== "mock");
+  const catalog = useWorkCatalog(props.client, state.data?.sources ?? []);
+  const groups = pickerGroups(catalog, { mac: isMacPlatform(), desktop: isDesktopRuntime() });
+  const label = (id: string) => toolLabel(catalog, id);
+  const sizeLabelId = useId();
+  // A company account: members read, admins invite and remove members, the owner does everything (the server checks).
+  const enterprise = useEnterpriseFlags();
   const links = useWorkInviteLinks((store) => store.links);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
@@ -137,6 +177,9 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const data = query.data;
   const org = data?.org ?? null;
   const owner = data?.you_role === "owner";
+  const admin = data?.you_role === "admin";
+  const canInvite = !enterprise.on || owner || admin;
+  const canRemove = (member: OmniRushWorkMember) => owner || (enterprise.on && admin && member.role === "member");
   const you = data?.members.find((member) => member.you) ?? null;
   // The company's connector list; an older server has none (404), so the page stays as it was: no section, no admins.
   const teamQuery = useWorkOrgConnectors(props.client, Boolean(org));
@@ -144,10 +187,12 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const rolesKnown = Boolean(teamQuery.data);
 
   // Edits in progress; null shows what the server has.
-  const saved = { name: org?.name ?? "", domain: org?.domain ?? "", size: org?.size ?? "", industry: org?.industry ?? "", tools: org?.tools ?? [] };
+  const saved = { name: org?.name ?? "", domain: org?.domain ?? "", size: org?.size ?? "", industry: org?.industry ?? "", tools: org?.tools ?? [], custom: org?.custom_tools ?? [] };
   const [companyDraft, setCompany] = useState<typeof saved | null>(null);
   const company = companyDraft ?? saved;
-  const companyChanged = (["name", "domain", "size", "industry"] as const).some((field) => company[field].trim() !== saved[field].trim()) || !sameList(company.tools, saved.tools);
+  const companyChanged = (["name", "domain", "size", "industry"] as const).some((field) => company[field].trim() !== saved[field].trim()) || !sameList(company.tools, saved.tools) || !sameList(company.custom, saved.custom);
+  // A size saved before the smaller bands (2-10, 11-50, …) shows as it was, first.
+  const sizes = company.size && !catalog.sizes.includes(company.size) ? [company.size, ...catalog.sizes] : catalog.sizes;
   // Only the fields the person touched: the server keeps one tools list per person, and an owner's is the company's.
   const [mineDraft, setMine] = useState<{ job_role?: string; tools?: string[] }>({});
   const mine = { job_role: mineDraft.job_role ?? you?.job_role ?? "", tools: mineDraft.tools ?? you?.tools ?? [] };
@@ -162,6 +207,8 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const saveOrg = useMutation({
     mutationFn: () => props.client!.updateWorkOrg({
       name: company.name.trim(), tools: company.tools,
+      // Custom tools go only when changed: an older server does not take them.
+      ...(!sameList(company.custom, saved.custom) ? { custom_tools: company.custom } : {}),
       ...(company.domain.trim() ? { domain: company.domain.trim() } : {}), ...(company.size ? { size: company.size } : {}), ...(company.industry.trim() ? { industry: company.industry.trim() } : {}),
     }),
     onSuccess: () => { toast.success(t("work.org.company_saved")); setCompany(null); refresh(); },
@@ -257,17 +304,17 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                   </label>
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-[13px] font-medium">{t("work.org.team_size")}</span>
-                  <div className="flex flex-wrap gap-2">
-                    {sizeOptions().map(([value, label]) => <Chip key={value} selected={company.size === value} disabled={!owner} onClick={() => setCompany({ ...company, size: company.size === value ? "" : value })}>{label}</Chip>)}
-                  </div>
+                  <span id={sizeLabelId} className="text-[13px] font-medium">{t("work.org.team_size")}</span>
+                  <SizeChips sizes={sizes} value={company.size || null} disabled={!owner} labelId={sizeLabelId} onChange={(size) => setCompany({ ...company, size: size ?? "" })} />
                 </div>
-                {offered.length ? (
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[13px] font-medium">{t("work.org.company_tools")}</span>
-                    <ToolChips offered={offered} selected={company.tools} disabled={!owner} onChange={(tools) => setCompany({ ...company, tools })} />
-                  </div>
-                ) : null}
+                <div className="flex flex-col gap-1.5" data-testid="work-org-tools">
+                  <span className="text-[13px] font-medium">{t("work.org.company_tools")}</span>
+                  {owner && groups.length ? (
+                    <ToolPicker groups={groups} selected={company.tools} custom={company.custom} onToggle={(id) => setCompany({ ...company, tools: toggle(company.tools, id) })} onCustom={(custom) => setCompany({ ...company, custom })} />
+                  ) : (
+                    <ToolList ids={company.tools} custom={company.custom} label={label} />
+                  )}
+                </div>
                 {owner ? (
                   <div className="flex justify-end">
                     <Button type="submit" size="sm" disabled={!company.name.trim() || !companyChanged || saveOrg.isPending} data-testid="work-org-save">{saveOrg.isPending ? t("work.common.saving") : t("common.save")}</Button>
@@ -289,7 +336,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                 {offered.length && !owner ? (
                   <div className="flex flex-col gap-1.5">
                     <span className="text-[13px] font-medium">{t("work.org.your_tools")}</span>
-                    <ToolChips offered={offered} selected={mine.tools} onChange={(tools) => setMine({ ...mineDraft, tools })} testId="work-org-my-tools" />
+                    <ToolChips offered={offered} selected={mine.tools} label={label} onChange={(tools) => setMine({ ...mineDraft, tools })} testId="work-org-my-tools" />
                   </div>
                 ) : null}
                 <div className="flex justify-end">
@@ -302,7 +349,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
               title={t("work.org.members")}
               description={owner && rolesKnown ? t("work.org.members_hint") : undefined}
               testId="work-org-members"
-              actions={<Button size="sm" variant="outline" onClick={() => setInviteOpen(true)} data-testid="work-org-invite"><UserPlus className="size-4" />{t("work.org.invite")}</Button>}
+              actions={canInvite ? <Button size="sm" variant="outline" onClick={() => setInviteOpen(true)} data-testid="work-org-invite"><UserPlus className="size-4" />{t("work.org.invite")}</Button> : null}
             >
               <ul className="rounded-xl border border-border">
                 {(data?.members ?? []).map((member) => (
@@ -328,6 +375,8 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                         <Button variant="ghost" size="sm" onClick={() => setConfirm({ kind: "transfer", member })}>{t("work.org.make_owner")}</Button>
                         <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirm({ kind: "remove", member })}>{t("common.remove")}</Button>
                       </div>
+                    ) : !member.you && canRemove(member) ? (
+                      <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirm({ kind: "remove", member })} data-testid="work-org-member-remove">{t("common.remove")}</Button>
                     ) : null}
                   </li>
                 ))}
@@ -348,7 +397,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                         {link ? (
                           <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard.writeText(link).then(() => toast.success(t("work.common.link_copied")))}><Copy className="size-3.5" />{t("work.org.copy_link")}</Button>
                         ) : null}
-                        {owner ? (
+                        {owner || (enterprise.on && admin) ? (
                           <Button variant="ghost" size="sm" disabled={cancelInvite.isPending && cancelInvite.variables === invite.id} onClick={() => cancelInvite.mutate(invite.id)}>{t("common.cancel")}</Button>
                         ) : null}
                       </li>
@@ -362,12 +411,18 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
               <TeamConnectors view={team} pending={saveShown.isPending ? saveShown.variables : undefined} busy={saveShown.isPending} onChange={showConnector} />
             ) : null}
 
+            {enterprise.on && enterprise.portalUrl && (owner || admin) ? (
+              <Section title={t("work.ent.manage_portal")} testId="work-org-portal">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
+                  <span className="max-w-[32rem] text-[13px] text-muted-foreground">{t("work.ent.manage_portal_body")}</span>
+                  <Button variant="outline" size="sm" onClick={() => props.openLink(enterprise.portalUrl!)} data-testid="work-org-portal-open">{t("work.ent.manage_open")}<ArrowUpRight className="size-4" /></Button>
+                </div>
+              </Section>
+            ) : null}
+
             <Section title={t("work.org.security")} testId="work-org-security">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <TrustBadge />
-                  <span className="text-[13px] text-muted-foreground">{t("work.trust.alt")}</span>
-                </div>
+                <span className="max-w-[32rem] text-[13px] text-muted-foreground" data-testid="work-org-privacy">{t("work.setup.privacy_line")}</span>
                 <Button variant="outline" size="sm" onClick={() => props.openLink(TRUST_URL)} data-testid="work-org-trust">{t("work.org.trust_page")}</Button>
               </div>
             </Section>

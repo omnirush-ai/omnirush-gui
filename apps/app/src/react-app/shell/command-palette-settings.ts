@@ -3,6 +3,7 @@ import { isSettingsTabAllowed, type DesktopAppRestrictionChecker } from "@/app/c
 import type { SettingsTab } from "@/app/types";
 import {
   CLOUD_SETTINGS_TABS,
+  enterpriseSettingsTabs,
   getGlobalSettingsTabs,
   getSettingsTabDescription,
   getSettingsTabLabel,
@@ -26,6 +27,8 @@ const SETTINGS_KEYWORDS: Partial<Record<SettingsTab, string[]>> = {
   debug: ["logs", "diagnostics", "developer mode"],
   "cloud-account": ["sign in", "log in", "login", "account", "organization", "org", "den", "cloud", "omnirush cloud"],
   general: ["settings", "preferences", "options", "configure", "best practices", "guides"],
+  work: ["work", "connectors", "organization", "company", "answer style", "autopilot", "web search"],
+  browser: ["browser", "sign-ins", "cookies", "logins", "import"],
 };
 
 const LIBRARY_SECTIONS = [
@@ -42,14 +45,17 @@ export function buildCommandPaletteSettingsItems(input: {
   capabilities: Pick<PlatformCapabilities, "autoUpdate">;
   /** Desktop policy checker; when `allowControlSettings` is blocked only the Cloud tabs remain. */
   checkRestriction?: DesktopAppRestrictionChecker;
+  /** A company account (OmniRush Work): only the tabs its Settings shows. */
+  enterprise?: { on: boolean; code: boolean };
   onOpenSettings: (route: string) => void;
   onOpenExtensions: (section?: string) => void;
 }): PaletteItem[] {
   const checkRestriction = input.checkRestriction ?? (() => false);
+  const enterprise = input.enterprise ? enterpriseSettingsTabs(input.developerMode, input.capabilities, input.enterprise) : null;
   const tabs = ([
     "general",
-    ...getWorkspaceSettingsTabs(),
-    ...getGlobalSettingsTabs(input.developerMode, input.capabilities),
+    ...(enterprise?.workspace ?? getWorkspaceSettingsTabs()),
+    ...(enterprise?.global ?? getGlobalSettingsTabs(input.developerMode, input.capabilities)),
     ...CLOUD_SETTINGS_TABS,
   ] satisfies SettingsTab[]).filter((tab) => isSettingsTabAllowed({ tab, checkRestriction }));
 
@@ -69,7 +75,8 @@ export function buildCommandPaletteSettingsItems(input: {
     },
   }));
 
-  const libraryItems = LIBRARY_SECTIONS.map((section): PaletteItem => ({
+  // The Library is a Code surface: a company account without Code has none.
+  const libraryItems = enterprise && !enterprise.workspace.includes("extensions") ? [] : LIBRARY_SECTIONS.map((section): PaletteItem => ({
     id: `settings:extensions/${section.slug}`,
     title: section.title,
     detail: section.detail,

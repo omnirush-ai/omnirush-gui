@@ -90,7 +90,10 @@ import { GeneralSettingsView } from "@/react-app/domains/settings/pages/general-
 import type { BestPracticesClient } from "@/react-app/domains/settings/best-practices";
 import type { AgentAssistClient } from "@/react-app/domains/settings/agent-assist";
 import { AuthorizedFoldersPanel } from "@/react-app/domains/settings/panels/authorized-folders-panel";
-import { BrowserLoginsPanel } from "../domains/browser-logins/browser-logins-panel";
+import { BrowserSettingsSections, BrowserSettingsView } from "@/react-app/domains/settings/pages/browser-view";
+import { WorkSettingsView } from "@/react-app/domains/settings/pages/work-view";
+import { settingsTabShown, useSettingsNavGroups } from "@/react-app/domains/settings/shell/settings-page";
+import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode";
 import { SettingsStack } from "@/react-app/domains/settings/settings-section";
 import { AdvancedView } from "@/react-app/domains/settings/pages/advanced-view";
 import { AppearanceView } from "@/react-app/domains/settings/pages/appearance-view";
@@ -310,6 +313,8 @@ export function parseSettingsPath(pathname: string): {
     case "environment":
     case "updates":
     case "debug":
+    case "work":
+    case "browser":
       return { tab: head, redirectPath: null };
     case "advanced":
       return { tab: "advanced", redirectPath: null, advancedSection: tail };
@@ -541,6 +546,10 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("omnirush.developerMode") === "1";
   });
+  // A company account (OmniRush Work) has fewer tabs (settings-page.tsx): any other one opens General.
+  const enterpriseFlags = useEnterpriseFlags();
+  const settingsNavGroups = useSettingsNavGroups(developerMode);
+  const enterpriseTabHidden = enterpriseFlags.on && !props.standaloneExtensions && !settingsTabShown(route.tab, settingsNavGroups);
   const toggleDeveloperMode = useCallback(() => {
     setDeveloperMode((current) => {
       const next = !current;
@@ -2283,6 +2292,10 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     return <Navigate to={target} replace state={location.state} />;
   }
 
+  if (!props.embedded && enterpriseTabHidden) {
+    return <Navigate to={selectedWorkspaceId ? workspaceSettingsRoute(selectedWorkspaceId, "general") : "/settings/general"} replace state={location.state} />;
+  }
+
   const openCloudAccountSettings = () => {
     navigateSettingsPath("general");
   };
@@ -2327,9 +2340,13 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
                 void connectionsStore.refreshMcpServers();
               }}
             />
-            <BrowserLoginsPanel />
+            <BrowserSettingsSections />
           </SettingsStack>
         );
+      case "work":
+        return <WorkSettingsView client={omnirushClient} busy={busy} />;
+      case "browser":
+        return <BrowserSettingsView />;
       case "ai":
         return (
           <AiSettingsView
@@ -2381,7 +2398,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             }}
             subagentModelClient={omnirushClient}
             webSearchClient={omnirushClient}
-            workClient={omnirushClient}
+            workClient={enterpriseFlags.on ? null : omnirushClient}
           />
         );
       case "extensions":

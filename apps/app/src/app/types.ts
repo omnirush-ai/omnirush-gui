@@ -204,6 +204,8 @@ export const SETTINGS_TAB_VALUES = [
   "updates",
   "recovery",
   "debug",
+  "work",
+  "browser",
 ] as const;
 
 export type SettingsTab = (typeof SETTINGS_TAB_VALUES)[number];

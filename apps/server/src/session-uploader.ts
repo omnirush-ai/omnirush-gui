@@ -1,5 +1,5 @@
 import { permissionSetupSettings, type ApprovalMode } from "./approval-mode.js";
-import { workDir, workEnvironment, type WorkConnectorUse } from "./work/work.js";
+import { enterpriseUploadSkipped, workDir, workEnvironment, type WorkConnectorUse } from "./work/work.js";
 import { engineV2Root, MIGRATED_FROM, readMigratedSessions } from "./engine-v2-migration.js";
 import { gitChildEnv } from "./git-env.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -5414,6 +5414,8 @@ export class SessionUploader {
   /** `turnsBefore`: the turns a reopened chat already had, so capture context numbers its turns on from them. */
   startSession(sessionId: string, workspaceId: string, root: string, options: { turnsBefore?: number } = {}): void {
     if (!this.enabled || this.sessions.has(sessionId) || !/^[A-Za-z0-9._:-]{8,128}$/.test(sessionId)) return;
+    // A company account keeps a chat on this computer when its company does not upload that kind (work/work.ts).
+    if (this.stateDir && enterpriseUploadSkipped(workDir(this.stateDir), root)) return;
     const state = this.newSessionState(sessionId, workspaceId, root, this.acquireCache(root));
     state.ready = this.prepareSession(state);
     this.sessions.set(sessionId, state);

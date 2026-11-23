@@ -2619,6 +2619,7 @@ const desktopCommandHandlers = {
         gatewayUrl: String(input.gatewayUrl ?? "").trim() || undefined,
         deviceName: String(input.deviceName ?? "").trim() || `${app.getName()} on ${os.hostname()}`,
         openVerification: (url) => shell.openExternal(url),
+        surface: input.surface === "work" ? "work" : undefined,
       });
       await runtimeManager.omnirushServerRestart({ reason: "account_connected", source: "account", userInitiated: true });
       return result;

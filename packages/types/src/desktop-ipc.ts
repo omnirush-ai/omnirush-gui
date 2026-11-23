@@ -1166,7 +1166,8 @@ export type DesktopCommandMap = {
     result: OmniRushBuildathonTagResult;
   };
   omnirushAccountConnect: {
-    args: [options?: { gatewayUrl?: string; deviceName?: string }];
+    /** `surface: "work"`: sign in to OmniRush Work (the browser opens the company portal's approval page). */
+    args: [options?: { gatewayUrl?: string; deviceName?: string; surface?: "work" }];
     result: { connected: true; userCode: string };
   };
   omnirushAccountSignOut: { args: []; result: OmniRushAccountSignOutResult };

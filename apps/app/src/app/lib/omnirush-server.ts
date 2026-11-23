@@ -614,7 +614,17 @@ export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAl
 /** `available`: Work is off but the account can try it (POST /work/enable). */
 /** `autopilot`/`writes_paused`/`full_access`: F action-layer capabilities, carried by /work/state (contract Work Addendum F). */
 /** `meetings`: the server transcribes meeting audio (capabilities.work.meetings); everything about meetings stays hidden without it. */
-export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null; autopilot?: boolean; writes_paused?: boolean; full_access?: boolean; meetings?: boolean };
+export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null; autopilot?: boolean; writes_paused?: boolean; full_access?: boolean; meetings?: boolean; enterprise?: OmniRushWorkEnterprise | null };
+/** A company account (`work.enterprise` in the capabilities; absent for everyone else): the company's state and the
+ *  person's role, whether staff turned Code on, what uploads, and the admin portal. */
+export type OmniRushWorkEnterprise = {
+  status: "pending" | "active" | "denied" | "suspended";
+  org: { id: string; name: string; domain: string | null } | null;
+  role: "owner" | "admin" | "member" | null;
+  code: boolean;
+  capture: { code: boolean; chat: boolean };
+  portal_url: string | null;
+};
 /** F action-layer: the user's automation settings (GET/PATCH /omnirush/work/settings). `full_access` implies `autopilot`. */
 export type OmniRushWorkSettings = { autopilot: boolean; full_access: boolean; writes_paused: boolean };
 /** One row of the Work activity log (GET /omnirush/work/actions): a write the agent made in a connected app. */
@@ -660,10 +670,11 @@ export type OmniRushWorkInsights = {
   members: OmniRushWorkInsightsMember[];
 };
 /** The company profile and first-run steps (contract Addendum B2: GET/POST /omnirush/work/onboarding). */
-export type OmniRushWorkOrg = { id: string; name: string; domain?: string | null; size?: string | null; industry?: string | null; tools?: string[] | null };
+export type OmniRushWorkOrg = { id: string; name: string; domain?: string | null; size?: string | null; industry?: string | null; tools?: string[] | null; custom_tools?: string[] | null; enterprise?: boolean; status?: "pending" | "active" | "denied" | "suspended" | string | null };
 export type OmniRushWorkStarter = { title: string; prompt: string };
-export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | null; steps?: Partial<Record<"company" | "connected" | "first_chat", boolean>>; sample_data?: boolean };
-export type OmniRushWorkOnboardingInput = { company: string; domain?: string; size?: string; industry?: string; role?: string; tools: string[] };
+/** `next`: the step a company account resumes at (an older server has none). `sample_data` is always false now. */
+export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | null; steps?: Partial<Record<"company" | "connected" | "first_chat", boolean>>; sample_data?: boolean; next?: "company" | "tools" | "connect" | "invite" | "done" | string | null };
+export type OmniRushWorkOnboardingInput = { company: string; domain?: string; size?: string; industry?: string; role?: string; tools: string[]; custom_tools?: string[] };
 export type OmniRushWorkOnboardingResult = { org: OmniRushWorkOrg; recommended_sources?: string[]; starters?: OmniRushWorkStarter[] };
 /** GET /omnirush/work/org/members (contract Addendum B2, C1 adds `you_role` and `org.tools`). */
 export type OmniRushWorkMember = { user_id: string; email: string; role: "owner" | "admin" | "member" | string; job_role?: string | null; tools?: string[] | null; you?: boolean };
@@ -683,7 +694,7 @@ export type OmniRushWorkOrgConnectors = {
   members?: number;
   allowed?: OmniRushWorkOrgConnector[];
 };
-export type OmniRushWorkOrgPatch = { name?: string; domain?: string; size?: string; industry?: string; tools?: string[] };
+export type OmniRushWorkOrgPatch = { name?: string; domain?: string; size?: string; industry?: string; tools?: string[]; custom_tools?: string[] };
 /** A connected source's problem (contract Addendum C1): what to show and which button fixes it. */
 export type OmniRushWorkAttention = {
   kind: "reconnect" | "failing" | "stale" | "coverage" | string;
@@ -2609,8 +2620,9 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         body: setting,
         timeoutMs: timeouts.config,
       }),
-    getWorkState: () =>
-      requestJson<OmniRushWorkState>(baseUrl, "/work/state", { token, hostToken, timeoutMs: timeouts.config }),
+    /** `fresh`: the switch read again from the server when the cached one is over half a minute old. */
+    getWorkState: (options?: { fresh?: boolean }) =>
+      requestJson<OmniRushWorkState>(baseUrl, options?.fresh ? "/work/state?fresh=1" : "/work/state", { token, hostToken, timeoutMs: timeouts.config }),
     getWorkOrgInsights: (days?: number) =>
       requestJson<OmniRushWorkInsights>(baseUrl, `/work/org/insights${days ? `?days=${days}` : ""}`, { token, hostToken, timeoutMs: timeouts.config }),
     ensureWorkWorkspace: () =>
@@ -2660,12 +2672,12 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<OmniRushWorkOnboarding>(baseUrl, "/work/onboarding", { token, hostToken, timeoutMs: timeouts.config }),
     saveWorkOnboarding: (input: OmniRushWorkOnboardingInput) =>
       requestJson<OmniRushWorkOnboardingResult>(baseUrl, "/work/onboarding", { token, hostToken, method: "POST", body: input, timeoutMs: timeouts.config }),
-    seedWorkDemo: () =>
-      requestJson<unknown>(baseUrl, "/work/demo", { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
-    removeWorkDemo: () =>
-      requestJson<unknown>(baseUrl, "/work/demo", { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
-    inviteWorkMember: (email: string) =>
-      requestJson<{ id?: string; email?: string; link: string; expires_at?: string }>(baseUrl, "/work/org/invites", { token, hostToken, method: "POST", body: { email }, timeoutMs: timeouts.config }),
+    /** `role` and `send_email` (the server mails the invite) go only when given: an older server takes the e-mail alone. */
+    inviteWorkMember: (email: string, options?: { role?: "member" | "admin"; sendEmail?: boolean }) =>
+      requestJson<{ id?: string; email?: string; link: string; expires_at?: string }>(baseUrl, "/work/org/invites", {
+        token, hostToken, method: "POST", timeoutMs: timeouts.config,
+        body: { email, ...(options?.role ? { role: options.role } : {}), ...(options?.sendEmail ? { send_email: true } : {}) },
+      }),
     acceptWorkInvite: (link: string) =>
       requestJson<{ ok: boolean; org?: OmniRushWorkOrg }>(baseUrl, "/work/org/invites/accept", { token, hostToken, method: "POST", body: { token: link }, timeoutMs: timeouts.config }),
     listWorkMembers: () =>

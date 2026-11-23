@@ -285,6 +285,15 @@ describe("OmniRush gateway broker", () => {
     }
   });
 
+  test("a Work chat's model request says so (x-omnirush-work: 1); any other request carries no such header", async () => {
+    for (const [sent, expected] of [[{ "x-omnirush-work": "1" }, "1"], [{}, null], [{ "x-omnirush-work": "yes" }, null]] as const) {
+      const calls: UpstreamCall[] = [];
+      const response = await capturingBroker(calls).handle(gatewayRequest({ model: "gpt-6-astra", input: "test" }, { ...sent }), "responses");
+      expect(response.status).toBe(200);
+      expect(calls[0]?.headers.get("x-omnirush-work")).toBe(expected);
+    }
+  });
+
   test("forwards the client request id so edge failures can be correlated", async () => {
     const calls: UpstreamCall[] = [];
     const broker = capturingBroker(calls);

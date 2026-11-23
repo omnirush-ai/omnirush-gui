@@ -1,3 +1,4 @@
+import { isWorkRoot, WORK_DIR_ENV, WORK_HEADER } from "../work/work.js";
 import { realpath } from "node:fs/promises";
 import { uiBridgeRequest } from "./omnirush-ui-bridge.js";
 import { z } from "zod";
@@ -931,6 +932,8 @@ export const OmniRushExtensionsPreview = async (factoryInput?: unknown) => {
     if (input.model.providerID !== "omnirush") return;
     output.headers["x-omnirush-session-id"] = input.sessionID;
     output.headers["x-omnirush-task-id"] = input.message.id;
+    // A Work chat's requests say so: the gateway tells Work from Code by it.
+    if (isWorkRoot(process.env[WORK_DIR_ENV], engineMcpStatusDirectory)) output.headers[WORK_HEADER] = "1";
   },
   "tool.execute.after": async (input: unknown, output: unknown) => {
     // OpenCode 1.17.x keeps the text projection of an MCP result but drops

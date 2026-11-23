@@ -1,6 +1,7 @@
 /** @jsxImportSource react */
 import { useEffect } from "react";
 import { Dithering } from "@paper-design/shaders-react";
+import { Briefcase } from "lucide-react";
 
 import { t } from "../../../i18n";
 import { useBootState } from "../../shell/boot-state";
@@ -24,6 +25,10 @@ type WelcomePageProps = {
   showManualFolder?: boolean;
   onTeamSignIn?: () => void;
   onJoinOrganization: () => void;
+  /** Sign in to OmniRush Work (a company account): the browser opens the company portal's approval page. */
+  onWorkSignIn?: () => void;
+  workSignInBusy?: boolean;
+  workSignInError?: string | null;
 };
 
 export function WelcomePage({
@@ -37,6 +42,9 @@ export function WelcomePage({
   showManualFolder,
   onTeamSignIn,
   onJoinOrganization,
+  onWorkSignIn,
+  workSignInBusy,
+  workSignInError,
 }: WelcomePageProps) {
   const { config: shellConfig } = useShellConfig();
   const appName = shellConfig.appName;
@@ -124,6 +132,27 @@ export function WelcomePage({
                     ? t("welcome.creating_workspace")
                     : (getStartedLabel || t("welcome.use_without_cloud"))}
                 </Button>
+
+                {onWorkSignIn ? (
+                  <Button
+                    type="button"
+                    size="lg"
+                    variant="outline"
+                    className="h-12 w-full text-[15px] font-medium"
+                    onClick={onWorkSignIn}
+                    disabled={busy || workSignInBusy}
+                    aria-describedby={workSignInBusy || workSignInError ? "welcome-work-signin-status" : undefined}
+                    data-testid="welcome-work-signin"
+                  >
+                    <Briefcase className="size-4" aria-hidden />
+                    {t("welcome.sign_in_work")}
+                  </Button>
+                ) : null}
+                {workSignInBusy || workSignInError ? (
+                  <p id="welcome-work-signin-status" role="status" className={workSignInError ? "text-center text-xs text-destructive" : "text-center text-xs text-muted-foreground"}>
+                    {workSignInError ?? t("welcome.sign_in_work_waiting")}
+                  </p>
+                ) : null}
 
                 <div className="pt-2">
                   <button

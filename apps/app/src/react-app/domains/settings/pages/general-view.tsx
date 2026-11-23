@@ -4,9 +4,11 @@ import {
   Code2,
   ArrowRight,
   Bot,
+  Briefcase,
   Coffee,
   Cog,
   FolderLock,
+  Globe,
   Mic,
   Paintbrush,
   RefreshCcw,
@@ -53,6 +55,8 @@ import { LinuxSandboxCard } from "../linux-sandbox-card";
 import { BuildathonTrackCard } from "../../buildathon/buildathon";
 import { ComputerUseSettingsCard } from "../../session/surface/computer-use/setup";
 import { EventsJoinedList } from "../../events/event-badge";
+import { useEnterpriseFlags } from "../../work/enterprise-mode";
+import { enterpriseSettingsTabs } from "../shell/settings-page";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
@@ -94,6 +98,12 @@ const globalCards: SettingsCardDefinition[] = [
   { tab: "voice", icon: Mic, titleKey: "settings.tab_voice", descKey: "settings.card_voice_desc" },
   { tab: "environment", icon: Terminal, titleKey: "settings.tab_environment", descKey: "settings.card_environment_desc" },
   { tab: "updates", icon: RefreshCcw, titleKey: "settings.tab_updates", descKey: "settings.card_updates_desc" },
+];
+
+/** A company account's own tabs (OmniRush Work), as cards. */
+const enterpriseCards: SettingsCardDefinition[] = [
+  { tab: "work", icon: Briefcase, titleKey: "settings.tab_work", descKey: "settings.card_work_desc" },
+  { tab: "browser", icon: Globe, titleKey: "settings.tab_browser", descKey: "settings.card_browser_desc" },
 ];
 
 function cardTitle(card: SettingsCardDefinition) {
@@ -406,6 +416,14 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   const linuxSandboxClient = props.linuxSandboxClient ?? null;
   const linuxSandbox = useLinuxSandbox(linuxSandboxClient, props.sandboxWorkspaceId ?? null);
   const keepAwake = useKeepAwake();
+  // A company account (OmniRush Work): no usage meter, events or buildathon; the Code cards only when staff turned Code
+  // on; the cards follow the tabs its Settings shows.
+  const enterprise = useEnterpriseFlags();
+  // The updates card shows wherever the tab may (as for everyone): capabilities only narrow the sidebar.
+  const tabs = enterpriseSettingsTabs(props.developerMode, { autoUpdate: true }, enterprise);
+  const codeShown = !enterprise.on || enterprise.code;
+  const shownWorkspaceCards = tabs ? workspaceCards.filter((card) => tabs.workspace.includes(card.tab)) : workspaceCards;
+  const shownGlobalCards = tabs ? [...enterpriseCards, ...globalCards].filter((card) => tabs.global.includes(card.tab)) : globalCards;
 
   useEffect(() => {
     if (!isElectronRuntime()) return;
@@ -457,7 +475,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
   }
 
   const serverLine = account ? accountServerLine(account) : null;
-  const usage = account?.connected && account.usage ? omnirushUsageSummary(account.usage) : null;
+  const usage = account?.connected && account.usage && !enterprise.on ? omnirushUsageSummary(account.usage) : null;
 
   return (
     <div className="w-full max-w-3xl space-y-8">
@@ -486,7 +504,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
                 {accountMessage || (account.connected
                   ? usage
                     ? usage.line
-                    : t("settings.account_models_ready")
+                    : enterprise.on && enterprise.orgName ? enterprise.orgName : t("settings.account_models_ready")
                   : account.gatewayConfigured
                     ? account.reauthorizationRequired
                       ? account.keyringUnavailable
@@ -524,14 +542,14 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
           </div>
         </div>
       )}
-      {isElectronRuntime() && account?.connected && account.events ? <EventsJoinedList events={account.events} /> : null}
+      {isElectronRuntime() && account?.connected && account.events && !enterprise.on ? <EventsJoinedList events={account.events} /> : null}
       {/* Workspace settings */}
-      <div className="space-y-3">
+      {shownWorkspaceCards.length ? <div className="space-y-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
           {t("settings.section_workspace")}
         </div>
         <div className="grid grid-cols-2 gap-2">
-          {workspaceCards.map((card) => (
+          {shownWorkspaceCards.map((card) => (
             <SettingsCard
               key={card.tab}
               icon={card.icon}
@@ -541,7 +559,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
             />
           ))}
         </div>
-      </div>
+      </div> : null}
 
       {/* Global settings */}
       <div className="space-y-3">
@@ -549,7 +567,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
           {t("settings.section_global")}
         </div>
         <div className="grid grid-cols-2 gap-2">
-          {globalCards.map((card) => (
+          {shownGlobalCards.map((card) => (
             <SettingsCard
               key={card.tab}
               icon={card.icon}
@@ -561,7 +579,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
         </div>
       </div>
 
-      {approvalsClient ? (
+      {approvalsClient && codeShown ? (
         <ApprovalsCard
           approvals={approvalMode.approvals}
           busy={approvalMode.busy}
@@ -570,7 +588,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
         />
       ) : null}
 
-      {bestPracticesClient ? (
+      {bestPracticesClient && codeShown ? (
         <BestPracticesCard
           enabled={bestPractices.setting?.enabled ?? null}
           busy={bestPractices.busy}
@@ -579,7 +597,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
         />
       ) : null}
 
-      {agentAssistClient ? (
+      {agentAssistClient && codeShown ? (
         <AgentAssistCard
           setting={agentAssist.setting}
           busy={agentAssist.busy}
@@ -596,13 +614,13 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
         />
       ) : null}
 
-      {isElectronRuntime() ? <ComputerUseSettingsCard /> : null}
+      {isElectronRuntime() && codeShown ? <ComputerUseSettingsCard /> : null}
 
-      {props.buildathonProject ? (
+      {props.buildathonProject && !enterprise.on ? (
         <BuildathonTrackCard projectPath={props.buildathonProject.path} projectName={props.buildathonProject.name} />
       ) : null}
 
-      {linuxSandboxClient && props.sandboxWorkspaceId ? (
+      {linuxSandboxClient && props.sandboxWorkspaceId && codeShown ? (
         <LinuxSandboxCard
           box={linuxSandbox.box}
           pending={linuxSandbox.pending}

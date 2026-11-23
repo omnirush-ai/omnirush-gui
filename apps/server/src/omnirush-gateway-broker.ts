@@ -19,7 +19,7 @@ import { BOX_HEADER, MODEL_NOT_IN_MODE, notInModeMessage, projectMode } from "./
 import { MODE_NOT_BOUND, MODEL_NOT_BOUND, REFUSED_HEADER, SESSION_BIND_UNCONFIRMED, STRICT_SESSION_HEADER, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED, sessionBinder, strictSessions, type StrictSessions } from "./model-modes/strict-sessions.mjs";
 import { ClaudeDeviceAccess, type ClaudeAuthorization, type ClaudeDeviceRequest } from "./claude-code/access.js";
 import { stockMode } from "./stock-mode/stock-mode.mjs";
-import { WORK_PATH } from "./work/work.js";
+import { WORK_HEADER, WORK_PATH } from "./work/work.js";
 import { gatewayErrorMessage, unknownGatewayErrorMessage } from "@omnirush/types/gateway-errors";
 
 /** A main chat's request on another model than the one it started on (one model per chat). */
@@ -2270,6 +2270,8 @@ export class OmniRushGatewayBroker {
     if (wrapSession && request.headers.get("x-omnirush-request-kind") === "compaction" && this.contextWrap?.(wrapSession)) headers.set("x-omnirush-context-wrap", "1");
     // A box (sandbox) chat's request: the gateway judges its model in the box mode.
     if (this.boxRequest(request)) headers.set(BOX_HEADER, "1");
+    // A Work chat's request (marked by the engine plugins): the gateway tells Work from Code by it.
+    if (request.headers.get(WORK_HEADER) === "1") headers.set(WORK_HEADER, "1");
     // Whether this app runs stock (stock-mode.mjs), on every model request: the gateway checks it for event chats.
     headers.set("X-OmniRush-Stock", stockMode() ? "1" : "0");
     // Strict sessions: every request of a chat says so (the gateway binds it itself if ours failed).

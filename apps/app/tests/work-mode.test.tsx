@@ -6,21 +6,30 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { matchRoutes, MemoryRouter } from "react-router";
 
 import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers, type OmniRushWorkOrgConnectors } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
+import { isWorkSignInLink, needsOnboarding, workOnboardingKey, askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
   askAboutItemPrompt, coverageCanAdd, coverageLine, relativeTime, workActionsKey, workOrgConnectorsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
 import { leaveState, mePatch, nextShown, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
 import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
 import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
-import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
+import { WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
 import { ConnectorIcon, ConnectorRow, HookCard, localChatError, LocalChatsCard, TelegramCard, telegramLoginError, WorkConnectorsChip, WorkConnectorsPage, WorkHome, WorkModeToggle, WorkToolNotices, WorkToolsBanner } from "../src/react-app/domains/work/work-views";
 import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
+import { BrandTile } from "../src/react-app/domains/work/brand-icon";
+import { addCustomTool, builtInCatalog, customToolName, matchTool, pickerGroups, readCatalog, searchTools, sizeLabel, toolLabel, WORK_SIZES } from "../src/react-app/domains/work/catalog";
+import { CONSUMER, enterpriseMode, enterpriseRedirect, useEnterpriseStore } from "../src/react-app/domains/work/enterprise-mode";
+import { ConsumerOnly, enterpriseWaitingCopy, EnterpriseWaiting } from "../src/react-app/domains/work/enterprise-ui";
+import { companyFromDomain, onboardingSteps, parseEmails } from "../src/react-app/domains/work/onboarding-steps";
+import { connectorState, sidebarConnectors, WorkSidebarNav } from "../src/react-app/domains/session/sidebar/work-sidebar-nav";
+import { enterpriseSettingsTabs, settingsTabShown } from "../src/react-app/domains/settings/shell/settings-page";
+import { buildCommandPaletteSettingsItems } from "../src/react-app/shell/command-palette-settings";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
   id: "google", label: "Google", status: "disconnected", last_sync_at: null, records: 0, sync_enabled: false, ...over,
 });
 const noop = () => {};
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** A query left in its error state, as a failed read leaves it (and not read again when the page mounts). */
 function failQuery(queries: QueryClient, queryKey: readonly unknown[], error: Error) {
   queries.setQueryDefaults([...queryKey], { retryOnMount: false });
@@ -61,6 +70,10 @@ describe("Work mode", () => {
     expect(workInviteToken("https://api.omnirush.ai/omnirush/work/invite#t=abc123")).toBe("abc123");
     expect(workInviteToken("omnirush://work/invite#t=abc123")).toBe("abc123");
     expect(workInviteToken("omnirush:///work/invite?t=abc123")).toBe("abc123");
+    // The company portal's join page and the app's own join link (enterprise design 3.3, S8).
+    expect(workInviteToken("https://omnirush.ai/console/enterprise/join#t=abc123")).toBe("abc123");
+    expect(workInviteToken("omnirush://work/join#t=abc123")).toBe("abc123");
+    expect(workInviteToken("https://omnirush.ai/console/enterprise/joined#t=abc")).toBeNull();
     expect(workInviteToken("omnirush://work/invite")).toBeNull();
     expect(workInviteToken("omnirush://connect?token=abc123")).toBeNull();
     expect(workInviteToken("https://evil.example/work/invites#t=abc")).toBeNull();
@@ -110,10 +123,10 @@ describe("Work mode", () => {
   });
 
   test("the home asks what to get done, has no card grid, and centres the composer with the starter chips under it", () => {
-    const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} starters={[{ title: "Overdue invoices", prompt: "List overdue invoices." }, { title: "Reply to leads", prompt: "x" }, { title: "Weekly summary", prompt: "y" }, { title: "Fourth", prompt: "z" }]} badge={<span data-testid="badge-slot" />} />);
+    const markup = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} starters={[{ title: "Overdue invoices", prompt: "List overdue invoices." }, { title: "Reply to leads", prompt: "x" }, { title: "Weekly summary", prompt: "y" }, { title: "Fourth", prompt: "z" }]} />);
     expect(markup).toContain("What do you want to get done?");
     expect(markup).toContain('data-testid="composer-slot"');
-    expect(markup).toContain('data-testid="badge-slot"');
+    expect(markup).not.toMatch(/sample data/i);
     expect(markup).not.toContain("data-work-template");
     // A 640 column between two equal spacers, with the chat composer's gutters and bottom spacing (composer.tsx), so
     // a send glides it into the chat's place.
@@ -130,7 +143,7 @@ describe("Work mode", () => {
     expect(today.indexOf("data-work-starter")).toBeLessThan(today.indexOf("composer-slot"));
   });
 
-  test("first run: domain from a work e-mail, recommended sources first, checklist, sample data", () => {
+  test("first run: domain from a work e-mail, recommended sources first, checklist; sample data counts for nothing", () => {
     expect(domainFromEmail("dana@Acme-Bakery.test")).toBe("acme-bakery.test");
     expect(domainFromEmail("someone@gmail.com")).toBe("");
     expect(domainFromEmail(null)).toBe("");
@@ -139,37 +152,36 @@ describe("Work mode", () => {
     // An import source has no sign-in: onboarding offers no Connect for it (Connectors has its import card).
     expect(connectOrder([...rows, row({ id: "whatsapp", label: "WhatsApp", mode: "import" })], ["whatsapp"]).map((item) => item.id)).toEqual(["google", "slack", "hubspot"]);
     expect(visibleConnectors(rows).map((item) => item.id)).not.toContain("demo");
-    expect(hasSampleData({ done: true, sample_data: true })).toBe(true);
-    expect(hasSampleData({ done: true, sample_data: false })).toBe(false);
-    expect(hasSampleData(undefined)).toBe(false);
-    expect(checklistItems({ done: false, org: { id: "o1", name: "Acme" }, steps: { first_chat: false }, sample_data: true }, rows).map((item) => [item.id, item.done])).toEqual([["company", true], ["connected", true], ["first_chat", false]]);
+    // An account seeded before keeps its rows: they neither show nor count as a connected tool.
+    expect(checklistItems({ done: false, org: { id: "o1", name: "Acme" }, steps: { first_chat: false }, sample_data: true }, rows).map((item) => [item.id, item.done])).toEqual([["company", true], ["connected", false], ["first_chat", false]]);
     expect(checklistItems({ done: false, org: { id: "o1", name: "Acme" } }, rows).find((item) => item.id === "connected")?.done).toBe(false);
     expect(checklistItems(undefined, [row({})]).every((item) => !item.done)).toBe(true);
   });
 
-  test("onboarding opens on the company step with the domain prefilled and the offered tools as chips", () => {
-    const markup = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkOnboarding client={null} email="ops@acme-bakery.test" sources={["google", "slack", "demo", "mock"]} openLink={noop} onDone={noop} /></QueryClientProvider>);
-    expect(markup).toContain('data-step="company"');
-    expect(markup).toContain("Step 1 of 2");
+  test("onboarding opens on the company step: name and website from the work e-mail, the new sizes, no Just me, SOC 2 or sample data", () => {
+    const queries = new QueryClient();
+    queries.setQueryData(workOnboardingKey(null), { done: false, org: null });
+    const markup = renderToStaticMarkup(<QueryClientProvider client={queries}><WorkOnboarding client={null} email="ops@acme-bakery.test" sources={["google", "slack", "demo", "mock"]} openLink={noop} onDone={noop} /></QueryClientProvider>);
+    expect(markup).toContain('data-step-name="company"');
+    expect(markup).toContain("Step 1 of 4");
+    expect(markup).toContain('value="Acme Bakery"');
     expect(markup).toContain('value="acme-bakery.test"');
-    expect(markup).toContain('data-testid="work-onboarding-tool-google"');
-    expect(markup).toContain('data-testid="work-onboarding-tool-slack"');
-    expect(markup).not.toContain("work-onboarding-tool-demo");
-    expect(markup).not.toContain("work-onboarding-tool-mock");
+    expect(markup.match(/data-size="/g)?.length).toBe(8);
+    expect(markup).toContain('data-size="2-5"');
+    expect(markup).toContain(">251-1,000<");
+    expect(markup).toContain(">1,000+<");
+    expect(markup).not.toContain(">Just me<");
+    expect(markup).not.toMatch(/soc\s*2|how we protect|sample data|work-trust-badge|work-onboarding-demo/i);
     expect(markup).not.toMatch(/consent|terms/i);
-    expect(markup).toContain('data-testid="work-join-link"');
-    expect(markup).toContain(">Just me<");
-    expect(markup).toContain('data-testid="work-trust-badge"');
-    expect(markup).toContain(">In progress<");
-    expect(markup).toContain('aria-label="SOC 2 Type II audit in progress"');
-    expect(markup).toContain("How we protect your data");
+    // Joining a team is one folded line, not a box.
+    expect(markup).toContain('data-testid="work-join-open"');
+    expect(markup).not.toContain('data-testid="work-join-link"');
+    // Copy rules: no em or en dashes anywhere on the step.
+    expect(markup).not.toMatch(/[\u2013\u2014]/);
   });
 
-  test("Try Work and the sample-data badge", () => {
+  test("Try Work", () => {
     expect(renderToStaticMarkup(<WorkTryButton onTry={async () => {}} />)).toContain("Try Work");
-    const badge = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><SampleDataBadge client={null} /></QueryClientProvider>);
-    expect(badge).toContain("Sample data");
-    expect(badge).toContain('data-testid="work-sample-data-remove"');
   });
 
   test("connectors: unavailable sources are hidden; a connect settles on connected, syncing or error", () => {
@@ -1224,8 +1236,10 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(owner).toContain("the organization and its pending invites are deleted");
     const member = render({ org, you_role: "member", members: [{ user_id: "u1", email: "o@acme.test", role: "owner" }, { user_id: "u2", email: "m@acme.test", role: "member", you: true }], invites: [] });
     expect(member).toContain('data-testid="work-org-my-tools"');
-    // The company's chips are shown, not offered: a member cannot press them.
-    expect(member.match(/aria-pressed="(true|false)" disabled=""/g)?.length).toBeGreaterThanOrEqual(2);
+    // The company's tools are shown, not offered: a member reads them as tiles, with no picker to press.
+    expect(member).toContain('data-testid="work-org-tool-list"');
+    expect(member).not.toContain('data-testid="work-onboarding-tool-search"');
+    expect(owner).toContain('data-testid="work-onboarding-tool-search"');
     // Saving only a role never sends tools: an owner's tools are the company's, and a member's never come back from the server.
     expect(mePatch({ job_role: " Founder " }, { job_role: null })).toEqual({ job_role: "Founder" });
     expect(mePatch({ tools: ["slack"] }, { job_role: "Ops" })).toEqual({ job_role: "Ops", tools: ["slack"] });
@@ -1491,3 +1505,350 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     for (const html of [out, password, signedIn, other]) expect(html).not.toMatch(/—/);
   });
 });
+
+describe("Work for companies (enterprise design 2.3, 2.4, 2.6)", () => {
+  const block = {
+    status: "active" as const,
+    org: { id: "org_1", name: "Acme Freight", domain: "acme.com" },
+    role: "owner" as const,
+    code: false,
+    capture: { code: false, chat: true },
+    portal_url: "https://omnirush.ai/console/enterprise",
+  };
+
+  test("catalog: the built-in copy offers what the switch lists; pickers never show the company hook, the test source or sample data", () => {
+    const catalog = builtInCatalog(["google", "slack", "hook", "hook_org", "mock", "demo", "salesforce", "xero", "monday"]);
+    const ids = (platform: { mac: boolean; desktop: boolean }) => pickerGroups(catalog, platform).flatMap((group) => group.tools.map((row) => row.id));
+    const desktop = ids({ mac: false, desktop: true });
+    for (const id of ["google", "slack", "hook", "salesforce", "xero", "monday", "whatsapp", "telegram"]) expect(desktop).toContain(id);
+    for (const id of ["hook_org", "mock", "demo", "imessage", "jira"]) expect(desktop).not.toContain(id);
+    // One automation row, named for what it is.
+    expect(desktop.filter((id) => id.startsWith("hook"))).toEqual(["hook"]);
+    // iMessage only on a Mac; desktop-only sources never in the browser.
+    expect(ids({ mac: true, desktop: true })).toContain("imessage");
+    expect(ids({ mac: true, desktop: false })).not.toContain("whatsapp");
+    // Names as the brands write them, groups in the catalog's order, empty groups left out.
+    expect([toolLabel(catalog, "salesforce"), toolLabel(catalog, "xero"), toolLabel(catalog, "monday"), toolLabel(catalog, "hook")]).toEqual(["Salesforce", "Xero", "monday.com", "Zapier, Make or n8n"]);
+    expect(pickerGroups(catalog, { mac: false, desktop: false }).map((group) => group.label)).toEqual(["Email and calendar", "Chat", "Projects and code", "Sales and support", "Finance and commerce", "Automation"]);
+  });
+
+  test("catalog from the server: checked row by row, the built-in copy when it is not one", () => {
+    expect(readCatalog(null)).toBeNull();
+    expect(readCatalog({ connectors: [], categories: [] })).toBeNull();
+    const read = readCatalog({
+      version: 3, sizes: ["2-5", 4],
+      categories: [{ id: "chat", label: "Chat" }, { id: 7 }],
+      connectors: [{ id: "slack", label: "Slack", category: "chat", offered: true, includes: ["Channels", 3] }, { id: "../x", label: "X", category: "chat" }, { id: "basecamp", category: "chat" }],
+    });
+    expect(read?.connectors.map((row) => [row.id, row.offered, row.includes])).toEqual([["slack", true, ["Channels"]]]);
+    expect(read?.categories).toEqual([{ id: "chat", label: "Chat" }]);
+    expect(read?.sizes).toEqual(["2-5"]);
+  });
+
+  test("one field searches the catalog or adds a tool it lacks: exact names pick, at most ten custom names of forty characters", () => {
+    const groups = pickerGroups(builtInCatalog(["google", "github", "gitlab"]), { mac: false, desktop: false });
+    expect(matchTool(groups, " Gmail ")?.id).toBe("google");
+    expect(matchTool(groups, "GitHub")?.id).toBe("github");
+    expect(matchTool(groups, "git")).toBeNull();
+    expect(searchTools(groups, "git").map((row) => row.id)).toEqual(["github", "gitlab"]);
+    expect(customToolName("  Basecamp  ")).toBe("Basecamp");
+    expect(customToolName("A&B + C.d-e")).toBe("A&B + C.d-e");
+    expect(customToolName("x".repeat(41))).toBeNull();
+    expect(customToolName("<script>")).toBeNull();
+    expect(addCustomTool(["Basecamp"], "basecamp")).toEqual(["Basecamp"]);
+    const ten = Array.from({ length: 10 }, (_, i) => `Tool ${i}`);
+    expect(addCustomTool(ten, "Gusto")).toEqual(ten);
+    expect(addCustomTool([], " Gusto ")).toEqual(["Gusto"]);
+  });
+
+  test("team sizes run 2-5 to 1,000+ with no one-person band; an older size reads as it was saved", () => {
+    expect([...WORK_SIZES]).toEqual(["2-5", "6-10", "11-25", "26-50", "51-100", "101-250", "251-1000", "1000+"]);
+    expect(sizeLabel("251-1000")).toBe("251-1,000");
+    expect(sizeLabel("1000+")).toBe("1,000+");
+    expect(sizeLabel("2-10")).toBe("2-10");
+  });
+
+  test("the steps: a new company, a company made on the web (Connect first), an invited member (no invite step)", () => {
+    expect(onboardingSteps({ hasOrg: false, role: null })).toEqual(["company", "tools", "connect", "invite", "done"]);
+    expect(onboardingSteps({ hasOrg: true, role: "owner" })).toEqual(["connect", "invite", "done"]);
+    expect(onboardingSteps({ hasOrg: true, role: "admin", changeTools: true })).toEqual(["tools", "connect", "invite", "done"]);
+    expect(onboardingSteps({ hasOrg: true, role: "member" })).toEqual(["welcome", "connect", "done"]);
+    expect(companyFromDomain("acme-freight.com")).toBe("Acme Freight");
+    expect(companyFromDomain("www.globex.io")).toBe("Globex");
+    expect(parseEmails("Ana <ANA@acme.com>, ben@acme.com; ben@acme.com cara@ hello")).toEqual({ emails: ["ana@acme.com", "ben@acme.com"], rejected: ["cara@"] });
+  });
+
+  test("the Work home opens setup while there is no company, or a step is left on a company made on the web, until finished here", () => {
+    const org = { id: "o1", name: "Acme" };
+    expect(needsOnboarding(undefined, {})).toBe(false);
+    expect(needsOnboarding({ done: false, org: null }, {})).toBe(true);
+    expect(needsOnboarding({ done: true, org: null }, {})).toBe(false);
+    expect(needsOnboarding({ done: false, org, next: "connect" }, {})).toBe(true);
+    expect(needsOnboarding({ done: false, org, next: "connect" }, { o1: true })).toBe(false);
+    // An older server says no next step: a company that exists is set up.
+    expect(needsOnboarding({ done: false, org }, {})).toBe(false);
+    expect(needsOnboarding({ done: true, org, next: "done" }, {})).toBe(false);
+  });
+
+  test("setup end to end: company, tools (search, pick, add one), connect only the picks, invites with a role, starters", async () => {
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const saved: unknown[] = [];
+      const invited: unknown[] = [];
+      const started: string[] = [];
+      let finished = 0;
+      const starters = [{ title: "Catch me up on this week", prompt: "Catch me up." }, { title: "What needs a reply from me?", prompt: "Replies." }, { title: "Prepare me for my next meeting", prompt: "Meeting." }];
+      const client = {
+        baseUrl: "http://setup.test",
+        getWorkOnboarding: async () => ({ done: false, org: null }),
+        getWorkCatalog: async () => { throw new OmniRushServerError(404, "not_found", "Not Found"); },
+        saveWorkOnboarding: async (input: unknown) => { saved.push(input); return { org: { id: "org_9", name: "Acme Freight" }, starters }; },
+        listWorkMembers: async () => ({ org: null, members: [], invites: [] }),
+        listWorkConnectors: async () => [
+          row({ id: "google", label: "Google" }), row({ id: "slack", label: "Slack", status: "connected", account: "acme.slack.com" }), row({ id: "jira", label: "Jira" }), row({ id: "mock", label: "Test" }),
+        ],
+        inviteWorkMember: async (email: string, options: unknown) => { invited.push([email, options]); return { id: email, link: "https://omnirush.ai/console/enterprise/join#t=x" }; },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(
+        <QueryClientProvider client={queries}>
+          <WorkOnboarding client={client} email="ana@acme-freight.com" sources={["google", "slack", "jira", "salesforce"]} openLink={noop} onDone={() => { finished += 1; }} onStart={async (prompt) => { started.push(prompt); }} />
+        </QueryClientProvider>,
+      ));
+      await act(async () => { await sleep(0); });
+      const step = () => document.querySelector('[data-testid="work-onboarding"]')?.getAttribute("data-step-name");
+      const type = async (input: HTMLInputElement, value: string) => act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const key = async (input: HTMLElement, name: string) => act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true })); });
+      const click = async (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); await sleep(0); });
+
+      // 1: company (prefilled from the e-mail), a size, Continue.
+      expect(step()).toBe("company");
+      expect(document.querySelector<HTMLInputElement>('[data-testid="work-onboarding-company"]')!.value).toBe("Acme Freight");
+      await click('[data-size="11-25"]');
+      expect(document.querySelector('[data-size="11-25"]')!.getAttribute("aria-checked")).toBe("true");
+      await click('[data-testid="work-onboarding-continue"]');
+      await act(async () => { await sleep(0); });
+      expect(saved[0]).toEqual({ company: "Acme Freight", tools: [], domain: "acme-freight.com", size: "11-25" });
+
+      // 2: tools. "gmail" picks Google Workspace; "Basecamp" is no catalog tool, so the last row adds it.
+      expect(step()).toBe("tools");
+      const search = document.querySelector<HTMLInputElement>('[data-testid="work-onboarding-tool-search"]')!;
+      await type(search, "gmail");
+      await key(search, "Enter");
+      expect(document.querySelector('[data-testid="work-onboarding-tool-google"]')!.getAttribute("aria-pressed")).toBe("true");
+      expect(search.value).toBe("");
+      await type(search, "Basecamp");
+      expect(document.querySelector('[data-testid="work-onboarding-add-custom"]')!.textContent).toContain('Add "Basecamp"');
+      await key(search, "Enter");
+      expect(document.querySelector('[data-custom-tool="Basecamp"]')).not.toBeNull();
+      await click('[data-testid="work-onboarding-tool-jira"]');
+      // Salesforce is offered by the switch: its chip shows with its name, never a lower-case id.
+      expect(document.querySelector('[data-testid="work-onboarding-tool-salesforce"]')!.textContent).toBe("Salesforce");
+      await click('[data-testid="work-onboarding-continue"]');
+      await act(async () => { await sleep(0); });
+      expect(saved[1]).toEqual({ company: "Acme Freight", tools: ["google", "jira"], custom_tools: ["Basecamp"], domain: "acme-freight.com", size: "11-25" });
+
+      // 3: connect lists only the picks; the rest is folded under "Connect something else".
+      expect(step()).toBe("connect");
+      await act(async () => { await sleep(0); });
+      const listed = [...document.querySelectorAll('[data-testid="work-onboarding-connect-list"] [data-work-connect]')].map((item) => item.getAttribute("data-work-connect"));
+      expect(listed).toEqual(["google", "jira"]);
+      expect(document.querySelector('[data-testid="work-onboarding-noted"]')!.textContent).toContain("Basecamp");
+      expect(document.querySelector('[data-testid="work-onboarding-more"]')!.getAttribute("aria-expanded")).toBe("false");
+      expect(document.querySelector('[data-work-connect="slack"]')).toBeNull();
+      await click('[data-testid="work-onboarding-continue"]');
+
+      // 4: invite, two addresses pasted at once, as admins.
+      expect(step()).toBe("invite");
+      const field = document.querySelector<HTMLInputElement>('[data-testid="work-invite-input"]')!;
+      await type(field, "ben@acme-freight.com, cara@acme-freight.com ");
+      expect([...document.querySelectorAll("[data-invite-email]")].map((item) => item.getAttribute("data-invite-email"))).toEqual(["ben@acme-freight.com", "cara@acme-freight.com"]);
+      await click('[data-invite-role="admin"]');
+      await click('[data-testid="work-onboarding-send-invites"]');
+      await act(async () => { await sleep(0); });
+      expect(invited).toEqual([["ben@acme-freight.com", { role: "admin", sendEmail: true }], ["cara@acme-freight.com", { role: "admin", sendEmail: true }]]);
+
+      // Done: three starters from the answer; one starts a Work chat, Open Work finishes.
+      expect(step()).toBe("done");
+      expect([...document.querySelectorAll("[data-work-starter]")].map((item) => item.getAttribute("data-work-starter"))).toEqual(starters.map((starter) => starter.title));
+      await click('[data-work-starter="What needs a reply from me?"]');
+      expect(started).toEqual(["Replies."]);
+      await click('[data-testid="work-onboarding-finish"]');
+      expect(finished).toBe(1);
+      expect(document.body.textContent).not.toMatch(/sample data|soc\s*2|just me/i);
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
+  test("an older server refusing the new sizes and custom tools gets the answer again without them", async () => {
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const sent: unknown[] = [];
+      const client = {
+        baseUrl: "http://old.test",
+        getWorkOnboarding: async () => ({ done: false, org: null }),
+        getWorkCatalog: async () => { throw new OmniRushServerError(404, "not_found", "Not Found"); },
+        saveWorkOnboarding: async (input: { size?: string }) => {
+          sent.push(input);
+          if (input.size === "6-10") throw new OmniRushServerError(422, "bad_arguments", "size");
+          return { org: { id: "org_1", name: "Acme" }, starters: [] };
+        },
+        listWorkMembers: async () => ({ org: null, members: [], invites: [] }),
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><WorkOnboarding client={client} email="ana@acme.com" sources={[]} openLink={noop} onDone={noop} /></QueryClientProvider>));
+      await act(async () => { await sleep(0); });
+      await act(async () => { document.querySelector<HTMLElement>('[data-size="6-10"]')!.click(); });
+      await act(async () => { document.querySelector<HTMLElement>('[data-testid="work-onboarding-continue"]')!.click(); await sleep(0); });
+      await act(async () => { await sleep(0); });
+      expect(sent).toEqual([{ company: "Acme", tools: [], domain: "acme.com", size: "6-10" }, { company: "Acme", tools: [], domain: "acme.com", size: "2-10" }]);
+      expect(document.querySelector('[data-testid="work-onboarding"]')?.getAttribute("data-step-name")).toBe("tools");
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
+  test("every catalog brand shows its own mark: a glyph wherever simple-icons has one, a letter only for the four it lacks", () => {
+    const letters: string[] = [];
+    for (const tool of builtInCatalog([]).connectors) {
+      if (tool.id === "imap" || tool.id === "caldav") continue;
+      const tile = renderToStaticMarkup(<BrandTile id={tool.id} />);
+      expect(tile).not.toContain("lucide");
+      expect(tile).toContain(`data-connector-icon="${tool.id}"`);
+      if (tile.includes("<text")) letters.push(tool.id);
+    }
+    expect(letters.sort()).toEqual(["freshdesk", "front", "monday", "pipedrive"]);
+    // Near-black marks take the text colour in dark mode; a custom tool shows its first letter.
+    expect(renderToStaticMarkup(<BrandTile id="github" />)).toContain("dark:[fill:currentColor]");
+    expect(renderToStaticMarkup(<BrandTile id="dropbox" />)).not.toContain("dark:[fill:currentColor]");
+    expect(renderToStaticMarkup(<BrandTile name="Basecamp" />)).toContain(">B</text>");
+  });
+
+  test("sidebar: places as labelled rows, connectors with a logo, the name and words beside the dot, problems first", () => {
+    const pass = { phase: "backfill", done: 42, total: 100, steps_done: null, steps_total: null };
+    expect(connectorState(row({ status: "connected" }))).toEqual({ tone: "ok", label: "Synced", value: null });
+    expect(connectorState(row({ status: "syncing", progress: pass }))).toEqual({ tone: "syncing", label: "Syncing 42%", value: 42 });
+    expect(connectorState(row({ status: "syncing" })).label).toBe("Syncing");
+    expect(connectorState(row({ status: "error", error: "reconnect_required" })).label).toBe("Reconnect");
+    expect(connectorState(row({ status: "paused_by_admin" })).label).toBe("Off");
+    const rows = [
+      row({ id: "google", status: "connected" }), row({ id: "slack", label: "Slack", status: "syncing", progress: pass }), row({ id: "jira", label: "Jira", status: "error" }),
+      row({ id: "notion", label: "Notion" }), row({ id: "mock", status: "connected" }), row({ id: "demo", status: "connected" }), row({ id: "hubspot", label: "HubSpot", status: "paused_by_admin" }),
+    ];
+    expect(sidebarConnectors(rows).map((item) => item.id)).toEqual(["jira", "slack", "google", "hubspot"]);
+    const nav = { onOpenHome: noop, homeActive: true, onOpenSearch: noop, onOpenOrganization: noop, organizationActive: false, onOpenConnectors: noop, connectorsActive: false, onOpenKnowledge: noop, knowledgeActive: false, onOpenActivity: noop, activityActive: false };
+    const markup = renderToStaticMarkup(<WorkSidebarNav nav={{ ...nav, connectors: rows, onOpenConnector: noop }} />);
+    for (const label of [">Home<", ">Search<", ">Knowledge<", ">Automation<", ">Organization<"]) expect(markup).toContain(label);
+    expect(markup).not.toContain(">Team insights<");
+    expect(markup).toContain('data-sidebar-connector="slack"');
+    expect(markup).toContain('aria-label="Slack, Syncing 42%"');
+    expect(markup).toContain('aria-label="Jira, Reconnect"');
+    expect(markup).toContain('data-connector-icon="google"');
+    expect(markup).not.toContain('data-sidebar-connector="notion"');
+    expect(markup).not.toContain('data-sidebar-connector="mock"');
+    // More than six: the first six, then Show N more. None connected: one Connect your tools row.
+    const many = ["google", "slack", "jira", "notion", "linear", "github", "hubspot", "stripe"].map((id) => row({ id, label: id, status: "connected" }));
+    const long = renderToStaticMarkup(<WorkSidebarNav nav={{ ...nav, connectors: many }} />);
+    expect(long.match(/data-sidebar-connector=/g)?.length).toBe(6);
+    expect(long).toContain(">Show 2 more<");
+    expect(renderToStaticMarkup(<WorkSidebarNav nav={{ ...nav, connectors: [] }} />)).toContain('data-testid="sidebar-work-connect-tools"');
+  });
+
+  test("enterprise mode: none without the block; Code only when staff turned it on and the company is active", () => {
+    expect(enterpriseMode(null)).toBe(CONSUMER);
+    expect(enterpriseMode(undefined).on).toBe(false);
+    expect(enterpriseMode(block)).toMatchObject({ on: true, active: true, code: false, role: "owner", orgName: "Acme Freight", portalUrl: "https://omnirush.ai/console/enterprise" });
+    expect(enterpriseMode({ ...block, status: "pending", code: true })).toMatchObject({ active: false, code: false });
+    const off = enterpriseMode(block);
+    for (const path of ["/", "/session", "/automations", "/apps", "/dashboard", "/extensions/skills"]) expect(enterpriseRedirect(off, path)).toBe("/work");
+    // A Code project's chat goes; a Work chat stays; nothing moves while the workspaces load.
+    expect(enterpriseRedirect(off, "/workspace/ws_1/session/ses_1", "starter")).toBe("/work");
+    expect(enterpriseRedirect(off, "/workspace/ws_work/session/ses_1", "work")).toBeNull();
+    expect(enterpriseRedirect(off, "/workspace/ws_1/session/ses_1", undefined)).toBeNull();
+    for (const path of ["/work", "/work/connectors", "/settings/general", "/workspace/ws_1/settings/work"]) expect(enterpriseRedirect(off, path, "starter")).toBeNull();
+    expect(enterpriseRedirect(enterpriseMode({ ...block, code: true }), "/session")).toBeNull();
+    expect(enterpriseRedirect(CONSUMER, "/session")).toBeNull();
+    expect(enterpriseRedirect(enterpriseMode({ ...block, status: "pending" }), "/session")).toBeNull();
+  });
+
+  test("a company that is not active gets the whole window: no time promise, the portal and Sign out", () => {
+    const copy = (status: "pending" | "denied" | "suspended", name: string | null = "Acme Freight") => enterpriseWaitingCopy({ status, orgName: name }, "ana@acme.com");
+    expect(copy("pending")).toEqual({ title: "We're setting up Acme Freight", body: "We'll e-mail ana@acme.com when it's ready." });
+    expect(copy("denied").title).toBe("Acme Freight wasn't approved");
+    expect(copy("suspended").title).toBe("Acme Freight is paused");
+    expect(copy("pending", null).title).toBe("Add your company to get started");
+    const markup = renderToStaticMarkup(<EnterpriseWaiting mode={enterpriseMode({ ...block, status: "pending" })} email="ana@acme.com" openLink={noop} onCheckAgain={async () => {}} onSignOut={async () => {}} />);
+    expect(markup).toContain('data-status="pending"');
+    expect(markup).toContain('data-testid="work-enterprise-portal"');
+    expect(markup).toContain('data-testid="work-enterprise-sign-out"');
+    expect(markup).not.toMatch(/business day|within|[\u2013\u2014]/i);
+  });
+
+  test("consumer-only surfaces (rewards, events, placements, release notes) render for everyone but a company account", async () => {
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => { useEnterpriseStore.getState().setBlock(null); });
+      await act(async () => root.render(<ConsumerOnly><span data-testid="reward" /></ConsumerOnly>));
+      expect(document.querySelector('[data-testid="reward"]')).not.toBeNull();
+      await act(async () => { useEnterpriseStore.getState().setBlock(block); });
+      expect(document.querySelector('[data-testid="reward"]')).toBeNull();
+      await act(async () => { useEnterpriseStore.getState().setBlock(null); });
+      expect(document.querySelector('[data-testid="reward"]')).not.toBeNull();
+      await act(async () => root.unmount());
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
+  test("settings: a company account without Code gets Work, Browser and the basics; with Code the full list; everyone else as before", () => {
+    const caps = { autoUpdate: true };
+    expect(enterpriseSettingsTabs(false, caps, CONSUMER)).toBeNull();
+    expect(enterpriseSettingsTabs(false, caps, enterpriseMode(block))).toEqual({ workspace: [], global: ["work", "browser", "appearance", "voice", "updates"] });
+    expect(enterpriseSettingsTabs(true, { autoUpdate: false }, enterpriseMode(block))?.global).toEqual(["work", "browser", "appearance", "voice", "debug"]);
+    const code = enterpriseSettingsTabs(false, caps, enterpriseMode({ ...block, code: true }));
+    expect(code?.workspace).toEqual(["preferences", "permissions", "extensions", "advanced"]);
+    expect(code?.global[0]).toBe("work");
+    const groups = { workspace: [], global: ["work", "browser"] as const, cloud: [] };
+    expect(settingsTabShown("general", { ...groups, global: [...groups.global] })).toBe(true);
+    expect(settingsTabShown("ai", { ...groups, global: [...groups.global] })).toBe(false);
+    // The command palette lists the same tabs.
+    const titles = (enterprise?: { on: boolean; code: boolean }) => buildCommandPaletteSettingsItems({ developerMode: false, capabilities: caps, enterprise, onOpenSettings: noop, onOpenExtensions: noop }).map((item) => item.id);
+    expect(titles({ on: true, code: false }).filter((id) => id.startsWith("settings:"))).toEqual(["settings:general", "settings:work", "settings:browser", "settings:appearance", "settings:voice", "settings:updates"]);
+    expect(titles()).toContain("settings:ai");
+    expect(titles()).not.toContain("settings:work");
+  });
+
+  test("Sign in to Work links: omnirush://work/signin only", () => {
+    expect(isWorkSignInLink("omnirush://work/signin")).toBe(true);
+    expect(isWorkSignInLink("omnirush:///work/signin/")).toBe(true);
+    expect(isWorkSignInLink("https://omnirush.ai/work/signin")).toBe(false);
+    expect(isWorkSignInLink("omnirush://work/signin-now")).toBe(false);
+  });
+});
+

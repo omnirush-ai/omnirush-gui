@@ -30,6 +30,7 @@ import {
   type Placement,
 } from "../../../app/lib/placements";
 import { observeViewability, trackPlacementWindow } from "../../../app/lib/placement-viewability";
+import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode";
 
 // The window's focus / minimize / show state from the start, before any card mounts.
 trackPlacementWindow();
@@ -67,8 +68,12 @@ function DismissButton(props: { placement: Placement; testId: string }) {
   );
 }
 
-/** The home / new-chat card: under the composer and the suggestions. */
+/** The home / new-chat card: under the composer and the suggestions. Never for a company account (OmniRush Work). */
 export function PlacementHomeCard() {
+  return useEnterpriseFlags().on ? null : <PlacementHomeCardLive />;
+}
+
+function PlacementHomeCardLive() {
   const placement = usePlacementsStore((state) => state.home);
   useEffect(() => {
     installPlacementActivity();
@@ -141,6 +146,10 @@ export function PlacementHomeCardView({ placement }: { placement: Placement }) {
  * session (the main process remembers it across runs too).
  */
 export function PlacementTurnFooter(props: { sessionId: string; turnRunning: boolean }) {
+  return useEnterpriseFlags().on ? null : <PlacementTurnFooterLive {...props} />;
+}
+
+function PlacementTurnFooterLive(props: { sessionId: string; turnRunning: boolean }) {
   const placement = usePlacementsStore((state) => state.footers[props.sessionId] ?? null);
   const previous = useRef({ sessionId: props.sessionId, running: props.turnRunning });
   useEffect(() => {

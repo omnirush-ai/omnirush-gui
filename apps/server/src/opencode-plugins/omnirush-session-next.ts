@@ -1,5 +1,6 @@
 import { SHELL_SECRET_ENV } from "./shell-secret-env.js";
 import { stockMode, stockShellEnv } from "../stock-mode/stock-mode.mjs";
+import { isWorkRoot, WORK_DIR_ENV, WORK_HEADER } from "../work/work.js";
 
 /**
  * 2.x engine plugin: what the 1.x plugins' `chat.headers` and `shell.env` did.
@@ -8,6 +9,7 @@ import { stockMode, stockShellEnv } from "../stock-mode/stock-mode.mjs";
  *   keeps one model per chat. A title request is marked and names the chat's model.
  * - A Claude chat (opencode-plugins/claude-provider): its turns name the chat's folder and agent (a compaction
  *   runs /compact in Claude Code); its title, on the gateway's title model, names no chat (it never binds there).
+ * - A Work chat's model requests say so (x-omnirush-work), so the gateway tells Work from Code.
  * - Agent shells never see the app's secrets (the engine password included).
  * The server refuses v2 chats while this plugin is not active (engine-v2-preview.ts).
  */
@@ -50,6 +52,8 @@ export default {
       if (event.kind === "compaction") event.headers["x-omnirush-request-kind"] = "compaction";
       const session = await info(event.sessionID);
       if (typeof session.parentID === "string" && session.parentID) event.headers["x-parent-session-id"] = session.parentID;
+      const directory = session.location?.directory;
+      if (typeof directory === "string" && isWorkRoot(process.env[WORK_DIR_ENV], directory)) event.headers[WORK_HEADER] = "1";
       if (event.kind === "title") {
         event.headers["x-omnirush-title"] = "1";
         const chatModel = typeof session.model?.id === "string" ? session.model.id : event.model.id;

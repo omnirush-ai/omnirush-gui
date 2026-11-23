@@ -3,7 +3,7 @@ import {
 } from "../../app/lib/deep-link-bridge";
 import { subscribeDesktopDeepLinks } from "../../app/lib/desktop";
 import { isDesktopRuntime } from "../../app/utils";
-import { useWorkInviteStore, workInviteToken } from "../domains/work/work-mode";
+import { isWorkSignInLink, useWorkInviteStore, useWorkSignInRequest, workInviteToken } from "../domains/work/work-mode";
 
 let started = false;
 
@@ -12,6 +12,7 @@ function push(urls: readonly string[]): void {
   for (const url of urls) {
     const token = workInviteToken(url);
     if (token) useWorkInviteStore.getState().setToken(token);
+    if (isWorkSignInLink(url)) useWorkSignInRequest.getState().setRequested(true);
   }
   pushPendingDeepLinks(window, urls);
 }

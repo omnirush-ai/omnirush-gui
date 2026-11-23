@@ -13,7 +13,7 @@ import type { OmniRushWorkConnector, OmniRushWorkFeed, OmniRushWorkFeedItem } fr
 import { cn } from "@/lib/utils";
 
 import { askAboutItemPrompt, connectorLabel, relativeTime, signsInWithForm, workConnectorsKey, workFailure, workFeedKey, type WorkClient } from "./work-mode";
-import { ConnectorIcon } from "./work-views";
+import { BrandTile, ConnectorIcon } from "./brand-icon";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
 /** Rows a section shows before "Show N more". */
@@ -58,7 +58,7 @@ export function SourceStrip(props: { sources: FeedSource[]; selected: string | n
           const pill = { "data-work-source": source.id, "data-dot": dot, title: source.attention?.message ?? dotLabel(dot) };
           const body = (
             <>
-              <ConnectorIcon id={source.id} className="size-3.5 text-current" />
+              <BrandTile id={source.id} size="chip" className="-ms-1.5 rounded-full" />
               {/* "Google (Gmail, Drive, Calendar)" reads as "Google" on a chip. */}
               <span className="max-w-[10rem] truncate">{connectorLabel(source.id, source.label.replace(/\s*\(.*\)$/, ""))}</span>
               <span aria-label={dotLabel(dot)} role="img" className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
@@ -177,12 +177,17 @@ function FeedSkeleton() {
 }
 
 /** The Today view: fixes, source filters and the non-empty sections (re-read on focus and every 5 minutes). */
-export function WorkToday(props: { client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void; badge?: React.ReactNode; checklist?: React.ReactNode }) {
+export function WorkToday(props: {
+  client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void; checklist?: React.ReactNode;
+  /** The filter kept by the caller (the route's `?source=`, so a sidebar connector opens Home filtered to it). */
+  source?: string | null; onSourceChange?: (id: string | null) => void;
+}) {
   const queryClient = useQueryClient();
-  const [source, setSource] = useState<string | null>(null);
+  const [ownSource, setOwnSource] = useState<string | null>(null);
+  const source = props.onSourceChange ? props.source ?? null : ownSource;
   const [asking, setAsking] = useState(false);
   const [more, setMore] = useState<Record<string, boolean>>({});
-  const pick = (id: string | null) => { setSource(id); setMore({}); };
+  const pick = (id: string | null) => { if (props.onSourceChange) props.onSourceChange(id); else setOwnSource(id); setMore({}); };
   const feed = useQuery({
     queryKey: workFeedKey(props.client, source),
     queryFn: () => props.client!.getWorkFeed({ ...(source ? { source } : {}), tz: localZone(), limit: 60 }),
@@ -194,7 +199,7 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
   });
   // The picked source went away: show all again (one source left has no All chip to clear it).
   useEffect(() => {
-    if (source && feed.data && !feed.data.sources.some((item) => item.id === source)) { setSource(null); setMore({}); }
+    if (source && feed.data && !feed.data.sources.some((item) => item.id === source)) pick(null);
   }, [feed.data, source]);
   // The strip and the chips always show every source, also while one is picked.
   const all = queryClient.getQueryData<OmniRushWorkFeed>(workFeedKey(props.client, null));
@@ -234,7 +239,6 @@ export function WorkToday(props: { client: WorkClient | null; openLink: (url: st
           <h1 className="text-[22px] font-semibold leading-[28px] tracking-[-0.02em] text-foreground">{t("work.today.today")}</h1>
           <span className="text-[13px] text-muted-foreground">{today}</span>
         </div>
-        {props.badge}
       </div>
       {sources.length ? (
         <SourceAttention

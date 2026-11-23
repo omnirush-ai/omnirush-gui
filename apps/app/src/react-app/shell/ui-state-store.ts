@@ -20,6 +20,8 @@ export type SidePanelState = Record<string, SidePanelItem | null>;
 
 export type PersistedUiState = {
   applicationMenuVisible?: boolean;
+  /** Work sidebar sections folded by the person (nav, connectors, chats). */
+  collapsedWorkSections?: string[];
   workspaceLeftSidebarWidth?: number;
   workspaceRightSidebarExpanded?: boolean;
   workspaceRightSidebarExpandedWidth?: number;
@@ -33,6 +35,8 @@ export type UiState = {
   // (not persisted) so leaving for Settings and coming back does not collapse
   // them: the session route unmounts while Settings is open.
   expandedWorkspaceIds: string[];
+  /** Work sidebar sections folded by the person (remembered), so the chat list keeps its height on small windows. */
+  collapsedWorkSections: string[];
   applicationMenuVisible: boolean;
   workspaceLeftSidebarWidth: number;
   workspaceLeftSidebarResizing: boolean;
@@ -44,6 +48,7 @@ const initialState: UiState = {
   sidebarOpen: true,
   sidePanelState: {},
   expandedWorkspaceIds: [],
+  collapsedWorkSections: [],
   applicationMenuVisible: false,
   workspaceLeftSidebarWidth: DEFAULT_WORKSPACE_LEFT_SIDEBAR_WIDTH,
   workspaceLeftSidebarResizing: false,
@@ -144,6 +149,9 @@ function readPersistedUiState(): UiState {
       ...initialState,
       sidebarOpen,
       applicationMenuVisible: parsed.applicationMenuVisible ?? initialState.applicationMenuVisible,
+      collapsedWorkSections: Array.isArray(parsed.collapsedWorkSections)
+        ? parsed.collapsedWorkSections.filter((id): id is string => typeof id === "string").slice(0, 8)
+        : initialState.collapsedWorkSections,
       workspaceLeftSidebarWidth: normalizeNumber(
         parsed.workspaceLeftSidebarWidth,
         MIN_WORKSPACE_LEFT_SIDEBAR_WIDTH,
@@ -174,6 +182,7 @@ export function persistUiState(state: UiState): void {
       PERSISTED_UI_STATE_KEY,
       JSON.stringify({
         applicationMenuVisible: state.applicationMenuVisible,
+        ...(state.collapsedWorkSections.length ? { collapsedWorkSections: state.collapsedWorkSections } : {}),
         workspaceLeftSidebarWidth: state.workspaceLeftSidebarWidth,
         workspaceRightSidebarExpanded: state.workspaceRightSidebarExpanded,
         workspaceRightSidebarExpandedWidth: state.workspaceRightSidebarExpandedWidth,
@@ -332,6 +341,7 @@ type UiStateStore = UiState & {
   toggleSidePanelState: (sessionId: string | null | undefined, panel: SidePanelItem) => void;
   expandWorkspace: (workspaceId: string) => void;
   toggleWorkspaceExpanded: (workspaceId: string) => void;
+  toggleWorkSection: (section: string) => void;
   setApplicationMenuVisible: (visible: boolean) => void;
   setWorkspaceLeftSidebarWidth: (width: number) => void;
   setWorkspaceLeftSidebarResizing: (resizing: boolean) => void;
@@ -348,6 +358,11 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   toggleSidePanelState: (sessionId, panel) => set((state) => toggleSidePanelState(state, sessionId, panel)),
   expandWorkspace: (workspaceId) => set((state) => expandWorkspace(state, workspaceId)),
   toggleWorkspaceExpanded: (workspaceId) => set((state) => toggleWorkspaceExpanded(state, workspaceId)),
+  toggleWorkSection: (section) => set((state) => ({
+    collapsedWorkSections: state.collapsedWorkSections.includes(section)
+      ? state.collapsedWorkSections.filter((id) => id !== section)
+      : [...state.collapsedWorkSections, section],
+  })),
   setApplicationMenuVisible: (visible) => {
     set((state) => setApplicationMenuVisible(state, visible));
     syncApplicationMenuVisible(visible);

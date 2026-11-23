@@ -61,6 +61,9 @@ export const GATEWAY_ERROR_COPY: Readonly<Record<string, string>> = {
   model_not_bound: BOUND_MODEL_COPY,
   mode_not_bound: "this chat keeps the project mode it started in. Start a new chat to change it.",
   session_model_used: "this chat already ran on another model. Start a new chat to use this one.",
+  // OmniRush Work company accounts: models wait for the company to be active, and Code waits for staff to turn it on.
+  work_company_not_active: "your company's OmniRush Work account is not active yet. Open Work to see where it stands.",
+  code_not_enabled: "Code is not turned on for your company. Use Work, or ask your admin.",
 }
 
 /** The copy for a gateway error code (bare or `upstream_<code>`), or null for a code without copy. */

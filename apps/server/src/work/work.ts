@@ -139,6 +139,57 @@ export function rememberedWorkActions(dir: string): { autopilot: boolean; full_a
   return { autopilot: block.autopilot === true, full_access: block.full_access === true, writes_paused: block.writes_paused === true, meetings: block.meetings === true };
 }
 
+/** Enterprise mode (`work.enterprise` in the capabilities, only for company accounts): the company's state, the person's
+ *  role, whether staff turned Code on, what uploads, and the admin portal. Null for every other account. */
+export type WorkEnterprise = {
+  status: "pending" | "active" | "denied" | "suspended";
+  org: { id: string; name: string; domain: string | null } | null;
+  role: "owner" | "admin" | "member" | null;
+  code: boolean;
+  capture: { code: boolean; chat: boolean };
+  portal_url: string | null;
+};
+
+const ENTERPRISE_STATUS = new Set(["pending", "active", "denied", "suspended"]);
+
+/** The `enterprise` key of a `work` block; absent or malformed is null (the app as before). Unknown statuses read as
+ *  pending (no Work, no Code), uploads stay off unless the server says on. */
+export function workEnterprise(block: unknown): WorkEnterprise | null {
+  const raw = isRecord(block) && isRecord(block.enterprise) ? block.enterprise : null;
+  if (!raw) return null;
+  const org = isRecord(raw.org) && typeof raw.org.id === "string" && typeof raw.org.name === "string"
+    ? { id: raw.org.id.slice(0, 64), name: raw.org.name.trim().slice(0, 200), domain: typeof raw.org.domain === "string" && raw.org.domain ? raw.org.domain.slice(0, 253) : null }
+    : null;
+  const capture = isRecord(raw.capture) ? raw.capture : {};
+  const portal = typeof raw.portal_url === "string" && /^https:\/\/[^\s]{1,500}$/.test(raw.portal_url) ? raw.portal_url : null;
+  return {
+    status: typeof raw.status === "string" && ENTERPRISE_STATUS.has(raw.status) ? raw.status as WorkEnterprise["status"] : "pending",
+    org,
+    role: raw.role === "owner" || raw.role === "admin" || raw.role === "member" ? raw.role : null,
+    code: raw.code === true,
+    capture: { code: capture.code === true, chat: capture.chat === true },
+    portal_url: portal,
+  };
+}
+
+/** The enterprise block as last seen (null: not a company account, or never seen). */
+export function rememberedWorkEnterprise(dir: string): WorkEnterprise | null {
+  const saved = readJson(join(dir, "server.json"));
+  return workEnterprise(isRecord(saved) ? saved.block : null);
+}
+
+/** Whether a chat in `root` stays on this computer: a company account uploads Code chats only when staff turned Code
+ *  uploads on, and Work chats only while its company keeps them (the server drops them anyway). Never for anyone else. */
+export function enterpriseUploadSkipped(dir: string | null | undefined, root: string): boolean {
+  if (!dir) return false;
+  const enterprise = rememberedWorkEnterprise(dir);
+  if (!enterprise) return false;
+  return isWorkRoot(dir, root) ? !enterprise.capture.chat : !enterprise.capture.code;
+}
+
+/** The model request header of a Work chat: the gateway tells Work from Code by it (the code gate for company accounts). */
+export const WORK_HEADER = "x-omnirush-work";
+
 /** The switch as last seen (off when never seen). */
 export function rememberedWorkSwitch(dir: string): WorkSwitch {
   const saved = readJson(join(dir, "server.json"));

@@ -9,7 +9,7 @@ import { desiredV2Mcp, v2McpGate } from "../engine-v2-mcp.js";
 import { writeWorkspaceMcp } from "../mcp-allow/state.js";
 import { workPrompt } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
-import { isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
+import { enterpriseUploadSkipped, isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_HEADER, WORK_PATH, WORK_READ_TOOLS, workEnterprise, workEnvironment, workHome } from "./work.js";
 import type { Route } from "../routes/registry.js";
 import type { ServerConfig } from "../types.js";
 
@@ -647,6 +647,30 @@ describe("work routes", () => {
     expect(asked).toEqual([undefined, { maxAgeMs: 0 }, undefined]);
   });
 
+  test("company accounts: the state carries the enterprise block (no one else's does), a focus read asks fresher, custom tools and invite roles are checked", async () => {
+    const asked: unknown[] = [];
+    let enterprise: unknown = { status: "pending", org: { id: "org_1", name: "Acme" }, role: "owner", code: false, capture: { code: false, chat: true }, portal_url: "https://omnirush.ai/console/enterprise" };
+    const { calls, call } = setup(() => json({ ok: true, org: { id: "org_1", name: "Acme" } }), async (options) => { asked.push(options); return { work: { enabled: false, sources: [], ...(enterprise ? { enterprise } : {}) } }; });
+    expect((await (await call("GET", "/work/state")).json()).enterprise).toMatchObject({ status: "pending", role: "owner", code: false });
+    await call("GET", "/work/state?fresh=1");
+    expect(asked).toEqual([undefined, { maxAgeMs: 30_000 }]);
+    enterprise = null;
+    expect("enterprise" in (await (await call("GET", "/work/state")).json())).toBe(false);
+    expect((await call("POST", "/work/onboarding", { company: "Acme", size: "2-5", tools: ["google"], custom_tools: [" Basecamp ", "Gusto", "Basecamp"] })).status).toBe(200);
+    expect((await call("POST", "/work/onboarding", { company: "Acme", custom_tools: ["<b>"] })).status).toBe(400);
+    expect((await call("POST", "/work/onboarding", { company: "Acme", custom_tools: Array.from({ length: 11 }, (_, i) => `T${i}`) })).status).toBe(400);
+    expect((await call("PATCH", "/work/org", { custom_tools: ["Basecamp"] })).status).toBe(200);
+    expect((await call("POST", "/work/org/invites", { email: "ben@acme.test", role: "admin", send_email: true })).status).toBe(200);
+    expect((await call("POST", "/work/org/invites", { email: "ben@acme.test", role: "owner" })).status).toBe(400);
+    expect((await call("POST", "/work/org/invites", { email: "cara@acme.test" })).status).toBe(200);
+    expect(calls).toEqual([
+      "POST onboarding {\"company\":\"Acme\",\"size\":\"2-5\",\"tools\":[\"google\"],\"custom_tools\":[\"Basecamp\",\"Gusto\"]}",
+      "PATCH org {\"custom_tools\":[\"Basecamp\"]}",
+      "POST org/invites {\"email\":\"ben@acme.test\",\"role\":\"admin\",\"send_email\":true}",
+      "POST org/invites {\"email\":\"cara@acme.test\"}",
+    ]);
+  });
+
   test("the catalog, a record, its attachment, an action and a new mail are checked, then forwarded", async () => {
     const { calls, call } = setup((path) => path.startsWith("records/attachment")
       ? new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": path.includes("n=1") ? "image/svg+xml" : "application/pdf", "content-disposition": "attachment; filename=\"a.pdf\"" } })
@@ -694,5 +718,41 @@ describe("work routes", () => {
     expect(seen.headers?.["mcp-protocol-version"]).toBe("2025-06-18");
     expect(JSON.stringify(seen.headers)).not.toContain("engine");
     expect((await forwardWorkMcp(new Request("http://x/omnirush/work/mcp"), broker)).status).toBe(405);
+  });
+});
+
+describe("work for companies (enterprise design 2.6)", () => {
+  const block = { status: "active", org: { id: "org_1", name: " Acme Freight ", domain: "acme.com" }, role: "owner", code: false, capture: { code: false, chat: true }, portal_url: "https://omnirush.ai/console/enterprise" };
+
+  test("the enterprise block: absent for everyone else; checked field by field; an unknown status waits; uploads off unless said on", () => {
+    expect(workEnterprise({ enabled: true })).toBeNull();
+    expect(workEnterprise(null)).toBeNull();
+    expect(workEnterprise({ enterprise: "yes" })).toBeNull();
+    expect(workEnterprise({ enterprise: block })).toEqual({ status: "active", org: { id: "org_1", name: "Acme Freight", domain: "acme.com" }, role: "owner", code: false, capture: { code: false, chat: true }, portal_url: "https://omnirush.ai/console/enterprise" });
+    expect(workEnterprise({ enterprise: { status: "closing", org: null, code: "yes", capture: null, portal_url: "javascript:alert(1)" } })).toEqual({ status: "pending", org: null, role: null, code: false, capture: { code: false, chat: false }, portal_url: null });
+  });
+
+  test("remembered with the switch; a later answer without it clears it", () => {
+    const dir = temp();
+    expect(rememberedWorkEnterprise(dir)).toBeNull();
+    rememberWorkSwitch(dir, { work: { enabled: true, sources: [], enterprise: block } });
+    expect(rememberedWorkEnterprise(dir)?.org?.name).toBe("Acme Freight");
+    rememberWorkSwitch(dir, { work: { enabled: true, sources: [] } });
+    expect(rememberedWorkEnterprise(dir)).toBeNull();
+  });
+
+  test("a company account keeps on this computer what its company does not upload; nobody else ever does", () => {
+    const dir = temp();
+    const workChat = join(dir, "user_1");
+    expect(enterpriseUploadSkipped(dir, "/tmp/project")).toBe(false);
+    expect(enterpriseUploadSkipped(dir, workChat)).toBe(false);
+    expect(enterpriseUploadSkipped(null, "/tmp/project")).toBe(false);
+    rememberWorkSwitch(dir, { work: { enabled: true, sources: [], enterprise: block } });
+    expect(enterpriseUploadSkipped(dir, "/tmp/project")).toBe(true);
+    expect(enterpriseUploadSkipped(dir, workChat)).toBe(false);
+    rememberWorkSwitch(dir, { work: { enabled: true, sources: [], enterprise: { ...block, capture: { code: true, chat: false } } } });
+    expect(enterpriseUploadSkipped(dir, "/tmp/project")).toBe(false);
+    expect(enterpriseUploadSkipped(dir, workChat)).toBe(true);
+    expect(WORK_HEADER).toBe("x-omnirush-work");
   });
 });

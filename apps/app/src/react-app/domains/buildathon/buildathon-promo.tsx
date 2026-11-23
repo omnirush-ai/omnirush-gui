@@ -21,6 +21,7 @@ import {
 } from "../../../app/lib/buildathon";
 import { BANNER_HEIGHT_PX, bannerShiftStyle } from "../../shell/update-gate";
 import posterThumb from "./buildathon-poster-thumb.webp";
+import { useEnterpriseFlags } from "../work/enterprise-mode";
 
 /** The event poster's colours (omnirush.ai/buildathon). */
 const BLUE = "#3A2DF5";
@@ -43,9 +44,11 @@ export function useActivePromo(): BuildathonPromo | null {
   const promo = useBuildathonStore((store) => store.promo);
   const seenVersion = useBuildathonStore((store) => store.seenVersion);
   const now = useServerNow(30_000);
+  // Events are the consumer app's: a company account (OmniRush Work) never sees the promo.
+  const enterprise = useEnterpriseFlags().on;
   // seenVersion: re-read the dismissed ids after a dismissal.
   void seenVersion;
-  return promoActive(promo, now, readPromoIds("dismissed")) ? promo : null;
+  return !enterprise && promoActive(promo, now, readPromoIds("dismissed")) ? promo : null;
 }
 
 export function dismissPromo(id: string): void {

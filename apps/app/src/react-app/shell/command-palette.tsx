@@ -31,6 +31,7 @@ import { DEFAULT_FEEDBACK_URL } from "@/app/lib/feedback";
 import { openFeedbackDialog } from "@/app/lib/in-app-feedback";
 import { isDesktopRuntime } from "@/app/utils";
 import { displayVersion, openWhatsNew, useWhatsNewUnseen } from "../domains/whats-new/whats-new";
+import { useEnterpriseFlags } from "../domains/work/enterprise-mode";
 import { ChevronLeftIcon } from "lucide-react";
 import type { ModelOption, ModelRef } from "@/app/types";
 import { useCheckDesktopRestriction } from "../domains/cloud/desktop-config-provider";
@@ -203,6 +204,7 @@ export function CommandPalette(props: CommandPaletteProps) {
   };
 
   const whatsNewUnseen = useWhatsNewUnseen();
+  const enterprise = useEnterpriseFlags();
   const accessibleTargetCount = props.accessibleTargets?.length ?? 0;
   const sessionGroupCount = props.sessionGroups?.length ?? 0;
   const canMoveCurrentSessionToGroup = Boolean(props.currentSessionForGroupMove && props.onMoveCurrentSessionToGroup);
@@ -354,7 +356,7 @@ export function CommandPalette(props: CommandPaletteProps) {
         openUrl("https://github.com/omnirush-ai/omnirush-gui#readme");
       },
     },
-    ...(isDesktopRuntime()
+    ...(isDesktopRuntime() && !enterprise.on
       ? [{
           id: "whats-new",
           title: t("whats_new.title"),
@@ -381,7 +383,7 @@ export function CommandPalette(props: CommandPaletteProps) {
         else openUrl(DEFAULT_FEEDBACK_URL);
       },
     },
-  ], [accessibleTargetCount, canMoveCurrentSessionToGroup, hasNestedModelPicker, props, sessionGroupCount, sessionNumberHelp, whatsNewUnseen]);
+  ], [accessibleTargetCount, canMoveCurrentSessionToGroup, enterprise.on, hasNestedModelPicker, props, sessionGroupCount, sessionNumberHelp, whatsNewUnseen]);
 
   const sessionItems = useMemo<PaletteItem[]>(
     () =>
@@ -408,6 +410,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       developerMode: props.developerMode,
       capabilities: platform.capabilities,
       checkRestriction: checkDesktopRestriction,
+      enterprise: { on: enterprise.on, code: enterprise.code },
       onOpenSettings: (route) => {
         props.onClose();
         props.onOpenSettings(route);
@@ -419,6 +422,8 @@ export function CommandPalette(props: CommandPaletteProps) {
     }),
     [
       checkDesktopRestriction,
+      enterprise.code,
+      enterprise.on,
       platform.capabilities,
       props.developerMode,
       props.onClose,

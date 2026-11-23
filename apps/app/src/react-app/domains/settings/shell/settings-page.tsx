@@ -3,12 +3,14 @@ import type * as React from "react";
 import {
   Code2,
   ArrowLeft,
+  Briefcase,
   Bug,
   Cable,
   ChevronDown,
   CloudCog,
   Cog,
   FolderLock,
+  Globe,
   Mic,
   Paintbrush,
   Puzzle,
@@ -61,6 +63,7 @@ import {
   SettingsPanelToolbarStatus,
 } from "./panel";
 import { SidebarDestination } from "../../session/sidebar/sidebar-destination";
+import { useEnterpriseFlags, type EnterpriseMode } from "../../work/enterprise-mode";
 
 export function getSettingsTabIcon(tab: SettingsTab) {
   switch (tab) {
@@ -98,6 +101,10 @@ export function getSettingsTabIcon(tab: SettingsTab) {
       return ShieldCheck;
     case "debug":
       return Bug;
+    case "work":
+      return Briefcase;
+    case "browser":
+      return Globe;
     default:
       return Cog;
   }
@@ -139,6 +146,10 @@ export function getSettingsTabLabel(tab: SettingsTab) {
       return t("settings.tab_recovery");
     case "debug":
       return t("settings.tab_debug");
+    case "work":
+      return t("settings.tab_work");
+    case "browser":
+      return t("settings.tab_browser");
     case "general":
       return t("settings.tab_general");
     default:
@@ -182,6 +193,10 @@ export function getSettingsTabDescription(tab: SettingsTab) {
       return t("settings.tab_description_recovery");
     case "debug":
       return t("settings.tab_description_debug");
+    case "work":
+      return t("settings.tab_description_work");
+    case "browser":
+      return t("settings.tab_description_browser");
     case "general":
       return t("settings.tab_description_overview");
     default:
@@ -205,6 +220,29 @@ export function getGlobalSettingsTabs(
 
 export const CLOUD_SETTINGS_TABS: SettingsTab[] = [
 ];
+
+/**
+ * Settings for a company account (OmniRush Work, enterprise design 2.6); null for everyone else (the lists above).
+ * Without Code: Work, Browser and the app-wide basics, no workspace tabs, no AI, Editor or Environment (Debug only in
+ * developer mode). With Code turned on by staff: the full list, Work first.
+ */
+export function enterpriseSettingsTabs(
+  developerMode: boolean,
+  capabilities: Pick<PlatformCapabilities, "autoUpdate">,
+  mode: Pick<EnterpriseMode, "on" | "code">,
+): { workspace: SettingsTab[]; global: SettingsTab[] } | null {
+  if (!mode.on) return null;
+  if (mode.code) return { workspace: getWorkspaceSettingsTabs(), global: ["work", ...getGlobalSettingsTabs(developerMode, capabilities)] };
+  const global: SettingsTab[] = ["work", "browser", "appearance", "voice"];
+  if (capabilities.autoUpdate) global.push("updates");
+  if (developerMode) global.push("debug");
+  return { workspace: [], global };
+}
+
+/** Whether Settings shows `tab` in this mode (General always). */
+export function settingsTabShown(tab: SettingsTab, groups: Pick<SettingsNavGroups, "workspace" | "global" | "cloud">): boolean {
+  return tab === "general" || groups.workspace.includes(tab) || groups.global.includes(tab) || groups.cloud.includes(tab);
+}
 
 export function isSettingsTabBeta(_tab: SettingsTab) {
   return false;
@@ -252,12 +290,13 @@ export type SettingsNavGroups = {
 export function useSettingsNavGroups(developerMode: boolean): SettingsNavGroups {
   const platform = usePlatform();
   const checkRestriction = useCheckDesktopRestriction();
+  const enterprise = enterpriseSettingsTabs(developerMode, platform.capabilities, useEnterpriseFlags());
   const allowed = (tabs: SettingsTab[]) =>
     tabs.filter((tab) => isSettingsTabAllowed({ tab, checkRestriction }));
   return {
     hub: allowed(["general"]),
-    workspace: allowed(getWorkspaceSettingsTabs()),
-    global: allowed(getGlobalSettingsTabs(developerMode, platform.capabilities)),
+    workspace: allowed(enterprise?.workspace ?? getWorkspaceSettingsTabs()),
+    global: allowed(enterprise?.global ?? getGlobalSettingsTabs(developerMode, platform.capabilities)),
     cloud: allowed(CLOUD_SETTINGS_TABS),
   };
 }

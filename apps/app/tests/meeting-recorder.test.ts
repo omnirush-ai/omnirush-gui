@@ -359,7 +359,7 @@ describe("meetings: all four Work layers", () => {
     const local = readFileSync(new URL("../../server/src/work/routes.ts", import.meta.url), "utf8");
     for (const path of ["/work/meetings", "/work/meetings/:id", "/work/meetings/:id/audio"]) expect(local).toContain(`"${path}"`);
     const broker = readFileSync(new URL("../../server/src/work/work.ts", import.meta.url), "utf8");
-    expect(broker).toContain("meetings(?:\\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}(?:\\/audio)?)?");
+    expect(broker).toContain("`meetings(?:/${ID}(?:/audio)?)?`");
 
     const seen: { url: string; method: string; body: unknown; type: string | null }[] = [];
     const saved = globalThis.fetch;

@@ -11,6 +11,7 @@ import {
   workspaceSetSelected,
   type WorkspaceInfo,
   type WorkspaceList,
+  omnirushAccountConnect,
 } from "../../app/lib/desktop";
 import { isDesktopRuntime } from "../../app/utils";
 import { canCreateWorkspaces } from "../../app/lib/workspace-creation-policy";
@@ -37,6 +38,7 @@ import { writeActiveWorkspaceId, writeLastSessionFor, writeWorkspaceProjectDimen
 import { workspaceSessionRoute } from "./workspace-routes";
 import { ensureDesktopLocalOmniRushConnection } from "./desktop-local-omnirush";
 import { shouldHoldWelcomeForDenSession } from "./welcome-den-session";
+import { useWorkModeStore, useWorkSignInRequest, WORK_HOME_ROUTE } from "../domains/work/work-mode";
 
 function subscribeToDenSettings(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
@@ -140,6 +142,8 @@ export function WelcomeRoute() {
   const [state, dispatch] = useReducer(welcomeReducer, initialWelcomeState);
   const [manualFolder, setManualFolder] = useState("");
   const [joinOrganizationOpen, setJoinOrganizationOpen] = useState(false);
+  // Sign in to OmniRush Work: a company account skips the folder and model steps and opens Work.
+  const [workSignIn, setWorkSignIn] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const denAuthTokenSnapshot = useSyncExternalStore(
     subscribeToDenSettings,
     readDenAuthTokenSnapshot,
@@ -366,6 +370,27 @@ export function WelcomeRoute() {
     platform.openLink(url);
   }, [markOnboardingComplete, platform]);
 
+  const handleWorkSignIn = useCallback(async () => {
+    setWorkSignIn({ busy: true, error: null });
+    try {
+      await omnirushAccountConnect({ surface: "work" });
+      captureAnalyticsEvent("sign_in_completed", { method: "device_link", surface: "work" });
+      useWorkModeStore.getState().setMode("work");
+      markOnboardingComplete();
+      navigate(WORK_HOME_ROUTE, { replace: true });
+    } catch {
+      setWorkSignIn({ busy: false, error: t("welcome.sign_in_work_failed") });
+    }
+  }, [markOnboardingComplete, navigate]);
+
+  // `omnirush://work/signin` (the company portal's "Open the app") starts it at once.
+  const signInRequested = useWorkSignInRequest((store) => store.requested);
+  useEffect(() => {
+    if (!signInRequested || !isDesktopRuntime() || workSignIn.busy) return;
+    useWorkSignInRequest.getState().setRequested(false);
+    void handleWorkSignIn();
+  }, [handleWorkSignIn, signInRequested, workSignIn.busy]);
+
   const finishOnboarding = useCallback(() => {
     markOnboardingComplete();
     navigate(state.pendingRoute ?? "/session", { replace: true });
@@ -402,6 +427,9 @@ export function WelcomeRoute() {
         showManualFolder={import.meta.env.DEV && isDesktopRuntime()}
         onTeamSignIn={denControlPlaneConfigured ? handleTeamSignIn : undefined}
         onJoinOrganization={() => setJoinOrganizationOpen(true)}
+        onWorkSignIn={isDesktopRuntime() ? () => void handleWorkSignIn() : undefined}
+        workSignInBusy={workSignIn.busy}
+        workSignInError={workSignIn.error}
       />
       <JoinOrganizationDialog
         open={joinOrganizationOpen}

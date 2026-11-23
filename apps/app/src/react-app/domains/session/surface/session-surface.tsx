@@ -108,6 +108,7 @@ import { useComputerUseHint } from "@/react-app/domains/session/surface/computer
 import { QueuedMessagesPanel } from "@/react-app/domains/session/modals/queued-messages-panel";
 import { GoodSessionChecklistBar, noteUserStop } from "@/react-app/domains/quality/good-session";
 import { PlacementTurnFooter } from "@/react-app/domains/placements/placements";
+import { useEnterpriseFlags } from "@/react-app/domains/work/enterprise-mode";
 import { SideAnswers } from "./side-answers";
 import { parseSideQuestion, type SideAnswer } from "./side-question";
 import { FeedbackTurnPrompt } from "@/react-app/domains/feedback/feedback";
@@ -1188,6 +1189,8 @@ function hiddenMessageCount(snapshot: OmniRushSessionSnapshot, revertMessageId: 
 
 export function SessionSurface(props: SessionSurfaceProps) {
   const local = useLocal();
+  // A company account (OmniRush Work) gets none of the consumer session nudges.
+  const enterprise = useEnterpriseFlags();
   const { config: shellConfig } = useShellConfig();
   const showThinking = local.prefs.showThinking;
   const findOpen = useSessionFindStore((state) => state.open);
@@ -3684,7 +3687,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           onCheckAcceptance={() => void checkUnknownAdmission(true)}
           onStop={async () => { await handleAbort(); }}
         />
-        {props.workChat ? null : <GoodSessionChecklistBar
+        {props.workChat || enterprise.on ? null : <GoodSessionChecklistBar
           sessionId={props.sessionId}
           messages={renderedMessages}
           workspaceRoot={props.workspaceRoot}
