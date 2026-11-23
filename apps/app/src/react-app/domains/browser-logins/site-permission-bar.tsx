@@ -3,23 +3,96 @@
 // use your camera and microphone. Block / Allow"), the screen picker that covers the page while someone shares, and
 // the switch that turns both on for Work accounts. The questions only ever come for the person's own tabs.
 import type { BrowserPanelTab } from "@omnirush/browser-tabs";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppWindow, Bell, Mic, Monitor, Video } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { BrowserScreenSource } from "@/app/lib/desktop";
+import type { BrowserScreenSource, BrowserSiteKind, BrowserSitePermission } from "@/app/lib/desktop";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
-import { getBrowserSitesBridge, sitePromptMessage, sitePromptParts, siteHost, useSitePromptsGate } from "./site-permissions";
+import { BrandTile } from "../work/brand-icon";
+import { browserSitePermissionsKey, getBrowserSitesBridge, siteBrand, siteName, sitePromptMessage, sitePromptParts, siteHost, useSitePermissionList, useSitePromptsGate } from "./site-permissions";
+import { useBrowserLibraryAvailable } from "./use-browser-library";
+
+/** Sent by "Site settings" in the Work browser's ".." menu (work-browser.ts) with the page's address. */
+export const SITE_SETTINGS_EVENT = "omnirush:work-browser-site-settings";
 
 /** Mounted once for the app: Work accounts get the per-site questions, everyone else keeps them denied. */
 export function BrowserSitePrompts() {
   useSitePromptsGate();
-  return null;
+  const available = useBrowserLibraryAvailable();
+  return available && getBrowserSitesBridge() ? <SiteSettingsDialog /> : null;
+}
+
+const SITE_KINDS: BrowserSiteKind[] = ["camera", "microphone", "notifications"];
+
+/** One site's camera, microphone and notification choices, from the Work browser's ".." menu, with Remove. */
+export function SiteSettingsDialog() {
+  const [origin, setOrigin] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const open = (event: Event) => {
+      const url = (event as CustomEvent<{ url?: unknown }>).detail?.url;
+      try {
+        const parsed = new URL(typeof url === "string" ? url : "");
+        if (parsed.protocol === "https:" || parsed.protocol === "http:") setOrigin(parsed.origin);
+      } catch {
+        // Not a web page: nothing to show.
+      }
+    };
+    window.addEventListener(SITE_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(SITE_SETTINGS_EVENT, open);
+  }, []);
+  const list = useSitePermissionList(origin !== null);
+  const entry: BrowserSitePermission | null = list.data?.find((item) => item.origin === origin) ?? null;
+  const forget = useMutation({
+    mutationFn: (site: string) => getBrowserSitesBridge()!.forget(site),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: browserSitePermissionsKey }),
+    onError: report,
+  });
+  const host = origin ? siteHost(origin) : "";
+  const chosen = Boolean(entry && SITE_KINDS.some((kind) => entry[kind] !== null));
+  return (
+    <Dialog open={origin !== null} onOpenChange={(next) => { if (!next) setOrigin(null); }}>
+      <DialogContent className="gap-5 sm:max-w-[440px]" data-testid="site-settings-dialog">
+        <DialogHeader>
+          <DialogTitle className="flex min-w-0 items-center gap-2.5 text-[17px] tracking-[-0.01em]">
+            {origin ? <BrandTile id={siteBrand(origin)} name={siteName(origin).toUpperCase()} /> : null}
+            <span className="min-w-0 truncate" title={origin ?? undefined}>{host}</span>
+          </DialogTitle>
+          <DialogDescription className="text-[13px]">{t("site_permissions.site_settings_desc")}</DialogDescription>
+        </DialogHeader>
+        <ul className="overflow-hidden rounded-xl border border-border" data-testid="site-settings-list">
+          {SITE_KINDS.map((kind) => {
+            const Icon = kind === "camera" ? Video : kind === "microphone" ? Mic : Bell;
+            const choice = entry?.[kind] ?? null;
+            return (
+              <li key={kind} className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-b-0" data-testid="site-settings-row">
+                <Icon aria-hidden className="size-4 shrink-0 text-dls-secondary" />
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{t(`site_permissions.label_${kind}`)}</span>
+                <span className={cn("shrink-0 text-[13px]", choice ? "text-foreground" : "text-dls-secondary")}>
+                  {choice === "allow" ? t("site_permissions.state_allowed") : choice === "block" ? t("site_permissions.state_blocked") : t("site_permissions.state_ask")}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        <DialogFooter className="items-center">
+          {chosen && origin ? (
+            <Button variant="ghost" size="sm" className="h-8 px-3 text-[13px] sm:me-auto" disabled={forget.isPending} onClick={() => forget.mutate(origin)} aria-label={t("site_permissions.remove_site", { host })} data-testid="site-settings-remove">
+              {t("site_permissions.remove")}
+            </Button>
+          ) : null}
+          <Button size="sm" className="h-8 px-4 text-[13px]" onClick={() => setOrigin(null)} data-testid="site-settings-done">{t("site_permissions.done")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 type SitePrompt = NonNullable<BrowserPanelTab["sitePrompt"]>;

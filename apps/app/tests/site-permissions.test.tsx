@@ -209,6 +209,37 @@ describe("calls and alerts in the built-in browser", () => {
     expect(consumer.calls.prompts).toEqual([false]);
   });
 
+  test("Site settings from the Work browser's .. menu: this site's camera, microphone and notification choices, with Remove", async () => {
+    const { BrowserSitePrompts, SITE_SETTINGS_EVENT } = await import("../src/react-app/domains/browser-logins/site-permission-bar");
+    const { bridge, calls } = fakeSites([entry("https://meet.google.com", 2, { camera: "allow", notifications: "block" }), entry("https://app.slack.com", 1, { notifications: "allow" })]);
+    const open = (url: string) => window.dispatchEvent(new CustomEvent(SITE_SETTINGS_EVENT, { detail: { url } }));
+    await withDom(async ({ mount, act }) => {
+      await mount(<BrowserSitePrompts />);
+      expect(byTestId("site-settings-dialog")).toBeNull();
+      await act(() => open("https://meet.google.com/abc-defg-hij?authuser=0"));
+      expect(byTestId("site-settings-dialog")?.textContent).toContain("meet.google.com");
+      expect(allByTestId("site-settings-row").map((row) => row.textContent)).toEqual(["CameraAllowed", "MicrophoneAsks first", "NotificationsBlocked"]);
+      await act(() => byTestId("site-settings-remove")!.click());
+      expect(calls.forgot).toEqual(["https://meet.google.com"]);
+      // Forgotten: every choice asks again, and there is nothing left to remove.
+      expect(allByTestId("site-settings-row").map((row) => row.textContent)).toEqual(["CameraAsks first", "MicrophoneAsks first", "NotificationsAsks first"]);
+      expect(byTestId("site-settings-remove")).toBeNull();
+      await act(() => byTestId("site-settings-done")!.click());
+      expect(byTestId("site-settings-dialog")).toBeNull();
+      // A site with no choices yet still opens, with nothing to remove.
+      await act(() => open("https://tms.acme.example/s/4471"));
+      expect(allByTestId("site-settings-row")).toHaveLength(3);
+      expect(byTestId("site-settings-remove")).toBeNull();
+    }, bridge);
+    // Without Work: nothing listens.
+    const consumer = fakeSites([entry("https://meet.google.com", 2, { camera: "allow" })]);
+    await withDom(async ({ mount, act }) => {
+      await mount(<BrowserSitePrompts />);
+      await act(() => open("https://meet.google.com/x"));
+      expect(byTestId("site-settings-dialog")).toBeNull();
+    }, consumer.bridge, false);
+  });
+
   test("Settings lists eight sites, then Show all, with a search; Remove forgets a site; nothing shows when empty", async () => {
     const many = Array.from({ length: 11 }, (_, index) => entry(`https://site${index + 1}.example`, 100 - index, { camera: "allow" }));
     many[0] = entry("https://meet.google.com", 200, { camera: "allow", microphone: "allow", notifications: "block" });
