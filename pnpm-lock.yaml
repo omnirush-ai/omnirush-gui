@@ -144,6 +144,12 @@ importers:
       '@heroicons/react':
         specifier: ^2.2.0
         version: 2.2.0(react@19.2.8)
+      '@lexical/link':
+        specifier: ^0.35.0
+        version: 0.35.0
+      '@lexical/list':
+        specifier: ^0.35.0
+        version: 0.35.0
       '@lexical/react':
         specifier: ^0.35.0
         version: 0.35.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(yjs@13.6.30)

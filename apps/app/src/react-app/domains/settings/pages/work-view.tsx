@@ -9,6 +9,7 @@ import { WorkAnswerStyleSetting } from "@/react-app/domains/work/answer-style";
 import { useWorkState, WORK_ACTIVITY_ROUTE, type WorkClient } from "@/react-app/domains/work/work-mode";
 import { WorkOrganizationSetting } from "@/react-app/domains/work/work-org";
 import { WorkConnectorsSetting } from "@/react-app/domains/work/work-views";
+import { WorkUndoSendSetting } from "@/react-app/domains/work/viewer/undo-send-setting";
 
 import {
   LayoutSection,
@@ -46,6 +47,7 @@ export function WorkSettingsView(props: { client: (WorkClient & WebSearchClient)
         <WorkConnectorsSetting client={props.client} />
         <WorkOrganizationSetting client={props.client} />
         <WorkAnswerStyleSetting client={props.client} />
+        <WorkUndoSendSetting client={props.client} />
         <WebSearchSetting client={props.client} busy={props.busy} />
         <WorkAutomationSetting client={props.client} />
       </LayoutSection>

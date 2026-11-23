@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils";
 
 import { askAboutItemPrompt, coverageCanAdd, periodStart, relativeTime, snippetParts, workConnectorsKey, workFailure, workSearchKey, WORK_SEARCH_FOCUS_EVENT, type SearchPeriod, type WorkClient } from "./work-mode";
 import { ConnectorIcon, useCoverageMeter, WorkCoverageMeter } from "./work-views";
+import { useOpenRecordId } from "./viewer/record-tabs";
+import { canOpen, isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
+import { useListKeys } from "./viewer/shortcuts";
 
 /** Items a group shows before "Show all". */
 export const GROUP_ROWS = 3;
@@ -28,17 +31,23 @@ function Snippet(props: { text: string | null | undefined }) {
   return <>{snippetParts(props.text).map((part, index) => (part.bold ? <strong key={index} className="font-semibold text-foreground">{part.text}</strong> : <span key={index}>{part.text}</span>))}</>;
 }
 
-/** One hit: subject and when, then who and the snippet. The row opens the item; Open and Ask show on hover or focus. */
-export function SearchRow(props: { item: OmniRushWorkSearchItem; label: string; now?: number; busy: boolean; onOpen: (url: string) => void; onAsk: (item: OmniRushWorkSearchItem) => void }) {
+/** One hit: subject and when, then who and the snippet. The row opens the item in the viewer panel (Cmd/Ctrl+click or
+ *  Open: at its source); Open and Ask show on hover or focus. */
+export function SearchRow(props: { item: OmniRushWorkSearchItem; label: string; now?: number; busy: boolean; selected?: boolean; onOpen: (item: OmniRushWorkSearchItem, options: { external: boolean; newTab: boolean }) => void; onAsk: (item: OmniRushWorkSearchItem) => void }) {
   const item = props.item;
   const title = item.subject?.trim() || props.label;
-  const open = item.url ? () => props.onOpen(item.url!) : null;
+  const open = canOpen({ sourceId: item.source_id, url: item.url }) ? (options: { external: boolean; newTab: boolean }) => props.onOpen(item, options) : null;
   return (
     <li
       data-search-item={item.source_id}
-      {...(open ? { role: "button", tabIndex: 0, "aria-label": t("work.today.open_item", { title }), onClick: open, onKeyDown: (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open(); } } } : {})}
-      className={cn("group relative flex flex-col gap-0.5 border-b border-border px-3 py-2.5 last:border-b-0", open && "cursor-pointer outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring")}
+      {...(open ? {
+        role: "button", tabIndex: 0, "data-record-row": item.source_id, "aria-current": props.selected ? "true" : undefined, "aria-label": t("work.today.open_item", { title }),
+        onClick: (event: React.MouseEvent) => open(openModifiers(event, isMac())),
+        onKeyDown: (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && event.key === " ") { event.preventDefault(); open({ external: false, newTab: false }); } },
+      } : {})}
+      className={cn("group relative flex flex-col gap-0.5 border-b border-border px-3 py-2.5 last:border-b-0", open && "cursor-pointer outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", props.selected && "bg-muted/70 hover:bg-muted/70")}
     >
+      {props.selected ? <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-foreground/70" /> : null}
       {/* Room for Open and Ask while they show, so neither line runs under them. */}
       <div className="flex min-w-0 items-baseline gap-3 group-focus-within:pr-[8.5rem] group-hover:pr-[8.5rem]">
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" title={title}>{title}</span>
@@ -49,7 +58,7 @@ export function SearchRow(props: { item: OmniRushWorkSearchItem; label: string; 
         <Snippet text={item.snippet} />
       </div>
       <div className="absolute right-3 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
-        {open ? <Button variant="ghost" size="sm" className="bg-muted" aria-label={t("work.search.open_name", { title })} onClick={(event) => { event.stopPropagation(); open(); }}><ExternalLink className="size-3.5" />{t("work.search.open")}</Button> : null}
+        {item.url ? <Button variant="ghost" size="sm" className="bg-muted" aria-label={t("work.search.open_name", { title })} onClick={(event) => { event.stopPropagation(); props.onOpen(item, { external: true, newTab: false }); }}><ExternalLink className="size-3.5" />{t("work.search.open")}</Button> : null}
         <Button variant="ghost" size="sm" className="bg-muted disabled:opacity-0" aria-label={t("work.today.ask_about", { title })} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onAsk(item); }}>
           <MessageSquare className="size-3.5" />{t("work.today.ask")}
         </Button>
@@ -120,6 +129,15 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
   const askItem = (item: OmniRushWorkSearchItem, label: string) =>
     void ask(askAboutItemPrompt({ id: item.source_id, source: label, kind: item.kind, title: item.subject?.trim() || label, url: item.url ?? null }));
   const now = Date.now();
+  // Every hit on screen, in order, for [ and ] in the viewer.
+  const refs: RecordRef[] = groups.flatMap((group) => (channel ? group.items : group.items.slice(0, GROUP_ROWS)).map((item) => ({ sourceId: item.source_id, source: item.channel, kind: item.kind, title: item.subject?.trim() || group.label, url: item.url ?? null })));
+  const openHit = (item: OmniRushWorkSearchItem, options: { external: boolean; newTab: boolean }) =>
+    openItem({ sourceId: item.source_id, source: item.channel, kind: item.kind, title: item.subject?.trim() || item.channel, url: item.url ?? null, list: refs }, props.openLink, options);
+  const listKeys = useListKeys((row, options) => {
+    const item = groups.flatMap((group) => group.items).find((entry) => entry.source_id === row.dataset.recordRow);
+    if (item) openHit(item, options);
+  });
+  const openId = useOpenRecordId();
   const chip = (active: boolean) => cn(
     "flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12px] text-foreground transition-colors",
     active ? "border-foreground/20 bg-muted font-medium" : "border-border bg-background hover:bg-muted/50",
@@ -194,8 +212,8 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
                   </h2>
                   {/* The backend fills items only for the top hits overall, so a lower-ranked channel can come with a count and no items. */}
                   {items.length ? (
-                    <ul className="rounded-xl border border-border bg-background">
-                      {items.map((item) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} onOpen={props.openLink} onAsk={(picked) => askItem(picked, group.label)} />)}
+                    <ul className="overflow-hidden rounded-xl border border-border bg-background" data-work-list onKeyDown={listKeys}>
+                      {items.map((item) => <SearchRow key={item.source_id} item={item} label={group.label} now={now} busy={asking} selected={openId === item.source_id} onOpen={openHit} onAsk={(picked) => askItem(picked, group.label)} />)}
                     </ul>
                   ) : null}
                   {!channel && group.count > items.length ? (

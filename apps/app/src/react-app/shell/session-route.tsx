@@ -130,6 +130,7 @@ import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domain
 import { WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
 import { enterpriseRedirect, useEnterpriseMode, useEnterpriseStore } from "@/react-app/domains/work/enterprise-mode";
 import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
+import { ASK_WORK_RECORD_EVENT } from "@/react-app/domains/work/viewer/records";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -3830,6 +3831,17 @@ export function SessionRoute() {
     if (attachments.length) useComposerStateStore.getState().setAttachments(sessionId, attachments);
     markComposerAutoSend(sessionId);
   };
+  // "Ask" in a record viewer: a Work chat about that record.
+  const startWorkChatRef = useRef(startWorkChat);
+  startWorkChatRef.current = startWorkChat;
+  useEffect(() => {
+    const ask = (event: Event) => {
+      const prompt = (event as CustomEvent<string>).detail;
+      if (typeof prompt === "string" && prompt.trim()) void startWorkChatRef.current(prompt).catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+    };
+    window.addEventListener(ASK_WORK_RECORD_EVENT, ask);
+    return () => window.removeEventListener(ASK_WORK_RECORD_EVENT, ask);
+  }, []);
   const workChecklist = workOrgId ? (
     <>
       <WorkChecklist client={client ?? null} onboarding={workOnboarding.data} connectors={workConnectorRows.data} orgId={workOrgId} onConnect={() => navigate(WORK_CONNECTORS_ROUTE)} onInvite={() => setWorkInviteOpen(true)} onOrganization={() => navigate(WORK_ORG_ROUTE)} />

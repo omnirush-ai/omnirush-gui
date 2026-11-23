@@ -46,6 +46,7 @@ import {
   sameBounds,
 } from "./utils";
 import { LoginSyncCard } from "../../browser-logins/login-sync-card";
+import { RecordPanel, RecordTabIcon } from "../../work/viewer/record-panel-entry";
 
 type SidePanelProps = {
   sessionId: string;
@@ -147,7 +148,7 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
             ) : (
               <Globe />
             )
-          ) : tab.type === "app" ? <Blocks /> : (
+          ) : tab.type === "app" ? <Blocks /> : tab.type === "record" ? <RecordTabIcon tab={tab} /> : (
             <ArtifactIcon type={tab.preview} />
           )}
           <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
@@ -801,6 +802,8 @@ export function SidePanel({
             <LoginSyncCard />
             <BrowserPanelContent sessionId={sessionId} tab={activeTab} onClose={onClose} />
           </>
+        ) : activeTab?.type === "record" ? (
+          <div className="min-h-0 flex-1 overflow-hidden"><RecordPanel key={activeTab.id} panelKey={sessionId} tab={activeTab} client={client} onClose={onClose} /></div>
         ) : activeTab?.type === "app" ? (
           <div className="min-h-0 flex-1 overflow-hidden"><AppArtifact key={activeTab.id} appId={activeTab.appId} revisionId={activeTab.revisionId} receiptId={activeTab.receiptId} onClose={onClose} /></div>
         ) : activeTab?.type === "artifact" ? (

@@ -635,6 +635,16 @@ describe("work routes", () => {
     expect(await response.json()).toEqual({ detail: "work_disabled", code: "work_disabled", message: "Work is turned off for your account." });
   });
 
+  test("a viewer action's refusal keeps what fixes it as details: the reason, an https install link, the field, the wait", async () => {
+    const answer = async (body: Record<string, unknown>, status: number) => (await (await setup(() => json(body, status)).call("POST", "/work/records/action", { source_id: "github:acme/app#7", action: "comment", args: { markdown: "Fixed" } })).json()) as Record<string, unknown>;
+    const install = await answer({ detail: "needs_install", reason: "OmniRush isn't installed on acme in GitHub. Ask an owner of acme to install it.", setup_url: "https://github.com/apps/omnirush/installations/new" }, 403);
+    expect(install).toMatchObject({ code: "needs_install", details: { reason: "OmniRush isn't installed on acme in GitHub. Ask an owner of acme to install it.", setup_url: "https://github.com/apps/omnirush/installations/new" } });
+    // Only an https link is passed on as a fix.
+    expect(((await answer({ detail: "needs_install", setup_url: "javascript:alert(1)" }, 403)).details ?? null)).toBeNull();
+    expect(await answer({ detail: "bad_arguments", reason: "to", field: "to" }, 422)).toMatchObject({ details: { field: "to" } });
+    expect(await answer({ detail: "rate_limited", reason: "retry after 12s", retry_after: 12 }, 429)).toMatchObject({ details: { retry_after: 12 } });
+  });
+
   test("after a work_disabled answer the next state read asks the server again instead of using its cached switch", async () => {
     const asked: unknown[] = [];
     let enabled = true;

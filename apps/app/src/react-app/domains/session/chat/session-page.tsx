@@ -93,6 +93,8 @@ import { LazyEditorPanel } from "../editor/editor-entry";
 import { DEFAULT_IDE_CHAT_WIDTH, tabId, useEditorStore, type EditorTab, type LayoutMode } from "../editor/editor-store";
 import { ChatPanelButton, ChatSwitcher, LayoutModeToggle, RailDestinations, shortcutLabel, WorkspaceSwitcher, type RailDestination } from "../editor/ide-chrome";
 import { useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
+import { openRecordTab } from "../../work/viewer/record-tabs";
+import { onOpenRecordRequest } from "../../work/viewer/records";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
 import { useControlAction, type OmniRushControlAction } from "../../../shell/control/control-provider";
 import { cn } from "@/lib/utils";
@@ -1022,6 +1024,12 @@ export function SessionPage(props: SessionPageProps) {
     window.addEventListener("omnirush-close-right-pane", handler);
     return () => window.removeEventListener("omnirush-close-right-pane", handler);
   }, [setCurrentSidePanel]);
+  // A Work item (Today, Search, Deals, Knowledge, a Work chat's sources) opens in this panel's record viewer.
+  useEffect(() => onOpenRecordRequest((request) => {
+    openRecordTab(sidePanelSessionKey, request);
+    setCurrentSidePanel("panel");
+    if (isMobile) selectNarrowPane("panel");
+  }), [isMobile, selectNarrowPane, setCurrentSidePanel, sidePanelSessionKey]);
   const [showDelayedSessionLoadingState, setShowDelayedSessionLoadingState] = useState(false);
 
   const selectedSessionTitle = useMemo(
