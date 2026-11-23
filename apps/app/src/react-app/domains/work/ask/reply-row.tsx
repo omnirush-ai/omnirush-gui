@@ -28,6 +28,8 @@ import {
 import { actionChipSpecs, NO_SIGNALS, type ActionChipSpec, type TurnSignals } from "./action-chips";
 import { SuggestionChipRow, type SuggestionChip } from "./suggestion-chips";
 
+const RESUMED_TOAST_ID = "work-actions-resumed";
+
 export type WorkRepliesValue = {
   /** Every condition but the group's place: a Work chat, idle, nothing pending, no items attached, no error. */
   show: boolean;
@@ -159,8 +161,12 @@ function WorkReplyRow({ value }: { value: WorkRepliesValue }) {
             if (!client) return;
             try {
               await setPaused(false);
-              toast.success(t("work.replies.resumed"), {
-                action: { label: t("work.replies.pause_again"), onClick: () => { void setPaused(true).catch(failed); } },
+              // One line from the top of the window, clear of the composer and its send button.
+              toast.undo(t("work.replies.resumed"), {
+                id: RESUMED_TOAST_ID,
+                icon: Play,
+                undo: { label: t("work.replies.pause_again"), onClick: () => { void setPaused(true).catch(failed); } },
+                closeLabel: t("common.close"),
               });
             } catch (reason) {
               failed(reason);
