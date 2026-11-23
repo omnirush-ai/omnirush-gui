@@ -224,3 +224,49 @@ test("which local sources are off, the sync card's words for the company's refus
   expect(workRoleLabel("owner")).toBe("Owner");
   expect(workRoleLabel("member")).toBe("Member");
 });
+
+test("Connectors: the row menu holds sync, Check and a red Disconnect that asks first; a long list folds by kind with search", async () => {
+  const disconnected: string[] = [];
+  const rows = [
+    row({ id: "google", status: "connected", records: 3, sync_enabled: true, last_sync_at: new Date().toISOString() }),
+    ...["slack", "notion", "jira", "linear", "hubspot", "stripe", "zendesk", "asana", "trello"].map((id) => row({ id, label: id[0]!.toUpperCase() + id.slice(1) })),
+  ];
+  const client = {
+    baseUrl: "http://org-connectors.test",
+    listWorkConnectors: async () => rows,
+    listWorkImports: async () => [],
+    getWorkCoverage: async () => { throw new OmniRushServerError(404, "request_failed", "Not Found"); },
+    getWorkOrgConnectors: async () => { throw new OmniRushServerError(404, "request_failed", "Not Found"); },
+    getWorkCatalog: async () => { throw new OmniRushServerError(404, "request_failed", "Not Found"); },
+    disconnectWorkConnector: async (id: string) => { disconnected.push(id); return { ok: true }; },
+  } as never;
+  const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  queries.setQueryData(workConnectorsKey(client), rows);
+  await render(<WorkConnectorsPage client={client} openLink={() => undefined} />, queries);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+
+  // Ten sources: Connected open, the rest folded by kind, and a search field.
+  expect(document.querySelector('[data-connector-group="connected"]')?.getAttribute("data-open")).toBe("true");
+  expect(document.querySelector('[data-work-connector="slack"]')).toBeNull();
+  expect(document.querySelector('[data-testid="work-connectors-search"]')).not.toBeNull();
+  // Disconnect sits in the row's menu, in red, and asks before it runs.
+  await click(byLabel("Google options"));
+  const item = document.querySelector<HTMLElement>('[data-testid="work-connector-disconnect"]');
+  expect(item).not.toBeNull();
+  expect(item!.className).toContain("text-red-11");
+  expect(document.body.textContent).toContain("Data sync");
+  await click(item);
+  expect(dialog()?.textContent).toContain("Disconnect");
+  expect(disconnected).toEqual([]);
+  await click(button("Disconnect", dialog()!));
+  expect(disconnected).toEqual(["google"]);
+
+  const search = document.querySelector<HTMLInputElement>('[data-testid="work-connectors-search"]')!;
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    set.call(search, "sla");
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(document.querySelector('[data-work-connector="slack"]')).not.toBeNull();
+  expect(document.querySelector('[data-work-connector="notion"]')).toBeNull();
+});
