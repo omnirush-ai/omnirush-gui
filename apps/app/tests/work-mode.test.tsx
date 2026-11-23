@@ -24,6 +24,9 @@ import { companyFromDomain, onboardingSteps, parseEmails } from "../src/react-ap
 import { connectorState, sidebarConnectors, WorkSidebarNav } from "../src/react-app/domains/session/sidebar/work-sidebar-nav";
 import { enterpriseSettingsTabs, settingsTabShown } from "../src/react-app/domains/settings/shell/settings-page";
 import { buildCommandPaletteSettingsItems } from "../src/react-app/shell/command-palette-settings";
+import { WelcomePage } from "../src/react-app/domains/onboarding/welcome-page";
+import { BootStateProvider } from "../src/react-app/shell/boot-state";
+import { ShellConfigProvider } from "../src/react-app/shell/shell-config";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
   id: "google", label: "Google", status: "disconnected", last_sync_at: null, records: 0, sync_enabled: false, ...over,
@@ -1842,6 +1845,21 @@ describe("Work for companies (enterprise design 2.3, 2.4, 2.6)", () => {
     expect(titles({ on: true, code: false }).filter((id) => id.startsWith("settings:"))).toEqual(["settings:general", "settings:work", "settings:browser", "settings:appearance", "settings:voice", "settings:updates"]);
     expect(titles()).toContain("settings:ai");
     expect(titles()).not.toContain("settings:work");
+  });
+
+  test("the welcome page offers Sign in to OmniRush Work as a peer of the consumer start (desktop only), with its status", () => {
+    const render = (props: Partial<Parameters<typeof WelcomePage>[0]>) => renderToStaticMarkup(
+      <ShellConfigProvider><BootStateProvider><WelcomePage onGetStarted={noop} onJoinOrganization={noop} {...props} /></BootStateProvider></ShellConfigProvider>,
+    );
+    const offered = render({ onWorkSignIn: noop });
+    expect(offered).toContain('data-testid="welcome-work-signin"');
+    expect(offered).toContain("Sign in to OmniRush Work");
+    // The same size as the consumer start button, right under it.
+    expect(offered).toMatch(/data-testid="welcome-work-signin" class="[^"]*h-12 w-full/);
+    expect(offered.indexOf("welcome-use-without-cloud")).toBeLessThan(offered.indexOf("welcome-work-signin"));
+    expect(render({})).not.toContain("welcome-work-signin");
+    expect(render({ onWorkSignIn: noop, workSignInBusy: true })).toContain("Approve the sign-in in your browser");
+    expect(render({ onWorkSignIn: noop, workSignInError: "Sign-in didn't finish. Try again." })).toContain("Sign-in didn&#x27;t finish");
   });
 
   test("Sign in to Work links: omnirush://work/signin only", () => {

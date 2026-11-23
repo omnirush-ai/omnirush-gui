@@ -56,7 +56,7 @@ import { BuildathonTrackCard } from "../../buildathon/buildathon";
 import { ComputerUseSettingsCard } from "../../session/surface/computer-use/setup";
 import { EventsJoinedList } from "../../events/event-badge";
 import { useEnterpriseFlags } from "../../work/enterprise-mode";
-import { enterpriseSettingsTabs } from "../shell/settings-page";
+import { enterpriseSettingsTabs } from "../shell/settings-tabs";
 
 export type GeneralSettingsViewProps = {
   onNavigateTab: (tab: SettingsTab) => void;
