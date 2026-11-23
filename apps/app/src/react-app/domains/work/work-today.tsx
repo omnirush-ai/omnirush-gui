@@ -23,6 +23,8 @@ import { ListSearch, matchesQuery } from "./list-cap";
 export const FEED_REFRESH_MS = 5 * 60_000;
 /** Rows a section shows before "Show N more". */
 export const SECTION_ROWS = 5;
+/** Rows each "Show N more" adds. */
+export const SECTION_STEP = 20;
 const SECTIONS = [
   { id: "needs_you", get label() { return t("work.today.needs_you"); } },
   { id: "today", get label() { return t("work.today.today"); } },
@@ -328,7 +330,8 @@ export function WorkToday(props: {
   const [ownSource, setOwnSource] = useState<string | null>(null);
   const source = props.onSourceChange ? props.source ?? null : ownSource;
   const [asking, setAsking] = useState(false);
-  const [more, setMore] = useState<Record<string, boolean>>({});
+  // Rows each section shows now (SECTION_ROWS until "Show N more").
+  const [more, setMore] = useState<Record<string, number>>({});
   const pick = (id: string | null) => { if (props.onSourceChange) props.onSourceChange(id); else setOwnSource(id); setMore({}); };
   const feed = useQuery({
     queryKey: workFeedKey(props.client, source),
@@ -433,7 +436,10 @@ export function WorkToday(props: {
             if (!all.length) return null;
             const recent = section.id === "fyi";
             const capped = all.length > SECTION_ROWS;
-            const items = capped && !more[section.id] ? all.slice(0, SECTION_ROWS) : all;
+            const limit = more[section.id] ?? SECTION_ROWS;
+            const items = all.slice(0, limit);
+            const left = all.length - items.length;
+            const expanded = limit > SECTION_ROWS;
             // The same reason on every Recent row ("Edited") says nothing, so it is left out.
             const same = recent && all.length > 1 && all.every((item) => item.reason === all[0]!.reason);
             return (
@@ -446,9 +452,23 @@ export function WorkToday(props: {
                   {items.map((item) => <FeedRow key={item.id} item={same ? { ...item, reason: null } : item} now={now} busy={asking} selected={Boolean(openId && item.source_id === openId)} onOpen={openFeedItem} onAsk={(picked) => void ask(picked)} />)}
                 </ul>
                 {capped ? (
-                  <button type="button" aria-expanded={Boolean(more[section.id])} onClick={() => setMore({ ...more, [section.id]: !more[section.id] })} data-testid="work-feed-more" className="self-start rounded-md px-1 text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
-                    {more[section.id] ? t("work.today.show_less") : t("work.today.show_more", { count: all.length - SECTION_ROWS })}
-                  </button>
+                  // A page of SECTION_STEP rows at a time, so a long day never draws hundreds of rows at once.
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      onClick={() => setMore({ ...more, [section.id]: left > 0 ? limit + SECTION_STEP : SECTION_ROWS })}
+                      data-testid="work-feed-more"
+                      className="rounded-md px-1 text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {left > 0 ? t("work.today.show_more", { count: Math.min(left, SECTION_STEP) }) : t("work.today.show_less")}
+                    </button>
+                    {left > 0 && expanded ? (
+                      <button type="button" onClick={() => setMore({ ...more, [section.id]: SECTION_ROWS })} data-testid="work-feed-less" className="rounded-md px-1 text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+                        {t("work.today.show_less")}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
               </section>
             );

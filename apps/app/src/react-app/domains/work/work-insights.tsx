@@ -8,20 +8,29 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { t } from "@/i18n";
-import type { OmniRushWorkInsights, OmniRushWorkInsightsAlert, OmniRushWorkInsightsMember } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkInsights, OmniRushWorkInsightsAlert, OmniRushWorkInsightsMember, OmniRushWorkMember } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { ListMore, ListSearch, matchesQuery, useListCap } from "./list-cap";
-import { relativeTime, useWorkOrgInsights, workFailure, workRoleLabel, type WorkClient } from "./work-mode";
+import { ListMore, ListSearch, matchesQuery, PersonAvatar, useListCap } from "./list-cap";
+import { connectorLabel, relativeTime, useWorkOrgInsights, workFailure, workMembersKey, workRoleLabel, type WorkClient } from "./work-mode";
 
 const RANGES = [7, 14, 30, 90] as const;
 const DEFAULT_DAYS = 14;
 
-/** A member's name line from the three bits the server gives (email is always there, the rest when set). */
-function memberName(member: OmniRushWorkInsightsMember): { primary: string; secondary: string | null } {
+/** A member's title and second line: the display name over the e-mail, job role and role; the e-mail as the title when
+ *  there is no name. */
+export function memberName(member: OmniRushWorkInsightsMember): { primary: string; secondary: string | null } {
   const role = member.role ? workRoleLabel(member.role) : null;
-  const tags = [member.job_role, role].filter((part): part is string => Boolean(part));
-  return { primary: member.email, secondary: tags.length ? tags.join(" · ") : null };
+  const name = member.name?.trim() || null;
+  const tags = [name ? member.email : null, member.job_role, role].filter((part): part is string => Boolean(part));
+  return { primary: name ?? member.email, secondary: tags.length ? tags.join(" · ") : null };
+}
+
+/** Adds the members list's display names to the insights people (joined on `user_id`); a name the server sent wins. */
+export function withNames(members: OmniRushWorkInsightsMember[], people: OmniRushWorkMember[] | undefined): OmniRushWorkInsightsMember[] {
+  if (!people?.length) return members;
+  const names = new Map(people.filter((person) => person.name?.trim()).map((person) => [person.user_id, person.name!.trim()]));
+  return members.map((member) => (member.name?.trim() || !names.has(member.user_id) ? member : { ...member, name: names.get(member.user_id) }));
 }
 
 /** An alert in words, by its kind; a kind this app does not know shows the server's own text. */
@@ -112,18 +121,40 @@ function Stat(props: { label: string; value: string | number; tone?: "default" |
   );
 }
 
-/** A work area's label without the server's type prefix ("email:ana@x.com" reads "ana@x.com"). */
+/** Thread sources that are part of a bigger connector (Gmail is Google's, Teams is Microsoft 365's). */
+const THREAD_SOURCES: Record<string, string> = { gmail: "Gmail", outlook: "Outlook", teams: "Teams", calendar: "Calendar", email: "Email" };
+
+/** A work area's label without the server's type prefix ("email:ana@x.com" reads "ana@x.com"). A thread key
+ *  ("thread:slack:C1:1794650400.000000") reads as its source's thread ("Slack thread"). */
 export function focusLabel(label: string): string {
+  const thread = label.match(/^thread:([a-z0-9_-]+)(?::|$)/i);
+  if (thread) {
+    const source = thread[1]!.toLowerCase();
+    const name = THREAD_SOURCES[source] ?? connectorLabel(source).replace(/\s*\(.*\)$/, "");
+    return t("work.insights.thread_label", { name });
+  }
   return label.replace(/^(email|domain|person|company|org|deal|project|channel|repo|topic):/i, "");
 }
 
+/** The work areas as readable labels, the same label once (two Slack threads are one "Slack thread" chip with both
+ *  counts), highest first. */
+export function focusAreas(focus: OmniRushWorkInsightsMember["focus"]): [string, number][] {
+  const merged = new Map<string, number>();
+  for (const [label, count] of focus) {
+    const text = focusLabel(label).trim();
+    if (text) merged.set(text, (merged.get(text) ?? 0) + count);
+  }
+  return [...merged.entries()].sort((a, b) => b[1] - a[1]);
+}
+
 function FocusChips(props: { focus: OmniRushWorkInsightsMember["focus"] }) {
-  if (!props.focus.length) return null;
+  const areas = focusAreas(props.focus);
+  if (!areas.length) return null;
   return (
     <div className="flex flex-wrap gap-1.5" data-testid="work-insights-focus">
-      {props.focus.slice(0, 5).map(([label, count]) => (
-        <span key={label} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-background px-2.5 py-0.5 text-[12px] text-foreground" title={`${focusLabel(label)} · ${count}`}>
-          <span className="max-w-[14rem] truncate">{focusLabel(label)}</span>
+      {areas.slice(0, 5).map(([label, count]) => (
+        <span key={label} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-background px-2.5 py-0.5 text-[12px] text-foreground" title={`${label} · ${count}`}>
+          <span className="max-w-[14rem] truncate">{label}</span>
           <span className="tabular-nums text-muted-foreground">{count}</span>
         </span>
       ))}
@@ -137,9 +168,12 @@ function MemberCard(props: { member: OmniRushWorkInsightsMember; now: number }) 
   return (
     <li className="flex flex-col gap-3 border-b border-border px-4 py-4 last:border-b-0" data-member={member.user_id}>
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="truncate text-[14px] font-medium text-foreground" title={name.primary}>{name.primary}</div>
-          {name.secondary ? <div className="truncate text-[13px] text-muted-foreground" title={name.secondary}>{name.secondary}</div> : null}
+        <div className="flex min-w-0 items-center gap-3">
+          <PersonAvatar name={member.name?.trim() || member.email} />
+          <div className="min-w-0">
+            <div className="truncate text-[14px] font-medium text-foreground" title={name.primary}>{name.primary}</div>
+            {name.secondary ? <div className="truncate text-[13px] text-muted-foreground" title={name.secondary}>{name.secondary}</div> : null}
+          </div>
         </div>
         <Sparkline data={member.daily} label={name.primary} />
       </div>
@@ -185,11 +219,13 @@ function InsightsSkeleton() {
 export function WorkInsightsPage(props: { client: WorkClient | null; onBack: () => void; backLabel?: string }) {
   const [days, setDays] = useState<number>(DEFAULT_DAYS);
   const query = useWorkOrgInsights(props.client, days, Boolean(props.client));
+  // The members list carries the display names (the insights only e-mails on an older server).
+  const people = useQuery({ queryKey: workMembersKey(props.client), queryFn: () => props.client!.listWorkMembers(), enabled: Boolean(props.client), retry: false });
   const data: OmniRushWorkInsights | undefined = query.data;
-  const members = data ? sortMembers(data.members) : [];
+  const members = data ? sortMembers(withNames(data.members, people.data?.members)) : [];
   const [search, setSearch] = useState("");
   const [showIdle, setShowIdle] = useState(false);
-  const found = members.filter((member) => matchesQuery(search, member.email, member.job_role, ...member.focus.map(([label]) => focusLabel(label))));
+  const found = members.filter((member) => matchesQuery(search, member.name, member.email, member.job_role, ...member.focus.map(([label]) => focusLabel(label))));
   // People with no tracked activity fold into one line (searching shows everyone who matches).
   const idle = search.trim() ? [] : found.filter(isIdle);
   const active = search.trim() ? found : found.filter((member) => !isIdle(member));
@@ -256,7 +292,7 @@ export function WorkInsightsPage(props: { client: WorkClient | null; onBack: () 
                     {showIdle ? (
                       <ul className="flex flex-col border-t border-border px-4 py-2" data-testid="work-insights-idle-list">
                         {idle.slice(0, 50).map((member) => (
-                          <li key={member.user_id} className="truncate py-1 text-[13px] text-muted-foreground" title={member.email} data-member={member.user_id}>{member.email}</li>
+                          <li key={member.user_id} className="truncate py-1 text-[13px] text-muted-foreground" title={member.name?.trim() ? `${member.name.trim()} (${member.email})` : member.email} data-member={member.user_id}>{member.name?.trim() || member.email}</li>
                         ))}
                         {idle.length > 50 ? <li className="py-1 text-[13px] text-muted-foreground">{t("work.insights.idle_more", { n: (idle.length - 50).toLocaleString() })}</li> : null}
                       </ul>

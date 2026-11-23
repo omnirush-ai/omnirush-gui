@@ -87,6 +87,8 @@ export type DiagnosticsSectionProps = {
   canOpenLogsFolder?: boolean;
   /** Test seam: replaces clipboard, file save and IPC. */
   deps?: DiagnosticsActionDeps;
+  /** A company account (OmniRush Work): a 12 px label and 13 px text instead of 11 px. */
+  work?: boolean;
 };
 
 /**
@@ -115,11 +117,12 @@ export function DiagnosticsSection(props: DiagnosticsSectionProps) {
     }
   }
 
-  const buttonClass = "inline-flex items-center gap-1.5 rounded-lg border border-dls-border px-3 py-2 text-[12px] text-dls-text hover:bg-dls-hover disabled:opacity-50";
+  const buttonClass = `inline-flex items-center gap-1.5 rounded-lg border border-dls-border px-3 py-2 ${props.work ? "text-[13px]" : "text-[12px]"} text-dls-text hover:bg-dls-hover disabled:opacity-50`;
+  const small = props.work ? "text-[13px]" : "text-[11px]";
 
   return (
     <div className="space-y-3" data-testid="settings-diagnostics">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
+      <div className={`${props.work ? "text-[12px]" : "text-[11px]"} font-semibold uppercase tracking-[0.15em] text-dls-secondary`}>
         {t("settings.diagnostics_section_title")}
       </div>
       <div className="flex items-start gap-4 rounded-2xl border border-dls-border bg-dls-surface p-4">
@@ -129,7 +132,7 @@ export function DiagnosticsSection(props: DiagnosticsSectionProps) {
         <div className="min-w-0 flex-1 space-y-3">
           <div>
             <div className="text-[13px] font-medium text-dls-text">{t("settings.diagnostics_card_title")}</div>
-            <div className="text-[11px] text-dls-secondary">{t("settings.diagnostics_card_desc")}</div>
+            <div className={`${small} text-dls-secondary`}>{t("settings.diagnostics_card_desc")}</div>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={buttonClass} disabled={busy !== null} onClick={() => void run("copy")}>
@@ -149,7 +152,7 @@ export function DiagnosticsSection(props: DiagnosticsSectionProps) {
           </div>
           {result ? (
             <div
-              className={`text-[11px] ${result.ok ? "text-dls-secondary" : "text-red-400"}`}
+              className={`${small} ${result.ok ? "text-dls-secondary" : "text-red-400"}`}
               role="status"
               data-testid="settings-diagnostics-status"
             >

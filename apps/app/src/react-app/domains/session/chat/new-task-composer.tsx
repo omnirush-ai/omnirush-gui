@@ -472,6 +472,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       runModeControl={<WorkspaceRunModeMenu client={workspaceClient} workspaceId={workspaceId} busy={props.busy} />}
       fullPermissionsControl={<FullPermissionsToggle client={workspaceClient} workspaceId={workspaceId} />}
       sandboxControl={<SandboxStatusChip client={workspaceClient} workspaceId={workspaceId} model={context?.selectedModel?.providerID === "omnirush" ? context.selectedModel.modelID : null} onOpenSettings={() => context?.onOpenSettingsSection?.("sandbox")} />}
+      work={Boolean(props.workChat)}
       subagentModelControl={props.workChat ? <WorkConnectorsChip workChat client={workspaceClient} /> : <SubagentModelMenu client={workspaceClient} chatModel={context?.selectedModel?.providerID === "omnirush" ? context.selectedModel.modelID : null} />}
           voiceClient={workspaceClient}
           voiceWorkspaceId={workspaceId}

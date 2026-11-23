@@ -209,7 +209,7 @@ function ConnectStepRow(props: {
       {/* GitHub: where the app is installed, and installing it on another organization. */}
       {linked && row?.setup_url ? (
         <div className="-mt-1 px-4 pb-2.5 ps-14">
-          <button type="button" className="text-[12px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline" onClick={() => props.openLink(row.setup_url!)}>
+          <button type="button" className="rounded-md px-1 text-[12px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring" onClick={() => props.openLink(row.setup_url!)}>
             {props.id === "github" ? t("work.setup.github_install_more") : setupLabel(props.id)}
           </button>
         </div>
@@ -454,7 +454,7 @@ export function WorkOnboarding(props: {
                     </div>
                   </div>
                 ) : (
-                  <button type="button" onClick={() => setJoinOpen(true)} className="text-[13px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline" data-testid="work-join-open">
+                  <button type="button" onClick={() => setJoinOpen(true)} className="rounded-md px-1 text-[13px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="work-join-open">
                     {t("work.setup.joining_team")}
                   </button>
                 )}
@@ -514,7 +514,7 @@ export function WorkOnboarding(props: {
                   )}
                   {customPicked.length ? <p className="text-[13px] text-muted-foreground" data-testid="work-onboarding-noted">{t("work.setup.noted", { count: customPicked.length, names: customPicked.join(", ") })}</p> : null}
                   {flow.includes("tools") || flow[0] === "connect" ? (
-                    <button type="button" onClick={() => go("tools")} className="self-start text-[13px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline" data-testid="work-onboarding-change-tools">{t("work.setup.change_tools")}</button>
+                    <button type="button" onClick={() => go("tools")} className="self-start rounded-md px-1 text-[13px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring" data-testid="work-onboarding-change-tools">{t("work.setup.change_tools")}</button>
                   ) : null}
                   <MoreConnectors count={others.length}>
                     <ul className="overflow-hidden rounded-xl border border-border bg-background">

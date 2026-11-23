@@ -220,7 +220,7 @@ export function ToolPicker(props: {
             >
               <Plus aria-hidden className="size-3.5 text-muted-foreground" />
               {t("work.setup.add_custom", { name: customName ?? "" })}
-              <kbd className="ms-1 rounded border border-border px-1 text-[11px] text-muted-foreground">↵</kbd>
+              <kbd className="ms-1 rounded border border-border px-1 text-[12px] text-muted-foreground">↵</kbd>
             </button>
           ) : (
             <p className="text-[12px] text-muted-foreground" data-testid="work-onboarding-custom-note">

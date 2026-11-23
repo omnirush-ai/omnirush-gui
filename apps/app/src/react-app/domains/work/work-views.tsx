@@ -17,6 +17,7 @@ import { t } from "@/i18n";
 import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStart, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
 import type { WorkChatSyncSource, WorkChatSyncStatus, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
 import { desktopBridge } from "@/app/lib/desktop";
+import { useAccountStatusStore } from "@/app/lib/quality";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { isMacPlatform } from "@/app/utils";
 import { cn } from "@/lib/utils";
@@ -40,7 +41,7 @@ import {
 } from "./work-mode";
 
 import { connectorState } from "@/react-app/domains/session/sidebar/work-sidebar-nav";
-import { ListSearch, matchesQuery, StatusPill, type PillTone } from "./list-cap";
+import { ListMore, ListSearch, matchesQuery, StatusPill, useListCap, WORK_DESTRUCTIVE, type PillTone } from "./list-cap";
 import { useWorkCatalog } from "./catalog";
 
 // Connector marks live in brand-icon.tsx (one tile style for every Work list); re-exported for the pages that import them here.
@@ -267,6 +268,8 @@ export function ConnectorRow(props: {
   onPick?: (picked: string[]) => void;
   /** The company's owner or an admin: a connector the company turned off says so for the team, and opens Organization. */
   onManage?: () => void;
+  /** The signed-in person's e-mail: an account that is the same address is not repeated on the row. */
+  ownEmail?: string | null;
 }) {
   const row = props.connector;
   const fullName = connectorLabel(row.id, row.label);
@@ -286,10 +289,12 @@ export function ConnectorRow(props: {
   const progress = connected ? connectorProgress(row.progress) : null;
   const pill = connectorPill(row, props.connecting);
   const synced = row.last_sync_at ? relativeTime(row.last_sync_at) : "";
+  // The person's own address says nothing on their own list: it is left out (still in the line's title).
+  const ownAccount = Boolean(row.account && props.ownEmail && row.account.trim().toLowerCase() === props.ownEmail.trim().toLowerCase());
   const meta = row.status === "error" && !attention
     ? sourceErrorText(row.error)
     : connected
-      ? [row.account, coverage ?? countLabel(row.records, "work.count.records"), synced ? t("work.connectors.last_sync", { when: synced }) : t("work.connectors.not_synced"), row.sync_enabled ? null : t("work.connectors.sync_off")].filter(Boolean).join(" · ")
+      ? [synced ? t("work.connectors.last_sync", { when: synced }) : t("work.connectors.not_synced"), row.sync_enabled ? null : t("work.connectors.sync_off"), coverage ?? countLabel(row.records, "work.count.records"), ownAccount ? null : row.account].filter(Boolean).join(" · ")
       : paused
         ? [row.account, countLabel(row.records, "work.count.records")].filter(Boolean).join(" · ")
         : connectorAccess(row.id);
@@ -304,7 +309,7 @@ export function ConnectorRow(props: {
     <Button size="sm" onClick={props.onSetup}>{attention?.action === "setup" ? t("work.connectors.open_setup") : setupLabel(row.id)}</Button>
   ) : paused ? (
     // Turned off by the company: Disconnect is all it offers, so it shows (in the destructive style), with a confirm.
-    <Button variant="destructive" size="sm" aria-label={t("work.connectors.disconnect_name", { name: fullName })} disabled={props.busy} onClick={props.onDisconnect}>{t("work.connectors.disconnect")}</Button>
+    <Button variant="destructive" size="sm" className={WORK_DESTRUCTIVE} aria-label={t("work.connectors.disconnect_name", { name: fullName })} disabled={props.busy} onClick={props.onDisconnect}>{t("work.connectors.disconnect")}</Button>
   ) : null;
   const line = "mt-0.5 truncate text-[13px]";
   return (
@@ -315,7 +320,7 @@ export function ConnectorRow(props: {
           <span className="min-w-0 truncate text-[14px] font-medium text-foreground" title={fullName}>{name}</span>
           <StatusPill tone={pill.tone} label={pill.label} testId="work-connector-status" />
         </div>
-        <div className={cn(line, "text-muted-foreground")} title={meta}>{meta}</div>
+        <div className={cn(line, "text-muted-foreground")} title={connected && row.account && ownAccount ? `${meta} · ${row.account}` : meta} data-testid="work-connector-meta">{meta}</div>
         {paused ? (
           <div className={cn(line, "text-foreground")} data-testid="work-connector-paused" data-by={row.paused_by}>
             {row.paused_by === "staff" ? t("work.connectors.paused_by_staff") : props.onManage ? t("work.connectors.paused_for_team") : t("work.connectors.paused_by_org")}
@@ -856,7 +861,7 @@ export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkCli
                 {on ? (
                   <>
                     <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirm({ id: row.id, action: "regenerate" })}>{t("work.hook.regenerate")}</Button>
-                    <Button variant="destructive" size="sm" disabled={busy} onClick={() => setConfirm({ id: row.id, action: "delete" })}>{t("work.hook.delete")}</Button>
+                    <Button variant="destructive" size="sm" className={WORK_DESTRUCTIVE} disabled={busy} onClick={() => setConfirm({ id: row.id, action: "delete" })}>{t("work.hook.delete")}</Button>
                   </>
                 ) : (
                   <Button size="sm" disabled={busy || !props.client} onClick={() => make.mutate(row.id)} data-testid="work-hook-create">{t("work.hook.create")}</Button>
@@ -924,6 +929,9 @@ export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkCli
 
 /** The Connectors page shows its search field from this many sources. */
 export const CONNECTORS_SEARCH_FROM = 8;
+/** Connected rows shown before "Show N more" (the ones that need something come first). */
+export const CONNECTED_SHOWN = 8;
+const CONNECTED_RANK: Record<PillTone, number> = { error: 0, attention: 1, syncing: 2, ok: 3, off: 4, neutral: 5 };
 
 const FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
@@ -1320,6 +1328,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const [search, setSearch] = useState("");
   // The kinds of tool opened (the connected group is always open).
   const [openGroups, setOpenGroups] = useState<string[]>([]);
+  const ownEmail = useAccountStatusStore((state) => state.status?.email ?? null);
   const connectStarted = useRef(0);
   const query = useQuery({
     queryKey: key,
@@ -1418,8 +1427,15 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const inUse = (row: OmniRushWorkConnector) => isLinked(row) || isPausedByAdmin(row) || connecting === row.id || form === row.id;
   const found = rows.filter((row) => matchesQuery(search, row.label, row.id, connectorLabel(row.id, row.label)));
   const categoryOf = (id: string) => catalog.connectors.find((tool) => tool.id === id)?.category ?? "other";
+  // Reconnect, Attention and Syncing lead the connected group, then the rest in the server's order.
+  const connectedRows = found
+    .filter(inUse)
+    .map((row, index) => ({ row, index, rank: CONNECTED_RANK[connectorPill(row, connecting === row.id).tone] }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.row);
+  const connectedCap = useListCap(connectedRows.length, CONNECTED_SHOWN);
   const groups = [
-    { id: "connected", label: t("work.connectors.group_connected"), rows: found.filter(inUse) },
+    { id: "connected", label: t("work.connectors.group_connected"), rows: connectedRows },
     ...[...catalog.categories, { id: "other", label: t("work.connectors.group_other") }].map((category) => ({
       id: category.id,
       label: category.label,
@@ -1433,6 +1449,8 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     const group = groups.find((entry) => entry.id !== "connected" && entry.rows.some((row) => row.id === wanted));
     if (group && !openGroups.includes(group.id)) setOpenGroups([...openGroups, group.id]);
   }, [wanted, rowsIn]);
+  // The first rows of the connected group, plus the one the page was opened at (`#slack`) or whose form is open.
+  const cappedConnected = connectedRows.filter((row, index) => index < connectedCap.shown || row.id === wanted);
   const renderRow = (row: OmniRushWorkConnector) => [
     <ConnectorRow
       key={row.id}
@@ -1450,6 +1468,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
       onRetry={() => retry.mutate(row.id)}
       onPick={(picked) => pick.mutate({ id: row.id, picked })}
       onManage={manage}
+      ownEmail={ownEmail}
     />,
     form === row.id ? (
       (() => {
@@ -1514,7 +1533,12 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
                       {open ? null : <span aria-hidden className="ms-auto flex items-center gap-1">{group.rows.slice(0, 5).map((row) => <BrandTile key={row.id} id={row.id} size="chip" />)}</span>}
                     </button>
                   )}
-                  {open ? <div className="rounded-xl border border-border bg-background">{group.rows.map(renderRow)}</div> : null}
+                  {open ? (
+                    <div className="rounded-xl border border-border bg-background">
+                      {(group.id === "connected" ? cappedConnected : group.rows).map(renderRow)}
+                    </div>
+                  ) : null}
+                  {group.id === "connected" ? <ListMore cap={connectedCap} className="px-1" testId="work-connected-more" /> : null}
                 </section>
               );
             })}
@@ -1562,7 +1586,7 @@ function WorkConnectorsChipButton(props: { client: WorkClient | null }) {
       title={connected.length ? t("work.connectors.chip_title", { names: connected.map((row) => connectorLabel(row.id, row.label)).join(", ") }) : t("work.connectors.chip_connect")}
       aria-label={label}
       onClick={() => navigate(WORK_CONNECTORS_ROUTE, connectorsBackState(location.pathname, location.search))}
-      className="flex h-9 max-h-9 min-w-9 shrink-[4] items-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
+      className="flex h-9 max-h-9 min-w-9 shrink-[4] items-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm text-gray-11 transition-colors hover:bg-gray-3 hover:text-gray-12"
     >
       {connected.length ? connected.slice(0, 3).map((row) => <ConnectorIcon key={row.id} id={row.id} className="size-3.5 text-current" />) : <Plug aria-hidden className="size-4 shrink-0" />}
       {/* Nothing connected: the icon alone, so the home's checklist keeps the one "Connect" in words. */}

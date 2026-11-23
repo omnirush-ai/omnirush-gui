@@ -69,15 +69,31 @@ export const matchesQuery = (query: string, ...texts: (string | null | undefined
   return !needle || texts.some((text) => (text ?? "").toLowerCase().includes(needle));
 };
 
-/** A round initial for a person's e-mail or name: the same neutral tile everywhere. */
+/** Initials for a person: the first letters of the first and last word of a name ("Maximilian van den Berghe" reads
+ *  "MB"), or the first letter of an e-mail. */
+export function personInitials(name: string): string {
+  const text = name.trim();
+  if (!text) return "?";
+  if (text.includes("@")) return text[0]!.toUpperCase();
+  const words = text.split(/\s+/).filter((word) => /\p{L}/u.test(word));
+  if (!words.length) return text[0]!.toUpperCase();
+  const first = words[0]!;
+  const last = words.length > 1 ? words[words.length - 1]! : "";
+  return (Array.from(first)[0]! + (last ? Array.from(last)[0]! : "")).toUpperCase();
+}
+
+/** A round tile with a person's initials (from the name, or the e-mail when there is none): the same everywhere. */
 export function PersonAvatar(props: { name: string; className?: string }) {
-  const letter = (props.name.trim()[0] ?? "?").toUpperCase();
   return (
     <span aria-hidden className={cn("flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-muted text-[12px] font-semibold text-foreground", props.className)}>
-      {letter}
+      {personInitials(props.name)}
     </span>
   );
 }
+
+/** A destructive button's text in Work: red-11 reaches 4.5:1 on the page in light and dark (the shared variant's red
+ *  does not in light). Added to `variant="destructive"`; consumers keep the shared style. */
+export const WORK_DESTRUCTIVE = "text-red-11 hover:text-red-11";
 
 /** A status pill: words in the foreground colour beside a small dot, so it never relies on colour alone. */
 export type PillTone = "ok" | "syncing" | "attention" | "error" | "off" | "neutral";
