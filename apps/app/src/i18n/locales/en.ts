@@ -2767,7 +2767,7 @@ export default {
   "work.connectors.choices_boards": "Boards to read",
   "work.key.label_trello": "API key",
   "work.key.token_trello": "Token",
-  "work.key.where_trello": "Trello needs an API key and a token from you. Open Trello's apps page and click New, give it any name and pick a workspace you manage, then Create. On the Trello Auth tab, generate an API key and copy it. Then click Token next to the key, choose Allow and copy the token.",
+  "work.key.where_trello": "Trello needs an API key and a token from you. Open Trello's apps page and click New, give it any name and pick a workspace you manage (or create one of your own first), then Create. On the Trello Auth tab, generate an API key and copy it. Then click Token next to the key, choose Allow and copy the token.",
   "work.key.label_clickup": "API token",
   "work.key.where_clickup": "In ClickUp, click your avatar, open Settings, then Apps, and generate or copy your API token. It starts with pk_.",
   "work.key.label_monday": "API token",

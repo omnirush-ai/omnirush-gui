@@ -531,7 +531,7 @@ const KEY_FORMS: Record<string, KeyFormSpec> = {
   },
   pipedrive: { help: "https://pipedrive.readme.io/docs/how-to-find-the-api-token", placeholder: "", where: () => t("work.key.where_pipedrive"), label: () => t("work.key.label_pipedrive") },
   trello: {
-    help: "https://trello.com/power-ups/admin",
+    help: "https://trello.com/apps/admin",
     placeholder: "",
     where: () => t("work.key.where_trello"),
     label: () => t("work.key.label_trello"),

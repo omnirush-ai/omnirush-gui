@@ -2774,7 +2774,7 @@ export default {
   "work.connectors.choices_boards": "要读取的看板",
   "work.key.label_trello": "API 密钥",
   "work.key.token_trello": "令牌",
-  "work.key.where_trello": "Trello 需要你提供一个 API 密钥和一个令牌。打开 Trello 的应用页面并点击“新建”，随便起个名字，选择一个你管理的工作区，然后点击“创建”。在“Trello Auth”标签页生成一个 API 密钥并复制。然后点击密钥旁边的“令牌”，选择“允许”，复制令牌。",
+  "work.key.where_trello": "Trello 需要你提供一个 API 密钥和一个令牌。打开 Trello 的应用页面并点击“新建”，随便起个名字，选择一个你管理的工作区（没有的话先自己新建一个），然后点击“创建”。在“Trello Auth”标签页生成一个 API 密钥并复制。然后点击密钥旁边的“令牌”，选择“允许”，复制令牌。",
   "work.key.label_clickup": "API 令牌",
   "work.key.where_clickup": "在 ClickUp 中点击你的头像，打开“设置”，再打开“应用”，生成或复制你的 API 令牌。它以 pk_ 开头。",
   "work.key.label_monday": "API 令牌",

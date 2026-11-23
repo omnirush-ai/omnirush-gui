@@ -792,7 +792,7 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
       expect(form.querySelector('[data-key-field="host"]')).toBeNull();
       expect(form.textContent).toContain("Nothing is posted or created without your approval.");
       await act(async () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-help"]')!.click());
-      expect(opened).toEqual(["https://trello.com/power-ups/admin"]);
+      expect(opened).toEqual(["https://trello.com/apps/admin"]);
       const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!;
       await type(form, "api_key", " 0123456789abcdef0123456789abcdef ");
       expect(save().disabled).toBe(true);
