@@ -21,7 +21,7 @@ const ID = "[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}";
 
 /** The `/omnirush/work/` paths the app calls (the contract's), one pattern per line so lanes add theirs without touching
  *  another's: connectors, entities, facts, health, the graph, the timeline, the MCP server, the Today feed, the tryout and
- *  company setup (enable, onboarding, demo, the org, its invites, members, insights and connectors), iMessage, WhatsApp
+ *  company setup (enable, onboarding, demo, the org, its invites, members, insights, connectors and browser), iMessage, WhatsApp
  *  from the Mac app, Telegram from the desktop, search, coverage, deals, chat-export imports, meetings (one, and its audio
  *  parts), the action layer (settings, the activity log and an action's undo), the connector catalog, and the record
  *  viewers (a record, an attachment, an action on it, and a new mail or meeting). */
@@ -47,7 +47,7 @@ export const WORK_PATHS: readonly string[] = [
   "coverage",
   "imports",
   `actions(?:/${ID}/undo)?`,
-  `org(?:/(?:me|leave|transfer|insights|connectors|invites(?:/${ID})?|members(?:/${ID})?))?`,
+  `org(?:/(?:me|leave|transfer|insights|connectors|browser|invites(?:/${ID})?|members(?:/${ID})?))?`,
   "catalog",
   "records/detail",
   "records/attachment",
@@ -178,6 +178,54 @@ export function workEnterprise(block: unknown): WorkEnterprise | null {
 export function rememberedWorkEnterprise(dir: string): WorkEnterprise | null {
   const saved = readJson(join(dir, "server.json"));
   return workEnterprise(isRecord(saved) ? saved.block : null);
+}
+
+/** The company's Work browser settings (`work.browser`, for a member of a company): its apps, the import switches and
+ *  where Work links open. Never anyone's browsing. */
+export type WorkBrowser = {
+  apps: { name: string; url: string }[];
+  import_bookmarks: boolean;
+  import_signins: boolean;
+  links_in_app: boolean;
+  links_locked: boolean;
+  org_name: string | null;
+};
+
+export const WORK_BROWSER_MAX_APPS = 24;
+
+/** An app address the app may open: https, a host, no user name or password, kept short. */
+export function workBrowserAppUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2048) return null;
+  let url: URL;
+  try { url = new URL(value); } catch { return null; }
+  return url.protocol === "https:" && url.hostname && !url.username && !url.password ? url.href : null;
+}
+
+/** The `browser` key of a `work` block; absent or malformed is null (the defaults). A switch that is not a boolean reads
+ *  as its default, an app without a name or an https address is left out. */
+export function workBrowser(block: unknown): WorkBrowser | null {
+  const raw = isRecord(block) && isRecord(block.browser) ? block.browser : null;
+  if (!raw) return null;
+  const apps = (Array.isArray(raw.apps) ? raw.apps : []).flatMap((app) => {
+    const url = isRecord(app) ? workBrowserAppUrl(app.url) : null;
+    const name = isRecord(app) && typeof app.name === "string" ? app.name.trim().slice(0, 60) : "";
+    return url && name ? [{ name, url }] : [];
+  }).slice(0, WORK_BROWSER_MAX_APPS);
+  const flag = (value: unknown, fallback: boolean) => (typeof value === "boolean" ? value : fallback);
+  return {
+    apps,
+    import_bookmarks: flag(raw.import_bookmarks, true),
+    import_signins: flag(raw.import_signins, true),
+    links_in_app: flag(raw.links_in_app, true),
+    links_locked: flag(raw.links_locked, false),
+    org_name: typeof raw.org_name === "string" && raw.org_name.trim() ? raw.org_name.trim().slice(0, 200) : null,
+  };
+}
+
+/** The company's browser settings as last seen, while Work is on (null: none, or not in a company). */
+export function rememberedWorkBrowser(dir: string): WorkBrowser | null {
+  const saved = readJson(join(dir, "server.json"));
+  return isRecord(saved) && isRecord(saved.block) && saved.block.enabled === true ? workBrowser(saved.block) : null;
 }
 
 /** Whether a chat in `root` stays on this computer: a company account uploads Code chats only when staff turned Code

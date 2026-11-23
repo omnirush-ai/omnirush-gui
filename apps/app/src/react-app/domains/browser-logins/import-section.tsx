@@ -29,6 +29,7 @@ import {
   LayoutSectionItemTitle,
 } from "../settings/settings-layout";
 import { SettingsSection } from "../settings/settings-section";
+import { useWorkBrowserPolicy } from "../work/company-browser";
 import { BrowserTile } from "./browser-marks";
 import { BrowserImportDialog } from "./import-dialog";
 import {
@@ -57,7 +58,10 @@ export function BrowserImportSection() {
 
 function ImportSection() {
   const available = useBrowserLibraryAvailable();
-  const sources = useBrowserImportSources(available);
+  const policy = useWorkBrowserPolicy();
+  // The company turned importing off altogether: say so, list no browsers; what was imported before can still go.
+  const companyOff = !policy.importBookmarks && !policy.importSignIns;
+  const sources = useBrowserImportSources(available && !companyOff);
   const summary = useQuery<BrowserLibrarySummary>({
     queryKey: browserLibraryKeys.summary,
     queryFn: () => getBrowserLibraryBridge()!.summary(),
@@ -84,8 +88,13 @@ function ImportSection() {
         </LayoutSectionItemHeader>
         <LayoutSectionItemContent className="gap-4">
           <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-muted-foreground">{t("browser_import.found")}</p>
-            {sources.isLoading ? (
+            {companyOff ? null : <p className="text-xs font-medium text-muted-foreground">{t("browser_import.found")}</p>}
+            {companyOff ? (
+              <p className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-[13px] text-muted-foreground dark:text-foreground/55" data-testid="browser-import-company-off">
+                <Lock aria-hidden className="size-3.5 shrink-0" />
+                {policy.orgName ? t("browser_import.company_off_all", { company: policy.orgName }) : t("browser_import.company_off_all_generic")}
+              </p>
+            ) : sources.isLoading ? (
               <Skeleton className="h-28 w-full rounded-xl" />
             ) : browsers.length === 0 ? (
               <p className="rounded-xl border border-border px-4 py-3 text-xs text-muted-foreground" data-testid="browser-import-section-none">

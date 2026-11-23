@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { SiteMonogram } from "../../browser-logins/bookmark-tiles";
 import { BrowserTile, isImportBrowser } from "../../browser-logins/browser-marks";
 import { BrowserImportDialog } from "../../browser-logins/import-dialog";
+import { useWorkBrowserPolicy } from "../../work/company-browser";
 import {
   BROWSER_LIBRARY_KEY,
   browserLibraryKeys,
@@ -80,10 +81,13 @@ function LibraryBar({ sessionId, tab, inputRef }: BarProps) {
   const anchorRef = React.useRef<HTMLSpanElement>(null);
   const [importOpen, setImportOpen] = React.useState(false);
   const compact = useCompact(inputRef);
+  const policy = useWorkBrowserPolicy();
+  // No import entry when the company turned importing off altogether.
+  const canImport = policy.importBookmarks || policy.importSignIns;
   return (
     <span ref={anchorRef} className="contents">
       {compact ? null : <StarButton tab={tab} />}
-      <BookmarksMenu sessionId={sessionId} tab={compact ? tab : null} onImport={() => setImportOpen(true)} />
+      <BookmarksMenu sessionId={sessionId} tab={compact ? tab : null} onImport={canImport ? () => setImportOpen(true) : null} />
       <AddressSuggestions inputRef={inputRef} anchorRef={anchorRef} currentUrl={tab.url} />
       <BrowserImportDialog open={importOpen} onOpenChange={setImportOpen} />
     </span>
@@ -166,7 +170,7 @@ function StarRow({ tab }: { tab: BrowserPanelTab }) {
   );
 }
 
-function BookmarksMenu({ sessionId, tab, onImport }: { sessionId: string; tab: BrowserPanelTab | null; onImport: () => void }) {
+function BookmarksMenu({ sessionId, tab, onImport }: { sessionId: string; tab: BrowserPanelTab | null; onImport: (() => void) | null }) {
   const [open, setOpen] = React.useState(false);
   const [path, setPath] = React.useState<number[]>([]);
   const tree = useQuery({
@@ -251,20 +255,22 @@ function BookmarksMenu({ sessionId, tab, onImport }: { sessionId: string; tab: B
             ))
           )}
         </div>
-        <div className="border-t border-border p-1">
-          <button
-            type="button"
-            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
-            onClick={() => {
-              setOpen(false);
-              onImport();
-            }}
-            data-testid="browser-bookmarks-import"
-          >
-            <Download aria-hidden className="size-4 shrink-0" />
-            {t("browser_library.import")}
-          </button>
-        </div>
+        {onImport ? (
+          <div className="border-t border-border p-1">
+            <button
+              type="button"
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
+              onClick={() => {
+                setOpen(false);
+                onImport();
+              }}
+              data-testid="browser-bookmarks-import"
+            >
+              <Download aria-hidden className="size-4 shrink-0" />
+              {t("browser_library.import")}
+            </button>
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   );

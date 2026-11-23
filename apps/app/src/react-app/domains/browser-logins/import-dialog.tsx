@@ -36,6 +36,7 @@ import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
+import { useWorkBrowserPolicy, type WorkBrowserPolicy } from "../work/company-browser";
 import { BrowserTile } from "./browser-marks";
 import {
   browserLibraryKeys,
@@ -51,9 +52,11 @@ type Choices = { bookmarks: boolean; history: boolean; signIns: boolean; keepInS
 
 const fmt = (count: number) => count.toLocaleString();
 
-/** Why a part could not be read, in words. `browser` is the short name ("Chrome"). */
-export function importFailureText(reason: string, browser: string): string {
+/** Why a part could not be read, in words. `browser` is the short name ("Chrome"); `company`: who turned it off. */
+export function importFailureText(reason: string, browser: string, company: string | null = null): string {
   switch (reason) {
+    case "company_off":
+      return company ? t("browser_import.company_off", { company }) : t("browser_import.company_off_generic");
     case "busy":
       return t("browser_import.fail_busy", { browser });
     case "key_denied":
@@ -91,6 +94,18 @@ export function importSummary(result: BrowserImportResult): string {
   return t("browser_import.list_and", { list: parts.slice(0, -1).join(", "), last: parts[parts.length - 1]! });
 }
 
+/** What a profile can bring once the company's settings apply: a part the company turned off reads as blocked
+ *  (`company_off`), so it is never ticked or sent. */
+export function withCompanyPolicy(inspection: BrowserImportInspection, policy: Pick<WorkBrowserPolicy, "importBookmarks" | "importSignIns">): BrowserImportInspection {
+  if (policy.importBookmarks && policy.importSignIns) return inspection;
+  const off = { state: "blocked", reason: "company_off" } as const;
+  return {
+    ...inspection,
+    ...(policy.importBookmarks ? {} : { bookmarks: off, history: off }),
+    ...(policy.importSignIns ? {} : { signIns: off, keepInStep: false }),
+  };
+}
+
 function initialChoices(inspection: BrowserImportInspection): Choices {
   const sites = inspection.signIns.state === "ready" ? inspection.signIns.sites.filter((site) => site.preselected).map((site) => site.site) : [];
   return {
@@ -124,6 +139,7 @@ export type BrowserImportDialogProps = {
 
 export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null, onImported }: BrowserImportDialogProps) {
   const sources = useBrowserImportSources(open);
+  const policy = useWorkBrowserPolicy();
   const invalidate = useInvalidateBrowserLibrary();
   const browsers = useMemo(() => sources.data?.browsers ?? [], [sources.data]);
   const [browser, setBrowser] = useState<ImportBrowser | null>(null);
@@ -166,10 +182,15 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
     refetchOnWindowFocus: false,
   });
 
+  const data = useMemo(
+    () => (inspection.data ? withCompanyPolicy(inspection.data, policy) : null),
+    [inspection.data, policy],
+  );
+
   useEffect(() => {
-    setChoices(inspection.data ? initialChoices(inspection.data) : null);
+    setChoices(data ? initialChoices(data) : null);
     setSitesOpen(false);
-  }, [inspection.data]);
+  }, [data]);
 
   const chooseBrowser = useCallback((id: string) => {
     const next = browsers.find((entry) => entry.browser === id);
@@ -185,7 +206,6 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
   }, []);
 
   const short = group?.short ?? "";
-  const data = inspection.data ?? null;
   const signIns = data?.signIns ?? null;
   const readySites = signIns?.state === "ready" ? signIns.sites : [];
   const selectedSites = choices?.sites ?? new Set<string>();
@@ -384,6 +404,7 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
                         browser={short}
                         detail={t("browser_import.bookmarks_detail", { browser: short })}
                         checked={choices.bookmarks}
+                        company={policy.orgName}
                         onCheckedChange={(value) => setChoices({ ...choices, bookmarks: value })}
                         status={statusFor("bookmarks")}
                         stage={stage}
@@ -397,6 +418,7 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
                         detail={t("browser_import.history_detail", { days: data.history.state === "ready" || data.history.state === "empty" ? data.history.days ?? 90 : 90 })}
                         countLabel={(count) => t("browser_import.count_pages", { count, n: fmt(count) })}
                         checked={choices.history}
+                        company={policy.orgName}
                         onCheckedChange={(value) => setChoices({ ...choices, history: value })}
                         status={statusFor("history")}
                         stage={stage}
@@ -404,6 +426,7 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
                       <SignInsRow
                         signIns={data.signIns}
                         browser={short}
+                        company={policy.orgName}
                         checked={choices.signIns}
                         selected={selectedSites}
                         onCheckedChange={(value) => {
@@ -540,6 +563,7 @@ function PartRow(props: {
   detail: string;
   countLabel?: (count: number) => string;
   checked: boolean;
+  company?: string | null;
   onCheckedChange: (checked: boolean) => void;
   status: RowStatus | null;
   stage: "choose" | "importing" | "done";
@@ -558,14 +582,16 @@ function PartRow(props: {
     ? props.detail
     : part.state === "empty"
       ? t("browser_import.none_in_profile")
-      : importFailureText(part.reason, props.browser);
+      : importFailureText(part.reason, props.browser, props.company);
   return (
     <RowFrame
       kind={props.kind}
       icon={props.icon}
       title={props.title}
       disabled={!ready}
-      lead={<Checkbox id={id} checked={ready && props.checked} disabled={!ready} onCheckedChange={(value) => props.onCheckedChange(value === true)} aria-label={props.title} />}
+      lead={part.state === "blocked" && part.reason === "company_off"
+        ? <Lock aria-hidden className="size-3.5 text-muted-foreground" />
+        : <Checkbox id={id} checked={ready && props.checked} disabled={!ready} onCheckedChange={(value) => props.onCheckedChange(value === true)} aria-label={props.title} />}
       meta={<label htmlFor={id}>{meta}</label>}
       trailing={props.part.state === "ready" ? label(props.part.count) : null}
     />
@@ -583,6 +609,7 @@ function siteUse(lastUsedAt: number | null): string | null {
 function SignInsRow(props: {
   signIns: BrowserImportSignIns;
   browser: string;
+  company?: string | null;
   checked: boolean;
   selected: Set<string>;
   onCheckedChange: (checked: boolean) => void;
@@ -613,14 +640,16 @@ function SignInsRow(props: {
   if (signIns.state !== "ready") {
     const meta = signIns.state === "empty"
       ? t("browser_import.signins_none")
-      : importFailureText(signIns.reason, props.browser);
+      : importFailureText(signIns.reason, props.browser, props.company);
     return (
       <RowFrame
         kind="signIns"
         icon={icon}
         title={title}
         disabled
-        lead={signIns.state === "unavailable" ? <Lock aria-hidden className="size-3.5 text-muted-foreground" /> : <Checkbox disabled checked={false} aria-label={title} />}
+        lead={signIns.state === "unavailable" || (signIns.state === "blocked" && signIns.reason === "company_off")
+          ? <Lock aria-hidden className="size-3.5 text-muted-foreground" />
+          : <Checkbox disabled checked={false} aria-label={title} />}
         meta={meta}
       />
     );

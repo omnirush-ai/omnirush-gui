@@ -2,7 +2,7 @@
  * Work mode's local routes, for the app (client scope). The account's credential stays in this server: the
  * app and the engine reach /omnirush/work/* only through here.
  *
- *   GET   /work/state[?account=1][&fresh=1] { enabled, sources, message, autopilot, full_access, writes_paused, workspaceId, account?, enterprise? }
+ *   GET   /work/state[?account=1][&fresh=1] { enabled, sources, message, autopilot, full_access, writes_paused, workspaceId, account?, enterprise?, browser? }
  *                                          (account: "<server origin> <account id>", for the desktop's chat sync)
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
@@ -23,6 +23,8 @@
  *   POST  /work/org/transfer {user_id}, POST /work/org/leave                   the organization (contract Addendum C1)
  *   GET   /work/org/insights?days=         the owner's team insights
  *   GET   /work/org/connectors, PATCH /work/org/connectors {shown: [...] | null}   what members see (owner or admin)
+ *   GET   /work/org/browser, PATCH /work/org/browser {apps?, import_bookmarks?, import_signins?, links_in_app?, links_locked?}
+ *                                          the company's Work browser settings (any member reads; owner or admin)
  *   PATCH /work/org/members/:id {role: admin | member}                         a member's role (owner)
  *   GET   /work/settings, PATCH /work/settings {autopilot?, full_access?, writes_paused?}   the action layer (Addendum F)
  *   GET   /work/actions?limit=, POST /work/actions/:id/undo                    the activity log and an action's undo
@@ -53,7 +55,7 @@ import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
-import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
+import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkBrowser, rememberedWorkConnectors, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_BROWSER_MAX_APPS, WORK_PRESET, WORK_SOURCE_ID, workBrowserAppUrl, workHome } from "./work.js";
 
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
@@ -143,6 +145,8 @@ const WORK_ERRORS: Record<string, string> = {
   key_not_restricted: "Use a restricted key (it starts with rk_), not your secret key.",
   missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Refunds, and Events.",
   not_admin: "Only your company owner or an admin can change this.",
+  bad_url: "Use an https:// address, like https://tms.example.com.",
+  too_many_apps: "A company can list up to 24 apps.",
   not_allowed: "That connector is not available for your company.",
   connector_off: "Your company admin has turned this off.",
   connector_not_allowed: "This connector is not available for your company yet. Ask OmniRush support to turn it on.",
@@ -270,7 +274,9 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     const account = accountId ? { account: `${found?.serverOrigin ?? ""} ${accountId}`.trim() } : {};
     // A signed-in company account's enterprise block (only then: every other account's answer is as before).
     const enterprise = found ? rememberedWorkEnterprise(deps.workDir()) : null;
-    return jsonResponse({ ...setting, ...rememberedWorkActions(deps.workDir()), workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null, ...account, ...(enterprise ? { enterprise } : {}) });
+    // A company member's browser settings (only then: every other answer is as before).
+    const browser = found ? rememberedWorkBrowser(deps.workDir()) : null;
+    return jsonResponse({ ...setting, ...rememberedWorkActions(deps.workDir()), workspaceId: findWorkWorkspace(deps.config.workspaces)?.id ?? null, ...account, ...(enterprise ? { enterprise } : {}), ...(browser ? { browser } : {}) });
   });
 
   addRoute(routes, "POST", "/work/workspace", "client", async () => {
@@ -549,6 +555,33 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     if (shown !== null && (!list || !ids || list.length > 100 || ids.length !== list.length)) return invalid("shown must be null or a list of connector ids");
     const answer = await forward("org/connectors", "PATCH", { shown: ids && [...new Set(ids)] });
     // The account's own sources follow the company's list (the capabilities' work block): read it fresh next time.
+    if (answer.ok) switchStale = true;
+    return answer;
+  });
+  // The company's Work browser settings: any member reads them, the owner or an admin changes any of them (`apps`
+  // replaces the list). Members get them in the capabilities, so the next /work/state reads those again.
+  addRoute(routes, "GET", "/work/org/browser", "client", async () => forward("org/browser", "GET"));
+  addRoute(routes, "PATCH", "/work/org/browser", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    const patch: Record<string, unknown> = {};
+    if (body.apps !== undefined) {
+      if (!Array.isArray(body.apps) || body.apps.length > WORK_BROWSER_MAX_APPS) return invalid(`apps must be a list of at most ${WORK_BROWSER_MAX_APPS}`);
+      const apps = body.apps.map((app: unknown) => {
+        const record = typeof app === "object" && app !== null ? app as Record<string, unknown> : {};
+        const name = text(record.name);
+        const url = typeof record.url === "string" ? workBrowserAppUrl(record.url.trim()) : null;
+        return name && name.length <= 200 && url ? { name, url } : null;
+      });
+      if (apps.some((app) => app === null)) return jsonResponse({ detail: "bad_url", code: "bad_url", message: WORK_ERRORS.bad_url }, 400);
+      patch.apps = apps;
+    }
+    for (const key of ["import_bookmarks", "import_signins", "links_in_app", "links_locked"]) {
+      const value = body[key];
+      if (value === undefined) continue;
+      if (typeof value !== "boolean") return invalid(`${key} must be true or false`);
+      patch[key] = value;
+    }
+    const answer = await forward("org/browser", "PATCH", patch);
     if (answer.ok) switchStale = true;
     return answer;
   });

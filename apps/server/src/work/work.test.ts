@@ -9,7 +9,7 @@ import { desiredV2Mcp, v2McpGate } from "../engine-v2-mcp.js";
 import { writeWorkspaceMcp } from "../mcp-allow/state.js";
 import { workPrompt } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
-import { enterpriseUploadSkipped, isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_HEADER, WORK_PATH, WORK_READ_TOOLS, workEnterprise, workEnvironment, workHome } from "./work.js";
+import { enterpriseUploadSkipped, isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkBrowser, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_HEADER, WORK_PATH, WORK_READ_TOOLS, workBrowser, workEnterprise, workEnvironment, workHome } from "./work.js";
 import type { Route } from "../routes/registry.js";
 import type { ServerConfig } from "../types.js";
 
@@ -371,9 +371,9 @@ describe("work routes", () => {
   test("the broker reaches only the contract's paths", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/imap/connect", "connectors/hook/hook", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
-      "org/insights", "org/connectors", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
+      "org/insights", "org/connectors", "org/browser", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
       "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio", "catalog", "records/detail", "records/attachment", "records/action", "compose"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "org/connectors/x", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "org/connectors/x", "org/browser/x", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
       "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "whatsapp-local/x", "whatsapp", "telegram/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
       "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin", "hooks/h1/orh_x", "connectors/hook/hook/x",
       "catalog/x", "records", "records/x", "records/detail/x", "records/../admin", "compose/mail", "xcatalog", "catalogx"]) expect(WORK_PATH.test(path)).toBe(false);
@@ -559,6 +559,58 @@ describe("work routes", () => {
     expect(fresh).toEqual([undefined, { maxAgeMs: 0 }, undefined]);
     const { call: notAdmin } = setup(() => json({ detail: "not_admin" }, 403));
     expect(await (await notAdmin("PATCH", "/work/org/connectors", { shown: null })).json()).toMatchObject({ code: "not_admin", message: "Only your company owner or an admin can change this." });
+  });
+
+  test("the company's browser settings: read from the block, checked, forwarded; a save re-reads the switch", async () => {
+    const asked: unknown[] = [];
+    let block: Record<string, unknown> = { enabled: true, sources: ["google"] };
+    const { calls, call } = setup(() => json({ ok: true }), async (options) => {
+      asked.push(options);
+      return { work: block };
+    });
+    // No company (no `browser` in the block): the state is as before.
+    expect(await (await call("GET", "/work/state")).json()).not.toHaveProperty("browser");
+    const apps = [{ name: "Acme TMS", url: "https://tms.acme.test/" }];
+    expect((await call("PATCH", "/work/org/browser", { apps: [{ name: " Acme TMS ", url: " https://TMS.acme.test " }], import_signins: false, evil: 1 })).status).toBe(200);
+    for (const body of [
+      { apps: "x" },
+      { apps: Array.from({ length: 25 }, (_, i) => ({ name: `A${i}`, url: `https://a${i}.test/` })) },
+      { import_bookmarks: "no" },
+      { links_locked: 1 },
+    ]) expect((await call("PATCH", "/work/org/browser", body)).status).toBe(400);
+    for (const url of ["http://tms.acme.test/", "javascript:alert(1)", "https://ana:pw@tms.acme.test/", "tms.acme.test", ""]) {
+      const refused = await call("PATCH", "/work/org/browser", { apps: [{ name: "TMS", url }] });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ code: "bad_url" });
+    }
+    expect((await call("PATCH", "/work/org/browser", { apps: [{ name: " ", url: "https://tms.acme.test/" }] })).status).toBe(400);
+    await call("GET", "/work/org/browser");
+    block = { enabled: true, sources: ["google"], browser: { apps: [...apps, { name: "Old", url: "http://old.acme.test/" }, { name: "", url: "https://x.test/" }], import_bookmarks: true, import_signins: false, links_in_app: "yes", links_locked: true, org_name: " Acme Freight ", agent: "any" } };
+    expect((await (await call("GET", "/work/state")).json()).browser).toEqual({ apps, import_bookmarks: true, import_signins: false, links_in_app: true, links_locked: true, org_name: "Acme Freight" });
+    expect(asked).toEqual([undefined, { maxAgeMs: 0 }]);
+    expect(calls).toEqual([
+      "PATCH org/browser {\"apps\":[{\"name\":\"Acme TMS\",\"url\":\"https://tms.acme.test/\"}],\"import_signins\":false}",
+      "GET org/browser ",
+    ]);
+    // Work off: nothing about the company's browser is served.
+    block = { enabled: false, sources: [], browser: block.browser };
+    expect(await (await call("GET", "/work/state")).json()).not.toHaveProperty("browser");
+    const { call: notAdmin } = setup(() => json({ detail: "not_admin" }, 403));
+    expect(await (await notAdmin("PATCH", "/work/org/browser", { links_in_app: false })).json()).toMatchObject({ code: "not_admin" });
+    const { call: badUrl } = setup(() => json({ detail: "bad_url", reason: "Use an https:// address." }, 422));
+    expect(await (await badUrl("PATCH", "/work/org/browser", { apps })).json()).toMatchObject({ code: "bad_url", message: "Use an https:// address, like https://tms.example.com." });
+  });
+
+  test("the remembered browser block is the defaults' shape, only while Work is on", () => {
+    const dir = temp();
+    expect(rememberedWorkBrowser(dir)).toBeNull();
+    expect(workBrowser({ browser: "x" })).toBeNull();
+    expect(workBrowser({ browser: {} })).toEqual({ apps: [], import_bookmarks: true, import_signins: true, links_in_app: true, links_locked: false, org_name: null });
+    rememberWorkSwitch(dir, { work: { enabled: true, sources: [], browser: { apps: Array.from({ length: 30 }, (_, i) => ({ name: `A${i}`, url: `https://a${i}.test/` })), links_in_app: false } } });
+    expect(rememberedWorkBrowser(dir)?.apps).toHaveLength(24);
+    expect(rememberedWorkBrowser(dir)?.links_in_app).toBe(false);
+    rememberWorkSwitch(dir, { work: { enabled: false, sources: [], browser: { apps: [] } } });
+    expect(rememberedWorkBrowser(dir)).toBeNull();
   });
 
   test("insights, the action layer and iMessage are checked, then forwarded; a saved setting re-reads the switch", async () => {

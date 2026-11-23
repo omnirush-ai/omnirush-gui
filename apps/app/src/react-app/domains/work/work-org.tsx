@@ -1,7 +1,8 @@
 /** @jsxImportSource react */
 // Settings > Work > Organization (contract Addendum C2): the company profile (owner edits), the member's own role and
 // tools, members, pending invites, removing, transferring and leaving. Each person's connectors stay their own; the owner
-// and admins pick which connectors members see (Connectors for your team), and the owner makes admins.
+// and admins pick which connectors members see (Connectors for your team) and the company's apps in the Work browser
+// (Apps for your team, `work-org-browser`), and the owner makes admins.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowUpRight, Copy, Pencil, RotateCw, UserPlus } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
@@ -29,6 +30,7 @@ import { ListMore, ListSearch, matchesQuery, PersonAvatar, useListCap, WORK_DEST
 import { useEnterpriseFlags } from "./enterprise-mode";
 import { SizeChips, ToolPicker } from "./onboarding-steps";
 import { TRUST_URL, WorkInviteDialog } from "./work-onboarding";
+import { TeamBrowser } from "./work-org-browser";
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((item) => b.includes(item));
 const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
@@ -525,6 +527,8 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
             {team ? (
               <TeamConnectors view={team} pending={saveShown.isPending ? saveShown.variables : undefined} busy={saveShown.isPending} onChange={showConnector} />
             ) : null}
+
+            <TeamBrowser client={props.client} company={org.name} />
 
             {enterprise.on && enterprise.portalUrl && (owner || admin) ? (
               <Section title={t("work.ent.manage_portal")} testId="work-org-portal">

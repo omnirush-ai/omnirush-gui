@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { t } from "@/i18n";
 import type { WorkChatSyncProgress } from "@omnirush/types/desktop-ipc";
 import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkOrgConnectors, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+
+import { enforceCompanySignIns } from "./company-browser";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -69,7 +72,7 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "inviteWorkMember" | "acceptWorkInvite"
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
-  | "getWorkOrgConnectors" | "setWorkOrgConnectors" | "setWorkMemberRole"
+  | "getWorkOrgConnectors" | "setWorkOrgConnectors" | "setWorkMemberRole" | "getWorkOrgBrowser" | "setWorkOrgBrowser"
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
   | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
   | "importIMessage" | "getIMessageCount" | "getWhatsAppLocalCount" | "getTelegramCount"
@@ -84,6 +87,7 @@ export const workEntityKey = (client: WorkClient | null, id: string) => ["omniru
 export const workFeedKey = (client: WorkClient | null, source: string | null) => ["omnirush-work-feed", client?.baseUrl?.trim() || "default", source ?? "all"];
 export const workMembersKey = (client: WorkClient | null) => ["omnirush-work-members", client?.baseUrl?.trim() || "default"];
 export const workOrgConnectorsKey = (client: WorkClient | null) => ["omnirush-work-org-connectors", client?.baseUrl?.trim() || "default"];
+export const workOrgBrowserKey = (client: WorkClient | null) => ["omnirush-work-org-browser", client?.baseUrl?.trim() || "default"];
 export const workChatToolsKey = (client: WorkClient | null) => ["omnirush-work-chat-tools", client?.baseUrl?.trim() || "default"];
 export const workInsightsKey = (client: WorkClient | null, days: number) => ["omnirush-work-insights", client?.baseUrl?.trim() || "default", days];
 export const workSettingsKey = (client: WorkClient | null) => ["omnirush-work-settings", client?.baseUrl?.trim() || "default"];
@@ -148,15 +152,18 @@ export function askAboutDealPrompt(deal: Pick<OmniRushWorkDeal, "source_id" | "n
   return `Brief me on the deal "${name}"${deal.company ? ` with ${deal.company}` : ""} (source id ${deal.source_id}). Call work_deals for it first, then tell me where it stands, what puts it at risk, the latest contact on each channel and what I should do next, with links.`;
 }
 
-/** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
+/** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. A company that
+ *  turned sign-in import off stops it on this computer (`enforceCompanySignIns`). */
 export function useWorkState(client: WorkClient | null) {
-  return useQuery<OmniRushWorkState>({
+  const query = useQuery<OmniRushWorkState>({
     queryKey: workStateKey(client),
     queryFn: () => client!.getWorkState(),
     enabled: Boolean(client),
     refetchInterval: 60_000,
     retry: false,
   });
+  useEffect(() => enforceCompanySignIns(query.data), [query.data]);
+  return query;
 }
 
 /** The company's connector list (GET /work/org/connectors). An older server answers 404: no retry, and every caller

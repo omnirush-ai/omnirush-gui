@@ -7,6 +7,7 @@ import { usePersistedBrowserLoginsStore } from "./browser-logins-store";
 import { BrowserTile } from "./browser-marks";
 import { BrowserImportDialog } from "./import-dialog";
 import { LoginSyncDialog } from "./login-sync-dialog";
+import { useWorkBrowserPolicy } from "../work/company-browser";
 import { getBrowserLibraryBridge, offerBrowser, useBrowserImportSources, useWorkUser } from "./use-browser-library";
 import { useBrowserLoginSync } from "./use-browser-login-sync";
 import { t } from "@/i18n";
@@ -26,11 +27,15 @@ function LibraryAwareCard() {
 function BrowserImportOffer() {
   const outcome = usePersistedBrowserLoginsStore((state) => state.importOffer);
   const resolve = usePersistedBrowserLoginsStore((state) => state.resolveImportOffer);
-  const sources = useBrowserImportSources(outcome === null);
+  const policy = useWorkBrowserPolicy();
+  // Nothing to offer when the company turned importing off altogether.
+  const allowed = policy.importBookmarks || policy.importSignIns;
+  const sources = useBrowserImportSources(outcome === null && allowed);
   const [dialogOpen, setDialogOpen] = useState(false);
   const target = offerBrowser(sources.data);
 
-  if ((outcome !== null || !target) && !dialogOpen) return null;
+  if ((outcome !== null || !target || !allowed) && !dialogOpen) return null;
+  const signIns = Boolean(target?.signIns.importable) && policy.importSignIns;
 
   return (
     <>
@@ -43,9 +48,11 @@ function BrowserImportOffer() {
         >
           <BrowserTile browser={target.browser} size="chip" />
           <p className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-[18px] text-foreground">
-            {target.signIns.importable
-              ? t("browser_import.offer", { browser: target.short })
-              : t("browser_import.offer_no_signins", { browser: target.short })}
+            {!policy.importBookmarks
+              ? t("browser_import.offer_signins_only", { browser: target.short })
+              : signIns
+                ? t("browser_import.offer", { browser: target.short })
+                : t("browser_import.offer_no_signins", { browser: target.short })}
           </p>
           <Button size="sm" variant="ghost" className="h-7 px-2.5 text-xs" onClick={() => resolve("dismissed")} data-testid="browser-import-offer-dismiss">
             {t("browser_import.not_now")}

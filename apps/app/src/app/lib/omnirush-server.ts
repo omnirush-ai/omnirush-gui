@@ -614,7 +614,25 @@ export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAl
 /** `available`: Work is off but the account can try it (POST /work/enable). */
 /** `autopilot`/`writes_paused`/`full_access`: F action-layer capabilities, carried by /work/state (contract Work Addendum F). */
 /** `meetings`: the server transcribes meeting audio (capabilities.work.meetings); everything about meetings stays hidden without it. */
-export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null; autopilot?: boolean; writes_paused?: boolean; full_access?: boolean; meetings?: boolean; enterprise?: OmniRushWorkEnterprise | null };
+/** `browser`: the company's Work browser settings (capabilities.work.browser), for a member of a company; absent for
+ *  everyone else and from an older server, which reads as the defaults. */
+export type OmniRushWorkState = { enabled: boolean; available?: boolean; sources: string[]; message: string | null; workspaceId: string | null; autopilot?: boolean; writes_paused?: boolean; full_access?: boolean; meetings?: boolean; enterprise?: OmniRushWorkEnterprise | null; browser?: OmniRushWorkBrowser | null };
+/** One of the company's apps: a name and an https address, opened in the Work browser. */
+export type OmniRushWorkBrowserApp = { name: string; url: string };
+/** The company's Work browser settings (owner or admin set them): its apps (at most 24), whether people may import
+ *  bookmarks and history, and sign-ins, from other browsers, and where Work links open (`links_locked`: people cannot
+ *  change it). `org_name` comes with the capabilities only. */
+export type OmniRushWorkBrowser = {
+  apps: OmniRushWorkBrowserApp[];
+  import_bookmarks: boolean;
+  import_signins: boolean;
+  links_in_app: boolean;
+  links_locked: boolean;
+  org_name?: string | null;
+};
+/** GET/PATCH /omnirush/work/org/browser: the settings and whether the caller may change them (owner or admin). */
+export type OmniRushWorkOrgBrowser = { browser: OmniRushWorkBrowser; can_manage: boolean };
+export type OmniRushWorkOrgBrowserPatch = Partial<Omit<OmniRushWorkBrowser, "org_name">>;
 /** A company account (`work.enterprise` in the capabilities; absent for everyone else): the company's state and the
  *  person's role, whether staff turned Code on, what uploads, and the admin portal. */
 export type OmniRushWorkEnterprise = {
@@ -2704,6 +2722,12 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
     /** What members see (owner or admin): the ids shown, or null for every connector the company may use. */
     setWorkOrgConnectors: (shown: string[] | null) =>
       requestJson<OmniRushWorkOrgConnectors>(baseUrl, "/work/org/connectors", { token, hostToken, method: "PATCH", body: { shown }, timeoutMs: timeouts.config }),
+    /** The company's Work browser settings; an older server answers 404 (nothing to show). */
+    getWorkOrgBrowser: () =>
+      requestJson<OmniRushWorkOrgBrowser>(baseUrl, "/work/org/browser", { token, hostToken, timeoutMs: timeouts.config }),
+    /** Owner or admin: any of the settings; `apps` replaces the whole list. */
+    setWorkOrgBrowser: (patch: OmniRushWorkOrgBrowserPatch) =>
+      requestJson<OmniRushWorkOrgBrowser>(baseUrl, "/work/org/browser", { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
     /** A member's role (owner only): an admin also manages which connectors members see. */
     setWorkMemberRole: (userId: string, role: "admin" | "member") =>
       requestJson<{ ok: boolean; role: string }>(baseUrl, `/work/org/members/${encodeURIComponent(userId)}`, { token, hostToken, method: "PATCH", body: { role }, timeoutMs: timeouts.config }),
