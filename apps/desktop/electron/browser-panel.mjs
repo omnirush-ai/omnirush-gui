@@ -17,6 +17,7 @@ import { BrowserTaskError, createBrowserTaskHost } from "./browser-task.mjs";
 import { createWebMcpBroker } from "./webmcp-host.mjs";
 import { createWebMcpFramePolicy } from "./webmcp-policy.mjs";
 import { installBrowserPanelPermissionHandlers } from "./media-permissions.mjs";
+import { clearBrowsingData } from "./browser-account-guard.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROWSER_SESSION_PARTITION = "persist:omnirush-browser";
@@ -77,7 +78,11 @@ const BROWSER_SECURITY_PREFERENCES = Object.freeze({
   webviewTag: false,
 });
 
-export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, checkPolicy, permissionMode, actApproval }) {
+export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, checkPolicy, permissionMode, actApproval,
+  // Work chats and company accounts ask before each new website (browser-site-guard.mjs).
+  siteGuard = null,
+  // A tab opened: the company account whose sign-ins the browser holds is remembered (browser-account-guard.mjs).
+  onUse = () => {} }) {
   let browserSessionHooksInstalled = false;
   function installBrowserSessionHooks() {
     if (browserSessionHooksInstalled) return;
@@ -843,6 +848,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     runSiteTool: (args, options) => webMcpBroker.executeTool(args, options),
     ...(permissionMode ? { mode: permissionMode } : {}),
     ...(actApproval ? { actApproval } : {}),
+    ...(siteGuard ? { sitesAsk: siteGuard.sitesAsk } : {}),
   });
 
   function scheduleWebMcpToolCountRefresh(tabId) {
@@ -894,6 +900,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     if (!restoreTabId && registry.size() >= 100) throw new Error("OmniRush.ai has 100 saved browser tabs. Close an unused tab, then try again.");
     installBrowserSessionHooks();
     ensureWebMcpFramePolicy();
+    onUse();
     const tabId = restoreTabId ?? createBrowserTabId();
     const view = new WebContentsView({
       ...contentsOptions,
@@ -1529,6 +1536,19 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     sendBrowserState();
   }
 
+  /**
+   * Clear the browser for an account change: every tab (open and suspended)
+   * closes, then sign-ins, site data and the cache go. Resolves to the cookies
+   * left (0). The window then forgets its saved tab lists (main.mjs tells it).
+   */
+  async function clearProfile() {
+    closeAllBrowserTabs();
+    suspendedTabs.clear();
+    const left = await clearBrowsingData(session.fromPartition(BROWSER_SESSION_PARTITION));
+    sendBrowserState();
+    return left;
+  }
+
   function normalizeSessionId(value) {
     return typeof value === "string" && value.trim() ? value : null;
   }
@@ -1546,11 +1566,11 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     ));
     ipcMain.handle("omnirush:browser:hide", () => hideBrowserView());
     ipcMain.handle("omnirush:browser:setVisibleSession", (_event, sessionId) => setVisibleSession(normalizeSessionId(sessionId)));
-    ipcMain.handle("omnirush:browser:openUrl", (_event, url, provider, options) => (
-      openBrowserUrlForAutomation(url, provider, {
-        ownerSessionId: normalizeSessionId(options && typeof options === "object" ? options.sessionId : null),
-      })
-    ));
+    ipcMain.handle("omnirush:browser:openUrl", (_event, url, provider, options) => {
+      const request = options && typeof options === "object" ? options : {};
+      siteGuard?.noteSession({ sessionId: request.sessionId, directory: request.directory });
+      return openBrowserUrlForAutomation(url, provider, { ownerSessionId: normalizeSessionId(request.sessionId ?? null) });
+    });
     ipcMain.handle("omnirush:browser:navigate", (event, url) => {
       authorizeManualNavigation(event);
       getActiveWebContents(); // Reject navigation while suspension is pending.
@@ -1686,7 +1706,11 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     isMainWindowAllowedNavigation,
     setMainWindowEntryUrl,
     allowMainWindowInternalUrl,
-    browserTask: (args, options) => taskHost.request(args, options),
+    browserTask: (args, options) => {
+      siteGuard?.noteSession(args);
+      return taskHost.request(args, options);
+    },
+    clearProfile,
     listWebMcpTools: (args, options) => taskHost.request({ sessionId: args?.sessionId, operation: "site_tools", args }, options),
     executeWebMcpTool: (args, options) => taskHost.request({ sessionId: args?.sessionId, operation: "site_tool", args }, options),
     registerIpc,

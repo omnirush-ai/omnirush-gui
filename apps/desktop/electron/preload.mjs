@@ -280,6 +280,11 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
       ipcRenderer.on("omnirush:browser:panel-closed", handler);
       return () => ipcRenderer.removeListener("omnirush:browser:panel-closed", handler);
     },
+    onAccountChanged(callback) {
+      const handler = (_event, payload) => callback({ cleared: payload?.cleared === true });
+      ipcRenderer.on("omnirush:browser:account-changed", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser:account-changed", handler);
+    },
   },
   browserLogins: {
     disableForManagedContext() { return ipcRenderer.invoke("omnirush:browser-logins:disableForManagedContext"); },

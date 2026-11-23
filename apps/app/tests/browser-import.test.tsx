@@ -298,6 +298,42 @@ describe("browser import", () => {
     }, bridge, false);
   });
 
+  test("an account change refreshes the library; a cleared browser drops every chat's saved browser tabs", async () => {
+    const { BrowserAccountChanges } = await import("../src/react-app/domains/browser-logins/browser-account-changes");
+    const { browserLibraryKeys } = await import("../src/react-app/domains/browser-logins/use-browser-library");
+    const { usePanelTabStore } = await import("../src/react-app/domains/session/panel/panel-tab-store");
+    const browserTab = (id: string, ownerSessionId: string) => ({
+      id, type: "browser" as const, label: "Acme TMS", url: "https://tms.acme.example/", favicon: null, status: "ready" as const,
+      canGoBack: false, canGoForward: false, ownerSessionId, siteToolCount: 0, siteTools: [], siteToolActivity: [],
+    });
+    const store = usePanelTabStore.getState();
+    store.openTab("chat-a", browserTab("tab-1", "chat-a"));
+    store.openTab("chat-a", { id: "record:gmail:1", type: "record", label: "Shipment 4471", sourceId: "gmail:1" });
+    store.openTab("chat-b", browserTab("tab-2", "chat-b"));
+    const listeners = new Set<(payload: { cleared: boolean }) => void>();
+    const { bridge } = fakeBridge();
+    await withDom(async ({ mount, act, queries }) => {
+      window.__OMNIRUSH_ELECTRON__ = { ...window.__OMNIRUSH_ELECTRON__, browser: { onAccountChanged: (callback) => { listeners.add(callback); return () => listeners.delete(callback); } } };
+      queries.setQueryData(browserLibraryKeys.summary, { imports: [], bookmarks: 4, history: 3 });
+      await mount(<BrowserAccountChanges />);
+      expect(listeners.size).toBe(1);
+
+      await act(() => { for (const listener of listeners) listener({ cleared: false }); });
+      expect(queries.getQueryState(browserLibraryKeys.summary)?.isInvalidated).toBe(true);
+      expect(usePanelTabStore.getState().sessions["chat-b"]?.tabs.map((tab) => tab.id)).toEqual(["tab-2"]);
+
+      await act(() => { for (const listener of listeners) listener({ cleared: true }); });
+      const sessions = usePanelTabStore.getState().sessions;
+      expect(sessions["chat-a"]?.tabs.map((tab) => tab.id)).toEqual(["record:gmail:1"]);
+      expect(sessions["chat-a"]?.activeTabId).toBe("record:gmail:1");
+      expect(sessions["chat-b"]?.tabs).toEqual([]);
+      expect(localStorage.getItem("omnirush:panel-tabs:v1") ?? "").not.toContain("tab-2");
+    }, bridge);
+    expect(listeners.size).toBe(0);
+    usePanelTabStore.getState().clearSession("chat-a");
+    usePanelTabStore.getState().clearSession("chat-b");
+  });
+
   test("every new string has a Chinese copy", () => {
     const zh = readFileSync(new URL("../src/i18n/locales/zh.ts", import.meta.url), "utf8");
     const en = readFileSync(new URL("../src/i18n/locales/en.ts", import.meta.url), "utf8");

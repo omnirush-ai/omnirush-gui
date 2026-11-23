@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useReducer, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router";
 
-import { t } from "../../i18n";
+import { currentLocale, t } from "../../i18n";
 import {
   pickDirectory,
   resolveWorkspaceListSelectedId,
@@ -373,7 +373,7 @@ export function WelcomeRoute() {
   const handleWorkSignIn = useCallback(async () => {
     setWorkSignIn({ busy: true, error: null });
     try {
-      await omnirushAccountConnect({ surface: "work" });
+      await omnirushAccountConnect({ surface: "work", language: currentLocale() });
       captureAnalyticsEvent("sign_in_completed", { method: "device_link", surface: "work" });
       useWorkModeStore.getState().setMode("work");
       markOnboardingComplete();

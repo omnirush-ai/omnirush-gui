@@ -111,7 +111,7 @@ function fakeSession() {
   };
 }
 
-function setup({ platform = "darwin", confirm = async () => true, blockSafari = false, policyAllowed = true, fixture = null, readLinuxKeyring = async () => null } = {}) {
+function setup({ platform = "darwin", confirm = async () => true, blockSafari = false, policyAllowed = true, fixture = null, readLinuxKeyring = async () => null, account = { id: "acc_work" } } = {}) {
   const { home, env } = fixture ?? fixtureHome({ platform });
   const session = fakeSession();
   const confirmations = [];
@@ -143,6 +143,7 @@ function setup({ platform = "darwin", confirm = async () => true, blockSafari = 
     env,
     loginSync,
     now: () => NOW,
+    account: async () => account.id,
     readSourceFile: async (filePath) => {
       if (blockSafari && filePath.includes(join("Library", "Safari"))) throw permissionDenied();
       return readFileSync(filePath);
@@ -151,7 +152,7 @@ function setup({ platform = "darwin", confirm = async () => true, blockSafari = 
       if (blockSafari && filePath.includes(join("Library", "Safari"))) throw permissionDenied();
     },
   });
-  return { library, loginSync, session, confirmations, home };
+  return { library, loginSync, session, confirmations, home, account };
 }
 
 /** The IPC handlers as the renderer reaches them, with every answer kept so the test can scan them for values. */
@@ -214,9 +215,9 @@ test("inspect counts before anything is copied; the import fills the library; a 
   assert.deepEqual(tree[0].children[0].children.map((node) => node.title), ["Team tracker", "Docs"]);
 
   await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
-  assert.equal(library.summary().bookmarks, 3);
-  assert.equal(library.summary().history, 3);
-  assert.deepEqual(library.summary().imports.map(({ sourceId, browser, name, bookmarks, history, signIns }) => ({ sourceId, browser, name, bookmarks, history, signIns })), [
+  assert.equal((await library.summary()).bookmarks, 3);
+  assert.equal((await library.summary()).history, 3);
+  assert.deepEqual((await library.summary()).imports.map(({ sourceId, browser, name, bookmarks, history, signIns }) => ({ sourceId, browser, name, bookmarks, history, signIns })), [
     { sourceId: "chrome:Default", browser: "chrome", name: "Work", bookmarks: 3, history: 3, signIns: null },
   ]);
 });
@@ -224,31 +225,31 @@ test("inspect counts before anything is copied; the import fills the library; a 
 test("address bar suggestions: a site typed from its start first, bookmarks and frequent pages next, eight at most", async () => {
   const { library } = setup();
   await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
-  const suggestions = library.suggest("exam");
+  const suggestions = await library.suggest("exam");
   assert.deepEqual(suggestions.map((entry) => entry.url).slice(0, 3), ["https://www.example.com/", "https://exampleapp.io/login", "https://example.com/pricing"]);
   assert.equal(suggestions[0].kind, "bookmark");
-  assert.equal(library.suggest("tracker")[0].url, "https://tracker.example.org/board");
-  assert.equal(library.suggest("handbook")[0].title, "Handbook");
-  assert.deepEqual(library.suggest(""), []);
-  assert.deepEqual(library.suggest("100%_"), []);
-  assert.deepEqual(library.topBookmarks(2).map((entry) => entry.title), ["Team tracker", "Handbook"]);
+  assert.equal((await library.suggest("tracker"))[0].url, "https://tracker.example.org/board");
+  assert.equal((await library.suggest("handbook"))[0].title, "Handbook");
+  assert.deepEqual(await library.suggest(""), []);
+  assert.deepEqual(await library.suggest("100%_"), []);
+  assert.deepEqual((await library.topBookmarks(2)).map((entry) => entry.title), ["Team tracker", "Handbook"]);
 });
 
 test("the star adds and removes a page; clearing imports keeps starred pages", async () => {
   const { library } = setup();
   await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
-  assert.equal(library.isBookmarked("https://news.example.com/"), false);
-  assert.deepEqual(library.toggleBookmark({ url: "https://news.example.com/", title: "News" }), { bookmarked: true });
-  assert.equal(library.isBookmarked("https://news.example.com/"), true);
-  assert.equal(library.bookmarkTree()[0].title, "News");
-  assert.deepEqual(library.toggleBookmark({ url: "https://tracker.example.org/board" }), { bookmarked: false });
-  assert.equal(library.isBookmarked("https://tracker.example.org/board"), false);
-  assert.throws(() => library.toggleBookmark({ url: "file:///etc/passwd" }), /Only web pages/);
+  assert.equal(await library.isBookmarked("https://news.example.com/"), false);
+  assert.deepEqual(await library.toggleBookmark({ url: "https://news.example.com/", title: "News" }), { bookmarked: true });
+  assert.equal(await library.isBookmarked("https://news.example.com/"), true);
+  assert.equal((await library.bookmarkTree())[0].title, "News");
+  assert.deepEqual(await library.toggleBookmark({ url: "https://tracker.example.org/board" }), { bookmarked: false });
+  assert.equal(await library.isBookmarked("https://tracker.example.org/board"), false);
+  await assert.rejects(library.toggleBookmark({ url: "file:///etc/passwd" }), /Only web pages/);
 
-  const cleared = library.clear();
+  const cleared = await library.clear();
   assert.deepEqual(cleared, { imports: [], bookmarks: 1, history: 0 });
-  assert.deepEqual(library.bookmarkTree().map((node) => node.title), ["News"]);
-  assert.deepEqual(library.suggest("exam").map((entry) => entry.url), ["https://news.example.com/"]);
+  assert.deepEqual((await library.bookmarkTree()).map((node) => node.title), ["News"]);
+  assert.deepEqual((await library.suggest("exam")).map((entry) => entry.url), ["https://news.example.com/"]);
 });
 
 test("sign-ins: the dialog sees site names only; a one-time import asks first and writes the chosen sites; no cookie value crosses IPC", async () => {
@@ -328,7 +329,7 @@ test("Safari without Full Disk Access is listed with the access step and its rea
   assert.deepEqual(counted.bookmarks, { state: "ready", count: 4 });
   const imported = await open.library.runImport({ sourceId: "safari:Safari", bookmarks: true });
   assert.deepEqual(imported.bookmarks, { state: "done", count: 4 });
-  assert.deepEqual(open.library.bookmarkTree()[0].children.map((folder) => folder.title), ["Favorites", "Reading list", "Bookmarks"]);
+  assert.deepEqual((await open.library.bookmarkTree())[0].children.map((folder) => folder.title), ["Favorites", "Reading list", "Bookmarks"]);
 });
 
 test("sign-in import off on this computer (managed Desktop): bookmarks and history still offered, sign-ins say why", async () => {
@@ -425,9 +426,85 @@ test("the sign-in sync setup (Settings > Permissions) lists what it always liste
 test("the library file is readable by its owner only", { skip: process.platform === "win32" }, async () => {
   const { statSync } = await import("node:fs");
   const dir = mkdtempSync(join(tmpdir(), "browser-library-db-"));
-  const library = createBrowserLibrary({ dbPath: join(dir, "browser-library.sqlite"), platform: "linux", home: dir, now: () => NOW });
-  library.toggleBookmark({ url: "https://example.com/", title: "Example" });
+  const library = createBrowserLibrary({ dbPath: join(dir, "browser-library.sqlite"), platform: "linux", home: dir, now: () => NOW, account: async () => "acc_work" });
+  await library.toggleBookmark({ url: "https://example.com/", title: "Example" });
   assert.equal(statSync(join(dir, "browser-library.sqlite")).mode & 0o777, 0o600);
-  assert.equal(library.isBookmarked("https://example.com/"), true);
+  assert.equal(await library.isBookmarked("https://example.com/"), true);
   library.close();
+});
+
+// The library belongs to the account that imported it (judge M2): another account on this computer sees none of it.
+test("another account sees no library; the importing account sees it again after signing back in", async () => {
+  const { library, account } = setup();
+  const ipc = ipcHarness(library);
+  await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
+  await library.toggleBookmark({ url: "https://news.example.com/", title: "News" });
+  assert.equal((await library.summary()).bookmarks, 4);
+
+  account.id = "acc_other";
+  assert.deepEqual(await ipc.call("omnirush:browser-library:summary"), { imports: [], bookmarks: 0, history: 0 });
+  assert.deepEqual(await ipc.call("omnirush:browser-library:bookmarks"), []);
+  assert.deepEqual(await ipc.call("omnirush:browser-library:top", 8), []);
+  assert.deepEqual(await ipc.call("omnirush:browser-library:suggest", "exam"), []);
+  assert.equal(await ipc.call("omnirush:browser-library:isBookmarked", "https://news.example.com/"), false);
+  // Its own star and clear touch only its own rows.
+  assert.deepEqual(await library.toggleBookmark({ url: "https://news.example.com/", title: "Mine" }), { bookmarked: true });
+  assert.deepEqual(await library.clear(), { imports: [], bookmarks: 1, history: 0 });
+
+  account.id = null;
+  assert.deepEqual(await library.summary(), { imports: [], bookmarks: 0, history: 0 });
+  assert.deepEqual(await library.bookmarkTree(), []);
+  await assert.rejects(library.toggleBookmark({ url: "https://news.example.com/" }), /Sign in/);
+  await assert.rejects(library.runImport({ sourceId: "chrome:Default", bookmarks: true }), /Sign in/);
+
+  account.id = "acc_work";
+  const back = await library.summary();
+  assert.equal(back.bookmarks, 4);
+  assert.equal(back.history, 3);
+  assert.deepEqual(back.imports.map((entry) => entry.sourceId), ["chrome:Default"]);
+  assert.equal((await library.suggest("tracker"))[0].url, "https://tracker.example.org/board");
+  assert.equal((await library.bookmarkTree()).find((node) => node.title === "News")?.url, "https://news.example.com/");
+});
+
+test("two accounts importing the same browser profile each keep their own copy", async () => {
+  const { library, account } = setup();
+  await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
+  account.id = "acc_other";
+  await library.runImport({ sourceId: "chrome:Default", bookmarks: true });
+  assert.deepEqual(await library.summary().then(({ bookmarks, history }) => ({ bookmarks, history })), { bookmarks: 3, history: 0 });
+  await library.clear();
+  account.id = "acc_work";
+  assert.deepEqual(await library.summary().then(({ bookmarks, history }) => ({ bookmarks, history })), { bookmarks: 3, history: 3 });
+});
+
+test("a library saved before accounts were recorded goes to the first account that opens it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "browser-library-v0-"));
+  const dbPath = join(dir, "browser-library.sqlite");
+  const old = new DatabaseSync(dbPath);
+  old.exec(`
+    CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, parent INTEGER, title TEXT NOT NULL, url TEXT, position INTEGER NOT NULL DEFAULT 0, added_at INTEGER, source TEXT NOT NULL);
+    CREATE INDEX bookmarks_parent ON bookmarks(parent, position);
+    CREATE INDEX bookmarks_url ON bookmarks(url);
+    CREATE INDEX bookmarks_source ON bookmarks(source);
+    CREATE TABLE history (url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', visits INTEGER NOT NULL DEFAULT 1, last_visit_at INTEGER, source TEXT NOT NULL, PRIMARY KEY (url, source));
+    CREATE INDEX history_last ON history(last_visit_at);
+    CREATE TABLE imports (source TEXT PRIMARY KEY, browser TEXT NOT NULL, name TEXT NOT NULL, imported_at INTEGER NOT NULL, bookmarks INTEGER, history INTEGER, sign_ins INTEGER);
+    INSERT INTO bookmarks (parent, title, url, position, added_at, source) VALUES (NULL, 'Chrome', NULL, 1, 1, 'chrome:Default');
+    INSERT INTO bookmarks (parent, title, url, position, added_at, source) VALUES (1, 'Tracker', 'https://tracker.example.org/', 0, 1, 'chrome:Default');
+    INSERT INTO history (url, title, visits, last_visit_at, source) VALUES ('https://tracker.example.org/', 'Tracker', 5, 1, 'chrome:Default');
+    INSERT INTO imports (source, browser, name, imported_at, bookmarks, history, sign_ins) VALUES ('chrome:Default', 'chrome', 'Work', 1, 1, 1, NULL);
+  `);
+  old.close();
+  let account = "acc_first";
+  const library = createBrowserLibrary({ dbPath, platform: "linux", home: dir, now: () => NOW, account: async () => account });
+  try {
+    assert.deepEqual(await library.summary().then(({ bookmarks, history, imports }) => ({ bookmarks, history, imports: imports.length })), { bookmarks: 1, history: 1, imports: 1 });
+    account = "acc_second";
+    assert.deepEqual(await library.summary(), { imports: [], bookmarks: 0, history: 0 });
+    assert.deepEqual(await library.suggest("tracker"), []);
+    account = "acc_first";
+    assert.equal((await library.suggest("tracker"))[0].url, "https://tracker.example.org/");
+  } finally {
+    library.close();
+  }
 });

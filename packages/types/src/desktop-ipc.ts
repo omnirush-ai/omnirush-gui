@@ -1166,11 +1166,15 @@ export type DesktopCommandMap = {
     result: OmniRushBuildathonTagResult;
   };
   omnirushAccountConnect: {
-    /** `surface: "work"`: sign in to OmniRush Work (the browser opens the company portal's approval page). */
-    args: [options?: { gatewayUrl?: string; deviceName?: string; surface?: "work" }];
+    /**
+     * `surface: "work"`: sign in to OmniRush Work (the browser opens the company portal's approval page).
+     * `language`: the app's language, for the question about another account's browser sign-ins.
+     */
+    args: [options?: { gatewayUrl?: string; deviceName?: string; surface?: "work"; language?: string }];
     result: { connected: true; userCode: string };
   };
-  omnirushAccountSignOut: { args: []; result: OmniRushAccountSignOutResult };
+  /** `language`: the app's language, for a company account's question about its browser sign-ins. */
+  omnirushAccountSignOut: { args: [options?: { language?: string }]; result: OmniRushAccountSignOutResult };
   automationRunnerConfigure: {
     args: [configuration: { baseUrl: string; token: string; runnerId: string } | null];
     result: { connected: boolean };

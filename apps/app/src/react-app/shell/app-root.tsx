@@ -29,6 +29,7 @@ import { EnterpriseActivationGate } from "../domains/cloud/enterprise-activation
 import { OmniRushWebAccessGate } from "../domains/cloud/omnirush-web-access-gate";
 import { OrgOnboardingPage } from "../domains/cloud/org-onboarding-page";
 import { NewProvidersListener } from "./new-providers-listener";
+import { BrowserAccountChanges } from "../domains/browser-logins/browser-account-changes";
 import { BudgetWrapConsent } from "./budget-wrap-consent";
 import { AutoCompactNotice } from "./auto-compact-notice";
 import { StockModeNotice } from "./stock-mode-notice";
@@ -562,6 +563,7 @@ export function AppRoot() {
         true app-level signal.
       */}
       <NewProvidersListener />
+      <BrowserAccountChanges />
       <DevProfilerOverlay />
       <ReactRenderWatchdogOverlay />
     </>

@@ -153,7 +153,7 @@ const RESET_SEQUENCE = [
   { method: "Emulation.clearDeviceMetricsOverride", params: undefined },
 ];
 
-function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0) {
+function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0, options = {}) {
   effects.length = 0;
   controls.confirm = async () => 0;
   controls.beforeLoad = async () => {};
@@ -194,6 +194,7 @@ function createPanel(checkPolicy = async (_request) => {}, remoteDebugPort = 0) 
     checkPolicy: async (request) => { policies.push(request); await checkPolicy(request); },
     // These journeys cover the per-origin and per-act reviews, which only Careful keeps.
     permissionMode: () => "careful",
+    ...options,
   });
   panel.registerIpc(ipcMain);
   const mainContents = mainWindow.webContents;
@@ -1499,4 +1500,75 @@ test("minimizing the window parks the displayed tab and restoring brings it back
   assert.equal(onScreen(), view);
   assert.deepEqual(view.getBounds(), PANEL_BOUNDS);
   assert.equal(invoke("omnirush:browser:state").backgroundWindowCount, 0);
+});
+
+// Work chats and company accounts (judge M1, M2).
+test("a Work chat's agent asks before opening a site even in Auto mode; No leaves no page", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { createBrowserSiteGuard } = await import("./browser-site-guard.mjs");
+  const dir = mkdtempSync(path.join(tmpdir(), "panel-work-"));
+  try {
+    const workDir = path.join(dir, "work");
+    const siteGuard = createBrowserSiteGuard({ workDir });
+    const { invoke, views, panel, approve } = createPanel(undefined, 0, { permissionMode: () => "auto", siteGuard });
+    invoke("omnirush:browser:show", PANEL_BOUNDS, "W");
+    const opening = panel.browserTask({ sessionId: "W", directory: path.join(workDir, "acc_1"), operation: "open", args: { url: "https://crm.example.com/deals" } });
+    await flush();
+    const tab = invoke("omnirush:browser:state").tabs[0];
+    assert.equal(tab.browserApproval?.title, "Allow website navigation?");
+    assert.match(tab.browserApproval.message, /https:\/\/crm\.example\.com/);
+    assert.deepEqual(views()[0].webContents.loads, [], "nothing loads before the answer");
+    assert.equal(approve(false, tab.id), true);
+    const denied = await opening;
+    assert.equal(denied.ok, false);
+    assert.equal(denied.code, "user_denied");
+    assert.equal(views()[0].webContents.destinations.length, 0, "the site was never contacted");
+
+    // The app's open command for the same Work chat asks as well.
+    const command = invoke("omnirush:browser:openUrl", "https://crm.example.com/deals", "builtin", { sessionId: "W2", directory: path.join(workDir, "acc_1") });
+    invoke("omnirush:browser:show", PANEL_BOUNDS, "W2");
+    await flush();
+    const second = invoke("omnirush:browser:state").tabs.find((item) => item.ownerSessionId === "W2");
+    assert.equal(second?.browserApproval?.title, "Allow website navigation?");
+    assert.equal(approve(true, second.id), true);
+    const handle = await command;
+    assert.equal(handle.owner_session_id, "W2");
+    invoke("omnirush:browser:destroy");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a consumer Code chat in Auto mode opens a site without asking", async () => {
+  const { createBrowserSiteGuard } = await import("./browser-site-guard.mjs");
+  const siteGuard = createBrowserSiteGuard({ workDir: "/nonexistent/omnirush/work" });
+  const { invoke, views, panel } = createPanel(undefined, 0, { permissionMode: () => "auto", siteGuard });
+  invoke("omnirush:browser:show", PANEL_BOUNDS, "C");
+  const opened = await panel.browserTask({ sessionId: "C", directory: "/home/me/projects/site", operation: "open", args: { url: "https://docs.example.com/" } });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  assert.equal(invoke("omnirush:browser:state").tabs[0].browserApproval, null);
+  assert.deepEqual(views()[0].webContents.loads, ["https://docs.example.com/"]);
+  invoke("omnirush:browser:destroy");
+});
+
+test("clearing the browser for an account change closes every tab and leaves no cookies", async () => {
+  const jar = [{ domain: ".tms.acme.example", name: "sid", path: "/", secure: true }, { domain: "app.crm.example", name: "auth", path: "/", secure: true }];
+  const cleared = [];
+  browserSession.clearStorageData = async () => { cleared.push("storage"); jar.length = 0; };
+  browserSession.clearCache = async () => { cleared.push("cache"); };
+  browserSession.clearAuthCache = async () => { cleared.push("auth"); };
+  browserSession.cookies = { get: async () => [...jar], remove: async () => {}, flushStore: async () => { cleared.push("flush"); } };
+  const { invoke, panel, views } = createPanel();
+  invoke("omnirush:browser:createTab", "https://tms.acme.example/", "A");
+  invoke("omnirush:browser:createTab", "https://app.crm.example/", "B");
+  invoke("omnirush:browser:createTab", "https://intranet.acme.example/");
+  await flush();
+  assert.equal(invoke("omnirush:browser:state").tabs.length, 3);
+  assert.equal(await panel.clearProfile(), 0);
+  assert.deepEqual(invoke("omnirush:browser:state").tabs, []);
+  assert.ok(views().every((view) => view.webContents.isDestroyed()), "every page closed");
+  assert.deepEqual(cleared, ["storage", "cache", "auth", "flush"]);
+  assert.equal(jar.length, 0);
 });

@@ -67,6 +67,8 @@ export type OmniRushAffordanceDescriptor = z.infer<typeof omnirushAffordanceDesc
 export const omnirushAffordanceOriginSchema = z.object({
   sessionId: z.string().trim().min(1),
   workspaceId: z.string().trim().min(1).optional(),
+  /** The conversation's folder: a Work chat's browser asks before each new website. */
+  directory: z.string().trim().min(1).optional(),
 })
 export type OmniRushAffordanceOrigin = z.infer<typeof omnirushAffordanceOriginSchema>
 

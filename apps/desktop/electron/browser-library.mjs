@@ -7,6 +7,11 @@
 // (sign-ins go through the login sync, which returns counts only) and saved
 // passwords, which are never read. Nothing here is uploaded or added to a
 // chat; the agent does not see the library.
+//
+// Every row belongs to the OmniRush account that was signed in when it was
+// imported or starred, and only that account sees it: a company's imported
+// history never shows under another account on the same computer. Signed
+// out, the library is empty.
 import { chmodSync, closeSync, openSync } from "node:fs";
 import { copyFile, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -49,30 +54,58 @@ CREATE TABLE IF NOT EXISTS bookmarks (
   url TEXT,
   position INTEGER NOT NULL DEFAULT 0,
   added_at INTEGER,
-  source TEXT NOT NULL
+  source TEXT NOT NULL,
+  account TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS bookmarks_parent ON bookmarks(parent, position);
-CREATE INDEX IF NOT EXISTS bookmarks_url ON bookmarks(url);
-CREATE INDEX IF NOT EXISTS bookmarks_source ON bookmarks(source);
+CREATE INDEX IF NOT EXISTS bookmarks_url ON bookmarks(account, url);
+CREATE INDEX IF NOT EXISTS bookmarks_source ON bookmarks(account, source);
 CREATE TABLE IF NOT EXISTS history (
   url TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT '',
   visits INTEGER NOT NULL DEFAULT 1,
   last_visit_at INTEGER,
   source TEXT NOT NULL,
-  PRIMARY KEY (url, source)
+  account TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (account, url, source)
 );
 CREATE INDEX IF NOT EXISTS history_last ON history(last_visit_at);
 CREATE TABLE IF NOT EXISTS imports (
-  source TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  account TEXT NOT NULL DEFAULT '',
   browser TEXT NOT NULL,
   name TEXT NOT NULL,
   imported_at INTEGER NOT NULL,
   bookmarks INTEGER,
   history INTEGER,
-  sign_ins INTEGER
+  sign_ins INTEGER,
+  PRIMARY KEY (account, source)
 );
 `;
+const LIBRARY_TABLES = ["bookmarks", "history", "imports"];
+
+/** A library from before rows named their account: history and imports are rebuilt (their keys change), bookmarks gain the column. */
+function migrateToAccounts(store) {
+  const columns = (table) => store.prepare(`PRAGMA table_info(${table})`).all().map((row) => String(row.name));
+  const old = LIBRARY_TABLES.filter((table) => {
+    const names = columns(table);
+    return names.length > 0 && !names.includes("account");
+  });
+  if (old.length === 0) return;
+  store.exec("BEGIN");
+  try {
+    if (old.includes("bookmarks")) store.exec("ALTER TABLE bookmarks ADD COLUMN account TEXT NOT NULL DEFAULT ''; DROP INDEX IF EXISTS bookmarks_url; DROP INDEX IF EXISTS bookmarks_source;");
+    if (old.includes("history")) store.exec("DROP INDEX IF EXISTS history_last; ALTER TABLE history RENAME TO history_before_accounts;");
+    if (old.includes("imports")) store.exec("ALTER TABLE imports RENAME TO imports_before_accounts;");
+    store.exec(SCHEMA);
+    if (old.includes("history")) store.exec("INSERT INTO history (url, title, visits, last_visit_at, source) SELECT url, title, visits, last_visit_at, source FROM history_before_accounts; DROP TABLE history_before_accounts;");
+    if (old.includes("imports")) store.exec("INSERT INTO imports (source, browser, name, imported_at, bookmarks, history, sign_ins) SELECT source, browser, name, imported_at, bookmarks, history, sign_ins FROM imports_before_accounts; DROP TABLE imports_before_accounts;");
+    store.exec("COMMIT");
+  } catch (error) {
+    store.exec("ROLLBACK");
+    throw error;
+  }
+}
 
 const CHROMIUM_FAMILY = new Set(["chrome", "edge", "arc", "brave", "vivaldi", "chromium"]);
 /** @type {Map<string, { label: string, short: string }>} */
@@ -123,6 +156,7 @@ function bareUrl(url) {
  *   probeFile?: (filePath: string) => Promise<void>,
  *   openExternal?: (url: string) => Promise<void>,
  *   now?: () => number,
+ *   account?: () => Promise<string | null>,
  * }} [options]
  */
 export function createBrowserLibrary({
@@ -140,9 +174,12 @@ export function createBrowserLibrary({
   },
   openExternal = async () => undefined,
   now = Date.now,
+  // The signed-in OmniRush account (null when signed out): the rows this library shows and writes.
+  account = async () => null,
 } = {}) {
   let db = null;
   let importing = null;
+  const adopted = new Set();
 
   function database() {
     if (!db) {
@@ -157,9 +194,35 @@ export function createBrowserLibrary({
       }
       db = openDatabase(dbPath);
       db.exec("PRAGMA journal_mode = WAL");
+      migrateToAccounts(db);
       db.exec(SCHEMA);
     }
     return db;
+  }
+
+  /**
+   * The account whose rows to use, or null when signed out. Rows saved before
+   * the library named accounts go to the first account that opens it.
+   */
+  async function owner() {
+    const id = await Promise.resolve().then(account).catch(() => null);
+    if (typeof id !== "string" || !id) return null;
+    if (!adopted.has(id)) {
+      transaction((store) => {
+        for (const table of LIBRARY_TABLES) {
+          store.prepare(`UPDATE OR IGNORE ${table} SET account = ? WHERE account = ''`).run(id);
+          store.prepare(`DELETE FROM ${table} WHERE account = ''`).run();
+        }
+      });
+      adopted.add(id);
+    }
+    return id;
+  }
+
+  async function requireOwner() {
+    const id = await owner();
+    if (!id) throw new Error("Sign in to OmniRush to keep bookmarks and history.");
+    return id;
   }
 
   function transaction(work) {
@@ -388,39 +451,40 @@ export function createBrowserLibrary({
     return siblings > 1 ? `${short} \u00b7 ${profile.name}` : short;
   }
 
-  function storeBookmarks(profile, tree) {
+  function storeBookmarks(profile, tree, id) {
     const rows = flattenBookmarks(tree);
     return transaction((store) => {
-      store.prepare("DELETE FROM bookmarks WHERE source = ?").run(profile.id);
+      store.prepare("DELETE FROM bookmarks WHERE source = ? AND account = ?").run(profile.id, id);
       if (rows.length === 0) return 0;
-      const top = store.prepare("SELECT COALESCE(MAX(position), 0) + 1 AS next FROM bookmarks WHERE parent IS NULL").get();
-      const insert = store.prepare("INSERT INTO bookmarks (parent, title, url, position, added_at, source) VALUES (?, ?, ?, ?, ?, ?)");
-      const folder = insert.run(null, importFolderTitle(profile), null, Number(top?.next ?? 1), Math.trunc(now() / 1000), profile.id);
+      const top = store.prepare("SELECT COALESCE(MAX(position), 0) + 1 AS next FROM bookmarks WHERE parent IS NULL AND account = ?").get(id);
+      const insert = store.prepare("INSERT INTO bookmarks (parent, title, url, position, added_at, source, account) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const folder = insert.run(null, importFolderTitle(profile), null, Number(top?.next ?? 1), Math.trunc(now() / 1000), profile.id, id);
       const ids = [];
       for (const row of rows) {
         const parent = row.parent === null ? Number(folder.lastInsertRowid) : ids[row.parent];
-        const inserted = insert.run(parent, row.title, row.url, row.position, row.addedAt, profile.id);
+        const inserted = insert.run(parent, row.title, row.url, row.position, row.addedAt, profile.id, id);
         ids.push(Number(inserted.lastInsertRowid));
       }
       return rows.filter((row) => row.kind === "url").length;
     });
   }
 
-  function storeHistory(profile, entries) {
+  function storeHistory(profile, entries, id) {
     return transaction((store) => {
-      store.prepare("DELETE FROM history WHERE source = ?").run(profile.id);
-      const insert = store.prepare("INSERT OR REPLACE INTO history (url, title, visits, last_visit_at, source) VALUES (?, ?, ?, ?, ?)");
-      for (const entry of entries) insert.run(entry.url, entry.title, entry.visits, entry.lastVisitAt, profile.id);
+      store.prepare("DELETE FROM history WHERE source = ? AND account = ?").run(profile.id, id);
+      const insert = store.prepare("INSERT OR REPLACE INTO history (url, title, visits, last_visit_at, source, account) VALUES (?, ?, ?, ?, ?, ?)");
+      for (const entry of entries) insert.run(entry.url, entry.title, entry.visits, entry.lastVisitAt, profile.id, id);
       return entries.length;
     });
   }
 
-  function recordImport(profile, result) {
+  function recordImport(profile, result, id) {
     const count = (part) => (part?.state === "done" ? part.count : null);
     const store = database();
-    const previous = store.prepare("SELECT bookmarks, history, sign_ins FROM imports WHERE source = ?").get(profile.id);
-    store.prepare("INSERT OR REPLACE INTO imports (source, browser, name, imported_at, bookmarks, history, sign_ins) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+    const previous = store.prepare("SELECT bookmarks, history, sign_ins FROM imports WHERE source = ? AND account = ?").get(profile.id, id);
+    store.prepare("INSERT OR REPLACE INTO imports (source, account, browser, name, imported_at, bookmarks, history, sign_ins) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
       profile.id,
+      id,
       profile.browser,
       profile.name,
       Math.trunc(now() / 1000),
@@ -460,12 +524,13 @@ export function createBrowserLibrary({
     const signIns = request.signIns && typeof request.signIns === "object" ? request.signIns : null;
     const sites = Array.isArray(signIns?.sites) ? signIns.sites.map(String) : [];
     importing = (async () => {
+      const id = await requireOwner();
       const result = { source: { id: profile.id, browser: profile.browser, label: profile.label, name: profile.name }, bookmarks: null, history: null, signIns: null };
       if (request.bookmarks === true) {
-        result.bookmarks = await step("bookmarks", emit, async () => ({ state: "done", count: storeBookmarks(profile, await readBookmarkTree(profile)) }));
+        result.bookmarks = await step("bookmarks", emit, async () => ({ state: "done", count: storeBookmarks(profile, await readBookmarkTree(profile), id) }));
       }
       if (request.history === true) {
-        result.history = await step("history", emit, async () => ({ state: "done", count: storeHistory(profile, await readHistory(profile, { countOnly: false })) }));
+        result.history = await step("history", emit, async () => ({ state: "done", count: storeHistory(profile, await readHistory(profile, { countOnly: false }), id) }));
       }
       if (signIns && sites.length > 0 && loginSync) {
         const keepInStep = signIns.keepInStep === true;
@@ -477,7 +542,7 @@ export function createBrowserLibrary({
           return { state: "done", count, failed, keepInStep };
         });
       }
-      if (result.bookmarks?.state === "done" || result.history?.state === "done" || result.signIns?.state === "done") recordImport(profile, result);
+      if (result.bookmarks?.state === "done" || result.history?.state === "done" || result.signIns?.state === "done") recordImport(profile, result, id);
       return result;
     })();
     try {
@@ -492,10 +557,12 @@ export function createBrowserLibrary({
   // -------------------------------------------------------------------------
 
   /** The bookmarks menu: the user's own bookmarks first, then one folder per imported profile. */
-  function bookmarkTree() {
+  async function bookmarkTree() {
+    const id = await owner();
+    if (!id) return [];
     const rows = database().prepare(
-      "SELECT b.id AS id, b.parent AS parent, b.title AS title, b.url AS url, b.source AS source, i.browser AS browser FROM bookmarks b LEFT JOIN imports i ON i.source = b.source AND b.parent IS NULL ORDER BY CASE WHEN b.parent IS NULL AND b.source = ? THEN 0 ELSE 1 END, b.position, b.id LIMIT ?",
-    ).all(USER_SOURCE, TREE_LIMIT);
+      "SELECT b.id AS id, b.parent AS parent, b.title AS title, b.url AS url, b.source AS source, i.browser AS browser FROM bookmarks b LEFT JOIN imports i ON i.source = b.source AND i.account = b.account AND b.parent IS NULL WHERE b.account = ? ORDER BY CASE WHEN b.parent IS NULL AND b.source = ? THEN 0 ELSE 1 END, b.position, b.id LIMIT ?",
+    ).all(id, USER_SOURCE, TREE_LIMIT);
     const nodes = new Map();
     const roots = [];
     for (const row of rows) {
@@ -514,28 +581,32 @@ export function createBrowserLibrary({
   }
 
   /** Bookmarks for the new-tab page: the ones visited most, then the user's own. */
-  function topBookmarks(limit = SUGGESTION_LIMIT) {
+  async function topBookmarks(limit = SUGGESTION_LIMIT) {
+    const id = await owner();
+    if (!id) return [];
     const size = Math.max(1, Math.min(24, Math.trunc(Number(limit) || SUGGESTION_LIMIT)));
     return database().prepare(`
       SELECT b.url AS url, b.title AS title, COALESCE(h.visits, 0) AS visits
-      FROM bookmarks b LEFT JOIN (SELECT url, SUM(visits) AS visits FROM history GROUP BY url) h ON h.url = b.url
-      WHERE b.url IS NOT NULL
+      FROM bookmarks b LEFT JOIN (SELECT url, SUM(visits) AS visits FROM history WHERE account = ? GROUP BY url) h ON h.url = b.url
+      WHERE b.url IS NOT NULL AND b.account = ?
       GROUP BY b.url
       ORDER BY visits DESC, CASE WHEN b.source = ? THEN 0 ELSE 1 END, b.id
-      LIMIT ?`).all(USER_SOURCE, size).map((row) => ({ url: String(row.url), title: String(row.title) }));
+      LIMIT ?`).all(id, id, USER_SOURCE, size).map((row) => ({ url: String(row.url), title: String(row.title) }));
   }
 
   /**
    * Address bar suggestions for what was typed: a site typed from its start
    * ranks first, bookmarks and often-visited pages next. At most eight.
    */
-  function suggest(query) {
+  async function suggest(query) {
     const text = String(query ?? "").trim().toLowerCase();
     if (!text || text.length > 200) return [];
+    const id = await owner();
+    if (!id) return [];
     const like = `%${escapeLike(text)}%`;
     const store = database();
-    const marks = store.prepare("SELECT url, title FROM bookmarks WHERE url IS NOT NULL AND (lower(url) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\') LIMIT 200").all(like, like);
-    const pages = store.prepare("SELECT url, MAX(title) AS title, SUM(visits) AS visits, MAX(last_visit_at) AS last FROM history WHERE lower(url) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\' GROUP BY url ORDER BY visits DESC LIMIT 200").all(like, like);
+    const marks = store.prepare("SELECT url, title FROM bookmarks WHERE account = ? AND url IS NOT NULL AND (lower(url) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\') LIMIT 200").all(id, like, like);
+    const pages = store.prepare("SELECT url, MAX(title) AS title, SUM(visits) AS visits, MAX(last_visit_at) AS last FROM history WHERE account = ? AND (lower(url) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\') GROUP BY url ORDER BY visits DESC LIMIT 200").all(id, like, like);
     const nowSeconds = Math.trunc(now() / 1000);
     const visited = new Map(pages.map((row) => [String(row.url), { visits: Number(row.visits ?? 1), last: Number(row.last ?? 0) }]));
     const scored = new Map();
@@ -574,33 +645,38 @@ export function createBrowserLibrary({
       .map(({ url, title, kind }) => ({ url, title, kind }));
   }
 
-  function isBookmarked(url) {
+  async function isBookmarked(url) {
     const clean = importableUrl(url);
     if (!clean) return false;
-    return Boolean(database().prepare("SELECT 1 AS found FROM bookmarks WHERE url = ? LIMIT 1").get(clean));
+    const id = await owner();
+    if (!id) return false;
+    return Boolean(database().prepare("SELECT 1 AS found FROM bookmarks WHERE account = ? AND url = ? LIMIT 1").get(id, clean));
   }
 
   /** Star or unstar a page. Unstarring removes the page from every folder, as the filled star promised. */
   /** @param {{ url?: unknown, title?: unknown }} [request] */
-  function toggleBookmark({ url, title } = {}) {
+  async function toggleBookmark({ url, title } = {}) {
     const clean = importableUrl(url);
     if (!clean) throw new Error("Only web pages can be bookmarked.");
+    const id = await requireOwner();
     return transaction((store) => {
-      if (store.prepare("SELECT 1 AS found FROM bookmarks WHERE url = ? LIMIT 1").get(clean)) {
-        store.prepare("DELETE FROM bookmarks WHERE url = ?").run(clean);
+      if (store.prepare("SELECT 1 AS found FROM bookmarks WHERE account = ? AND url = ? LIMIT 1").get(id, clean)) {
+        store.prepare("DELETE FROM bookmarks WHERE account = ? AND url = ?").run(id, clean);
         return { bookmarked: false };
       }
-      const next = store.prepare("SELECT COALESCE(MAX(position), 0) + 1 AS next FROM bookmarks WHERE parent IS NULL AND source = ?").get(USER_SOURCE);
+      const next = store.prepare("SELECT COALESCE(MAX(position), 0) + 1 AS next FROM bookmarks WHERE parent IS NULL AND source = ? AND account = ?").get(USER_SOURCE, id);
       const label = typeof title === "string" && title.trim() ? title.trim().slice(0, 300) : bareUrl(clean).split("/")[0];
-      store.prepare("INSERT INTO bookmarks (parent, title, url, position, added_at, source) VALUES (NULL, ?, ?, ?, ?, ?)").run(label, clean, Number(next?.next ?? 1), Math.trunc(now() / 1000), USER_SOURCE);
+      store.prepare("INSERT INTO bookmarks (parent, title, url, position, added_at, source, account) VALUES (NULL, ?, ?, ?, ?, ?, ?)").run(label, clean, Number(next?.next ?? 1), Math.trunc(now() / 1000), USER_SOURCE, id);
       return { bookmarked: true };
     });
   }
 
   /** What is in the library and where it came from, for Settings. */
-  function summary() {
+  async function summary() {
+    const id = await owner();
+    if (!id) return { imports: [], bookmarks: 0, history: 0 };
     const store = database();
-    const imports = store.prepare("SELECT source, browser, name, imported_at, bookmarks, history, sign_ins FROM imports ORDER BY imported_at DESC").all().map((row) => ({
+    const imports = store.prepare("SELECT source, browser, name, imported_at, bookmarks, history, sign_ins FROM imports WHERE account = ? ORDER BY imported_at DESC").all(id).map((row) => ({
       sourceId: String(row.source),
       browser: String(row.browser),
       label: BROWSER_INFO.get(String(row.browser))?.label ?? String(row.browser),
@@ -610,18 +686,21 @@ export function createBrowserLibrary({
       history: row.history === null ? null : Number(row.history),
       signIns: row.sign_ins === null ? null : Number(row.sign_ins),
     }));
-    const bookmarks = Number(store.prepare("SELECT COUNT(*) AS n FROM bookmarks WHERE url IS NOT NULL").get()?.n ?? 0);
-    const history = Number(store.prepare("SELECT COUNT(DISTINCT url) AS n FROM history").get()?.n ?? 0);
+    const bookmarks = Number(store.prepare("SELECT COUNT(*) AS n FROM bookmarks WHERE account = ? AND url IS NOT NULL").get(id)?.n ?? 0);
+    const history = Number(store.prepare("SELECT COUNT(DISTINCT url) AS n FROM history WHERE account = ?").get(id)?.n ?? 0);
     return { imports, bookmarks, history };
   }
 
   /** Forget imported bookmarks and history. Starred pages and sign-ins stay (sign out of sites in the list below). */
-  function clear() {
-    transaction((store) => {
-      store.prepare("DELETE FROM bookmarks WHERE source <> ?").run(USER_SOURCE);
-      store.prepare("DELETE FROM history").run();
-      store.prepare("DELETE FROM imports").run();
-    });
+  async function clear() {
+    const id = await owner();
+    if (id) {
+      transaction((store) => {
+        store.prepare("DELETE FROM bookmarks WHERE account = ? AND source <> ?").run(id, USER_SOURCE);
+        store.prepare("DELETE FROM history WHERE account = ?").run(id);
+        store.prepare("DELETE FROM imports WHERE account = ?").run(id);
+      });
+    }
     return summary();
   }
 

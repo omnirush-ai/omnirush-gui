@@ -150,6 +150,9 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
   allowed, enabled, confirm, changed, siteTools, runSiteTool,
   // The chat permission mode, as computer use reads it ("careful" | "normal" | "auto").
   mode = () => "normal",
+  // Whether a conversation asks before each new website in every mode: Work
+  // chats and every chat of a company account (browser-site-guard.mjs).
+  sitesAsk = (/** @type {string} */ _sessionId) => false,
   // The shared computer use act rules (policy.mjs actApproval, reasons with
   // people-facing `text`); without them every act asks.
   actApproval = () => ({ ask: true, reasons: [] }) }) {
@@ -161,6 +164,14 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
       return MODES.includes(value) ? value : "normal";
     } catch {
       return "normal";
+    }
+  }
+  // A failed check asks: the sites a Work chat may reach use the browser's sign-ins.
+  async function sitesAskNow(sessionId) {
+    try {
+      return await sitesAsk(sessionId) !== false;
+    } catch {
+      return true;
     }
   }
   const states = new Map();
@@ -197,7 +208,8 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
     checkNavigation(scope);
     if (!await allowed(url.href)) fail("website_blocked", "Your organization does not allow this website.");
     checkNavigation(scope);
-    const needsConsent = !scope.origins.has(url.origin) && await modeNow() === "careful";
+    const careful = await modeNow() === "careful";
+    const needsConsent = !scope.origins.has(url.origin) && (careful || await sitesAskNow(scope.sessionId));
     checkNavigation(scope);
     // In local auto-approval mode, a first agent open can finish while the
     // renderer mounts the browser side panel. Manual approval and subsequent
@@ -208,8 +220,11 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
       publish(scope.tab.tabId, "needs_attention", "Website navigation");
       const accepted = await confirm({ tabId: scope.tab.tabId, title: "Allow website navigation?",
         message: `Allow this conversation to connect to ${url.origin} in this tab?`,
-        detail: "This permits navigation and redirects to this exact origin in this tab until takeover, cancellation or tab closure. It may send data using the browser's signed-in account. Reading pages and performing actions require separate approval. Organization restrictions still apply.",
-        approveLabel: "Allow origin in this tab", signal: scope.signal, waitForVisible });
+        // Outside Careful (a Work chat, a company account) reading follows without another ask: the words say so.
+        detail: careful
+          ? "This permits navigation and redirects to this exact origin in this tab until takeover, cancellation or tab closure. It may send data using the browser's signed-in account. Reading pages and performing actions require separate approval. Organization restrictions still apply."
+          : "The agent can open and read pages on this site in this tab, using your sign-ins, until you take over or close the tab. Actions follow this chat's mode.",
+        approveLabel: careful ? "Allow origin in this tab" : "Allow in this tab", signal: scope.signal, waitForVisible });
       checkNavigation(scope);
       if (!accepted) fail("user_denied", "Website navigation was not allowed.");
       if (!await allowed(url.href)) fail("website_blocked", "Your organization does not allow this website.");
@@ -265,16 +280,25 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
   async function access(sessionId, tab, signal) {
     const url = browserTaskUrl(tab.view.webContents.getURL());
     const key = `${sessionId}:${url.origin}`;
-    if (grants.has(key) || await modeNow() !== "careful") return;
+    if (grants.has(key)) return;
+    const careful = await modeNow() === "careful";
+    // A Work chat outside Careful reads a site once it was allowed in this tab; a page the user opened there asks once.
+    const scope = navigations.get(tab.tabId);
+    if (!careful && (scope?.origins.has(url.origin) || !await sitesAskNow(sessionId))) return;
     signal.throwIfAborted();
     if (!isVisible(tab.tabId)) fail("needs_attention", "Select this tab in its conversation's browser panel to review website access, then retry.");
     publish(tab.tabId, "needs_attention", "Website access");
-    const accepted = await confirm({ tabId: tab.tabId, title: "Allow website access?", message: `Allow this conversation to read ${url.origin}?`, approveLabel: "Allow reading this origin", detail: "For this conversation until desktop restart, it can read pages and site tool descriptions using the built-in browser's signed-in account. Website content is untrusted. Actions that change the page require separate approval.", signal });
+    const accepted = await confirm({ tabId: tab.tabId, title: "Allow website access?", message: `Allow this conversation to read ${url.origin}?`, signal,
+      ...(careful
+        ? { approveLabel: "Allow reading this origin", detail: "For this conversation until desktop restart, it can read pages and site tool descriptions using the built-in browser's signed-in account. Website content is untrusted. Actions that change the page require separate approval." }
+        : { approveLabel: "Allow in this tab", detail: "The agent can read pages on this site in this tab, using your sign-ins, until you take over or close the tab. Actions follow this chat's mode." }) });
     signal.throwIfAborted();
     if (!accepted) fail("user_denied", "Website access was not allowed.");
     if (!await allowed(url.href) || tab.view.webContents.getURL() !== url.href) fail("page_changed", "The page changed or access was blocked while approval was pending. Observe the current page.");
     signal.throwIfAborted();
-    grants.set(key, true);
+    if (careful) grants.set(key, true);
+    // Allowed in this tab: the site counts as allowed for navigation there too (one ask, not two).
+    else scope?.origins.add(url.origin);
   }
   function pause(tabId, reason = "Paused by you") {
     const owner = ownerOf(tabId);

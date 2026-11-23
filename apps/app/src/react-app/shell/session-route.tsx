@@ -82,7 +82,7 @@ import {
   resolveModelDisplayName,
   safeStringify,
 } from "@/app/utils";
-import { t } from "@/i18n";
+import { currentLocale, t } from "@/i18n";
 import {
   type RouteWorkspace,
   type RouteSession,
@@ -3881,7 +3881,7 @@ export function SessionRoute() {
           if (next) queryClient.setQueryData(workStateKey(client), next);
         }}
         onSignOut={async () => {
-          await omnirushAccountSignOut().catch(() => undefined);
+          await omnirushAccountSignOut({ language: currentLocale() }).catch(() => undefined);
           useEnterpriseStore.getState().setBlock(null);
           await queryClient.invalidateQueries({ queryKey: workStateKey(client ?? null) });
         }}

@@ -73,6 +73,8 @@ export type PanelTabStore = {
   ) => void;
   syncTranscriptArtifacts: (sessionId: string, targets: OpenTarget[]) => void;
   clearSession: (sessionId: string) => void;
+  /** Drops every browser tab from every conversation (the browser was cleared for an account change). */
+  clearBrowserTabs: () => void;
 };
 
 const EMPTY_SESSION: SessionPanelState = {
@@ -404,6 +406,13 @@ export const usePanelTabStore = create<PanelTabStore>()(
           } : state.transcriptArtifactTargets,
           sessions: sessionUpdate?.sessions ?? state.sessions,
         };
+      }),
+      clearBrowserTabs: () => set((state) => {
+        const sessions = Object.fromEntries(Object.entries(state.sessions).map(([sessionId, session]) => {
+          const tabs = session.tabs.filter((tab) => tab.type !== "browser");
+          return [sessionId, { tabs, activeTabId: resolveActiveTabId(tabs, session.activeTabId) }];
+        }));
+        return { sessions };
       }),
       clearSession: (sessionId) => set((state) => {
         const nextSessions = { ...state.sessions };

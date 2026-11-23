@@ -28,7 +28,11 @@ function fakeTab(elements, { title = "Example shop", page = {} } = {}) {
   return { tab: { tabId: "t1", view: { webContents }, webMcpRevision: 0 }, calls, setUrl: (next) => { url = next; } };
 }
 
-function hostFor({ mode = "normal", visible = false, rules = true, allowedUrl = () => true, elements = [], title, page } = {}) {
+/**
+ * @param {{ mode?: string, visible?: boolean, rules?: boolean, allowedUrl?: (url: string) => boolean, elements?: any[], title?: string,
+ *   page?: Record<string, unknown>, sitesAsk?: (sessionId: string) => boolean, answer?: boolean }} [options]
+ */
+function hostFor({ mode = "normal", visible = false, rules = true, allowedUrl = () => true, elements = [], title = undefined, page = undefined, sitesAsk = undefined, answer = true } = {}) {
   const { tab, calls, setUrl } = fakeTab(elements, { title, page });
   const asked = [];
   const navigated = [];
@@ -38,15 +42,17 @@ function hostFor({ mode = "normal", visible = false, rules = true, allowedUrl = 
     ownerOf: () => "ses_1",
     activeFor: () => tab.tabId,
     isVisible: () => visible,
-    openTab: async () => tab,
+    // Like the panel: the new tab's first address is authorized before it loads.
+    openTab: async (_url, _sessionId, _signal, beforeLoad) => { await beforeLoad?.(tab); return tab; },
     navigate: async (_tab, url) => { navigated.push(url); setUrl(url); },
     allowed: async (url) => allowedUrl(url),
     enabled: () => true,
-    confirm: async (request) => { asked.push(request); return true; },
+    confirm: async (request) => { asked.push(request); return answer; },
     changed: () => {},
     siteTools: async () => ({ ok: true, tools: [] }),
     runSiteTool: async () => ({ ok: true }),
     mode: () => mode,
+    ...(sitesAsk ? { sitesAsk } : {}),
     ...(rules ? {
       actApproval: (input) => {
         const decision = actApproval(input);
@@ -60,7 +66,7 @@ function hostFor({ mode = "normal", visible = false, rules = true, allowedUrl = 
     assert.equal(observed.ok, true, JSON.stringify(observed));
     return call("act", { observationId: observed.observationId, action });
   }
-  return { call, act, asked, navigated, calls };
+  return { host, tab, call, act, asked, navigated, calls, setUrl };
 }
 
 const BUTTONS = [
@@ -284,4 +290,110 @@ test("password fields are refused before any ask", async () => {
   const key = await focused.act({ type: "key", key: "Enter" });
   assert.equal(key.code, "sign_in_required");
   assert.equal(focused.asked.filter((item) => item.title === "Allow browser action?").length, 0);
+});
+
+// Work chats and company accounts (browser-site-guard.mjs): the first visit to each site in a tab asks in every mode.
+test("Work chat in Auto mode: opening a site asks first; No gives user_denied and loads nothing", async () => {
+  const denied = hostFor({ mode: "auto", visible: true, sitesAsk: (sessionId) => sessionId === "ses_1", answer: false });
+  const result = await denied.host.request({ sessionId: "ses_1", operation: "open", args: { url: "https://crm.example.com/deals" } });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "user_denied");
+  assert.equal(result.dispatched, false);
+  assert.deepEqual(denied.asked.map((item) => item.title), ["Allow website navigation?"]);
+  assert.match(denied.asked[0].message, /https:\/\/crm\.example\.com/);
+  // Outside Careful the ask says what the grant allows (reading follows), not that reading asks again.
+  assert.match(denied.asked[0].detail, /The agent can open and read pages on this site in this tab, using your sign-ins/);
+  assert.equal(denied.asked[0].approveLabel, "Allow in this tab");
+  assert.equal(denied.asked[0].waitForVisible, true);
+
+  const allowed = hostFor({ mode: "auto", visible: true, sitesAsk: () => true });
+  const opened = await allowed.host.request({ sessionId: "ses_1", operation: "open", args: { url: "https://crm.example.com/deals" } });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  assert.equal(allowed.asked.length, 1);
+});
+
+test("Work chat: each new site in a tab asks once, the same site again does not, in Normal and Auto", async () => {
+  for (const mode of ["normal", "auto"]) {
+    const { call, asked, navigated } = hostFor({ mode, visible: true, sitesAsk: () => true });
+    assert.equal((await call("navigate", { url: "https://crm.example.com/a" })).ok, true, mode);
+    assert.equal((await call("navigate", { url: "https://crm.example.com/b" })).ok, true, mode);
+    assert.equal((await call("navigate", { url: "https://mail.example.org/" })).ok, true, mode);
+    assert.deepEqual(asked.map((item) => item.title), ["Allow website navigation?", "Allow website navigation?"], mode);
+    assert.deepEqual(navigated, ["https://crm.example.com/a", "https://crm.example.com/b", "https://mail.example.org/"], mode);
+  }
+});
+
+test("Work chat: a site cannot be visited in a tab the user cannot see (the ask needs it on screen)", async () => {
+  const { call, asked, navigated } = hostFor({ mode: "auto", visible: false, sitesAsk: () => true });
+  const result = await call("navigate", { url: "https://crm.example.com/a" });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "needs_attention");
+  assert.equal(asked.length, 0);
+  assert.deepEqual(navigated, []);
+});
+
+test("Work chat: redirects to a new site ask too (the request hook's guard)", async () => {
+  const { host, tab, call, asked } = hostFor({ mode: "auto", visible: true, sitesAsk: () => true });
+  assert.equal((await call("navigate", { url: "https://crm.example.com/a" })).ok, true);
+  const guard = host.navigationGuard(tab.tabId);
+  assert.ok(guard);
+  (await guard("https://crm.example.com/next"))();
+  assert.equal(asked.length, 1);
+  (await guard("https://login.example.net/sso"))();
+  assert.equal(asked.length, 2);
+  assert.match(asked[1].message, /login\.example\.net/);
+});
+
+test("a failing Work check asks (never a silent visit)", async () => {
+  const { call, asked } = hostFor({ mode: "auto", visible: true, sitesAsk: () => { throw new Error("unreadable"); } });
+  assert.equal((await call("navigate", { url: "https://crm.example.com/a" })).ok, true);
+  assert.equal(asked.length, 1);
+});
+
+test("consumer Code chat in Normal mode opens a site without asking", async () => {
+  const { host, asked } = hostFor({ mode: "normal", visible: false, sitesAsk: () => false });
+  const result = await host.request({ sessionId: "ses_1", operation: "open", args: { url: "https://docs.example.com/" } });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(asked.length, 0);
+});
+
+test("Careful keeps its own wording when a Work chat asks", async () => {
+  const { call, asked } = hostFor({ mode: "careful", visible: true, sitesAsk: () => true });
+  assert.equal((await call("navigate", { url: "https://crm.example.com/a" })).ok, true);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].detail, /Reading pages and performing actions require separate approval/);
+  assert.equal(asked[0].approveLabel, "Allow origin in this tab");
+});
+
+test("Work chat: reading a page the user opened in the chat's tab asks once; a site the agent was allowed to open reads without another ask", async () => {
+  const { call, asked, setUrl } = hostFor({ mode: "auto", visible: true, sitesAsk: () => true, elements: BUTTONS });
+  // The tab shows a page the user opened (PAGE_URL), never allowed for the agent.
+  const first = await call("observe");
+  assert.equal(first.ok, true, JSON.stringify(first));
+  assert.deepEqual(asked.map((item) => [item.title, item.approveLabel]), [["Allow website access?", "Allow in this tab"]]);
+  assert.match(asked[0].detail, /The agent can read pages on this site in this tab, using your sign-ins/);
+  assert.equal((await call("observe")).ok, true);
+  // Same site in the same tab: neither reading nor going there asks again.
+  assert.equal((await call("navigate", { url: "https://shop.example.com/orders" })).ok, true);
+  assert.equal(asked.length, 1);
+  // A new site: one ask to go there, then reading it is free.
+  assert.equal((await call("navigate", { url: "https://crm.example.com/deals" })).ok, true);
+  assert.equal((await call("observe")).ok, true);
+  assert.deepEqual(asked.map((item) => item.title), ["Allow website access?", "Allow website navigation?"]);
+  void setUrl;
+});
+
+test("Work chat: No to reading gives user_denied and nothing is read", async () => {
+  const { call, asked } = hostFor({ mode: "normal", visible: true, sitesAsk: () => true, elements: BUTTONS, answer: false });
+  const result = await call("observe");
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "user_denied");
+  assert.equal(result.text, undefined);
+  assert.equal(asked.length, 1);
+});
+
+test("consumer Code chat in Auto reads the user's page without asking", async () => {
+  const { call, asked } = hostFor({ mode: "auto", visible: false, sitesAsk: () => false, elements: BUTTONS });
+  assert.equal((await call("observe")).ok, true);
+  assert.equal(asked.length, 0);
 });

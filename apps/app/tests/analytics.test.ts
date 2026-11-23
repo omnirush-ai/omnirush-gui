@@ -260,7 +260,7 @@ describe("call sites", () => {
     const view = src("react-app/domains/settings/pages/general-view.tsx");
     expect(view).toContain('captureAnalyticsEvent("device_approved"');
     expect(view).toContain('captureAnalyticsEvent("sign_in_completed"');
-    expect(view).toMatch(/omnirushAccountSignOut\(\);\n\s+resetAnalyticsAccount\(\);/);
+    expect(view).toMatch(/omnirushAccountSignOut\(.*\);\n\s+resetAnalyticsAccount\(\);/);
     expect(src("app/lib/quality.ts")).toContain("syncAnalyticsAccount(status)");
   });
 

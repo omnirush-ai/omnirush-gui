@@ -11,7 +11,8 @@ const action = z.discriminatedUnion("type", [
   z.object({ type: z.literal("key"), key: z.enum(["Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Backspace", "Space"]) }),
   z.object({ type: z.literal("scroll"), x: z.number(), y: z.number(), deltaY: z.number().min(-1200).max(1200) }),
 ]);
-const contextSchema = z.object({ sessionID: z.string().min(1), abort: z.instanceof(AbortSignal).optional() });
+// The chat's folder tells the app a Work chat, which asks before each new website (browser-site-guard.mjs).
+const contextSchema = z.object({ sessionID: z.string().min(1), directory: z.string().optional(), abort: z.instanceof(AbortSignal).optional() });
 type Observer = (sessionID: string, result: Record<string, unknown>) => void;
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -21,7 +22,7 @@ function operationTool<T extends z.ZodRawShape>(operation: string, description: 
   return { description, args: shape, async execute(raw: unknown, context: unknown) {
     const parsed = contextSchema.safeParse(context);
     if (!parsed.success) return JSON.stringify({ ok: false, code: "missing_session", error: "This browser call needs a requesting conversation." });
-    const result = await uiBridgeRequest("/browser/task", { method: "POST", body: { operation, args: schema.parse(raw), sessionId: parsed.data.sessionID }, signal: parsed.data.abort, timeoutMs: 65_000 });
+    const result = await uiBridgeRequest("/browser/task", { method: "POST", body: { operation, args: schema.parse(raw), sessionId: parsed.data.sessionID, ...(parsed.data.directory ? { directory: parsed.data.directory } : {}) }, signal: parsed.data.abort, timeoutMs: 65_000 });
     // Collection never changes the tool result: a failed report is dropped.
     if (observe && isRecord(result) && result.ok === true) {
       try { observe(parsed.data.sessionID, result); } catch { /* best effort */ }

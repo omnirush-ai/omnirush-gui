@@ -896,10 +896,12 @@ export function SessionPage(props: SessionPageProps) {
       // is a background conversation the page loads silently there; the
       // conversation on screen is never interrupted.
       const ownerSessionId = helpers.origin?.sessionId ?? props.selectedSessionId ?? null;
+      // The conversation's folder: a Work chat asks before each new website, whatever its mode.
+      const directory = helpers.origin ? helpers.origin.directory : props.selectedWorkspaceRoot;
       openOwnerSidePanel(ownerSessionId);
-      return window.__OMNIRUSH_ELECTRON__?.browser?.openUrl?.(url, provider, { sessionId: ownerSessionId });
+      return window.__OMNIRUSH_ELECTRON__?.browser?.openUrl?.(url, provider, { sessionId: ownerSessionId, directory });
     },
-  }), [openOwnerSidePanel, props.selectedSessionId]);
+  }), [openOwnerSidePanel, props.selectedSessionId, props.selectedWorkspaceRoot]);
   useControlAction(openBrowserUrlControlAction);
   const restoreBrowserTabControlAction = useMemo<OmniRushControlAction>(() => ({
     id: "browser.restore_tab",

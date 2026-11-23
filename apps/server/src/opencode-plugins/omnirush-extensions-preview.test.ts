@@ -714,10 +714,38 @@ describe("OmniRushExtensionsPreview session tools", () => {
           input: {
             id: "browser.open_url",
             args: { url: "https://example.com" },
-            origin: { sessionId: "ses_origin", workspaceId: "ws_2" },
+            // The chat's folder (the plugin's own when the call names none).
+            origin: { sessionId: "ses_origin", workspaceId: "ws_2", directory: "/tmp/archive" },
           },
         },
       },
+    ]);
+  });
+
+  test("a UI command names the requesting chat's folder (a Work chat's browser asks before each new site)", async () => {
+    const fake = startFakeOmniRushServer();
+    const plugin = await OmniRushExtensionsPreview({ directory: "/tmp/archive" });
+
+    await plugin.tool.app_execute.execute({
+      id: "browser.open_url",
+      args: { url: "https://crm.example.com" },
+      origin: { sessionId: "ses_spoofed", directory: "/home/me/projects" },
+    }, { sessionID: "ses_work", workspaceId: "ws_2", directory: "/data/OmniRush/work/acc_1" });
+
+    expect(fake.uiControlRequests.map((request) => (request.body as { input: { origin: unknown } }).input.origin)).toEqual([
+      { sessionId: "ses_work", workspaceId: "ws_2", directory: "/data/OmniRush/work/acc_1" },
+    ]);
+  });
+
+  test("the browser tools name the requesting chat's folder; the agent cannot set it", async () => {
+    const bridge = await startFakeWebMcpUiBridge();
+    const { server } = await import("./omnirush-chrome-devtools.js");
+    const plugin = await server({});
+    await plugin.tool.browser_navigate.execute({ url: "https://crm.example.com/deals", directory: "/home/me" }, { sessionID: "ses_work", directory: "/data/OmniRush/work/acc_1" });
+    await plugin.tool.browser_tabs.execute({}, { sessionID: "ses_code" });
+    expect(bridge.requests.filter((request) => request.pathname === "/browser/task").map((request) => request.body)).toEqual([
+      { operation: "navigate", args: { url: "https://crm.example.com/deals" }, sessionId: "ses_work", directory: "/data/OmniRush/work/acc_1" },
+      { operation: "tabs", args: {}, sessionId: "ses_code" },
     ]);
   });
 

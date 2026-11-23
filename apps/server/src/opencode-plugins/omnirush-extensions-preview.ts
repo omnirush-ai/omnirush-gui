@@ -474,11 +474,13 @@ async function executeOmniRushAffordance(
     : unavailableAffordance(request.id, "App UI command returned an invalid response.");
 }
 
-function affordanceOrigin(context: OmniRushContext): { origin?: { sessionId: string; workspaceId?: string } } {
+function affordanceOrigin(context: OmniRushContext): { origin?: { sessionId: string; workspaceId?: string; directory?: string } } {
   const sessionId = context.sessionID?.trim();
   if (!sessionId) return {};
   const workspaceId = (context.workspaceId ?? context.workspaceID)?.trim();
-  return { origin: { sessionId, ...(workspaceId ? { workspaceId } : {}) } };
+  // The chat's folder stays with the desktop bridge (a Work chat's browser asks before each new website).
+  const directory = context.directory?.trim();
+  return { origin: { sessionId, ...(workspaceId ? { workspaceId } : {}), ...(directory ? { directory } : {}) } };
 }
 
 function collapseWhitespace(value: string): string {

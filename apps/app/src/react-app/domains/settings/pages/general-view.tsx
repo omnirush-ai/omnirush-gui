@@ -22,7 +22,7 @@ import {
 import type { KeepAwakeState, OmniRushAccountSignOutReason } from "@omnirush/types/desktop-ipc";
 
 import { Switch } from "@/components/ui/switch";
-import { t } from "../../../../i18n";
+import { currentLocale, t } from "../../../../i18n";
 import type { SettingsTab } from "../../../../app/types";
 import {
   keepAwakeSet,
@@ -443,7 +443,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
     setAccountBusy(true);
     setAccountMessage(t("settings.account_approve_in_browser"));
     try {
-      await omnirushAccountConnect();
+      await omnirushAccountConnect({ language: currentLocale() });
       captureAnalyticsEvent("device_approved", { method: "device_link" });
       const next = await omnirushAccountStatus();
       setAccount(next);
@@ -468,7 +468,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
     try {
       // What is still queued goes first (a few seconds at most); the rest stays on this computer for this account.
       const kept = account?.connected ? await sendPendingBeforeSignOut(setAccountMessage) : 0;
-      const result = await omnirushAccountSignOut();
+      const result = await omnirushAccountSignOut({ language: currentLocale() });
       resetAnalyticsAccount();
       const next = await omnirushAccountStatus().catch(() => null);
       setAccount(next ?? { connected: false, gatewayConfigured: account?.gatewayConfigured ?? false });

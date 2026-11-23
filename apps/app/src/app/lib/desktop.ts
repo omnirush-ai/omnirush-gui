@@ -413,7 +413,7 @@ declare global {
         openUrl?: (
           url: string,
           provider?: "auto" | "builtin" | "external",
-          options?: { sessionId?: string | null },
+          options?: { sessionId?: string | null; directory?: string | null },
         ) => Promise<OpenBrowserUrlResult>;
         setVisibleSession?: (sessionId: string | null) => Promise<string | null>;
         navigate?: (url: string) => Promise<void>;
@@ -444,6 +444,8 @@ declare global {
         onStateChange?: (callback: (state: BrowserStatePayload) => void) => () => void;
         onPanelOpened?: (callback: (payload?: BrowserPanelOwnerPayload) => void) => () => void;
         onPanelClosed?: (callback: (payload?: BrowserPanelOwnerPayload) => void) => () => void;
+        /** Signed out or another account signed in; `cleared`: the browser's sign-ins and tabs were cleared. */
+        onAccountChanged?: (callback: (payload: { cleared: boolean }) => void) => () => void;
       };
       browserLogins?: BrowserLoginSyncBridge;
       browserLibrary?: BrowserLibraryBridge;

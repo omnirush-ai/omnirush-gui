@@ -52,6 +52,8 @@ import { applyBrandAppName } from "./brand-app-name.mjs";
 import { createBrowserLoginSync } from "./browser-login-sync.mjs";
 import { createBrowserLibrary } from "./browser-library.mjs";
 import { createBrowserPanel } from "./browser-panel.mjs";
+import { createBrowserSiteGuard } from "./browser-site-guard.mjs";
+import { clearConfirmOptions, createBrowserAccountGuard } from "./browser-account-guard.mjs";
 import { applyBackgroundRenderingSwitches } from "./background-rendering.mjs";
 import { createWorkspaceStore } from "./workspace-store.mjs";
 import {
@@ -1197,11 +1199,15 @@ const turnGuard = createTurnGuard({
   appName: APP_NAME,
 });
 
+// Work chats and every chat of a company account ask before each new website, in every mode.
+const browserSiteGuard = createBrowserSiteGuard({ workDir: path.join(app.getPath("userData"), "work") });
 browserPanel = createBrowserPanel({
   remoteDebugPort,
   // The built-in browser asks like computer use: the same mode and act rules.
   permissionMode: browserPermissionMode,
   actApproval: browserActApproval,
+  siteGuard: browserSiteGuard,
+  onUse: () => noteBrowserOwner(),
   getWindow: () => mainWindow,
   onDeepLink: (urls) => queueDeepLinks(urls),
   checkPolicy: async (input) => {
@@ -1465,6 +1471,43 @@ const omnirushAccountStore = createDesktopOmniRushAccountStore({
     blankSlate: BLANK_SLATE_LAUNCH.enabled,
   }),
 });
+
+// Company sign-ins stay with the company account: signing out of one, or another account signing in after one, asks
+// to clear the built-in browser (sign-ins, site data, tabs) or keep it.
+const browserAccountGuard = createBrowserAccountGuard({
+  ownerPath: path.join(app.getPath("userData"), "browser-owner.json"),
+  accountId: () => omnirushAccountStore.accountId(),
+  company: () => browserSiteGuard.company(),
+  confirm: async ({ reason, company, language }) => {
+    const options = clearConfirmOptions(reason, { company, language });
+    const result = mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showMessageBox(mainWindow, options)
+      : await dialog.showMessageBox(options);
+    return result.response === 1 ? "keep" : "clear";
+  },
+  clearBrowser: async () => {
+    // The sync from another browser stops and forgets its sites first, so nothing copies sign-ins back.
+    await browserLoginSync.disconnect({ forgetSynced: false }).catch(() => undefined);
+    return { cookies: await browserPanel.clearProfile() };
+  },
+});
+let browserOwnerNotedAt = 0;
+function noteBrowserOwner() {
+  if (Date.now() - browserOwnerNotedAt < 60_000) return;
+  browserOwnerNotedAt = Date.now();
+  void browserAccountGuard.noteAccount().catch(() => undefined);
+}
+/** The window refreshes the library (it belongs to the account) and, after a clear, forgets its saved tabs. */
+function sendBrowserAccountChanged(cleared) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("omnirush:browser:account-changed", { cleared });
+  } catch {
+    /* closing */
+  }
+}
+function accountLanguage(input) {
+  return input && typeof input === "object" && typeof input.language === "string" ? input.language : null;
+}
 
 // Sponsored placements (placements-desktop.mjs): a quiet card on the home
 // screen and one line after a finished turn, only when the server sends one.
@@ -2622,14 +2665,20 @@ const desktopCommandHandlers = {
         openVerification: (url) => shell.openExternal(url),
         surface: input.surface === "work" ? "work" : undefined,
       });
+      // Another account than the company account whose sign-ins the browser holds: clear or keep them first.
+      const browser = await browserAccountGuard.afterSignIn({ language: accountLanguage(input) }).catch(() => ({ cleared: false }));
+      sendBrowserAccountChanged(browser.cleared);
       await runtimeManager.omnirushServerRestart({ reason: "account_connected", source: "account", userInitiated: true });
       return result;
   },
   "omnirushAccountSignOut": async (event, ...args) => {
+      // A company account: the browser's sign-ins, tabs and site permissions are cleared unless the person keeps them.
+      const browser = await browserAccountGuard.beforeSignOut({ language: accountLanguage(args[0]) }).catch(() => ({ cleared: false }));
       // A user's sign-out: the next server start stops sending what is queued and keeps it on disk for this
       // account (sent after its next sign-in, never under another account). The app sent what it could first.
       await runtimeManager.markUploadQueueClear();
       const result = await omnirushAccountStore.clear();
+      sendBrowserAccountChanged(browser.cleared);
       await runtimeManager.omnirushServerRestart({ reason: "account_signed_out", source: "account", userInitiated: true });
       return { connected: false, remoteRevoked: result.remoteRevoked, reason: result.reason };
   },
@@ -3239,6 +3288,8 @@ async function createMainWindow() {
     if (process.platform === "win32") mainWindow?.setSkipTaskbar(false);
     mainWindow?.show();
     flushPendingDeepLinks();
+    // A company account's sign-ins are remembered as its own once the server has had time to say so.
+    setTimeout(noteBrowserOwner, 30_000).unref?.();
   });
 
   // Windows logout or shutdown never waits on the turn guard.
@@ -3480,6 +3531,8 @@ browserLoginSync.registerIpc(ipcMain, { evalSeam: browserLoginEvalSeam });
 const browserLibrary = createBrowserLibrary({
   dbPath: path.join(app.getPath("userData"), "browser-library.sqlite"),
   loginSync: browserLoginSync,
+  // Imported bookmarks and history belong to the account that imported them; other accounts never see them.
+  account: () => omnirushAccountStore.accountId(),
   openExternal: async (url) => {
     await openExternalUrl(url);
   },
