@@ -65,13 +65,14 @@ export function v2WorkMcp(engineEnv: Record<string, string | undefined>, dir?: s
 export type V2PermissionRule = { action: string; resource: string; effect: "allow" | "ask" | "deny" };
 
 /**
- * A Work chat's own 2.x rules (last match wins, so they go last): no shell, file edits, sub-agents or code tools;
- * the hosted server's tools ask, its read tools run.
+ * A Work chat's own 2.x rules (last match wins, so they go last): no shell, file edits, sub-agents, code tools or
+ * question form (a rule that denies a tool on every resource drops it from the model's tool list); the hosted server's
+ * tools ask, its read tools run.
  */
 export function v2WorkPermissions(): V2PermissionRule[] {
   const prefix = toolPrefix(FIRST_PARTY_REMOTE.work.id);
   return [
-    ...["shell", "edit", "subagent", "lsp", "codesearch"].map((action) => ({ action, resource: "*", effect: "deny" as const })),
+    ...["shell", "edit", "subagent", "lsp", "codesearch", "question"].map((action) => ({ action, resource: "*", effect: "deny" as const })),
     { action: `${prefix}*`, resource: "*", effect: "ask" },
     ...WORK_READ_TOOLS.map((tool) => ({ action: `${prefix}${tool}`, resource: "*", effect: "allow" as const })),
   ];

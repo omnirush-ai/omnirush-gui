@@ -7,9 +7,9 @@ import { firstPartyRemote } from "../mcp-allow/mcp-allow.mjs";
 import { applyWork, v2WorkPermissions, withV2WorkPermissions } from "./engine.js";
 import { desiredV2Mcp, v2McpGate } from "../engine-v2-mcp.js";
 import { writeWorkspaceMcp } from "../mcp-allow/state.js";
-import { workPrompt } from "./prompt.js";
+import { SUGGESTED_REPLIES, workPrompt } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
-import { enterpriseUploadSkipped, isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_HEADER, WORK_PATH, WORK_READ_TOOLS, workEnterprise, workEnvironment, workHome } from "./work.js";
+import { enterpriseUploadSkipped, isWorkRoot, rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_DISABLED_TOOLS, WORK_HEADER, WORK_PATH, WORK_READ_TOOLS, workEnterprise, workEnvironment, workHome } from "./work.js";
 import type { Route } from "../routes/registry.js";
 import type { ServerConfig } from "../types.js";
 
@@ -92,6 +92,8 @@ describe("work engine config", () => {
     expect(permission["omnirush-work_mock_send"]).toBeUndefined();
     expect(permission.bash).toBe("deny");
     expect((target.tools as Record<string, boolean>).bash).toBe(false);
+    // No question form in Work chats (1.x): the agent asks in its message and the app offers the replies.
+    expect((target.tools as Record<string, boolean>).question).toBe(false);
     const agent = (target.agent as Record<string, Record<string, unknown>>).omnirush;
     expect(agent?.prompt).toBe(workPrompt("brief"));
     rememberAnswerStyle(dir, "detailed");
@@ -152,6 +154,26 @@ describe("work on the 2.x engine", () => {
     const always = { action: "omnirush-work_gmail_send", resource: "*", effect: "allow" as const };
     expect(withV2WorkPermissions([mode, ...work, always])).toEqual([mode, always, ...work]);
   });
+
+  test("a Work chat has no question form on 2.x: denied on every resource (the engine then drops the tool), after any allow", () => {
+    const work = v2WorkPermissions();
+    expect(work).toContainEqual({ action: "question", resource: "*", effect: "deny" });
+    // The engine's tool list keeps a tool unless the LAST rule matching its action denies it on "*" (tool.ts whollyDisabled).
+    const wholly = (action: string, rules: { action: string; resource: string; effect: string }[]) => {
+      const match = (pattern: string) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`).test(action);
+      const rule = [...rules].reverse().find((item) => match(item.action));
+      return rule?.resource === "*" && rule.effect === "deny";
+    };
+    const agentAllows = { action: "question", resource: "*", effect: "allow" as const };
+    const fullAccess = { action: "*", resource: "*", effect: "allow" as const };
+    // The engine merges the agent's rules, then the chat's own (permission.ts merge).
+    expect(wholly("question", [agentAllows, ...withV2WorkPermissions([fullAccess])!])).toBe(true);
+    // A chat saved with the rules before this change is patched again (its tail no longer matches).
+    const older = work.filter((rule) => rule.action !== "question");
+    expect(withV2WorkPermissions([fullAccess, ...older])).toEqual([fullAccess, ...work]);
+    // Code chats never get these rules: the question tool stays.
+    expect(wholly("question", [agentAllows, fullAccess])).toBe(false);
+  });
 });
 
 describe("work prompt and tools", () => {
@@ -171,6 +193,23 @@ describe("work prompt and tools", () => {
       expect(workPrompt(style)).toContain("For deal questions call work_deals first");
       expect(workPrompt(style)).toContain("coverage_note, pass it on once");
     }
+  });
+
+  test("suggested replies: both styles end with the same fixed section; neutral words; no question tool line", () => {
+    for (const style of ["brief", "detailed"] as const) {
+      expect(workPrompt(style).endsWith(`\n\n${SUGGESTED_REPLIES}`)).toBe(true);
+      expect(workPrompt(style)).toBe(workPrompt(style));
+    }
+    expect(SUGGESTED_REPLIES.startsWith("## Suggested replies\n")).toBe(true);
+    expect(SUGGESTED_REPLIES).toContain("\n<replies>\nSend it\nMake it shorter\n</replies>\n");
+    expect(SUGGESTED_REPLIES).toContain("Never a step the user takes elsewhere");
+    expect(SUGGESTED_REPLIES).toContain("are fine with any answer style");
+    // Only the new section is checked: the rest of the prompt names the product on purpose.
+    expect(SUGGESTED_REPLIES).not.toMatch(/omnirush|farm|automat|\bbot\b/i);
+    expect(SUGGESTED_REPLIES).not.toMatch(/[\u2013\u2014]/);
+    // The question tool is off in Work chats (WORK_DISABLED_TOOLS, v2WorkPermissions), so the prompt never names it.
+    expect(WORK_DISABLED_TOOLS).toContain("question");
+    expect(workPrompt("brief")).not.toContain("question tool");
   });
 
   test("brief by default; each style is one fixed text (prompt caching holds)", () => {

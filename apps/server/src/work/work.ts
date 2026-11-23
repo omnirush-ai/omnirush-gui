@@ -78,8 +78,9 @@ export const WORK_READ_TOOLS = [
   "salesforce_query", "salesforce_read", "salesforce_search", "xero_read", "xero_search", "work_today",
 ];
 
-/** The engine's own tools a Work chat does not get (no shell, no code editing). */
-export const WORK_DISABLED_TOOLS = ["bash", "edit", "write", "patch", "multiedit", "apply_patch", "task", "lsp", "codesearch"];
+/** The engine's own tools a Work chat does not get (no shell, no code editing, and no question form: the agent asks in
+ *  its message and the app offers the replies). */
+export const WORK_DISABLED_TOOLS = ["bash", "edit", "write", "patch", "multiedit", "apply_patch", "task", "lsp", "codesearch", "question"];
 
 /** `available`: Work is off for the account but it can turn it on itself (POST /omnirush/work/enable, the "Try Work" offer). */
 export type WorkSwitch = { enabled: boolean; available: boolean; sources: string[]; message: string | null };
