@@ -96,6 +96,29 @@ export async function clearBrowsingData(browserSession) {
 }
 
 /**
+ * Sign out with the browser asked first. When the browser was cleared, the window hears it at once (its restore list,
+ * the conversations' saved tabs and the Work link choices go too), before the account itself is signed out: a sign-out
+ * that fails after that never leaves the company's pages to come back. The window hears again once the sign-out
+ * finished, cleared or not, so the library follows the account.
+ * @template T
+ * @param {{
+ *   beforeSignOut: () => Promise<{ cleared?: boolean } | null | undefined>,
+ *   notify: (cleared: boolean) => void,
+ *   signOut: () => Promise<T>,
+ * }} steps
+ * @returns {Promise<T>}
+ */
+export async function signOutWithBrowserGuard({ beforeSignOut, notify, signOut }) {
+  const browser = await beforeSignOut().catch(() => ({ cleared: false }));
+  if (browser?.cleared === true) notify(true);
+  try {
+    return await signOut();
+  } finally {
+    notify(false);
+  }
+}
+
+/**
  * @param {{
  *   ownerPath: string,
  *   accountId: () => Promise<string | null>,

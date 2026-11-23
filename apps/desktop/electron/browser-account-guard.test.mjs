@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { clearBrowsingData, clearConfirmOptions, createBrowserAccountGuard } from "./browser-account-guard.mjs";
+import { clearBrowsingData, clearConfirmOptions, createBrowserAccountGuard, signOutWithBrowserGuard } from "./browser-account-guard.mjs";
 
 /** A browser session with a cookie jar, site storage and a cache, like Electron's. */
 function fakeSession(cookies = []) {
@@ -200,4 +200,48 @@ test("the confirm: Clear first and default (Escape too), then Keep; English and 
   assert.equal(clearConfirmOptions("switch", { language: "fr" }).buttons[1], "Keep browser sign-ins");
   // Plain copy: no em or en dashes.
   for (const options of [en, switched, zh]) assert.doesNotMatch(JSON.stringify(options), /[–—]/);
+});
+
+test("a cleared browser is announced before the account signs out, even when signing out then fails", async () => {
+  const { guard, state, cleanup } = rig();
+  try {
+    /** @type {string[]} */
+    const steps = [];
+    await assert.rejects(signOutWithBrowserGuard({
+      beforeSignOut: () => guard.beforeSignOut(),
+      notify: (cleared) => steps.push(`notify:${cleared}`),
+      signOut: async () => {
+        steps.push("sign out");
+        throw new Error("account store could not be cleared");
+      },
+    }), /could not be cleared/);
+    assert.equal(state.cleared, 1);
+    // The window heard "cleared" first, so its restore list and saved tabs went even though signing out failed.
+    assert.deepEqual(steps, ["notify:true", "sign out", "notify:false"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a kept or personal browser is not announced as cleared; the window still hears the sign-out", async () => {
+  for (const options of [{ choice: /** @type {const} */ ("keep") }, { company: null }]) {
+    const { guard, cleanup } = rig(options);
+    try {
+      /** @type {boolean[]} */
+      const heard = [];
+      const result = await signOutWithBrowserGuard({ beforeSignOut: () => guard.beforeSignOut(), notify: (cleared) => heard.push(cleared), signOut: async () => "signed out" });
+      assert.equal(result, "signed out");
+      assert.deepEqual(heard, [false]);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test("a guard that fails to answer still signs out (not cleared)", async () => {
+  /** @type {boolean[]} */
+  const heard = [];
+  const result = await signOutWithBrowserGuard({ beforeSignOut: async () => { throw new Error("dialog gone"); }, notify: (cleared) => heard.push(cleared), signOut: async () => 7 });
+  assert.equal(result, 7);
+  assert.deepEqual(heard, [false]);
 });

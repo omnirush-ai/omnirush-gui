@@ -397,3 +397,22 @@ test("consumer Code chat in Auto reads the user's page without asking", async ()
   assert.equal((await call("observe")).ok, true);
   assert.equal(asked.length, 0);
 });
+
+test("Work chat: a site allowed for reading in a tab stays allowed when a step is cancelled, until takeover", async () => {
+  const { host, tab, call, asked } = hostFor({ mode: "auto", visible: true, sitesAsk: () => true, elements: BUTTONS });
+  assert.equal((await call("observe")).ok, true);
+  assert.equal(asked.length, 1);
+  // A step cancelled before it ran (the caller gave up): its navigation scope is gone with it.
+  const cancelled = new AbortController();
+  cancelled.abort();
+  const stopped = await host.request({ sessionId: "ses_1", operation: "observe", args: { tabId: tab.tabId } }, { signal: cancelled.signal });
+  assert.equal(stopped.ok, false);
+  // The next look at the same site does not ask again.
+  assert.equal((await call("observe")).ok, true);
+  assert.equal(asked.length, 1);
+  // Takeover ends it: after Resume the site asks again.
+  host.pause(tab.tabId);
+  host.resume(tab.tabId);
+  assert.equal((await call("observe")).ok, true);
+  assert.equal(asked.length, 2);
+});

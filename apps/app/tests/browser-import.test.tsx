@@ -298,7 +298,7 @@ describe("browser import", () => {
     }, bridge, false);
   });
 
-  test("an account change refreshes the library; a cleared browser drops every chat's saved browser tabs", async () => {
+  test("an account change refreshes the library; a cleared browser drops every chat's saved browser tabs and the Work browser's restore list", async () => {
     const { BrowserAccountChanges } = await import("../src/react-app/domains/browser-logins/browser-account-changes");
     const { browserLibraryKeys } = await import("../src/react-app/domains/browser-logins/use-browser-library");
     const { usePanelTabStore } = await import("../src/react-app/domains/session/panel/panel-tab-store");
@@ -322,7 +322,22 @@ describe("browser import", () => {
       expect(queries.getQueryState(browserLibraryKeys.summary)?.isInvalidated).toBe(true);
       expect(usePanelTabStore.getState().sessions["chat-b"]?.tabs.map((tab) => tab.id)).toEqual(["tab-2"]);
 
+      // The Work browser's restore list and link choices for the company's sites, kept on this computer.
+      localStorage.setItem("omnirush:work-browser:tabs:v1", JSON.stringify({ tabs: [{ url: "https://tms.acme.example/shipments/4471", title: "Shipment 4471" }], active: 0 }));
+      localStorage.setItem("omnirush:work-browser:links:v1", "false");
+      localStorage.setItem("omnirush:work-browser:elsewhere:v1", JSON.stringify([{ host: "acme.sharepoint.com", browserId: "edge" }]));
+      localStorage.setItem("omnirush:panel-tabs:keep-me", "1");
+      const storageEvents: Array<string | null> = [];
+      const onStorage = (event: StorageEvent) => storageEvents.push(event.key);
+      window.addEventListener("storage", onStorage);
       await act(() => { for (const listener of listeners) listener({ cleared: true }); });
+      window.removeEventListener("storage", onStorage);
+      expect(localStorage.getItem("omnirush:work-browser:tabs:v1")).toBeNull();
+      expect(localStorage.getItem("omnirush:work-browser:links:v1")).toBeNull();
+      expect(localStorage.getItem("omnirush:work-browser:elsewhere:v1")).toBeNull();
+      expect(localStorage.getItem("omnirush:panel-tabs:keep-me")).toBe("1");
+      expect(storageEvents).toEqual(["omnirush:work-browser:tabs:v1", "omnirush:work-browser:links:v1", "omnirush:work-browser:elsewhere:v1"]);
+      localStorage.removeItem("omnirush:panel-tabs:keep-me");
       const sessions = usePanelTabStore.getState().sessions;
       expect(sessions["chat-a"]?.tabs.map((tab) => tab.id)).toEqual(["record:gmail:1"]);
       expect(sessions["chat-a"]?.activeTabId).toBe("record:gmail:1");

@@ -179,6 +179,13 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
   const pausedSessions = new Set();
   const opening = new Map();
   const navigations = new Map();
+  // Sites a Work chat may read in a tab (allowed once there, outside Careful): kept per tab, so the ask is not repeated
+  // when its navigation scope is replaced (a cancelled or timed-out step) or was never made. Gone on takeover or close.
+  const tabReads = new Map();
+  function readAllowed(tab, sessionId, origin) {
+    const entry = tabReads.get(tab.tabId);
+    return Boolean(entry && entry.tab === tab && entry.sessionId === sessionId && entry.origins.has(origin));
+  }
   function trackNavigation(sessionId, tab, signal = undefined) {
     const previous = navigations.get(tab.tabId);
     const sameTab = previous?.tab === tab && previous.sessionId === sessionId;
@@ -284,7 +291,7 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
     const careful = await modeNow() === "careful";
     // A Work chat outside Careful reads a site once it was allowed in this tab; a page the user opened there asks once.
     const scope = navigations.get(tab.tabId);
-    if (!careful && (scope?.origins.has(url.origin) || !await sitesAskNow(sessionId))) return;
+    if (!careful && (scope?.origins.has(url.origin) || readAllowed(tab, sessionId, url.origin) || !await sitesAskNow(sessionId))) return;
     signal.throwIfAborted();
     if (!isVisible(tab.tabId)) fail("needs_attention", "Select this tab in its conversation's browser panel to review website access, then retry.");
     publish(tab.tabId, "needs_attention", "Website access");
@@ -297,8 +304,15 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
     if (!await allowed(url.href) || tab.view.webContents.getURL() !== url.href) fail("page_changed", "The page changed or access was blocked while approval was pending. Observe the current page.");
     signal.throwIfAborted();
     if (careful) grants.set(key, true);
-    // Allowed in this tab: the site counts as allowed for navigation there too (one ask, not two).
-    else scope?.origins.add(url.origin);
+    else {
+      // Allowed in this tab: the site counts as allowed for navigation there too (one ask, not two), and for reading
+      // there until takeover or close, whatever happens to this step.
+      scope?.origins.add(url.origin);
+      const entry = tabReads.get(tab.tabId);
+      const kept = entry && entry.tab === tab && entry.sessionId === sessionId ? entry : { tab, sessionId, origins: new Set() };
+      kept.origins.add(url.origin);
+      tabReads.set(tab.tabId, kept);
+    }
   }
   function pause(tabId, reason = "Paused by you") {
     const owner = ownerOf(tabId);
@@ -306,6 +320,7 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
     for (const item of tabsFor(owner)) {
       const navigation = navigations.get(item.tabId);
       if (navigation) { navigation.manual = false; navigation.lifetime.abort(); }
+      tabReads.delete(item.tabId);
       if (!item.view.webContents.isDestroyed()) item.view.webContents.stop();
       const sibling = states.get(item.tabId); sibling?.controller?.abort(); if (sibling) sibling.observation = null; publish(item.tabId, "paused", reason);
     }
@@ -323,7 +338,7 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
     }
   }
   function invalidate(tabId, { closed = false } = {}) {
-    if (closed) { navigations.get(tabId)?.lifetime.abort(); navigations.delete(tabId); }
+    if (closed) { navigations.get(tabId)?.lifetime.abort(); navigations.delete(tabId); tabReads.delete(tabId); }
     const state = states.get(tabId); if (!state) return;
     state.observation = null;
     if (closed) { state.controller?.abort(); states.delete(tabId); }

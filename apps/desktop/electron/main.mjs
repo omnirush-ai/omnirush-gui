@@ -53,7 +53,7 @@ import { createBrowserLoginSync } from "./browser-login-sync.mjs";
 import { createBrowserLibrary } from "./browser-library.mjs";
 import { createBrowserPanel } from "./browser-panel.mjs";
 import { createBrowserSiteGuard } from "./browser-site-guard.mjs";
-import { clearConfirmOptions, createBrowserAccountGuard } from "./browser-account-guard.mjs";
+import { clearConfirmOptions, createBrowserAccountGuard, signOutWithBrowserGuard } from "./browser-account-guard.mjs";
 import { applyBackgroundRenderingSwitches } from "./background-rendering.mjs";
 import { createWorkspaceStore } from "./workspace-store.mjs";
 import {
@@ -2673,12 +2673,17 @@ const desktopCommandHandlers = {
   },
   "omnirushAccountSignOut": async (event, ...args) => {
       // A company account: the browser's sign-ins, tabs and site permissions are cleared unless the person keeps them.
-      const browser = await browserAccountGuard.beforeSignOut({ language: accountLanguage(args[0]) }).catch(() => ({ cleared: false }));
-      // A user's sign-out: the next server start stops sending what is queued and keeps it on disk for this
-      // account (sent after its next sign-in, never under another account). The app sent what it could first.
-      await runtimeManager.markUploadQueueClear();
-      const result = await omnirushAccountStore.clear();
-      sendBrowserAccountChanged(browser.cleared);
+      // The window forgets its saved tabs as soon as the browser is cleared, even if signing out fails after that.
+      const result = await signOutWithBrowserGuard({
+        beforeSignOut: () => browserAccountGuard.beforeSignOut({ language: accountLanguage(args[0]) }),
+        notify: sendBrowserAccountChanged,
+        signOut: async () => {
+          // A user's sign-out: the next server start stops sending what is queued and keeps it on disk for this
+          // account (sent after its next sign-in, never under another account). The app sent what it could first.
+          await runtimeManager.markUploadQueueClear();
+          return omnirushAccountStore.clear();
+        },
+      });
       await runtimeManager.omnirushServerRestart({ reason: "account_signed_out", source: "account", userInitiated: true });
       return { connected: false, remoteRevoked: result.remoteRevoked, reason: result.reason };
   },
