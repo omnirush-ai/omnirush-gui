@@ -15,6 +15,7 @@ import { ProgressIndicator, ProgressTrack } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { t } from "@/i18n";
 import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStart, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
 import type { WorkChatSyncSource, WorkChatSyncStatus, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
@@ -37,7 +38,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  chatSyncProgress, choicesTitle, connectorAccess, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  chatSyncProgress, connectorAccess, connectorChoicesTitle, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
 } from "./work-mode";
 
@@ -73,6 +74,18 @@ const BRAND_ICONS: Record<string, { color: string; path: string }> = {
   clickup: {
     color: "#7B68EE",
     path: "M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z",
+  },
+  airtable: {
+    color: "#18BFFF",
+    path: "M11.992 1.966c-.434 0-.87.086-1.28.257L1.779 5.917c-.503.208-.49.908.012 1.116l8.982 3.558a3.266 3.266 0 0 0 2.454 0l8.982-3.558c.503-.196.503-.908.012-1.116l-8.957-3.694a3.255 3.255 0 0 0-1.272-.257zM23.4 8.056a.589.589 0 0 0-.222.045l-10.012 3.877a.612.612 0 0 0-.38.564v8.896a.6.6 0 0 0 .821.552L23.62 18.1a.583.583 0 0 0 .38-.551V8.653a.6.6 0 0 0-.6-.596zM.676 8.095a.644.644 0 0 0-.48.19C.086 8.396 0 8.53 0 8.69v8.355c0 .442.515.737.908.54l6.27-3.006.307-.147 2.969-1.436c.466-.22.43-.908-.061-1.092L.883 8.138a.57.57 0 0 0-.207-.044z",
+  },
+  calendly: {
+    color: "#006BFF",
+    path: "M19.655 14.262c.281 0 .557.023.828.064 0 .005-.005.01-.005.014-.105.267-.234.534-.381.786l-1.219 2.106c-1.112 1.936-3.177 3.127-5.411 3.127h-2.432c-2.23 0-4.294-1.191-5.412-3.127l-1.218-2.106a6.251 6.251 0 0 1 0-6.252l1.218-2.106C6.736 4.832 8.8 3.641 11.035 3.641h2.432c2.23 0 4.294 1.191 5.411 3.127l1.219 2.106c.147.252.271.519.381.786 0 .004.005.009.005.014-.267.041-.543.064-.828.064-1.816 0-2.501-.607-3.291-1.306-.764-.676-1.711-1.517-3.44-1.517h-1.029c-1.251 0-2.387.455-3.2 1.278-.796.805-1.233 1.904-1.233 3.099v1.411c0 1.196.437 2.295 1.233 3.099.813.823 1.949 1.278 3.2 1.278h1.034c1.729 0 2.676-.841 3.439-1.517.791-.703 1.471-1.306 3.287-1.301Zm.005-3.237c.399 0 .794-.036 1.179-.11-.002-.004-.002-.01-.002-.014-.073-.414-.193-.823-.349-1.218.731-.12 1.407-.396 1.986-.819 0-.004-.005-.013-.005-.018-.331-1.085-.832-2.101-1.489-3.03-.649-.915-1.435-1.719-2.331-2.395-1.867-1.398-4.088-2.138-6.428-2.138-1.448 0-2.855.28-4.175.841-1.273.543-2.423 1.315-3.407 2.299S2.878 6.552 2.341 7.83c-.557 1.324-.842 2.726-.842 4.175 0 1.448.281 2.855.842 4.174.542 1.274 1.314 2.423 2.298 3.407s2.129 1.761 3.407 2.299c1.324.556 2.727.841 4.175.841 2.34 0 4.561-.74 6.428-2.137a10.815 10.815 0 0 0 2.331-2.396c.652-.929 1.158-1.949 1.489-3.03 0-.004.005-.014.005-.018-.579-.423-1.255-.699-1.986-.819.161-.395.276-.804.349-1.218.005-.009.005-.014.005-.023.869.166 1.692.506 2.404 1.035.685.505.552 1.075.446 1.416C22.184 20.437 17.619 24 12.221 24c-6.625 0-12-5.375-12-12s5.37-12 12-12c5.398 0 9.963 3.563 11.471 8.464.106.341.239.915-.446 1.421-.717.529-1.535.873-2.404 1.034.128.716.128 1.45 0 2.166-.387-.074-.782-.11-1.182-.11-4.184 0-3.968 2.823-6.736 2.823h-1.029c-1.899 0-3.15-1.357-3.15-3.095v-1.411c0-1.738 1.251-3.094 3.15-3.094h1.034c2.768 0 2.552 2.823 6.731 2.827Z",
+  },
+  figma: {
+    color: "#F24E1E",
+    path: "M15.852 8.981h-4.588V0h4.588c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.491-4.49 4.491zM12.735 7.51h3.117c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-3.117V7.51zm0 1.471H8.148c-2.476 0-4.49-2.014-4.49-4.49S5.672 0 8.148 0h4.588v8.981zm-4.587-7.51c-1.665 0-3.019 1.355-3.019 3.019s1.354 3.02 3.019 3.02h3.117V1.471H8.148zm4.587 15.019H8.148c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h4.588v8.98zM8.148 8.981c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h3.117V8.981H8.148zM8.172 24c-2.489 0-4.515-2.014-4.515-4.49s2.014-4.49 4.49-4.49h4.588v4.441c0 2.503-2.047 4.539-4.563 4.539zm-.024-7.51a3.023 3.023 0 0 0-3.019 3.019c0 1.665 1.365 3.019 3.044 3.019 1.705 0 3.093-1.376 3.093-3.068v-2.97H8.148zm7.704 0h-.098c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h.098c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.49-4.49 4.49zm-.097-7.509c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h.098c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-.098z",
   },
   zoom: {
     color: "#0B5CFF",
@@ -392,7 +405,7 @@ export function ConnectorRow(props: {
           </div>
         ) : null}
         {connected && props.onPick && (row.choices?.length ?? 0) > 1 ? (
-          <ConnectorChoices title={choicesTitle(row.id)} choices={row.choices!} busy={props.busy} onPick={props.onPick} />
+          <ConnectorChoices title={connectorChoicesTitle(row.id)} choices={row.choices!} busy={props.busy} onPick={props.onPick} />
         ) : null}
         {connected && props.health !== undefined ? (
           <div className={cn("mt-0.5 text-[12px]", problem ? "text-destructive" : "text-muted-foreground")} data-testid="work-connector-health">
@@ -601,10 +614,12 @@ export function CredentialsForm(props: { connector: OmniRushWorkConnector; clien
 
 /** The pasted-key sources: where the key is (the steps and a link), its field's name, the account's address where it has one
  *  (Freshdesk, Shopify; GitLab's is optional: empty is gitlab.com), Shopify's Client ID, Trello's second secret (the token),
- *  and whether the key is also used for writes the user approves. */
+ *  for Figma the links to follow (Figma cannot list every file), and whether the key is also used for writes the user approves
+ *  ("token": the note says token). */
 type KeyFormSpec = {
   help: string; placeholder: string; where: () => string; label: () => string;
-  host?: () => string; hostPlaceholder?: string; hostOptional?: boolean; clientId?: () => string; token?: () => string; writes?: boolean;
+  host?: () => string; hostPlaceholder?: string; hostOptional?: boolean; clientId?: () => string; token?: () => string; links?: () => string;
+  writes?: boolean | "token";
 };
 const KEY_FORMS: Record<string, KeyFormSpec> = {
   stripe: { help: "https://dashboard.stripe.com/apikeys", placeholder: "rk_live_...", where: () => t("work.key.where_stripe"), label: () => t("work.key.label_stripe") },
@@ -652,15 +667,32 @@ const KEY_FORMS: Record<string, KeyFormSpec> = {
     clientId: () => t("work.key.client_id_shopify"),
     writes: true,
   },
+  airtable: { help: "https://airtable.com/create/tokens", placeholder: "pat...", where: () => t("work.key.where_airtable"), label: () => t("work.key.label_token"), writes: "token" },
+  calendly: {
+    help: "https://calendly.com/app/developer?tab=personal_access_tokens",
+    placeholder: "",
+    where: () => t("work.key.where_calendly"),
+    label: () => t("work.key.label_token"),
+    writes: "token",
+  },
+  figma: {
+    help: "https://developers.figma.com/docs/rest-api/personal-access-tokens/",
+    placeholder: "figd_...",
+    where: () => t("work.key.where_figma"),
+    label: () => t("work.key.label_token"),
+    links: () => t("work.key.links_figma"),
+    writes: "token",
+  },
 };
 
-/** A source connected with a pasted API key (Stripe, Freshdesk, Pipedrive, Trello, ClickUp, monday.com): where to find the key,
- *  paste it, and Test and save tries it before anything is saved. The key goes to the server once and is not kept here. */
+/** A source connected with a pasted API key or token (Stripe, Freshdesk, Pipedrive, Trello, ClickUp, monday.com, GitLab, Shopify,
+ *  Airtable, Calendly, Figma): where to find it, paste it, and Test and save tries it before anything is saved. The key goes to
+ *  the server once and is not kept here. */
 export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkClient | null; openLink: (url: string) => void; onDone: () => void; onCancel: () => void }) {
   const id = props.connector.id;
   const spec: KeyFormSpec = KEY_FORMS[id] ?? { help: "", placeholder: "", where: () => "", label: () => t("work.key.label_freshdesk") };
   const name = connectorLabel(id, props.connector.label);
-  const [field, setField] = useState({ api_key: "", host: "", client_id: "", token: "" });
+  const [field, setField] = useState({ api_key: "", host: "", client_id: "", token: "", url: "" });
   const [error, setError] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: () =>
@@ -669,15 +701,17 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
         ...(spec.host && field.host.trim() ? { host: field.host.trim() } : {}),
         ...(spec.clientId && field.client_id.trim() ? { client_id: field.client_id.trim() } : {}),
         ...(spec.token ? { token: field.token.trim() } : {}),
+        // Figma's links, one per line (the server also splits on spaces and commas).
+        ...(spec.links ? { url: field.url.trim() } : {}),
       }),
     onSuccess: () => {
-      setField({ api_key: "", host: "", client_id: "", token: "" });
+      setField({ api_key: "", host: "", client_id: "", token: "", url: "" });
       toast.success(t("work.mailcal.connected", { name }));
       props.onDone();
     },
     onError: (reason) => setError(workFailure(reason).text),
   });
-  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || spec.hostOptional || Boolean(field.host.trim())) && (!spec.token || Boolean(field.token.trim()));
+  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || spec.hostOptional || Boolean(field.host.trim())) && (!spec.token || Boolean(field.token.trim())) && (!spec.links || Boolean(field.url.trim()));
   const input = (key: keyof typeof field, label: string, extra: { type?: string; placeholder?: string } = {}) => (
     <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
       {label}
@@ -719,7 +753,22 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
         {input("api_key", spec.label(), { type: "password", placeholder: spec.placeholder })}
         {spec.token ? input("token", spec.token(), { type: "password" }) : null}
       </div>
-      <p className="text-[12px] text-muted-foreground">{spec.writes ? t("work.key.note_write") : t("work.key.note")}</p>
+      {spec.links ? (
+        <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+          {spec.links()}
+          <Textarea
+            className="min-h-[4.5rem] text-[12px]"
+            value={field.url}
+            disabled={save.isPending}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="www.figma.com/files/team/..."
+            onChange={(event) => { setError(null); setField({ ...field, url: event.target.value }); }}
+            data-key-field="url"
+          />
+        </label>
+      ) : null}
+      <p className="text-[12px] text-muted-foreground">{spec.writes === "token" ? t("work.key.note_token_write") : spec.writes ? t("work.key.note_write") : t("work.key.note")}</p>
       {error ? <p className="text-[12px] text-destructive" role="alert" data-testid="work-key-error">{error}</p> : null}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={props.onCancel}>{t("common.cancel")}</Button>

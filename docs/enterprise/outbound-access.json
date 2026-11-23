@@ -361,6 +361,33 @@
       "override": null
     },
     {
+      "host": "airtable.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Airtable's page for making a personal access token, linked from the Work key form for Airtable.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
+      "host": "calendly.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Calendly's personal access token settings, linked from the Work key form for Calendly.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
+      "host": "developers.figma.com",
+      "kind": "link-only",
+      "components": ["renderer"],
+      "purpose": "Figma's guide to personal access tokens, linked from the Work key form for Figma.",
+      "requirement": "optional",
+      "blockedEffect": "The help link will not open; connecting still works.",
+      "override": null
+    },
+    {
       "host": "support.gmx.com",
       "kind": "link-only",
       "components": ["renderer"],

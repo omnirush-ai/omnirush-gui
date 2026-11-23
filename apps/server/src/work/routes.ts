@@ -147,7 +147,17 @@ const WORK_ERRORS: Record<string, string> = {
   shopify_not_found: "Shopify could not find that store. Use its address ending in .myshopify.com.",
   shopify_not_permitted: "Shopify only gives a token to an app made in the store's own organization. Create the app from this store's admin.",
   shopify_scope_missing: "That app cannot read orders, customers or products. Give it read_orders, read_customers or read_products, release a new version and approve it on the store.",
+  no_bases: "That token has no bases with records you can read. Add the bases to read to the token in Airtable.",
+  no_links: "Add at least one Figma team, project or file link.",
+  bad_link: "That is not a Figma team, project or file link. Copy it from the address bar in Figma.",
+  too_many_links: "That is more than 20 links. A team link covers all its projects.",
+  link_refused: "Figma would not open one of those links with this token. Check the link and that your account can see it.",
 };
+
+/** A token's missing scope (Airtable, Calendly, Figma: the reason has a colon, like `users:read`); Stripe's names a list. */
+function missingScope(reason: unknown): string | null {
+  return typeof reason === "string" && /^[a-z_.]+:[a-z_]+$/i.test(reason) ? `That token is missing the ${reason} permission. Make a new token that has it.` : null;
+}
 
 const CONNECTOR = WORK_SOURCE_ID;
 /** The server refuses a chat export over 50 MB (contract D5). */
@@ -185,7 +195,8 @@ async function passThrough(response: Response, jsonResponse: WorkRouteDeps["json
   // The app's client reads `code` and `message` (never a bare code); the server's own `detail` is kept as it came.
   if (response.status >= 400 && data && typeof data === "object" && !Array.isArray(data)) {
     const detail = (data as { detail?: unknown }).detail;
-    if (typeof detail === "string") data = { ...data, code: detail, message: WORK_ERRORS[detail] ?? "That didn't work. Try again." };
+    const reason = (data as { reason?: unknown }).reason;
+    if (typeof detail === "string") data = { ...data, code: detail, message: (detail === "missing_permission" && missingScope(reason)) || WORK_ERRORS[detail] || "That didn't work. Try again." };
     else if (Array.isArray(detail)) data = { ...data, code: "invalid_request", message: "That request wasn't accepted." };
   }
   return { status: response.status, data, response: jsonResponse(data, response.status) };

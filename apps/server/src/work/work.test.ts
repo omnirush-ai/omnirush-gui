@@ -304,6 +304,25 @@ describe("work routes", () => {
     );
   });
 
+  test("Figma's links go on with its token; a missing scope is named; the new read tools do not ask first", async () => {
+    const { calls, call } = setup(() => json({ ok: true, account: "sam@acme.example" }));
+    const links = "https://www.figma.com/files/team/42/Acme\nhttps://www.figma.com/design/KEYcheckout0001/Checkout";
+    await call("POST", "/work/connectors/figma/connect", { api_key: "figd_x", url: links, evil: "x" });
+    await call("POST", "/work/connectors/airtable/connect", { api_key: "patA.b" });
+    expect(calls).toEqual([
+      `POST connectors/figma/connect ${JSON.stringify({ url: links, api_key: "figd_x" })}`,
+      `POST connectors/airtable/connect ${JSON.stringify({ api_key: "patA.b" })}`,
+    ]);
+    const word = async (answer: unknown) => (await (await setup(() => json(answer, 400)).call("POST", "/work/connectors/calendly/connect", { api_key: "eyJ.a.b" })).json()).message;
+    expect(await word({ detail: "missing_permission", reason: "scheduled_events:read" })).toBe("That token is missing the scheduled_events:read permission. Make a new token that has it.");
+    expect(await word({ detail: "missing_permission", reason: "invoices" })).toContain("Read on Customers, Invoices");
+    expect(await word({ detail: "link_refused", reason: "folder:501" })).toContain("Figma would not open one of those links");
+    expect(await word({ detail: "no_links" })).toBe("Add at least one Figma team, project or file link.");
+    expect(await word({ detail: "no_bases" })).toContain("no bases");
+    for (const tool of ["airtable_bases", "airtable_search", "airtable_read", "calendly_events", "calendly_read_event", "calendly_event_types", "figma_list", "figma_read_file"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["airtable_comment", "airtable_create_record", "calendly_create_link", "figma_comment"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+  });
+
   test("Trello's token goes on with its key; the new read tools do not ask first", async () => {
     const { calls, call } = setup(() => json({ ok: true, account: "ann@acme.example" }));
     await call("POST", "/work/connectors/trello/connect", { api_key: "k1", token: "t1", evil: "x" });

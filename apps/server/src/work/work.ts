@@ -34,6 +34,8 @@ export const WORK_READ_TOOLS = [
   "zendesk_search", "zendesk_search_articles", "zendesk_read", "intercom_search", "intercom_read", "front_inboxes", "front_search", "front_read",
   "trello_search", "trello_read", "clickup_tasks", "clickup_read", "monday_search", "monday_read",
   "gitlab_search", "gitlab_read", "shopify_search", "shopify_read", "box_search", "box_read",
+  "airtable_bases", "airtable_search", "airtable_read", "calendly_events", "calendly_read_event", "calendly_event_types",
+  "figma_list", "figma_read_file",
   // The context graph: briefing and lookup only; work_remember and work_forget ask like every write.
   "work_context", "work_entity",
   // Full read of one record, counts across many, and deals (contract D1-D3): reads only.
