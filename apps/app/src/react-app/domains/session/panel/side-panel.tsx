@@ -38,6 +38,7 @@ import { useControlAction, type OmniRushControlAction } from "../../../shell/con
 import type { OpenTarget } from "../artifacts/open-target";
 import { useSidePanelTabs } from "./use-side-panel-tabs";
 import { handlePanelEscape, PanelEmpty } from "./panel-empty";
+import { BrowserLibraryBar } from "./browser-library-bar";
 import {
   computeBounds,
   getElectronBrowser,
@@ -46,7 +47,6 @@ import {
   sameBounds,
 } from "./utils";
 import { LoginSyncCard } from "../../browser-logins/login-sync-card";
-import { BrowserLibraryBar } from "./browser-library-bar";
 
 type SidePanelProps = {
   sessionId: string;
