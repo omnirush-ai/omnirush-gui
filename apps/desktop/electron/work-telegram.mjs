@@ -369,8 +369,10 @@ export function createTelegram(deps) {
     /**
      * The chat-days since `cursor` for the chat sync. Newest first per chat: the new messages, then the rest of the
      * oldest new message's day (the server replaces a chat-day's record); a chat never read goes back `days`. Only
-     * the dialogs whose last message is past the previous run are read. Throws signed_out, other_account, no_keyring.
-     * @returns {Promise<{ records: object[], cursor: object, messageCount: number, retryAfterMs?: number }>}
+     * the dialogs whose last message is past the previous run are read. A chat's days come together, so `cursorAt(n)`
+     * (the cursor once the first `n` landed) moves each chat whose days all landed and keeps the rest where they were.
+     * Throws signed_out, other_account, no_keyring.
+     * @returns {Promise<{ records: object[], cursor: object, messageCount: number, retryAfterMs?: number, cursorAt: (n: number) => object }>}
      */
     async read(cursor, account) {
       const saved = await load();
@@ -499,12 +501,21 @@ export function createTelegram(deps) {
       } finally {
         await close(client);
       }
+      const records = [...days.values()].map(finishDay);
+      // An unfinished run keeps the previous floor, so the chats it did not reach are found next time.
+      const next = { user: me.id, channels, at: complete ? start : fresh.at ?? null, chats };
       return {
-        records: [...days.values()].map(finishDay),
-        // An unfinished run keeps the previous floor, so the chats it did not reach are found next time.
-        cursor: { user: me.id, channels, at: complete ? start : fresh.at ?? null, chats },
+        records,
+        cursor: next,
         messageCount,
         ...(retryAfterMs ? { retryAfterMs } : {}),
+        // Part of it landed: the previous floor and setting stay, so every chat still to send is read again next run.
+        cursorAt: (n) => {
+          if (n >= records.length) return next;
+          const waiting = new Set(records.slice(n).map((record) => record.chat_id));
+          const kept = Object.entries(chats).map(([id, top]) => [id, waiting.has(id) ? fresh.chats[id] : top]).filter(([, top]) => top !== undefined);
+          return { user: me.id, ...(fresh.channels === undefined ? {} : { channels: fresh.channels }), at: fresh.at ?? null, chats: Object.fromEntries(kept) };
+        },
       };
     },
   };

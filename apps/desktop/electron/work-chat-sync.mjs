@@ -10,6 +10,10 @@
 // again until the Work state's sources list it again.
 // The read position and switch live here (<userData>/work-chat-sync.json),
 // per server and Work account, so an account switch never mixes data.
+// Pushes are small (100 chat-days or 1.5 MB), and a reader that can say so
+// (`cursorAt`) has its read position saved after each one, so a failed push
+// never sends again what already landed and a long first sync carries on
+// over several runs. The card polls `status()` for the run's progress.
 
 import { watch as fsWatch } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -23,24 +27,30 @@ export const START_DELAY_MS = 30_000;
 export const WATCH_QUIET_MS = 60_000;
 export const MIN_GAP_MS = 2 * 60_000;
 const MAX_BACKOFF_MS = 6 * 60 * 60_000;
-// The server takes at most 2,000 records and 20 MB per push.
-const BATCH_RECORDS = 500;
-const BATCH_CHARS = 6_000_000;
+// The server takes at most 2,000 records and 20 MB per push, and stores a push in one request: 1,000 chat-days
+// once took 131 s. Small pushes finish well inside the timeout and each one saves the read position.
+const BATCH_RECORDS = 100;
+const BATCH_BYTES = 1_500_000;
+export const PUSH_TIMEOUT_MS = 300_000;
+// The local server's own answers (the Work account) are quick.
+const STATE_TIMEOUT_MS = 30_000;
+// A push that timed out, could not reach the local server or got a 5xx or 429 is sent once more after this.
+export const RETRY_DELAY_MS = 3_000;
 
-/** Records in slices under the server's limits; a chat-day is never split. */
-export function batches(records, maxRecords = BATCH_RECORDS, maxChars = BATCH_CHARS) {
+/** Records in slices under the push limits (bytes of JSON); a chat-day is never split. */
+export function batches(records, maxRecords = BATCH_RECORDS, maxBytes = BATCH_BYTES) {
   const out = [];
   let batch = [];
-  let chars = 0;
+  let bytes = 0;
   for (const record of records) {
-    const size = JSON.stringify(record).length;
-    if (batch.length && (batch.length >= maxRecords || chars + size > maxChars)) {
+    const size = Buffer.byteLength(JSON.stringify(record));
+    if (batch.length && (batch.length >= maxRecords || bytes + size > maxBytes)) {
       out.push(batch);
       batch = [];
-      chars = 0;
+      bytes = 0;
     }
     batch.push(record);
-    chars += size;
+    bytes += size;
   }
   if (batch.length) out.push(batch);
   return out;
@@ -54,22 +64,25 @@ export function backoffMs(failures) {
 /** A server with company connector lists refuses a source the company (or OmniRush) turned off with these. */
 const TURNED_OFF = new Set(["connector_off", "connector_not_allowed"]);
 
+/** `retry`: worth one more try (a timeout, the local server not reached, a 5xx or 429). */
 class SyncError extends Error {
-  constructor(code) {
+  constructor(code, retry = false) {
     super(code);
     this.code = code;
+    this.retry = retry;
   }
 }
 
 /**
  * @param {{
- *   sources: Record<string, { read: (cursor: any, account: string) => Promise<{ records: object[], cursor: any, messageCount: number, retryAfterMs?: number }>, route: string, watch?: { dir: string, file: string }[] }>,
+ *   sources: Record<string, { read: (cursor: any, account: string) => Promise<{ records: object[], cursor: any, messageCount: number, retryAfterMs?: number, cursorAt?: (sent: number) => any }>, route: string, watch?: { dir: string, file: string }[] }>,
  *   localServer: () => Promise<{ baseUrl: string | null, token: string | null } | null>,
  *   file: string,
  *   fetchImpl?: typeof fetch,
  *   now?: () => number,
  *   setTimer?: typeof setTimeout, clearTimer?: typeof clearTimeout,
  *   setRepeat?: typeof setInterval, clearRepeat?: typeof clearInterval,
+ *   sleep?: (ms: number) => Promise<void>,
  *   watch?: (dir: string, listener: (event: string, name: string | null) => void) => { close: () => void, on?: (event: "error", fn: () => void) => unknown },
  *   log?: (line: string) => void,
  * }} deps
@@ -81,6 +94,7 @@ export function createChatSync(deps) {
     fetchImpl = fetch,
     now = Date.now,
     setTimer = setTimeout, clearTimer = clearTimeout, setRepeat = setInterval, clearRepeat = clearInterval,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     watch = (dir, listener) => fsWatch(dir, { persistent: false }, listener),
     log = (line) => console.info(line),
   } = deps;
@@ -88,6 +102,8 @@ export function createChatSync(deps) {
   const pending = new Map();
   let chain = Promise.resolve();
   let running = null;
+  /** The running read's progress for the card: reading, then uploading with pushes and chat-days sent and in all. */
+  let progress = null;
   let lastRunAt = 0;
   let repeat = null;
   const timers = new Map();
@@ -120,14 +136,19 @@ export function createChatSync(deps) {
     return next;
   }
 
-  async function call(server, route, init = {}) {
-    const response = await fetchImpl(`${server.baseUrl}${route}`, {
-      ...init,
-      headers: { Authorization: `Bearer ${server.token}`, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(120_000),
-    });
+  async function call(server, route, init = {}, timeoutMs = STATE_TIMEOUT_MS) {
+    let response;
+    try {
+      response = await fetchImpl(`${server.baseUrl}${route}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${server.token}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      throw new SyncError(error?.name === "TimeoutError" ? "timeout" : "unreachable", true);
+    }
     const body = await response.json().catch(() => null);
-    if (!response.ok) throw new SyncError(typeof body?.code === "string" ? body.code : `http_${response.status}`);
+    if (!response.ok) throw new SyncError(typeof body?.code === "string" ? body.code : `http_${response.status}`, response.status >= 500 || response.status === 429);
     return body;
   }
 
@@ -154,17 +175,43 @@ export function createChatSync(deps) {
     if (!manual && TURNED_OFF.has(entry.lastError) && me.sources && !me.sources.includes(source)) return { status: "skipped", reason: "turned_off" };
     lastRunAt = now();
     running = source;
+    progress = { phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 };
     try {
       const read = await spec.read(entry.cursor, me.account);
       // The server restarts on an account switch with the same port and token: the account is checked before every
-      // push, so no batch lands in another account, and once more after the last; on a change the read position stays put.
+      // push (a retry too), so no batch lands in another account, and once more after the last; on a change the read
+      // position stays where the last checked push left it.
       const switched = async () => (await who())?.account !== me.account;
       const changed = { status: "skipped", reason: "account_changed" };
-      for (const batch of batches(read.records)) {
-        if (await switched()) return changed;
-        await call(me.server, spec.route, { method: "POST", body: JSON.stringify({ records: batch }) });
-      }
+      /** One push, and once more after a short wait when that is worth it; false: the account changed meanwhile. */
+      const send = async (batch) => {
+        const init = { method: "POST", body: JSON.stringify({ records: batch }) };
+        try {
+          await call(me.server, spec.route, init, PUSH_TIMEOUT_MS);
+        } catch (error) {
+          if (!(error instanceof SyncError) || !error.retry) throw error;
+          log(`[work-chat-sync] ${source} push failed: ${error.code}, trying once more`);
+          await sleep(RETRY_DELAY_MS);
+          if (await switched()) return false;
+          await call(me.server, spec.route, init, PUSH_TIMEOUT_MS);
+        }
+        return true;
+      };
+      const pushes = batches(read.records);
+      progress = { phase: "uploading", pushesDone: 0, pushesTotal: pushes.length, recordsDone: 0, recordsTotal: read.records.length };
       if (await switched()) return changed;
+      let sent = 0;
+      for (const [index, batch] of pushes.entries()) {
+        if (!(await send(batch))) return changed;
+        sent += batch.length;
+        progress = { ...progress, pushesDone: index + 1, recordsDone: sent };
+        if (await switched()) return changed;
+        // What landed is kept: the read position moves past it, and the switch turns on as after a good read.
+        if (read.cursorAt && index < pushes.length - 1) {
+          const cursor = read.cursorAt(sent);
+          await update(me.account, source, (latest) => ({ ...latest, enabled: latest.enabled ?? true, cursor, lastError: null, failures: 0, nextAt: null }));
+        }
+      }
       // A read Telegram slowed down (FLOOD_WAIT) saves what it got and waits its time.
       const wait = Number(read.retryAfterMs) || 0;
       const saved = await update(me.account, source, (latest) => ({ enabled: latest.enabled ?? true, cursor: read.cursor, lastSyncAt: new Date(now()).toISOString(), lastError: wait ? "flood_wait" : null, failures: 0, nextAt: wait ? now() + wait : null }));
@@ -180,6 +227,7 @@ export function createChatSync(deps) {
       return { status: "error", code };
     } finally {
       running = null;
+      progress = null;
     }
   }
 
@@ -265,7 +313,8 @@ export function createChatSync(deps) {
       const saved = (await load()).accounts[me.account] ?? {};
       return /** @type {any} */ (Object.fromEntries(Object.keys(sources).map((source) => {
         const entry = saved[source] ?? {};
-        return [source, { enabled: entry.enabled ?? null, lastSyncAt: entry.lastSyncAt ?? null, lastError: entry.lastError ?? null, failures: entry.failures ?? 0, running: running === source }];
+        const mine = running === source;
+        return [source, { enabled: entry.enabled ?? null, lastSyncAt: entry.lastSyncAt ?? null, lastError: entry.lastError ?? null, failures: entry.failures ?? 0, running: mine, progress: mine && progress ? { ...progress } : null }];
       })));
     },
     /** The switch; turning it on reads now. */

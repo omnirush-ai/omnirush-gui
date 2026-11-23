@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { copyDatabase, cut, MAX_DAY_TEXT, MAX_PEOPLE, probe } from "./work-imessage.mjs";
+import { copyDatabase, cut, MAX_DAY_TEXT, MAX_PEOPLE, probe, sendOrder } from "./work-imessage.mjs";
 
 // Seconds between the Unix epoch (1970) and Core Data's (2001).
 const CORE_DATA_EPOCH = 978_307_200;
@@ -160,7 +160,8 @@ function readMessages(db, sincePk, ctx) {
       if (SKIP_TYPES.has(Number(row.type)) || row.date === null) continue;
       const text = messageText(row);
       if (!text) continue;
-      if (Number(row.pk) > sincePk) messageCount += 1;
+      const pk = Number(row.pk);
+      if (pk > sincePk) messageCount += 1;
       const when = local(row.date);
       const fromMe = Number(row.from_me) === 1;
       const jid = session.group ? str(row.member_jid) : session.jid;
@@ -172,10 +173,11 @@ function readMessages(db, sincePk, ctx) {
       const key = `${session.pk}\u0000${when.day}`;
       let group = groups.get(key);
       if (!group) {
-        group = { chat_key: cut(ctx.keyOf(session), MAX_NAME), chat_name: cut(session.name, MAX_NAME), is_group: session.group, day: when.day, messages: [], phones: new Set(), chars: 0 };
+        group = { chat_key: cut(ctx.keyOf(session), MAX_NAME), chat_name: cut(session.name, MAX_NAME), is_group: session.group, day: when.day, messages: [], phones: new Set(), chars: 0, first: Infinity };
         if (!session.group && phoneOf(session.jid)) group.phones.add(phoneOf(session.jid));
         groups.set(key, group);
       }
+      if (pk > sincePk && pk < group.first) group.first = pk;
       // A day over the server's caps would fail the whole push: the rest of it is left out.
       if (group.messages.length >= MAX_DAY_MESSAGES || group.chars >= MAX_DAY_TEXT) continue;
       const kept = cut(text, MAX_DAY_TEXT - group.chars);
@@ -184,8 +186,8 @@ function readMessages(db, sincePk, ctx) {
       if (!fromMe && session.group && phoneOf(jid)) group.phones.add(phoneOf(jid));
     }
   }
-  const records = [...groups.values()].map(({ chars: _chars, phones, ...group }) => ({ ...group, phones: [...phones].slice(0, MAX_PEOPLE) }));
-  return { records, lastPk, messageCount };
+  const records = [...groups.values()].map(({ chars: _chars, first: _first, phones, ...group }) => ({ ...group, phones: [...phones].slice(0, MAX_PEOPLE) }));
+  return { records, lastPk, messageCount, firsts: [...groups.values()].map((group) => group.first) };
 }
 
 /** The listed chats of one ChatStorage copy: `{ pk, name, jid, group }`; throws unsupported_schema. */
@@ -207,7 +209,9 @@ function readSessions(db, contacts) {
  * Read the given apps' databases (copies, already opened as `files`) past
  * each app's cursor. A chat's key is its name; a name two chats share
  * (across both apps) keeps the name only for the first, the others add
- * their JID so no chat-day overwrites another's.
+ * their JID so no chat-day overwrites another's. The records come in push
+ * order and `cursorAt(n)` is the cursor to save once the first `n` landed
+ * (sendOrder, each app's own row ids).
  * @param {{ app: string, chat: string, contacts?: string }[]} files
  * @param {Record<string, number>} cursor
  */
@@ -231,7 +235,7 @@ export function readDatabases(files, cursor = {}) {
     }
     const owner = new Map();
     for (const { app, sessions } of opened) for (const s of sessions) if (!owner.has(s.name)) owner.set(s.name, `${app}:${s.pk}`);
-    const records = [];
+    const parts = [];
     const next = { ...cursor };
     let messageCount = 0;
     for (const { app, db, contacts, sessions } of opened) {
@@ -242,11 +246,12 @@ export function readDatabases(files, cursor = {}) {
       } catch (error) {
         throw new WhatsAppError("unsupported_schema", error);
       }
-      records.push(...read.records);
+      parts.push(...read.records.map((record, index) => ({ record, key: app, first: read.firsts[index] })));
       next[app] = read.lastPk;
       messageCount += read.messageCount;
     }
-    return { records, cursor: next, messageCount };
+    const order = sendOrder(parts, cursor, next);
+    return { records: order.records, cursor: next, messageCount, cursorAt: order.cursorAt };
   } finally {
     for (const { db } of opened) db.close();
   }

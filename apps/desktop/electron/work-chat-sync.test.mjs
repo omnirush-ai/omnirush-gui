@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { backoffMs, batches, createChatSync, MIN_GAP_MS, SYNC_EVERY_MS, WATCH_QUIET_MS } from "./work-chat-sync.mjs";
+import { backoffMs, batches, createChatSync, MIN_GAP_MS, PUSH_TIMEOUT_MS, RETRY_DELAY_MS, SYNC_EVERY_MS, WATCH_QUIET_MS } from "./work-chat-sync.mjs";
 
 /**
  * A chat sync against a fake local server; `server` and `reads` are what the test steers and inspects.
@@ -13,8 +13,11 @@ import { backoffMs, batches, createChatSync, MIN_GAP_MS, SYNC_EVERY_MS, WATCH_QU
 function rig({ read } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "chat-sync-"));
   const file = path.join(dir, "work-chat-sync.json");
-  const server = { enabled: true, account: "https://omnirush.ai acct_a", fail: null, pushed: [], onPush: null, sources: undefined };
+  // fail: a code every push answers with (failStatus, 502 by default); failures: the codes the next pushes answer with,
+  // one each ("timeout" and "unreachable" throw like fetch does); beforeAnswer: awaited while a push is in flight.
+  const server = { enabled: true, account: "https://omnirush.ai acct_a", fail: null, failStatus: 502, failures: [], pushed: [], onPush: null, beforeAnswer: null, signals: [], sources: undefined };
   const reads = [];
+  const sleeps = [];
   let clock = Date.parse("2026-11-20T10:00:00Z");
   const timers = [];
   const watchers = [];
@@ -35,8 +38,14 @@ function rig({ read } = {}) {
     if (route === "/work/state?account=1") return Response.json({ enabled: server.enabled, ...(server.enabled ? { account: server.account } : {}), ...(server.sources ? { sources: server.sources } : {}) });
     // A push lands in the account the server has when it arrives; onPush may switch it after.
     const account = server.account;
+    server.signals.push(init.signal);
     server.onPush?.();
-    if (server.fail) return Response.json({ code: server.fail }, { status: 502 });
+    await server.beforeAnswer?.();
+    const failure = server.failures.shift();
+    if (failure === "timeout") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    if (failure === "unreachable") throw new TypeError("fetch failed");
+    if (failure) return Response.json({ code: failure }, { status: failure === "bad_import" ? 422 : 503 });
+    if (server.fail) return Response.json({ code: server.fail }, { status: server.failStatus });
     server.pushed.push({ route, account, records: JSON.parse(init.body).records });
     return Response.json({ imported: 1 });
   };
@@ -53,11 +62,12 @@ function rig({ read } = {}) {
     clearTimer: (timer) => { if (timer) timer.cleared = true; },
     setRepeat: (fn, ms) => ({ fn, ms }),
     clearRepeat: () => undefined,
+    sleep: async (ms) => { sleeps.push(ms); },
     watch: (watched, listener) => { const handle = { dir: watched, listener, closed: false, close() { this.closed = true; } }; watchers.push(handle); return handle; },
     log: () => undefined,
   }));
   return {
-    sync, server, reads, timers, watchers, file,
+    sync, server, reads, timers, watchers, file, sleeps,
     advance: (ms) => { clock += ms; },
     saved: () => JSON.parse(readFileSync(file, "utf8")),
     overlapped: () => overlap,
@@ -65,12 +75,18 @@ function rig({ read } = {}) {
   };
 }
 
-test("batches stay under the server's limits and never split a record", () => {
+test("pushes are small (100 chat-days or 1.5 MB of JSON) and never split a record", () => {
   const records = Array.from({ length: 2001 }, (_, index) => ({ day: "2026-11-15", text: `m${index}` }));
   const out = batches(records);
   assert.deepEqual(out.flat(), records);
-  assert.ok(Math.max(...out.map((batch) => batch.length)) <= 500);
+  assert.equal(out.length, 21);
+  assert.ok(Math.max(...out.map((batch) => batch.length)) <= 100);
   assert.deepEqual(batches([{ text: "x".repeat(40) }, { text: "y".repeat(40) }, { text: "z" }], 500, 70).map((b) => b.length), [1, 2]);
+  // Bytes, not characters: 40 days of 100,000 three-byte characters (300 KB each) go five to a push.
+  const wide = Array.from({ length: 40 }, () => ({ text: "語".repeat(100_000) }));
+  assert.deepEqual(batches(wide).map((b) => b.length), [4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
+  // One record over the limit goes alone.
+  assert.deepEqual(batches([{ text: "a" }, { text: "b".repeat(1_600_000) }, { text: "c" }]).map((b) => b.length), [1, 1, 1]);
 });
 
 test("backoff doubles from 10 minutes up to 6 hours", () => {
@@ -204,6 +220,8 @@ test("a failed push keeps the read position, so the messages go again next time"
 test("a source the company turned off is not read again until the Work sources list it again", async () => {
   const r = rig();
   try {
+    // The company's refusal is a 403, so it is not sent once more.
+    r.server.failStatus = 403;
     r.server.sources = ["google", "whatsapp"];
     assert.equal((await r.sync.run("whatsapp", { manual: true })).status, "ok");
     r.server.fail = "connector_off";
@@ -262,8 +280,8 @@ test("an account switch between pushes: no later batch reaches the new account",
   try {
     r.server.onPush = () => { r.server.account = "https://omnirush.ai acct_b"; };
     assert.equal((await r.sync.run("imessage", { manual: true })).reason, "account_changed");
-    // three batches were due; only the first went, to the account that read them
-    assert.deepEqual(r.server.pushed.map((push) => [push.account, push.records.length]), [["https://omnirush.ai acct_a", 500]]);
+    // eleven pushes were due; only the first went, to the account that read them
+    assert.deepEqual(r.server.pushed.map((push) => [push.account, push.records.length]), [["https://omnirush.ai acct_a", 100]]);
     assert.equal(existsSync(r.file), false); // no read position saved for either account
   } finally {
     r.done();
@@ -312,6 +330,130 @@ test("start: while the local server is not up yet, the first read is tried again
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(r.timers.at(-1).ms, 60_000);
     r.sync.stop();
+  } finally {
+    r.done();
+  }
+});
+
+/** 250 chat-days whose read position after `n` of them landed is `n` (a reader that says so with `cursorAt`). */
+function resumable(cursor) {
+  const from = Number(cursor) || 0;
+  const records = Array.from({ length: 250 - from }, (_, index) => ({ chat_key: `c${from + index}`, day: "2026-11-20" }));
+  return { records, cursor: 250, messageCount: records.length, cursorAt: (n) => from + n };
+}
+
+test("each push that lands moves the read position, so a failure later never sends it again", async () => {
+  const r = rig({ read: (_source, cursor) => resumable(cursor) });
+  try {
+    // The third push fails, and its one quick retry too.
+    let pushes = 0;
+    r.server.onPush = () => { pushes += 1; if (pushes >= 3) r.server.fail = "provider_error"; };
+    assert.deepEqual(await r.sync.run("whatsapp", { manual: true }), { status: "error", code: "provider_error" });
+    assert.equal(pushes, 4);
+    const saved = r.saved().accounts["https://omnirush.ai acct_a"].whatsapp;
+    // Two pushes (200 chat-days) landed: kept, and the switch is on like after a good read, so it carries on alone.
+    assert.deepEqual([saved.cursor, saved.enabled, saved.failures, saved.lastError, saved.lastSyncAt ?? null], [200, true, 1, "provider_error", null]);
+    r.server.fail = null;
+    r.server.onPush = null;
+    r.advance(backoffMs(1));
+    assert.equal((await r.sync.run("whatsapp")).status, "ok");
+    assert.deepEqual(r.reads.map((read) => read.cursor), [undefined, 200]);
+    const sent = r.server.pushed.flatMap((push) => push.records.map((record) => record.chat_key));
+    assert.equal(sent.length, 250);
+    assert.equal(new Set(sent).size, 250);
+    assert.equal(r.saved().accounts["https://omnirush.ai acct_a"].whatsapp.cursor, 250);
+  } finally {
+    r.done();
+  }
+});
+
+test("a reader without cursorAt keeps today's rule: the position moves only once all of it landed", async () => {
+  const r = rig({ read: (_source, cursor) => { const read = resumable(cursor); delete read.cursorAt; return read; } });
+  try {
+    let pushes = 0;
+    r.server.onPush = () => { pushes += 1; if (pushes >= 2) r.server.fail = "bad_import"; };
+    r.server.failStatus = 422;
+    assert.equal((await r.sync.run("imessage", { manual: true })).code, "bad_import");
+    assert.equal(r.saved().accounts["https://omnirush.ai acct_a"].imessage.cursor, undefined);
+  } finally {
+    r.done();
+  }
+});
+
+test("a push that times out, cannot reach the server or gets a 5xx goes once more; a refusal does not", async () => {
+  for (const failure of ["timeout", "unreachable", "collect_busy"]) {
+    const r = rig({ read: (_source, cursor) => resumable(cursor) });
+    try {
+      r.server.failures = [undefined, failure];
+      assert.equal((await r.sync.run("whatsapp", { manual: true })).status, "ok", failure);
+      assert.deepEqual(r.sleeps, [RETRY_DELAY_MS]);
+      assert.deepEqual(r.server.pushed.map((push) => push.records.length), [100, 100, 50]);
+    } finally {
+      r.done();
+    }
+  }
+  const refused = rig({ read: (_source, cursor) => resumable(cursor) });
+  try {
+    refused.server.failures = ["bad_import"];
+    assert.deepEqual(await refused.sync.run("whatsapp", { manual: true }), { status: "error", code: "bad_import" });
+    assert.deepEqual(refused.sleeps, []);
+    assert.equal(refused.server.pushed.length, 0);
+  } finally {
+    refused.done();
+  }
+});
+
+test("a push gets 300 s; running out of time twice is its own error, kept apart from other failures", async () => {
+  const r = rig({ read: (_source, cursor) => resumable(cursor) });
+  try {
+    r.server.failures = ["timeout", "timeout"];
+    assert.deepEqual(await r.sync.run("imessage", { manual: true }), { status: "error", code: "timeout" });
+    assert.equal(r.sleeps.length, 1);
+    assert.equal(r.server.signals.length, 2);
+    assert.ok(r.server.signals.every((signal) => signal instanceof AbortSignal && !signal.aborted));
+    assert.equal(PUSH_TIMEOUT_MS, 300_000);
+    const status = (await r.sync.status()).imessage;
+    assert.deepEqual([status.lastError, status.failures], ["timeout", 1]);
+    // Nothing landed, so nothing moved.
+    assert.equal(r.saved().accounts["https://omnirush.ai acct_a"].imessage.cursor, undefined);
+  } finally {
+    r.done();
+  }
+});
+
+test("the retry checks the account first: a switch while it waited sends nothing more", async () => {
+  const r = rig({ read: (_source, cursor) => resumable(cursor) });
+  try {
+    r.server.failures = ["timeout"];
+    r.server.onPush = () => { r.server.account = "https://omnirush.ai acct_b"; };
+    assert.equal((await r.sync.run("imessage", { manual: true })).reason, "account_changed");
+    assert.equal(r.server.pushed.length, 0);
+    assert.equal(existsSync(r.file), false);
+  } finally {
+    r.done();
+  }
+});
+
+test("status shows the running read's progress: reading, then pushes and chat-days sent of all", async () => {
+  const seen = [];
+  const r = rig({
+    read: async (_source, cursor) => {
+      seen.push((await r.sync.status()).whatsapp.progress);
+      return resumable(cursor);
+    },
+  });
+  try {
+    r.server.beforeAnswer = async () => { seen.push((await r.sync.status()).whatsapp.progress); };
+    assert.equal((await r.sync.run("whatsapp", { manual: true })).status, "ok");
+    assert.deepEqual(seen, [
+      { phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 },
+      { phase: "uploading", pushesDone: 0, pushesTotal: 3, recordsDone: 0, recordsTotal: 250 },
+      { phase: "uploading", pushesDone: 1, pushesTotal: 3, recordsDone: 100, recordsTotal: 250 },
+      { phase: "uploading", pushesDone: 2, pushesTotal: 3, recordsDone: 200, recordsTotal: 250 },
+    ]);
+    const after = (await r.sync.status()).whatsapp;
+    assert.deepEqual([after.running, after.progress], [false, null]);
+    assert.equal((await r.sync.status()).imessage.progress, null);
   } finally {
     r.done();
   }

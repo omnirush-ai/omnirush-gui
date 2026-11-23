@@ -542,6 +542,20 @@ describe("work routes", () => {
     ]);
   });
 
+  test("a chat push waits longer than the default minute; running out of time answers timeout, other errors stay errors", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const { calls, call } = setup((_path, init) => { signals.push(init.signal); return json({ imported: 1 }); });
+    for (const path of ["imessage", "whatsapp-local", "telegram"]) expect((await call("POST", `/work/${path}`, { records: [] })).status).toBe(200);
+    expect(calls).toEqual(["POST imessage {\"records\":[]}", "POST whatsapp-local {\"records\":[]}", "POST telegram {\"records\":[]}"]);
+    expect(signals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(true);
+    const late = setup(() => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); });
+    const answer = await late.call("POST", "/work/whatsapp-local", { records: [] });
+    expect(answer.status).toBe(504);
+    expect(await answer.json()).toMatchObject({ code: "timeout" });
+    const broken = setup(() => { throw new TypeError("fetch failed"); });
+    await expect(broken.call("POST", "/work/telegram", { records: [] })).rejects.toThrow("fetch failed");
+  });
+
   test("an error reads in words: known codes their own text, any other code or a validation list a plain line", async () => {
     const message = async (detail: unknown, status: number) => (await (await setup(() => json({ detail }, status)).call("GET", "/work/feed?tz=Asia%2FCalcutta")).json()) as Record<string, unknown>;
     expect(await message("bad_arguments", 422)).toMatchObject({ code: "bad_arguments", message: "Something in that request wasn't accepted. Try again." });

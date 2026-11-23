@@ -729,6 +729,19 @@ export type OmniRushWorkConnector = {
   choices?: { id: string; name: string; picked: boolean }[];
   /** With `paused_by_admin`: who turned it off ("org": the company's owner or an admin, "staff": OmniRush). */
   paused_by?: "org" | "staff" | string;
+  /** The sync's pass (null for pushed and imported sources and before a first run; absent from older servers). */
+  progress?: OmniRushWorkSyncProgress | null;
+};
+/** A server-side source's sync pass: `phase` idle when no run reads now; `done` records read this pass; `total` when the
+ *  provider says (Gmail); `steps_done`/`steps_total` for a list read one item at a time (GitHub repositories, channels). */
+export type OmniRushWorkSyncProgress = {
+  phase: "backfill" | "incremental" | "idle" | string;
+  done: number;
+  total: number | null;
+  steps_done: number | null;
+  steps_total: number | null;
+  started_at?: string | null;
+  updated_at?: string | null;
 };
 /** The connect form of a "credentials" or "key" source (POST /omnirush/work/connectors/{id}/connect). */
 export type OmniRushWorkCredentials = { preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string };
