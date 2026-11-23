@@ -6,7 +6,7 @@
  *                                          (account: "<server origin> <account id>", for the desktop's chat sync)
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
- *   POST  /work/connectors/:id/start       { auth_url }
+ *   POST  /work/connectors/:id/start       { host?, region? } -> { auth_url } (Zendesk's address, Intercom's region: `start_fields`)
  *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key? } -> { ok, account }
  *                                          (imap and caldav, and the pasted-key sources: the server tries the login or key, then saves and syncs)
  *   POST  /work/connectors/:id/hook        { url }: a new inbound URL for Zapier, Make or n8n (hook, hook_org), shown once
@@ -227,13 +227,33 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     return answer.response;
   });
 
+  // What a sign-in source asks before its sign-in page (`start_fields`): only Zendesk's address and Intercom's region go on.
+  // No body (a reconnect from Today) is fine: the server keeps what the source had.
+  const startForm = async (request: Request) => {
+    let body: unknown = null;
+    try {
+      const raw = await request.text();
+      body = raw.trim() ? JSON.parse(raw) : null;
+    } catch {
+      body = null;
+    }
+    const form: { host?: string; region?: string } = {};
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const { host, region } = body as Record<string, unknown>;
+      if (typeof host === "string" && host.trim()) form.host = host.trim();
+      if (region === "us" || region === "eu" || region === "au") form.region = region;
+    }
+    return form;
+  };
+
   // hook: a new inbound URL (Zapier, Make, n8n), passed to the app once and not kept here.
   for (const action of ["start", "disconnect", "sync", "hook"] as const) {
     addRoute(routes, "POST", `/work/connectors/:id/${action}`, "client", async (ctx) => {
       if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
+      const body = action === "start" ? JSON.stringify(await startForm(ctx.request)) : "{}";
       const found = deps.broker();
       if (!found) return signedOut();
-      return (await pass(await found.workRequest(`connectors/${ctx.params.id}/${action}`, { method: "POST", body: "{}" }))).response;
+      return (await pass(await found.workRequest(`connectors/${ctx.params.id}/${action}`, { method: "POST", body }))).response;
     });
   }
 

@@ -231,6 +231,24 @@ describe("work routes", () => {
     expect(calls).toEqual(["GET connectors ", "GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}", "PATCH connectors/asana {\"picked\":[\"w1\"]}"]);
   });
 
+  test("a start sends on only Zendesk's address and Intercom's region; no body or a bad one sends nothing", async () => {
+    const { calls, call } = setup(() => json({ auth_url: "https://acme.zendesk.com/oauth/authorizations/new?x=1" }));
+    expect(await (await call("POST", "/work/connectors/zendesk/start", { host: " acme.zendesk.com ", evil: "x" })).json()).toEqual({ auth_url: "https://acme.zendesk.com/oauth/authorizations/new?x=1" });
+    await call("POST", "/work/connectors/intercom/start", { region: "eu", host: "" });
+    await call("POST", "/work/connectors/intercom/start", { region: "mars" });
+    await call("POST", "/work/connectors/zendesk/start");
+    await call("POST", "/work/connectors/zendesk/start", [1]);
+    expect(calls).toEqual([
+      `POST connectors/zendesk/start ${JSON.stringify({ host: "acme.zendesk.com" })}`,
+      `POST connectors/intercom/start ${JSON.stringify({ region: "eu" })}`,
+      "POST connectors/intercom/start {}",
+      "POST connectors/zendesk/start {}",
+      "POST connectors/zendesk/start {}",
+    ]);
+    for (const tool of ["zendesk_search", "zendesk_search_articles", "zendesk_read", "intercom_search", "intercom_read", "front_inboxes", "front_search", "front_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["zendesk_note", "zendesk_reply", "intercom_note", "intercom_reply", "front_comment"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+  });
+
   test("a server-and-password connect forwards only the form's fields", async () => {
     const { calls, call } = setup(() => json({ ok: true, account: "me@corp.test" }));
     const form = { preset: "other", host: "mail.corp.test", port: 993, security: "tls", username: "me@corp.test", password: "app-pw", evil: "x", url: 5 };
