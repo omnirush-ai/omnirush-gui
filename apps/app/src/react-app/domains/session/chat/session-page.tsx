@@ -86,6 +86,7 @@ import { isCollectibleArtifactTarget, isLocalhostBrowserTarget, isOpenableFileTa
 import { opensInIdeEditor, resolveCollectibleOpenTarget } from "../artifacts/resolve-open-target";
 import type { OpenTargetOptions } from "@/lib/target-provider";
 import { SidePanel } from "../panel/side-panel";
+import { BrowserSiteAuthSheet } from "../panel/browser-site-auth";
 import { getSidePanelSessionKey, NO_SESSION_SIDE_PANEL_KEY } from "../panel/side-panel-session";
 import { useCreateTab } from "../panel/use-side-panel-tabs";
 import { useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
@@ -2555,6 +2556,9 @@ export function SessionPage(props: SessionPageProps) {
       </Dialog>
 
       {props.shareWorkspaceModal ? <ShareWorkspaceModal {...props.shareWorkspaceModal} /> : null}
+
+      {/* A site in the person's own browser tab asks for a user name and password (Work accounts). */}
+      <BrowserSiteAuthSheet enabled={workBrowser} />
 
       {/* Cloud provider notifications are now handled globally by CloudProvidersToast in app-root.tsx */}
     </div>

@@ -16,6 +16,7 @@ import { askAboutDealPrompt, connectorLabel, relativeTime, workDealKey, workDeal
 import { SECTION_ROWS } from "./work-today";
 import { ConnectorIcon } from "./work-views";
 import { isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
+import type { OpenWorkLink } from "./browser/work-links";
 
 const FILTERS = [
   { id: "open", get label() { return t("work.deals.filter_open"); } },
@@ -51,7 +52,7 @@ function LastTouch(props: { touch: OmniRushWorkDeal["last_touch"]; now?: number 
 }
 
 /** One deal opened beside the list: details, people, the latest records per channel, risks and Ask about this deal. */
-export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWorkDeal; openLink: (url: string) => void; onAsk: () => void; asking: boolean; onOpenRecord?: (ref: RecordRef & { list?: RecordRef[] }, options: { external: boolean; newTab: boolean }) => void }) {
+export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWorkDeal; openLink: OpenWorkLink; onAsk: () => void; asking: boolean; onOpenRecord?: (ref: RecordRef & { list?: RecordRef[] }, options: { external: boolean; newTab: boolean }) => void }) {
   const detail = useQuery<OmniRushWorkDealDetail>({
     queryKey: workDealKey(props.client, props.deal.source_id),
     queryFn: () => props.client!.getWorkDeal(props.deal.source_id),
@@ -104,7 +105,7 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
                             className="min-w-0 flex-1 truncate text-start text-foreground outline-none hover:underline focus-visible:underline"
                             onClick={(event) => (props.onOpenRecord
                               ? props.onOpenRecord({ sourceId: item.source_id, source: channel.channel, kind: item.kind, title: item.subject ?? null, url: item.url ?? null }, openModifiers(event, isMac()))
-                              : props.openLink(item.url!))}
+                              : props.openLink(item.url!, openModifiers(event, isMac())))}
                           >
                             {item.subject || item.kind}
                           </button>
@@ -122,14 +123,14 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
       <div className="mt-auto flex flex-wrap gap-2 pt-2">
         <Button size="sm" disabled={props.asking} onClick={props.onAsk} data-testid="work-deal-ask"><MessageSquare className="size-3.5" />{t("work.deals.ask")}</Button>
         {props.onOpenRecord ? <Button variant="outline" size="sm" onClick={() => props.onOpenRecord!({ sourceId: deal.source_id, source: deal.source_id.split(":")[0] ?? null, kind: "deal", title: deal.name ?? null, url: deal.url ?? null }, { external: false, newTab: false })} data-testid="work-deal-view"><PanelRight className="size-3.5" />{t("work.viewer.view_record")}</Button> : null}
-        {deal.url ? <Button variant="outline" size="sm" onClick={() => props.openLink(deal.url!)}><ExternalLink className="size-3.5" />{t("work.search.open")}</Button> : null}
+        {deal.url ? <Button variant="outline" size="sm" onClick={(event) => props.openLink(deal.url!, openModifiers(event, isMac()))}><ExternalLink className="size-3.5" />{t("work.search.open")}</Button> : null}
       </div>
     </div>
   );
 }
 
 /** Work > Deals: Open, At risk or Closing soon; the table drops stage and close date on a narrow window and shows 5 rows before "Show more". */
-export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void> }) {
+export function WorkDealsPage(props: { client: WorkClient | null; openLink: OpenWorkLink; onAsk: (prompt: string) => Promise<void> }) {
   const [filter, setFilter] = useState<OmniRushWorkDealFilter>("open");
   const [picked, setPicked] = useState<OmniRushWorkDeal | null>(null);
   const [more, setMore] = useState(false);

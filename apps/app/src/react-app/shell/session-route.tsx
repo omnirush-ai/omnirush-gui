@@ -134,6 +134,7 @@ import { ASK_WORK_RECORD_EVENT } from "@/react-app/domains/work/viewer/records";
 import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
 import { WorkBrowserPage } from "@/react-app/domains/work/browser/work-browser-page";
 import { useAskBesideStore, useWorkBrowserRestore } from "@/react-app/domains/work/browser/use-work-browser";
+import { useOpenWorkLink, useWorkBrowserFeatures } from "@/react-app/domains/work/browser/use-work-links";
 import { WORK_BROWSER_EXPAND_EVENT } from "@/react-app/domains/work/browser/work-browser";
 import { useBrowserLibraryAvailable } from "@/react-app/domains/browser-logins/use-browser-library";
 import { NO_SESSION_SIDE_PANEL_KEY } from "@/react-app/domains/session/panel/side-panel-session";
@@ -580,6 +581,9 @@ export function SessionRoute() {
   const workBrowserAvailable = useBrowserLibraryAvailable();
   const workBrowserActive = workRouteActive && workBrowserAvailable && location.pathname.startsWith(WORK_BROWSER_ROUTE);
   useWorkBrowserRestore(workBrowserAvailable);
+  useWorkBrowserFeatures(workBrowserAvailable);
+  // Open on Today, Search, Deals and Knowledge: a tab beside Work, or the person's browser (Settings > Browser).
+  const openWorkLink = useOpenWorkLink();
   // The tryout: Work is off but this account may turn it on ("Try Work"), then onboarding runs.
   const workAvailable = !workEnabled && workState.data?.available === true;
   const workOnboarding = useWorkOnboarding(client ?? null, workEnabled);
@@ -4049,9 +4053,9 @@ export function SessionRoute() {
             onOpenOrganization={() => navigate(WORK_ORG_ROUTE, { state: { from: WORK_CONNECTORS_ROUTE } })}
           />
         ) : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? (
-          <WorkSearchPage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)} initialQuery={new URLSearchParams(location.search).get("q") ?? undefined} />
+          <WorkSearchPage client={client ?? null} openLink={openWorkLink} onAsk={startWorkChat} onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)} initialQuery={new URLSearchParams(location.search).get("q") ?? undefined} />
         ) : location.pathname.startsWith(WORK_DEALS_ROUTE) ? (
-          <WorkDealsPage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} />
+          <WorkDealsPage client={client ?? null} openLink={openWorkLink} onAsk={startWorkChat} />
         ) : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? (
           <MeetingsPage client={client ?? null} />
         ) : location.pathname.startsWith(WORK_ORG_ROUTE) ? (
@@ -4067,7 +4071,7 @@ export function SessionRoute() {
         ) : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? (
           <WorkAutomationPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
-          <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
+          <WorkKnowledgePage client={client ?? null} openLink={openWorkLink} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : workBrowserActive ? (
           <WorkBrowserPage onAsk={(prompt) => startWorkChat(prompt, [], { pageBeside: true })} openExternal={(url) => platform.openLink(url)} />
         ) : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? (
@@ -4092,7 +4096,8 @@ export function SessionRoute() {
             today={hasRealSource(workConnectorRows.data) ? (
               <WorkToday
                 client={client ?? null}
-                openLink={(url) => platform.openLink(url)}
+                openLink={openWorkLink}
+                openExternal={(url) => platform.openLink(url)}
                 onAsk={startWorkChat}
                 onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)}
                 source={workHomeSource}

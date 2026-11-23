@@ -18,6 +18,7 @@ import { BrowserTaskError, createBrowserTaskHost } from "./browser-task.mjs";
 import { createWebMcpBroker } from "./webmcp-host.mjs";
 import { createWebMcpFramePolicy } from "./webmcp-policy.mjs";
 import { installBrowserPanelPermissionHandlers } from "./media-permissions.mjs";
+import { handOffBrowser, PASSKEY_GUARD_ARG, SIGN_IN_CHECK_WORLD_ID, SIGN_IN_PAGE_CHECK, siteAuthAnswer, siteAuthRequest, watchSignIns } from "./browser-signin-guard.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROWSER_SESSION_PARTITION = "persist:omnirush-browser";
@@ -171,6 +172,12 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
   let menuOverlayReadyResolvers = [];
   let menuOverlayShowSerial = 0;
   const webMcpRefreshTimers = new Map();
+  // A Work account is signed in (the renderer says so): its tabs get the passkey guard, the blocked sign-in bar and
+  // the site sign-in sheet. Off, the browser behaves exactly as before.
+  let workFeatures = false;
+  // A site's sign-in request (HTTP Basic or NTLM) waiting for the person's answer in the sheet, by request id.
+  const siteAuthPending = new Map();
+  let siteAuthCounter = 0;
 
   function window() {
     return getWindow?.() ?? null;
@@ -433,6 +440,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       siteToolCount: Number.isInteger(tab.webMcpToolCount) ? tab.webMcpToolCount : 0,
       siteTools: Array.isArray(tab.webMcpTools) ? tab.webMcpTools : [],
       siteToolActivity: Array.isArray(tab.webMcpActivity) ? tab.webMcpActivity : [],
+      ...(tab.blockedSignIn ? { blockedSignIn: tab.blockedSignIn } : {}),
     };
   }
 
@@ -899,6 +907,73 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     callback(browserProxy.username, browserProxy.password);
   });
 
+  // ---- Sign-ins the built-in browser cannot finish (Work accounts): never a dead end.
+
+  /** The person's default browser by name, and Microsoft Edge for a Microsoft device rule when it is installed. */
+  async function signInBrowser(kind) {
+    let defaultName = null;
+    try { defaultName = app.getApplicationNameForProtocol?.("https://example.com") ?? null; } catch { /* name it "your browser" */ }
+    return handOffBrowser(kind, kind === "microsoft_device" ? await listInstalledBrowsers() : [], defaultName);
+  }
+
+  /** Opens a web address in another browser: one the person has (by catalog id) or their default. */
+  async function openOutside(url, browserId) {
+    if (!isHttpUrl(url)) throw new Error("Only web addresses open in another browser.");
+    await checkPolicy?.({ url, external: true });
+    const browser = browserId ? (await listInstalledBrowsers()).find((candidate) => candidate.id === browserId) : null;
+    if (browser) await browser.open(url);
+    else await shell.openExternal(url);
+  }
+
+  function watchTabSignIns(tab) {
+    tab.blockedSignIn = null;
+    tab.signIns = watchSignIns(tab, {
+      isOn: () => workFeatures,
+      chooseBrowser: signInBrowser,
+      publish: () => sendBrowserState(),
+      checkPage: (contents) => (typeof contents.executeJavaScriptInIsolatedWorld === "function"
+        ? contents.executeJavaScriptInIsolatedWorld(SIGN_IN_CHECK_WORLD_ID, [{ code: SIGN_IN_PAGE_CHECK }])
+        : null),
+    });
+    tab.view.webContents.once("destroyed", () => cancelSiteAuth((pending) => pending.tabId === tab.tabId));
+  }
+
+  function cancelSiteAuth(matches) {
+    for (const [id, pending] of siteAuthPending) {
+      if (!matches(pending)) continue;
+      siteAuthPending.delete(id);
+      clearTimeout(pending.timer);
+      try { pending.callback(); } catch { /* the request is gone */ }
+      sendToRenderer("omnirush:browser:auth-done", { id });
+    }
+  }
+
+  // A site asks for a user name and password (HTTP Basic, Digest or NTLM). The person's own tabs get a sign-in sheet;
+  // an agent's tab hands off (the agent stops, the bar offers the person's browser), so the agent never sees or types a
+  // password. Everyone else, and proxies, keep the behaviour above (cancelled, or the proxy's own credentials).
+  app.on("login", (event, webContents, details, authInfo, callback) => {
+    if (authInfo?.isProxy || !workFeatures || !webContents) return;
+    const tab = [...browserTabs.values()].find((candidate) => candidate.view.webContents === webContents);
+    if (!tab) return;
+    event.preventDefault();
+    if (registry.ownerOf(tab.tabId) !== USER_TABS_OWNER) {
+      callback();
+      taskHost.pause(tab.tabId, "This site asks you to sign in. Open it in your browser.");
+      tab.signIns?.siteAuthBlocked(details?.url);
+      return;
+    }
+    // One sheet per tab at a time: a page asking again while it is open waits for that answer.
+    if ([...siteAuthPending.values()].some((pending) => pending.tabId === tab.tabId)) {
+      callback();
+      return;
+    }
+    const id = `auth_${Date.now().toString(36)}_${(++siteAuthCounter).toString(36)}`;
+    const request = siteAuthRequest(id, tab.tabId, details, authInfo);
+    const timer = setTimeout(() => cancelSiteAuth((pending) => pending.id === id), 5 * 60_000);
+    siteAuthPending.set(id, { id, tabId: tab.tabId, callback, timer });
+    sendToRenderer("omnirush:browser:auth-request", request);
+  });
+
   function createBrowserTab(url = "about:blank", { select = true, initializeBlank = true, deferBackground = false, ownerSessionId = null, restoreTabId = null, automationProtected = false, contentsOptions = /** @type {import("electron").WebContentsViewConstructorOptions} */ ({}) } = {}) {
     // Check synchronously before creating a WebContentsView, including pending
     // opens, popups, transcript links and the tab-strip button.
@@ -917,6 +992,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
         ...BROWSER_SECURITY_PREFERENCES,
         preload: path.join(__dirname, "browser-content-preload.cjs"),
         partition: BROWSER_SESSION_PARTITION,
+        ...(workFeatures ? { additionalArguments: [PASSKEY_GUARD_ARG] } : {}),
       },
     });
     const tab = {
@@ -933,6 +1009,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     };
     browserTabs.set(tabId, tab);
     if (!restoreTabId) registry.add({ tabId, ownerSessionId });
+    watchTabSignIns(tab);
     view.webContents.once("dom-ready", () => {
       tab.domReady = true;
       if (tab.background) emulateBackgroundTab(tab);
@@ -958,7 +1035,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       if (!/^https?:\/\//i.test(targetUrl)) return { action: "deny" };
       // The shared all-request policy hook checks popup requests too. Never
       // fall back to an external browser when that policy denies a request.
-      return { action: "allow", overrideBrowserWindowOptions: { webPreferences: BROWSER_SECURITY_PREFERENCES }, createWindow: (options) => {
+      return { action: "allow", overrideBrowserWindowOptions: { webPreferences: workFeatures ? { ...BROWSER_SECURITY_PREFERENCES, additionalArguments: [PASSKEY_GUARD_ARG] } : BROWSER_SECURITY_PREFERENCES }, createWindow: (options) => {
         // Electron supplies the opener-linked webContents. Retain it: creating
         // a different one leaves the synchronous window.open handshake waiting.
         const popup = createBrowserTab("about:blank", { select: disposition !== "background-tab", initializeBlank: false, ownerSessionId: registry.ownerOf(tabId), contentsOptions: options });
@@ -1824,6 +1901,63 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
       if (!tab) return;
       invalidateWebMcpTab(tab);
       scheduleWebMcpToolCountRefresh(tab.tabId);
+    });
+
+    // ---- Sign-ins the built-in browser cannot finish (Work accounts). Only the app's own window may call these.
+    const fromApp = (event) => event.sender === window()?.webContents && event.senderFrame === window()?.webContents.mainFrame;
+    ipcMain.handle("omnirush:browser:setWorkFeatures", (event, on) => {
+      if (!fromApp(event)) return workFeatures;
+      workFeatures = on === true;
+      if (!workFeatures) {
+        cancelSiteAuth(() => true);
+        for (const tab of browserTabs.values()) tab.signIns?.clear();
+      }
+      return workFeatures;
+    });
+    ipcMain.handle("omnirush:browser:defaultBrowser", async (event) => {
+      if (!fromApp(event)) return { name: null };
+      return { name: (await signInBrowser("default")).name };
+    });
+    // "Open in <browser>" on the bar: the app the person was signing in to opens there. Their own tab closes (the work
+    // moved); an agent's tab stays for its conversation.
+    ipcMain.handle("omnirush:browser:openBlockedElsewhere", async (event, tabId) => {
+      if (!fromApp(event)) throw new Error("Use the browser bar.");
+      const tab = getBrowserTab(String(tabId ?? ""));
+      const blocked = tab?.blockedSignIn;
+      if (!tab || !blocked) throw new Error("This page has nothing to open elsewhere.");
+      await openOutside(blocked.url, blocked.browser.id);
+      if (registry.ownerOf(tab.tabId) === USER_TABS_OWNER) closeBrowserTab(tab.tabId);
+      else tab.signIns?.clear();
+      return { name: blocked.browser.name };
+    });
+    ipcMain.handle("omnirush:browser:dismissBlocked", (event, tabId) => {
+      if (!fromApp(event)) return false;
+      getBrowserTab(String(tabId ?? ""))?.signIns?.clear();
+      return true;
+    });
+    // A Work link whose site the person set to always open in another browser.
+    ipcMain.handle("omnirush:browser:openElsewhere", async (event, url, browserId) => {
+      if (!fromApp(event)) throw new Error("Use the app to open links.");
+      await openOutside(url, typeof browserId === "string" ? browserId : null);
+      return true;
+    });
+    ipcMain.handle("omnirush:browser:authAnswer", (event, id, answer) => {
+      if (!fromApp(event)) return false;
+      const pending = siteAuthPending.get(String(id ?? ""));
+      if (!pending) return false;
+      siteAuthPending.delete(pending.id);
+      clearTimeout(pending.timer);
+      const credentials = siteAuthAnswer(answer);
+      try {
+        if (credentials) pending.callback(credentials.username, credentials.password);
+        else pending.callback();
+      } catch { /* the request is gone */ }
+      sendToRenderer("omnirush:browser:auth-done", { id: pending.id });
+      return true;
+    });
+    ipcMain.on("omnirush:browser:passkey-timeout", (event) => {
+      const tab = [...browserTabs.values()].find((candidate) => candidate.view.webContents === event.sender);
+      tab?.signIns?.passkeyTimedOut();
     });
   }
 

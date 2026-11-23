@@ -415,13 +415,17 @@ export function agentWorkingIn(tab: BrowserPanelTab): boolean {
   return status === "running" || status === "paused" || status === "needs_attention";
 }
 
+function agentStatus(tab: BrowserPanelTab): string {
+  return tab.browserTask?.status === "paused" ? "You have control · resume when finished" : tab.browserTask?.status === "running" ? browserOperationLabels[tab.browserTask.operation ?? ""] ?? "Working on this page" : tab.browserTask?.status === "needs_attention" ? browserOperationLabels[tab.browserTask.operation ?? ""] ?? "Review this page" : "This conversation's tab";
+}
+
 /** The strip above a tab an agent can drive: what it is doing, and Take over / Resume. */
 export function BrowserAgentStrip({ tab }: { tab: BrowserPanelTab }) {
   return (
     <div className="flex min-h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
       <span className="shrink-0 font-medium">Built-in browser</span>
-      <span role="status" className="min-w-0 flex-1 truncate text-muted-foreground">
-        {tab.browserTask?.status === "paused" ? "You have control · resume when finished" : tab.browserTask?.status === "running" ? browserOperationLabels[tab.browserTask.operation ?? ""] ?? "Working on this page" : tab.browserTask?.status === "needs_attention" ? browserOperationLabels[tab.browserTask.operation ?? ""] ?? "Review this page" : "This conversation's tab"}
+      <span role="status" className="min-w-0 flex-1 truncate text-muted-foreground" title={agentStatus(tab)}>
+        {agentStatus(tab)}
       </span>
       <Button variant="outline" size="sm" className="h-6 px-2 text-xs"
         onClick={() => { void window.__OMNIRUSH_ELECTRON__?.browser?.taskControl?.(tab.id, tab.browserTask?.status === "paused" ? "resume" : "pause"); }}>

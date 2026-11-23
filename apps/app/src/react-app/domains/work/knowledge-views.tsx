@@ -20,6 +20,7 @@ import { askAboutPrompt, connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, k
 import { ConnectorIcon } from "./work-views";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
+import type { OpenWorkLink } from "./browser/work-links";
 import { useListKeys } from "./viewer/shortcuts";
 import {
   categoryColor, categoryCounts, categoryKey, categoryOf, entityIdOf, GRAPH_CATEGORIES, GRAPH_GROUPS, groupByDay, matchNodes, mergeGraph, searchHits, visibleGraph,
@@ -86,7 +87,7 @@ function Section(props: { title: string; children: React.ReactNode; action?: Rea
   );
 }
 
-function RecordRow(props: { record: OmniRushWorkEntityRecord; openLink: (url: string) => void; list?: RecordRef[]; selected?: boolean }) {
+function RecordRow(props: { record: OmniRushWorkEntityRecord; openLink: OpenWorkLink; list?: RecordRef[]; selected?: boolean }) {
   const record = props.record;
   const people = actorNames(record.actors);
   const ref: RecordRef = { sourceId: record.source_id, source: record.source, kind: record.kind, title: record.subject ?? null, url: record.url ?? null };
@@ -109,7 +110,7 @@ function RecordRow(props: { record: OmniRushWorkEntityRecord; openLink: (url: st
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{record.subject || record.kind}</span>
           <span className="shrink-0 text-[12px] text-muted-foreground">{when(record.occurred_at)}</span>
           {record.url ? (
-            <button type="button" aria-label={t("work.knowledge.open_source")} className="shrink-0 text-muted-foreground hover:text-foreground" onClick={(event) => { event.stopPropagation(); props.openLink(record.url!); }}>
+            <button type="button" aria-label={t("work.knowledge.open_source")} className="shrink-0 text-muted-foreground hover:text-foreground" onClick={(event) => { event.stopPropagation(); props.openLink(record.url!, openModifiers(event, isMac())); }}>
               <ExternalLink className="size-3.5" />
             </button>
           ) : null}
@@ -164,7 +165,7 @@ export function FactRow(props: { fact: OmniRushWorkFact; busy: boolean; onSave: 
 export function EntityDetail(props: {
   detail: OmniRushWorkEntityDetail;
   busy: boolean;
-  openLink: (url: string) => void;
+  openLink: OpenWorkLink;
   onAsk: () => void;
   onSelect: (id: string) => void;
   onAddFact: (fact: { text: string; kind: string }) => void;
@@ -252,7 +253,7 @@ export function EntityDetail(props: {
 }
 
 /** One entity's detail with its saved knowledge (add, edit, retire) and "Ask about this". */
-function EntityPanel(props: { client: WorkClient | null; entityId: string; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onSelect: (id: string) => void }) {
+function EntityPanel(props: { client: WorkClient | null; entityId: string; openLink: OpenWorkLink; onAsk: (prompt: string) => Promise<void>; onSelect: (id: string) => void }) {
   const queryClient = useQueryClient();
   const detailKey = workEntityKey(props.client, props.entityId);
   const detail = useQuery({ queryKey: detailKey, queryFn: () => props.client!.getWorkEntity(props.entityId), enabled: Boolean(props.client) });
@@ -288,7 +289,7 @@ function EntityPanel(props: { client: WorkClient | null; entityId: string; openL
 }
 
 /** The list view (kept for accessibility): entities by kind, the header's search, and the selected entity's detail. */
-function KnowledgeList(props: { client: WorkClient | null; search: string; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; initialEntityId?: string | null }) {
+function KnowledgeList(props: { client: WorkClient | null; search: string; openLink: OpenWorkLink; onAsk: (prompt: string) => Promise<void>; initialEntityId?: string | null }) {
   const search = props.search.trim();
   const [kind, setKind] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(props.initialEntityId ?? null);
@@ -393,7 +394,7 @@ function shortDate(value: string | null | undefined, time = false): string {
 }
 
 /** A record or a saved fact in the inspector: what it is, where it came from, and a link to it at its source. */
-export function NodeCard(props: { node: OmniRushWorkGraphNode; dark: boolean; openLink: (url: string) => void }) {
+export function NodeCard(props: { node: OmniRushWorkGraphNode; dark: boolean; openLink: OpenWorkLink }) {
   const { node } = props;
   const key = categoryKey(node);
   return (
@@ -410,7 +411,7 @@ export function NodeCard(props: { node: OmniRushWorkGraphNode; dark: boolean; op
       {node.sub ? <p className="text-sm">{node.sub}</p> : null}
       <p className="text-[12px] text-muted-foreground">{countLabel(node.degree, "work.count.links")}</p>
       {node.url ? (
-        <Button variant="outline" size="sm" className="self-start" onClick={() => props.openLink(node.url!)} data-testid="work-graph-open"><ExternalLink className="size-3.5" />{t("work.knowledge.open_source")}</Button>
+        <Button variant="outline" size="sm" className="self-start" onClick={(event) => props.openLink(node.url!, openModifiers(event, isMac()))} data-testid="work-graph-open"><ExternalLink className="size-3.5" />{t("work.knowledge.open_source")}</Button>
       ) : null}
     </div>
   );
@@ -436,7 +437,7 @@ function ViewSwitch(props: { value: KnowledgeView; onChange: (value: KnowledgeVi
 }
 
 /** The timeline view: records and saved facts newest first, by day, filtered by the same categories. */
-function KnowledgeTimeline(props: { client: WorkClient | null; focus: OmniRushWorkGraphNode | null; hidden: ReadonlySet<string>; dark: boolean; search: string; selected: string | null; onSelect: (id: string) => void; onClearFocus: () => void; openLink: (url: string) => void }) {
+function KnowledgeTimeline(props: { client: WorkClient | null; focus: OmniRushWorkGraphNode | null; hidden: ReadonlySet<string>; dark: boolean; search: string; selected: string | null; onSelect: (id: string) => void; onClearFocus: () => void; openLink: OpenWorkLink }) {
   const base = props.client?.baseUrl?.trim() || "default";
   const timeline = useInfiniteQuery({
     queryKey: ["omnirush-work-timeline", base, props.focus?.id ?? null],
@@ -500,7 +501,7 @@ const useDarkTheme = () => useSyncExternalStore(subscribeToTheme, getResolvedThe
  */
 export function WorkKnowledgePage(props: {
   client: WorkClient | null;
-  openLink: (url: string) => void;
+  openLink: OpenWorkLink;
   onAsk: (prompt: string) => Promise<void>;
   onBack?: () => void;
   initialEntityId?: string | null;

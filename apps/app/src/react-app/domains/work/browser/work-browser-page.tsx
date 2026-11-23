@@ -30,6 +30,7 @@ import {
   reportBrowserError,
   useNativeBrowserView,
 } from "../../session/panel/browser-surface";
+import { BrowserSignInBar } from "../../session/panel/browser-signin-bar";
 import { getElectronBrowser } from "../../session/panel/utils";
 import { BrowserHome } from "./browser-home";
 import { TabMark } from "./tab-mark";
@@ -208,6 +209,7 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
       </div>
       {notice}
       {activeTab && agentWorkingIn(activeTab) ? <BrowserAgentStrip tab={activeTab} /> : null}
+      {activeTab && !home ? <BrowserSignInBar tab={activeTab} /> : null}
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <div ref={contentRef} className="relative h-full overflow-hidden" data-browser-page="">

@@ -11,7 +11,11 @@ export const controls = {
   ready: true,
   confirm: async () => 0, beforeLoad: async () => {}, beforeCommand: async () => {},
 };
-export const app = { on() {} };
+export const appListeners = [];
+export const app = {
+  on(event, handler) { appListeners.push({ event, handler }); },
+  getApplicationNameForProtocol() { return "Google Chrome"; },
+};
 export const clipboard = { writeText(url) { effects.push({ type: "copy", url }); } };
 export const dialog = { async showMessageBox(_window, options) { effects.push({ type: "dialog" }); return { response: await controls.confirm(options) }; } };
 export const requestHooks = [];
@@ -19,6 +23,7 @@ export const browserSession = new EventEmitter();
 browserSession.webRequest = { onBeforeRequest(_filter, listener) { requestHooks.push(listener); } };
 browserSession.setPermissionRequestHandler = (handler) => { browserSession.permissionRequest = handler; };
 browserSession.setPermissionCheckHandler = (handler) => { browserSession.permissionCheck = handler; };
+browserSession.setUserAgent = (userAgent) => { effects.push({ type: "user-agent", userAgent }); };
 export const session = { fromPartition() {
   if (!controls.ready) throw new Error("Session can only be received when app is ready");
   return browserSession;
@@ -45,6 +50,7 @@ export class BrowserWindow {
 export class WebContentsView {
   constructor(options) {
     createdViews.push(this);
+    this.options = options;
     const listeners = new EventEmitter();
     const requestHook = options?.webPreferences?.partition === "persist:omnirush-browser" ? requestHooks.at(-1) : null;
     let attached = false;
@@ -75,6 +81,7 @@ export class WebContentsView {
       removeListener(event, handler) { listeners.removeListener(event, handler); },
       emit(event, ...args) { listeners.emit(event, null, ...args); },
       setWindowOpenHandler(handler) { this.windowOpenHandler = handler; },
+      setUserAgent(userAgent) { effects.push({ type: "user-agent", userAgent }); },
       destroyed: false,
       isDestroyed() { return this.destroyed; },
       getURL() { return this.url; },
@@ -145,7 +152,7 @@ export function load(url, context, next) {
 register(`data:text/javascript,${encodeURIComponent(hooks)}`);
 const { createBrowserPanel } = await import("./browser-panel.mjs");
 // @ts-expect-error The registered test-only Electron stub exports its witnesses.
-const { createdViews, effects, controls, browserSession, navigation, requestHooks } = await import("electron");
+const { createdViews, effects, controls, browserSession, navigation, requestHooks, appListeners } = await import("electron");
 
 const PANEL_BOUNDS = { x: 800, y: 40, width: 400, height: 900 };
 const LINK = { url: "https://example.com/a%2Fb?x=one%20two&x=%2F#section", point: { x: 20, y: 30 }, sessionId: "A" };
@@ -1644,4 +1651,156 @@ test("Ask reads only the title, address and selection of the person's tab on scr
   await flush();
   await assert.rejects(invoke("omnirush:browser:pageContext", chat), /Select this tab/);
   await assert.rejects(invoke("omnirush:browser:pageContext", tabId), /Select this tab/, "only the tab on screen");
+});
+
+// ---- Lane W2: sign-ins the built-in browser cannot finish (Work accounts), never a dead end.
+
+/** Every app-level "login" listener, as Electron calls them for a site's or a proxy's sign-in request. */
+function siteLogin(contents, authInfo, url = "https://intranet.acme.example/hr/") {
+  const answers = [];
+  const event = { prevented: false, preventDefault() { this.prevented = true; } };
+  for (const { event: name, handler } of appListeners) {
+    if (name === "login") handler(event, contents, { url }, { isProxy: false, scheme: "basic", host: "intranet.acme.example", port: 443, realm: "Acme intranet", ...authInfo }, (...args) => answers.push(args));
+  }
+  return { event, answers };
+}
+const navigateTo = (contents, url) => { contents.url = url; contents.emit("did-start-navigation", url, false, true); contents.emit("did-navigate", url); };
+
+test("a consumer's browser is unchanged: no passkey guard, site sign-ins cancelled as before, no bar", async () => {
+  const { invoke, views } = createPanel();
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const { tabId } = invoke("omnirush:browser:createTab", "https://intranet.acme.example/", USER);
+  await flush();
+  const contents = views().at(-1).webContents;
+  assert.equal(views().at(-1).options.webPreferences.additionalArguments, undefined);
+  const { event, answers } = siteLogin(contents);
+  assert.equal(event.prevented, false, "Electron cancels it, as before");
+  assert.deepEqual(answers, []);
+  navigateTo(contents, "https://accounts.google.com/v3/signin/rejected");
+  await flush();
+  assert.equal(invoke("omnirush:browser:state").tabs.find((tab) => tab.id === tabId).blockedSignIn, undefined);
+});
+
+test("a Work account's own tab asking for a password gets the sign-in sheet; the answer reaches the site once", async () => {
+  const { invoke, emit, views, messages } = createPanel();
+  assert.equal(await emit("omnirush:browser:setWorkFeatures", { sender: {}, senderFrame: {} }, true), false, "only the app may turn it on");
+  assert.equal(await invoke("omnirush:browser:setWorkFeatures", true), true);
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const { tabId } = invoke("omnirush:browser:createTab", "https://intranet.acme.example/hr/", USER);
+  await flush();
+  const view = views().at(-1);
+  assert.deepEqual(view.options.webPreferences.additionalArguments, ["--omnirush-passkey-guard"], "Work tabs get the passkey guard");
+  const { event, answers } = siteLogin(view.webContents);
+  assert.equal(event.prevented, true);
+  const [request] = messages("omnirush:browser:auth-request");
+  assert.deepEqual({ ...request, id: "x" }, { id: "x", tabId, host: "intranet.acme.example", realm: "Acme intranet", scheme: "basic", url: "https://intranet.acme.example/hr/" });
+  // The page asking again while the sheet is open waits for that answer.
+  assert.deepEqual(siteLogin(view.webContents).answers, [[]]);
+  assert.equal(await emit("omnirush:browser:authAnswer", { sender: {}, senderFrame: {} }, request.id, { username: "pat", password: "x" }), false);
+  assert.equal(await invoke("omnirush:browser:authAnswer", request.id, { username: "pat", password: "hunter2" }), true);
+  assert.deepEqual(answers, [["pat", "hunter2"]]);
+  assert.equal(await invoke("omnirush:browser:authAnswer", request.id, { username: "pat", password: "again" }), false, "answered once");
+  assert.deepEqual(messages("omnirush:browser:auth-done"), [{ id: request.id }]);
+  // Cancel, and closing the tab, answer with nothing.
+  const second = siteLogin(view.webContents);
+  const next = messages("omnirush:browser:auth-request").at(-1);
+  await invoke("omnirush:browser:authAnswer", next.id, null);
+  assert.deepEqual(second.answers, [[]]);
+  const third = siteLogin(view.webContents);
+  invoke("omnirush:browser:closeTab", tabId);
+  await flush();
+  assert.deepEqual(third.answers, [[]]);
+  // Proxies keep their own credentials path.
+  assert.equal(siteLogin(view.webContents, { isProxy: true }).event.prevented, false);
+});
+
+test("an agent's tab never gets the sheet: the request is cancelled, the agent stops, and the bar offers the person's browser", async () => {
+  const { invoke, views } = createPanel();
+  await invoke("omnirush:browser:setWorkFeatures", true);
+  invoke("omnirush:browser:show", PANEL_BOUNDS, "ses_work");
+  const { tabId } = invoke("omnirush:browser:createTab", "https://intranet.acme.example/hr/", "ses_work");
+  await flush();
+  const { event, answers } = siteLogin(views().at(-1).webContents);
+  await flush(); await flush();
+  assert.equal(event.prevented, true);
+  assert.deepEqual(answers, [[]], "cancelled at once: no password ever goes to an agent's tab");
+  const tab = invoke("omnirush:browser:state").tabs.find((entry) => entry.id === tabId);
+  assert.equal(tab.browserTask.status, "paused");
+  assert.deepEqual(tab.blockedSignIn, { kind: "site_auth", url: "https://intranet.acme.example/hr/", host: "intranet.acme.example", browser: { id: null, name: "Google Chrome" } });
+  // Open in <browser>: the page opens there; the conversation keeps its tab.
+  effects.length = 0;
+  assert.deepEqual(await invoke("omnirush:browser:openBlockedElsewhere", tabId), { name: "Google Chrome" });
+  assert.deepEqual(effects, [{ type: "external", url: "https://intranet.acme.example/hr/" }]);
+  assert.equal(invoke("omnirush:browser:state").tabs.find((entry) => entry.id === tabId).blockedSignIn, undefined);
+});
+
+test("Google refusing sign-in in the person's tab: the bar, then Open in <browser> takes the app there and closes the tab", async () => {
+  const { invoke, emit, views, policies } = createPanel();
+  await invoke("omnirush:browser:setWorkFeatures", true);
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const { tabId } = invoke("omnirush:browser:createTab", "https://mail.google.com/mail/u/0/", USER);
+  await flush();
+  const contents = views().at(-1).webContents;
+  navigateTo(contents, "https://mail.google.com/mail/u/0/");
+  navigateTo(contents, "https://accounts.google.com/v3/signin/rejected?continue=https%3A%2F%2Fmail.google.com%2Fmail%2Fu%2F0%2F");
+  await flush(); await flush();
+  const tab = () => invoke("omnirush:browser:state").tabs.find((entry) => entry.id === tabId);
+  assert.deepEqual(tab().blockedSignIn, { kind: "google", url: "https://mail.google.com/mail/u/0/", host: "mail.google.com", browser: { id: null, name: "Google Chrome" } });
+  await assert.rejects(async () => emit("omnirush:browser:openBlockedElsewhere", { sender: {}, senderFrame: {} }, tabId), /browser bar/);
+  // Dismiss hides it until the next sign-in page says so again.
+  await invoke("omnirush:browser:dismissBlocked", tabId);
+  assert.equal(tab().blockedSignIn, undefined);
+  navigateTo(contents, "https://accounts.google.com/v3/signin/rejected");
+  await flush(); await flush();
+  assert.equal(tab().blockedSignIn.kind, "google");
+  effects.length = 0;
+  policies.length = 0;
+  await invoke("omnirush:browser:openBlockedElsewhere", tabId);
+  assert.deepEqual(policies, [{ url: "https://mail.google.com/mail/u/0/", external: true }], "the company's rules still apply");
+  assert.deepEqual(effects, [{ type: "external", url: "https://mail.google.com/mail/u/0/" }]);
+  assert.equal(tab(), undefined, "the person's tab closes: the work moved");
+});
+
+test("a passkey that timed out in a page marks only its own tab; a site set elsewhere opens in that browser", async () => {
+  const { invoke, emit, views } = createPanel();
+  await invoke("omnirush:browser:setWorkFeatures", true);
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const first = invoke("omnirush:browser:createTab", "https://github.com/login", USER).tabId;
+  const other = invoke("omnirush:browser:createTab", "https://linear.app/acme", USER).tabId;
+  await flush();
+  const contents = views().find((view) => view.webContents.getURL() === "https://github.com/login").webContents;
+  emit("omnirush:browser:passkey-timeout", { sender: contents });
+  emit("omnirush:browser:passkey-timeout", { sender: {} });
+  await flush(); await flush();
+  const state = invoke("omnirush:browser:state");
+  assert.equal(state.tabs.find((tab) => tab.id === first).blockedSignIn.kind, "passkey");
+  assert.equal(state.tabs.find((tab) => tab.id === other).blockedSignIn, undefined);
+  effects.length = 0;
+  await invoke("omnirush:browser:openElsewhere", "https://acme.zendesk.com/agent/tickets/8812", "firefox");
+  await invoke("omnirush:browser:openElsewhere", "https://acme.zendesk.com/agent/tickets/8813", "edge");
+  await assert.rejects(invoke("omnirush:browser:openElsewhere", "javascript:alert(1)", null), /web addresses/);
+  assert.deepEqual(effects, [
+    { type: "browser", id: "firefox", url: "https://acme.zendesk.com/agent/tickets/8812" },
+    { type: "external", url: "https://acme.zendesk.com/agent/tickets/8813" },
+  ], "a browser that is gone falls back to the default");
+  assert.deepEqual(await invoke("omnirush:browser:defaultBrowser"), { name: "Google Chrome" });
+  // Signing out of Work turns it all off again.
+  await invoke("omnirush:browser:setWorkFeatures", false);
+  assert.equal(invoke("omnirush:browser:state").tabs.find((tab) => tab.id === first).blockedSignIn, undefined);
+});
+
+test("the browser partition keeps its own user agent: no override on the session, a tab or its preferences", async () => {
+  const { invoke, views } = createPanel();
+  effects.length = 0;
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  invoke("omnirush:browser:createTab", "https://accounts.google.com/", USER);
+  await invoke("omnirush:browser:setWorkFeatures", true);
+  invoke("omnirush:browser:createTab", "https://accounts.google.com/", USER);
+  invoke("omnirush:browser:createTab", "https://agent.example/", "ses_work");
+  await flush();
+  assert.deepEqual(effects.filter((effect) => effect.type === "user-agent"), []);
+  for (const view of views()) {
+    assert.equal(view.options?.webPreferences?.partition, "persist:omnirush-browser");
+    assert.equal("userAgent" in (view.options?.webPreferences ?? {}), false);
+  }
 });

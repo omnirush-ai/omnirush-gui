@@ -20,8 +20,9 @@ import { cn } from "@/lib/utils";
 import { usePlatform } from "@/react-app/kernel/platform";
 
 import { usePanelTabStore, type RecordPanelTab } from "../../session/panel/panel-tab-store";
-import { useCreateTab } from "../../session/panel/use-side-panel-tabs";
 import { BrandTile } from "../brand-icon";
+import { useOpenWorkLink } from "../browser/use-work-links";
+import type { OpenWorkLinkOptions } from "../browser/work-links";
 import { workConnectorsKey, workFailure, WORK_ACTIVITY_ROUTE } from "../work-mode";
 import { issueRef, issueState } from "./issue-view";
 import { mailMessages } from "./mail-view";
@@ -137,7 +138,6 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
   const client = props.client;
   const platform = usePlatform();
   const navigate = useNavigate();
-  const createTab = useCreateTab();
   const queryClient = useQueryClient();
   const rootRef = useRef<HTMLDivElement>(null);
   const tab = props.tab;
@@ -170,15 +170,24 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
     staleTime: 60_000,
   });
 
+  // A record's Open and the links in it: the Work link router (a tab in this panel, or the person's own browser).
+  const routeLink = useOpenWorkLink(props.panelKey);
+  const openLink = useCallback((url: string, options?: OpenWorkLinkOptions) => {
+    if (isElectronRuntime()) routeLink(url, options);
+    else platform.openLink(url);
+  }, [platform, routeLink]);
+  const openLinkRef = useRef(openLink);
+  openLinkRef.current = openLink;
+
   // An older server: no viewers. The item opens at its source, as before, and later ones go straight there.
   useEffect(() => {
     if (record.isSuccess) setSupport("yes");
     if (record.error && isMissingRoute(record.error)) {
       setSupport("no");
       usePanelTabStore.getState().closeTab(props.panelKey, tab.id);
-      if (tab.url) platform.openLink(tab.url);
+      if (tab.url) openLinkRef.current(tab.url);
     }
-  }, [record.isSuccess, record.error, setSupport, props.panelKey, tab.id, tab.url, platform]);
+  }, [record.isSuccess, record.error, setSupport, props.panelKey, tab.id, tab.url]);
 
   // The tab's label follows the record's title once known.
   useEffect(() => {
@@ -192,10 +201,6 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
     if (session?.activeTabId && session.activeTabId !== tab.id) store.selectTab(props.panelKey, session.activeTabId);
   }, [data, props.panelKey, tab.id, tab.label, tab.mark]);
 
-  const openLink = useCallback((url: string) => {
-    if (isElectronRuntime()) void createTab(url, props.panelKey);
-    else platform.openLink(url);
-  }, [createTab, platform, props.panelKey]);
   const openRecord = useCallback((ref: RecordRef) => { openRecordTab(props.panelKey, ref); }, [props.panelKey]);
   const composeTo = useCallback((address: string) => { openRecordTab(props.panelKey, { sourceId: "", compose: { kind: "mail", to: [address] } }); }, [props.panelKey]);
   const viewer = useMemo<ViewerContextValue>(() => ({ client, openLink, openRecord, composeTo }), [client, openLink, openRecord, composeTo]);
@@ -219,10 +224,10 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
 
   const failed = useCallback((error: unknown, source: string) => {
     const failure = sendFailure(error, source);
-    toast.error(failure.text, failure.fix === "setup" && failure.url ? { action: { label: source === "github" ? t("work.viewer.install_github") : t("work.viewer.fix"), onClick: () => openLink(failure.url!) } }
+    toast.error(failure.text, failure.fix === "setup" && failure.url ? { action: { label: source === "github" ? t("work.viewer.install_github") : t("work.viewer.fix"), onClick: () => platform.openLink(failure.url!) } }
       : failure.fix === "reconnect" ? { action: { label: t("work.connectors.reconnect"), onClick: () => void reconnect() } }
       : failure.fix === "settings" ? { action: { label: t("work.viewer.open_settings"), onClick: openSettings } } : undefined);
-  }, [openLink, openSettings, reconnect]);
+  }, [openSettings, platform, reconnect]);
 
   /** One write, through the undo window when it reaches people. */
   const send: SendFn = useCallback((input: SendInput) => new Promise<boolean>((resolve) => {

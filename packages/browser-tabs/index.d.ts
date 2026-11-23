@@ -32,6 +32,14 @@ export type BrowserPanelTab = {
   ownerSessionId: string | null;
   browserApproval?: { id: string; title: string; message: string; detail: string; approveLabel?: string } | null;
   browserTask?: { status: "idle" | "running" | "paused" | "needs_attention"; operation: string | null };
+  /** A sign-in this browser cannot finish (Work accounts): the bar names the browser to open `url` in instead. */
+  blockedSignIn?: {
+    kind: "google" | "microsoft_device" | "passkey" | "site_auth";
+    url: string;
+    /** The app's host for "Always open <host> there" (null when only a sign-in page is known). */
+    host: string | null;
+    browser: { id: string | null; name: string | null };
+  } | null;
   siteToolCount: number;
   siteTools: Array<{
     toolId?: string;

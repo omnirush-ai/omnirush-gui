@@ -18,6 +18,7 @@ import { BROWSER_LIBRARY_KEY, browserLibraryKeys, getBrowserLibraryBridge, useBr
 import { BrandTile } from "../brand-icon";
 import { relativeTime } from "../work-mode";
 import { type CompanyApp, HOME_RECENT_LIMIT, HOME_RECENT_SHOWN, HOME_SEARCH_FROM, HOME_TILES_SHOWN, siteBrand, siteHost } from "./work-browser";
+import { SignInOnceRow } from "./sign-in-once";
 
 export type BrowserHomeProps = {
   /** The company's name for "From <company>"; null for an account without one. */
@@ -61,6 +62,7 @@ export function BrowserHome(props: BrowserHomeProps) {
   return (
     <div className="h-full overflow-y-auto bg-background" data-testid="browser-home" data-browser-occluder="">
       <div className={cn("mx-auto flex w-full flex-col", props.compact ? "gap-6 px-4 py-5" : "max-w-[1000px] gap-9 px-8 py-10")}>
+        <SignInOnceRow onOpen={(url) => props.onOpen(url)} compact={props.compact} />
         {companyTiles.length ? (
           <TileGroup
             id="company"

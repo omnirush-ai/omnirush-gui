@@ -8,6 +8,7 @@ import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
 import type { OmniRushWorkRecordDetail } from "@/app/lib/omnirush-server";
 
+import type { OpenWorkLink } from "../browser/work-links";
 import { builtInCatalog, toolLabel } from "../catalog";
 import { connectorLabel, type WorkClient } from "../work-mode";
 
@@ -148,11 +149,12 @@ export function requestAskAbout(prompt: string) {
 }
 
 /** A row's open: in the panel when the item has a record id and the server has viewers, else at its source as before.
- *  `external` (Cmd/Ctrl+Enter or a modifier click) always opens at the source. */
-export function openItem(ref: RecordRef & { list?: RecordRef[] }, openLink: (url: string) => void, options: { external?: boolean; newTab?: boolean } = {}) {
+ *  `atSource` (a row's Open button) opens its link; `external` (Cmd/Ctrl+Enter or a modifier click) opens it in the
+ *  person's own browser. A link opens through `openLink`, the Work link router. */
+export function openItem(ref: RecordRef & { list?: RecordRef[] }, openLink: OpenWorkLink, options: { external?: boolean; newTab?: boolean; atSource?: boolean } = {}) {
   const support = useViewerSupport.getState().support;
-  if (options.external || !ref.sourceId || support === "no") {
-    if (ref.url) openLink(ref.url);
+  if (options.external || options.atSource || !ref.sourceId || support === "no") {
+    if (ref.url) openLink(ref.url, { external: Boolean(options.external) });
     return;
   }
   requestOpenRecord({ ...ref, newTab: options.newTab });

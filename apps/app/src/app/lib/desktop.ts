@@ -194,6 +194,9 @@ export type BrowserBookmarkNode =
 
 export type BrowserSuggestion = { url: string; title: string; kind: "bookmark" | "history" };
 
+/** A site asking for a user name and password (HTTP Basic or NTLM) in one of the person's own tabs. */
+export type BrowserSiteAuthRequest = { id: string; tabId: string; host: string; realm: string; scheme: string; url: string | null };
+
 export type BrowserRecentPages = { pages: Array<{ url: string; title: string; lastVisitAt: number }>; total: number };
 
 export type BrowserLibrarySummary = {
@@ -456,6 +459,19 @@ declare global {
         onStateChange?: (callback: (state: BrowserStatePayload) => void) => () => void;
         onPanelOpened?: (callback: (payload?: BrowserPanelOwnerPayload) => void) => () => void;
         onPanelClosed?: (callback: (payload?: BrowserPanelOwnerPayload) => void) => () => void;
+        /** A Work account is signed in: its tabs get the passkey guard, the blocked sign-in bar and the site sign-in sheet. */
+        setWorkFeatures?: (on: boolean) => Promise<boolean>;
+        /** The person's default browser by name (null when the system does not say). */
+        defaultBrowser?: () => Promise<{ name: string | null }>;
+        /** "Open in <browser>" on a blocked sign-in: opens the app there; the person's own tab closes. */
+        openBlockedElsewhere?: (tabId: string) => Promise<{ name: string | null }>;
+        dismissBlocked?: (tabId: string) => Promise<boolean>;
+        /** Opens a web address in another browser: a catalog id ("edge"), or null for the default. */
+        openElsewhere?: (url: string, browserId: string | null) => Promise<boolean>;
+        /** The person's answer to a site's sign-in sheet; null cancels. */
+        authAnswer?: (id: string, answer: { username: string; password: string } | null) => Promise<boolean>;
+        onAuthRequest?: (callback: (request: BrowserSiteAuthRequest) => void) => () => void;
+        onAuthDone?: (callback: (payload: { id: string }) => void) => () => void;
       };
       browserLogins?: BrowserLoginSyncBridge;
       browserLibrary?: BrowserLibraryBridge;

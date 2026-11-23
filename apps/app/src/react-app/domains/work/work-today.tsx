@@ -19,6 +19,7 @@ import { useOpenRecordId } from "./viewer/record-tabs";
 import { canOpen, isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
 import { ListSearch, matchesQuery } from "./list-cap";
+import type { OpenWorkLink } from "./browser/work-links";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
 /** Rows a section shows before "Show N more". */
@@ -322,7 +323,11 @@ function FeedSkeleton() {
 
 /** The Today view: fixes, source filters and the non-empty sections (re-read on focus and every 5 minutes). */
 export function WorkToday(props: {
-  client: WorkClient | null; openLink: (url: string) => void; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void; checklist?: React.ReactNode;
+  client: WorkClient | null; onAsk: (prompt: string) => Promise<void>; onOpenConnectors: () => void; checklist?: React.ReactNode;
+  /** Item links (the Work link router: beside Work, or the person's browser). */
+  openLink: OpenWorkLink;
+  /** Reconnect pages (OAuth) always open in the person's browser; without it, `openLink` as before. */
+  openExternal?: (url: string) => void;
   /** The filter kept by the caller (the route's `?source=`, so a sidebar connector opens Home filtered to it). */
   source?: string | null; onSourceChange?: (id: string | null) => void;
 }) {
@@ -356,7 +361,7 @@ export function WorkToday(props: {
   const onError = (reason: unknown) => toast.error(workFailure(reason).text);
   const reconnect = useMutation({
     mutationFn: (id: string) => props.client!.startWorkConnector(id),
-    onSuccess: (answer) => props.openLink(answer.auth_url),
+    onSuccess: (answer) => (props.openExternal ?? props.openLink)(answer.auth_url),
     onError,
   });
   const retry = useMutation({

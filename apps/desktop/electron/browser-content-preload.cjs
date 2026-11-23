@@ -299,6 +299,84 @@ function installWebMcpRuntime() {
   return true;
 }
 
+// Work accounts only (the tab is created with PASSKEY_GUARD_ARG). Serialized into the page's main world like the
+// WebMCP runtime, so it must stay self-contained. A passkey request (navigator.credentials create or get with
+// publicKey) that has not answered after `timeoutMs` is aborted with NotAllowedError, the error a cancelled prompt
+// gives, so the site offers another way, and the tab shows a bar with a way out. Passkey autofill (mediation
+// "conditional") waits as before. On macOS no platform authenticator is reported: this app cannot reach iCloud
+// Keychain or Touch ID passkeys, so sites should not offer them. Security keys keep working where they do.
+function installPasskeyGuard(mac, timeoutMs) {
+  if (typeof navigator === "undefined" || !navigator.credentials || typeof window === "undefined") return false;
+  const container = Object.getPrototypeOf(navigator.credentials);
+  if (!container || typeof container.create !== "function" || typeof container.get !== "function") return false;
+  const MARK = Symbol.for("omnirush.passkey-guard");
+  if (container[MARK]) return false;
+  const notify = () => {
+    try { window.dispatchEvent(new Event("omnirush:passkey-timeout")); } catch { /* the page is going away */ }
+  };
+  const guard = (original) => function guarded(options) {
+    const request = options && typeof options === "object" ? options : null;
+    if (!request || !request.publicKey || request.mediation === "conditional") return original.apply(this, arguments);
+    const callerSignal = request.signal || null;
+    if (callerSignal && callerSignal.aborted) return original.apply(this, arguments);
+    const timeout = new AbortController();
+    let signal = timeout.signal;
+    if (callerSignal && typeof AbortSignal.any === "function") signal = AbortSignal.any([callerSignal, timeout.signal]);
+    else if (callerSignal) callerSignal.addEventListener("abort", () => timeout.abort(callerSignal.reason), { once: true });
+    let pending;
+    try {
+      pending = original.call(this, Object.assign({}, request, { signal }));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const error = new DOMException("The passkey request timed out.", "NotAllowedError");
+        try { timeout.abort(error); } catch { /* already settled */ }
+        reject(error);
+        notify();
+      }, timeoutMs);
+      Promise.resolve(pending).then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        (error) => { clearTimeout(timer); reject(error); },
+      );
+    });
+  };
+  const define = (target, name, value) => Object.defineProperty(target, name, { configurable: true, writable: true, enumerable: false, value });
+  define(container, "create", guard(container.create));
+  define(container, "get", guard(container.get));
+  define(container, MARK, true);
+  if (mac && typeof PublicKeyCredential === "function") {
+    define(PublicKeyCredential, "isUserVerifyingPlatformAuthenticatorAvailable", function isUserVerifyingPlatformAuthenticatorAvailable() { return Promise.resolve(false); });
+    const capabilities = PublicKeyCredential.getClientCapabilities;
+    if (typeof capabilities === "function") {
+      define(PublicKeyCredential, "getClientCapabilities", function getClientCapabilities() {
+        return Promise.resolve(capabilities.call(PublicKeyCredential)).then((result) => Object.assign({}, result, { userVerifyingPlatformAuthenticator: false, passkeyPlatformAuthenticator: false }));
+      });
+    }
+  }
+  return true;
+}
+
+// Same values as browser-signin-guard.mjs (this preload cannot import it).
+const PASSKEY_GUARD_ARG = "--omnirush-passkey-guard";
+const PASSKEY_TIMEOUT_MS = 30_000;
+
+function passkeyGuardOn() {
+  return typeof process !== "undefined" && Array.isArray(process.argv) && process.argv.includes(PASSKEY_GUARD_ARG);
+}
+
+/** Tells the app a passkey request timed out on this page, at most once every few seconds (the event carries nothing). */
+function installPasskeyRelay() {
+  let last = 0;
+  window.addEventListener("omnirush:passkey-timeout", () => {
+    const now = Date.now();
+    if (now - last < 5_000) return;
+    last = now;
+    ipcRenderer?.send("omnirush:browser:passkey-timeout");
+  });
+}
+
 function dismissMenuOverlay() {
   ipcRenderer?.send("omnirush:menu-overlay:dismiss");
 }
@@ -363,6 +441,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   } catch (error) {
     console.warn("[browser] could not install the WebMCP compatibility runtime", error);
   }
+  if (passkeyGuardOn()) {
+    try {
+      const mac = process.platform === "darwin";
+      if (typeof contextBridge?.executeInMainWorld === "function") {
+        contextBridge.executeInMainWorld({ func: installPasskeyGuard, args: [mac, PASSKEY_TIMEOUT_MS] });
+      } else if (typeof webFrame?.executeJavaScript === "function") {
+        void webFrame.executeJavaScript(`(${installPasskeyGuard.toString()})(${mac}, ${PASSKEY_TIMEOUT_MS})`);
+      }
+      installPasskeyRelay();
+    } catch (error) {
+      console.warn("[browser] could not install the passkey guard", error);
+    }
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", installDismissListeners, { once: true });
@@ -372,4 +463,4 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   installToolChangeRelay();
 }
 
-if (typeof module !== "undefined") module.exports = { installWebMcpRuntime };
+if (typeof module !== "undefined") module.exports = { installWebMcpRuntime, installPasskeyGuard, PASSKEY_GUARD_ARG, PASSKEY_TIMEOUT_MS };

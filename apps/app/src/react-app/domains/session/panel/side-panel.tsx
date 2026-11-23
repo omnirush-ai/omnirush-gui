@@ -43,6 +43,7 @@ import {
   reportBrowserError,
   useNativeBrowserView,
 } from "./browser-surface";
+import { BrowserSignInBar } from "./browser-signin-bar";
 import { NO_SESSION_SIDE_PANEL_KEY } from "./side-panel-session";
 import {
   getElectronBrowser,
@@ -310,6 +311,7 @@ function BrowserPanelContent({
           <X />
         </Button>
       </div>
+      {isAvailable ? <BrowserSignInBar tab={tab} /> : null}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {isAvailable ? (
           <div ref={contentRef} className="relative h-full overflow-hidden">

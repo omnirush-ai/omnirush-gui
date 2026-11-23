@@ -284,6 +284,22 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
       ipcRenderer.on("omnirush:browser:panel-closed", handler);
       return () => ipcRenderer.removeListener("omnirush:browser:panel-closed", handler);
     },
+    setWorkFeatures(on) { return ipcRenderer.invoke("omnirush:browser:setWorkFeatures", on); },
+    defaultBrowser() { return ipcRenderer.invoke("omnirush:browser:defaultBrowser"); },
+    openBlockedElsewhere(tabId) { return ipcRenderer.invoke("omnirush:browser:openBlockedElsewhere", tabId); },
+    dismissBlocked(tabId) { return ipcRenderer.invoke("omnirush:browser:dismissBlocked", tabId); },
+    openElsewhere(url, browserId) { return ipcRenderer.invoke("omnirush:browser:openElsewhere", url, browserId); },
+    authAnswer(id, answer) { return ipcRenderer.invoke("omnirush:browser:authAnswer", id, answer); },
+    onAuthRequest(callback) {
+      const handler = (_event, payload) => callback(payload);
+      ipcRenderer.on("omnirush:browser:auth-request", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser:auth-request", handler);
+    },
+    onAuthDone(callback) {
+      const handler = (_event, payload) => callback(payload);
+      ipcRenderer.on("omnirush:browser:auth-done", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser:auth-done", handler);
+    },
   },
   browserLogins: {
     disableForManagedContext() { return ipcRenderer.invoke("omnirush:browser-logins:disableForManagedContext"); },
