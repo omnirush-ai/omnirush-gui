@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, keyLabel, workEntityKey, workFailure, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
 import { requestAsk, type AskOptions } from "./ask/ask-bridge";
-import { refFromEntity, refFromGraphNode, type WorkRef } from "./ask/refs";
+import { refFromEntity, refFromGraphNode, refFromRecordRef, type WorkRef } from "./ask/refs";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
@@ -189,6 +189,9 @@ export function EntityDetail(props: {
   const listKeys = useListKeys((row, options) => {
     const ref = refs.find((entry) => entry.sourceId === row.dataset.recordRow);
     if (ref) openItem({ ...ref, list: refs }, props.openLink, options);
+  }, (row, options) => {
+    const ref = refs.find((entry) => entry.sourceId === row.dataset.recordRow);
+    if (ref) requestAsk(refFromRecordRef(ref), options);
   });
   const add = () => {
     if (!text.trim()) return;

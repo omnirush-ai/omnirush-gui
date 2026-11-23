@@ -3899,12 +3899,14 @@ export function SessionRoute() {
     const leave = target.kind === "home" && target.navigate;
     if (target.kind === "home" && target.reason === "claude") toast.info(t("work.ask.claude_home"));
     if (request.stay) {
-      if (outcome.result === "added") toast.success(t("work.ask.added_toast"), leave ? { action: { label: t("work.ask.open"), onClick: () => route.navigate(WORK_HOME_ROUTE) } } : undefined);
+      // Short, so it never sits for long on the button the user may press again.
+      if (outcome.result === "added") toast.success(t("work.ask.added_toast"), { duration: 2500, ...(leave ? { action: { label: t("work.ask.open"), onClick: () => route.navigate(WORK_HOME_ROUTE) } } : {}) });
       return;
     }
     // A history push: Back returns to the page the item was asked from.
     if (leave) route.navigate(WORK_HOME_ROUTE);
-    window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), leave ? 120 : 30);
+    // The home composer mounts after the navigation: ask for the focus again once it is there.
+    for (const delay of leave ? [120, 600] : [30]) window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), delay);
   }), []);
   // A chip in a sent question opens its entity in Knowledge.
   useEffect(() => {

@@ -181,7 +181,7 @@ export function SuggestionChipRow(props: {
             onClick={onClick(chip)}
             className={cn(
               "flex h-full min-w-0 items-center gap-1.5 rounded-full text-[12px] text-foreground outline-none",
-              action ? "ps-2 pe-3" : "ps-3 pe-1.5",
+              action ? "ps-2 pe-3" : "px-3",
               unavailable && "cursor-default",
             )}
             data-suggestion-chip={chip.id}
@@ -196,7 +196,7 @@ export function SuggestionChipRow(props: {
           <span
             key={chip.id}
             className={cn(
-              "group/chip inline-flex h-7 max-w-[280px] items-center rounded-full border border-border bg-background transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring",
+              "group/chip relative inline-flex h-7 max-w-[280px] items-center rounded-full border border-border bg-background transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring",
               unavailable ? "opacity-60" : "hover:bg-muted/60",
             )}
           >
@@ -213,10 +213,11 @@ export function SuggestionChipRow(props: {
                 aria-label={t("work.ask.edit_before_sending")}
                 title={t("work.ask.edit_before_sending")}
                 onClick={() => activate(chip, "fill")}
-                className="me-1 flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 outline-none transition-opacity hover:bg-muted hover:text-foreground group-hover/chip:opacity-100 group-has-focus-visible/chip:opacity-100"
+                // On the chip's top corner while it is hovered or focused, so the label keeps even padding.
+                className="pointer-events-none absolute -end-1.5 -top-2 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground opacity-0 outline-none transition-opacity hover:bg-muted hover:text-foreground group-hover/chip:pointer-events-auto group-hover/chip:opacity-100 group-has-focus-visible/chip:pointer-events-auto group-has-focus-visible/chip:opacity-100"
                 data-suggestion-edit={chip.id}
               >
-                <Pencil className="size-3.5" aria-hidden />
+                <Pencil className="size-3" aria-hidden />
               </button>
             )}
           </span>
