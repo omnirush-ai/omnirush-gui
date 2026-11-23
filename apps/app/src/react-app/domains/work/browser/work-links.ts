@@ -13,10 +13,10 @@ export type OpenWorkLink = (url: string, options?: OpenWorkLinkOptions) => void;
 export const MEETING_HOSTS = ["meet.google.com", "zoom.us", "teams.microsoft.com", "teams.live.com", "webex.com"] as const;
 
 /**
- * Google-hosted links open beside Work while Google's direct sign-in works in this browser. If the release check on
- * real machines finds it refused, this turns false and they open in the person's browser instead.
+ * Google-hosted links open beside Work only once Google's direct sign-in passed in this browser on real machines (the
+ * release matrix, with a throwaway account). Until that row has run, they open in the person's browser.
  */
-export const GOOGLE_LINKS_IN_APP = true;
+export const GOOGLE_LINKS_IN_APP = false;
 const GOOGLE_HOSTS = ["google.com"];
 
 export type ElsewhereHost = { host: string; browserId: string | null; browserName: string | null };

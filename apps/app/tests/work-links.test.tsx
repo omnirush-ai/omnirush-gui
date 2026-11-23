@@ -136,7 +136,9 @@ describe("where a Work link opens", () => {
     const { workLinkTarget } = await import("../src/react-app/domains/work/browser/work-links");
     const base = { inApp: true, elsewhere: [] };
     expect(workLinkTarget("https://acme.zendesk.com/agent/tickets/8812", base)).toEqual({ kind: "panel" });
-    expect(workLinkTarget("https://mail.google.com/mail/u/0/#inbox/1", base)).toEqual({ kind: "panel" });
+    // Google links stay in the person's browser until Google's direct sign-in passed on real machines.
+    expect(workLinkTarget("https://mail.google.com/mail/u/0/#inbox/1", base)).toEqual({ kind: "system" });
+    expect(workLinkTarget("https://mail.google.com/mail/u/0/#inbox/1", { ...base, googleInApp: true })).toEqual({ kind: "panel" });
     expect(workLinkTarget("https://acme.zendesk.com/agent/tickets/8812", { ...base, external: true })).toEqual({ kind: "system" });
     for (const url of ["https://meet.google.com/abc-defg-hij", "https://us02web.zoom.us/j/123", "https://teams.microsoft.com/l/meetup-join/x", "https://acme.webex.com/meet/pat"]) {
       expect(workLinkTarget(url, base)).toEqual({ kind: "system" });
@@ -389,6 +391,23 @@ describe("never a dead end", () => {
       await act(() => byTestId("browser-signin-dismiss")!.click());
       expect(fake.calls.dismissed).toEqual(["u1"]);
     }, { browser: fake.browser, browserLibrary: libraryBridge() });
+  });
+
+  test("on the Work browser the blocked sign-in is the one bar: the import offer waits", async () => {
+    const { WorkBrowserPage } = await import("../src/react-app/domains/work/browser/work-browser-page");
+    const { usePersistedBrowserLoginsStore } = await import("../src/react-app/domains/browser-logins/browser-logins-store");
+    usePersistedBrowserLoginsStore.setState({ importOffer: null });
+    const blockedTab = tab({ kind: "google", url: "https://mail.google.com/mail/u/0/", host: "mail.google.com", browser: { id: null, name: "Google Chrome" } });
+    const fake = fakeBrowser();
+    const state = { tabs: [blockedTab], activeTabIdByOwner: { [USER_TABS_OWNER]: "u1" } };
+    const chrome = { platform: "darwin", historyDays: 90, browsers: [{ browser: "chrome", label: "Google Chrome", short: "Chrome", profiles: [{ id: "chrome:Default", name: "Work", has: { bookmarks: true, history: true, signIns: true } }], signIns: { importable: true } }] };
+    const library = { ...libraryBridge(), sources: async () => chrome as unknown as Awaited<ReturnType<BrowserLibraryBridge["sources"]>> };
+    await withDom(async ({ mount }) => {
+      await mount(<WorkBrowserPage onAsk={async () => undefined} openExternal={() => undefined} />);
+      expect(allByTestId("browser-signin-bar")).toHaveLength(1);
+      expect(byTestId("browser-import-offer")).toBeNull();
+    }, { browser: { ...fake.browser, getState: async () => state }, browserLibrary: library });
+    usePersistedBrowserLoginsStore.setState({ importOffer: null });
   });
 
   test("a Microsoft device rule names Edge; a passkey names the way out; no app host, no Always", async () => {

@@ -2,10 +2,8 @@
 // (kept on this computer) and the company's setting from the Work state. The company's setting is read from the
 // `browser` block of the Work state the app already holds (the `work.browser` capability); no request of its own.
 import { USER_TABS_OWNER } from "@omnirush/browser-tabs";
-import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
-import type { OmniRushWorkState } from "@/app/lib/omnirush-server";
 import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
 import { usePlatform } from "@/react-app/kernel/platform";
@@ -13,6 +11,7 @@ import { usePlatform } from "@/react-app/kernel/platform";
 import { useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
 import { getElectronBrowser } from "../../session/panel/utils";
 import { useEnterpriseFlags } from "../enterprise-mode";
+import { useCachedWorkState } from "../work-state-cache";
 import {
   type ElsewhereHost,
   linksInApp,
@@ -27,19 +26,12 @@ import {
 
 /** The company's link setting, with its name for "Set by <company>". */
 export function useWorkLinkPolicy(): WorkLinkPolicy {
-  const queryClient = useQueryClient();
   const enterprise = useEnterpriseFlags();
-  const subscribe = React.useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-  // A string, so an unchanged block keeps the same snapshot.
-  const snapshot = React.useCallback(() => {
-    const state = queryClient.getQueriesData<OmniRushWorkState>({ queryKey: ["omnirush-work-state"] }).find(([, data]) => data?.enabled)?.[1] ?? null;
-    return JSON.stringify(workLinkPolicy(state));
-  }, [queryClient]);
-  const raw = React.useSyncExternalStore(subscribe, snapshot, snapshot);
+  const state = useCachedWorkState();
   return React.useMemo(() => {
-    const policy = JSON.parse(raw) as WorkLinkPolicy;
+    const policy = workLinkPolicy(state);
     return { ...policy, orgName: policy.orgName ?? enterprise.orgName ?? null };
-  }, [raw, enterprise.orgName]);
+  }, [state, enterprise.orgName]);
 }
 
 function subscribeChoices(notify: () => void) {

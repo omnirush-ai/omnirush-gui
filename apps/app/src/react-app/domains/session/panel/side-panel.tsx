@@ -606,7 +606,7 @@ export function SidePanel({
         ) : null}
         {activeTab?.type === "browser" ? (
           <>
-            <LoginSyncCard visit={userPanel} />
+            <LoginSyncCard visit={userPanel} hidden={Boolean(activeTab.blockedSignIn)} />
             <BrowserPanelContent sessionId={sessionId} tab={activeTab} onClose={onClose} />
           </>
         ) : activeTab?.type === "record" ? (

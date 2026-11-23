@@ -174,6 +174,7 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
         }}
       />
     ) : null,
+    activeTab && !home && activeTab.blockedSignIn ? <BrowserSignInBar tab={activeTab} /> : null,
   ].find(Boolean) ?? (activeTab && !home ? <LoginSyncCard visit /> : null);
 
   return (
@@ -209,7 +210,6 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
       </div>
       {notice}
       {activeTab && agentWorkingIn(activeTab) ? <BrowserAgentStrip tab={activeTab} /> : null}
-      {activeTab && !home ? <BrowserSignInBar tab={activeTab} /> : null}
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <div ref={contentRef} className="relative h-full overflow-hidden" data-browser-page="">
