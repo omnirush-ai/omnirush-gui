@@ -46,6 +46,7 @@ import {
   sameBounds,
 } from "./utils";
 import { LoginSyncCard } from "../../browser-logins/login-sync-card";
+import { BrowserLibraryBar } from "./browser-library-bar";
 
 type SidePanelProps = {
   sessionId: string;
@@ -426,6 +427,7 @@ function BrowserPanelContent({
                 <Globe />
               </InputGroupAddon>
             </InputGroup>
+            <BrowserLibraryBar sessionId={sessionId} tab={tab} inputRef={urlInputRef} />
             <Button
               variant="ghost"
               size="sm"

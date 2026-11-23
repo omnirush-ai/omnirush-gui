@@ -5,6 +5,9 @@ export const BROWSER_LOGIN_SYNC_STORE_KEY = "omnirush:browser-login-sync:v1";
 
 export type LoginSyncPromptOutcome = "synced" | "dismissed";
 
+/** The one-line "bring your bookmarks" offer in the built-in browser (Work accounts): shown until imported or dismissed. */
+export type BrowserImportOfferOutcome = "imported" | "dismissed";
+
 /**
  * Local memory for the one-time sync setup offer.
  */
@@ -19,6 +22,8 @@ export type BrowserLoginsState = {
   observeEffectiveAllowed: (allowed: boolean, now?: number) => void;
   markPromptShown: (now?: number) => void;
   resolvePrompt: (outcome: LoginSyncPromptOutcome) => void;
+  importOffer: BrowserImportOfferOutcome | null;
+  resolveImportOffer: (outcome: BrowserImportOfferOutcome) => void;
 };
 
 export const usePersistedBrowserLoginsStore = create<BrowserLoginsState>()(
@@ -38,6 +43,8 @@ export const usePersistedBrowserLoginsStore = create<BrowserLoginsState>()(
         state.prompt.shownAt === null ? { prompt: { ...state.prompt, shownAt: now } } : state
       )),
       resolvePrompt: (outcome) => set((state) => ({ prompt: { ...state.prompt, outcome } })),
+      importOffer: null,
+      resolveImportOffer: (outcome) => set({ importOffer: outcome }),
     }),
     {
       name: BROWSER_LOGIN_SYNC_STORE_KEY,

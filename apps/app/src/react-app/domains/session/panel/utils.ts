@@ -57,7 +57,8 @@ export function sameBounds(
 }
 
 export function hasNativeBrowserOccluder() {
-  const overlays = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+  // Menus that sit over the page (bookmarks, address suggestions) mark themselves with data-browser-occluder.
+  const overlays = document.querySelectorAll('[role="dialog"], [role="alertdialog"], [data-browser-occluder]');
   for (const overlay of overlays) {
     if (!(overlay instanceof HTMLElement)) {
       continue;

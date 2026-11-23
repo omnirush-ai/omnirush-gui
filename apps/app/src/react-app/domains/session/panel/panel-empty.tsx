@@ -5,8 +5,11 @@ import { ArrowLeft, ArrowRight, FileText, Globe, Puzzle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+import { BookmarkTiles } from "../../browser-logins/bookmark-tiles";
+
 export type PanelEmptyActions = {
-  onOpenBrowser?: () => void;
+  /** Opens a browser tab, at `url` when given (the bookmark tiles). */
+  onOpenBrowser?: (url?: string) => void;
   onOpenExtensions?: () => void;
 };
 
@@ -36,7 +39,7 @@ export function getPanelDestinations(
       label: "Browser",
       description: "Open a new page in the built-in browser.",
       icon: <Globe aria-hidden="true" />,
-      activate: actions.onOpenBrowser,
+      activate: () => actions.onOpenBrowser?.(),
     });
   }
 
@@ -123,6 +126,7 @@ export function PanelEmpty({ onOpenBrowser, onOpenExtensions }: PanelEmptyAction
             </button>
           ))}
         </div>
+        <BookmarkTiles onOpen={onOpenBrowser} />
       </div>
     </div>
   );

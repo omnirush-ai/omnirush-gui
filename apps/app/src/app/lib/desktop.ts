@@ -55,7 +55,7 @@ import type {
   BrowserStatePayload,
   OpenBrowserUrlResult,
 } from "@omnirush/browser-tabs";
-import type { ImportableSite, ImportSourceAvailability } from "@omnirush/browser-logins";
+import type { ImportableSite, ImportBrowser, ImportSourceAvailability } from "@omnirush/browser-logins";
 import type { ComputerUseStatus } from "@omnirush/types/desktop-ipc";
 
 export type BrowserLoginSite = ImportableSite;
@@ -124,6 +124,105 @@ export type BrowserLoginSyncBridge = {
   writeTestStore?: (request: { path: string; cookies: unknown[] }) => Promise<BrowserLoginSource>;
   /** Eval seam (unpackaged builds only): value-free login witness on Electron's host. */
   testWitnessUrl?: () => Promise<string>;
+};
+
+/** Why sign-ins cannot come from a browser on this computer. */
+export type BrowserImportSignInBlock = "policy_off" | "windows_locked" | "windows_unsupported";
+
+/** Browsers found on this computer and their profiles. Never a path. */
+export type BrowserImportSources = {
+  platform: string;
+  historyDays: number;
+  browsers: Array<{
+    browser: ImportBrowser;
+    label: string;
+    short: string;
+    signIns: { importable: boolean; reason: BrowserImportSignInBlock | null };
+    /** Safari: macOS refuses its files until OmniRush has Full Disk Access. */
+    access: "ok" | "full_disk_access";
+    profiles: Array<{ id: string; name: string; profile: string; has: { bookmarks: boolean; history: boolean; signIns: boolean } }>;
+  }>;
+};
+
+export type BrowserImportPart =
+  | { state: "ready"; count: number; days?: number }
+  | { state: "empty"; days?: number }
+  | { state: "blocked" | "failed"; reason: string };
+
+export type BrowserImportSignIns =
+  | { state: "ready"; previewId: string; sites: ImportableSite[]; cookieCount: number }
+  | { state: "empty" }
+  | { state: "unavailable"; reason: BrowserImportSignInBlock }
+  | { state: "blocked" | "failed"; reason: string };
+
+export type BrowserImportSource = { id: string; browser: ImportBrowser; label: string; name: string };
+
+/** What one profile can bring, counted before anything is copied. Sign-ins are site names only. */
+export type BrowserImportInspection = {
+  source: BrowserImportSource;
+  bookmarks: BrowserImportPart;
+  history: BrowserImportPart;
+  signIns: BrowserImportSignIns;
+  keepInStep: boolean;
+};
+
+export type BrowserImportKind = "bookmarks" | "history" | "signIns";
+
+export type BrowserImportStep =
+  | { state: "done"; count: number; failed?: number; keepInStep?: boolean }
+  | { state: "failed" | "blocked" | "cancelled"; reason: string };
+
+export type BrowserImportProgress = { kind: BrowserImportKind } & ({ state: "running" } | BrowserImportStep);
+
+export type BrowserImportRequest = {
+  sourceId: string;
+  bookmarks: boolean;
+  history: boolean;
+  signIns: { previewId: string; sites: string[]; keepInStep: boolean } | null;
+};
+
+export type BrowserImportResult = {
+  source: BrowserImportSource;
+  bookmarks: BrowserImportStep | null;
+  history: BrowserImportStep | null;
+  signIns: BrowserImportStep | null;
+};
+
+export type BrowserBookmarkNode =
+  | { id: number; title: string; url: string }
+  | { id: number; title: string; children: BrowserBookmarkNode[]; browser?: ImportBrowser };
+
+export type BrowserSuggestion = { url: string; title: string; kind: "bookmark" | "history" };
+
+export type BrowserLibrarySummary = {
+  imports: Array<{
+    sourceId: string;
+    browser: ImportBrowser;
+    label: string;
+    name: string;
+    importedAt: number;
+    bookmarks: number | null;
+    history: number | null;
+    signIns: number | null;
+  }>;
+  bookmarks: number;
+  history: number;
+};
+
+/** The built-in browser's bookmarks and history, and importing them from other browsers. */
+export type BrowserLibraryBridge = {
+  sources: () => Promise<BrowserImportSources>;
+  inspect: (request: { sourceId: string }) => Promise<BrowserImportInspection>;
+  import: (request: BrowserImportRequest) => Promise<BrowserImportResult>;
+  onProgress: (callback: (progress: BrowserImportProgress) => void) => () => void;
+  bookmarks: () => Promise<BrowserBookmarkNode[]>;
+  topBookmarks: (limit?: number) => Promise<Array<{ url: string; title: string }>>;
+  suggest: (query: string) => Promise<BrowserSuggestion[]>;
+  isBookmarked: (url: string) => Promise<boolean>;
+  toggleBookmark: (request: { url: string; title?: string }) => Promise<{ bookmarked: boolean }>;
+  summary: () => Promise<BrowserLibrarySummary>;
+  clear: () => Promise<BrowserLibrarySummary>;
+  openFullDiskAccess: () => Promise<boolean>;
 };
 
 export type { BrowserStatePayload } from "@omnirush/browser-tabs";
@@ -347,6 +446,7 @@ declare global {
         onPanelClosed?: (callback: (payload?: BrowserPanelOwnerPayload) => void) => () => void;
       };
       browserLogins?: BrowserLoginSyncBridge;
+      browserLibrary?: BrowserLibraryBridge;
       terminal?: {
         shells?: () => Promise<Array<{ id: string; label: string }>>;
         create?: (options: { cwd: string; cols: number; rows: number; workspaceId?: string; shellId?: string | null }) => Promise<{ terminalId: string; shellId?: string; shellLabel?: string; cwd?: string }>;
