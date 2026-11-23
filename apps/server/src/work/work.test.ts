@@ -158,6 +158,8 @@ describe("work prompt and tools", () => {
   test("context tools read without asking; remember and forget ask; the prompt briefs and remembers", () => {
     for (const tool of ["work_context", "work_entity", "jira_search", "github_read", "work_read", "work_count", "work_deals"]) expect(WORK_READ_TOOLS).toContain(tool);
     for (const tool of ["work_remember", "work_forget", "jira_comment", "github_create_issue"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+    for (const tool of ["gitlab_search", "gitlab_read", "shopify_search", "shopify_read", "box_search", "box_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["gitlab_comment", "gitlab_create_issue", "shopify_note", "box_comment"]) expect(WORK_READ_TOOLS).not.toContain(tool);
     for (const style of ["brief", "detailed"] as const) {
       expect(workPrompt(style)).toContain("call work_context once with the task and a budget");
       expect(workPrompt(style)).toContain("pass max_tokens on searches");
@@ -261,6 +263,20 @@ describe("work routes", () => {
     expect((await (await missing.call("POST", "/work/connectors/freshdesk/connect", { api_key: "fd-key-1", host: "acme" })).json()).message).toBe(
       "Freshdesk could not find that account address. Check it and try again.",
     );
+    // Shopify's Dev Dashboard app: the Client ID goes on with the secret; its refusals are worded.
+    const shop = setup(() => json({ ok: true, account: "acme.myshopify.com" }));
+    await shop.call("POST", "/work/connectors/shopify/connect", { host: "acme", client_id: "abc123def456", api_key: "shpss_x", evil: "x" });
+    expect(shop.calls).toEqual([`POST connectors/shopify/connect ${JSON.stringify({ host: "acme", api_key: "shpss_x", client_id: "abc123def456" })}`]);
+    for (const [detail, words] of [
+      ["shopify_not_permitted", "own organization"],
+      ["shopify_scope_missing", "read_orders"],
+      ["gitlab_not_found", "gitlab.com"],
+      ["gitlab_scope_missing", "read_api"],
+    ]) {
+      const message = (await (await setup(() => json({ detail }, 400)).call("POST", "/work/connectors/gitlab/connect", { api_key: "glpat-x" })).json()).message;
+      expect(message).toContain(words);
+      expect(message).not.toMatch(/[\u2013\u2014]/);
+    }
     const moved = setup(() => json({ detail: "bad_redirect", reason: "unusable location" }, 400));
     expect((await (await moved.call("POST", "/work/connectors/caldav/connect", { preset: "other", url: "https://dav.example.com/", username: "u", password: "p" })).json()).message).toBe(
       "The calendar server sent us to an address that does not work. Check the URL.",

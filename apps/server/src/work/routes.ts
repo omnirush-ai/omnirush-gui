@@ -7,7 +7,7 @@
  *   POST  /work/workspace                  makes the account's Work folder a workspace: { workspaceId, path }
  *   GET   /work/connectors                 GET /omnirush/work/connectors (also remembered for the upload)
  *   POST  /work/connectors/:id/start       { auth_url }
- *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key? } -> { ok, account }
+ *   POST  /work/connectors/:id/connect     { preset, host?, port?, security?, url?, username?, password?, api_key?, client_id? } -> { ok, account }
  *                                          (imap and caldav, and the pasted-key sources: the server tries the login or key, then saves and syncs)
  *   POST  /work/connectors/:id/hook        { url }: a new inbound URL for Zapier, Make or n8n (hook, hook_org), shown once
  *   POST  /work/connectors/:id/disconnect
@@ -135,6 +135,11 @@ const WORK_ERRORS: Record<string, string> = {
   bad_redirect: "The calendar server sent us to an address that does not work. Check the URL.",
   key_not_restricted: "Use a restricted key (it starts with rk_), not your secret key.",
   missing_permission: "That key cannot read everything needed. Give it Read on Customers, Invoices, Charges and Refunds, and Events.",
+  gitlab_not_found: "No GitLab answered at that address. Leave it empty for gitlab.com, or check your company's GitLab address.",
+  gitlab_scope_missing: "That token cannot read GitLab's API. Make one with the read_api scope, or api to also comment and create issues.",
+  shopify_not_found: "Shopify could not find that store. Use its address ending in .myshopify.com.",
+  shopify_not_permitted: "Shopify only gives a token to an app made in the store's own organization. Create the app from this store's admin.",
+  shopify_scope_missing: "That app cannot read orders, customers or products. Give it read_orders, read_customers or read_products, release a new version and approve it on the store.",
 };
 
 const CONNECTOR = WORK_SOURCE_ID;
@@ -242,7 +247,7 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     if (!CONNECTOR.test(ctx.params.id ?? "")) return jsonResponse({ detail: "unknown_connector" }, 404);
     const body = await deps.readJsonBody(ctx.request);
     const form: Record<string, string | number> = {};
-    for (const key of ["preset", "host", "security", "url", "username", "password", "api_key"]) {
+    for (const key of ["preset", "host", "security", "url", "username", "password", "api_key", "client_id"]) {
       const value = body[key];
       if (typeof value === "string" && value) form[key] = value;
     }
