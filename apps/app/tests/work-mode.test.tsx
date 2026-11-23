@@ -5,12 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { matchRoutes, MemoryRouter } from "react-router";
 
-import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
+import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers, type OmniRushWorkOrgConnectors } from "../src/app/lib/omnirush-server";
 import { askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
-  askAboutItemPrompt, coverageLine, relativeTime, workActionsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
+  askAboutItemPrompt, coverageCanAdd, coverageLine, relativeTime, workActionsKey, workOrgConnectorsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
-import { leaveState, mePatch, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
+import { leaveState, mePatch, nextShown, WorkOrganizationPage } from "../src/react-app/domains/work/work-org";
 import { alertText, WorkInsightsPage } from "../src/react-app/domains/work/work-insights";
 import { WorkAutomationPage } from "../src/react-app/domains/work/work-activity";
 import { SampleDataBadge, WorkOnboarding, WorkTryButton } from "../src/react-app/domains/work/work-onboarding";
@@ -890,6 +890,82 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     // Saving only a role never sends tools: an owner's tools are the company's, and a member's never come back from the server.
     expect(mePatch({ job_role: " Founder " }, { job_role: null })).toEqual({ job_role: "Founder" });
     expect(mePatch({ tools: ["slack"] }, { job_role: "Ops" })).toEqual({ job_role: "Ops", tools: ["slack"] });
+  });
+
+  test("connectors for your team: owners and admins switch what members see, with who connected each; admins come with it", () => {
+    const client = { baseUrl: "http://org-connectors.test" } as never;
+    const org = { id: "org_1", name: "Acme Bakery" };
+    const people = (you: "owner" | "admin" | "member"): OmniRushWorkMembers => ({
+      org, you_role: you, invites: [],
+      members: [
+        { user_id: "u1", email: "owner@acme-bakery.test", role: "owner", you: you === "owner" },
+        { user_id: "u2", email: "dana@acme-bakery.test", role: "admin", you: you === "admin" },
+        { user_id: "u3", email: "jo@acme-bakery.test", role: "member", you: you === "member" },
+      ],
+    });
+    const managed: OmniRushWorkOrgConnectors = {
+      org, role: "owner", can_manage: true, connectors: [{ id: "google", label: "Google" }], shown: ["google"], staff_limited: true, members: 3,
+      allowed: [{ id: "google", label: "Google", shown: true, members_connected: 3 }, { id: "slack", label: "Slack", shown: false, members_connected: 1 }, { id: "linear", label: "Linear", shown: false, members_connected: 0 }],
+    };
+    const render = (members: OmniRushWorkMembers, view?: OmniRushWorkOrgConnectors | Error) => {
+      const queries = new QueryClient();
+      queries.setQueryData(workMembersKey(client), members);
+      if (view instanceof Error) failQuery(queries, workOrgConnectorsKey(client), view);
+      else if (view) queries.setQueryData(workOrgConnectorsKey(client), view);
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter><WorkOrganizationPage client={client} openLink={noop} onBack={noop} /></MemoryRouter></QueryClientProvider>);
+    };
+    const owner = render(people("owner"), managed);
+    expect(owner).toContain('data-testid="work-org-connectors"');
+    expect(owner).toContain(">Connectors for your team<");
+    expect(owner).toContain("Your team only sees the connectors switched on here.");
+    expect(owner).toContain(">1 of 3 on<");
+    expect(owner).toMatch(/data-org-connector="google" data-shown="true"[\s\S]*?3 people connected it[\s\S]*?aria-checked="true"/);
+    expect(owner).toMatch(/data-org-connector="slack" data-shown="false"[\s\S]*?1 person connected it[\s\S]*?aria-checked="false"/);
+    expect(owner).toContain("Nobody has connected it yet");
+    expect(owner).toContain('aria-label="Show Slack to your team"');
+    expect(owner).toContain('data-testid="work-org-connectors-limited"');
+    // The owner makes admins: Admin badge, Make admin and Remove admin, and a line saying what admins do.
+    expect(owner).toContain(">Admin<");
+    expect(owner).toContain(">Remove admin<");
+    expect(owner).toContain(">Make admin<");
+    expect(owner).toContain("Admins can choose which connectors your team sees.");
+    // An admin manages the list but not the people.
+    const admin = render(people("admin"), { ...managed, role: "admin" });
+    expect(admin).toContain('data-testid="work-org-connectors"');
+    expect(admin).not.toContain(">Make admin<");
+    expect(admin).not.toContain(">Make owner<");
+    // A member gets neither.
+    const member = render(people("member"), { org, role: "member", can_manage: false, connectors: [{ id: "google", label: "Google" }] });
+    expect(member).not.toContain('data-testid="work-org-connectors"');
+    expect(member).not.toContain(">Make admin<");
+    // An older server has no such list: the page is as it was (no section, no admin buttons).
+    const old = render(people("owner"), new OmniRushServerError(404, "Not Found", "That didn't work. Try again."));
+    expect(old).not.toContain('data-testid="work-org-connectors"');
+    expect(old).not.toContain(">Make admin<");
+    expect(old).not.toContain("Admins can choose");
+    expect(old).toContain(">Make owner<");
+    // The saved list after one switch (staff limits this company's list, so only the listed ids go).
+    expect(nextShown(managed, "slack", true)).toEqual(["google", "slack"]);
+    expect(nextShown(managed, "google", false)).toEqual([]);
+  });
+
+  test("a connection the company turned off says so and offers only Disconnect; it is never offered to connect", () => {
+    const paused = row({ id: "slack", label: "Slack", status: "paused_by_admin", paused_by: "org", account: "acme-bakery", records: 5400, sync_enabled: true });
+    const markup = renderToStaticMarkup(<ConnectorRow connector={paused} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onCheck={noop} />);
+    expect(markup).toContain('data-status="paused_by_admin"');
+    expect(markup).toContain(">Paused<");
+    expect(markup).toContain("Turned off by your company admin");
+    expect(markup).toContain("acme-bakery · 5,400 records");
+    expect(markup).toContain(">Disconnect<");
+    expect(markup).not.toContain(">Connect<");
+    expect(markup).not.toContain('role="switch"');
+    expect(markup).not.toContain(">Check<");
+    const staff = renderToStaticMarkup(<ConnectorRow connector={{ ...paused, paused_by: "staff" }} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
+    expect(staff).toContain("Not available for your company right now");
+    const rows = [row({ id: "google" }), paused];
+    expect(connectOrder(rows).map((item) => item.id)).toEqual(["google"]);
+    expect(coverageCanAdd(rows, "slack")).toBe(false);
+    expect(coverageCanAdd(rows, "google")).toBe(true);
   });
 
   test("insights: alerts in the app's words by kind, roles as labels, a missing route says update with no retry", () => {
