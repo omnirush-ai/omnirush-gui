@@ -209,6 +209,7 @@ describe("work prompt and tools", () => {
     expect(SUGGESTED_REPLIES).toContain("Never a reply where the user promises a step of their own");
     expect(SUGGESTED_REPLIES).toContain("A message that asks the user something or shows a draft always ends with replies.");
     expect(SUGGESTED_REPLIES).toContain("compared options or made a recommendation");
+    expect(SUGGESTED_REPLIES).toContain("After a brief, a summary or an analysis that asks nothing, give at most one reply");
     expect(SUGGESTED_REPLIES).toContain("offer the likely values from the records or a way you can get it in this chat");
     expect(SUGGESTED_REPLIES).toContain("are fine with any answer style");
     // Only the new section is checked: the rest of the prompt names the product on purpose.
