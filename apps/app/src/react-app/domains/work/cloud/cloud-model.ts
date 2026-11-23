@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 
-import { t } from "@/i18n";
+import { currentLocale, t } from "@/i18n";
 import type {
   OmniRushServerClient, OmniRushWorkCloud, OmniRushWorkCloudOutput, OmniRushWorkCloudRun, OmniRushWorkCloudSchedule,
   OmniRushWorkCloudStatus, OmniRushWorkCloudTask, OmniRushWorkCloudWaiting, OmniRushWorkOrgCloud,
@@ -126,9 +126,10 @@ export const useCloudClientStore = create<{ client: CloudClient | null; live: bo
 
 // ── words ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** "Monday" for 0 to "Sunday" for 6, in the person's language (1 Jan 2024 was a Monday). */
+/** "Monday" for 0 to "Sunday" for 6, in the app's language (1 Jan 2024 was a Monday). */
 export function weekdayName(index: number, style: "long" | "short" = "long"): string {
-  return new Date(2024, 0, 1 + Math.max(0, Math.min(6, index))).toLocaleDateString(undefined, { weekday: style });
+  const day = new Date(2024, 0, 1 + Math.max(0, Math.min(6, index)));
+  try { return day.toLocaleDateString(currentLocale(), { weekday: style }); } catch { return day.toLocaleDateString(undefined, { weekday: style }); }
 }
 
 export function deviceZone(): string {
@@ -191,7 +192,9 @@ export function statusTone(status: OmniRushWorkCloudStatus | null | undefined): 
 }
 /** Dots and text per tone; text colours pass AA on the page in light and dark. */
 export const TONE_DOT: Record<Tone, string> = { waiting: "bg-amber-9", running: "bg-blue-9", ok: "bg-green-9", error: "bg-red-9", off: "bg-muted-foreground/50" };
-export const TONE_TEXT: Record<Tone, string> = { waiting: "text-amber-11", running: "text-foreground", ok: "text-muted-foreground", error: "text-red-11", off: "text-muted-foreground" };
+/** Amber words: step 11 is a hair under AA on the light page, so it is mixed a little darker there. */
+export const WAIT_TEXT = "text-[color-mix(in_oklab,var(--amber-11)_84%,black)] dark:text-amber-11";
+export const TONE_TEXT: Record<Tone, string> = { waiting: WAIT_TEXT, running: "text-foreground", ok: "text-muted-foreground", error: "text-red-11", off: "text-muted-foreground" };
 
 /** Why a run ended, in words; a code this app does not know shows the server's words when they are words. */
 export function runErrorText(error: { code: string; message?: string | null } | null | undefined): string | null {
@@ -325,7 +328,8 @@ export function fileSize(bytes: number): string {
 export function runWhen(value: string | null | undefined): string {
   const at = value ? new Date(value) : null;
   if (!at || Number.isNaN(at.getTime())) return "";
-  return `${at.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+  const locale = currentLocale();
+  return `${at.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short" })} ${at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 /** A live page the frame may show: `/omnirush/work/live/v/` with the ticket in the fragment, https (or the local

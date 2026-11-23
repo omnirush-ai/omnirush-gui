@@ -16,7 +16,7 @@ import { t } from "@/i18n";
 import type { OmniRushWorkCloudRun } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { CLOUD_KEY, cloudFailure, cloudRunKey, liveUrlOk, waitingText, type CloudClient } from "./cloud-model";
+import { CLOUD_KEY, cloudFailure, cloudRunKey, liveUrlOk, WAIT_TEXT, waitingText, type CloudClient } from "./cloud-model";
 
 /** A live session ends after 10 minutes; a fresh ticket comes a little before. */
 const TICKET_REFRESH_MS = 9 * 60_000;
@@ -93,7 +93,7 @@ export function LiveFrame(props: { client: CloudClient | null; run: OmniRushWork
         {url && !control ? <div aria-hidden className="absolute inset-0 cursor-default" data-testid="work-cloud-live-shield" /> : null}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border px-3 py-2">
-        <span className={cn("flex min-w-0 flex-1 items-center gap-2 text-[13px]", control || waitingOnPerson ? "text-amber-11" : "text-foreground")} aria-live="polite" data-testid="work-cloud-live-line">
+        <span className={cn("flex min-w-0 flex-1 items-center gap-2 text-[13px]", control || waitingOnPerson ? WAIT_TEXT : "text-foreground")} aria-live="polite" data-testid="work-cloud-live-line">
           <span aria-hidden className={cn("size-2 shrink-0 rounded-full", control || waitingOnPerson ? "bg-amber-9" : "bg-blue-9 motion-safe:animate-pulse")} />
           <span className="min-w-0">{line}</span>
         </span>
@@ -110,7 +110,7 @@ export function LiveFrame(props: { client: CloudClient | null; run: OmniRushWork
             <Button ref={handRef} size="sm" disabled={hand.isPending} onClick={() => hand.mutate()} data-testid="work-cloud-handback">{t("work.cloud.hand_back")}</Button>
           </div>
         ) : props.canControl ? (
-          <Button ref={takeRef} size="sm" variant={props.run.waiting_for === "signin" || props.run.waiting_for === "captcha" || props.run.waiting_for === "decision" ? "default" : "outline"} disabled={take.isPending || !url} onClick={() => take.mutate()} data-testid="work-cloud-takeover">{t("work.cloud.take_over")}</Button>
+          <Button ref={takeRef} size="sm" variant={props.run.waiting_for === "signin" || props.run.waiting_for === "captcha" || props.run.waiting_for === "decision" ? "default" : "outline"} disabled={take.isPending || Boolean(failed)} onClick={() => take.mutate()} data-testid="work-cloud-takeover">{t("work.cloud.take_over")}</Button>
         ) : null}
       </div>
     </section>

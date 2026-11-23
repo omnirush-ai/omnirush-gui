@@ -19,7 +19,7 @@ import { Approval, StepShot } from "./approval";
 import {
   blockedHosts, CLOUD_KEY, cloudFailure, cloudRunsKey, cloudStepsKey, durationText, fileSize, hostOf, isOpen, orgCloudKey,
   RECORD_ROWS, recordKey, RUN_ROWS, runErrorText, runNotes, runWhen, savedText, scheduleText, statusText, statusTone,
-  STEP_ROWS, TONE_DOT, TONE_TEXT, useCloudRun, type CloudClient,
+  STEP_ROWS, TONE_DOT, TONE_TEXT, useCloudRun, WAIT_TEXT, type CloudClient,
 } from "./cloud-model";
 import { CodeEntry } from "./code-entry";
 import { LiveFrame } from "./live-frame";
@@ -183,7 +183,7 @@ export function RunView(props: {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
           <span>{scheduleText(task.schedule)}</span>
           {site ? <><span aria-hidden>·</span><span className="truncate">{site}</span></> : null}
-          {task.paused ? <><span aria-hidden>·</span><span className="text-amber-11">{task.paused_reason || t("work.cloud.paused")}</span></> : null}
+          {task.paused ? <><span aria-hidden>·</span><span className={WAIT_TEXT}>{task.paused_reason || t("work.cloud.paused")}</span></> : null}
         </div>
 
         {task.paused && task.paused_reason && props.caps.admin ? (
@@ -268,7 +268,7 @@ export function RunView(props: {
               <Block label={t("work.cloud.notes")} testId="work-cloud-notes">
                 <ul className="flex flex-col gap-1.5">
                   {notes.slice(0, RECORD_ROWS).map((flag, index) => (
-                    <li key={`${flag.kind}-${index}`} className={cn("leading-[1.5]", flag.kind === "ignored_instruction" ? "text-amber-11" : "text-foreground")} data-cloud-flag={flag.kind}>{flag.text}</li>
+                    <li key={`${flag.kind}-${index}`} className={cn("leading-[1.5]", flag.kind === "ignored_instruction" ? WAIT_TEXT : "text-foreground")} data-cloud-flag={flag.kind}>{flag.text}</li>
                   ))}
                 </ul>
               </Block>

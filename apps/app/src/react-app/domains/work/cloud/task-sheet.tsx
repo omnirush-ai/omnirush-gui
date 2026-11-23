@@ -17,7 +17,7 @@ import type { OmniRushWorkCloud, OmniRushWorkCloudOutput, OmniRushWorkCloudSigni
 import { cn } from "@/lib/utils";
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 
-import { CLOUD_KEY, cloudFailure, deviceZone, hostOf, outputLabel, siteAllowed, startUrl, weekdayName, type CloudClient } from "./cloud-model";
+import { CLOUD_KEY, cloudFailure, deviceZone, hostOf, outputLabel, siteAllowed, startUrl, WAIT_TEXT, weekdayName, type CloudClient } from "./cloud-model";
 
 /** A row of buttons that act as one choice (arrow keys move it, like any radio group). */
 export function Segmented<T extends string | number>(props: { value: T; options: { value: T; label: string }[]; onChange: (value: T) => void; label: string; labelId?: string; disabled?: boolean; testId?: string }) {
@@ -187,7 +187,6 @@ export function TaskSheet(props: {
   if (draft.signin.startsWith("saved:") && !signinItems.some((item) => item.value === draft.signin)) signinItems.push({ value: draft.signin, label: t("work.cloud.signin_unavailable") });
   const outputs: OmniRushWorkCloudOutput[] = ["invoice", "order", "ticket", "row", "files", "answer"];
   const days = Array.from({ length: 28 }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }));
-  const weekdays = Array.from({ length: 7 }, (_, index) => ({ value: String(index), label: weekdayName(index) }));
   const show = (error: string | null) => (tried ? error : null);
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
@@ -209,7 +208,7 @@ export function TaskSheet(props: {
               label={t("work.cloud.field_what")}
               htmlFor={ids.what}
               error={show(errors.instructions)}
-              hint={looksLikePassword(draft.instructions) ? <span className="text-amber-11" data-testid="work-cloud-password-warning">{t("work.cloud.password_warning")}</span> : t("work.cloud.no_passwords")}
+              hint={looksLikePassword(draft.instructions) ? <span className={WAIT_TEXT} data-testid="work-cloud-password-warning">{t("work.cloud.password_warning")}</span> : t("work.cloud.no_passwords")}
             >
               <Textarea
                 id={ids.what}
@@ -251,10 +250,7 @@ export function TaskSheet(props: {
               {draft.every !== "asked" ? (
                 <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground" data-testid="work-cloud-when-detail">
                   {draft.every === "week" ? (
-                    <Select value={String(draft.weekday)} items={weekdays} onValueChange={(value) => { if (value !== null) set("weekday", Number(value)); }}>
-                      <SelectTrigger className="h-8 w-36" aria-label={t("work.cloud.weekday")}><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectGroup>{weekdays.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
-                    </Select>
+                    <Segmented<number> label={t("work.cloud.weekday")} value={draft.weekday} onChange={(weekday) => set("weekday", weekday)} options={Array.from({ length: 7 }, (_, index) => ({ value: index, label: weekdayName(index, "short") }))} testId="work-cloud-field-weekday" />
                   ) : null}
                   {draft.every === "month" ? (
                     <>

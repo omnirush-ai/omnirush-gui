@@ -12,7 +12,7 @@ import { t } from "@/i18n";
 import type { OmniRushWorkCloudRun } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { CLOUD_KEY, cloudFailure, cloudRunKey, type CloudClient } from "./cloud-model";
+import { CLOUD_KEY, cloudFailure, cloudRunKey, WAIT_TEXT, type CloudClient } from "./cloud-model";
 
 /** The step a `shot_url` points at (`.../runs/<id>/steps/<n>/shot`); null for anything else. */
 export function shotStep(url: string | null | undefined): number | null {
@@ -61,7 +61,7 @@ export function Approval(props: { client: CloudClient | null; run: OmniRushWorkC
         <p className="whitespace-pre-wrap text-[13px] text-foreground" data-testid="work-cloud-approval-summary">{props.run.approval?.summary || t("work.cloud.approval_no_summary")}</p>
       </div>
       {n !== null ? <StepShot client={props.client} runId={props.run.id} n={n} alt={t("work.cloud.approval_shot")} className="max-h-[360px]" /> : null}
-      {props.writesPaused ? <p className="text-[12px] text-amber-11" data-testid="work-cloud-approval-paused">{t("work.cloud.approval_paused")}</p> : null}
+      {props.writesPaused ? <p className={cn("text-[12px]", WAIT_TEXT)} data-testid="work-cloud-approval-paused">{t("work.cloud.approval_paused")}</p> : null}
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={props.writesPaused || decide.isPending} onClick={() => decide.mutate("approve")} data-testid="work-cloud-approve">{t("work.cloud.approve")}</Button>
         <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate("deny")} data-testid="work-cloud-deny">{t("work.cloud.deny")}</Button>

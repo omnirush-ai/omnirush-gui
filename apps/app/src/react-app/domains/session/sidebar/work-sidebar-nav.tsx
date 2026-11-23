@@ -113,7 +113,7 @@ function NavRow(props: { icon: LucideIcon; label: string; active?: boolean; onCl
       <Icon aria-hidden className="size-4 shrink-0 text-sidebar-foreground/60" />
       <span className="min-w-0 flex-1 truncate">{props.label}</span>
       {props.hint ? <kbd className="shrink-0 font-sans text-[11px] text-muted-foreground/80">{props.hint}</kbd> : null}
-      {props.count ? <span className="shrink-0 rounded-full bg-amber-3 px-1.5 text-[11px] font-medium tabular-nums text-amber-11" aria-label={props.count.label} title={props.count.label}>{props.count.n > 9 ? "9+" : props.count.n}</span> : null}
+      {props.count ? <span className="shrink-0 rounded-full bg-amber-3 px-1.5 text-[11px] font-medium tabular-nums text-amber-12" aria-label={props.count.label} title={props.count.label}>{props.count.n > 9 ? "9+" : props.count.n}</span> : null}
     </button>
   );
 }

@@ -20,7 +20,7 @@ import { relativeTime } from "../work-mode";
 import { openItem } from "../viewer/records";
 import {
   CLOUD_KEY, cloudFailure, cloudSearch, cloudTasksKey, filterTasks, hostOf, isOpen, LIST_POLL_MS, needsYou, scheduleText, statusText, TASK_ROWS,
-  usageText, useCloudSignins, useCloudWaiting, useOrgCloud, waitingAction, waitingText, type CloudClient, type CloudOpen, type TaskFilter,
+  usageText, useCloudSignins, useCloudWaiting, useOrgCloud, WAIT_TEXT, waitingAction, waitingText, type CloudClient, type CloudOpen, type TaskFilter,
 } from "./cloud-model";
 import { RunView, StatusLine } from "./run-view";
 import { Segmented, TaskSheet } from "./task-sheet";
@@ -51,7 +51,7 @@ function TaskRow(props: { task: OmniRushWorkCloudTask; now: number; active: bool
           <span className="block truncate text-[13px] font-medium text-foreground">{task.title}</span>
           {site ? <span className="block truncate text-[12px] text-muted-foreground">{site}</span> : null}
         </span>
-        <span className={cn("min-w-0 text-[12px] @2xl:line-clamp-2 @2xl:text-[13px]", task.paused ? "text-amber-11" : "text-muted-foreground")}>
+        <span className={cn("min-w-0 text-[12px] @2xl:line-clamp-2 @2xl:text-[13px]", task.paused ? WAIT_TEXT : "text-muted-foreground")}>
           {task.paused ? (task.paused_reason || t("work.cloud.paused")) : scheduleText(task.schedule)}
         </span>
         <span className="flex min-w-0 items-center gap-1.5 text-[12px] @2xl:text-[13px]">
@@ -75,7 +75,7 @@ function NeedsYouRow(props: { task: OmniRushWorkCloudTask; waiting: OmniRushWork
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3" data-cloud-needs={task.id}>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium text-foreground">{task.title}</span>
-        <span className="flex items-center gap-1.5 text-[12px] text-amber-11">
+        <span className={cn("flex items-center gap-1.5 text-[12px]", WAIT_TEXT)}>
           <span aria-hidden className="size-1.5 rounded-full bg-amber-9" />
           <span className="truncate">{props.waiting ? waitingText(props.waiting) : run.summary || waitingText(null)}</span>
           {run.at ? <span className="shrink-0 text-muted-foreground">· {relativeTime(run.at, props.now)}</span> : null}

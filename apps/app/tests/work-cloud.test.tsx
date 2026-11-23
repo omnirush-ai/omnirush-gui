@@ -512,6 +512,20 @@ describe("the live frame", () => {
     expect(($('[data-testid="work-cloud-takeover"]') as HTMLButtonElement).disabled).toBe(true);
   });
 
+  test("keyboard: after Take over the cursor is on Hand back, after Hand back on Take over", async () => {
+    const { client } = fakeClient();
+    const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    document.body.innerHTML = '<div id="root"></div>';
+    const root = createRoot(document.getElementById("root")!);
+    const show = (run: OmniRushWorkCloudRun) => act(async () => { root.render(<QueryClientProvider client={queries}><LiveFrame client={client} run={run} canControl /></QueryClientProvider>); await sleep(30); });
+    unmount = () => act(async () => root.unmount());
+    await show(F.RUNS.r_running!);
+    await show({ ...F.RUNS.r_running!, status: "waiting", waiting_for: "takeover" });
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("work-cloud-handback");
+    await show(F.RUNS.r_running!);
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("work-cloud-takeover");
+  });
+
   test("only people who may take over see Take over", async () => {
     const { client } = fakeClient();
     await render(<LiveFrame client={client} run={F.RUNS.r_running!} canControl={false} />);
