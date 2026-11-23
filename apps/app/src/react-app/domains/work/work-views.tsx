@@ -1,12 +1,12 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Briefcase, Calendar, Code2, Copy, Info, Mail, Plug, Plus, Sparkles } from "lucide-react";
+import { ArrowLeft, Briefcase, Calendar, ChevronDown, Code2, Copy, Info, Mail, MoreHorizontal, Plug, Plus, RotateCw, Settings2, Sparkles, Stethoscope, Unplug } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ProgressIndicator, ProgressTrack } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -35,9 +35,13 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  chatSyncProgress, connectorAccess, connectorChoicesTitle, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  chatSyncProgress, connectorAccess, connectorChoicesTitle, isLinked, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
 } from "./work-mode";
+
+import { connectorState } from "@/react-app/domains/session/sidebar/work-sidebar-nav";
+import { ListSearch, matchesQuery, StatusPill, type PillTone } from "./list-cap";
+import { useWorkCatalog } from "./catalog";
 
 // Connector marks live in brand-icon.tsx (one tile style for every Work list); re-exported for the pages that import them here.
 export { BrandTile, ConnectorIcon } from "./brand-icon";
@@ -187,11 +191,6 @@ function statusLabel(status: OmniRushWorkConnector["status"]): string {
   return t("work.connectors.status_unavailable");
 }
 
-function lastSync(value: string | null): string {
-  const at = value ? new Date(value) : null;
-  return at && !Number.isNaN(at.getTime()) ? t("work.connectors.last_sync", { when: at.toLocaleString() }) : t("work.connectors.not_synced");
-}
-
 export const CONNECT_POLL_MS = 2_000;
 // Sign-in with a second factor or an admin prompt often takes over a minute.
 export const CONNECT_TIMEOUT_MS = 180_000;
@@ -236,7 +235,18 @@ function useRunEnded(running: boolean, done: () => void) {
   });
 }
 
-/** One source on the Connectors page. */
+/** A connector's status pill on the Connectors page: the sidebar's words (Synced, Syncing 42%, Needs attention,
+ *  Reconnect, Paused), or Not connected / Waiting for sign-in. */
+export function connectorPill(row: OmniRushWorkConnector, connecting: boolean): { tone: PillTone; label: string } {
+  if (connecting) return { tone: "syncing", label: t("work.common.waiting_sign_in") };
+  const linked = row.status === "connected" || row.status === "syncing" || row.status === "error";
+  if (!linked && !isPausedByAdmin(row)) return { tone: "neutral", label: row.status === "disconnected" ? t("work.connectors.status_not_connected") : statusLabel(row.status) };
+  const state = connectorState(row);
+  return { tone: state.tone, label: state.label };
+}
+
+/** One source on the Connectors page: logo, name, status pill and one line of facts; the one action it needs now
+ *  (Connect, Reconnect, Retry, Set up) as a button, everything else (sync, check, Disconnect) in its menu. */
 export function ConnectorRow(props: {
   connector: OmniRushWorkConnector;
   connecting: boolean;
@@ -259,9 +269,11 @@ export function ConnectorRow(props: {
   onManage?: () => void;
 }) {
   const row = props.connector;
-  const name = connectorLabel(row.id, row.label);
+  const fullName = connectorLabel(row.id, row.label);
+  // "Microsoft 365 (Outlook, OneDrive/SharePoint, Teams, Calendar)" reads as "Microsoft 365"; the rest is in its title.
+  const name = fullName.replace(/\s*\(.*\)$/, "") || fullName;
   const connected = row.status === "connected" || row.status === "syncing" || row.status === "error";
-  // Turned off by the company: what was connected stays, and Disconnect is the only button.
+  // Turned off by the company: what was connected stays, and Disconnect is the only action.
   const paused = isPausedByAdmin(row);
   const problem = healthProblem(props.health ?? null);
   // The server's own account of a problem (contract Addendum C1) decides the button when it sends one.
@@ -272,56 +284,64 @@ export function ConnectorRow(props: {
   const coverage = coverageLine(row.coverage);
   // The history import's bar (servers that send `progress`); nothing once it is caught up.
   const progress = connected ? connectorProgress(row.progress) : null;
+  const pill = connectorPill(row, props.connecting);
+  const synced = row.last_sync_at ? relativeTime(row.last_sync_at) : "";
+  const meta = row.status === "error" && !attention
+    ? sourceErrorText(row.error)
+    : connected
+      ? [row.account, coverage ?? countLabel(row.records, "work.count.records"), synced ? t("work.connectors.last_sync", { when: synced }) : t("work.connectors.not_synced"), row.sync_enabled ? null : t("work.connectors.sync_off")].filter(Boolean).join(" · ")
+      : paused
+        ? [row.account, countLabel(row.records, "work.count.records")].filter(Boolean).join(" · ")
+        : connectorAccess(row.id);
+  const setupPrimary = connected && Boolean(row.setup_url) && Boolean(props.onSetup) && (needsSetup || attention?.action === "setup");
+  const primary = !connected && !paused ? (
+    <Button size="sm" aria-label={t("work.connectors.connect_name", { name: fullName })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.common.connect")}</Button>
+  ) : connected && reconnect ? (
+    <Button size="sm" aria-label={t("work.connectors.reconnect_name", { name: fullName })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.connectors.reconnect")}</Button>
+  ) : connected && attention?.action === "retry" && props.onRetry ? (
+    <Button size="sm" aria-label={t("work.connectors.retry_sync_for", { name: fullName })} disabled={props.retrying} onClick={props.onRetry}>{props.retrying ? t("work.connectors.starting") : t("work.connectors.retry_sync")}</Button>
+  ) : setupPrimary ? (
+    <Button size="sm" onClick={props.onSetup}>{attention?.action === "setup" ? t("work.connectors.open_setup") : setupLabel(row.id)}</Button>
+  ) : paused ? (
+    // Turned off by the company: Disconnect is all it offers, so it shows (in the destructive style), with a confirm.
+    <Button variant="destructive" size="sm" aria-label={t("work.connectors.disconnect_name", { name: fullName })} disabled={props.busy} onClick={props.onDisconnect}>{t("work.connectors.disconnect")}</Button>
+  ) : null;
+  const line = "mt-0.5 truncate text-[13px]";
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 transition-colors duration-500 last:border-b-0 data-highlight:bg-muted/70" data-work-connector={row.id} data-status={row.status}>
+    <div className="flex items-start gap-3 border-b border-border px-4 py-3 transition-colors duration-500 last:border-b-0 data-highlight:bg-muted/70" data-work-connector={row.id} data-status={row.status}>
       <BrandTile id={row.id} name={name} />
-      {/* The text keeps at least 16rem; on a narrow window the controls wrap under it instead of squeezing it. */}
-      <div className="min-w-[16rem] flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{name}</span>
-          <Badge variant={row.status === "error" || attention?.kind === "reconnect" || attention?.kind === "failing" ? "destructive" : row.status === "disconnected" || paused ? "outline" : "secondary"} data-testid="work-connector-status">
-            {props.connecting ? t("work.common.waiting_sign_in") : attention ? statusLabel("error") : statusLabel(row.status)}
-          </Badge>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate text-[14px] font-medium text-foreground" title={fullName}>{name}</span>
+          <StatusPill tone={pill.tone} label={pill.label} testId="work-connector-status" />
         </div>
-        <div className="mt-0.5 break-words text-[12px] text-muted-foreground">
-          {row.status === "error" && !attention
-            ? sourceErrorText(row.error)
-            : connected
-              ? [row.account, coverage ?? countLabel(row.records, "work.count.records"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
-              : paused
-                ? [row.account, countLabel(row.records, "work.count.records")].filter(Boolean).join(" · ")
-                : connectorAccess(row.id)}
-        </div>
+        <div className={cn(line, "text-muted-foreground")} title={meta}>{meta}</div>
         {paused ? (
-          <div className="mt-0.5 break-words text-[12px] text-amber-11" data-testid="work-connector-paused" data-by={row.paused_by}>
+          <div className={cn(line, "text-foreground")} data-testid="work-connector-paused" data-by={row.paused_by}>
             {row.paused_by === "staff" ? t("work.connectors.paused_by_staff") : props.onManage ? t("work.connectors.paused_for_team") : t("work.connectors.paused_by_org")}
             {row.paused_by !== "staff" && props.onManage ? (
               <>
                 {" "}
-                <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={props.onManage} data-testid="work-connector-paused-manage">
+                <button type="button" className="rounded underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onClick={props.onManage} data-testid="work-connector-paused-manage">
                   {t("work.connectors.paused_manage")}
                 </button>
               </>
             ) : null}
           </div>
         ) : null}
-        {progress ? <SyncProgressBar view={progress} name={name} /> : null}
+        {progress ? <SyncProgressBar view={progress} name={fullName} /> : null}
         {attention ? (
-          <div
-            className={cn("mt-0.5 break-words text-[12px]", attention.kind === "reconnect" || attention.kind === "failing" ? "text-destructive" : "text-amber-11")}
-            data-testid="work-connector-attention"
-            data-kind={attention.kind}
-          >
+          <div className={cn(line, "text-foreground")} title={attention.message} data-testid="work-connector-attention" data-kind={attention.kind}>
             {attention.message}
           </div>
         ) : null}
         {connected && (row.skipped_records ?? 0) > 0 ? (
-          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-connector-skipped">
+          <div className={cn(line, "text-muted-foreground")} data-testid="work-connector-skipped">
             {t("work.connectors.skipped", { count: row.skipped_records ?? 0, n: (row.skipped_records ?? 0).toLocaleString() })}
           </div>
         ) : null}
         {needsSetup ? (
-          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-connector-setup-hint">
+          <div className={cn(line, "text-muted-foreground")} data-testid="work-connector-setup-hint">
             {t("work.connectors.setup_hint", { action: setupLabel(row.id) })}
           </div>
         ) : null}
@@ -329,40 +349,52 @@ export function ConnectorRow(props: {
           <ConnectorChoices title={connectorChoicesTitle(row.id)} choices={row.choices!} busy={props.busy} onPick={props.onPick} />
         ) : null}
         {connected && props.health !== undefined ? (
-          <div className={cn("mt-0.5 text-[12px]", problem ? "text-destructive" : "text-muted-foreground")} data-testid="work-connector-health">
+          <div className={cn(line, problem ? "text-red-11" : "text-muted-foreground")} data-testid="work-connector-health">
             {props.health === null ? t("work.connectors.no_health") : problem ? problem.text : t("work.connectors.health_ok")}
           </div>
         ) : null}
       </div>
-      <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
-      {connected ? (
-        <label className="me-2 flex items-center gap-2 text-[12px] text-muted-foreground">
-          {t("work.connectors.data_sync")}
-          <Switch
-            aria-label={t("work.connectors.data_sync_for", { name })}
-            checked={row.sync_enabled}
-            disabled={props.busy}
-            onCheckedChange={(checked: boolean) => props.onSync(checked)}
-          />
-        </label>
-      ) : null}
-      {connected && props.onCheck ? (
-        <Button variant="ghost" size="sm" aria-label={t("work.connectors.check_name", { name })} disabled={props.checking} onClick={props.onCheck}>{props.checking ? t("work.connectors.checking") : t("work.connectors.check")}</Button>
-      ) : null}
-      {connected && attention?.action === "retry" && props.onRetry ? (
-        <Button size="sm" aria-label={t("work.connectors.retry_sync_for", { name })} disabled={props.retrying} onClick={props.onRetry}>{props.retrying ? t("work.connectors.starting") : t("work.connectors.retry_sync")}</Button>
-      ) : null}
-      {connected && row.setup_url && props.onSetup ? (
-        <Button variant={needsSetup || attention?.action === "setup" ? "default" : "ghost"} size="sm" onClick={props.onSetup}>{attention?.action === "setup" ? t("work.connectors.open_setup") : setupLabel(row.id)}</Button>
-      ) : null}
-      {connected && reconnect ? (
-        <Button size="sm" aria-label={t("work.connectors.reconnect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.connectors.reconnect")}</Button>
-      ) : null}
-      {connected || paused ? (
-        <Button variant="outline" size="sm" aria-label={t("work.connectors.disconnect_name", { name })} disabled={props.busy} onClick={props.onDisconnect}>{t("work.connectors.disconnect")}</Button>
-      ) : (
-        <Button size="sm" aria-label={t("work.connectors.connect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.common.connect")}</Button>
-      )}
+      <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+        {primary}
+        {connected ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={(
+                <Button variant="ghost" size="icon-sm" aria-label={t("work.sidebar.options", { name: fullName })} data-testid="work-connector-menu">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              )}
+            />
+            <DropdownMenuContent align="end" className="w-56">
+              {(
+                <DropdownMenuCheckboxItem checked={row.sync_enabled} disabled={props.busy} onCheckedChange={(checked: boolean) => props.onSync(checked)} aria-label={t("work.connectors.data_sync_for", { name: fullName })}>
+                  {t("work.connectors.data_sync")}
+                </DropdownMenuCheckboxItem>
+              )}
+              {props.onCheck ? (
+                <DropdownMenuItem disabled={props.checking} onClick={props.onCheck} aria-label={t("work.connectors.check_name", { name: fullName })}>
+                  <Stethoscope className="size-4" />{props.checking ? t("work.connectors.checking") : t("work.connectors.check")}
+                </DropdownMenuItem>
+              ) : null}
+              {row.setup_url && props.onSetup && !setupPrimary ? (
+                <DropdownMenuItem onClick={props.onSetup}><Settings2 className="size-4" />{setupLabel(row.id)}</DropdownMenuItem>
+              ) : null}
+              {!reconnect ? (
+                <DropdownMenuItem disabled={props.busy || props.connecting} onClick={props.onConnect}><RotateCw className="size-4" />{t("work.connectors.reconnect")}</DropdownMenuItem>
+              ) : null}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={props.busy}
+                onClick={props.onDisconnect}
+                aria-label={t("work.connectors.disconnect_name", { name: fullName })}
+                className="text-red-11 focus:text-red-11 *:[svg]:text-red-11"
+                data-testid="work-connector-disconnect"
+              >
+                <Unplug className="size-4" />{t("work.connectors.disconnect")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </div>
     </div>
   );
@@ -778,6 +810,8 @@ const HOOK_EXAMPLE = JSON.stringify(
 export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkClient | null; onChanged: () => void }) {
   const [shown, setShown] = useState<{ id: string; url: string } | null>(null);
   const [tool, setTool] = useState<(typeof HOOK_TOOLS)[number]["id"]>("zapier");
+  // The how-to is folded until asked for.
+  const [howto, setHowto] = useState(false);
   const [confirm, setConfirm] = useState<{ id: string; action: "regenerate" | "delete" } | null>(null);
   const make = useMutation({
     mutationFn: (id: string) => props.client!.createWorkHook(id),
@@ -796,8 +830,8 @@ export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkCli
       <div className="flex items-start gap-4 border-b border-border px-4 py-3">
         <BrandTile id="hook" />
         <div className="min-w-[16rem] flex-1">
-          <span className="text-sm font-medium">{t("work.hook.title")}</span>
-          <div className="mt-0.5 text-[12px] text-muted-foreground">{t("work.hook.body")}</div>
+          <span className="text-[14px] font-medium">{t("work.hook.title")}</span>
+          <div className="mt-0.5 text-[13px] text-muted-foreground">{t("work.hook.body")}</div>
         </div>
       </div>
       {props.rows.map((row) => {
@@ -808,21 +842,21 @@ export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkCli
           <div key={row.id} className="flex flex-col gap-2 border-b border-border px-4 py-3" data-work-hook={row.id} data-status={on ? "on" : "off"}>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <div className="min-w-[16rem] flex-1">
-                <span className="text-sm font-medium">{company ? t("work.hook.company") : t("work.hook.mine")}</span>
-                <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-hook-status">
+                <span className="text-[14px] font-medium">{company ? t("work.hook.company") : t("work.hook.mine")}</span>
+                <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="work-hook-status">
                   {!on
                     ? t("work.hook.off")
                     : row.records
                       ? [countLabel(row.records, "work.count.records"), relativeTime(row.last_sync_at)].filter(Boolean).join(" · ")
                       : t("work.hook.nothing_yet")}
                 </div>
-                {company ? <div className="mt-0.5 text-[12px] text-muted-foreground">{t("work.hook.company_note")}</div> : null}
+                {company ? <div className="mt-0.5 text-[13px] text-muted-foreground">{t("work.hook.company_note")}</div> : null}
               </div>
               <div className="ms-auto flex flex-wrap items-center justify-end gap-2">
                 {on ? (
                   <>
                     <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirm({ id: row.id, action: "regenerate" })}>{t("work.hook.regenerate")}</Button>
-                    <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirm({ id: row.id, action: "delete" })}>{t("work.hook.delete")}</Button>
+                    <Button variant="destructive" size="sm" disabled={busy} onClick={() => setConfirm({ id: row.id, action: "delete" })}>{t("work.hook.delete")}</Button>
                   </>
                 ) : (
                   <Button size="sm" disabled={busy || !props.client} onClick={() => make.mutate(row.id)} data-testid="work-hook-create">{t("work.hook.create")}</Button>
@@ -847,15 +881,28 @@ export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkCli
         );
       })}
       <div className="flex flex-col gap-2 px-4 py-3" data-testid="work-hook-howto">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="me-2 text-[12px] font-medium">{t("work.hook.howto")}</span>
-          {HOOK_TOOLS.map((item) => (
-            <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-pressed={tool === item.id} onClick={() => setTool(item.id)}>{item.label}</Button>
-          ))}
-        </div>
-        <p className="text-[12px] text-muted-foreground" data-testid="work-hook-steps">{HOOK_TOOLS.find((item) => item.id === tool)!.steps()}</p>
-        <pre className="overflow-x-auto rounded-md bg-muted/50 px-3 py-2 text-[11px]">{HOOK_EXAMPLE}</pre>
-        <p className="text-[12px] text-muted-foreground">{t("work.hook.fields")}</p>
+        <button
+          type="button"
+          aria-expanded={howto}
+          onClick={() => setHowto(!howto)}
+          className="-mx-1 flex items-center gap-1.5 self-start rounded-md px-1 text-[13px] font-medium text-foreground outline-none hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring"
+          data-testid="work-hook-howto-toggle"
+        >
+          <ChevronDown aria-hidden className={cn("size-4 text-muted-foreground transition-transform motion-reduce:transition-none", !howto && "-rotate-90")} />
+          {t("work.hook.howto")}
+        </button>
+        {howto ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              {HOOK_TOOLS.map((item) => (
+                <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-pressed={tool === item.id} onClick={() => setTool(item.id)}>{item.label}</Button>
+              ))}
+            </div>
+            <p className="text-[13px] text-muted-foreground" data-testid="work-hook-steps">{HOOK_TOOLS.find((item) => item.id === tool)!.steps()}</p>
+            <pre className="overflow-x-auto rounded-md bg-muted/50 px-3 py-2 text-[12px]">{HOOK_EXAMPLE}</pre>
+            <p className="text-[13px] text-muted-foreground">{t("work.hook.fields")}</p>
+          </>
+        ) : null}
       </div>
       <ConfirmModal
         open={confirm !== null}
@@ -874,6 +921,9 @@ export function HookCard(props: { rows: OmniRushWorkConnector[]; client: WorkCli
     </div>
   );
 }
+
+/** The Connectors page shows its search field from this many sources. */
+export const CONNECTORS_SEARCH_FROM = 8;
 
 const FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
@@ -1267,6 +1317,9 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const [health, setHealth] = useState<Record<string, OmniRushWorkHealth | null>>({});
   // The source whose server and password form is open (other email, other calendar).
   const [form, setForm] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  // The kinds of tool opened (the connected group is always open).
+  const [openGroups, setOpenGroups] = useState<string[]>([]);
   const connectStarted = useRef(0);
   const query = useQuery({
     queryKey: key,
@@ -1307,7 +1360,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     found.setAttribute("data-highlight", "");
     const timer = window.setTimeout(() => found.removeAttribute("data-highlight"), 1600);
     return () => window.clearTimeout(timer);
-  }, [rowsIn, target]);
+  }, [rowsIn, target, openGroups.length]);
   const connect = useMutation({
     mutationFn: ({ id, form: start }: { id: string; form?: OmniRushWorkStart }) => props.client!.startWorkConnector(id, start),
     onSuccess: (answer, { id }) => {
@@ -1358,6 +1411,62 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     else if (canAdd(id) && !busy) connect.mutate({ id });
   };
   const failure = query.error ? workFailure(query.error) : null;
+  // Connected sources first, then the rest by kind of tool (folded until opened), with search once the list is long.
+  const catalog = useWorkCatalog(props.client, [], Boolean(props.client));
+  const searching = Boolean(search.trim());
+  const folding = rows.length > CONNECTORS_SEARCH_FROM;
+  const inUse = (row: OmniRushWorkConnector) => isLinked(row) || isPausedByAdmin(row) || connecting === row.id || form === row.id;
+  const found = rows.filter((row) => matchesQuery(search, row.label, row.id, connectorLabel(row.id, row.label)));
+  const categoryOf = (id: string) => catalog.connectors.find((tool) => tool.id === id)?.category ?? "other";
+  const groups = [
+    { id: "connected", label: t("work.connectors.group_connected"), rows: found.filter(inUse) },
+    ...[...catalog.categories, { id: "other", label: t("work.connectors.group_other") }].map((category) => ({
+      id: category.id,
+      label: category.label,
+      rows: found.filter((row) => !inUse(row) && (categoryOf(row.id) === category.id || (category.id === "other" && !catalog.categories.some((known) => known.id === categoryOf(row.id))))),
+    })),
+  ].filter((group) => group.rows.length > 0);
+  // Opened at one connector (`#slack`) or its sign-in form: its group opens too.
+  const wanted = target || form;
+  useEffect(() => {
+    if (!wanted || !rowsIn) return;
+    const group = groups.find((entry) => entry.id !== "connected" && entry.rows.some((row) => row.id === wanted));
+    if (group && !openGroups.includes(group.id)) setOpenGroups([...openGroups, group.id]);
+  }, [wanted, rowsIn]);
+  const renderRow = (row: OmniRushWorkConnector) => [
+    <ConnectorRow
+      key={row.id}
+      connector={row}
+      connecting={connecting === row.id}
+      busy={busy}
+      onConnect={() => (row.mode === "credentials" || row.mode === "key" || row.start_fields?.length ? setForm(form === row.id ? null : row.id) : connect.mutate({ id: row.id }))}
+      onDisconnect={() => setConfirmDisconnect(row)}
+      onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
+      onSetup={row.setup_url ? () => props.openLink(row.setup_url!) : undefined}
+      health={health[row.id]}
+      checking={check.isPending && check.variables === row.id}
+      onCheck={() => check.mutate(row.id)}
+      retrying={retry.isPending && retry.variables === row.id}
+      onRetry={() => retry.mutate(row.id)}
+      onPick={(picked) => pick.mutate({ id: row.id, picked })}
+      onManage={manage}
+    />,
+    form === row.id ? (
+      (() => {
+        const formProps = {
+          connector: row,
+          client: props.client,
+          openLink: props.openLink,
+          onDone: () => { setForm(null); void refresh(); void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) }); },
+          onCancel: () => setForm(null),
+        };
+        if (row.start_fields?.length) {
+          return <StartForm key={`${row.id}-form`} connector={row} busy={connect.isPending} onStart={(start) => connect.mutate({ id: row.id, form: start })} onCancel={() => setForm(null)} />;
+        }
+        return row.mode === "key" ? <KeyForm key={`${row.id}-form`} {...formProps} /> : <CredentialsForm key={`${row.id}-form`} {...formProps} />;
+      })()
+    ) : null,
+  ];
   return (
     <div className="h-full overflow-y-auto" data-testid="work-connectors">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-10 pt-10">
@@ -1370,51 +1479,48 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           {props.notice ? <div className="mt-3">{props.notice}</div> : null}
         </div>
         <WorkCoverageMeter client={props.client} onAdd={add} canAdd={canAdd} />
-        <div className="rounded-xl border border-border bg-background">
-          {query.isLoading ? (
-            <div className="px-4 py-6 text-sm text-muted-foreground">{t("common.loading")}</div>
-          ) : failure ? (
-            <div className="flex flex-col items-start gap-2 px-4 py-4" data-testid="work-connectors-error">
-              <span className="text-sm text-muted-foreground">{failure.text}</span>
-              {failure.retry ? <Button variant="outline" size="sm" onClick={() => void query.refetch()}>{t("work.common.try_again")}</Button> : null}
-            </div>
-          ) : rows.length === 0 ? (
-            <div className="px-4 py-6 text-sm text-muted-foreground">{t("work.connectors.none")}</div>
-          ) : rows.map((row) => [
-            <ConnectorRow
-              key={row.id}
-              connector={row}
-              connecting={connecting === row.id}
-              busy={busy}
-              onConnect={() => (row.mode === "credentials" || row.mode === "key" || row.start_fields?.length ? setForm(form === row.id ? null : row.id) : connect.mutate({ id: row.id }))}
-              onDisconnect={() => setConfirmDisconnect(row)}
-              onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
-              onSetup={row.setup_url ? () => props.openLink(row.setup_url!) : undefined}
-              health={health[row.id]}
-              checking={check.isPending && check.variables === row.id}
-              onCheck={() => check.mutate(row.id)}
-              retrying={retry.isPending && retry.variables === row.id}
-              onRetry={() => retry.mutate(row.id)}
-              onPick={(picked) => pick.mutate({ id: row.id, picked })}
-              onManage={manage}
-            />,
-            form === row.id ? (
-              (() => {
-                const formProps = {
-                  connector: row,
-                  client: props.client,
-                  openLink: props.openLink,
-                  onDone: () => { setForm(null); void refresh(); void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) }); },
-                  onCancel: () => setForm(null),
-                };
-                if (row.start_fields?.length) {
-                  return <StartForm key={`${row.id}-form`} connector={row} busy={connect.isPending} onStart={(start) => connect.mutate({ id: row.id, form: start })} onCancel={() => setForm(null)} />;
-                }
-                return row.mode === "key" ? <KeyForm key={`${row.id}-form`} {...formProps} /> : <CredentialsForm key={`${row.id}-form`} {...formProps} />;
-              })()
-            ) : null,
-          ])}
-        </div>
+        {query.isLoading ? (
+          <div className="rounded-xl border border-border px-4 py-6 text-[14px] text-muted-foreground">{t("common.loading")}</div>
+        ) : failure ? (
+          <div className="flex flex-col items-start gap-2 rounded-xl border border-border px-4 py-4" data-testid="work-connectors-error">
+            <span className="text-[14px] text-muted-foreground">{failure.text}</span>
+            {failure.retry ? <Button variant="outline" size="sm" onClick={() => void query.refetch()}>{t("work.common.try_again")}</Button> : null}
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="rounded-xl border border-border px-4 py-6 text-[14px] text-muted-foreground">{t("work.connectors.none")}</div>
+        ) : (
+          <div className="flex flex-col gap-4" data-testid="work-connector-groups">
+            {rows.length > CONNECTORS_SEARCH_FROM ? (
+              <ListSearch value={search} onChange={setSearch} label={t("work.connectors.search")} testId="work-connectors-search" />
+            ) : null}
+            {groups.map((group) => {
+              // A short list shows whole; a long one folds each kind of tool until opened.
+              const open = !folding || group.id === "connected" || searching || openGroups.includes(group.id);
+              return (
+                <section key={group.id} className="flex flex-col gap-2" data-connector-group={group.id} data-open={open}>
+                  {group.id === "connected" || !folding ? (
+                    <h2 className="flex items-center gap-2 text-[13px] font-semibold text-foreground">{group.label}<span className="font-normal tabular-nums text-muted-foreground">{group.rows.length}</span></h2>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setOpenGroups(open ? openGroups.filter((id) => id !== group.id) : [...openGroups, group.id])}
+                      className="flex h-9 w-full items-center gap-2 rounded-lg px-1 text-start text-[13px] font-semibold text-foreground outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+                      data-testid="work-connector-group-toggle"
+                    >
+                      <ChevronDown aria-hidden className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", !open && "-rotate-90")} />
+                      <span className="min-w-0 truncate">{group.label}</span>
+                      <span className="font-normal tabular-nums text-muted-foreground">{group.rows.length}</span>
+                      {open ? null : <span aria-hidden className="ms-auto flex items-center gap-1">{group.rows.slice(0, 5).map((row) => <BrandTile key={row.id} id={row.id} size="chip" />)}</span>}
+                    </button>
+                  )}
+                  {open ? <div className="rounded-xl border border-border bg-background">{group.rows.map(renderRow)}</div> : null}
+                </section>
+              );
+            })}
+            {searching && !groups.length ? <p className="px-1 text-[14px] text-muted-foreground" data-testid="work-connectors-no-match">{t("work.connectors.no_match")}</p> : null}
+          </div>
+        )}
         <HookCard rows={hookRows} client={props.client} onChanged={() => void refresh()} />
         <ChatImportCard client={props.client} off={off} />
         {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} off={off} /> : null}
@@ -1459,7 +1565,8 @@ function WorkConnectorsChipButton(props: { client: WorkClient | null }) {
       className="flex h-9 max-h-9 min-w-9 shrink-[4] items-center gap-1.5 overflow-hidden rounded-md px-2.5 text-sm text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
     >
       {connected.length ? connected.slice(0, 3).map((row) => <ConnectorIcon key={row.id} id={row.id} className="size-3.5 text-current" />) : <Plug aria-hidden className="size-4 shrink-0" />}
-      <span className="min-w-0 truncate whitespace-nowrap">{label}</span>
+      {/* Nothing connected: the icon alone, so the home's checklist keeps the one "Connect" in words. */}
+      <span className={connected.length ? "min-w-0 truncate whitespace-nowrap" : "sr-only"}>{label}</span>
     </button>
   );
 }

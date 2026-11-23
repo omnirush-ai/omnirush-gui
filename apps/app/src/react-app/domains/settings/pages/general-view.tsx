@@ -37,6 +37,7 @@ import { omnirushUsageSummary } from "../../../../app/lib/omnirush-usage";
 import { ALLOWANCE_HELP_TITLE } from "../../../../app/lib/allowance-help";
 import { AllowanceHelpLink } from "../../quality/allowance-help";
 import { isElectronRuntime } from "../../../../app/utils";
+import { cn } from "@/lib/utils";
 import {
   APPROVAL_MODES,
   approvalModeLabel,
@@ -119,6 +120,8 @@ function SettingsCard(props: {
   title: string;
   desc: string;
   onClick: () => void;
+  /** A company account (OmniRush Work): 14 px titles and 12 px descriptions. */
+  work?: boolean;
 }) {
   return (
     <button
@@ -130,8 +133,8 @@ function SettingsCard(props: {
         <props.icon size={16} className="text-dls-secondary" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-dls-text">{props.title}</div>
-        <div className="text-[11px] text-dls-secondary">{props.desc}</div>
+        <div className={cn("font-medium text-dls-text", props.work ? "text-[14px]" : "text-[13px]")}>{props.title}</div>
+        <div className={cn("text-dls-secondary", props.work ? "text-[12px]" : "text-[11px]")}>{props.desc}</div>
       </div>
       <ArrowRight size={14} className="shrink-0 text-dls-secondary" />
     </button>
@@ -556,6 +559,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
               title={cardTitle(card)}
               desc={cardDescription(card)}
               onClick={() => props.onNavigateTab(card.tab)}
+              work={enterprise.on}
             />
           ))}
         </div>
@@ -563,7 +567,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
 
       {/* Global settings */}
       <div className="space-y-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-dls-secondary">
+        <div className={cn("font-semibold uppercase tracking-[0.15em] text-dls-secondary", enterprise.on ? "text-[12px]" : "text-[11px]")}>
           {t("settings.section_global")}
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -574,6 +578,7 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
               title={cardTitle(card)}
               desc={cardDescription(card)}
               onClick={() => props.onNavigateTab(card.tab)}
+              work={enterprise.on}
             />
           ))}
         </div>

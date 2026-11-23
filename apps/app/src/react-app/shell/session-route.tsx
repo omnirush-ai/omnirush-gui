@@ -127,9 +127,10 @@ import { WorkAutomationPage } from "@/react-app/domains/work/work-activity";
 import { WorkToday } from "@/react-app/domains/work/work-today";
 import { WorkKnowledgePage } from "@/react-app/domains/work/knowledge-views";
 import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
-import { WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
+import { useChecklistShown, WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTryButton } from "@/react-app/domains/work/work-onboarding";
 import { enterpriseRedirect, useEnterpriseMode, useEnterpriseStore } from "@/react-app/domains/work/enterprise-mode";
 import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
+import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -3830,9 +3831,11 @@ export function SessionRoute() {
     if (attachments.length) useComposerStateStore.getState().setAttachments(sessionId, attachments);
     markComposerAutoSend(sessionId);
   };
+  // The checklist's "Connect a tool" is the home's one Connect action while it shows.
+  const workChecklistShown = useChecklistShown(workOnboarding.data, workConnectorRows.data, workOrgId, workRole);
   const workChecklist = workOrgId ? (
     <>
-      <WorkChecklist client={client ?? null} onboarding={workOnboarding.data} connectors={workConnectorRows.data} orgId={workOrgId} onConnect={() => navigate(WORK_CONNECTORS_ROUTE)} onInvite={() => setWorkInviteOpen(true)} onOrganization={() => navigate(WORK_ORG_ROUTE)} />
+      <WorkChecklist client={client ?? null} onboarding={workOnboarding.data} connectors={workConnectorRows.data} orgId={workOrgId} role={workRole} onConnect={() => navigate(WORK_CONNECTORS_ROUTE)} onInvite={() => setWorkInviteOpen(true)} onOrganization={() => navigate(WORK_ORG_ROUTE)} />
       <WorkInviteDialog client={client ?? null} open={workInviteOpen} onOpenChange={setWorkInviteOpen} />
     </>
   ) : null;
@@ -3994,7 +3997,8 @@ export function SessionRoute() {
       primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? t("work.nav.connectors") : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? t("work.nav.search") : location.pathname.startsWith(WORK_DEALS_ROUTE) ? t("work.nav.deals") : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? t("work.nav.meetings") : location.pathname.startsWith(WORK_ORG_ROUTE) ? t("work.nav.organization") : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? t("work.nav.insights") : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? t("work.nav.automation") : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? t("work.nav.knowledge") : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? t("work.nav.welcome") : t("work.nav.work")) : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
-        location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
+        // One Work page that fails to draw shows "couldn't load" with Reload, never a blank window.
+        <WorkPageBoundary key={location.pathname.split("/").slice(0, 3).join("/")}>{location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
           <WorkConnectorsPage
             client={client ?? null}
             openLink={(url) => platform.openLink(url)}
@@ -4039,7 +4043,7 @@ export function SessionRoute() {
             onStart={startWorkChat}
             starters={workStarters}
             checklist={workChecklist}
-            onConnect={() => navigate(WORK_CONNECTORS_ROUTE)}
+            onConnect={workChecklistShown ? undefined : () => navigate(WORK_CONNECTORS_ROUTE)}
             pending={workConnectorRows.isPending || workOnboarding.isPending}
             today={hasRealSource(workConnectorRows.data) ? (
               <WorkToday
@@ -4063,7 +4067,7 @@ export function SessionRoute() {
               />
             )}
           />
-        )
+        )}</WorkPageBoundary>
       ) : workRouteRequested && workState.isPending ? (
         // The Work switch is being read: a quiet placeholder, never the Code view or a blank page.
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pt-10" data-testid="work-route-loading" aria-busy="true">
