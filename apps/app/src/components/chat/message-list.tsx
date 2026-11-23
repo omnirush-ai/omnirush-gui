@@ -38,6 +38,8 @@ import { t } from "@/i18n"
 import { useOpenTargets } from "@/lib/target-provider"
 import { openTargetFromUrl } from "@/react-app/domains/session/artifacts/open-target"
 import { isWorkTool, WorkSourceChips } from "@/react-app/domains/work/viewer/source-chips"
+import { CloudToolCard } from "@/react-app/domains/work/cloud/cloud-card"
+import { isCloudTool } from "@/react-app/domains/work/cloud/cloud-model"
 import { sessionErrorPresentationFromUIMessage } from "@/react-app/domains/session/sync/session-error"
 import { gatewayRefusalEvent } from "@/app/lib/gateway-refusal"
 import { AllowanceHelpLink } from "@/react-app/domains/quality/allowance-help"
@@ -346,6 +348,10 @@ const ToolMessageInner = ({ part, attachments }: ToolMessageProps) => {
         onRetry={onMcpRetry}
       />
     )
+    // A Cloud tasks tool's answer: a compact task or run card under its line (lists and sign-ins get none).
+    if (isCloudTool(part.toolName) && part.state === "output-available") {
+      return <div className="flex flex-col">{line}<CloudToolCard toolName={part.toolName} output={part.output} /></div>
+    }
     // A Work tool's records open in the chat's side panel (record viewer).
     if (isWorkTool(part.toolName) && part.state === "output-available") {
       return <div className="flex flex-col">{line}<WorkSourceChips output={part.output} /></div>

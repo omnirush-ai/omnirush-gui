@@ -53,15 +53,18 @@ import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
+import { registerWorkCloudRoutes } from "./cloud-routes.js";
 import { rememberAnswerStyle, rememberedAnswerStyle, rememberedWorkActions, rememberedWorkConnectors, rememberedWorkEnterprise, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
-  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
+  workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; body?: string | FormData | Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
   accountId: () => Promise<string | null>;
   /** The account's server (gateway origin), so a key per server and account can be made. */
   readonly serverOrigin?: string | null;
   /** `maxAgeMs`: an answer older than that is asked again. */
   capabilities: (options?: { maxAgeMs?: number }) => Promise<unknown>;
+  /** The account's server as an origin, for Cloud tasks' live page check (not `serverOrigin`, which keys the chat sync). */
+  gatewayOrigin?: () => string | null;
 };
 
 export type WorkRouteDeps = {
@@ -262,7 +265,10 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
       const fresh = ctx.url.searchParams.get("fresh") === "1";
       const capabilities = await found.capabilities(switchStale ? { maxAgeMs: 0 } : fresh ? { maxAgeMs: 30_000 } : undefined).catch(() => null);
       if (capabilities) switchStale = false;
+      const cloudBefore = JSON.stringify(rememberedWorkActions(deps.workDir()).cloud ?? null);
       if (rememberWorkSwitch(deps.workDir(), capabilities)) void deps.applyEngine().catch(() => undefined);
+      // Cloud tasks coming or going change the hosted server's tools (work_cloud_*): the engine lists them again.
+      if (JSON.stringify(rememberedWorkActions(deps.workDir()).cloud ?? null) !== cloudBefore) deps.refreshMcp?.();
     }
     const setting = rememberedWorkSwitch(deps.workDir());
     // Only asked for by the desktop's chat sync: learning the account can take a network call.
@@ -735,6 +741,9 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     if (typeof body.connector !== "string" || !CONNECTOR.test(body.connector)) return invalid("connector is not valid");
     return forward("compose", "POST", body);
   });
+
+  // Cloud tasks (their own file): a company change to them reads the capabilities' cloud block fresh next time.
+  registerWorkCloudRoutes(deps, { passThrough, markStale: () => { switchStale = true; } });
 }
 
 /**

@@ -17,6 +17,7 @@ import { BrandTile, ConnectorIcon } from "./brand-icon";
 import { useOpenRecordId } from "./viewer/record-tabs";
 import { canOpen, isMac, openItem, openModifiers, requestOpenRecord, useViewerSupport, type RecordRef } from "./viewer/records";
 import { useListKeys } from "./viewer/shortcuts";
+import { CloudTodayStrip } from "./cloud/cloud-card";
 
 export const FEED_REFRESH_MS = 5 * 60_000;
 /** Rows a section shows before "Show N more". */
@@ -271,6 +272,8 @@ export function WorkToday(props: {
           </div>
         ) : null}
       </div>
+      {/* Cloud task runs that need the person or failed (only while Cloud tasks are on: the feed has no `cloud` otherwise). */}
+      <CloudTodayStrip items={feed.data?.cloud} now={now} />
       {sources.length ? (
         <SourceAttention
           sources={sources}

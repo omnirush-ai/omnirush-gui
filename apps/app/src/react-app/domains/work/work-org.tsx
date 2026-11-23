@@ -25,6 +25,8 @@ import {
 
 import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkOrgConnectors, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workRoleLabel, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
 import { BrandTile } from "./brand-icon";
+import { OrgCloudSection } from "./cloud/org-cloud";
+import { workCloud } from "./cloud/cloud-model";
 import { pickerGroups, toolLabel, useWorkCatalog } from "./catalog";
 import { useEnterpriseFlags } from "./enterprise-mode";
 import { SizeChips, ToolPicker } from "./onboarding-steps";
@@ -419,6 +421,9 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                 </div>
               </Section>
             ) : null}
+
+            {/* Cloud tasks: only once staff turned them on for the company (its own block). */}
+            <OrgCloudSection client={props.client} cloud={workCloud(state.data)} manager={owner || admin} enterprise={enterprise.on} />
 
             <Section title={t("work.org.security")} testId="work-org-security">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">

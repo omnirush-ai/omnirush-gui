@@ -131,6 +131,9 @@ import { WorkChecklist, WorkInviteDialog, WorkJoinDialog, WorkOnboarding, WorkTr
 import { enterpriseRedirect, useEnterpriseMode, useEnterpriseStore } from "@/react-app/domains/work/enterprise-mode";
 import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
 import { ASK_WORK_RECORD_EVENT } from "@/react-app/domains/work/viewer/records";
+import { WORK_CLOUD_ROUTE } from "@/react-app/domains/work/work-mode";
+import { cloudPageProps } from "@/react-app/domains/work/cloud/cloud-tasks";
+import { cloudSearch, useCloudClientStore, useCloudWaiting, workCloud, WORK_CLOUD_OPEN_EVENT, type CloudOpen } from "@/react-app/domains/work/cloud/cloud-model";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -587,6 +590,18 @@ export function SessionRoute() {
   const workIsOwner = workMembers.data?.you_role === "owner";
   // Deals shows in the sidebar only once the server has deals (none, an error or an older server: hidden).
   const workDeals = useQuery({ queryKey: workDealsKey(client ?? null, null), queryFn: () => client!.listWorkDeals(), enabled: Boolean(client) && workEnabled, retry: false, staleTime: 5 * 60_000 });
+  // Cloud tasks: only while the Work state has `cloud` (staff, the company and the global switch all on for this person);
+  // without it nothing below asks the server anything or shows anything.
+  const workCloudCaps = workEnabled ? workCloud(workState.data) : null;
+  const workCloudActive = workRouteActive && workCloudCaps !== null && location.pathname.startsWith(WORK_CLOUD_ROUTE);
+  const workCloudWaiting = useCloudWaiting(client ?? null, workCloudCaps !== null);
+  const setWorkCloudClient = useCloudClientStore((state) => state.setClient);
+  useEffect(() => setWorkCloudClient(workCloudCaps && client ? client : null, workCloudCaps?.live === true), [client, setWorkCloudClient, workCloudCaps !== null, workCloudCaps?.live]);
+  useEffect(() => {
+    const open = (event: Event) => navigate(`${WORK_CLOUD_ROUTE}${cloudSearch((event as CustomEvent<CloudOpen>).detail ?? {})}`);
+    window.addEventListener(WORK_CLOUD_OPEN_EVENT, open);
+    return () => window.removeEventListener(WORK_CLOUD_OPEN_EVENT, open);
+  }, [navigate]);
   const accountEmail = useAccountStatusStore((state) => state.status?.email ?? null);
   const [workInviteOpen, setWorkInviteOpen] = useState(false);
   const tryWork = useCallback(async () => {
@@ -4118,6 +4133,10 @@ export function SessionRoute() {
           <DashboardPage fallbackEndpoints={dashboardFallbackEndpoints} onCreateApp={startAppConversation} />
         </WorkspaceProvider>
       ) : undefined}
+      {...cloudPageProps(workCloudActive && workCloudCaps ? {
+        // Work > Cloud tasks, in its own block (the Work pages above stay as they are).
+        client: client ?? null, caps: workCloudCaps, orgName: enterprise.orgName, writesPaused: workState.data?.writes_paused === true, openLink: (url) => platform.openLink(url),
+      } : null)}
       terminalOpen={terminalOpen && !workChatActive}
       onTerminalOpenChange={setTerminalOpen}
       opencodeClient={opencodeClient}
@@ -4140,6 +4159,7 @@ export function SessionRoute() {
           onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE),
           onOpenActivity: () => navigate(WORK_ACTIVITY_ROUTE), activityActive: location.pathname.startsWith(WORK_ACTIVITY_ROUTE),
           ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}),
+          ...(workCloudCaps ? { onOpenCloud: () => navigate(WORK_CLOUD_ROUTE), cloudActive: workCloudActive, cloudWaiting: workCloudWaiting.data?.items.length ?? 0 } : {}),
           // A connector opens Home with only its items.
           connectors: workConnectorRows.data ?? (workConnectorRows.isError ? null : undefined),
           onOpenConnector: (id: string) => navigate(`${WORK_HOME_ROUTE}?source=${encodeURIComponent(id)}`),

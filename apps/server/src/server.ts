@@ -1485,6 +1485,8 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     workRequest: (path, init) => gatewayBroker.workRequest(path, init),
     accountId: () => gatewayBroker.accountId(),
     capabilities: (options) => gatewayBroker.sessionUploadCapabilities({ strict: true, ...options }),
+    // Cloud tasks' live view: only a page on the account's own server goes to the app's frame.
+    gatewayOrigin: () => gatewayBroker.serverOrigin,
   });
   voiceServicesByServer.set(config, new OmniRushVoiceService(gatewayBroker, {
     log: (level, message, attributes) => logger.log(level, message, attributes),

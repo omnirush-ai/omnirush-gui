@@ -709,6 +709,8 @@ export type OmniRushWorkFeed = {
   generated_at: string;
   sources: { id: string; label: string; status: OmniRushWorkConnectorStatus; attention?: OmniRushWorkAttention | null }[];
   groups: { needs_you: OmniRushWorkFeedItem[]; today: OmniRushWorkFeedItem[]; fyi: OmniRushWorkFeedItem[] };
+  /** Cloud task runs that need the person or failed in the last day (at most 3); only while Cloud tasks are on. */
+  cloud?: OmniRushWorkCloudFeedItem[];
 };
 /** Whether the Work chat's engine has the hosted Work tools (the app's own check, GET /work/chat-tools). */
 export type OmniRushWorkChatTools = { attached: boolean; reason: string | null };
@@ -964,6 +966,48 @@ export type OmniRushWorkRecordDetail = {
 export type OmniRushWorkRecordActionInput = { source_id: string; action: string; args?: Record<string, unknown>; client_action_id?: string };
 export type OmniRushWorkComposeInput = { kind: "mail" | "meeting"; connector: string } & Record<string, unknown>;
 export type OmniRushWorkRecordActionResult = { ok: boolean; action_id?: string | null; result?: unknown; undo?: { available: boolean } | null };
+
+// Cloud tasks (backend docs/work-cloud.md): jobs that run on a cloud computer for the company. The Work state carries
+// `cloud` only while staff, the company and the global switch have it on for this person; every route below answers
+// 403 cloud_off otherwise. Times are ISO 8601 UTC.
+/** The capability block (`work.cloud`). */
+export type OmniRushWorkCloud = { on: true; create: boolean; admin: boolean; live: boolean; vault: boolean; limits: { desktops: number; minutes_left: number } };
+export type OmniRushWorkCloudOutput = "invoice" | "order" | "ticket" | "row" | "files" | "answer";
+/** `weekday` 0 (Monday) to 6 for `week`, `day` 1 to 28 for `month`, `tz` an IANA zone; `once` runs once at the next `at`. */
+export type OmniRushWorkCloudSchedule = { every: "once" | "day" | "week" | "month"; at: string; weekday?: number; day?: number; tz: string };
+export type OmniRushWorkCloudStatus = "queued" | "starting" | "running" | "waiting" | "done" | "failed" | "stopped" | "limit" | "timed_out";
+export type OmniRushWorkCloudWaiting = "signin" | "code" | "captcha" | "approval" | "decision" | "takeover";
+export type OmniRushWorkCloudTask = {
+  id: string; title: string; instructions: string; start_url: string; signin_id: string | null; signin_mode: "saved" | "person" | "none";
+  output: { kind: OmniRushWorkCloudOutput }; write_mode: "read" | "ask"; schedule: OmniRushWorkCloudSchedule | null;
+  paused: boolean; paused_reason?: string | null; owner: { id: string; name: string }; next_run_at: string | null;
+  last_run: { id: string; status: OmniRushWorkCloudStatus; summary: string | null; at: string | null } | null;
+  created_at: string; updated_at: string;
+};
+export type OmniRushWorkCloudTaskInput = {
+  title: string; instructions: string; start_url: string; signin_id?: string | null; signin_mode: "saved" | "person" | "none";
+  output: { kind: OmniRushWorkCloudOutput }; write_mode: "read" | "ask"; schedule: OmniRushWorkCloudSchedule | null;
+};
+export type OmniRushWorkCloudFlag = { kind: "ignored_instruction" | "blocked_host" | "note"; text: string; host?: string | null };
+export type OmniRushWorkCloudRun = {
+  id: string; task_id: string; status: OmniRushWorkCloudStatus; waiting_for?: OmniRushWorkCloudWaiting | null;
+  trigger: "manual" | "schedule" | "agent"; run_as: string; started_at: string | null; ended_at: string | null;
+  minutes: number; steps: number; tokens: { in: number; out: number };
+  result: { answer: string | null; records: { saved: number; skipped: number; source_ids: string[] }; files: { name: string; bytes: number; mime: string }[] } | null;
+  flags: OmniRushWorkCloudFlag[]; error?: { code: string; message: string } | null; live: boolean;
+  approval?: { summary: string; shot_url: string | null } | null;
+};
+export type OmniRushWorkCloudStep = { n: number; at: string; tool: string; summary: string; ok: boolean; error: string | null; served_model: string | null; has_shot: boolean };
+export type OmniRushWorkCloudSignin = { id: string; label: string; hosts: string[]; username_hint: string; use: "admins" | "everyone"; last_used_at: string | null };
+export type OmniRushWorkCloudSigninInput = { label?: string; hosts?: string[]; username?: string; password?: string; use?: "admins" | "everyone" };
+/** GET /omnirush/work/org/cloud (members read; owner or admin write). `vault`: staff turned saved sign-ins on. */
+export type OmniRushWorkOrgCloud = {
+  enabled: boolean; hosts: string[]; creators: "admins" | "everyone"; notify: "owner" | "owner_and_admins"; retention_days: 7 | 30 | 90; vault: boolean;
+  usage: { minutes: number; minutes_limit: number; steps: number; steps_limit: number; desktops: number; desktops_now: number };
+};
+export type OmniRushWorkOrgCloudPatch = Partial<Pick<OmniRushWorkOrgCloud, "enabled" | "hosts" | "creators" | "notify" | "retention_days">>;
+/** One row of the Today feed's `cloud` list (only while on): a run that needs the person or failed in the last day. */
+export type OmniRushWorkCloudFeedItem = { run_id: string; task_id: string; title: string; status: OmniRushWorkCloudStatus; waiting_for?: OmniRushWorkCloudWaiting | null; at: string | null };
 
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
@@ -2782,6 +2826,59 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<OmniRushWorkRecordActionResult>(baseUrl, "/work/records/action", { token, hostToken, method: "POST", body: input, timeoutMs: 60_000 }),
     composeWork: (input: OmniRushWorkComposeInput) =>
       requestJson<OmniRushWorkRecordActionResult>(baseUrl, "/work/compose", { token, hostToken, method: "POST", body: input, timeoutMs: 60_000 }),
+    // Cloud tasks: only called while the Work state has `cloud` (the server answers 403 cloud_off otherwise).
+    listWorkCloudTasks: (query: { q?: string; filter?: "all" | "scheduled" | "needs_you" | "failed"; limit?: number; cursor?: string } = {}) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
+      return requestJson<{ items: OmniRushWorkCloudTask[]; next: string | null }>(baseUrl, `/work/cloud/tasks${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    createWorkCloudTask: (input: OmniRushWorkCloudTaskInput) =>
+      requestJson<OmniRushWorkCloudTask>(baseUrl, "/work/cloud/tasks", { token, hostToken, method: "POST", body: input, timeoutMs: timeouts.config }),
+    getWorkCloudTask: (id: string) =>
+      requestJson<OmniRushWorkCloudTask>(baseUrl, `/work/cloud/tasks/${encodeURIComponent(id)}`, { token, hostToken, timeoutMs: timeouts.config }),
+    /** Owner or admin; `{owner: "me"}` by an admin takes the task over. */
+    updateWorkCloudTask: (id: string, patch: Partial<OmniRushWorkCloudTaskInput> & { paused?: boolean; owner?: "me" }) =>
+      requestJson<OmniRushWorkCloudTask>(baseUrl, `/work/cloud/tasks/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
+    deleteWorkCloudTask: (id: string) =>
+      requestJson<unknown>(baseUrl, `/work/cloud/tasks/${encodeURIComponent(id)}`, { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
+    runWorkCloudTask: (id: string) =>
+      requestJson<{ run_id: string; status: OmniRushWorkCloudStatus }>(baseUrl, `/work/cloud/tasks/${encodeURIComponent(id)}/run`, { token, hostToken, method: "POST", body: {}, timeoutMs: timeouts.config }),
+    listWorkCloudRuns: (query: { task_id?: string; status?: string; limit?: number; cursor?: string } = {}) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
+      return requestJson<{ items: OmniRushWorkCloudRun[]; next: string | null }>(baseUrl, `/work/cloud/runs${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    getWorkCloudRun: (id: string) =>
+      requestJson<OmniRushWorkCloudRun>(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}`, { token, hostToken, timeoutMs: timeouts.config }),
+    listWorkCloudSteps: (id: string, query: { from?: number; limit?: number } = {}) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
+      return requestJson<OmniRushWorkCloudStep[]>(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}/steps${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    getWorkCloudStepShot: (id: string, n: number) =>
+      requestBinary(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}/steps/${n}/shot`, { token, hostToken, timeoutMs: 60_000 }),
+    getWorkCloudFile: (id: string, name: string) =>
+      requestBinary(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`, { token, hostToken, timeoutMs: 120_000 }),
+    /** Cancel, take over (the agent waits), approve or deny the step it asked about. */
+    workCloudRunAction: (id: string, action: "cancel" | "takeover" | "approve" | "deny") =>
+      requestJson<OmniRushWorkCloudRun>(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}/${action}`, { token, hostToken, method: "POST", body: {}, timeoutMs: timeouts.config }),
+    handBackWorkCloudRun: (id: string, note?: string) =>
+      requestJson<OmniRushWorkCloudRun>(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}/handback`, { token, hostToken, method: "POST", body: note ? { note } : {}, timeoutMs: timeouts.config }),
+    /** A sign-in code for the step waiting on one: typed into the site's field, never kept or shown to the model. */
+    sendWorkCloudCode: (id: string, code: string) =>
+      requestJson<OmniRushWorkCloudRun>(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}/input`, { token, hostToken, method: "POST", body: { code }, timeoutMs: timeouts.config }),
+    openWorkCloudLive: (id: string, mode: "view" | "control") =>
+      requestJson<{ url: string; expires_at: string }>(baseUrl, `/work/cloud/runs/${encodeURIComponent(id)}/live`, { token, hostToken, method: "POST", body: { mode }, timeoutMs: timeouts.config }),
+    getWorkOrgCloud: () =>
+      requestJson<OmniRushWorkOrgCloud>(baseUrl, "/work/org/cloud", { token, hostToken, timeoutMs: timeouts.config }),
+    setWorkOrgCloud: (patch: OmniRushWorkOrgCloudPatch) =>
+      requestJson<OmniRushWorkOrgCloud>(baseUrl, "/work/org/cloud", { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
+    listWorkCloudSignins: () =>
+      requestJson<{ items: OmniRushWorkCloudSignin[] }>(baseUrl, "/work/org/cloud/signins", { token, hostToken, timeoutMs: timeouts.config }),
+    /** Values go to the server once and are never read back. */
+    addWorkCloudSignin: (input: OmniRushWorkCloudSigninInput) =>
+      requestJson<OmniRushWorkCloudSignin>(baseUrl, "/work/org/cloud/signins", { token, hostToken, method: "POST", body: input, timeoutMs: timeouts.config }),
+    replaceWorkCloudSignin: (id: string, input: OmniRushWorkCloudSigninInput) =>
+      requestJson<OmniRushWorkCloudSignin>(baseUrl, `/work/org/cloud/signins/${encodeURIComponent(id)}`, { token, hostToken, method: "PUT", body: input, timeoutMs: timeouts.config }),
+    removeWorkCloudSignin: (id: string) =>
+      requestJson<unknown>(baseUrl, `/work/org/cloud/signins/${encodeURIComponent(id)}`, { token, hostToken, method: "DELETE", timeoutMs: timeouts.config }),
     getWebSearch: () =>
       requestJson<OmniRushWebSearchState>(baseUrl, "/omnirush/web-search", { token, hostToken, timeoutMs: timeouts.config }),
     setWebSearch: (enabled: boolean) =>

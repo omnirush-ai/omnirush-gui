@@ -4,6 +4,7 @@
 // "Syncing 42%", "Reconnect": always words beside the dot). A connector opens Home filtered to its items; Manage opens
 // Work > Connectors. Sections fold, remembered, so the chat list keeps its height on a small window.
 import { Activity, Building2, ChevronRight, Handshake, Home, Library, Mic, MoreHorizontal, Plug, Plus, Search, Settings2, Zap, type LucideIcon } from "lucide-react";
+import { Cloud } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,8 @@ export type WorkNavigation = {
   onOpenKnowledge: () => void; knowledgeActive: boolean;
   onOpenActivity: () => void; activityActive: boolean;
   onOpenInsights?: () => void; insightsActive?: boolean;
+  /** Cloud tasks (only while on for the account); `cloudWaiting` runs wait for someone (a count chip, none at 0). */
+  onOpenCloud?: () => void; cloudActive?: boolean; cloudWaiting?: number;
   /** The person's connectors (GET /work/connectors) for the Connectors section; undefined while they load. */
   connectors?: OmniRushWorkConnector[] | null;
   /** Opens Home with only this connector's items. */
@@ -91,7 +94,7 @@ function Section(props: { id: string; label: string; action?: ReactNode; childre
   );
 }
 
-function NavRow(props: { icon: LucideIcon; label: string; active?: boolean; onClick: () => void; hint?: string; testId: string }) {
+function NavRow(props: { icon: LucideIcon; label: string; active?: boolean; onClick: () => void; hint?: string; testId: string; count?: { n: number; label: string } }) {
   const Icon = props.icon;
   return (
     <button
@@ -110,6 +113,7 @@ function NavRow(props: { icon: LucideIcon; label: string; active?: boolean; onCl
       <Icon aria-hidden className="size-4 shrink-0 text-sidebar-foreground/60" />
       <span className="min-w-0 flex-1 truncate">{props.label}</span>
       {props.hint ? <kbd className="shrink-0 font-sans text-[11px] text-muted-foreground/80">{props.hint}</kbd> : null}
+      {props.count ? <span className="shrink-0 rounded-full bg-amber-3 px-1.5 text-[11px] font-medium tabular-nums text-amber-11" aria-label={props.count.label} title={props.count.label}>{props.count.n > 9 ? "9+" : props.count.n}</span> : null}
     </button>
   );
 }
@@ -203,6 +207,10 @@ export function WorkSidebarNav(props: { nav: WorkNavigation }) {
         <NavRow icon={Zap} label={t("work.nav.automation")} active={nav.activityActive} onClick={nav.onOpenActivity} testId="sidebar-work-automation" />
         <NavRow icon={Building2} label={t("work.nav.organization")} active={nav.organizationActive} onClick={nav.onOpenOrganization} testId="sidebar-work-organization" />
         {nav.onOpenInsights ? <NavRow icon={Activity} label={t("work.nav.insights")} active={nav.insightsActive} onClick={nav.onOpenInsights} testId="sidebar-work-insights" /> : null}
+        {nav.onOpenCloud ? (
+          <NavRow icon={Cloud} label={t("work.nav.cloud")} active={nav.cloudActive} onClick={nav.onOpenCloud} testId="sidebar-work-cloud"
+            count={nav.cloudWaiting ? { n: nav.cloudWaiting, label: t("work.cloud.nav_waiting", { count: nav.cloudWaiting, n: nav.cloudWaiting }) } : undefined} />
+        ) : null}
       </Section>
       <Section
         id="connectors"

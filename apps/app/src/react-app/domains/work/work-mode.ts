@@ -21,6 +21,8 @@ export const WORK_SEARCH_ROUTE = "/work/search";
 export const WORK_DEALS_ROUTE = "/work/deals";
 /** Shown only while the server transcribes meeting audio (`meetings` in the Work state) and MEETINGS_IN_APP is on. */
 export const WORK_MEETINGS_ROUTE = "/work/meetings";
+/** Cloud tasks: only while the Work state has `cloud` (staff, the company and the global switch all on). */
+export const WORK_CLOUD_ROUTE = "/work/cloud";
 /** Meeting notes stay hidden in this build: not yet checked with real audio on macOS or Windows. */
 export const MEETINGS_IN_APP: boolean = false;
 
@@ -75,6 +77,10 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "importIMessage" | "getIMessageCount" | "getWhatsAppLocalCount" | "getTelegramCount"
   | "searchWork" | "getWorkCoverage" | "listWorkDeals" | "getWorkDeal" | "listWorkImports" | "importWorkChat"
   | "createWorkMeeting" | "getWorkMeeting" | "updateWorkMeeting" | "uploadWorkMeetingAudio"
+  | "listWorkCloudTasks" | "createWorkCloudTask" | "getWorkCloudTask" | "updateWorkCloudTask" | "deleteWorkCloudTask" | "runWorkCloudTask"
+  | "listWorkCloudRuns" | "getWorkCloudRun" | "listWorkCloudSteps" | "getWorkCloudStepShot" | "getWorkCloudFile" | "workCloudRunAction"
+  | "handBackWorkCloudRun" | "sendWorkCloudCode" | "openWorkCloudLive" | "getWorkOrgCloud" | "setWorkOrgCloud"
+  | "listWorkCloudSignins" | "addWorkCloudSignin" | "replaceWorkCloudSignin" | "removeWorkCloudSignin"
   | "getWorkCatalog" | "getWorkRecord" | "getWorkRecordAttachment" | "runWorkRecordAction" | "composeWork"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
@@ -379,6 +385,8 @@ export function workToolPermission(permission: string): { label: string; scope: 
   const tool = permission.slice(WORK_TOOL_PREFIX.length);
   if (tool === "work_remember") return { label: t("work.tool.remember"), scope: t("work.tool.knowledge_scope") };
   if (tool === "work_forget") return { label: t("work.tool.forget"), scope: t("work.tool.knowledge_scope") };
+  if (tool === "work_cloud_task") return { label: t("work.tool.cloud_task"), scope: t("work.tool.cloud_scope") };
+  if (tool === "work_cloud_run") return { label: t("work.tool.cloud_run"), scope: t("work.tool.cloud_scope") };
   const [app, ...rest] = tool.split("_");
   const action = workAction(rest.join("_")) ?? (rest.join(" ") || tool).replace(/^./, (c) => c.toUpperCase());
   const name = app === "mock" ? t("work.connector.mock") : WORK_APPS[app] ?? app;

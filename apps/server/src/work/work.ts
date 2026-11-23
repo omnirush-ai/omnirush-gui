@@ -53,6 +53,11 @@ export const WORK_PATHS: readonly string[] = [
   "records/attachment",
   "records/action",
   "compose",
+  // Cloud tasks (backend docs/work-cloud.md): tasks, runs with their steps, screenshots, files and controls, and the
+  // company's settings and saved sign-ins.
+  `cloud/tasks(?:/${ID}(?:/run)?)?`,
+  `cloud/runs(?:/${ID}(?:/(?:steps(?:/\\d{1,5}/shot)?|files/[^/]{1,600}|cancel|takeover|handback|input|approve|deny|live))?)?`,
+  `org/cloud(?:/signins(?:/${ID})?)?`,
 ];
 
 export const WORK_PATH = new RegExp(`^(?:${WORK_PATHS.join("|")})$`);
@@ -76,6 +81,8 @@ export const WORK_READ_TOOLS = [
   "work_read", "work_count", "work_deals",
   // Salesforce and Xero reads, and what needs the user today (judge M13): reads only, never asked.
   "salesforce_query", "salesforce_read", "salesforce_search", "xero_read", "xero_search", "work_today",
+  // Cloud tasks: a run's list, its result and the saved sign-ins' names read only; creating or running a task asks.
+  "work_cloud_runs", "work_cloud_result", "work_cloud_signins",
 ];
 
 /** The engine's own tools a Work chat does not get (no shell, no code editing). */
@@ -134,11 +141,34 @@ export function workServerSwitch(capabilities: unknown): WorkSwitch {
 }
 
 /** The action layer's switches and the meetings flag (the server transcribes meeting audio) in the `work` block as last
- *  seen (all off unless Work is on). Not part of the switch, so turning autopilot on or off never restarts the engine. */
-export function rememberedWorkActions(dir: string): { autopilot: boolean; full_access: boolean; writes_paused: boolean; meetings: boolean } {
+ *  seen (all off unless Work is on), and Cloud tasks' block while it is on for the account (absent otherwise, so every
+ *  other answer stays as it was). Not part of the switch, so turning autopilot on or off never restarts the engine. */
+export function rememberedWorkActions(dir: string): { autopilot: boolean; full_access: boolean; writes_paused: boolean; meetings: boolean; cloud?: WorkCloud } {
   const saved = readJson(join(dir, "server.json"));
   const block = isRecord(saved) && isRecord(saved.block) && saved.block.enabled === true ? saved.block : {};
-  return { autopilot: block.autopilot === true, full_access: block.full_access === true, writes_paused: block.writes_paused === true, meetings: block.meetings === true };
+  const cloud = workCloud(block);
+  return { autopilot: block.autopilot === true, full_access: block.full_access === true, writes_paused: block.writes_paused === true, meetings: block.meetings === true, ...(cloud ? { cloud } : {}) };
+}
+
+/** Cloud tasks for this person (`work.cloud`, backend docs/work-cloud.md): only staff, the company and the global switch
+ *  all on make the server send it. What they may do (create, admin), whether a live view can open, whether saved
+ *  sign-ins are on, and the company's limits. */
+export type WorkCloud = { on: true; create: boolean; admin: boolean; live: boolean; vault: boolean; limits: { desktops: number; minutes_left: number } };
+
+/** The `cloud` key of a `work` block; absent, malformed or not `on` is null (no Cloud tasks anywhere in the app). */
+export function workCloud(block: unknown): WorkCloud | null {
+  const raw = isRecord(block) && isRecord(block.cloud) ? block.cloud : null;
+  if (!raw || raw.on !== true) return null;
+  const limits = isRecord(raw.limits) ? raw.limits : {};
+  const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0);
+  return {
+    on: true,
+    create: raw.create === true,
+    admin: raw.admin === true,
+    live: raw.live === true,
+    vault: raw.vault === true,
+    limits: { desktops: count(limits.desktops), minutes_left: count(limits.minutes_left) },
+  };
 }
 
 /** Enterprise mode (`work.enterprise` in the capabilities, only for company accounts): the company's state, the person's
