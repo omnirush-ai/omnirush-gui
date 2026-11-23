@@ -81,9 +81,9 @@ function MessageHeader(props: { message: MailMessage; open: boolean; onToggle: (
         ) : null}
         {details ? (
           <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-lg bg-muted/50 px-2.5 py-2 text-[12px]" data-testid="work-mail-details">
-            {([["from", [m.from]], ["to", m.to], ["cc", m.cc]] as const).map(([key, people]) => people.length ? (
+            {([["from", [m.from], "work.viewer.field_from"], ["to", m.to, "work.viewer.field_to"], ["cc", m.cc, "work.viewer.field_cc"]] as const).map(([key, people, label]) => people.length ? (
               <div key={key} className="contents">
-                <dt className="text-muted-foreground">{t(`work.viewer.field_${key}`)}</dt>
+                <dt className="text-muted-foreground">{t(label)}</dt>
                 <dd className="min-w-0 break-words text-foreground">{people.map((p) => (p.name && p.email ? `${p.name} <${p.email}>` : p.email || p.name)).join(", ")}</dd>
               </div>
             ) : null)}

@@ -22,6 +22,23 @@ import {
 
 const JOIN_LABEL: Record<string, string> = { meet: "work.viewer.join_meet", teams: "work.viewer.join_teams", zoom: "work.viewer.join_zoom", webex: "work.viewer.join_webex" };
 
+const ANSWER_KEYS: Record<RecordAnswer, string> = {
+  yes: "work.viewer.answer_yes",
+  maybe: "work.viewer.answer_maybe",
+  no: "work.viewer.answer_no",
+  none: "work.viewer.answer_none",
+};
+const ANSWERED_KEYS: Record<Exclude<RecordAnswer, "none">, string> = {
+  yes: "work.viewer.answered_yes",
+  maybe: "work.viewer.answered_maybe",
+  no: "work.viewer.answered_no",
+};
+
+/** A guest's answer as its label; anything else reads as no reply. */
+function answerLabel(answer: RecordAttendee["response"] | null | undefined): string {
+  return t(answer && answer in ANSWER_KEYS ? ANSWER_KEYS[answer as RecordAnswer] : ANSWER_KEYS.none);
+}
+
 function AnswerMark(props: { answer: RecordAttendee["response"] }) {
   const answer = props.answer ?? "none";
   if (answer === "yes") return <Check className="size-3.5 text-green-11" aria-hidden />;
@@ -122,7 +139,7 @@ export function EventActions(props: { record: WorkRecord; actions: RecordAction[
       action: "rsvp",
       args: actionArgs({ action: "rsvp", source: props.record.source, response }),
       label: t("work.viewer.answering"),
-      done: t(`work.viewer.answered_${response}`),
+      done: t(response === "none" ? ANSWER_KEYS.none : ANSWERED_KEYS[response]),
     });
     if (!ok) setAnswer(before);
     setBusy(null);
@@ -148,7 +165,7 @@ export function EventActions(props: { record: WorkRecord; actions: RecordAction[
                 )}
                 data-rsvp={value}
               >
-                {t(`work.viewer.answer_${value}`)}
+                {t(ANSWER_KEYS[value])}
               </button>
             ))}
           </div>
@@ -220,7 +237,7 @@ export function EventView(props: { record: WorkRecord }) {
                 <PersonName person={person} className="min-w-0 text-[13px] text-foreground" />
                 {person.organizer ? <span className="shrink-0 text-[11px] text-muted-foreground">{t("work.viewer.organizer_tag")}</span> : null}
                 {person.optional ? <span className="shrink-0 text-[11px] text-muted-foreground">{t("work.viewer.optional")}</span> : null}
-                <span className="ms-auto flex shrink-0 items-center gap-1 text-[12px] text-muted-foreground"><AnswerMark answer={person.response} />{t(`work.viewer.answer_${person.response && person.response !== "none" ? person.response : "none"}`)}</span>
+                <span className="ms-auto flex shrink-0 items-center gap-1 text-[12px] text-muted-foreground"><AnswerMark answer={person.response} />{answerLabel(person.response)}</span>
               </li>
             ))}
           </ul>
