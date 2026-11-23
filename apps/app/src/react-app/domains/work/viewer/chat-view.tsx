@@ -45,7 +45,7 @@ export function ChatView(props: { record: WorkRecord; onPreview: (file: RecordFi
         <section key={`${group.day}-${g}`} aria-label={group.day}>
           <div className="sticky top-0 z-[1] flex items-center gap-3 bg-background/95 px-2 py-2 backdrop-blur-sm">
             <span className="h-px flex-1 bg-border" aria-hidden />
-            <span className="text-[11px] font-medium text-muted-foreground">{group.day}</span>
+            <span className="text-[12px] font-medium text-muted-foreground">{group.day}</span>
             <span className="h-px flex-1 bg-border" aria-hidden />
           </div>
           {group.runs.map((run, r) => (
@@ -54,7 +54,7 @@ export function ChatView(props: { record: WorkRecord; onPreview: (file: RecordFi
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
                   <PersonName person={run.from} className="text-[13px] font-semibold text-foreground" />
-                  <span className="text-[11px] tabular-nums text-muted-foreground">{run.at ? new Date(run.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : ""}</span>
+                  <span className="text-[12px] tabular-nums text-muted-foreground">{run.at ? new Date(run.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : ""}</span>
                 </div>
                 {run.messages.map((m, i) => {
                   const mine = m.source_id === props.record.source_id;

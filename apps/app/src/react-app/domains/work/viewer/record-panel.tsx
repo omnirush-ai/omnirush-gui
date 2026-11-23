@@ -100,7 +100,7 @@ function ShortcutsSheet(props: { view: string; onClose: () => void }) {
       <dl className="grid grid-cols-[minmax(110px,max-content)_1fr] gap-x-6 gap-y-2.5 overflow-y-auto p-4 text-[13px]">
         {RECORD_SHORTCUTS.filter((s) => !s.views || s.views.includes(props.view)).map((s) => (
           <div key={s.id} className="contents">
-            <dt className="flex flex-wrap gap-1">{shortcutKeys(s.keys, isMac()).map((k, i) => <kbd key={i} className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted px-1.5 font-sans text-[11px] text-foreground">{k}</kbd>)}</dt>
+            <dt className="flex flex-wrap gap-1">{shortcutKeys(s.keys, isMac()).map((k, i) => <kbd key={i} className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted px-1.5 font-sans text-[12px] text-foreground">{k}</kbd>)}</dt>
             <dd className="text-muted-foreground">{t(s.label)}</dd>
           </div>
         ))}
@@ -378,7 +378,7 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
             <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground" data-testid="work-viewer-source" title={[label, detail].filter(Boolean).join(" · ")}>{[label, detail].filter(Boolean).join(" · ")}</span>
             {list.length > 1 && at >= 0 ? (
               <span className="flex items-center">
-                <span className="me-1 hidden text-[11px] tabular-nums text-muted-foreground @[22rem]/viewer:inline">{t("work.viewer.position", { at: at + 1, count: list.length })}</span>
+                <span className="me-1 hidden text-[12px] tabular-nums text-muted-foreground @[22rem]/viewer:inline">{t("work.viewer.position", { at: at + 1, count: list.length })}</span>
                 <HeaderButton label={t("work.viewer.previous")} keys="[" onPress={() => step(-1)} disabled={at <= 0}><ChevronUp /></HeaderButton>
                 <HeaderButton label={t("work.viewer.next")} keys="]" onPress={() => step(1)} disabled={at >= list.length - 1}><ChevronDown /></HeaderButton>
               </span>

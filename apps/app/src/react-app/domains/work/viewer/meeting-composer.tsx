@@ -212,7 +212,7 @@ export function NewMail(props: { formKey: string; compose: RecordCompose; mailbo
           <>
             <span className="flex-1" />
             <Button type="button" size="sm" variant="ghost" disabled={empty} onClick={() => send(true)}>{t("work.viewer.save_draft")}</Button>
-            <Button type="button" size="sm" disabled={!ready} onClick={() => send()} data-testid="work-new-mail-send">{t("work.viewer.send")}<kbd className="ms-1 hidden text-[11px] opacity-70 @[22rem]/viewer:inline">{/Mac/i.test(navigator.platform) ? "⌘↵" : "Ctrl+↵"}</kbd></Button>
+            <Button type="button" size="sm" disabled={!ready} onClick={() => send()} data-testid="work-new-mail-send">{t("work.viewer.send")}<kbd className="ms-1 hidden text-[12px] opacity-70 @[22rem]/viewer:inline">{/Mac/i.test(navigator.platform) ? "⌘↵" : "Ctrl+↵"}</kbd></Button>
           </>
         )}
       />

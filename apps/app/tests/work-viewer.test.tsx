@@ -472,3 +472,23 @@ describe("views (design 2.5)", () => {
     for (const path of ["/work/records/detail", "/work/records/attachment", "/work/records/action", "/work/compose"]) expect(local).toContain(`"${path}"`);
   });
 });
+
+describe("readable viewer labels", () => {
+  test("a state pill keeps its words in the foreground colour, the tone on the dot and border, at 12 px", async () => {
+    const { Pill } = await import("../src/react-app/domains/work/viewer/parts");
+    for (const tone of ["neutral", "green", "amber", "red", "blue", "purple"] as const) {
+      const markup = renderToStaticMarkup(<Pill tone={tone}>Open</Pill>);
+      expect(markup).toContain("text-foreground");
+      expect(markup).toContain("text-[12px]");
+      expect(markup).not.toMatch(/text-(green|amber|red|blue|purple)-11/);
+      expect(markup).toContain(`data-tone="${tone}"`);
+    }
+  });
+
+  test("no viewer text is under 12 px", () => {
+    const dir = new URL("../src/react-app/domains/work/viewer/", import.meta.url);
+    for (const name of ["parts.tsx", "record-panel.tsx", "chat-view.tsx", "event-view.tsx", "issue-view.tsx", "meeting-view.tsx", "html-frame.tsx", "record-actions.tsx", "meeting-composer.tsx", "mail-view.tsx"]) {
+      expect(readFileSync(new URL(name, dir), "utf8")).not.toMatch(/text-\[(9|10|11)px\]/);
+    }
+  });
+});

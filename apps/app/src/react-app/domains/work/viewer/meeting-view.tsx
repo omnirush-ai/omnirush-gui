@@ -73,7 +73,7 @@ export function MeetingView(props: { record: WorkRecord }) {
           <ol className="flex flex-col gap-2">
             {shown.map((segment, index) => (
               <li key={index} className="grid grid-cols-[64px_1fr] gap-2 text-[13px] leading-5">
-                <span className="font-mono text-[11px] leading-5 text-muted-foreground">{stamp(segment.start_ms)}</span>
+                <span className="font-mono text-[12px] leading-5 text-muted-foreground">{stamp(segment.start_ms)}</span>
                 <p className="min-w-0 text-foreground">{segment.speaker ? <span className="font-semibold">{segment.speaker}: </span> : null}{segment.text}</p>
               </li>
             ))}

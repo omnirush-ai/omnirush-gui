@@ -193,7 +193,7 @@ export function MailFrame(props: {
         </button>
       ) : null}
       {hover ? (
-        <div className="pointer-events-none absolute bottom-1 left-1 z-10 max-w-[85%] truncate rounded-md border border-border bg-popover px-2 py-0.5 font-mono text-[11px] text-popover-foreground shadow-sm" role="status" data-testid="work-mail-link-target">
+        <div className="pointer-events-none absolute bottom-1 left-1 z-10 max-w-[85%] truncate rounded-md border border-border bg-popover px-2 py-0.5 font-mono text-[12px] text-popover-foreground shadow-sm" role="status" data-testid="work-mail-link-target">
           {hover}
         </div>
       ) : null}
