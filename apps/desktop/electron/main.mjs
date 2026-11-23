@@ -1534,8 +1534,8 @@ const workChatSync = createChatSync({
     imessage: {
       route: "/work/imessage",
       read: async (cursor) => {
-        const { records, lastRowid, messageCount } = await readIMessage({ sinceRowid: Number(cursor) || 0 });
-        return { records, cursor: lastRowid, messageCount };
+        const { records, lastRowid, messageCount, cursorAt } = await readIMessage({ sinceRowid: Number(cursor) || 0 });
+        return { records, cursor: lastRowid, messageCount, cursorAt };
       },
       watch: [{ dir: path.join(os.homedir(), "Library", "Messages"), file: "chat.db-wal" }],
     },

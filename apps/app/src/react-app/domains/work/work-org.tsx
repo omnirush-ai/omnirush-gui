@@ -1,6 +1,7 @@
 /** @jsxImportSource react */
 // Settings > Work > Organization (contract Addendum C2): the company profile (owner edits), the member's own role and
-// tools, members, pending invites, removing, transferring and leaving. Each person's connectors stay their own.
+// tools, members, pending invites, removing, transferring and leaving. Each person's connectors stay their own; the owner
+// and admins pick which connectors members see (Connectors for your team), and the owner makes admins.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Copy, RotateCw, UserPlus } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -11,21 +12,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
+import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
-import type { OmniRushWorkMember, OmniRushWorkMembers } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkMember, OmniRushWorkMembers, OmniRushWorkOrgConnector, OmniRushWorkOrgConnectors } from "@/app/lib/omnirush-server";
 import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import {
   LayoutSectionItem, LayoutSectionItemDescription, LayoutSectionItemHeader, LayoutSectionItemHeaderActions, LayoutSectionItemTitle,
 } from "@/react-app/domains/settings/settings-layout";
 
-import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkState, workFailure, workMembersKey, workOnboardingKey, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
+import { connectorLabel, DEMO_SOURCE, useWorkInviteLinks, useWorkOrgConnectors, useWorkState, workConnectorsKey, workFailure, workMembersKey, workOnboardingKey, workOrgConnectorsKey, workRoleLabel, workStateKey, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, type WorkClient } from "./work-mode";
 import { Chip, sizeOptions, TRUST_URL, TrustBadge, WorkInviteDialog } from "./work-onboarding";
 import { ConnectorIcon } from "./work-views";
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((item) => b.includes(item));
 const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
 
-type Confirm = { kind: "remove" | "transfer"; member: OmniRushWorkMember } | { kind: "leave" } | null;
+type Confirm = { kind: "remove" | "transfer"; member: OmniRushWorkMember } | { kind: "leave" } | { kind: "hide"; connector: OmniRushWorkOrgConnector } | null;
 
 /** What leaving means for this person: blocked for an owner with others, the org goes for a sole owner. */
 export function leaveState(data: Pick<OmniRushWorkMembers, "members" | "you_role"> | undefined): { blocked: boolean; message: string } {
@@ -34,6 +36,20 @@ export function leaveState(data: Pick<OmniRushWorkMembers, "members" | "you_role
   if (owner && others > 0) return { blocked: true, message: t("work.org.leave_blocked") };
   if (owner) return { blocked: false, message: t("work.org.leave_sole_owner") };
   return { blocked: false, message: t("work.org.leave_member") };
+}
+
+/** The PATCH /work/org/connectors body after one switch. Before any choice (`shown` null) every connector shows, also the
+ *  ones offered later; the first switch turned off makes it a list. Once it is a list, ids on it that this page does not
+ *  offer right now (switched off for everyone, or not set up on this server) stay on it, so a save never changes what
+ *  the page does not show, and no "all" (null) is sent that would bring back ones the company turned off. Staff's own
+ *  list refuses ids outside it, so with one only the listed ids are sent. */
+export function nextShown(view: Pick<OmniRushWorkOrgConnectors, "allowed" | "shown" | "staff_limited">, id: string, on: boolean): string[] | null {
+  const allowed = view.allowed ?? [];
+  const listed = allowed.filter((row) => (row.id === id ? on : row.shown)).map((row) => row.id);
+  if (!Array.isArray(view.shown)) return listed.length === allowed.length ? null : listed;
+  const offered = new Set(allowed.map((row) => row.id));
+  const kept = view.staff_limited ? [] : view.shown.filter((item) => !offered.has(item));
+  return [...new Set([...listed, ...kept])];
 }
 
 /** The PATCH /work/org/me body: the role, and tools only when the person changed them. The server keeps one tools
@@ -71,6 +87,43 @@ function ToolChips(props: { offered: string[]; selected: string[]; onChange: (to
   );
 }
 
+/** Connectors for your team (owner or admin): every connector the company may use, a switch each and how many people
+ *  connected it. Members only see the ones switched on. `pending` is the list being saved, shown at once. */
+function TeamConnectors(props: { view: OmniRushWorkOrgConnectors; pending: string[] | null | undefined; busy: boolean; onChange: (row: OmniRushWorkOrgConnector, on: boolean) => void }) {
+  const allowed = props.view.allowed ?? [];
+  const isOn = (row: OmniRushWorkOrgConnector) => (props.pending === undefined ? row.shown : props.pending === null || props.pending.includes(row.id));
+  const on = allowed.filter(isOn).length;
+  return (
+    <Section
+      title={t("work.org.team_connectors")}
+      description={t("work.org.team_connectors_hint")}
+      testId="work-org-connectors"
+      actions={allowed.length ? <span className="shrink-0 text-[12px] text-muted-foreground" data-testid="work-org-connectors-count">{t("work.org.team_on", { on, total: allowed.length })}</span> : null}
+    >
+      {allowed.length ? (
+        <ul className="rounded-xl border border-border">
+          {allowed.map((row) => {
+            const name = connectorLabel(row.id, row.label);
+            return (
+              <li key={row.id} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0" data-org-connector={row.id} data-shown={isOn(row)}>
+                <ConnectorIcon id={row.id} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{name}</div>
+                  <div className="truncate text-[12px] text-muted-foreground">{t("work.org.team_connected", { count: row.members_connected, n: row.members_connected.toLocaleString() })}</div>
+                </div>
+                <Switch aria-label={t("work.org.team_switch_for", { name })} checked={isOn(row)} disabled={props.busy} onCheckedChange={(checked: boolean) => props.onChange(row, checked)} />
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="rounded-xl border border-border px-4 py-3 text-[13px] text-muted-foreground">{t("work.connectors.none")}</div>
+      )}
+      {props.view.staff_limited ? <p className="text-[12px] text-muted-foreground" data-testid="work-org-connectors-limited">{t("work.org.team_connectors_limited")}</p> : null}
+    </Section>
+  );
+}
+
 /** Work > Organization (opened from Settings and the home checklist). */
 export function WorkOrganizationPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack: () => void; backLabel?: string }) {
   const queryClient = useQueryClient();
@@ -85,6 +138,10 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const org = data?.org ?? null;
   const owner = data?.you_role === "owner";
   const you = data?.members.find((member) => member.you) ?? null;
+  // The company's connector list; an older server has none (404), so the page stays as it was: no section, no admins.
+  const teamQuery = useWorkOrgConnectors(props.client, Boolean(org));
+  const team = teamQuery.data?.can_manage && teamQuery.data.allowed ? teamQuery.data : null;
+  const rolesKnown = Boolean(teamQuery.data);
 
   // Edits in progress; null shows what the server has.
   const saved = { name: org?.name ?? "", domain: org?.domain ?? "", size: org?.size ?? "", industry: org?.industry ?? "", tools: org?.tools ?? [] };
@@ -99,6 +156,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: workMembersKey(props.client) });
     void queryClient.invalidateQueries({ queryKey: workOnboardingKey(props.client) });
+    void queryClient.invalidateQueries({ queryKey: workOrgConnectorsKey(props.client) });
   };
   const onError = (reason: unknown) => toast.error(workFailure(reason).text);
   const saveOrg = useMutation({
@@ -117,6 +175,29 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
   const cancelInvite = useMutation({ mutationFn: (id: string) => props.client!.cancelWorkInvite(id), onSuccess: () => { toast.success(t("work.org.invite_cancelled")); refresh(); }, onError });
   const remove = useMutation({ mutationFn: (id: string) => props.client!.removeWorkMember(id), onSuccess: () => { toast.success(t("work.org.member_removed")); refresh(); }, onError });
   const transfer = useMutation({ mutationFn: (id: string) => props.client!.transferWorkOrg(id), onSuccess: () => { toast.success(t("work.org.transferred")); refresh(); }, onError });
+  const saveShown = useMutation({
+    mutationFn: (shown: string[] | null) => props.client!.setWorkOrgConnectors(shown),
+    onSuccess: (view) => {
+      queryClient.setQueryData(workOrgConnectorsKey(props.client), view);
+      // This person's own connectors and Work sources follow the company's list too.
+      void queryClient.invalidateQueries({ queryKey: workConnectorsKey(props.client) });
+      void queryClient.invalidateQueries({ queryKey: workStateKey(props.client) });
+    },
+    onError,
+  });
+  const showConnector = (row: OmniRushWorkOrgConnector, on: boolean) => {
+    // Turning off one that people use pauses their connection: ask first.
+    if (!on && row.members_connected > 0) setConfirm({ kind: "hide", connector: row });
+    else if (team) saveShown.mutate(nextShown(team, row.id, on));
+  };
+  const setRole = useMutation({
+    mutationFn: (change: { member: OmniRushWorkMember; role: "admin" | "member" }) => props.client!.setWorkMemberRole(change.member.user_id, change.role),
+    onSuccess: (_answer, change) => {
+      toast.success(change.role === "admin" ? t("work.org.made_admin", { email: change.member.email }) : t("work.org.removed_admin", { email: change.member.email }));
+      refresh();
+    },
+    onError,
+  });
   const leave = useMutation({
     mutationFn: () => props.client!.leaveWorkOrg(),
     onSuccess: () => {
@@ -219,6 +300,7 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
 
             <Section
               title={t("work.org.members")}
+              description={owner && rolesKnown ? t("work.org.members_hint") : undefined}
               testId="work-org-members"
               actions={<Button size="sm" variant="outline" onClick={() => setInviteOpen(true)} data-testid="work-org-invite"><UserPlus className="size-4" />{t("work.org.invite")}</Button>}
             >
@@ -229,9 +311,20 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
                       <div className="truncate text-sm font-medium">{member.email}{member.you ? <span className="font-normal text-muted-foreground"> {t("work.org.you_tag")}</span> : null}</div>
                       {member.job_role ? <div className="truncate text-[12px] text-muted-foreground">{member.job_role}</div> : null}
                     </div>
-                    <Badge variant={member.role === "owner" ? "default" : "secondary"}>{member.role === "owner" ? t("work.role.owner") : t("work.role.member")}</Badge>
+                    <Badge variant={member.role === "owner" ? "default" : "secondary"}>{workRoleLabel(member.role)}</Badge>
                     {owner && !member.you ? (
-                      <div className="flex items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-1">
+                        {rolesKnown && member.role !== "owner" ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={setRole.isPending && setRole.variables?.member.user_id === member.user_id}
+                            onClick={() => setRole.mutate({ member, role: member.role === "admin" ? "member" : "admin" })}
+                            data-testid="work-org-member-role"
+                          >
+                            {member.role === "admin" ? t("work.org.remove_admin") : t("work.org.make_admin")}
+                          </Button>
+                        ) : null}
                         <Button variant="ghost" size="sm" onClick={() => setConfirm({ kind: "transfer", member })}>{t("work.org.make_owner")}</Button>
                         <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirm({ kind: "remove", member })}>{t("common.remove")}</Button>
                       </div>
@@ -265,6 +358,10 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
               </Section>
             ) : null}
 
+            {team ? (
+              <TeamConnectors view={team} pending={saveShown.isPending ? saveShown.variables : undefined} busy={saveShown.isPending} onChange={showConnector} />
+            ) : null}
+
             <Section title={t("work.org.security")} testId="work-org-security">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
                 <div className="flex items-center gap-3">
@@ -287,18 +384,27 @@ export function WorkOrganizationPage(props: { client: WorkClient | null; openLin
       <WorkInviteDialog client={props.client} open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) refresh(); }} />
       <ConfirmModal
         open={confirm !== null}
-        title={confirm?.kind === "remove" ? t("work.org.remove_title", { email: confirm.member.email }) : confirm?.kind === "transfer" ? t("work.org.transfer_title", { email: confirm.member.email }) : t("work.org.leave_confirm_title")}
+        title={confirm?.kind === "remove"
+          ? t("work.org.remove_title", { email: confirm.member.email })
+          : confirm?.kind === "transfer"
+            ? t("work.org.transfer_title", { email: confirm.member.email })
+            : confirm?.kind === "hide"
+              ? t("work.org.team_off_title", { name: connectorLabel(confirm.connector.id, confirm.connector.label) })
+              : t("work.org.leave_confirm_title")}
         message={confirm?.kind === "remove"
           ? t("work.org.remove_body")
           : confirm?.kind === "transfer"
             ? t("work.org.transfer_body")
-            : leaving.message}
-        confirmLabel={confirm?.kind === "remove" ? t("common.remove") : confirm?.kind === "transfer" ? t("work.org.make_owner") : t("work.org.leave")}
+            : confirm?.kind === "hide"
+              ? t("work.org.team_off_body", { count: confirm.connector.members_connected, n: confirm.connector.members_connected.toLocaleString() })
+              : leaving.message}
+        confirmLabel={confirm?.kind === "remove" ? t("common.remove") : confirm?.kind === "transfer" ? t("work.org.make_owner") : confirm?.kind === "hide" ? t("work.org.team_off") : t("work.org.leave")}
         cancelLabel={t("common.cancel")}
-        variant={confirm?.kind === "transfer" ? "warning" : "danger"}
+        variant={confirm?.kind === "transfer" || confirm?.kind === "hide" ? "warning" : "danger"}
         onConfirm={() => {
           if (confirm?.kind === "remove") remove.mutate(confirm.member.user_id);
           else if (confirm?.kind === "transfer") transfer.mutate(confirm.member.user_id);
+          else if (confirm?.kind === "hide" && team) saveShown.mutate(nextShown(team, confirm.connector.id, false));
           else if (confirm?.kind === "leave") leave.mutate();
           setConfirm(null);
         }}
