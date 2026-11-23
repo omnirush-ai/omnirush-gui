@@ -3746,6 +3746,7 @@ export default {
   "work.suggest.more_label": "更多建议（{count}）",
   "work.ask.added": "已将 {title} 加入你的问题",
   "work.ask.added_toast": "已加入你的问题",
+  "work.ask.added_toast_many": "已将 {count} 项加入你的问题",
   "work.ask.open": "打开",
   "work.ask.max": "最多可以附加 5 项",
   "work.ask.claude_home": "Claude 对话无法读取 Work 条目，已放到 Work 首页",

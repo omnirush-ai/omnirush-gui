@@ -204,12 +204,14 @@ interface UndoToastOptions {
   /** Optional secondary action that leaves the change in place, e.g. "View". */
   view?: ToastAction
   closeLabel?: string
+  /** Called once when the toast goes: closed, chosen or timed out (not when it is updated in place by its id). */
+  onClose?: () => void
 }
 
 /** Reversible actions stay quiet for long enough to change your mind. */
 const UNDO_TOAST_DURATION_MS = 10_000
 
-interface UndoToastCardProps extends Omit<UndoToastOptions, "id" | "duration"> {
+interface UndoToastCardProps extends Omit<UndoToastOptions, "id" | "duration" | "onClose"> {
   id: string | number
   title: React.ReactNode
 }
@@ -274,6 +276,8 @@ function showUndoToast(message: React.ReactNode, options: UndoToastOptions) {
       id: options.id,
       duration: options.duration ?? UNDO_TOAST_DURATION_MS,
       position: "top-center",
+      onDismiss: options.onClose,
+      onAutoClose: options.onClose,
     },
   )
 }

@@ -3739,6 +3739,7 @@ export default {
   "work.suggest.more_label": "More suggestions ({count})",
   "work.ask.added": "Added {title} to your question",
   "work.ask.added_toast": "Added to your question",
+  "work.ask.added_toast_many": "Added {count} items to your question",
   "work.ask.open": "Open",
   "work.ask.max": "You can attach up to 5 items",
   "work.ask.claude_home": "Claude chats can't read Work items, so it went to the Work home",

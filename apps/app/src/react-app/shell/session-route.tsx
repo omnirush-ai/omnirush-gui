@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { Archive, ArchiveRestore, MessageSquarePlus } from "lucide-react";
+import { Archive, ArchiveRestore } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { closeWorkspaceTerminals } from "../domains/session/terminal/terminal-runtime";
@@ -132,6 +132,7 @@ import { enterpriseRedirect, useEnterpriseMode, useEnterpriseStore } from "@/rea
 import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
 import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
 import { askTarget, onAskRequest, showAskChat, type AskRequest } from "@/react-app/domains/work/ask/ask-bridge";
+import { showAskAdded, showAskClaudeHome, showAskFull } from "@/react-app/domains/work/ask/ask-toast";
 import { useAskStore, useHomeRefs, workHomeRefOwner } from "@/react-app/domains/work/ask/ask-store";
 import { AskAnnouncer, OPEN_WORK_ENTITY_EVENT, WorkRefChips } from "@/react-app/domains/work/ask/ref-chip";
 import { addRef, defaultQuestion, refPlaceholder, refsOnlyTitle, starterQuestions, type AddRefResult, type WorkRef } from "@/react-app/domains/work/ask/refs";
@@ -3890,31 +3891,30 @@ export function SessionRoute() {
       outcome = useAskStore.getState().add(owner, request.ref);
     }
     const ask = useAskStore.getState();
-    if (outcome.result === "full") {
-      toast.info(t("work.ask.max"));
-      return;
-    }
-    if (outcome.result === "duplicate") ask.markFlash(owner, outcome.key);
-    else ask.say(t("work.ask.added", { title: request.ref.title }));
     const leave = target.kind === "home" && target.navigate;
-    if (target.kind === "home" && target.reason === "claude") toast.info(t("work.ask.claude_home"));
     const focusPrompt = (delays: number[]) => {
       for (const delay of delays) window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), delay);
     };
     // A narrow window shows the chat (or the Work home) and the viewer as tabs: bring the composer's tab forward.
     const showComposer = () => showAskChat(target.kind === "chat" ? target.sessionId : null);
+    // Open on a toast: it goes to the composer's page or tab and focuses it.
+    const open = () => {
+      if (leave) route.navigate(WORK_HOME_ROUTE);
+      showComposer();
+      if (leave) window.setTimeout(showComposer, 150);
+      focusPrompt(leave ? [120, 600] : [60, 300]);
+    };
+    if (outcome.result === "full") {
+      showAskFull(open);
+      return;
+    }
+    if (outcome.result === "duplicate") ask.markFlash(owner, outcome.key);
+    else ask.say(t("work.ask.added", { title: request.ref.title }));
+    if (target.kind === "home" && target.reason === "claude") showAskClaudeHome();
     if (request.stay) {
-      // One line from the top of the window (never over the button the user may press again), with Open: it goes to
-      // the composer's page or tab and focuses it.
-      if (outcome.result === "added") {
-        const open = () => {
-          if (leave) route.navigate(WORK_HOME_ROUTE);
-          showComposer();
-          if (leave) window.setTimeout(showComposer, 150);
-          focusPrompt(leave ? [120, 600] : [60, 300]);
-        };
-        toast.undo(t("work.ask.added_toast"), { icon: MessageSquarePlus, undo: { label: t("work.ask.open"), onClick: open }, closeLabel: t("common.close"), duration: 4000 });
-      }
+      // One line from the top of the window (never over the button the user may press again), updated in place by
+      // later adds, with Open.
+      if (outcome.result === "added") showAskAdded(owner, open);
       return;
     }
     // A history push: Back returns to the page the item was asked from.
