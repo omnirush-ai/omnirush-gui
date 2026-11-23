@@ -14,6 +14,15 @@ export function requestAsk(ref: WorkRef, options: AskOptions = {}) {
   window.dispatchEvent(new CustomEvent<AskRequest>(ASK_WORK_RECORD_EVENT, { detail: { ref, stay: Boolean(options.stay) } }));
 }
 
+/** An Ask added a chip to this chat's composer: a narrow window that shows the chat and the viewer as tabs brings the
+ *  Chat tab forward (session-page listens). */
+export const WORK_ASK_SHOW_CHAT_EVENT = "omnirush-work-ask-show-chat";
+
+export function showAskChat(sessionId: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent<{ sessionId: string }>(WORK_ASK_SHOW_CHAT_EVENT, { detail: { sessionId } }));
+}
+
 export function onAskRequest(handler: (request: AskRequest) => void): () => void {
   const listener = (event: Event) => {
     const detail = (event as CustomEvent<unknown>).detail;

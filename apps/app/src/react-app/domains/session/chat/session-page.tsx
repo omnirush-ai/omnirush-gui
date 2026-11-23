@@ -95,6 +95,7 @@ import { ChatPanelButton, ChatSwitcher, LayoutModeToggle, RailDestinations, shor
 import { useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
 import { openRecordTab } from "../../work/viewer/record-tabs";
 import { onOpenRecordRequest } from "../../work/viewer/records";
+import { WORK_ASK_SHOW_CHAT_EVENT } from "../../work/ask/ask-bridge";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
 import { useControlAction, type OmniRushControlAction } from "../../../shell/control/control-provider";
 import { cn } from "@/lib/utils";
@@ -614,6 +615,8 @@ export function SessionPage(props: SessionPageProps) {
   // Roving focus follows an actual pane change only; the initial mount must
   // never steal focus from the composer or another control.
   const lastFocusedNarrowPaneRef = useRef<NarrowSessionPane | null>(null);
+  // A switch made for the composer (a Work Ask) leaves the focus to the composer, not the tab.
+  const narrowPaneForComposerRef = useRef(false);
   useEffect(() => {
     if (!isMobile) {
       lastFocusedNarrowPaneRef.current = null;
@@ -625,6 +628,10 @@ export function SessionPage(props: SessionPageProps) {
     }
     if (lastFocusedNarrowPaneRef.current === narrowPane) return;
     lastFocusedNarrowPaneRef.current = narrowPane;
+    if (narrowPaneForComposerRef.current) {
+      narrowPaneForComposerRef.current = false;
+      return;
+    }
     const frame = window.requestAnimationFrame(() => {
       narrowPaneNavigationRef.current
         ?.querySelector<HTMLElement>("[role='tab'][aria-selected='true']")
@@ -632,6 +639,22 @@ export function SessionPage(props: SessionPageProps) {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [isMobile, narrowPane]);
+
+  // Ask in the record viewer of a narrow window (chat and viewer are tabs): the chip went to this chat's composer, so
+  // the Chat tab comes forward and the session route focuses the composer. Shift+click stays on the viewer.
+  const narrowAskRef = useRef({ isMobile, narrowPane, sessionId: props.selectedSessionId, selectNarrowPane });
+  narrowAskRef.current = { isMobile, narrowPane, sessionId: props.selectedSessionId, selectNarrowPane };
+  useEffect(() => {
+    const show = (event: Event) => {
+      const current = narrowAskRef.current;
+      const sessionId = (event as CustomEvent<{ sessionId?: unknown }>).detail?.sessionId;
+      if (!current.isMobile || current.narrowPane === "chat" || sessionId !== current.sessionId) return;
+      narrowPaneForComposerRef.current = true;
+      current.selectNarrowPane("chat");
+    };
+    window.addEventListener(WORK_ASK_SHOW_CHAT_EVENT, show);
+    return () => window.removeEventListener(WORK_ASK_SHOW_CHAT_EVENT, show);
+  }, []);
 
   const setCurrentSidePanel = useCallback((panel: SidePanelItem | null) => {
     setSidePanelState(sidePanelSessionKey, panel);

@@ -131,7 +131,7 @@ import { useChecklistShown, WorkChecklist, WorkInviteDialog, WorkJoinDialog, Wor
 import { enterpriseRedirect, useEnterpriseMode, useEnterpriseStore } from "@/react-app/domains/work/enterprise-mode";
 import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
 import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
-import { askTarget, onAskRequest, type AskRequest } from "@/react-app/domains/work/ask/ask-bridge";
+import { askTarget, onAskRequest, showAskChat, type AskRequest } from "@/react-app/domains/work/ask/ask-bridge";
 import { useAskStore, useHomeRefs, workHomeRefOwner } from "@/react-app/domains/work/ask/ask-store";
 import { AskAnnouncer, OPEN_WORK_ENTITY_EVENT, WorkRefChips } from "@/react-app/domains/work/ask/ref-chip";
 import { addRef, defaultQuestion, refPlaceholder, refsOnlyTitle, starterQuestions, type AddRefResult, type WorkRef } from "@/react-app/domains/work/ask/refs";
@@ -3898,19 +3898,27 @@ export function SessionRoute() {
     else ask.say(t("work.ask.added", { title: request.ref.title }));
     const leave = target.kind === "home" && target.navigate;
     if (target.kind === "home" && target.reason === "claude") toast.info(t("work.ask.claude_home"));
+    const focusPrompt = (delays: number[]) => {
+      for (const delay of delays) window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), delay);
+    };
     if (request.stay) {
       // One line from the top of the window (never over the button the user may press again), with Open when the
-      // composer is on another page.
+      // composer is on another page or on the Chat tab of a narrow window.
       if (outcome.result === "added") {
         if (leave) toast.undo(t("work.ask.added_toast"), { icon: MessageSquarePlus, undo: { label: t("work.ask.open"), onClick: () => route.navigate(WORK_HOME_ROUTE) }, closeLabel: t("common.close"), duration: 4000 });
-        else toast.success(t("work.ask.added_toast"), { duration: 2500 });
+        else if (target.kind === "chat") {
+          const sessionId = target.sessionId;
+          toast.undo(t("work.ask.added_toast"), { icon: MessageSquarePlus, undo: { label: t("work.ask.open"), onClick: () => { showAskChat(sessionId); focusPrompt([60, 300]); } }, closeLabel: t("common.close"), duration: 4000 });
+        } else toast.success(t("work.ask.added_toast"), { duration: 2500 });
       }
       return;
     }
     // A history push: Back returns to the page the item was asked from.
     if (leave) route.navigate(WORK_HOME_ROUTE);
-    // The home composer mounts after the navigation: ask for the focus again once it is there.
-    for (const delay of leave ? [120, 600] : [30]) window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), delay);
+    // A narrow window shows the chat and the viewer as tabs: bring the chat (and its composer) forward.
+    if (target.kind === "chat") showAskChat(target.sessionId);
+    // The composer mounts after the navigation or the tab switch: ask for the focus again once it is there.
+    focusPrompt(leave ? [120, 600] : target.kind === "chat" ? [30, 300] : [30]);
   }), []);
   // A chip in a sent question opens its entity in Knowledge.
   useEffect(() => {
@@ -4165,6 +4173,7 @@ export function SessionRoute() {
                       onSend={(text) => void startWorkChat(text).catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))}
                       onFill={(text) => { setWorkHomeDraft(text); window.setTimeout(() => window.dispatchEvent(new Event("omnirush:focusPrompt")), 30); }}
                       shortcuts
+                      tooltipSide="top"
                       testId="work-ask-starters"
                       className="mb-2 px-1"
                     />

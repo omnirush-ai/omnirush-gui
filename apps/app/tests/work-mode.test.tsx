@@ -522,7 +522,13 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(home).toContain("today-slot");
     expect(home).not.toContain("What do you want to get done?");
     expect(home.indexOf("today-slot")).toBeLessThan(home.indexOf("composer-slot"));
-    const empty = renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} onConnect={noop} />);
+    // The composer dock is its own solid surface below the scrolling feed, with no fade over the feed's text.
+    expect(home).not.toContain("mask-b-from");
+    const dock = home.slice(home.indexOf('data-testid="work-home-dock"') - 120);
+    expect(dock).toContain("bg-dls-surface");
+    expect(home.indexOf('data-testid="work-home-feed"')).toBeLessThan(home.indexOf('data-testid="work-home-dock"'));
+    expect(home.indexOf('data-testid="work-home-dock"')).toBeLessThan(home.indexOf("composer-slot"));
+    const empty =renderToStaticMarkup(<WorkHome composer={null} onStart={async () => {}} onConnect={noop} />);
     expect(empty).toContain('data-testid="work-home-connect"');
     // Sources still loading: the composer waits in the chat's place, so it does not jump when Today arrives.
     const pending = renderToStaticMarkup(<WorkHome composer={<div data-testid="composer-slot" />} onStart={async () => {}} pending onConnect={noop} />);

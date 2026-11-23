@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Briefcase, Calendar, ChevronDown, Code2, Copy, Info, Mail, MoreHorizontal, Plug, Plus, RotateCw, Settings2, Sparkles, Stethoscope, Unplug } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress";
 
 import { Button } from "@/components/ui/button";
@@ -85,6 +85,29 @@ export function WorkModeToggle(props: { mode: AppMode; onChange: (mode: AppMode)
   );
 }
 
+/** Whether a scroll area has content below its visible part (it is not scrolled to the end). */
+function useRunsOnBelow(ref: RefObject<HTMLElement | null>, active: boolean): boolean {
+  const [below, setBelow] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!active || !element) {
+      setBelow(false);
+      return;
+    }
+    const check = () => setBelow(element.scrollHeight - element.scrollTop - element.clientHeight > 1);
+    check();
+    element.addEventListener("scroll", check, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(check);
+    observer?.observe(element);
+    if (element.firstElementChild) observer?.observe(element.firstElementChild);
+    return () => {
+      element.removeEventListener("scroll", check);
+      observer?.disconnect();
+    };
+  }, [active, ref]);
+  return below;
+}
+
 /** Work home: the Today view once a source is connected (or sample data is in), above the real chat composer (passed
  *  in, the same one the running Work chat uses) with up to three tailored starter chips from onboarding just above it.
  *  Before that, "What do you want to get done?" and the composer centred, the starters, checklist and connect button
@@ -116,6 +139,8 @@ export function WorkHome(props: {
     }
   };
   const feed = Boolean(props.today || props.pending);
+  const feedRef = useRef<HTMLDivElement>(null);
+  const feedRunsOn = useRunsOnBelow(feedRef, feed);
   const starters = (props.starters ?? []).slice(0, 3);
   const starterChips = starters.length ? (
     <div className={cn("flex flex-wrap gap-2", !feed && "justify-center")} data-testid="work-starters">
@@ -137,18 +162,27 @@ export function WorkHome(props: {
   ) : null;
   const message = props.message ? <p className="text-center text-[12px] text-muted-foreground">{props.message}</p> : null;
   if (feed) {
+    // The composer dock is its own solid surface below the feed (no fade over feed text): the feed scrolls in the room
+    // above it, so every row can scroll fully clear of the dock however tall the chips and questions make it. A hairline
+    // marks the edge while feed rows run on below it.
     return (
       <div className="flex h-full flex-col" data-testid="work-home">
-        <div className="min-h-0 flex-1 overflow-y-auto mask-b-from-[calc(100%-1.5rem)]">
-          <div className={cn(COMPOSER_GUTTER, "py-8")}>
+        <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto" data-testid="work-home-feed">
+          <div className={cn(COMPOSER_GUTTER, "pt-8 pb-10")}>
             <div className="mx-auto w-full max-w-[800px]" data-testid="work-home-column">{props.today}</div>
           </div>
         </div>
-        <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 shrink-0 pt-1")}>
-          <div className={cn(COMPOSER_WIDTH, "flex flex-col gap-2")}>
-            {starterChips}
-            {props.composer}
-            {message}
+        <div
+          className={cn("shrink-0 border-t bg-dls-surface transition-colors", feedRunsOn ? "border-border" : "border-transparent")}
+          data-testid="work-home-dock"
+          data-feed-below={feedRunsOn || undefined}
+        >
+          <div className={cn(COMPOSER_GUTTER, COMPOSER_BOTTOM, "mb-2 pt-3")}>
+            <div className={cn(COMPOSER_WIDTH, "flex flex-col gap-2")}>
+              {starterChips}
+              {props.composer}
+              {message}
+            </div>
           </div>
         </div>
       </div>
