@@ -4,7 +4,7 @@
 import { BrandTile } from "../brand-icon";
 import { t } from "@/i18n";
 
-import { requestOpenRecord, type RecordRef } from "./records";
+import { requestOpenRecord, sourceLabel, sourceMark, type RecordRef } from "./records";
 import { WORK_TOOL_PREFIX } from "../work-mode";
 
 const MAX = 8;
@@ -57,8 +57,8 @@ export function WorkSourceChips(props: { output: unknown }) {
             className="flex h-7 max-w-[260px] items-center gap-1.5 rounded-full border border-border bg-background ps-1 pe-2.5 text-[12px] text-foreground outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring"
             data-source-chip={record.sourceId}
           >
-            <BrandTile id={record.source} size="chip" className="rounded-full" />
-            <span className="min-w-0 truncate">{record.title || record.sourceId}</span>
+            <BrandTile id={sourceMark({ source: record.source, kind: record.kind })} size="chip" className="rounded-full" />
+            <span className="min-w-0 truncate">{record.title || [sourceLabel({ source: record.source ?? "", kind: record.kind }), record.kind?.replace(/_/g, " ")].filter(Boolean).join(" · ")}</span>
           </button>
         </li>
       ))}

@@ -8,6 +8,7 @@ import { toast } from "@/components/ui/sonner";
 import { t } from "@/i18n";
 import type { OmniRushWorkRecordDetail } from "@/app/lib/omnirush-server";
 
+import { builtInCatalog, toolLabel } from "../catalog";
 import { connectorLabel, type WorkClient } from "../work-mode";
 
 // ── what the server answers ─────────────────────────────────────────────────────────────────────────────────────────
@@ -108,8 +109,9 @@ export type OpenRecordRequest = RecordRef & {
 export const OPEN_WORK_RECORD_EVENT = "omnirush-open-work-record";
 export const ASK_WORK_RECORD_EVENT = "omnirush-ask-work-record";
 export const RECORD_TAB_PREFIX = "record:";
+/** A record's tab is the record's; each new mail or meeting gets a tab of its own. */
 export const recordTabId = (request: Pick<OpenRecordRequest, "sourceId" | "compose">) =>
-  request.compose ? `${RECORD_TAB_PREFIX}compose:${request.compose.kind}` : `${RECORD_TAB_PREFIX}${request.sourceId}`;
+  request.compose ? `${RECORD_TAB_PREFIX}compose:${request.compose.kind}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}` : `${RECORD_TAB_PREFIX}${request.sourceId}`;
 
 /** Whether this server has the viewers: unknown until the first record answers; an older server (404 on the route)
  *  makes every item open at its source again, as before. */
@@ -176,18 +178,37 @@ export function isMissingRoute(error: unknown): boolean {
 
 const CHANNEL_LABELS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", teams: "Teams",
-  onedrive: "OneDrive", sharepoint: "SharePoint", imap: "Email", caldav: "Calendar",
+  onedrive: "OneDrive", sharepoint: "SharePoint",
 };
-/** "Gmail", "Slack", "GitHub": the record's channel when it names a product, else its connector. */
-export function sourceLabel(record: Pick<WorkRecord, "source"> & { channel?: string | null }): string {
-  const channel = record.channel?.trim();
-  return (channel && CHANNEL_LABELS[channel]) || connectorLabel(record.source).replace(/\s*\(.*\)$/, "");
+let catalog: ReturnType<typeof builtInCatalog> | null = null;
+/** A connector's name as people know it ("Xero", "monday.com"), from the built-in catalog, else the Work label. */
+export function connectorName(source: string): string {
+  catalog ??= builtInCatalog([]);
+  const known = toolLabel(catalog, source);
+  return (known && known !== source && source !== "google" && source !== "microsoft" ? known : connectorLabel(source)).replace(/\s*\(.*\)$/, "");
 }
-/** The mark a record shows: its channel's (Gmail, Outlook, Teams) when it has one, else its connector's. */
-export function sourceMark(record: { source?: string | null; channel?: string | null }): string {
-  const channel = record.channel?.trim();
-  if (channel && CHANNEL_LABELS[channel] && channel !== "imap" && channel !== "caldav") return channel;
-  return record.source ?? "generic";
+/** The product a Google or Microsoft record belongs to (its mark and name): Gmail, Calendar, Drive, Outlook, Teams. */
+export function channelFor(source: string | null | undefined, kind: string | null | undefined, channel?: string | null): string | null {
+  if (channel && CHANNEL_LABELS[channel]) return channel;
+  if (source === "google") return kind === "email" ? "gmail" : kind === "event" ? "calendar" : kind === "file" ? "drive" : null;
+  if (source === "microsoft") return kind === "email" || kind === "event" ? "outlook" : kind === "message" || kind === "chat" ? "teams" : kind === "file" ? "onedrive" : null;
+  return null;
+}
+/** "Gmail", "Slack", "GitHub": the record's product when it names one, else its connector. */
+export function sourceLabel(record: { source: string; kind?: string | null; channel?: string | null }): string {
+  const channel = channelFor(record.source, record.kind, record.channel);
+  return (channel && CHANNEL_LABELS[channel]) || connectorName(record.source);
+}
+/** The mark a record shows: its product's (Gmail, Outlook, Teams), else its connector's. */
+export function sourceMark(record: { source?: string | null; kind?: string | null; channel?: string | null }): string {
+  return channelFor(record.source, record.kind, record.channel) ?? record.source ?? "generic";
+}
+/** "AUTHORISED" or "open" as "Authorised", "Open". */
+export function stateLabel(value: string): string {
+  const text = value.replace(/_/g, " ").trim();
+  if (!text) return text;
+  const lower = text === text.toUpperCase() ? text.toLowerCase() : text;
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
 export function personName(person: RecordPerson | null | undefined): string {
@@ -212,7 +233,7 @@ export function tint(person: RecordPerson | null | undefined): string {
 
 /** "to you, Ben Okafor and 2 more" */
 export function recipientsLine(to: RecordPerson[], cc: RecordPerson[] = []): string {
-  const names = [...to, ...cc].map(personName).filter(Boolean);
+  const names = [...new Set([...to, ...cc].map(personName).filter(Boolean))];
   if (!names.length) return "";
   const shown = names.slice(0, 2).join(", ");
   return names.length > 2 ? t("work.viewer.to_more", { names: shown, count: names.length - 2 }) : t("work.viewer.to_names", { names: shown });
@@ -300,7 +321,7 @@ export function actionLabel(action: Pick<RecordAction, "id" | "label">, view?: s
 export function disabledReason(action: RecordAction, source: string): string | null {
   if (!action.disabled) return null;
   if (action.reason) return action.reason;
-  const name = connectorLabel(source).replace(/\s*\(.*\)$/, "");
+  const name = connectorName(source);
   if (action.disabled === "not_connected") return t("work.viewer.not_connected", { name });
   if (action.disabled === "reconnect_required") return t("work.viewer.reconnect_to_act", { name });
   if (action.disabled === "needs_install") return t("work.viewer.needs_install_generic");

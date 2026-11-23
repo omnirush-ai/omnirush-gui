@@ -14,7 +14,7 @@ import { MarkdownBlock } from "@/react-app/domains/session/surface/markdown";
 import { BrandTile } from "../brand-icon";
 import { linkParts, safeHref, splitPlainQuote } from "./mail-html";
 import {
-  fileSize, initials, personName, shortWhen, tint,
+  fileSize, initials, personName, shortWhen, sourceMark, stateLabel, tint,
   type RecordClient, type RecordField, type RecordFile, type RecordLink, type RecordPerson, type RecordRef,
 } from "./records";
 
@@ -59,12 +59,12 @@ export function Avatar(props: { person: RecordPerson | null | undefined; size?: 
 
 /** Markdown from a source (an issue, a comment, a Slack message): rendered and sanitized by the app's renderer, links
  *  opened by the viewer instead of the window. */
-export function RecordMarkdown(props: { text: string; className?: string }) {
+export function RecordMarkdown(props: { text: string; className?: string; compact?: boolean }) {
   const open = useLinkOpener();
   if (!props.text.trim()) return null;
   return (
     <div
-      className={cn("min-w-0 text-[13px] leading-[1.6] [&_.markdown-content]:text-[13px] [&_.markdown-content_img]:max-w-full [&_.markdown-content_img]:rounded-md", props.className)}
+      className={cn("min-w-0 text-[13px] leading-[1.6] [&_.markdown-content]:text-[13px] [&_.markdown-content_img]:max-w-full [&_.markdown-content_img]:rounded-md [&_.markdown-content_h1]:text-[15px] [&_.markdown-content_h2]:text-[14px] [&_.markdown-content_h3]:text-[13px] [&_.markdown-content_h1]:font-semibold [&_.markdown-content_h2]:font-semibold [&_.markdown-content_h3]:font-semibold", props.compact && "[&_.markdown-content>*]:my-0 [&_.markdown-content_p]:my-0", props.className)}
       onClickCapture={(event) => {
         const anchor = (event.target as Element | null)?.closest?.("a[href]");
         if (!anchor) return;
@@ -159,7 +159,7 @@ export function FieldGrid(props: { fields: RecordField[] | null | undefined; cla
 }
 
 /** A status-like value as a quiet pill. */
-export function Pill(props: { children: ReactNode; tone?: "neutral" | "green" | "amber" | "red" | "blue" | "purple"; className?: string }) {
+export function Pill(props: { children: ReactNode; tone?: "neutral" | "green" | "amber" | "red" | "blue" | "purple"; className?: string; state?: boolean }) {
   const tone = {
     neutral: "border-border bg-muted text-muted-foreground",
     green: "border-green-6 bg-green-3 text-green-11",
@@ -168,7 +168,9 @@ export function Pill(props: { children: ReactNode; tone?: "neutral" | "green" | 
     blue: "border-blue-6 bg-blue-3 text-blue-11",
     purple: "border-purple-6 bg-purple-3 text-purple-11",
   }[props.tone ?? "neutral"];
-  return <span className={cn("inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[11px] font-medium leading-none", tone, props.className)}>{props.children}</span>;
+  // A state word reads the same whatever case the source sends ("AUTHORISED", "open"); labels keep their own.
+  const children = props.state && typeof props.children === "string" ? stateLabel(props.children) : props.children;
+  return <span className={cn("inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[11px] font-medium leading-none", tone, props.className)}>{children}</span>;
 }
 /** A tone for a status word (open, closed, merged, paid, overdue ...). */
 export function statusTone(value: string | null | undefined): "neutral" | "green" | "amber" | "red" | "blue" | "purple" {
@@ -274,29 +276,37 @@ export function AttachmentPreview(props: { file: RecordFile; sourceId: string; o
   );
 }
 
-/** The records this one is linked to (mail about a deal, the call with a contact): each opens in this panel. */
+/** The records this one is linked to (mail about a deal, the call with a contact): each opens in this panel. The first
+ *  five show, then "Show N more". */
 export function RelatedList(props: { links: RecordLink[] | null | undefined }) {
   const { openRecord } = useViewer();
+  const [all, setAll] = useState(false);
   const links = props.links ?? [];
   if (!links.length) return null;
+  const shown = all ? links : links.slice(0, 5);
   return (
     <section aria-label={t("work.viewer.related")} data-testid="work-viewer-related">
       <SectionTitle count={links.length}>{t("work.viewer.related")}</SectionTitle>
       <ul className="flex flex-col overflow-hidden rounded-xl border border-border">
-        {links.map((link) => (
+        {shown.map((link) => (
           <li key={link.source_id} className="border-b border-border last:border-b-0">
             <button
               type="button"
               onClick={() => openRecord({ sourceId: link.source_id, source: link.source, kind: link.kind, title: link.subject })}
               className="flex w-full items-center gap-2.5 px-3 py-2 text-start outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
-              <BrandTile id={link.source} size="chip" />
+              <BrandTile id={sourceMark(link)} size="chip" />
               <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{link.subject?.trim() || link.kind.replace(/_/g, " ")}</span>
               <span className="shrink-0 text-[12px] text-muted-foreground">{shortWhen(link.occurred_at)}</span>
             </button>
           </li>
         ))}
       </ul>
+      {links.length > shown.length ? (
+        <button type="button" onClick={() => setAll(true)} className="mt-2 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline" data-testid="work-viewer-related-more">
+          {t("work.viewer.show_more", { count: links.length - shown.length })}
+        </button>
+      ) : null}
     </section>
   );
 }

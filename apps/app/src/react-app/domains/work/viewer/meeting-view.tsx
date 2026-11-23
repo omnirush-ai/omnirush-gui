@@ -2,7 +2,7 @@
 // Meetings (Work meetings, Zoom; design 2.5): summary, action items, who was there, then the transcript with a speaker
 // filter and find in transcript.
 import { Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -25,11 +25,23 @@ export function MeetingView(props: { record: WorkRecord }) {
   const speakers = useMemo(() => [...new Set(segments.map((s) => s.speaker).filter((s): s is string => Boolean(s)))], [segments]);
   const [speaker, setSpeaker] = useState<string | null>(null);
   const [find, setFind] = useState("");
+  const findRef = useRef<HTMLInputElement>(null);
   const query = find.trim().toLowerCase();
   const shown = segments.filter((s) => (!speaker || s.speaker === speaker) && (!query || (s.text ?? "").toLowerCase().includes(query)));
   const items = (meeting.action_items ?? []).map((item) => (typeof item === "string" ? item : typeof item === "object" && item ? String((item as Record<string, unknown>).text ?? (item as Record<string, unknown>).title ?? "") : "")).filter(Boolean);
   return (
-    <div className="flex flex-col gap-5 px-4 py-4" data-testid="work-meeting-view">
+    <div
+      className="flex flex-col gap-5 px-4 py-4"
+      data-testid="work-meeting-view"
+      onKeyDown={(event) => {
+        // Cmd/Ctrl+F in the panel: find in the transcript.
+        if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "f" && findRef.current) {
+          event.preventDefault();
+          findRef.current.focus();
+          findRef.current.select();
+        }
+      }}
+    >
       {meeting.summary?.trim() ? (
         <section aria-label={t("work.viewer.summary")}><SectionTitle>{t("work.viewer.summary")}</SectionTitle><RecordMarkdown text={meeting.summary} /></section>
       ) : null}
@@ -46,7 +58,7 @@ export function MeetingView(props: { record: WorkRecord }) {
           <div className="mb-3 flex flex-wrap items-center gap-1.5">
             <label className="flex h-8 min-w-[160px] flex-1 items-center gap-1.5 rounded-lg border border-border px-2 focus-within:ring-2 focus-within:ring-ring/30">
               <Search className="size-3.5 text-muted-foreground" aria-hidden />
-              <input value={find} onChange={(e) => setFind(e.target.value)} placeholder={t("work.viewer.find_transcript")} aria-label={t("work.viewer.find_transcript")} className="h-7 min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground" data-transcript-find />
+              <input ref={findRef} value={find} onChange={(e) => setFind(e.target.value)} placeholder={t("work.viewer.find_transcript")} aria-label={t("work.viewer.find_transcript")} className="h-7 min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground" data-transcript-find />
             </label>
             {speakers.length > 1 ? (
               <div role="radiogroup" aria-label={t("work.viewer.speaker")} className="flex flex-wrap gap-1">

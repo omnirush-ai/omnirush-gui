@@ -20,5 +20,5 @@ export function RecordPanel(props: ComponentProps<typeof Panel>) {
 
 export function RecordTabIcon(props: { tab: RecordPanelTab }) {
   if (props.tab.compose) return props.tab.compose.kind === "meeting" ? <CalendarPlus /> : <Mail />;
-  return <ConnectorIcon id={props.tab.source ?? "generic"} className="size-3.5" />;
+  return <ConnectorIcon id={props.tab.mark ?? props.tab.source ?? "generic"} className="size-3.5" />;
 }

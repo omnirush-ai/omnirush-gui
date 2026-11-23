@@ -57,11 +57,11 @@ function MessageHeader(props: { message: MailMessage; open: boolean; onToggle: (
       <Avatar person={m.from} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <button type="button" onClick={props.onToggle} className="min-w-0 truncate text-start text-[13px] font-semibold text-foreground outline-none focus-visible:underline" aria-expanded={props.open}>
+          <button type="button" onClick={props.onToggle} className="max-w-[60%] shrink-0 truncate text-start text-[13px] font-semibold text-foreground outline-none focus-visible:underline" aria-expanded={props.open}>
             <PersonName person={m.from} />
           </button>
-          {m.from.email && !m.from.me ? <span className="hidden min-w-0 truncate text-[12px] text-muted-foreground @[26rem]/viewer:inline">{m.from.email}</span> : null}
-          <span className="ms-auto shrink-0 text-[12px] tabular-nums text-muted-foreground" title={m.at ? new Date(m.at).toLocaleString() : undefined}>{shortWhen(m.at)}</span>
+          {m.from.email && !m.from.me ? <span className="hidden min-w-0 flex-1 truncate text-[12px] text-muted-foreground @[28rem]/viewer:inline">{m.from.email}</span> : <span className="flex-1" />}
+          <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground" title={m.at ? new Date(m.at).toLocaleString() : undefined}>{shortWhen(m.at)}</span>
         </div>
         {line ? (
           <button type="button" onClick={() => setDetails(!details)} aria-expanded={details} className="block max-w-full truncate text-start text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline">
@@ -145,14 +145,18 @@ function FoldedMessage(props: { message: MailMessage; onOpen: () => void }) {
     <button
       type="button"
       onClick={props.onOpen}
-      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-start outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className="flex w-full items-start gap-2.5 px-4 py-2.5 text-start outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       data-mail-folded={m.source_id}
       aria-expanded={false}
     >
       <Avatar person={m.from} size="sm" />
-      <span className={cn("w-28 shrink-0 truncate text-[13px] text-foreground @[30rem]/viewer:w-36", m.unread && "font-semibold")}><PersonName person={m.from} /></span>
-      <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{m.snippet || m.body.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 160)}</span>
-      <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{shortWhen(m.at)}</span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          <span className={cn("min-w-0 flex-1 truncate text-[13px] text-foreground", m.unread && "font-semibold")}><PersonName person={m.from} /></span>
+          <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{shortWhen(m.at)}</span>
+        </span>
+        <span className="block truncate text-[12px] text-muted-foreground">{m.snippet || m.body.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 160)}</span>
+      </span>
     </button>
   );
 }
@@ -196,7 +200,7 @@ export function MailView(props: { record: WorkRecord; onPreview: (file: RecordFi
 
 // ── the mail composer's fields ──────────────────────────────────────────────────────────────────────────────────────
 
-export function RecipientField(props: { label: string; value: string[]; onChange: (value: string[]) => void; suggestions?: RecordPerson[]; autoFocus?: boolean; testId?: string }) {
+export function RecipientField(props: { label: string; value: string[]; onChange: (value: string[]) => void; suggestions?: RecordPerson[]; autoFocus?: boolean; last?: boolean; testId?: string }) {
   const [text, setText] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -233,7 +237,7 @@ export function RecipientField(props: { label: string; value: string[]; onChange
     }
   };
   return (
-    <div className="relative flex min-h-9 items-start gap-2 border-b border-border px-3 py-1" data-testid={props.testId}>
+    <div className={cn("relative flex min-h-9 items-start gap-2 px-3 py-1", !props.last && "border-b border-border")} data-testid={props.testId}>
       <label className="mt-1.5 w-8 shrink-0 text-[12px] text-muted-foreground" onClick={() => inputRef.current?.focus()}>{props.label}</label>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
         {props.value.map((address) => {

@@ -47,7 +47,7 @@ export function FinanceView(props: { record: WorkRecord }) {
           <p className="text-[24px] font-semibold leading-8 tracking-[-0.02em] text-foreground tabular-nums" data-testid="work-finance-amount">{money(finance.amount, finance.currency) || "-"}</p>
           {finance.number ? <p className="text-[12px] text-muted-foreground">{t("work.viewer.number", { number: finance.number })}</p> : null}
         </div>
-        {finance.status ? <Pill tone={statusTone(finance.status)}>{finance.status}</Pill> : null}
+        {finance.status ? <Pill state tone={statusTone(finance.status)}>{finance.status}</Pill> : null}
       </div>
       <FieldGrid fields={facts} />
       {lines.length ? (

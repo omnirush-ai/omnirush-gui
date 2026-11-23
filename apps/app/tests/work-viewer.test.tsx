@@ -300,7 +300,8 @@ describe("opening items in the panel", () => {
     expect(session.tabs.map((tab) => tab.id)).toEqual(["record:gmail:2", "record:gmail:3"]);
     openRecordTab(key, { ...list[0]!, newTab: true });
     expect(usePanelTabStore.getState().sessions[key]!.tabs).toHaveLength(3);
-    expect(recordTab({ sourceId: "", compose: { kind: "meeting" } })).toMatchObject({ id: "record:compose:meeting", type: "record", label: "New meeting" });
+    expect(recordTab({ sourceId: "", compose: { kind: "meeting" } })).toMatchObject({ type: "record", label: "New meeting" });
+    expect(recordTab({ sourceId: "", compose: { kind: "meeting" } }).id).toMatch(/^record:compose:meeting:/);
     records.useRecordDrafts.getState().clear(records.draftKey("gmail:2", "reply"));
     usePanelTabStore.getState().clearSession(key);
   });
@@ -388,7 +389,7 @@ describe("views (design 2.5)", () => {
         attendees: [{ name: "Ana", email: "ana@acme.test", response: "yes" }, { name: "Ben", email: "ben@acme.test", response: "yes" }, { name: "Cara", response: "maybe" }, { email: "maria@cold.test", response: "none" }],
         counts: { yes: 2, maybe: 1, no: 0, none: 1 } },
       actions: [{ id: "rsvp", label: "Respond" }] } as unknown as WorkRecord;
-    expect(guestSummary(record.event!)).toBe("4 guests: 2 yes, 1 maybe, 1 no reply");
+    expect(guestSummary(record.event!)).toBe("2 yes, 1 maybe, 1 no reply");
     const markup = wrap(<RecordView record={record} onPreview={noop} />);
     expect(markup).toContain("Join Google Meet");
     const actions = wrap(<ActionArea record={record} mode={null} setMode={noop} send={async () => true} onSubmit={noop} onOpenSettings={noop} onOpenLink={noop} onReconnect={noop} />);

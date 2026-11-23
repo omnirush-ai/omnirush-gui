@@ -22,7 +22,7 @@ import { usePlatform } from "@/react-app/kernel/platform";
 import { usePanelTabStore, type RecordPanelTab } from "../../session/panel/panel-tab-store";
 import { useCreateTab } from "../../session/panel/use-side-panel-tabs";
 import { BrandTile } from "../brand-icon";
-import { connectorLabel, workConnectorsKey, workFailure, WORK_ACTIVITY_ROUTE } from "../work-mode";
+import { workConnectorsKey, workFailure, WORK_ACTIVITY_ROUTE } from "../work-mode";
 import { issueRef, issueState } from "./issue-view";
 import { mailMessages } from "./mail-view";
 import { NewMail, NewMeeting, type Calendar } from "./meeting-composer";
@@ -32,7 +32,7 @@ import { openRecordTab } from "./record-tabs";
 import { RecordView } from "./record-view";
 import {
   actionArgs, askPrompt, clientActionId, draftKey, holdSend, isEditable, isMac, isMissingRoute, neighbour, personName, recordList,
-  requestAskAbout, sourceLabel, sourceMark, useRecordDrafts, useUndoSendStore, useViewerSupport, workRecordKey,
+  connectorName, requestAskAbout, sourceLabel, sourceMark, useRecordDrafts, useUndoSendStore, useViewerSupport, workRecordKey,
   type RecordFile, type RecordRef, type SendFn, type SendInput, type WorkRecord,
 } from "./records";
 import { RECORD_SHORTCUTS, shortcutKeys } from "./shortcuts";
@@ -44,7 +44,7 @@ export function sendFailure(error: unknown, source: string): { text: string; fix
   const details = failure.details && typeof failure.details === "object" ? (failure.details as Record<string, unknown>) : {};
   const reason = typeof details.reason === "string" ? details.reason : "";
   const url = typeof details.setup_url === "string" ? details.setup_url : undefined;
-  const name = connectorLabel(source).replace(/\s*\(.*\)$/, "");
+  const name = connectorName(source);
   if (code === "writes_paused") return { text: t("work.viewer.writes_paused"), fix: "settings" };
   if (code === "needs_install" || code === "needs_permission" || code === "repo_not_installed") return { text: reason || workFailure(error).text, fix: url ? "setup" : undefined, url };
   if (code === "reconnect_required") return { text: t("work.viewer.reconnect_to_act", { name }), fix: "reconnect" };
@@ -131,6 +131,8 @@ function Failure(props: { title: string; body?: string; action?: ReactNode }) {
   );
 }
 
+const openComposers = new Map<string, ComposerMode>();
+
 export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; client: OmniRushServerClient | null; onClose: () => void }) {
   const client = props.client;
   const platform = usePlatform();
@@ -141,7 +143,12 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
   const tab = props.tab;
   const sourceId = tab.sourceId;
   const [live, setLive] = useState<"auto" | "1">("auto");
-  const [mode, setMode] = useState<ComposerMode>(null);
+  // An open composer survives the panel moving (a narrow window shows it as its own pane).
+  const [mode, setModeState] = useState<ComposerMode>(() => openComposers.get(tab.id) ?? null);
+  const setMode = useCallback((next: ComposerMode) => {
+    if (next) openComposers.set(tab.id, next); else openComposers.delete(tab.id);
+    setModeState(next);
+  }, [tab.id]);
   const [preview, setPreview] = useState<{ file: RecordFile; sourceId: string } | null>(null);
   const [help, setHelp] = useState(false);
   const setSupport = useViewerSupport((s) => s.setSupport);
@@ -175,13 +182,15 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
 
   // The tab's label follows the record's title once known.
   useEffect(() => {
-    if (!data?.subject || data.subject === tab.label) return;
+    if (!data) return;
+    const label = data.subject?.trim() ? (data.subject.length > 80 ? `${data.subject.slice(0, 79)}…` : data.subject) : tab.label;
+    if (label === tab.label && sourceMark(data) === tab.mark) return;
     const store = usePanelTabStore.getState();
     const session = store.sessions[props.panelKey];
     const current = session?.tabs.find((entry) => entry.id === tab.id);
-    if (current?.type === "record") store.openTab(props.panelKey, { ...current, label: data.subject.length > 80 ? `${data.subject.slice(0, 79)}…` : data.subject, source: data.source, kind: data.kind, url: data.url ?? current.url });
+    if (current?.type === "record") store.openTab(props.panelKey, { ...current, label, source: data.source, mark: sourceMark(data), kind: data.kind, url: data.url ?? current.url });
     if (session?.activeTabId && session.activeTabId !== tab.id) store.selectTab(props.panelKey, session.activeTabId);
-  }, [data?.subject, data?.source, data?.kind, data?.url, props.panelKey, tab.id, tab.label]);
+  }, [data, props.panelKey, tab.id, tab.label, tab.mark]);
 
   const openLink = useCallback((url: string) => {
     if (isElectronRuntime()) void createTab(url, props.panelKey);
@@ -318,15 +327,16 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
       <ViewerContext.Provider value={viewer}>
         <div ref={rootRef} className="@container/viewer relative h-full overflow-y-auto bg-background" data-testid="work-record-panel" data-compose={tab.compose.kind}>
           {connectors.isLoading ? <RecordSkeleton /> : tab.compose.kind === "meeting" ? (
-            <NewMeeting compose={tab.compose} calendars={connected} onError={(error) => failed(error, tab.compose?.connector ?? "google")} />
+            <NewMeeting formKey={tab.id} compose={tab.compose} calendars={connected} onError={(error) => failed(error, tab.compose?.connector ?? "google")} />
           ) : (
-            <NewMail compose={tab.compose} mailboxes={connected} onSend={({ connector, to, cc, bcc, subject, editor, draft }) => {
+            <NewMail formKey={tab.id} compose={tab.compose} mailboxes={connected} onSend={({ connector, to, cc, bcc, subject, editor, draft }) => {
               if (!client) return;
               const content = editor.content();
               const body = { kind: "mail" as const, connector, to, cc, bcc, subject, body: content.text, ...(content.html ? { html: content.html } : {}), ...(draft ? { draft: true } : {}), client_action_id: clientActionId() };
               const run = async () => {
                 try {
                   await client.composeWork(body);
+                  useRecordDrafts.getState().clear(draftKey(tab.id, "compose"));
                   toast.success(draft ? t("work.viewer.draft_saved") : t("work.viewer.sent"));
                   usePanelTabStore.getState().closeTab(props.panelKey, tab.id);
                 } catch (error) { failed(error, connector); }
@@ -344,9 +354,9 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
     if (record.isLoading || (record.error && isMissingRoute(record.error))) return <RecordSkeleton />;
     const error = record.error as { code?: string; status?: number } | null;
     const code = error?.code ?? "";
-    if (code === "unknown_record") return <Failure title={t("work.viewer.gone_title")} body={t("work.viewer.gone_body")} action={tab.url ? <Button variant="outline" size="sm" onClick={() => openLink(tab.url!)}><ExternalLink className="size-3.5" />{t("work.viewer.open_source", { name: connectorLabel(tab.source ?? "").replace(/\s*\(.*\)$/, "") })}</Button> : undefined} />;
+    if (code === "unknown_record") return <Failure title={t("work.viewer.gone_title")} body={t("work.viewer.gone_body")} action={tab.url ? <Button variant="outline" size="sm" onClick={() => openLink(tab.url!)}><ExternalLink className="size-3.5" />{t("work.viewer.open_source", { name: connectorName(tab.source ?? "") })}</Button> : undefined} />;
     if (code === "connector_off" || code === "connector_not_allowed") return <Failure title={t("work.viewer.turned_off")} body={t("work.viewer.turned_off_body")} />;
-    if (code === "reconnect_required") return <Failure title={t("work.viewer.reconnect_to_see", { name: connectorLabel(tab.source ?? "").replace(/\s*\(.*\)$/, "") })} action={<Button size="sm" onClick={() => void reconnect()}>{t("work.connectors.reconnect")}</Button>} />;
+    if (code === "reconnect_required") return <Failure title={t("work.viewer.reconnect_to_see", { name: connectorName(tab.source ?? "") })} action={<Button size="sm" onClick={() => void reconnect()}>{t("work.connectors.reconnect")}</Button>} />;
     const failure = workFailure(record.error);
     return <Failure title={t("work.viewer.load_failed")} body={failure.text} action={<Button variant="outline" size="sm" onClick={() => void record.refetch()}><RefreshCw className="size-3.5" />{t("work.common.try_again")}</Button>} />;
   }
@@ -355,9 +365,9 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
   const detail = sourceDetail(data);
   const state = stateWord(data);
   const at = list.findIndex((item) => item.sourceId === sourceId);
-  const people = data.view === "mail" ? (data.people ?? []).map(personName).filter(Boolean) : [];
+  const people = data.view === "mail" ? [...new Set((data.people ?? []).map(personName).filter(Boolean))] : [];
   const meetingPeople = (data.view === "mail" ? data.people ?? [] : data.event?.attendees ?? []).filter((p) => p.email && !p.me).map((p) => p.email!.toLowerCase());
-  const liveName = connectorLabel(data.source).replace(/\s*\(.*\)$/, "");
+  const liveName = sourceLabel(data);
 
   return (
     <ViewerContext.Provider value={viewer}>
@@ -365,9 +375,7 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
         <header className="shrink-0 border-b border-border px-4 pb-3 pt-3">
           <div className="flex items-center gap-2">
             <BrandTile id={sourceMark(data)} size="chip" />
-            <span className="min-w-0 truncate text-[12px] text-muted-foreground" data-testid="work-viewer-source">{[label, detail].filter(Boolean).join(" · ")}</span>
-            {state ? <Pill tone={statusTone(state)}>{state}</Pill> : null}
-            <span className="flex-1" />
+            <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground" data-testid="work-viewer-source" title={[label, detail].filter(Boolean).join(" · ")}>{[label, detail].filter(Boolean).join(" · ")}</span>
             {list.length > 1 && at >= 0 ? (
               <span className="flex items-center">
                 <span className="me-1 hidden text-[11px] tabular-nums text-muted-foreground @[22rem]/viewer:inline">{t("work.viewer.position", { at: at + 1, count: list.length })}</span>
@@ -393,7 +401,12 @@ export function RecordPanel(props: { panelKey: string; tab: RecordPanelTab; clie
             </DropdownMenu>
           </div>
           <h2 className="mt-2 line-clamp-2 break-words text-[15px] font-semibold leading-5 tracking-[-0.01em] text-foreground" data-testid="work-viewer-title">{data.subject?.trim() || detail || label}</h2>
-          {people.length ? <p className="mt-1 truncate text-[12px] text-muted-foreground" title={people.join(", ")}>{people.join(", ")}</p> : null}
+          {state || people.length ? (
+            <div className="mt-1.5 flex min-w-0 items-center gap-2">
+              {state ? <Pill state tone={statusTone(state)}>{state}</Pill> : null}
+              {people.length ? <p className="min-w-0 truncate text-[12px] text-muted-foreground" title={people.join(", ")}>{people.join(", ")}</p> : null}
+            </div>
+          ) : null}
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto" data-testid="work-viewer-body">
           {data.live_error === "reconnect_required" ? (

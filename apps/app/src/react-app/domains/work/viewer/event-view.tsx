@@ -24,13 +24,13 @@ const JOIN_LABEL: Record<string, string> = { meet: "work.viewer.join_meet", team
 
 function AnswerMark(props: { answer: RecordAttendee["response"] }) {
   const answer = props.answer ?? "none";
-  if (answer === "yes") return <Check className="size-3.5 text-green-11" aria-label={t("work.viewer.answer_yes")} />;
-  if (answer === "no") return <X className="size-3.5 text-red-11" aria-label={t("work.viewer.answer_no")} />;
-  if (answer === "maybe") return <CircleHelp className="size-3.5 text-amber-11" aria-label={t("work.viewer.answer_maybe")} />;
-  return <span className="size-3.5 text-center text-[11px] leading-[14px] text-muted-foreground" aria-label={t("work.viewer.answer_none")}>·</span>;
+  if (answer === "yes") return <Check className="size-3.5 text-green-11" aria-hidden />;
+  if (answer === "no") return <X className="size-3.5 text-red-11" aria-hidden />;
+  if (answer === "maybe") return <CircleHelp className="size-3.5 text-amber-11" aria-hidden />;
+  return <span className="size-1.5 rounded-full bg-muted-foreground/40" aria-hidden />;
 }
 
-/** "4 guests: 2 yes, 1 maybe, 1 no reply" */
+/** "2 yes, 1 maybe, 1 no reply" */
 export function guestSummary(event: RecordEvent): string {
   const people = event.attendees ?? [];
   if (!people.length) return "";
@@ -41,7 +41,7 @@ export function guestSummary(event: RecordEvent): string {
     counts.no ? t("work.viewer.count_no", { count: counts.no }) : "",
     counts.none ? t("work.viewer.count_none", { count: counts.none }) : "",
   ].filter(Boolean);
-  return t("work.viewer.guests_summary", { count: people.length, parts: parts.join(", ") });
+  return parts.join(", ");
 }
 
 /** Local date and time inputs as an ISO instant. */
@@ -211,14 +211,16 @@ export function EventView(props: { record: WorkRecord }) {
       ) : null}
       {people.length ? (
         <section aria-label={t("work.viewer.guests")}>
-          <SectionTitle>{summary || t("work.viewer.guests")}</SectionTitle>
-          <ul className="flex flex-col gap-1" data-testid="work-event-guests">
+          <SectionTitle count={people.length}>{t("work.viewer.guests")}</SectionTitle>
+          {summary ? <p className="-mt-1 mb-2 text-[12px] text-muted-foreground" data-testid="work-event-summary">{summary}</p> : null}
+          <ul className="flex flex-col" data-testid="work-event-guests">
             {people.map((person, index) => (
-              <li key={person.email ?? person.name ?? index} className="flex items-center gap-2.5 py-0.5">
-                <span className="relative"><Avatar person={person} size="sm" /><span className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-background"><AnswerMark answer={person.response} /></span></span>
+              <li key={person.email ?? person.name ?? index} className="flex items-center gap-2.5 py-1">
+                <Avatar person={person} size="sm" />
                 <PersonName person={person} className="min-w-0 text-[13px] text-foreground" />
-                {person.organizer ? <span className="text-[11px] text-muted-foreground">{t("work.viewer.organizer_tag")}</span> : null}
-                {person.optional ? <span className="text-[11px] text-muted-foreground">{t("work.viewer.optional")}</span> : null}
+                {person.organizer ? <span className="shrink-0 text-[11px] text-muted-foreground">{t("work.viewer.organizer_tag")}</span> : null}
+                {person.optional ? <span className="shrink-0 text-[11px] text-muted-foreground">{t("work.viewer.optional")}</span> : null}
+                <span className="ms-auto flex shrink-0 items-center gap-1 text-[12px] text-muted-foreground"><AnswerMark answer={person.response} />{t(`work.viewer.answer_${person.response && person.response !== "none" ? person.response : "none"}`)}</span>
               </li>
             ))}
           </ul>

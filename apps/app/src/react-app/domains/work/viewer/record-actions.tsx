@@ -18,7 +18,7 @@ import { EventActions } from "./event-view";
 import { ForwardFiles, RecipientField, mailMessages } from "./mail-view";
 import {
   actionLabel, defaultRecipients, disabledReason, draftKey, isMac, useRecordDrafts,
-  type ComposerContent, type MailFields, type MailMessage, type RecordAction, type SendFn, type WorkRecord,
+  type ComposerContent, type MailFields, type MailMessage, type RecordAction, type RecordDraft, type SendFn, type WorkRecord,
 } from "./records";
 
 export type ComposerMode = { action: string; message?: string } | null;
@@ -39,21 +39,44 @@ export const HUBSPOT_STAGES = [
   ["closedlost", "Closed lost"],
 ] as const;
 
-/** A draft saved as the composer changes (a short pause), read back when it opens again. */
+/** A draft saved as the composer changes (a short pause, and at once when the composer goes away), read back when it
+ *  opens again. */
 function useDraft(sourceId: string, action: string) {
   const key = draftKey(sourceId, action);
   const draft = useRecordDrafts((s) => s.drafts[key]);
-  const save = useRecordDrafts((s) => s.save);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<Partial<RecordDraft> | null>(null);
   const initial = useRef(draft);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  const put = (next: Partial<Parameters<typeof save>[1]>) => {
-    if (timer.current) clearTimeout(timer.current);
-    const merged = { ...(useRecordDrafts.getState().drafts[key] ?? { action }), ...next, action };
-    timer.current = setTimeout(() => save(key, merged), 250);
+  const write = (next: Partial<RecordDraft>) => {
+    const store = useRecordDrafts.getState();
+    store.save(key, { ...(store.drafts[key] ?? { action }), ...next, action });
   };
-  const discard = () => { if (timer.current) clearTimeout(timer.current); useRecordDrafts.getState().clear(key); };
-  return { initial: initial.current, put, discard };
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (pending.current) write(pending.current);
+    pending.current = null;
+    // Only on unmount.
+  }, [key]);
+  const put = (next: Partial<RecordDraft>) => {
+    pending.current = { ...(pending.current ?? {}), ...next };
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      if (pending.current) write(pending.current);
+      pending.current = null;
+    }, 250);
+  };
+  const discard = () => {
+    if (timer.current) clearTimeout(timer.current);
+    pending.current = null;
+    useRecordDrafts.getState().clear(key);
+  };
+  /** Saved now (a send): Undo brings back exactly what was sent. */
+  const flush = (next: Partial<RecordDraft>) => {
+    if (timer.current) clearTimeout(timer.current);
+    write({ ...(pending.current ?? {}), ...next });
+    pending.current = null;
+  };
+  return { initial: initial.current, put, discard, flush };
 }
 
 function SendButton(props: { disabled: boolean; onClick: () => void; label?: string; testId?: string }) {
@@ -97,12 +120,13 @@ function MailComposer(props: {
   const mail = (): MailFields => ({
     to, cc, bcc,
     ...(props.action === "forward" ? { subject, attachments: picked } : {}),
-    ...(answered && answered.source_id !== props.record.source_id ? { message: answered.source_id } : answered ? { message: answered.source_id } : {}),
+    ...(answered ? { message: answered.source_id } : {}),
   });
   const submit = (action: string) => {
     const content = editor.current?.content();
     if (!content || (!content.text.trim() && action !== "draft")) return;
     if (!to.length && action !== "draft") { toast.error(t("work.viewer.add_recipient")); return; }
+    draft.flush({ editor: editor.current?.snapshot(), text: content.text, to, cc, bcc, ...(props.action === "forward" ? { subject, attachments: picked } : {}) });
     props.onSubmit(action, { content, mail: mail() });
   };
   const modes = (["reply", "reply_all", "forward"] as const).filter((id) => props.offered.some((a) => a.id === id));
@@ -169,6 +193,7 @@ function TextComposer(props: {
   const submit = () => {
     const content = editor.current?.content();
     if (!content?.text.trim() || props.disabled) return;
+    draft.flush({ editor: editor.current?.snapshot(), text: content.text });
     props.onSubmit(props.action, { content });
   };
   const internal = props.action === "note" || (props.action === "comment" && props.record.view === "ticket");
@@ -254,18 +279,18 @@ function StageComposer(props: { record: WorkRecord; onCancel: () => void; onSubm
 
 function Notice(props: { icon?: ReactNode; children: ReactNode; action?: ReactNode; tone?: "neutral" | "amber"; testId?: string }) {
   return (
-    <div className={cn("flex items-start gap-2 rounded-xl border px-3 py-2 text-[12px] leading-5", props.tone === "amber" ? "border-amber-6/70 bg-amber-2 text-amber-12 dark:bg-amber-3/30" : "border-border bg-muted/40 text-muted-foreground")} data-testid={props.testId}>
-      <span className="mt-0.5 shrink-0">{props.icon ?? <Info className="size-3.5" aria-hidden />}</span>
+    <div className={cn("flex items-center gap-2 rounded-xl border px-3 py-2 text-[12px] leading-5", props.tone === "amber" ? "border-amber-6/70 bg-amber-2 text-amber-12 dark:bg-amber-3/30" : "border-border bg-muted/40 text-muted-foreground")} data-testid={props.testId}>
+      <span className="shrink-0">{props.icon ?? <Info className="size-3.5" aria-hidden />}</span>
       <span className="min-w-0 flex-1">{props.children}</span>
       {props.action}
     </div>
   );
 }
 
-function ActionButton(props: { action: RecordAction; view: string; keys?: string; icon?: ReactNode; primary?: boolean; source: string; onPress: () => void }) {
-  const reason = disabledReason(props.action, props.source);
+function ActionButton(props: { action: RecordAction; view: string; keys?: string; icon?: ReactNode; primary?: boolean; source: string; paused?: boolean; onPress: () => void }) {
+  const reason = props.paused ? t("work.viewer.writes_paused") : disabledReason(props.action, props.source);
   const button = (
-    <Button type="button" variant={props.primary ? "default" : "outline"} size="sm" disabled={Boolean(props.action.disabled)} onClick={props.onPress} data-action={props.action.id}>
+    <Button type="button" variant={props.primary ? "default" : "outline"} size="sm" disabled={Boolean(props.action.disabled) || props.paused} onClick={props.onPress} data-action={props.action.id}>
       {props.icon}{actionLabel(props.action, props.view)}
     </Button>
   );
@@ -293,12 +318,12 @@ export function ActionArea(props: {
 
   const notices: ReactNode[] = [];
   if (paused && actions.length) {
-    notices.push(<Notice key="paused" tone="amber" icon={<PauseCircle className="size-3.5" aria-hidden />} testId="work-viewer-paused" action={<button type="button" onClick={props.onOpenSettings} className="shrink-0 font-medium underline-offset-2 hover:underline">{t("work.viewer.open_settings")}</button>}>{t("work.viewer.writes_paused")}</Notice>);
+    notices.push(<Notice key="paused" tone="amber" icon={<PauseCircle className="size-3.5" aria-hidden />} testId="work-viewer-paused" action={<Button type="button" variant="outline" size="xs" className="shrink-0" onClick={props.onOpenSettings}>{t("work.viewer.open_settings")}</Button>}>{t("work.viewer.writes_paused")}</Notice>);
   }
   if (blocked && !live.length) {
     const reason = disabledReason(blocked, record.source);
     notices.push(
-      <Notice key="blocked" testId="work-viewer-blocked" action={blocked.setup_url ? <button type="button" onClick={() => props.onOpenLink(blocked.setup_url!)} className="shrink-0 font-medium text-foreground underline-offset-2 hover:underline">{record.source === "github" ? t("work.viewer.install_github") : t("work.viewer.fix")}</button> : reconnect ? <button type="button" onClick={props.onReconnect} className="shrink-0 font-medium text-foreground underline-offset-2 hover:underline">{t("work.connectors.reconnect")}</button> : undefined}>
+      <Notice key="blocked" testId="work-viewer-blocked" action={blocked.setup_url ? <Button type="button" variant="outline" size="xs" className="shrink-0" onClick={() => props.onOpenLink(blocked.setup_url!)}>{record.source === "github" ? t("work.viewer.install_github") : t("work.viewer.fix")}</Button> : reconnect ? <Button type="button" variant="outline" size="xs" className="shrink-0" onClick={props.onReconnect}>{t("work.connectors.reconnect")}</Button> : undefined}>
         {reason}
       </Notice>,
     );
@@ -306,7 +331,7 @@ export function ActionArea(props: {
   if (!actions.length && record.read_only) {
     const sender = (record.thread as MailMessage[] | undefined)?.[(record.thread?.length ?? 1) - 1]?.from?.email ?? null;
     notices.push(
-      <Notice key="read" testId="work-viewer-read-only" action={record.source === "imap" && sender ? <button type="button" onClick={() => { void navigator.clipboard?.writeText(sender); toast.success(t("work.viewer.copied")); }} className="shrink-0 font-medium text-foreground underline-offset-2 hover:underline">{t("work.viewer.copy_address")}</button> : undefined}>
+      <Notice key="read" testId="work-viewer-read-only" action={record.source === "imap" && sender ? <Button type="button" variant="outline" size="xs" className="shrink-0" onClick={() => { void navigator.clipboard?.writeText(sender); toast.success(t("work.viewer.copied")); }}>{t("work.viewer.copy_address")}</Button> : undefined}>
         {record.read_only}
       </Notice>,
     );
@@ -326,9 +351,9 @@ export function ActionArea(props: {
       <MailComposer record={record} action={current} messageId={mode?.message} offered={actions} onSwitch={(id) => props.setMode({ action: id, message: mode?.message })} onCancel={close} onSubmit={props.onSubmit} />
     ) : (
       <div className="flex flex-wrap items-center gap-2" data-testid="work-mail-actions">
-        {by("reply") ? <ActionButton action={by("reply")!} view={view} source={record.source} keys="R" primary icon={<CornerUpLeft className="size-3.5" />} onPress={() => props.setMode({ action: "reply" })} /> : null}
-        {by("reply_all") ? <ActionButton action={by("reply_all")!} view={view} source={record.source} keys="⇧R" icon={<ReplyAll className="size-3.5" />} onPress={() => props.setMode({ action: "reply_all" })} /> : null}
-        {by("forward") ? <ActionButton action={by("forward")!} view={view} source={record.source} keys="F" icon={<Forward className="size-3.5" />} onPress={() => props.setMode({ action: "forward" })} /> : null}
+        {by("reply") ? <ActionButton action={by("reply")!} view={view} source={record.source} paused={paused} keys="R" primary icon={<CornerUpLeft className="size-3.5" />} onPress={() => props.setMode({ action: "reply" })} /> : null}
+        {by("reply_all") ? <ActionButton action={by("reply_all")!} view={view} source={record.source} paused={paused} keys="⇧R" icon={<ReplyAll className="size-3.5" />} onPress={() => props.setMode({ action: "reply_all" })} /> : null}
+        {by("forward") ? <ActionButton action={by("forward")!} view={view} source={record.source} paused={paused} keys="F" icon={<Forward className="size-3.5" />} onPress={() => props.setMode({ action: "forward" })} /> : null}
       </div>
     );
   } else if (view === "chat") {
@@ -362,7 +387,7 @@ export function ActionArea(props: {
           action={current}
           choices={textual.filter((a) => !a.disabled)}
           autoFocus
-          placeholder={current === "reply" ? t("work.viewer.reply_customer_placeholder") : current === "note" || view === "ticket" ? t("work.viewer.note_placeholder") : t("work.viewer.comment_placeholder")}
+          placeholder={current === "reply" ? t("work.viewer.reply_customer_placeholder") : view === "ticket" ? t("work.viewer.note_placeholder") : current === "note" ? t("work.viewer.add_note_placeholder") : t("work.viewer.comment_placeholder")}
           onSwitch={(id) => props.setMode({ action: id })}
           onCancel={close}
           onSubmit={props.onSubmit}
@@ -381,14 +406,14 @@ export function ActionArea(props: {
               data-testid="work-comment-open"
             >
               <MessageSquare className="size-3.5" aria-hidden />
-              <span className="flex-1">{first.id === "reply" ? t("work.viewer.reply_customer_placeholder") : first.id === "note" ? t("work.viewer.note_placeholder") : t("work.viewer.comment_placeholder")}</span>
+              <span className="flex-1">{first.id === "reply" ? t("work.viewer.reply_customer_placeholder") : first.id === "note" ? (view === "ticket" ? t("work.viewer.note_placeholder") : t("work.viewer.add_note_placeholder")) : t("work.viewer.comment_placeholder")}</span>
               <kbd className="rounded border border-border px-1 font-sans text-[11px]">C</kbd>
             </button>
           ) : null}
           {textual.length > 1 || other.length ? (
             <div className="flex flex-wrap items-center gap-1.5">
-              {textual.slice(1).map((a) => <ActionButton key={a.id} action={a} view={view} source={record.source} icon={a.id === "reply" ? <CornerUpRight className="size-3.5" /> : undefined} onPress={() => props.setMode({ action: a.id })} />)}
-              {other.map((a) => <ActionButton key={a.id} action={a} view={view} source={record.source} onPress={() => props.setMode({ action: a.id })} />)}
+              {textual.slice(1).map((a) => <ActionButton key={a.id} action={a} view={view} source={record.source} paused={paused} icon={a.id === "reply" ? <CornerUpRight className="size-3.5" /> : undefined} onPress={() => props.setMode({ action: a.id })} />)}
+              {other.map((a) => <ActionButton key={a.id} action={a} view={view} source={record.source} paused={paused} onPress={() => props.setMode({ action: a.id })} />)}
             </div>
           ) : null}
         </div>

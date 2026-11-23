@@ -15,7 +15,7 @@ import { RichComposer, type RichComposerHandle } from "./composer";
 import { localInstant, dateInput, timeInput } from "./event-view";
 import { RecipientField } from "./mail-view";
 import { useViewer } from "./parts";
-import { clientActionId, zoneName, type RecordCompose } from "./records";
+import { clientActionId, draftKey, useRecordDrafts, zoneName, type RecordCompose, type RecordDraft } from "./records";
 
 export type Calendar = "google" | "microsoft";
 
@@ -82,19 +82,37 @@ function Made(props: { title: string; result: Record<string, unknown> }) {
   );
 }
 
-export function NewMeeting(props: { compose: RecordCompose; calendars: Calendar[]; onError: (error: unknown) => void }) {
+type MeetingForm = { connector: Calendar; title: string; date: string; start: string; end: string; guests: string[]; video: boolean; description: string; made: Record<string, unknown> | null };
+/** A form being filled in survives the panel moving (a narrow window shows the panel as its own pane). */
+const meetingForms = new Map<string, MeetingForm>();
+
+function useKept<K extends keyof MeetingForm>(form: MeetingForm, key: K): [MeetingForm[K], (value: MeetingForm[K]) => void] {
+  const [value, setValue] = useState<MeetingForm[K]>(form[key]);
+  return [value, (next) => { form[key] = next; setValue(next); }];
+}
+
+export function NewMeeting(props: { formKey: string; compose: RecordCompose; calendars: Calendar[]; onError: (error: unknown) => void }) {
   const viewer = useViewer();
-  const slot = nextSlot();
-  const [connector, setConnector] = useState<Calendar>(props.compose.connector ?? props.calendars[0] ?? "google");
-  const [title, setTitle] = useState(props.compose.title ?? "");
-  const [date, setDate] = useState(dateInput(slot.start.toISOString()));
-  const [start, setStart] = useState(timeInput(slot.start.toISOString()));
-  const [end, setEnd] = useState(timeInput(slot.end.toISOString()));
-  const [guests, setGuests] = useState<string[]>(props.compose.attendees ?? []);
-  const [video, setVideo] = useState(true);
-  const [description, setDescription] = useState("");
+  const form = meetingForms.get(props.formKey) ?? (() => {
+    const slot = nextSlot();
+    const fresh: MeetingForm = {
+      connector: props.compose.connector ?? props.calendars[0] ?? "google", title: props.compose.title ?? "",
+      date: dateInput(slot.start.toISOString()), start: timeInput(slot.start.toISOString()), end: timeInput(slot.end.toISOString()),
+      guests: props.compose.attendees ?? [], video: true, description: "", made: null,
+    };
+    meetingForms.set(props.formKey, fresh);
+    return fresh;
+  })();
+  const [connector, setConnector] = useKept(form, "connector");
+  const [title, setTitle] = useKept(form, "title");
+  const [date, setDate] = useKept(form, "date");
+  const [start, setStart] = useKept(form, "start");
+  const [end, setEnd] = useKept(form, "end");
+  const [guests, setGuests] = useKept(form, "guests");
+  const [video, setVideo] = useKept(form, "video");
+  const [description, setDescription] = useKept(form, "description");
+  const [made, setMade] = useKept(form, "made");
   const [busy, setBusy] = useState(false);
-  const [made, setMade] = useState<Record<string, unknown> | null>(null);
   const body = meetingBody({ connector, title, date, start, end, attendees: guests, video, description });
   const submit = async () => {
     if (!body || busy || !viewer.client) return;
@@ -113,7 +131,7 @@ export function NewMeeting(props: { compose: RecordCompose; calendars: Calendar[
   const label = "w-16 shrink-0 pt-1.5 text-[12px] text-muted-foreground";
   return (
     <form className="flex flex-col gap-3 p-4" onSubmit={(event) => { event.preventDefault(); void submit(); }} data-testid="work-new-meeting">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-[15px] font-semibold leading-5 text-foreground">{t("work.viewer.new_meeting")}</h2>
         <CalendarPick value={connector} options={props.calendars} onChange={setConnector} label={t("work.viewer.calendar")} />
       </div>
@@ -128,7 +146,7 @@ export function NewMeeting(props: { compose: RecordCompose; calendars: Calendar[
           <span className="text-[12px] text-muted-foreground">{zoneName()}</span>
         </div>
       </div>
-      <div className="overflow-visible rounded-xl border border-border"><RecipientField label={t("work.viewer.guests_short")} value={guests} onChange={setGuests} testId="work-meeting-guests" /></div>
+      <div className="rounded-xl border border-border"><RecipientField label={t("work.viewer.guests_short")} value={guests} onChange={setGuests} last testId="work-meeting-guests" /></div>
       <label className="flex items-center gap-2 text-[13px] text-foreground">
         <input type="checkbox" checked={video} onChange={(e) => setVideo(e.target.checked)} className="size-4 accent-[var(--primary)]" />
         {connector === "google" ? t("work.viewer.add_meet") : t("work.viewer.add_teams")}
@@ -142,21 +160,29 @@ export function NewMeeting(props: { compose: RecordCompose; calendars: Calendar[
   );
 }
 
-export function NewMail(props: { compose: RecordCompose; mailboxes: Calendar[]; onSend: (input: { connector: Calendar; to: string[]; cc: string[]; bcc: string[]; subject: string; editor: RichComposerHandle; draft?: boolean }) => void }) {
+export function NewMail(props: { formKey: string; compose: RecordCompose; mailboxes: Calendar[]; onSend: (input: { connector: Calendar; to: string[]; cc: string[]; bcc: string[]; subject: string; editor: RichComposerHandle; draft?: boolean }) => void }) {
+  // Kept on this computer like a reply's draft, so it survives the panel moving and an Undo.
+  const key = draftKey(props.formKey, "compose");
+  const kept = useRecordDrafts.getState().drafts[key];
+  const save = (next: Partial<RecordDraft>) => useRecordDrafts.getState().save(key, { ...(useRecordDrafts.getState().drafts[key] ?? { action: "compose" }), ...next, action: "compose" });
   const [connector, setConnector] = useState<Calendar>(props.compose.connector ?? props.mailboxes[0] ?? "google");
-  const [to, setTo] = useState<string[]>(props.compose.to ?? []);
-  const [cc, setCc] = useState<string[]>([]);
-  const [bcc, setBcc] = useState<string[]>([]);
-  const [more, setMore] = useState(false);
-  const [subject, setSubject] = useState(props.compose.subject ?? "");
+  const [to, setToState] = useState<string[]>(kept?.to ?? props.compose.to ?? []);
+  const [cc, setCcState] = useState<string[]>(kept?.cc ?? []);
+  const [bcc, setBccState] = useState<string[]>(kept?.bcc ?? []);
+  const [more, setMore] = useState(Boolean(kept?.cc?.length || kept?.bcc?.length));
+  const [subject, setSubjectState] = useState(kept?.subject ?? props.compose.subject ?? "");
+  const setTo = (v: string[]) => { setToState(v); save({ to: v }); };
+  const setCc = (v: string[]) => { setCcState(v); save({ cc: v }); };
+  const setBcc = (v: string[]) => { setBccState(v); save({ bcc: v }); };
+  const setSubject = (v: string) => { setSubjectState(v); save({ subject: v }); };
   const editor = useRef<RichComposerHandle>(null);
-  const [empty, setEmpty] = useState(true);
+  const [empty, setEmpty] = useState(!kept?.text?.trim());
   const ready = to.length > 0 && !empty;
   const send = (draft = false) => { if (editor.current && (ready || draft)) props.onSend({ connector, to, cc, bcc, subject, editor: editor.current, draft }); };
   if (!props.mailboxes.length) return <p className="p-4 text-[13px] text-muted-foreground">{t("work.viewer.no_mailbox")}</p>;
   return (
     <div className="flex flex-col gap-3 p-4" data-testid="work-new-mail">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-[15px] font-semibold leading-5 text-foreground">{t("work.viewer.new_mail")}</h2>
         <CalendarPick value={connector} options={props.mailboxes} onChange={setConnector} label={t("work.viewer.send_from")} />
       </div>
@@ -176,7 +202,8 @@ export function NewMail(props: { compose: RecordCompose; mailboxes: Calendar[]; 
         ref={editor}
         ariaLabel={t("work.viewer.message")}
         placeholder={t("work.viewer.write_message")}
-        onChange={(state) => setEmpty(!state.text.trim())}
+        initial={{ editor: kept?.editor, text: kept?.text }}
+        onChange={(state) => { setEmpty(!state.text.trim()); save({ editor: state.editor, text: state.text }); }}
         onSubmit={() => send()}
         footer={(
           <>

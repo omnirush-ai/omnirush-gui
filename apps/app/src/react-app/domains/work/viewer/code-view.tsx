@@ -24,10 +24,10 @@ export function CodeView(props: { record: WorkRecord }) {
           </button>
           {code.author ? <span>{code.author}</span> : null}
           {code.committed_at ? <span>{shortWhen(code.committed_at)}</span> : null}
-          {code.status ? <Pill tone={statusTone(code.status)}>{code.status}</Pill> : null}
+          {code.status ? <Pill state tone={statusTone(code.status)}>{code.status}</Pill> : null}
           {code.ref ? <span className="font-mono">{code.ref}</span> : null}
         </div>
-      ) : code.status ? <div className="flex items-center gap-2"><Pill tone={statusTone(code.status)}>{code.status}</Pill>{code.ref ? <span className="font-mono text-[12px] text-muted-foreground">{code.ref}</span> : null}</div> : null}
+      ) : code.status ? <div className="flex items-center gap-2"><Pill state tone={statusTone(code.status)}>{code.status}</Pill>{code.ref ? <span className="font-mono text-[12px] text-muted-foreground">{code.ref}</span> : null}</div> : null}
       {code.message?.trim() ? <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/30 px-3 py-2.5 font-mono text-[12px] leading-5 text-foreground">{code.message}</pre> : null}
       <FieldGrid fields={props.record.fields} />
       {files.length ? (

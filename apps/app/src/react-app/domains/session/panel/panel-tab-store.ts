@@ -29,6 +29,8 @@ export type RecordPanelTab = {
   label: string;
   sourceId: string;
   source?: string | null;
+  /** The mark the tab shows (Gmail, Outlook, Teams for Google and Microsoft records). */
+  mark?: string | null;
   kind?: string | null;
   url?: string | null;
   compose?: RecordCompose;
@@ -163,7 +165,7 @@ function isSameTab(left: PanelTab, right: PanelTab) {
   }
 
   if (left.type === "record" && right.type === "record") {
-    return left.label === right.label && left.sourceId === right.sourceId && left.source === right.source && left.url === right.url && left.compose === right.compose;
+    return left.label === right.label && left.sourceId === right.sourceId && left.source === right.source && left.mark === right.mark && left.url === right.url && left.compose === right.compose;
   }
 
   if (left.type === "app" && right.type === "app") {

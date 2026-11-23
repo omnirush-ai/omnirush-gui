@@ -100,6 +100,11 @@ export function sanitizeMailHtml(raw: string, options: { showImages?: boolean; c
       if (!show) {
         img.setAttribute("data-omr-src", src);
         img.setAttribute("src", BLANK_IMAGE);
+        // Held back: the size it asked for as a quiet box, or no room at all (a tracking pixel, an unsized logo).
+        const width = Number(img.getAttribute("width"));
+        const height = Number(img.getAttribute("height"));
+        img.setAttribute("style", width > 2 && height > 2 ? `width:${width}px;height:${height}px;max-width:100%;` : "display:none;");
+        img.classList.add("omr-held");
       } else if (src.startsWith("//")) {
         img.setAttribute("src", `https:${src}`);
       }
@@ -171,6 +176,7 @@ export function mailSrcdoc(html: string, options: { showImages?: boolean; theme:
     + `a{color:${link};}img{max-width:100%;height:auto;}table{max-width:100%;}pre{white-space:pre-wrap;}`
     + `blockquote{margin:0 0 0 2px;padding-left:12px;border-left:2px solid ${rule};color:${muted};}`
     + `.omr-q{display:none !important;}body.omr-show .omr-q{display:revert !important;}`
+    + `img.omr-held{background:${light ? "rgba(31,35,40,.06)" : "rgba(255,255,255,.06)"};border-radius:4px;object-fit:none;}`
     + `</style></head><body>${html}</body></html>`;
 }
 

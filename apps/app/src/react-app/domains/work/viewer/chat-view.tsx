@@ -64,9 +64,9 @@ export function ChatView(props: { record: WorkRecord; onPreview: (file: RecordFi
                       ref={mine ? focus : undefined}
                       data-chat-message={m.source_id}
                       data-opened={mine ? "true" : undefined}
-                      className={cn("-mx-1.5 rounded-md px-1.5 py-0.5", mine && "bg-amber-3/70 ring-1 ring-amber-6/60")}
+                      className={cn("-ms-1.5 rounded-md py-0.5 ps-1.5 pe-1", mine && "bg-amber-3/60 ring-1 ring-inset ring-amber-6/50")}
                     >
-                      {m.format === "markdown" ? <RecordMarkdown text={m.text} /> : <PlainText text={m.text} fold={false} />}
+                      {m.format === "markdown" ? <RecordMarkdown text={m.text} compact /> : <PlainText text={m.text} fold={false} />}
                       {m.attachments?.length && m.source_id ? <div className="mt-1.5"><AttachmentChips sourceId={m.source_id} files={m.attachments} onPreview={props.onPreview} /></div> : null}
                       {m.reply_count ? <p className="mt-0.5 text-[12px] font-medium text-link">{t("work.viewer.replies", { count: m.reply_count })}</p> : null}
                     </div>
