@@ -244,7 +244,8 @@ export function createBrowserLibrary({
       }
       const group = grouped.get(profile.browser);
       if (profile.browser === "safari") {
-        const files = [profile.files.bookmarks, profile.files.history, profile.files.cookies].filter(Boolean);
+        // Safari's own folder answers for all three; its app container is never touched just to look.
+        const files = [profile.files.bookmarks, profile.files.history].filter(Boolean);
         const results = await Promise.all(files.map((file) => readable(file)));
         if (results.some((ok) => !ok)) group.access = "full_disk_access";
       }

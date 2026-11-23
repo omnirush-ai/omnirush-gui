@@ -406,3 +406,18 @@ test("Safari sign-ins: read from the binary cookie file with access; without it 
   const blocked = setup({ fixture, blockSafari: true });
   assert.deepEqual((await blocked.library.inspect({ sourceId: "safari:Safari" })).signIns, { state: "blocked", reason: "full_disk_access" });
 });
+
+test("the sign-in sync setup (Settings > Permissions) lists what it always listed: no Safari, no Linux Chrome", async () => {
+  const mac = setup();
+  const listed = await mac.loginSync.listSources();
+  assert.deepEqual(listed.profiles.map((profile) => profile.browser).sort(), ["chrome", "firefox"]);
+  assert.deepEqual(listed.availability.find((entry) => entry.browser === "safari"), {
+    browser: "safari", label: "Safari", importable: false, reason: "Safari keeps its cookies where only Safari can read them without Full Disk Access.",
+  });
+  const linux = setup({ platform: "linux", fixture: linuxChromeHome() });
+  const linuxListed = await linux.loginSync.listSources();
+  assert.deepEqual(linuxListed.profiles, []);
+  assert.equal(linuxListed.availability.find((entry) => entry.browser === "chrome")?.importable, false);
+  // Importing still reaches Linux Chrome through the key ring (the test above).
+  assert.equal((await linux.library.sources()).browsers[0].signIns.importable, true);
+});

@@ -5,7 +5,7 @@
 // the app, so every menu here marks itself as an occluder and the page steps aside while it is open.
 import type { BrowserPanelTab } from "@omnirush/browser-tabs";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, BookMarked, ChevronRight, Clock, Download, Folder, Globe, Star } from "lucide-react";
+import { ArrowLeft, BookMarked, ChevronRight, Clock, Download, Folder, Star } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
@@ -17,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
+import { SiteMonogram } from "../../browser-logins/bookmark-tiles";
 import { BrowserTile, isImportBrowser } from "../../browser-logins/browser-marks";
 import { BrowserImportDialog } from "../../browser-logins/import-dialog";
 import {
@@ -55,20 +56,42 @@ function WorkGate(props: BarProps) {
   return useBrowserLibraryAvailable() ? <LibraryBar {...props} /> : null;
 }
 
+/** Address field width under which the star moves into the bookmarks menu, so the field keeps room to read. */
+const COMPACT_BELOW = 200;
+const STAR_WIDTH = 32;
+
+/** Whether the address field is too narrow to also show the star (with hysteresis, so it never flickers). */
+function useCompact(inputRef: React.RefObject<HTMLInputElement | null>): boolean {
+  const [compact, setCompact] = React.useState(false);
+  React.useEffect(() => {
+    const field = inputRef.current?.parentElement;
+    if (!field || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const width = field.getBoundingClientRect().width;
+      setCompact((current) => (current ? width - STAR_WIDTH < COMPACT_BELOW : width < COMPACT_BELOW));
+    });
+    observer.observe(field);
+    return () => observer.disconnect();
+  }, [inputRef]);
+  return compact;
+}
+
 function LibraryBar({ sessionId, tab, inputRef }: BarProps) {
   const anchorRef = React.useRef<HTMLSpanElement>(null);
   const [importOpen, setImportOpen] = React.useState(false);
+  const compact = useCompact(inputRef);
   return (
     <span ref={anchorRef} className="contents">
-      <StarButton tab={tab} />
-      <BookmarksMenu sessionId={sessionId} onImport={() => setImportOpen(true)} />
+      {compact ? null : <StarButton tab={tab} />}
+      <BookmarksMenu sessionId={sessionId} tab={compact ? tab : null} onImport={() => setImportOpen(true)} />
       <AddressSuggestions inputRef={inputRef} anchorRef={anchorRef} currentUrl={tab.url} />
       <BrowserImportDialog open={importOpen} onOpenChange={setImportOpen} />
     </span>
   );
 }
 
-function StarButton({ tab }: { tab: BrowserPanelTab }) {
+/** Whether the tab's page is bookmarked, and the toggle. */
+function useStar(tab: BrowserPanelTab) {
   const invalidate = useInvalidateBrowserLibrary();
   const page = isWebPage(tab.url);
   const starred = useQuery({
@@ -78,7 +101,19 @@ function StarButton({ tab }: { tab: BrowserPanelTab }) {
     retry: false,
   });
   const on = starred.data === true;
-  const label = on ? t("browser_library.unstar") : t("browser_library.star");
+  const toggle = React.useCallback(async () => {
+    try {
+      await getBrowserLibraryBridge()?.toggleBookmark({ url: tab.url, title: tab.label });
+      await invalidate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }, [invalidate, tab.label, tab.url]);
+  return { on, toggle, available: page && tab.status !== "suspended", label: on ? t("browser_library.unstar") : t("browser_library.star") };
+}
+
+function StarButton({ tab }: { tab: BrowserPanelTab }) {
+  const { on, toggle, available, label } = useStar(tab);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -88,16 +123,9 @@ function StarButton({ tab }: { tab: BrowserPanelTab }) {
             size="icon-sm"
             aria-label={label}
             aria-pressed={on}
-            disabled={!page || tab.status === "suspended"}
+            disabled={!available}
             data-testid="browser-star"
-            onClick={async () => {
-              try {
-                await getBrowserLibraryBridge()?.toggleBookmark({ url: tab.url, title: tab.label });
-                await invalidate();
-              } catch (error) {
-                toast.error(error instanceof Error ? error.message : String(error));
-              }
-            }}
+            onClick={() => void toggle()}
           >
             <Star className={cn(on && "fill-amber-9 text-amber-9")} />
           </Button>
@@ -118,7 +146,27 @@ function findFolder(nodes: BrowserBookmarkNode[], id: number): Extract<BrowserBo
   return null;
 }
 
-function BookmarksMenu({ sessionId, onImport }: { sessionId: string; onImport: () => void }) {
+/** The star as the menu's first row, when the address field is too narrow for the star button. */
+function StarRow({ tab }: { tab: BrowserPanelTab }) {
+  const { on, toggle, available, label } = useStar(tab);
+  return (
+    <div className="border-b border-border p-1">
+      <button
+        type="button"
+        disabled={!available}
+        aria-pressed={on}
+        className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] hover:bg-muted focus-visible:bg-muted focus-visible:outline-none disabled:opacity-50"
+        onClick={() => void toggle()}
+        data-testid="browser-star-row"
+      >
+        <Star aria-hidden className={cn("size-4 shrink-0", on ? "fill-amber-9 text-amber-9" : "text-muted-foreground")} />
+        {label}
+      </button>
+    </div>
+  );
+}
+
+function BookmarksMenu({ sessionId, tab, onImport }: { sessionId: string; tab: BrowserPanelTab | null; onImport: () => void }) {
   const [open, setOpen] = React.useState(false);
   const [path, setPath] = React.useState<number[]>([]);
   const tree = useQuery({
@@ -158,6 +206,7 @@ function BookmarksMenu({ sessionId, onImport }: { sessionId: string; onImport: (
         <TooltipContent>{t("browser_library.bookmarks")}</TooltipContent>
       </Tooltip>
       <PopoverContent align="end" sideOffset={6} className="w-80 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-0" data-browser-occluder="" data-testid="browser-bookmarks-menu">
+        {tab && !folder ? <StarRow tab={tab} /> : null}
         <div className="flex h-10 items-center gap-1 border-b border-border px-2">
           {folder ? (
             <Button variant="ghost" size="icon-sm" aria-label={t("browser_library.back")} onClick={() => setPath((current) => current.slice(0, -1))}>
@@ -189,7 +238,7 @@ function BookmarksMenu({ sessionId, onImport }: { sessionId: string; onImport: (
                     ? <BrowserTile browser={node.browser} size="chip" />
                     : <Folder aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                 ) : (
-                  <Globe aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                  <SiteMonogram url={node.url} />
                 )}
                 <span className="min-w-0 flex-1 truncate">{node.title}</span>
                 {"children" in node ? (

@@ -18,6 +18,28 @@ function host(url: string): string {
   }
 }
 
+/** The letter a site goes by: `app.hubspot.com` is H, `mail.example.com` is E. */
+export function siteLetter(url: string): string {
+  const labels = host(url).split(".").filter(Boolean);
+  const name = labels.length > 2 && /^(app|m|my|web|mail|docs|go|en|accounts?)$/i.test(labels[0]!) ? labels[1]! : labels[0] ?? "";
+  return (name.slice(0, 1) || "?").toUpperCase();
+}
+
+/** A small letter tile standing in for a site's icon (the library never fetches favicons). */
+export function SiteMonogram({ url, size = "sm" }: { url: string; size?: "sm" | "md" }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center bg-muted font-semibold text-muted-foreground",
+        size === "md" ? "size-8 rounded-lg text-[13px]" : "size-[18px] rounded-[5px] text-[10px]",
+      )}
+    >
+      {siteLetter(url)}
+    </span>
+  );
+}
+
 export function BookmarkTiles({ onOpen }: { onOpen?: (url: string) => void }) {
   // Outside the desktop app (and in markup tests) there is no library: render nothing before touching queries.
   if (!onOpen || getBrowserLibraryBridge() === null) return null;
@@ -51,9 +73,7 @@ function Tiles({ onOpen }: { onOpen: (url: string) => void }) {
                 "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               )}
             >
-              <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-[13px] font-semibold uppercase text-muted-foreground">
-                {name.slice(0, 1)}
-              </span>
+              <SiteMonogram url={tile.url} size="md" />
               <span className="min-w-0">
                 <span className="block truncate text-[13px] font-medium leading-5 text-foreground">{tile.title || name}</span>
                 <span className="block truncate text-xs leading-4 text-muted-foreground">{name}</span>

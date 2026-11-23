@@ -26,7 +26,6 @@ import {
   LayoutSectionItemContent,
   LayoutSectionItemDescription,
   LayoutSectionItemHeader,
-  LayoutSectionItemHeaderActions,
   LayoutSectionItemTitle,
 } from "../settings/settings-layout";
 import { SettingsSection } from "../settings/settings-section";
@@ -82,11 +81,6 @@ function ImportSection() {
         <LayoutSectionItemHeader>
           <LayoutSectionItemTitle>{t("browser_import.section_title")}</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>{t("browser_import.section_desc")}</LayoutSectionItemDescription>
-          <LayoutSectionItemHeaderActions>
-            <Button size="sm" onClick={() => open(null)} disabled={browsers.length === 0} data-testid="browser-import-open">
-              {t("browser_import.import")}
-            </Button>
-          </LayoutSectionItemHeaderActions>
         </LayoutSectionItemHeader>
         <LayoutSectionItemContent className="gap-4">
           <div className="flex flex-col gap-2">

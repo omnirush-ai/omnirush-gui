@@ -41,13 +41,19 @@ function present(path) {
   }
 }
 
-/** The Safari profile on macOS (Safari has one), with the files it may hold. Null elsewhere. */
+/**
+ * The Safari profile on macOS (Safari has one), with the files it may hold. Null elsewhere.
+ *
+ * Finding it never touches Safari's app container: on recent macOS any access there can raise a system prompt, so
+ * the container's cookie file is assumed whenever Safari's own folder is there, and only read when the user imports.
+ */
 export function safariProfile({ platform, home }) {
   if (platform !== "darwin") return null;
   const paths = safariPaths(home);
-  const cookies = paths.cookies.find(present) ?? null;
   const bookmarks = present(paths.bookmarks) ? paths.bookmarks : null;
   const history = present(paths.history) ? paths.history : null;
+  const legacyCookies = present(paths.cookies[1]) ? paths.cookies[1] : null;
+  const cookies = bookmarks || history ? paths.cookies[0] : legacyCookies;
   if (!cookies && !bookmarks && !history) return null;
   return {
     id: "safari:Safari",

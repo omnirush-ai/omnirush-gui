@@ -42,7 +42,7 @@ function BrowserImportOffer() {
           data-testid="browser-import-offer"
         >
           <BrowserTile browser={target.browser} size="chip" />
-          <p className="min-w-0 flex-1 truncate text-[13px] text-foreground">
+          <p className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-[18px] text-foreground">
             {target.signIns.importable
               ? t("browser_import.offer", { browser: target.short })
               : t("browser_import.offer_no_signins", { browser: target.short })}

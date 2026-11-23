@@ -21,6 +21,7 @@ import {
   groupCookiesIntoSites,
   importSourceAvailability,
   registrableDomain,
+  syncSourceAvailability,
   toElectronCookie,
 } from "@omnirush/browser-logins";
 import {
@@ -34,7 +35,7 @@ import {
   sqliteCompanionFiles,
 } from "@omnirush/browser-logins/node";
 import { linuxChromiumKeys, readLinuxKeyringPassword } from "@omnirush/browser-logins/linux-keyring";
-import { isPermissionError, parseBinaryCookies, safariProfile } from "@omnirush/browser-logins/safari";
+import { isPermissionError, parseBinaryCookies, safariPaths, safariProfile } from "@omnirush/browser-logins/safari";
 
 const require = createRequire(import.meta.url);
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
@@ -341,12 +342,17 @@ export function createBrowserLoginSync({
   async function readSafariCookies(source, { sites = null, metadataOnly = false } = {}) {
     let before;
     let cookies;
-    try {
-      before = await describeSourceFiles(source.path);
-      cookies = parseBinaryCookies(await readSourceFile(source.path));
-    } catch (error) {
-      if (isPermissionError(error)) throw new Error("full-disk-access");
-      throw error;
+    // The app container's file on current macOS; the older per-user file when the container has none.
+    const candidates = [...new Set([source.path, safariPaths(home).cookies[1]])];
+    for (const [index, filePath] of candidates.entries()) {
+      try {
+        before = await describeSourceFiles(filePath);
+        cookies = parseBinaryCookies(await readSourceFile(filePath));
+        break;
+      } catch (error) {
+        if (isPermissionError(error)) throw new Error("full-disk-access");
+        if (!(error && typeof error === "object" && error.code === "ENOENT") || index === candidates.length - 1) throw error;
+      }
     }
     const chosen = Array.isArray(sites) ? cookiesForSites(cookies, sites) : cookies;
     const httpOnly = chosen.filter((cookie) => cookie.httpOnly === true);
@@ -418,9 +424,12 @@ export function createBrowserLoginSync({
       throw new Error("Browser login sync setup was cancelled.");
     }
     assertPolicyAllowed();
+    // The sync setup offers what it always offered; importing (browser-library.mjs) reaches the rest.
+    const availability = syncSourceAvailability(platform);
+    const listed = new Set(availability.filter((entry) => entry.importable).map((entry) => entry.browser));
     return {
-      availability: importSourceAvailability(platform),
-      profiles: discoverProfiles().map(publicSource),
+      availability,
+      profiles: discoverProfiles().filter((source) => listed.has(source.browser)).map(publicSource),
     };
   }
 

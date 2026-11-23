@@ -245,7 +245,7 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (stage !== "importing") onOpenChange(next); }}>
-      <DialogContent className="gap-5 lg:max-w-[560px]" data-testid="browser-import-dialog" showCloseButton={stage !== "importing"}>
+      <DialogContent className="flex max-h-[min(760px,calc(100dvh-3rem))] flex-col gap-5 lg:max-w-[560px]" data-testid="browser-import-dialog" showCloseButton={stage !== "importing"}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-[17px] tracking-[-0.01em]">
             {stage === "done" && result ? (
@@ -253,10 +253,18 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
                 <CircleCheck aria-hidden className="size-[18px] text-green-11" />
                 {t("browser_import.done_title", { browser: short })}
               </>
-            ) : t("browser_import.title")}
+            ) : stage === "importing" ? t("browser_import.importing_title", { browser: short }) : t("browser_import.title")}
           </DialogTitle>
           <DialogDescription>
-            {stage === "done" && result ? importSummary(result) : t("browser_import.subtitle")}
+            {stage === "done" && result
+              ? importSummary(result)
+              : stage === "importing"
+                ? progress.signIns
+                  ? sources.data?.platform === "darwin" && browser !== "firefox" && browser !== "safari"
+                    ? t("browser_import.confirm_hint_keychain", { browser: browser === "edge" ? "Microsoft Edge" : short })
+                    : t("browser_import.confirm_hint")
+                  : t("browser_import.importing_hint")
+                : t("browser_import.subtitle")}
           </DialogDescription>
         </DialogHeader>
 
@@ -271,7 +279,7 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
             <p className="mt-1 text-xs text-muted-foreground">{t("browser_import.none_body")}</p>
           </div>
         ) : (
-          <div className="flex min-h-0 flex-col gap-4">
+          <div className="-mx-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-1">
             {stage === "choose" ? (
               <div className="flex flex-col gap-2.5">
                 <p className="text-xs font-medium text-muted-foreground" id="browser-import-from">{t("browser_import.from")}</p>
@@ -439,7 +447,9 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
               </p>
             ) : null}
 
-            {stage !== "done" ? (
+            {stage === "done" ? (
+              <p className="text-xs text-muted-foreground" data-testid="browser-import-where">{t("browser_import.where")}</p>
+            ) : (
               <div className="flex items-start gap-2.5 text-xs text-muted-foreground" data-testid="browser-import-privacy">
                 <Lock aria-hidden className="mt-px size-3.5 shrink-0" />
                 <p>
@@ -447,7 +457,7 @@ export function BrowserImportDialog({ open, onOpenChange, initialBrowser = null,
                   {t("browser_import.never_imported")}
                 </p>
               </div>
-            ) : null}
+            )}
           </div>
         )}
 
@@ -505,13 +515,13 @@ function RowFrame(props: {
 }) {
   return (
     <li className="border-b border-border last:border-b-0" data-testid={`browser-import-row-${props.kind}`}>
-      <div className={cn("flex items-center gap-3 px-4 py-3", props.disabled && "opacity-60")}>
-        <span className="flex w-4 shrink-0 justify-center">{props.lead}</span>
-        <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground [&_svg]:size-3.5">
+      <div className="flex items-center gap-3 px-4 py-3">
+        <span className={cn("flex w-4 shrink-0 justify-center", props.disabled && "opacity-60")}>{props.lead}</span>
+        <span aria-hidden className={cn("flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground [&_svg]:size-3.5", props.disabled && "opacity-60")}>
           {props.icon}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium leading-5 text-foreground">{props.title}</p>
+          <p className={cn("text-[13px] font-medium leading-5", props.disabled ? "text-muted-foreground" : "text-foreground")}>{props.title}</p>
           <div className="text-xs leading-4 text-muted-foreground">{props.meta}</div>
         </div>
         {props.trailing ? <div className="shrink-0 text-xs tabular-nums text-muted-foreground">{props.trailing}</div> : null}
@@ -651,7 +661,7 @@ function SignInsRow(props: {
               <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => props.onSelectAll(false)}>{t("browser_import.select_none")}</Button>
             </div>
           </div>
-          <div className="max-h-52 overflow-y-auto pe-1">
+          <div>
             <SiteList sites={ordinary} selected={props.selected} onToggle={props.onToggleSite} />
             {sensitive.length > 0 ? (
               <>
@@ -702,9 +712,7 @@ function FullDiskAccessSteps({ onCheckAgain }: { onCheckAgain: () => void }) {
   return (
     <div className="rounded-xl border border-border px-4 py-4" data-testid="browser-import-access">
       <div className="flex items-start gap-3">
-        <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground">
-          <Lock className="size-3.5" />
-        </span>
+        <BrowserTile browser="safari" />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-foreground">{t("browser_import.access_title")}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">{t("browser_import.access_body")}</p>

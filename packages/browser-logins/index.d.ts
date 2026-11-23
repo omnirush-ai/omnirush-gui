@@ -78,3 +78,4 @@ export function fromElectronCookie(cookie: ElectronCookieLike): NormalizedCookie
 export type ImportBrowserInfo = { browser: ImportBrowser; label: string; short: string; platforms: string[] };
 export const IMPORT_BROWSERS: readonly ImportBrowserInfo[];
 export function importSourceAvailability(platform: NodeJS.Platform | string): ImportSourceAvailability[];
+export function syncSourceAvailability(platform: NodeJS.Platform | string): ImportSourceAvailability[];

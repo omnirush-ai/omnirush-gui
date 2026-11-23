@@ -194,6 +194,28 @@ export function fromElectronCookie(cookie) {
   };
 }
 
+/**
+ * The sign-in sync setup's own list (Settings > Permissions > Browser login sync), unchanged from before importing
+ * existed: Chrome-family sync on macOS only, Safari not offered. Importing uses `importSourceAvailability`.
+ */
+export function syncSourceAvailability(platform) {
+  const chromiumBlocked = platform === "win32"
+    ? "Chrome and Edge on Windows lock their cookies to the browser (app-bound encryption)."
+    : platform === "linux"
+      ? "Chrome and Edge on Linux keep their key in the system keyring; not supported yet."
+      : null;
+  return [
+    { browser: "chrome", label: "Google Chrome", importable: chromiumBlocked === null, reason: chromiumBlocked },
+    { browser: "edge", label: "Microsoft Edge", importable: chromiumBlocked === null, reason: chromiumBlocked },
+    { browser: "brave", label: "Brave", importable: chromiumBlocked === null, reason: chromiumBlocked },
+    { browser: "chromium", label: "Chromium", importable: chromiumBlocked === null, reason: chromiumBlocked },
+    { browser: "firefox", label: "Firefox", importable: true, reason: null },
+    ...(platform === "darwin"
+      ? [{ browser: "safari", label: "Safari", importable: false, reason: "Safari keeps its cookies where only Safari can read them without Full Disk Access." }]
+      : []),
+  ];
+}
+
 /** The browsers OmniRush.ai can import from, in the order they are offered. */
 export const IMPORT_BROWSERS = Object.freeze([
   { browser: "chrome", label: "Google Chrome", short: "Chrome", platforms: ["darwin", "win32", "linux"] },
