@@ -194,21 +194,30 @@ export function fromElectronCookie(cookie) {
   };
 }
 
-/** Which browsers can be synced from on a platform, and why the others cannot. */
+/** The browsers OmniRush.ai can import from, in the order they are offered. */
+export const IMPORT_BROWSERS = Object.freeze([
+  { browser: "chrome", label: "Google Chrome", short: "Chrome", platforms: ["darwin", "win32", "linux"] },
+  { browser: "edge", label: "Microsoft Edge", short: "Edge", platforms: ["darwin", "win32", "linux"] },
+  { browser: "arc", label: "Arc", short: "Arc", platforms: ["darwin"] },
+  { browser: "brave", label: "Brave", short: "Brave", platforms: ["darwin", "win32", "linux"] },
+  { browser: "vivaldi", label: "Vivaldi", short: "Vivaldi", platforms: ["darwin", "win32", "linux"] },
+  { browser: "chromium", label: "Chromium", short: "Chromium", platforms: ["darwin", "win32", "linux"] },
+  { browser: "firefox", label: "Firefox", short: "Firefox", platforms: ["darwin", "win32", "linux"] },
+  { browser: "safari", label: "Safari", short: "Safari", platforms: ["darwin"] },
+]);
+
+/**
+ * Which browsers' sign-ins (cookies) can be read on a platform, and why the
+ * others cannot. Bookmarks and history import from every listed browser.
+ */
 export function importSourceAvailability(platform) {
-  const chromiumBlocked = platform === "win32"
-    ? "Chrome and Edge on Windows lock their cookies to the browser (app-bound encryption)."
-    : platform === "linux"
-      ? "Chrome and Edge on Linux keep their key in the system keyring; not supported yet."
-      : null;
-  return [
-    { browser: "chrome", label: "Google Chrome", importable: chromiumBlocked === null, reason: chromiumBlocked },
-    { browser: "edge", label: "Microsoft Edge", importable: chromiumBlocked === null, reason: chromiumBlocked },
-    { browser: "brave", label: "Brave", importable: chromiumBlocked === null, reason: chromiumBlocked },
-    { browser: "chromium", label: "Chromium", importable: chromiumBlocked === null, reason: chromiumBlocked },
-    { browser: "firefox", label: "Firefox", importable: true, reason: null },
-    ...(platform === "darwin"
-      ? [{ browser: "safari", label: "Safari", importable: false, reason: "Safari keeps its cookies where only Safari can read them without Full Disk Access." }]
-      : []),
-  ];
+  return IMPORT_BROWSERS.filter((entry) => entry.platforms.includes(platform)).map(({ browser, label, short }) => {
+    let reason = null;
+    if (platform === "win32" && browser !== "firefox") {
+      reason = browser === "chrome" || browser === "edge"
+        ? `${short} on Windows locks sign-ins to itself, so they can't be imported. Bookmarks and history can.`
+        : `Sign-ins from ${short} on Windows can't be imported yet. Bookmarks and history can.`;
+    }
+    return { browser, label, importable: reason === null, reason };
+  });
 }

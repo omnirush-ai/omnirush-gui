@@ -254,6 +254,7 @@ describe("profile discovery", () => {
     expect(windows.some((entry) => entry.browser === "safari")).toBe(false);
     const mac = importSourceAvailability("darwin");
     expect(mac.find((entry) => entry.browser === "chrome")).toMatchObject({ importable: true });
-    expect(mac.find((entry) => entry.browser === "safari")).toMatchObject({ importable: false });
+    // Safari's sign-ins need Full Disk Access; the importer asks for it when the read is refused.
+    expect(mac.find((entry) => entry.browser === "safari")).toMatchObject({ importable: true });
   });
 });

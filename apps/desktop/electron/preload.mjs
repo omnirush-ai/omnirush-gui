@@ -300,6 +300,24 @@ contextBridge.exposeInMainWorld("__OMNIRUSH_ELECTRON__", {
       testWitnessUrl() { return ipcRenderer.invoke("omnirush:browser-logins:testWitnessUrl"); },
     } : {}),
   },
+  browserLibrary: {
+    sources() { return ipcRenderer.invoke("omnirush:browser-library:sources"); },
+    inspect(request) { return ipcRenderer.invoke("omnirush:browser-library:inspect", request); },
+    import(request) { return ipcRenderer.invoke("omnirush:browser-library:import", request); },
+    onProgress(callback) {
+      const handler = (_event, progress) => callback(progress);
+      ipcRenderer.on("omnirush:browser-library:progress", handler);
+      return () => ipcRenderer.removeListener("omnirush:browser-library:progress", handler);
+    },
+    bookmarks() { return ipcRenderer.invoke("omnirush:browser-library:bookmarks"); },
+    topBookmarks(limit) { return ipcRenderer.invoke("omnirush:browser-library:top", limit); },
+    suggest(query) { return ipcRenderer.invoke("omnirush:browser-library:suggest", query); },
+    isBookmarked(url) { return ipcRenderer.invoke("omnirush:browser-library:isBookmarked", url); },
+    toggleBookmark(request) { return ipcRenderer.invoke("omnirush:browser-library:toggleBookmark", request); },
+    summary() { return ipcRenderer.invoke("omnirush:browser-library:summary"); },
+    clear() { return ipcRenderer.invoke("omnirush:browser-library:clear"); },
+    openFullDiskAccess() { return ipcRenderer.invoke("omnirush:browser-library:openFullDiskAccess"); },
+  },
   terminal: {
     shells() { return ipcRenderer.invoke("omnirush:terminal:shells"); },
     create(options) { return ipcRenderer.invoke("omnirush:terminal:create", options); },

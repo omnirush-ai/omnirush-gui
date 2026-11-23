@@ -50,6 +50,7 @@ import { resolveOmniRushUiMcpLaunch } from "./omnirush-ui-mcp.mjs";
 import { createApplicationMenu } from "./app-menu.mjs";
 import { applyBrandAppName } from "./brand-app-name.mjs";
 import { createBrowserLoginSync } from "./browser-login-sync.mjs";
+import { createBrowserLibrary } from "./browser-library.mjs";
 import { createBrowserPanel } from "./browser-panel.mjs";
 import { applyBackgroundRenderingSwitches } from "./background-rendering.mjs";
 import { createWorkspaceStore } from "./workspace-store.mjs";
@@ -3453,13 +3454,15 @@ const browserLoginSync = createBrowserLoginSync({
       /** @type {import("electron").MessageBoxOptions} */
       const options = {
         type: "warning",
-        buttons: [action === "resume" ? "Resume sync" : action === "configure" ? "Enable sync" : action === "discover" ? "Look for browsers" : "Read sites", "Cancel"],
+        buttons: [action === "resume" ? "Resume sync" : action === "configure" ? "Enable sync" : action === "import" ? "Import sign-ins" : action === "discover" ? "Look for browsers" : "Read sites", "Cancel"],
         defaultId: 1,
         cancelId: 1,
-        title: action === "resume" ? "Resume browser login sync?" : action === "configure" ? "Enable browser login sync?" : action === "discover" ? "Look for browser profiles?" : "Read logins from this browser?",
+        title: action === "resume" ? "Resume browser login sync?" : action === "configure" ? "Enable browser login sync?" : action === "import" ? "Import sign-ins from this browser?" : action === "discover" ? "Look for browser profiles?" : "Read logins from this browser?",
         message: sourceLabel,
         detail: action === "resume"
           ? "OmniRush.ai will resume reading the sites you selected from this profile. It never changes the source browser."
+          : action === "import"
+            ? `OmniRush.ai will copy the sign-ins for ${sites.length === 1 ? "this site" : `these ${sites.length} sites`} into its built-in browser once: ${sites.slice(0, 8).join(", ")}${sites.length > 8 ? ` and ${sites.length - 8} more` : ""}. Saved passwords are never read, and the source browser is not changed.`
           : action === "configure"
             ? `OmniRush.ai will keep reading login cookies for these sites until you pause or disconnect: ${sites.join(", ")}. It never changes the source browser.`
             : action === "discover"
@@ -3474,6 +3477,14 @@ const browserLoginSync = createBrowserLoginSync({
     },
 });
 browserLoginSync.registerIpc(ipcMain, { evalSeam: browserLoginEvalSeam });
+const browserLibrary = createBrowserLibrary({
+  dbPath: path.join(app.getPath("userData"), "browser-library.sqlite"),
+  loginSync: browserLoginSync,
+  openExternal: async (url) => {
+    await openExternalUrl(url);
+  },
+});
+browserLibrary.registerIpc(ipcMain);
 
 registerMigrationIpc({ app, ipcMain });
 const { ensureAutoUpdater, prepareInstallOnQuit, offerMoveAtLaunch, whenUpdaterIdle, pendingUpdatePaths } = registerUpdaterIpc({
@@ -3524,6 +3535,7 @@ or use: pnpm dev:worktree`);
     desktopAutomationRunner.stop();
     workChatSync.stop();
     browserLoginSync.shutdown();
+    browserLibrary.close();
     // The queued placement events: best effort, never waited for (the rest go next start).
     void desktopPlacements.stop().catch(() => undefined);
     void desktopFeedback.stop().catch(() => undefined);
