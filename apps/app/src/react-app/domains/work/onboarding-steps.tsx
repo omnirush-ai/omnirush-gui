@@ -50,7 +50,7 @@ export function parseEmails(typed: string): { emails: string[]; rejected: string
 }
 
 /** The four thin segments over every step, the ones done and current filled. */
-export function StepBar(props: { total: number; current: number }) {
+export function StepBar(props: { total: number; current: number; label?: string }) {
   return (
     <div className="flex items-center gap-3" data-testid="work-onboarding-progress" data-current={props.current + 1} data-total={props.total}>
       <ol className="flex flex-1 items-center gap-1.5" aria-label={t("work.setup.step_of", { n: props.current + 1, total: props.total })}>
@@ -65,7 +65,7 @@ export function StepBar(props: { total: number; current: number }) {
           />
         ))}
       </ol>
-      <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{t("work.setup.step_of", { n: props.current + 1, total: props.total })}</span>
+      <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{props.label ?? t("work.setup.step_of", { n: props.current + 1, total: props.total })}</span>
     </div>
   );
 }
@@ -93,7 +93,7 @@ export function SizeChips(props: { sizes: readonly string[]; value: string | nul
     refs.current[next]?.focus();
   };
   return (
-    <div role="radiogroup" aria-labelledby={props.labelId} className="flex flex-wrap gap-1.5" data-testid="work-onboarding-sizes">
+    <div role="radiogroup" aria-labelledby={props.labelId} className="flex flex-wrap gap-1" data-testid="work-onboarding-sizes">
       {props.sizes.map((size, index) => {
         const selected = props.value === size;
         return (
@@ -110,7 +110,7 @@ export function SizeChips(props: { sizes: readonly string[]; value: string | nul
             onClick={() => props.onChange(selected ? null : size)}
             onKeyDown={(event) => move(event, index)}
             className={cn(
-              "h-7 rounded-full border px-2.5 text-[12px] tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60",
+              "h-7 flex-auto whitespace-nowrap rounded-full border px-2 text-[12px] tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60",
               selected ? "border-foreground bg-foreground text-background" : "border-border text-foreground hover:border-foreground/30 hover:bg-muted/60",
             )}
           >
@@ -131,7 +131,7 @@ function ToolChip(props: { tool: CatalogTool; selected: boolean; onToggle: () =>
       data-testid={`work-onboarding-tool-${props.tool.id}`}
       onClick={props.onToggle}
       className={cn(
-        "flex h-8 items-center gap-1.5 rounded-full border ps-1 pe-3 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        "flex h-7 items-center gap-1.5 rounded-full border ps-1 pe-2.5 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         props.selected ? "border-foreground/50 bg-foreground/[0.06] text-foreground" : "border-border text-foreground/90 hover:border-foreground/30 hover:bg-muted/60",
       )}
     >
@@ -201,10 +201,10 @@ export function ToolPicker(props: {
           autoComplete="off"
         />
       </div>
-      <div className="flex flex-col gap-3.5">
+      <div className="@container flex flex-col gap-2.5">
         {groups.map((group) => (
-          <div key={group.id} className="flex flex-col gap-1.5" data-tool-group={group.id}>
-            <span className="text-[12px] font-medium text-muted-foreground">{group.label}</span>
+          <div key={group.id} className="grid gap-1.5 @[600px]:grid-cols-[144px_1fr] @[600px]:gap-x-3" data-tool-group={group.id}>
+            <span className="text-[12px] font-medium leading-4 text-muted-foreground @[600px]:whitespace-nowrap @[600px]:pt-1.5">{group.label}</span>
             <div className="flex flex-wrap gap-1.5">
               {group.tools.map((row) => <ToolChip key={row.id} tool={row} selected={props.selected.includes(row.id)} onToggle={() => props.onToggle(row.id)} />)}
             </div>
@@ -230,24 +230,26 @@ export function ToolPicker(props: {
         ) : null}
       </div>
       {props.custom.length ? (
-        <div className="flex flex-col gap-1.5" data-testid="work-onboarding-custom">
-          <span className="text-[12px] font-medium text-muted-foreground">{t("work.setup.your_other_tools")}</span>
+        <div className="@container" data-testid="work-onboarding-custom">
+         <div className="grid gap-1.5 @[600px]:grid-cols-[144px_1fr] @[600px]:gap-x-3">
+          <span className="text-[12px] font-medium leading-4 text-muted-foreground @[600px]:whitespace-nowrap @[600px]:pt-1.5">{t("work.setup.your_other_tools")}</span>
           <div className="flex flex-wrap gap-1.5">
             {props.custom.map((name) => (
-              <span key={name} className="flex h-8 items-center gap-1.5 rounded-full border border-foreground/50 bg-foreground/[0.06] ps-1 pe-1 text-[13px]" data-custom-tool={name}>
+              <span key={name} className="flex h-7 items-center gap-1.5 rounded-full border border-foreground/50 bg-foreground/[0.06] ps-1 pe-0.5 text-[13px]" data-custom-tool={name}>
                 <span className="flex size-5 items-center justify-center rounded-full border border-border bg-background" aria-hidden><LetterMark letter={name} className="size-3" /></span>
                 <span className="whitespace-nowrap">{name}</span>
                 <button
                   type="button"
                   aria-label={t("work.setup.remove_tool", { name })}
                   onClick={() => props.onCustom(props.custom.filter((item) => item !== name))}
-                  className="flex size-6 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex size-5 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <X aria-hidden className="size-3.5" />
                 </button>
               </span>
             ))}
           </div>
+         </div>
         </div>
       ) : null}
     </div>

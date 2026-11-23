@@ -1512,8 +1512,8 @@ export function AppSidebar(props: AppSidebarProps) {
                 <SquarePen className="size-4" />
                 <span className="flex-1 truncate">{t("session.new_task")}</span>
               </SidebarMenuButton>
-              {/* In Work the magnifier is Work > Search (Cmd/Ctrl+K); chats are still searched with Cmd/Ctrl+Shift+F. The tools
-                  row below is full, so Search and Deals sit here. */}
+              {/* In Work the magnifier is Work > Search (Cmd/Ctrl+K); chats are still searched with Cmd/Ctrl+Shift+F. The
+                  notifications bell sits beside it (the places are labelled rows below). */}
               {props.workNavigation?.onOpenSearch ? (
                 <SidebarIconButton icon={Search} label={t("work.nav.search")} title={`${t("work.nav.search")} (${isMacPlatform() ? "⌘K" : "Ctrl+K"})`} aria-keyshortcuts={isMacPlatform() ? "Meta+K" : "Control+K"} active={props.workNavigation.searchActive} onClick={props.workNavigation.onOpenSearch} data-testid="sidebar-work-search" className="size-8" />
               ) : props.onOpenSessionSearch ? (

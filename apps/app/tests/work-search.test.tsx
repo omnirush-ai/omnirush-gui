@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { MemoryRouter } from "react-router";
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -20,7 +21,8 @@ function failQuery(queries: QueryClient, queryKey: readonly unknown[], error: Er
   queries.setQueryDefaults([...queryKey], { retryOnMount: false });
   queries.getQueryCache().build(queries, { queryKey: [...queryKey], retry: false }).setState({ status: "error", error, fetchStatus: "idle", errorUpdatedAt: 1 });
 }
-const wrap = (queries: QueryClient, node: ReactNode) => renderToStaticMarkup(<QueryClientProvider client={queries}>{node}</QueryClientProvider>);
+// Work pages always mount inside the app's router (Connectors reads the route's #connector).
+const wrap = (queries: QueryClient, node: ReactNode) => renderToStaticMarkup(<QueryClientProvider client={queries}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>);
 
 const coverage: OmniRushWorkCoverage = {
   groups: [

@@ -12,14 +12,11 @@ import { WorkConnectorsSetting } from "@/react-app/domains/work/work-views";
 
 import {
   LayoutSection,
-  LayoutSectionDescription,
-  LayoutSectionHeader,
   LayoutSectionItem,
   LayoutSectionItemDescription,
   LayoutSectionItemHeader,
   LayoutSectionItemHeaderActions,
   LayoutSectionItemTitle,
-  LayoutSectionTitle,
   LayoutStack,
 } from "../settings-layout";
 import { WebSearchSetting, type WebSearchClient } from "../web-search-setting";
@@ -46,10 +43,6 @@ export function WorkSettingsView(props: { client: (WorkClient & WebSearchClient)
   return (
     <LayoutStack>
       <LayoutSection id="settings-work">
-        <LayoutSectionHeader>
-          <LayoutSectionTitle>{t("settings.work_section")}</LayoutSectionTitle>
-          <LayoutSectionDescription>{t("settings.work_section_desc")}</LayoutSectionDescription>
-        </LayoutSectionHeader>
         <WorkConnectorsSetting client={props.client} />
         <WorkOrganizationSetting client={props.client} />
         <WorkAnswerStyleSetting client={props.client} />

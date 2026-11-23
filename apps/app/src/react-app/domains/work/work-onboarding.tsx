@@ -413,8 +413,9 @@ export function WorkOnboarding(props: {
 
   return (
     <div className="h-full overflow-y-auto" data-testid="work-onboarding" data-step={step === "done" ? shown.length + 1 : stepNumber + 1} data-step-name={step}>
-      <div className="mx-auto flex min-h-full w-full max-w-[560px] flex-col justify-center gap-7 px-6 py-10">
-        {step === "done" ? <StepBar total={shown.length} current={shown.length - 1} /> : <StepBar total={shown.length} current={stepNumber} />}
+      {/* One 560 px column; the tool picker gets more room so the whole catalog fits without scrolling. */}
+      <div className={cn("mx-auto flex min-h-full w-full flex-col justify-center gap-6 px-6 py-8", step === "tools" ? "max-w-[780px]" : "max-w-[560px]")}>
+        {step === "done" ? <StepBar total={shown.length} current={shown.length - 1} label={t("work.setup.all_done")} /> : <StepBar total={shown.length} current={stepNumber} />}
         <div key={step} className="flex flex-col gap-6 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
           {step === "company" ? (
             <form className="flex flex-col gap-6" onSubmit={(event) => { event.preventDefault(); if (company.trim() && !saveCompany.isPending) saveCompany.mutate(); }}>

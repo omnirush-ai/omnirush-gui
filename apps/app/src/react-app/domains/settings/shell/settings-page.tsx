@@ -371,7 +371,8 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
               <span>{t("dashboard.back_to_app")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
-          <SidebarMenuItem>
+          {/* A company account without Code has no workspace settings: no workspace to pick. */}
+          {groups.workspace.length ? <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -393,7 +394,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-          </SidebarMenuItem>
+          </SidebarMenuItem> : null}
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>

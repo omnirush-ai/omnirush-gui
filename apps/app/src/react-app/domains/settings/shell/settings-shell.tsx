@@ -51,6 +51,8 @@ export type SettingsShellProps = SettingsPageFrameProps & {
 
 export function SettingsShell(props: SettingsShellProps) {
   const title = getSettingsTabLabel(props.activeTab);
+  // A company account without Code (OmniRush Work) has no workspace settings: no workspace name or picker.
+  const workspaceShown = useSettingsNavGroups(props.developerMode).workspace.length > 0;
 
   if (props.compact) {
     return (
@@ -62,12 +64,14 @@ export function SettingsShell(props: SettingsShellProps) {
               developerMode={props.developerMode}
               onSelectTab={props.onSelectTab}
             />
-            <WorkspaceMenu
-              selectedWorkspaceId={props.selectedWorkspaceId}
-              selectedWorkspaceName={props.selectedWorkspaceName}
-              workspaces={props.workspaces}
-              onSelectWorkspace={props.onSelectWorkspace}
-            />
+            {workspaceShown ? (
+              <WorkspaceMenu
+                selectedWorkspaceId={props.selectedWorkspaceId}
+                selectedWorkspaceName={props.selectedWorkspaceName}
+                workspaces={props.workspaces}
+                onSelectWorkspace={props.onSelectWorkspace}
+              />
+            ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-1 mac:titlebar-no-drag">
             <Button
@@ -117,9 +121,11 @@ export function SettingsShell(props: SettingsShellProps) {
                 <SidebarTrigger className="mac:titlebar-no-drag lg:hidden" />
                 {props.headerLeadingSlot}
                 <div className="truncate text-[15px] font-semibold text-dls-text">{title}</div>
-                <span className="hidden truncate text-[13px] text-dls-secondary lg:inline">
-                  {props.selectedWorkspaceName}
-                </span>
+                {workspaceShown ? (
+                  <span className="hidden truncate text-[13px] text-dls-secondary lg:inline">
+                    {props.selectedWorkspaceName}
+                  </span>
+                ) : null}
                 {props.developerMode && props.headerStatus ? (
                   <span className="hidden text-[12px] text-dls-secondary lg:inline">
                     {props.headerStatus}

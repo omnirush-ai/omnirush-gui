@@ -51,6 +51,12 @@ export function EnterpriseWaiting(props: {
       <div className="flex flex-1 items-center justify-center px-6 pb-16">
         <div className="flex w-full max-w-[440px] flex-col gap-5 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200">
           <div className="space-y-2">
+            {props.mode.orgName ? (
+              <span className="inline-flex h-6 items-center gap-1.5 rounded-full border border-border px-2.5 text-[12px] text-muted-foreground" data-testid="work-enterprise-status">
+                <span aria-hidden className={props.mode.status === "pending" ? "size-1.5 rounded-full bg-amber-9 motion-safe:animate-pulse" : "size-1.5 rounded-full bg-red-9"} />
+                {props.mode.status === "denied" ? t("work.ent.status_denied") : props.mode.status === "suspended" ? t("work.ent.status_suspended") : t("work.ent.status_pending")}
+              </span>
+            ) : null}
             <h1 className="text-balance text-[22px] font-semibold leading-[28px] tracking-[-0.02em]">{copy.title}</h1>
             <p className="text-[13px] leading-5 text-muted-foreground">{copy.body}</p>
           </div>
