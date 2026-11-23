@@ -256,6 +256,30 @@ export function shortWhen(value: string | null | undefined, now = new Date()): s
   if (at.getFullYear() === now.getFullYear()) return at.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return at.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
+/** A field value as people read it: ISO dates as "Dec 20, 2026", ISO times with the time too, and money-like whole
+ * numbers grouped ("48,000"). Anything else (ids, codes, zip codes, text) stays as the source sent it. */
+export function fieldValue(label: string, value: string): string {
+  const text = value.trim();
+  const date = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/);
+  if (date) {
+    const [, y, mo, d, h, mi, zone] = date;
+    if (!h) {
+      const day = new Date(Number(y), Number(mo) - 1, Number(d));
+      return Number.isNaN(day.getTime()) ? value : day.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    }
+    const at = new Date(zone ? text.replace(" ", "T") : `${y}-${mo}-${d}T${h}:${mi}`);
+    if (Number.isNaN(at.getTime())) return value;
+    const midnight = Number(h) === 0 && Number(mi) === 0;
+    return midnight
+      ? at.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+      : at.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  if (/^-?\d{4,}(?:\.\d{1,2})?$/.test(text) && /amount|balance|total|price|revenue|budget|paid/i.test(label) && !/\b(?:id|no|number|code|year)\b/i.test(label)) {
+    const number = Number(text);
+    if (Number.isFinite(number)) return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  return value;
+}
 /** "Today", "Yesterday", "Mon, Nov 24" for chat day dividers. */
 export function dayLabel(value: string | null | undefined, now = new Date()): string {
   if (!value) return "";

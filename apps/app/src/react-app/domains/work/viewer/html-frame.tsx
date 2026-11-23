@@ -95,7 +95,9 @@ export function MailFrame(props: {
       if (!doc?.body || !win) return;
       doc.body.classList.toggle("omr-show", showQuoteRef.current);
       const fit = () => {
-        const next = Math.ceil(doc.body.getBoundingClientRect().height) + 2;
+        // The body holds its children's margins (flow-root), so its bottom edge is where the mail ends.
+        const box = doc.body.getBoundingClientRect();
+        const next = Math.ceil(Math.max(box.bottom + (doc.documentElement.scrollTop || 0), box.height)) + 2;
         setHeight((current) => (Math.abs(current - next) > 1 ? next : current));
       };
       const rescale = () => {

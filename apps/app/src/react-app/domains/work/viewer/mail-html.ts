@@ -171,8 +171,8 @@ export function mailSrcdoc(html: string, options: { showImages?: boolean; theme:
   const bg = options.theme.paper ? "#ffffff" : "transparent";
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${light ? "light" : "dark"}"><style>`
     + `html,body{margin:0;padding:0;background:${bg};}`
-    + `body{color:${fg};font:13px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;overflow-wrap:anywhere;word-break:break-word;-webkit-font-smoothing:antialiased;}`
-    + `body>*:first-child{margin-top:0}body>*:last-child{margin-bottom:0}`
+    + `body{display:flow-root;color:${fg};font:13px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;overflow-wrap:anywhere;word-break:break-word;-webkit-font-smoothing:antialiased;}`
+    + `body>*:first-child,body>*:first-child>*:first-child{margin-top:0}body>*:last-child,body>*:last-child>*:last-child{margin-bottom:0}`
     + `a{color:${link};}img{max-width:100%;height:auto;}table{max-width:100%;}pre{white-space:pre-wrap;}`
     + `blockquote{margin:0 0 0 2px;padding-left:12px;border-left:2px solid ${rule};color:${muted};}`
     + `.omr-q{display:none !important;}body.omr-show .omr-q{display:revert !important;}`

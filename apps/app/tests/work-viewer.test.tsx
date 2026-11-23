@@ -26,6 +26,7 @@ const { groupChat } = await import("../src/react-app/domains/work/viewer/chat-vi
 const { guestSummary, localInstant } = await import("../src/react-app/domains/work/viewer/event-view");
 const { meetingBody, nextSlot } = await import("../src/react-app/domains/work/viewer/meeting-composer");
 const { money } = await import("../src/react-app/domains/work/viewer/finance-view");
+const { propertyLines } = await import("../src/react-app/domains/work/viewer/crm-view");
 const { usePanelTabStore } = await import("../src/react-app/domains/session/panel/panel-tab-store");
 const lexical = await import("lexical");
 const { $createListItemNode, $createListNode } = await import("@lexical/list");
@@ -404,7 +405,7 @@ describe("views (design 2.5)", () => {
     expect(ticket).toContain("Where is my truck?");
     expect(ticket).toContain("Internal");
     const crm = wrap(<RecordView record={{ ...base, source_id: "hubspot:deal:301", source: "hubspot", kind: "deal", view: "crm", stage: "contractsent", fields: [{ label: "Amount", value: "24000" }] } as unknown as WorkRecord} onPreview={noop} />);
-    expect(crm).toContain("24000");
+    expect(crm).toContain((24000).toLocaleString());
     const finance = wrap(<RecordView record={{ ...base, source_id: "xero:invoice:1", source: "xero", kind: "invoice", view: "finance", finance: { number: "INV-9", amount: "1200", currency: "EUR", status: "AUTHORISED", lines: [{ description: "Pallets", amount: "1200" }] } } as unknown as WorkRecord} onPreview={noop} />);
     expect(finance).toContain("INV-9");
     expect(finance).toContain(money("1200", "EUR"));
@@ -414,6 +415,28 @@ describe("views (design 2.5)", () => {
     expect(code).toContain("src/a.ts");
     const generic = wrap(<RecordView record={{ ...base, source_id: "hook:1", source: "hook", kind: "row", view: "generic", body: { format: "text", content: "A row" } } as unknown as WorkRecord} onPreview={noop} />);
     expect(generic).toContain("A row");
+  });
+
+  test("CRM properties kept as key: value lines fold behind All properties, with readable names and dates", () => {
+    const props = propertyLines("dealname: ColdChain Q1 lanes\namount: 48000\nclosedate: 2026-12-20\nhs_lastmodifieddate: 2026-10-19T10:00:00Z\nhs_object_id: 301");
+    expect(props?.map((f) => f.label)).toEqual(["Deal name", "Amount", "Close date", "Last modified", "Record id"]);
+    expect(propertyLines("Hi Ana,\nThe truck is late.\nBen")).toBeNull();
+    expect(propertyLines("a: 1\nb: 2")).toBeNull();
+    const crm = wrap(<RecordView record={{ ...base, source_id: "hubspot:deal:301", source: "hubspot", kind: "deal", view: "crm", body: { format: "text", content: "dealname: x\namount: 48000\npipeline: default" } } as unknown as WorkRecord} onPreview={noop} />);
+    expect(crm).toContain("All properties");
+    expect(crm).not.toContain("dealname:");
+    expect(records.fieldValue("Amount", "48000")).toBe((48000).toLocaleString());
+    expect(records.fieldValue("Zip", "10001")).toBe("10001");
+    expect(records.fieldValue("Invoice number", "100234")).toBe("100234");
+    expect(records.fieldValue("Close date", "2026-12-20")).toBe(new Date(2026, 11, 20).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }));
+    expect(records.fieldValue("Last edited", "2026-10-09T10:00:00+00:00")).toBe(new Date("2026-10-09T10:00:00+00:00").toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }));
+    expect(records.fieldValue("Ref", "2026-13-99x")).toBe("2026-13-99x");
+  });
+
+  test("the mail frame's body holds its children's margins, so the measured height never clips the last line", () => {
+    const doc = html.mailSrcdoc("<div><p>Hi</p><p>Best,<br>Maria</p></div>", { theme: { dark: false, paper: false } });
+    expect(doc).toContain("body{display:flow-root;");
+    expect(doc).toContain("body>*:last-child>*:last-child{margin-bottom:0}");
   });
 
   test("a new meeting asks for Meet when there are guests; its body is what /work/compose takes", () => {

@@ -151,7 +151,7 @@ function MailComposer(props: {
         {props.action === "forward" ? (
           <>
             <div className="flex items-center gap-2 border-b border-border px-3">
-              <label htmlFor="work-forward-subject" className="w-8 shrink-0 text-[12px] text-muted-foreground">{t("work.viewer.subject")}</label>
+              <label htmlFor="work-forward-subject" className="w-14 shrink-0 text-[12px] text-muted-foreground">{t("work.viewer.subject")}</label>
               <input id="work-forward-subject" value={subject} onChange={(e) => { setSubject(e.target.value); draft.put({ subject: e.target.value }); }} className="h-9 min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none" maxLength={900} />
             </div>
             <ForwardFiles files={files} picked={picked} onChange={(v) => { setPicked(v); draft.put({ attachments: v }); }} />

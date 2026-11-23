@@ -2,18 +2,55 @@
 // CRM records (HubSpot, Salesforce, Pipedrive; Intercom contacts) and support tickets (Zendesk, Intercom, Front,
 // Freshdesk, Salesforce cases; design 2.5): the stage or status, the key fields, the conversation with internal notes
 // marked, and the timeline of linked mail, calls and notes.
+import { ChevronRight } from "lucide-react";
+import { useState } from "react";
+
 import { t } from "@/i18n";
+import { cn } from "@/lib/utils";
 
 import { CommentList } from "./issue-view";
 import { AttachmentChips, Body, FieldGrid, PersonName, SectionTitle } from "./parts";
-import type { RecordFile, WorkRecord } from "./records";
+import type { RecordField, RecordFile, WorkRecord } from "./records";
+
+// CRM property names as people say them; the rest lose their vendor prefix and underscores.
+const PROPERTY_NAMES: Record<string, string> = {
+  firstname: "First name", lastname: "Last name", dealname: "Deal name", dealstage: "Deal stage", closedate: "Close date",
+  createdate: "Created", lastmodifieddate: "Last modified", object_id: "Record id", jobtitle: "Job title", lifecyclestage: "Lifecycle stage",
+};
+function propertyName(key: string): string {
+  const bare = key.trim().replace(/^hs_/i, "").toLowerCase();
+  return PROPERTY_NAMES[bare] ?? bare.replace(/[_.]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+/** A text that is only "key: value" lines (a CRM record's properties as the sync kept them), as fields; else null. */
+export function propertyLines(text: string | null | undefined): RecordField[] | null {
+  const lines = (text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 3) return null;
+  const pairs = lines.map((line) => line.match(/^([A-Za-z][\w .-]{0,40}):\s+(.+)$/));
+  if (pairs.filter(Boolean).length / lines.length < 0.6) return null;
+  return pairs.filter((m): m is RegExpMatchArray => Boolean(m)).map((m) => ({ label: propertyName(m[1]!), value: m[2]! }));
+}
+
+function AllProperties(props: { fields: RecordField[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section aria-label={t("work.viewer.all_properties")}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-center gap-1 text-[12px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:underline" data-testid="work-viewer-properties">
+        <ChevronRight className={cn("size-3.5 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
+        {t("work.viewer.all_properties")}
+      </button>
+      {open ? <FieldGrid fields={props.fields} className="mt-2" /> : null}
+    </section>
+  );
+}
 
 export function CrmView(props: { record: WorkRecord; onPreview: (file: RecordFile, sourceId: string) => void }) {
   const record = props.record;
+  const properties = propertyLines(record.body?.content);
   return (
     <div className="flex flex-col gap-5 px-4 py-4" data-testid="work-crm-view">
       <FieldGrid fields={record.fields} />
-      {record.body?.content?.trim() ? (
+      {properties ? <AllProperties fields={properties} /> : record.body?.content?.trim() ? (
         <section aria-label={t("work.viewer.notes")}>
           <SectionTitle>{t("work.viewer.notes")}</SectionTitle>
           <Body body={record.body} />

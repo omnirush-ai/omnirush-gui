@@ -140,10 +140,13 @@ export function NewMeeting(props: { formKey: string; compose: RecordCompose; cal
         <span className={label}>{t("work.viewer.when")}</span>
         <div className="flex flex-wrap items-center gap-1.5">
           <Input type="date" aria-label={t("work.viewer.date")} value={date} onChange={(e) => setDate(e.target.value)} className="h-8 w-[150px] text-[13px]" />
-          <Input type="time" aria-label={t("work.viewer.starts")} value={start} onChange={(e) => setStart(e.target.value)} className="h-8 w-[104px] text-[13px]" />
-          <span className="text-[12px] text-muted-foreground">{t("work.viewer.to")}</span>
-          <Input type="time" aria-label={t("work.viewer.ends")} value={end} onChange={(e) => setEnd(e.target.value)} className="h-8 w-[104px] text-[13px]" />
-          <span className="text-[12px] text-muted-foreground">{zoneName()}</span>
+          {/* The time range wraps as one piece, never "to" at a line end. */}
+          <span className="flex items-center gap-1.5">
+            <Input type="time" aria-label={t("work.viewer.starts")} value={start} onChange={(e) => setStart(e.target.value)} className="h-8 w-[104px] text-[13px]" />
+            <span className="text-[12px] text-muted-foreground">{t("work.viewer.to")}</span>
+            <Input type="time" aria-label={t("work.viewer.ends")} value={end} onChange={(e) => setEnd(e.target.value)} className="h-8 w-[104px] text-[13px]" />
+            <span className="text-[12px] text-muted-foreground">{zoneName()}</span>
+          </span>
         </div>
       </div>
       <div className="rounded-xl border border-border"><RecipientField label={t("work.viewer.guests_short")} value={guests} onChange={setGuests} last testId="work-meeting-guests" /></div>
@@ -194,7 +197,7 @@ export function NewMail(props: { formKey: string; compose: RecordCompose; mailbo
         {more ? <RecipientField label={t("work.viewer.field_cc")} value={cc} onChange={setCc} /> : null}
         {more ? <RecipientField label={t("work.viewer.field_bcc")} value={bcc} onChange={setBcc} /> : null}
         <div className="flex items-center gap-2 px-3">
-          <label htmlFor="work-new-mail-subject" className="w-8 shrink-0 text-[12px] text-muted-foreground">{t("work.viewer.subject")}</label>
+          <label htmlFor="work-new-mail-subject" className="w-14 shrink-0 text-[12px] text-muted-foreground">{t("work.viewer.subject")}</label>
           <input id="work-new-mail-subject" value={subject} onChange={(e) => setSubject(e.target.value)} className="h-9 min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none" maxLength={900} />
         </div>
       </div>

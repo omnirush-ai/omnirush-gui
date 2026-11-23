@@ -63,10 +63,21 @@ function MessageHeader(props: { message: MailMessage; open: boolean; onToggle: (
           {m.from.email && !m.from.me ? <span className="hidden min-w-0 flex-1 truncate text-[12px] text-muted-foreground @[28rem]/viewer:inline">{m.from.email}</span> : <span className="flex-1" />}
           <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground" title={m.at ? new Date(m.at).toLocaleString() : undefined}>{shortWhen(m.at)}</span>
         </div>
-        {line ? (
-          <button type="button" onClick={() => setDetails(!details)} aria-expanded={details} className="block max-w-full truncate text-start text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline">
-            {line}
-          </button>
+        {line || props.onReply ? (
+          <div className="flex min-h-5 items-center gap-2">
+            {line ? (
+              <button type="button" onClick={() => setDetails(!details)} aria-expanded={details} className="min-w-0 truncate text-start text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline">
+                {line}
+              </button>
+            ) : null}
+            <span className="flex-1" />
+            {props.onReply ? (
+              // On hover under the date, so the dates of open and folded messages line up.
+              <button type="button" onClick={props.onReply} aria-label={t("work.viewer.reply_to_this", { name: personName(m.from) })} title={t("work.viewer.reply")} className="-my-1 -me-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/message:opacity-100 motion-reduce:transition-none">
+                <CornerUpLeft className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {details ? (
           <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-lg bg-muted/50 px-2.5 py-2 text-[12px]" data-testid="work-mail-details">
@@ -80,11 +91,6 @@ function MessageHeader(props: { message: MailMessage; open: boolean; onToggle: (
           </dl>
         ) : null}
       </div>
-      {props.onReply ? (
-        <button type="button" onClick={props.onReply} aria-label={t("work.viewer.reply_to_this", { name: personName(m.from) })} title={t("work.viewer.reply")} className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/message:opacity-100">
-          <CornerUpLeft className="size-3.5" />
-        </button>
-      ) : null}
     </div>
   );
 }
@@ -92,7 +98,7 @@ function MessageHeader(props: { message: MailMessage; open: boolean; onToggle: (
 function ImagesBar(props: { sender: RecordPerson; onShow: () => void }) {
   const allow = useImagePrefs((s) => s.allow);
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-[12px] text-muted-foreground" data-testid="work-mail-images-hidden">
+    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-[12px] text-muted-foreground" data-testid="work-mail-images-hidden">
       <ImageOff className="size-3.5 shrink-0" aria-hidden />
       <span>{t("work.viewer.images_hidden")}</span>
       <button type="button" onClick={props.onShow} className="font-medium text-foreground outline-none hover:underline focus-visible:underline">{t("work.viewer.show_images")}</button>
@@ -238,7 +244,7 @@ export function RecipientField(props: { label: string; value: string[]; onChange
   };
   return (
     <div className={cn("relative flex min-h-9 items-start gap-2 px-3 py-1", !props.last && "border-b border-border")} data-testid={props.testId}>
-      <label className="mt-1.5 w-8 shrink-0 text-[12px] text-muted-foreground" onClick={() => inputRef.current?.focus()}>{props.label}</label>
+      <label className="mt-1.5 w-14 shrink-0 text-[12px] text-muted-foreground" onClick={() => inputRef.current?.focus()}>{props.label}</label>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
         {props.value.map((address) => {
           const person = props.suggestions?.find((p) => p.email?.toLowerCase() === address);

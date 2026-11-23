@@ -9,12 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { PdfPreview } from "@/react-app/domains/session/artifacts/preview";
 import { MarkdownBlock } from "@/react-app/domains/session/surface/markdown";
 
 import { BrandTile } from "../brand-icon";
 import { linkParts, safeHref, splitPlainQuote } from "./mail-html";
 import {
-  fileSize, initials, personName, shortWhen, sourceMark, stateLabel, tint,
+  fieldValue, fileSize, initials, personName, shortWhen, sourceMark, stateLabel, tint,
   type RecordClient, type RecordField, type RecordFile, type RecordLink, type RecordPerson, type RecordRef,
 } from "./records";
 
@@ -64,7 +65,7 @@ export function RecordMarkdown(props: { text: string; className?: string; compac
   if (!props.text.trim()) return null;
   return (
     <div
-      className={cn("min-w-0 text-[13px] leading-[1.6] [&_.markdown-content]:text-[13px] [&_.markdown-content_img]:max-w-full [&_.markdown-content_img]:rounded-md [&_.markdown-content_h1]:text-[15px] [&_.markdown-content_h2]:text-[14px] [&_.markdown-content_h3]:text-[13px] [&_.markdown-content_h1]:font-semibold [&_.markdown-content_h2]:font-semibold [&_.markdown-content_h3]:font-semibold", props.compact && "[&_.markdown-content>*]:my-0 [&_.markdown-content_p]:my-0", props.className)}
+      className={cn("min-w-0 text-[13px] leading-[1.6] [&_.markdown-content]:text-[13px] [&_.markdown-content_img]:max-w-full [&_.markdown-content_img]:rounded-md [&_.markdown-content_h1]:text-[15px] [&_.markdown-content_h2]:text-[14px] [&_.markdown-content_h3]:text-[13px] [&_.markdown-content_h1]:font-semibold [&_.markdown-content_h2]:font-semibold [&_.markdown-content_h3]:font-semibold [&_.markdown-content>*:first-child]:mt-0 [&_.markdown-content>*:last-child]:mb-0", props.compact && "[&_.markdown-content>*]:my-0 [&_.markdown-content_p]:my-0", props.className)}
       onClickCapture={(event) => {
         const anchor = (event.target as Element | null)?.closest?.("a[href]");
         if (!anchor) return;
@@ -151,7 +152,7 @@ export function FieldGrid(props: { fields: RecordField[] | null | undefined; cla
       {fields.map((field, index) => (
         <div key={`${field.label}:${index}`} className="contents">
           <dt className="truncate text-muted-foreground">{field.label}</dt>
-          <dd className="min-w-0 break-words text-foreground"><Linked text={field.value} /></dd>
+          <dd className="min-w-0 break-words text-foreground"><Linked text={fieldValue(field.label, field.value)} /></dd>
         </div>
       ))}
     </dl>
@@ -267,7 +268,8 @@ export function AttachmentPreview(props: { file: RecordFile; sourceId: string; o
         ) : isImage(type) && url ? (
           <div className="flex min-h-full items-center justify-center p-4"><img src={url} alt={props.file.name} className="max-h-full max-w-full rounded-md border border-border bg-background object-contain" /></div>
         ) : isPdf(type) && url ? (
-          <iframe title={props.file.name} src={url} sandbox="allow-same-origin" className="h-full w-full border-0" />
+          // Chromium's own PDF viewer (as the docs preview uses it): a sandboxed frame would show a blank page.
+          <PdfPreview url={url} title={props.file.name} />
         ) : text != null ? (
           <pre className="whitespace-pre-wrap break-words p-4 font-mono text-[12px] leading-5 text-foreground">{text}</pre>
         ) : null}
