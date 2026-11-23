@@ -56,8 +56,12 @@ function emptyComposerFocused(root: HTMLElement | null): boolean {
   return !scope || scope.contains(active);
 }
 
-// Chips: 32 px tall, 13 px text, the source-chip look. Focus is a 3:1 ring on the chip.
-const CHIP_SHELL = "group/chip relative inline-flex h-8 min-w-0 max-w-[320px] shrink-0 items-center rounded-full border border-border bg-background transition-colors has-focus-visible:ring-2 has-focus-visible:ring-foreground/60";
+// Chips: 32 px tall, 13 px text, the source-chip look. Focus is a 3:1 ring on the chip. Reply chips keep their width
+// (what does not fit goes to More); action chips always show, so when they alone do not fit they shrink and their
+// label ends in an ellipsis, with the full label in a tooltip.
+const CHIP_SHELL = "group/chip relative inline-flex h-8 min-w-0 max-w-[320px] items-center rounded-full border border-border bg-background transition-colors has-focus-visible:ring-2 has-focus-visible:ring-foreground/60";
+const REPLY_SHELL = "shrink-0";
+const ACTION_SHELL = "shrink";
 const CHIP_BUTTON = "flex h-full min-w-0 items-center gap-1.5 rounded-full text-[13px] leading-none text-foreground outline-none";
 const MORE_BUTTON = "inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-border bg-background ps-3 pe-2.5 text-[13px] leading-none text-foreground outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-foreground/60 data-popup-open:bg-muted/60";
 const MENU_POPUP = "z-50 min-w-48 max-w-[min(22rem,calc(100vw-2rem))] origin-(--transform-origin) rounded-xl border border-border bg-popover p-1 text-popover-foreground outline-none";
@@ -68,7 +72,7 @@ function ChipFace(props: { chip: SuggestionChip; label: string }) {
   return (
     <>
       {action && props.chip.icon ? <span className="flex shrink-0 items-center [&_svg]:size-3.5" aria-hidden>{props.chip.icon}</span> : null}
-      <span className="min-w-0 truncate">{props.label}</span>
+      <span className="min-w-0 truncate" data-chip-label="">{props.label}</span>
       {action && props.chip.external ? <ExternalLink className="size-3 shrink-0 text-muted-foreground" aria-hidden /> : null}
     </>
   );
@@ -201,10 +205,18 @@ export function SuggestionChipRow(props: {
   const onClick = (chip: SuggestionChip) => (event: ReactMouseEvent) => activate(chip, event.shiftKey ? "fill" : "send");
   const mac = isMac();
   const tipSide = props.tooltipSide ?? "bottom";
-  const tipProps = (id: string) => ({
+  const tipProps = (id: string, onlyWhenClipped?: () => boolean) => ({
     open: tip === id,
-    onOpenChange: (open: boolean) => setTip((current) => (open ? id : current === id ? null : current)),
+    onOpenChange: (open: boolean) => {
+      if (open && onlyWhenClipped && !onlyWhenClipped()) return;
+      setTip((current) => (open ? id : current === id ? null : current));
+    },
   });
+  // An action chip squeezed by the row: its label ends in an ellipsis.
+  const clipped = (index: number) => {
+    const label = buttons.current[index]?.querySelector<HTMLElement>("[data-chip-label]");
+    return Boolean(label && label.scrollWidth > label.clientWidth + 1);
+  };
 
   return (
     <TooltipProvider delay={TOOLTIP_DELAY}>
@@ -223,7 +235,10 @@ export function SuggestionChipRow(props: {
           const unavailable = Boolean(chip.disabledReason) || (action ? blocked || !chip.onRun : blocked);
           const keys = props.shortcuts ? chipShortcutLabel(index, mac) : null;
           const label = chipLabel(chip);
-          const tipText = chip.disabledReason ?? (keys ? (label === chip.label ? keys : `${chip.label} (${keys})`) : label === chip.label ? null : chip.label);
+          const ownTip = chip.disabledReason ?? (keys ? (label === chip.label ? keys : `${chip.label} (${keys})`) : label === chip.label ? null : chip.label);
+          // An action chip without a tooltip of its own shows its full label when the row has squeezed it.
+          const clipTip = !ownTip && action;
+          const tipText = ownTip ?? (clipTip ? chip.label : null);
           const button = (
             <button
               ref={(element) => { buttons.current[index] = element; }}
@@ -242,9 +257,9 @@ export function SuggestionChipRow(props: {
             </button>
           );
           return (
-            <span key={chip.id} className={cn(CHIP_SHELL, unavailable ? "opacity-60" : "hover:bg-muted/60")}>
+            <span key={chip.id} className={cn(CHIP_SHELL, action ? ACTION_SHELL : REPLY_SHELL, unavailable ? "opacity-60" : "hover:bg-muted/60")}>
               {tipText ? (
-                <Tooltip {...tipProps(chip.id)}>
+                <Tooltip {...tipProps(chip.id, clipTip ? () => clipped(index) : undefined)}>
                   <TooltipTrigger render={button} />
                   <TooltipContent side={tipSide} sideOffset={6}>{tipText}</TooltipContent>
                 </Tooltip>
@@ -325,7 +340,7 @@ export function SuggestionChipRow(props: {
         <div className={PROBE_CLASS} aria-hidden inert>
           <div ref={probe} className={PROBE_ROW_CLASS}>
             {chips.map((chip) => (
-              <span key={chip.id} className={CHIP_SHELL}>
+              <span key={chip.id} className={cn(CHIP_SHELL, "shrink-0")}>
                 <span className={cn(CHIP_BUTTON, chip.tone === "action" ? "ps-2.5 pe-3" : "px-3")}><ChipFace chip={chip} label={chipLabel(chip)} /></span>
               </span>
             ))}

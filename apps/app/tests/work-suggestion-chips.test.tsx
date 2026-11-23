@@ -190,3 +190,21 @@ test("no chips, no row", async () => {
   const { container } = await mount([]);
   expect(container.querySelector("[role=toolbar]")).toBeNull();
 });
+
+test("action chips may shrink to an ellipsis when they alone do not fit; reply chips keep their width", async () => {
+  const chips: SuggestionChip[] = [
+    { id: "a0", label: "Open Microsoft 365 in Connectors", tone: "action", onRun: () => {} },
+    { id: "a1", label: "Reconnect Google", tone: "action", onRun: () => {} },
+    ...replies("Draft the reply"),
+  ];
+  const { container } = await mount(chips);
+  const shell = (id: string) => container.querySelector(`[data-suggestion-chip="${id}"]`)?.closest("span.group\\/chip");
+  expect(shell("a0")?.className.split(/\s+/)).toContain("shrink");
+  expect(shell("a1")?.className.split(/\s+/)).toContain("shrink");
+  expect(shell("a0")?.className.split(/\s+/)).not.toContain("shrink-0");
+  expect(shell("r0")?.className.split(/\s+/)).toContain("shrink-0");
+  // The label truncates and the full label is the chip's name (the tooltip shows it only while it is clipped).
+  const label = container.querySelector('[data-suggestion-chip="a0"] [data-chip-label]');
+  expect(label?.className).toContain("truncate");
+  expect(container.querySelector('[data-suggestion-chip="a0"]')?.textContent).toBe("Open Microsoft 365 in Connectors");
+});
