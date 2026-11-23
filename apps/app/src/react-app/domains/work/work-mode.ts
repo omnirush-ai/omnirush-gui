@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { t } from "@/i18n";
+import type { WorkChatSyncProgress } from "@omnirush/types/desktop-ipc";
 import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
@@ -480,6 +481,39 @@ export function coverageLine(coverage: OmniRushWorkConnector["coverage"]): strin
   if (!kinds.length) return null;
   const plural = (noun: string, count: number) => (count === 1 ? noun : /(s|x|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`);
   return kinds.map(([kind, count]) => `${count.toLocaleString()} ${plural(kind.replace(/_/g, " "), count)}`).join(" · ");
+}
+
+/** A sync's bar: `value` 0 to 100, or null when how much is left is not known (the bar pulses), and its words. */
+export type SyncProgressView = { value: number | null; label: string };
+
+const percent = (done: number, total: number) => Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+
+/** A server-side source's bar while it imports its history (phase backfill): by the provider's total when it says one,
+ *  else by the list it reads one item at a time, else a pulsing bar with the count so far. Null otherwise, and for an
+ *  older server that sends no `progress`. */
+export function connectorProgress(progress: OmniRushWorkConnector["progress"]): SyncProgressView | null {
+  if (!progress || progress.phase !== "backfill") return null;
+  const done = Math.max(0, Number(progress.done) || 0);
+  const total = Number(progress.total);
+  if (progress.total !== null && Number.isFinite(total) && total > 0) {
+    return { value: percent(done, total), label: t("work.connectors.progress_of", { count: total, done: Math.min(done, total).toLocaleString(), total: total.toLocaleString() }) };
+  }
+  const steps = Number(progress.steps_total);
+  if (progress.steps_total !== null && Number.isFinite(steps) && steps > 0) {
+    const stepsDone = Math.min(Math.max(0, Number(progress.steps_done) || 0), steps);
+    const part = t("work.connectors.progress_steps", { done: stepsDone.toLocaleString(), total: steps.toLocaleString() });
+    return { value: percent(stepsDone, steps), label: done > 0 ? `${part} · ${countLabel(done, "work.connectors.progress_items")}` : part };
+  }
+  return { value: null, label: done > 0 ? countLabel(done, "work.connectors.progress_so_far") : t("work.connectors.progress_starting") };
+}
+
+/** A chat sync's bar while it runs: `reading` (pulsing) until the chat-days are read, then how many of them are sent. */
+export function chatSyncProgress(progress: WorkChatSyncProgress | null | undefined, reading: string): SyncProgressView | null {
+  if (!progress) return null;
+  const total = Number(progress.recordsTotal) || 0;
+  if (progress.phase !== "uploading" || total <= 0) return { value: null, label: reading };
+  const done = Math.min(Math.max(0, Number(progress.recordsDone) || 0), total);
+  return { value: percent(done, total), label: t("work.chatsync.progress", { count: total, done: done.toLocaleString(), total: total.toLocaleString() }) };
 }
 
 /** "5 min ago", "in 2 h", "Yesterday", "Tue": short, for feed rows. */

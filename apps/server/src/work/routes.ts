@@ -140,6 +140,8 @@ const WORK_ERRORS: Record<string, string> = {
 const CONNECTOR = WORK_SOURCE_ID;
 /** The server refuses a chat export over 50 MB (contract D5). */
 const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
+/** A chat push (the desktop's chat sync) is stored in one request; under the desktop's 300 s, so it hears `timeout`. */
+const CHAT_PUSH_TIMEOUT_MS = 290_000;
 /** One meeting audio part: 28 s of 16 kHz mono 16-bit is under 1 MiB; the plan's cap is 2 MiB. */
 const MEETING_PART_MAX_BYTES = 2 * 1024 * 1024;
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -544,27 +546,29 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     return (await pass(await found.workRequest(path, { method: "POST", body: bytes, headers: { "Content-Type": "audio/wav" }, signal: AbortSignal.timeout(150_000) }))).response;
   });
 
+  /** A chat push goes on with a longer wait than the default minute; running out of it answers 504 `timeout`. */
+  const pushChats = async (ctx: { request: Request }, path: "imessage" | "whatsapp-local" | "telegram") => {
+    const records = (await deps.readJsonBody(ctx.request)).records;
+    if (!Array.isArray(records)) return invalid("records must be a list");
+    const found = deps.broker();
+    if (!found) return signedOut();
+    try {
+      return (await pass(await found.workRequest(path, { method: "POST", body: JSON.stringify({ records }), signal: AbortSignal.timeout(CHAT_PUSH_TIMEOUT_MS) }))).response;
+    } catch (error) {
+      if ((error as { name?: unknown } | null)?.name !== "TimeoutError") throw error;
+      return jsonResponse({ detail: "timeout", code: "timeout", message: "omnirush.ai took too long to answer. Try again." }, 504);
+    }
+  };
+
   // iMessage (macOS desktop): the records the desktop read from the Mac's Messages database, and how many the server has.
   addRoute(routes, "GET", "/work/imessage", "client", async () => forward("imessage", "GET"));
-  addRoute(routes, "POST", "/work/imessage", "client", async (ctx) => {
-    const records = (await deps.readJsonBody(ctx.request)).records;
-    if (!Array.isArray(records)) return invalid("records must be a list");
-    return forward("imessage", "POST", { records });
-  });
+  addRoute(routes, "POST", "/work/imessage", "client", async (ctx) => pushChats(ctx, "imessage"));
   // WhatsApp (macOS desktop): the chat-days the desktop read from the WhatsApp Mac app's database.
   addRoute(routes, "GET", "/work/whatsapp-local", "client", async () => forward("whatsapp-local", "GET"));
-  addRoute(routes, "POST", "/work/whatsapp-local", "client", async (ctx) => {
-    const records = (await deps.readJsonBody(ctx.request)).records;
-    if (!Array.isArray(records)) return invalid("records must be a list");
-    return forward("whatsapp-local", "POST", { records });
-  });
+  addRoute(routes, "POST", "/work/whatsapp-local", "client", async (ctx) => pushChats(ctx, "whatsapp-local"));
   // Telegram (desktop): the chat-days the desktop read with the user's own Telegram login (the login stays on the device).
   addRoute(routes, "GET", "/work/telegram", "client", async () => forward("telegram", "GET"));
-  addRoute(routes, "POST", "/work/telegram", "client", async (ctx) => {
-    const records = (await deps.readJsonBody(ctx.request)).records;
-    if (!Array.isArray(records)) return invalid("records must be a list");
-    return forward("telegram", "POST", { records });
-  });
+  addRoute(routes, "POST", "/work/telegram", "client", async (ctx) => pushChats(ctx, "telegram"));
 }
 
 /**

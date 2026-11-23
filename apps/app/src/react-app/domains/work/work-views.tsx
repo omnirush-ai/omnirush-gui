@@ -5,17 +5,19 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Progress as ProgressPrimitive } from "@base-ui/react/progress";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { ProgressIndicator, ProgressTrack } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
 import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
-import type { WorkChatSyncSource, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
+import type { WorkChatSyncSource, WorkChatSyncStatus, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { isMacPlatform } from "@/app/utils";
@@ -35,8 +37,8 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
-  sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type WorkClient,
+  chatSyncProgress, connectorAccess, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
 } from "./work-mode";
 
 // Connectors, and the channels search results and deals name (gmail, drive, qbo, …).
@@ -232,6 +234,46 @@ function lastSync(value: string | null): string {
 export const CONNECT_POLL_MS = 2_000;
 // Sign-in with a second factor or an admin prompt often takes over a minute.
 export const CONNECT_TIMEOUT_MS = 180_000;
+// While a source imports its history, its bar moves with this poll.
+export const PROGRESS_POLL_MS = 5_000;
+// The chat sync's status (an IPC call) while a read runs, and otherwise.
+export const CHAT_SYNC_POLL_MS = 1_500;
+const CHAT_SYNC_IDLE_POLL_MS = 15_000;
+
+/** The thin bar under a source's line while it syncs: filled as far as it got, or a short pulsing piece while how much
+ *  is left is not known, with its words beside it (under it on a narrow card). One width on every row, so the bars line
+ *  up; the coverage meter's colours. */
+export function SyncProgressBar(props: { view: SyncProgressView; name: string }) {
+  const { view } = props;
+  return (
+    <ProgressPrimitive.Root
+      value={view.value}
+      aria-label={t("work.connectors.progress_for", { name: props.name })}
+      getAriaValueText={() => view.label}
+      className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1"
+      data-testid="work-sync-progress"
+      data-value={view.value ?? "unknown"}
+    >
+      <ProgressTrack className="h-1 w-40 max-w-full shrink-0 bg-muted-foreground/15 dark:bg-muted-foreground/25">
+        <ProgressIndicator className={cn("rounded-full bg-foreground/45 motion-safe:duration-500 motion-reduce:transition-none dark:bg-foreground/55", view.value === null && "w-1/4 motion-safe:animate-pulse")} />
+      </ProgressTrack>
+      <span className="text-[12px] tabular-nums text-muted-foreground">{view.label}</span>
+    </ProgressPrimitive.Root>
+  );
+}
+
+/** Whether a chat sync read runs now (the cards poll faster then). */
+const chatSyncRunning = (status: WorkChatSyncStatus | undefined) => Boolean(status && Object.values(status).some((source) => source?.running));
+const chatSyncPoll = (query: { state: { data?: WorkChatSyncStatus } }) => (chatSyncRunning(query.state.data) ? CHAT_SYNC_POLL_MS : CHAT_SYNC_IDLE_POLL_MS);
+
+/** Calls `done` when the source's read stops running (an automatic one too), so its count is read again. */
+function useRunEnded(running: boolean, done: () => void) {
+  const was = useRef(running);
+  useEffect(() => {
+    if (was.current && !running) done();
+    was.current = running;
+  });
+}
 
 /** One source on the Connectors page. */
 export function ConnectorRow(props: {
@@ -263,6 +305,8 @@ export function ConnectorRow(props: {
   // Connected and caught up with nothing to read: for GitHub, the App is not installed on any repository yet.
   const needsSetup = !attention && Boolean(row.setup_url) && row.status === "connected" && row.records === 0;
   const coverage = coverageLine(row.coverage);
+  // The history import's bar (servers that send `progress`); nothing once it is caught up.
+  const progress = connected ? connectorProgress(row.progress) : null;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
       <ConnectorIcon id={row.id} />
@@ -281,6 +325,7 @@ export function ConnectorRow(props: {
               ? [row.account, coverage ?? countLabel(row.records, "work.count.records"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
               : connectorAccess(row.id)}
         </div>
+        {progress ? <SyncProgressBar view={progress} name={name} /> : null}
         {attention ? (
           <div
             className={cn("mt-0.5 break-words text-[12px]", attention.kind === "reconnect" || attention.kind === "failing" ? "text-destructive" : "text-amber-11")}
@@ -718,6 +763,7 @@ export function localChatError(source: WorkChatSyncSource, code: string | null, 
     : code === "flood_wait" ? t("work.telegram.flood_sync")
     : code === "signed_out" ? t("work.telegram.signed_out")
     : code === "no_keyring" ? t("work.telegram.no_keyring")
+    : code === "timeout" ? t("work.chatsync.timeout")
     : t("work.chatsync.failed");
   return failures > 1 ? `${text} ${t("work.chatsync.repeated", { n: failures })}` : text;
 }
@@ -730,7 +776,7 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
   const name = LOCAL_CHAT_NAMES[source];
   const statusKey = ["omnirush-chat-sync"];
   const countKey = [`omnirush-${source}-count`, props.client?.baseUrl?.trim() || "default"];
-  const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: 15_000 });
+  const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: chatSyncPoll });
   const count = useQuery({
     queryKey: countKey,
     queryFn: () => (source === "imessage" ? props.client!.getIMessageCount() : props.client!.getWhatsAppLocalCount()),
@@ -751,8 +797,14 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
   const toggle = useMutation({ mutationFn: (enabled: boolean) => desktopBridge.workChatSyncSet(source, enabled), onSettled: settle });
   const state = status.data?.[source];
   const busy = syncNow.isPending || toggle.isPending || Boolean(state?.running);
+  useRunEnded(Boolean(state?.running), () => {
+    void queryClient.invalidateQueries({ queryKey: countKey });
+    void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) });
+  });
   const records = count.data?.records ?? 0;
-  const error = localChatError(source, state?.lastError ?? null, state?.failures ?? 0);
+  // While a read runs its bar shows instead of the last run's error.
+  const progress = state?.running ? chatSyncProgress(state.progress, t("work.chatsync.reading_mac")) : null;
+  const error = progress ? null : localChatError(source, state?.lastError ?? null, state?.failures ?? 0);
   const line = [
     records > 0 ? countLabel(records, "work.imessage.synced_days") : source === "imessage" ? t("work.imessage.intro") : t("work.chatsync.whatsapp_intro"),
     state?.lastSyncAt ? t("work.chatsync.last_sync", { when: relativeTime(state.lastSyncAt) }) : null,
@@ -763,8 +815,9 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
       <div className="min-w-[16rem] flex-1">
         <span className="text-sm font-medium">{name}</span>
         <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-local-chat-line">{line}</div>
+        {progress ? <SyncProgressBar view={progress} name={name} /> : null}
         {error ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
-        {state?.lastError === "fda_required" ? (
+        {error && state?.lastError === "fda_required" ? (
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground" data-testid="work-local-chat-fda">
             {t("work.chatsync.fda_steps")}
             <Button type="button" variant="outline" size="sm" onClick={() => props.openLink(FDA_URL)}>{t("work.imessage.open_settings")}</Button>
@@ -782,7 +835,7 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
           />
         </label>
         <Button type="button" variant="outline" size="sm" disabled={busy || !status.data} onClick={() => syncNow.mutate()} data-testid={`work-${source}-sync`}>
-          {busy ? t("work.imessage.reading") : t("work.chatsync.sync_now")}
+          {busy ? (progress?.value != null ? t("work.chatsync.syncing") : t("work.imessage.reading")) : t("work.chatsync.sync_now")}
         </Button>
       </div>
     </div>
@@ -824,7 +877,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
   const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workTelegramStatus(), enabled: isDesktopRuntime() });
   const data = status.data?.available ? status.data : null;
   const signedIn = data?.step === "signed_in";
-  const sync = useQuery({ queryKey: syncKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: 15_000, enabled: signedIn });
+  const sync = useQuery({ queryKey: syncKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: chatSyncPoll, enabled: signedIn });
   const count = useQuery({ queryKey: countKey, queryFn: () => props.client!.getTelegramCount(), enabled: Boolean(props.client) && signedIn });
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -852,9 +905,14 @@ export function TelegramCard(props: { client: WorkClient | null }) {
   });
   const settings = useMutation({ mutationFn: (change: { channels?: boolean; days?: number }) => desktopBridge.workTelegramSettings(change), onSettled: settle });
   const logout = useMutation({ mutationFn: () => desktopBridge.workTelegramLogout(), onSettled: settle });
+  useRunEnded(Boolean(sync.data?.telegram?.running), () => {
+    void queryClient.invalidateQueries({ queryKey: countKey });
+    void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) });
+  });
   if (!data) return null;
   const state = sync.data?.telegram;
   const records = count.data?.records ?? 0;
+  const progress = signedIn && state?.running ? chatSyncProgress(state.progress, t("work.chatsync.reading_telegram")) : null;
   const asking = data.step === "signed_out" || data.step === "code" || data.step === "password";
   const busy = login.isPending || logout.isPending;
   const line = signedIn
@@ -863,7 +921,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
     : data.step === "code" ? (data.via === "app" ? t("work.telegram.code_app") : t("work.telegram.code_sms"))
     : data.step === "password" ? (data.hint ? t("work.telegram.password_hint", { hint: data.hint }) : t("work.telegram.password_intro"))
     : t("work.telegram.intro");
-  const shownError = error ?? (signedIn ? localChatError("telegram", state?.lastError ?? null, state?.failures ?? 0) : null);
+  const shownError = error ?? (signedIn && !progress ? localChatError("telegram", state?.lastError ?? null, state?.failures ?? 0) : null);
   const submit = (): WorkTelegramLoginStep => (data.step === "code" ? { code: value } : data.step === "password" ? { password: value } : { phone: value });
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-telegram-card" data-step={data.step}>
@@ -872,6 +930,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
         <div className="min-w-[16rem] flex-1">
           <span className="text-sm font-medium">Telegram</span>
           <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-telegram-line">{line}</div>
+          {progress ? <SyncProgressBar view={progress} name="Telegram" /> : null}
           {shownError ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-telegram-error">{shownError}</div> : null}
           {asking ? (
             <form
@@ -921,7 +980,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
                 <Switch aria-label={t("work.connectors.data_sync_for", { name: "Telegram" })} checked={state?.enabled === true} disabled={!sync.data || toggle.isPending} onCheckedChange={(checked: boolean) => toggle.mutate(checked)} />
               </label>
               <Button type="button" variant="outline" size="sm" disabled={syncNow.isPending || Boolean(state?.running) || !sync.data} onClick={() => syncNow.mutate()} data-testid="work-telegram-sync">
-                {syncNow.isPending || state?.running ? t("work.imessage.reading") : t("work.chatsync.sync_now")}
+                {syncNow.isPending || state?.running ? (progress?.value != null ? t("work.chatsync.syncing") : t("work.imessage.reading")) : t("work.chatsync.sync_now")}
               </Button>
             </>
           ) : null}
@@ -1080,7 +1139,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     queryKey: key,
     queryFn: () => props.client!.listWorkConnectors(),
     enabled: Boolean(props.client),
-    refetchInterval: connecting ? CONNECT_POLL_MS : false,
+    refetchInterval: (current) => (connecting ? CONNECT_POLL_MS : current.state.data?.some((row) => connectorProgress(row.progress)) ? PROGRESS_POLL_MS : false),
   });
   useEffect(() => {
     if (!connecting) return;

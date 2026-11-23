@@ -25,6 +25,34 @@ export function cut(text, max) {
   return /[\ud800-\udbff]$/.test(head) ? head.slice(0, -1) : head;
 }
 
+/**
+ * Chat-days in the order they are pushed, so the read position can move after each push: per run of row ids (`key`:
+ * the Messages database, or each WhatsApp app), by the lowest new row each holds; days with none go last. `cursorAt(n)`
+ * is the position once the first `n` landed: per key, just before the lowest new row still to send, or `last` once
+ * none is left. A read from there may send a chat-day again (the server replaces it), never skips a message.
+ * @param {{ record: object, key: string, first: number }[]} parts  `first`: the lowest new row id, Infinity for none
+ * @param {Record<string, number>} since  the position the read started from
+ * @param {Record<string, any>} last  the position once all of it landed
+ */
+export function sendOrder(parts, since, last) {
+  const keys = [...new Set(parts.map((part) => part.key))];
+  const byFirst = (a, b) => (a.first === b.first ? 0 : a.first < b.first ? -1 : 1);
+  const sorted = keys.flatMap((key) => parts.filter((part) => part.key === key).sort(byFirst));
+  return {
+    records: sorted.map((part) => part.record),
+    /** @param {number} n */
+    cursorAt(n) {
+      const at = { ...last };
+      const rest = sorted.slice(n);
+      for (const key of keys) {
+        const next = rest.find((part) => part.key === key);
+        if (next && Number.isFinite(next.first)) at[key] = Math.max(Number(since[key]) || 0, next.first - 1);
+      }
+      return at;
+    },
+  };
+}
+
 /** A tagged error so the UI can show the right step (grant Full Disk
  *  Access, no Messages database, not macOS). */
 export class IMessageError extends Error {
@@ -160,7 +188,8 @@ function dayStart(raw) {
  * Group raw message rows into one record per chat per day.
  * @param {any[]} rows
  * @param {number} [newAfter] `messageCount` counts only rows past this ROWID
- * @returns {{ records: object[], lastRowid: number, messageCount: number }}
+ * @returns {{ records: object[], lastRowid: number, messageCount: number, firsts: number[] }} `firsts`: each record's
+ *   lowest ROWID past `newAfter` (Infinity for none)
  */
 export function groupRows(rows, newAfter = 0) {
   const byKey = new Map();
@@ -173,7 +202,8 @@ export function groupRows(rows, newAfter = 0) {
     if (!when) continue;
     const body = (row.text && String(row.text)) || decodeAttributedBody(row.attributedBody);
     if (!body) continue; // attachment-only / system rows carry no text
-    if (rowid > newAfter) messageCount += 1;
+    const fresh = rowid > newAfter;
+    if (fresh) messageCount += 1;
     const chatKey = String(row.chat_guid || row.chat_identifier || "unknown");
     const day = dayOf(when);
     const key = `${chatKey}\u0000${day}`;
@@ -187,9 +217,11 @@ export function groupRows(rows, newAfter = 0) {
         occurred_at: when.toISOString(),
         lines: [],
         participants: new Map(),
+        first: Infinity,
       };
       byKey.set(key, group);
     }
+    if (fresh && rowid < group.first) group.first = rowid;
     if (when.toISOString() > group.occurred_at) group.occurred_at = when.toISOString();
     const fromMe = Number(row.is_from_me) === 1;
     const handle = row.handle ? String(row.handle) : null;
@@ -203,7 +235,8 @@ export function groupRows(rows, newAfter = 0) {
       });
     }
   }
-  const records = [...byKey.values()].map((group) => ({
+  const groups = [...byKey.values()];
+  const records = groups.map((group) => ({
     chat_key: group.chat_key,
     chat_name: group.chat_name,
     is_group: group.is_group,
@@ -218,13 +251,15 @@ export function groupRows(rows, newAfter = 0) {
     ),
     participants: [...group.participants.values()].slice(0, MAX_PEOPLE),
   }));
-  return { records, lastRowid, messageCount };
+  return { records, lastRowid, messageCount, firsts: groups.map((group) => group.first) };
 }
 
 /** Read the chat.db at `dbPath` for the chats with messages past
  *  `sinceRowid`, each whole day from the first new message on: the server
  *  replaces a chat-day's record, so a record never holds only the new
- *  messages. Opens read-only; the caller gives a copy. */
+ *  messages. The records come in push order and `cursorAt(n)` is the
+ *  ROWID to save once the first `n` landed (sendOrder). Opens read-only;
+ *  the caller gives a copy. */
 export function readDatabase(dbPath, sinceRowid = 0) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
@@ -241,7 +276,10 @@ export function readDatabase(dbPath, sinceRowid = 0) {
     for (const chat of chats) rows.push(...stmt.all(chat.chat_id, chat.date === null ? 0n : dayStart(chat.date)));
     const grouped = groupRows(rows, since);
     const lastRowid = Math.max(since, ...chats.map((chat) => Number(chat.rowid)));
-    return { ...grouped, lastRowid };
+    const order = sendOrder(grouped.records.map((record, index) => ({ record, key: "rowid", first: grouped.firsts[index] })), { rowid: since }, { rowid: lastRowid });
+    /** @param {number} n */
+    const cursorAt = (n) => order.cursorAt(n).rowid;
+    return { records: order.records, lastRowid, messageCount: grouped.messageCount, cursorAt };
   } finally {
     db.close();
   }

@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { matchRoutes, MemoryRouter } from "react-router";
 
 import { OmniRushServerError, type OmniRushWorkAction, type OmniRushWorkConnector, type OmniRushWorkFeed, type OmniRushWorkMembers } from "../src/app/lib/omnirush-server";
-import { askAboutPrompt, checklistItems, connectorAccess, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
+import { askAboutPrompt, chatSyncProgress, checklistItems, connectorAccess, connectorProgress, connectOrder, connectSettled, connectorsBackState, countLabel, domainFromEmail, hasSampleData, healthFor, healthProblem, isWorkModeShortcut, keyLabel, shownInMode, visibleConnectors, workConnectorsKey, workErrorText, workInviteToken, workToolPermission,
   askAboutItemPrompt, coverageLine, relativeTime, workActionsKey, workChatToolsKey, workFailure, workFeedKey, workInsightsKey, workMembersKey, workSettingsKey, workStateKey, workToolNotices,
   WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_MEETINGS_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_SEARCH_ROUTE } from "../src/react-app/domains/work/work-mode";
 import { SourceAttention, SourceStrip, sourceDot, WorkToday } from "../src/react-app/domains/work/work-today";
@@ -970,6 +970,69 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(page).not.toContain('data-testid="work-telegram-card"');
   });
 
+  test("sync progress: a server source's bar while it imports its history; nothing idle or from an older server", () => {
+    const pass = { phase: "backfill", done: 1200, total: 4800, steps_done: null, steps_total: null };
+    expect(connectorProgress(pass)).toEqual({ value: 25, label: "1,200 of 4,800 items" });
+    // A list read one item at a time (GitHub's repositories): by the list, with the count so far.
+    expect(connectorProgress({ ...pass, total: null, steps_done: 3, steps_total: 12 })).toEqual({ value: 25, label: "3 of 12 done · 1,200 items" });
+    expect(connectorProgress({ ...pass, done: 0, total: null, steps_done: 0, steps_total: 4 })).toEqual({ value: 0, label: "0 of 4 done" });
+    // No total: a pulsing bar and a running count.
+    expect(connectorProgress({ ...pass, total: null })).toEqual({ value: null, label: "1,200 items so far" });
+    expect(connectorProgress({ ...pass, done: 0, total: null })).toEqual({ value: null, label: "Starting…" });
+    expect(connectorProgress({ ...pass, done: 5000 })?.value).toBe(100);
+    for (const phase of ["idle", "incremental"]) expect(connectorProgress({ ...pass, phase })).toBeNull();
+    expect(connectorProgress(null)).toBeNull();
+    expect(connectorProgress(undefined)).toBeNull();
+    const shown = (over: Partial<OmniRushWorkConnector>) => renderToStaticMarkup(
+      <ConnectorRow connector={row({ status: "syncing", account: "ops@example.com", records: 1200, sync_enabled: true, ...over })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />,
+    );
+    const running = shown({ progress: pass });
+    expect(running).toContain('data-testid="work-sync-progress"');
+    expect(running).toContain('data-value="25"');
+    expect(running).toContain("1,200 of 4,800 items");
+    expect(running).toContain('aria-label="Google sync progress"');
+    expect(shown({ progress: { ...pass, total: null } })).toContain('data-value="unknown"');
+    expect(shown({ progress: { ...pass, phase: "idle" } })).not.toContain("work-sync-progress");
+    // An older server sends no progress: the row is as before.
+    expect(shown({})).not.toContain("work-sync-progress");
+    expect(shown({ status: "disconnected", progress: pass })).not.toContain("work-sync-progress");
+    expect(running).not.toMatch(/—/);
+  });
+
+  test("chat sync progress: reading, then how many conversation days are sent; a timeout reads as its own line", () => {
+    expect(chatSyncProgress(null, "Reading")).toBeNull();
+    expect(chatSyncProgress({ phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 }, "Reading chats on this Mac")).toEqual({ value: null, label: "Reading chats on this Mac" });
+    expect(chatSyncProgress({ phase: "uploading", pushesDone: 12, pushesTotal: 48, recordsDone: 1200, recordsTotal: 4800 }, "x")).toEqual({ value: 25, label: "Syncing 1,200 of 4,800 conversation days" });
+    expect(chatSyncProgress({ phase: "uploading", pushesDone: 0, pushesTotal: 1, recordsDone: 0, recordsTotal: 1 }, "x")?.label).toBe("Syncing 0 of 1 conversation day");
+    expect(localChatError("whatsapp", "timeout", 2)).toBe("The upload took too long. It tries again on its own from where it stopped. Failed 2 times in a row.");
+    const card = (whatsapp: unknown) => {
+      const queries = new QueryClient();
+      queries.setQueryData(["omnirush-chat-sync"], {
+        imessage: { enabled: true, lastSyncAt: null, lastError: null, failures: 0, running: false, progress: null },
+        whatsapp,
+      });
+      queries.setQueryData(["omnirush-whatsapp-count", "http://connectors.test"], { records: 300 });
+      return renderToStaticMarkup(<QueryClientProvider client={queries}><LocalChatsCard client={{ baseUrl: "http://connectors.test" } as never} openLink={noop} /></QueryClientProvider>);
+    };
+    const base = { enabled: true, lastSyncAt: null, lastError: "timeout", failures: 2 };
+    const uploading = card({ ...base, running: true, progress: { phase: "uploading", pushesDone: 3, pushesTotal: 48, recordsDone: 300, recordsTotal: 4800 } });
+    expect(uploading.match(/data-testid="work-sync-progress"/g)?.length).toBe(1);
+    expect(uploading).toContain("Syncing 300 of 4,800 conversation days");
+    expect(uploading).toContain('aria-label="WhatsApp sync progress"');
+    expect(uploading).toContain("Syncing…");
+    // The last run's error waits while a new one runs.
+    expect(uploading).not.toContain('data-testid="work-local-chat-error"');
+    expect(card({ ...base, running: true, progress: { phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 } })).toContain("Reading chats on this Mac");
+    const failed = card({ ...base, running: false, progress: null });
+    expect(failed).not.toContain("work-sync-progress");
+    expect(failed).toContain("The upload took too long. It tries again on its own from where it stopped. Failed 2 times in a row.");
+    // An older desktop says only `running`: the card is as before.
+    const older = card({ ...base, lastError: null, failures: 0, running: true });
+    expect(older).not.toContain("work-sync-progress");
+    expect(older).toContain("Reading…");
+    for (const html of [uploading, failed, older]) expect(html).not.toMatch(/—/);
+  });
+
   test("Telegram card: hidden without credentials, then sign-in steps, then the signed-in line and its settings", () => {
     const client = { baseUrl: "http://connectors.test" } as never;
     const card = (status: unknown, sync?: unknown) => {
@@ -998,6 +1061,11 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     expect(signedIn).toContain("First sync goes back");
     expect(signedIn).toContain("Disconnect");
     expect(signedIn).not.toContain('data-testid="work-telegram-input"');
+    const syncing = card({ ...base, step: "signed_in", name: "Sam Rao" }, { telegram: { enabled: true, lastSyncAt: at, lastError: "flood_wait", failures: 0, running: true, progress: { phase: "uploading", pushesDone: 1, pushesTotal: 3, recordsDone: 100, recordsTotal: 250 } } });
+    expect(syncing).toContain("Syncing 100 of 250 conversation days");
+    expect(syncing).toContain('data-value="40"');
+    expect(syncing).not.toContain("Telegram asked to slow down.");
+    expect(card({ ...base, step: "signed_in", name: "Sam Rao" }, { telegram: { enabled: true, lastSyncAt: at, lastError: null, failures: 0, running: true, progress: { phase: "reading", pushesDone: 0, pushesTotal: 0, recordsDone: 0, recordsTotal: 0 } } })).toContain("Reading chats from Telegram");
     const other = card({ ...base, step: "other_account" });
     expect(other).toContain("Telegram is signed in on this computer for another OmniRush account.");
     expect(other).toContain("Disconnect");
