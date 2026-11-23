@@ -111,6 +111,8 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
     <PanelTabItem
       value={tab.id}
       id={tab.id}
+      // A record's title gets room (up to 220 px) before it ends in an ellipsis; other tabs keep their width.
+      className={tab.type === "record" ? "w-auto min-w-36 max-w-[220px]" : undefined}
       dragControls={tab.type === "browser" ? dragControls : undefined}
       onContextMenu={tab.type === "browser" ? (event: React.MouseEvent<HTMLDivElement>) => {
         event.preventDefault();
@@ -151,7 +153,7 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
           ) : tab.type === "app" ? <Blocks /> : tab.type === "record" ? <RecordTabIcon tab={tab} /> : (
             <ArtifactIcon type={tab.preview} />
           )}
-          <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
+          <span className="min-w-0 flex-1 truncate text-left" title={tab.type === "record" ? tab.label : undefined}>{tab.label}</span>
         </PanelTab>
         <PanelTabClose
           active={active}

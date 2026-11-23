@@ -26,7 +26,7 @@ const { groupChat } = await import("../src/react-app/domains/work/viewer/chat-vi
 const { guestSummary, localInstant } = await import("../src/react-app/domains/work/viewer/event-view");
 const { meetingBody, nextSlot } = await import("../src/react-app/domains/work/viewer/meeting-composer");
 const { money } = await import("../src/react-app/domains/work/viewer/finance-view");
-const { propertyLines } = await import("../src/react-app/domains/work/viewer/crm-view");
+const { crmFields, propertyLines } = await import("../src/react-app/domains/work/viewer/crm-view");
 const { usePanelTabStore } = await import("../src/react-app/domains/session/panel/panel-tab-store");
 const lexical = await import("lexical");
 const { $createListItemNode, $createListNode } = await import("@lexical/list");
@@ -425,6 +425,13 @@ describe("views (design 2.5)", () => {
     const crm = wrap(<RecordView record={{ ...base, source_id: "hubspot:deal:301", source: "hubspot", kind: "deal", view: "crm", body: { format: "text", content: "dealname: x\namount: 48000\npipeline: default" } } as unknown as WorkRecord} onPreview={noop} />);
     expect(crm).toContain("All properties");
     expect(crm).not.toContain("dealname:");
+    // Money reads with its currency: from the deal's Currency field or the synced deal_currency_code.
+    const usd = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(48000);
+    expect(crmFields([{ label: "Amount", value: "48000" }, { label: "Currency", value: "usd" }], null)).toEqual([{ label: "Amount", value: usd }]);
+    expect(crmFields([{ label: "Amount", value: "48000" }], propertyLines("dealname: x\namount: 48000\ndeal_currency_code: USD"))).toEqual([{ label: "Amount", value: usd }]);
+    expect(crmFields([{ label: "Amount", value: "48000" }], null)).toEqual([{ label: "Amount", value: "48000" }]);
+    const priced = wrap(<RecordView record={{ ...base, source_id: "pipedrive:deal:9", source: "pipedrive", kind: "deal", view: "crm", fields: [{ label: "Value", value: "48000" }, { label: "Currency", value: "EUR" }] } as unknown as WorkRecord} onPreview={noop} />);
+    expect(priced).toContain(new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR" }).format(48000));
     expect(records.fieldValue("Amount", "48000")).toBe((48000).toLocaleString());
     expect(records.fieldValue("Zip", "10001")).toBe("10001");
     expect(records.fieldValue("Invoice number", "100234")).toBe("100234");
