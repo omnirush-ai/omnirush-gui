@@ -310,9 +310,9 @@ describe("work routes", () => {
   test("the broker reaches only the contract's paths", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/imap/connect", "connectors/hook/hook", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
-      "org/insights", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
+      "org/insights", "org/connectors", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
       "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "org/connectors/x", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
       "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "whatsapp-local/x", "whatsapp", "telegram/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
       "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin", "hooks/h1/orh_x", "connectors/hook/hook/x"]) expect(WORK_PATH.test(path)).toBe(false);
   });
@@ -454,6 +454,51 @@ describe("work routes", () => {
     expect(await (await denied("POST", "/work/org/leave")).json()).toMatchObject({ code: "transfer_first", message: "Make someone else the owner before you leave." });
   });
 
+  test("the company's connectors and a member's role are checked, then forwarded; a saved list re-reads the switch", async () => {
+    const asked: unknown[] = [];
+    const { calls, call } = setup(() => json({ ok: true }), async (options) => {
+      asked.push(options);
+      return { work: { enabled: true, sources: ["google"] } };
+    });
+    await call("GET", "/work/state");
+    await call("GET", "/work/org/connectors");
+    expect((await call("PATCH", "/work/org/connectors", { shown: ["google", "slack", "google"], evil: 1 })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/connectors", { shown: null })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/connectors", { shown: [] })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/connectors", {})).status).toBe(400);
+    expect((await call("PATCH", "/work/org/connectors", { shown: "google" })).status).toBe(400);
+    expect((await call("PATCH", "/work/org/connectors", { shown: ["../admin"] })).status).toBe(400);
+    expect((await call("PATCH", "/work/org/connectors", { shown: Array.from({ length: 101 }, (_, i) => `c${i}`) })).status).toBe(400);
+    await call("GET", "/work/state");
+    expect(asked).toEqual([undefined, { maxAgeMs: 0 }]);
+    expect((await call("PATCH", "/work/org/members/user_2", { role: "admin", evil: 1 })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/members/user_2", { role: "owner" })).status).toBe(400);
+    expect((await call("PATCH", "/work/org/members/a%2Fb", { role: "member" })).status).toBe(404);
+    expect(calls).toEqual([
+      "GET org/connectors ",
+      "PATCH org/connectors {\"shown\":[\"google\",\"slack\"]}",
+      "PATCH org/connectors {\"shown\":null}",
+      "PATCH org/connectors {\"shown\":[]}",
+      "PATCH org/members/user_2 {\"role\":\"admin\"}",
+    ]);
+    // The server's refusals read in words.
+    const { call: refused } = setup(() => json({ detail: "connector_off", reason: "x" }, 403));
+    expect(await (await refused("POST", "/work/connectors/slack/start")).json()).toMatchObject({ code: "connector_off", message: "Your company admin has turned this off." });
+    // A connector the company turned off: the next state reads the sources fresh (the desktop's chat sync follows them).
+    const fresh: unknown[] = [];
+    const { call: offCall } = setup(() => json({ detail: "connector_not_allowed" }, 403), async (options) => {
+      fresh.push(options);
+      return { work: { enabled: true, sources: ["google"] } };
+    });
+    await offCall("GET", "/work/state");
+    expect((await offCall("POST", "/work/whatsapp-local", { records: [] })).status).toBe(403);
+    await offCall("GET", "/work/state");
+    await offCall("GET", "/work/state");
+    expect(fresh).toEqual([undefined, { maxAgeMs: 0 }, undefined]);
+    const { call: notAdmin } = setup(() => json({ detail: "not_admin" }, 403));
+    expect(await (await notAdmin("PATCH", "/work/org/connectors", { shown: null })).json()).toMatchObject({ code: "not_admin", message: "Only your company owner or an admin can change this." });
+  });
+
   test("insights, the action layer and iMessage are checked, then forwarded; a saved setting re-reads the switch", async () => {
     const asked: unknown[] = [];
     let autopilot = false;
@@ -498,6 +543,20 @@ describe("work routes", () => {
       "GET telegram ",
       `POST telegram ${JSON.stringify({ records: [tg] })}`,
     ]);
+  });
+
+  test("a chat push waits longer than the default minute; running out of time answers timeout, other errors stay errors", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const { calls, call } = setup((_path, init) => { signals.push(init.signal); return json({ imported: 1 }); });
+    for (const path of ["imessage", "whatsapp-local", "telegram"]) expect((await call("POST", `/work/${path}`, { records: [] })).status).toBe(200);
+    expect(calls).toEqual(["POST imessage {\"records\":[]}", "POST whatsapp-local {\"records\":[]}", "POST telegram {\"records\":[]}"]);
+    expect(signals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(true);
+    const late = setup(() => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); });
+    const answer = await late.call("POST", "/work/whatsapp-local", { records: [] });
+    expect(answer.status).toBe(504);
+    expect(await answer.json()).toMatchObject({ code: "timeout" });
+    const broken = setup(() => { throw new TypeError("fetch failed"); });
+    await expect(broken.call("POST", "/work/telegram", { records: [] })).rejects.toThrow("fetch failed");
   });
 
   test("an error reads in words: known codes their own text, any other code or a validation list a plain line", async () => {

@@ -141,6 +141,29 @@ test("readWhatsApp sees a message still only in the write-ahead log", async () =
   }
 });
 
+test("readWhatsApp gives a position per app after each part that landed", async () => {
+  const h = home({ business: true });
+  try {
+    seedPersonal(h.personal);
+    chat(h.smb.db, 1, 0, "15550002222@s.whatsapp.net", "Shop supplier");
+    message(h.smb.db, 1, 1, "2026-11-14T09:30:00Z", { text: "invoice sent" });
+    const read = await readWhatsApp({ platform: "darwin", homeDir: h.dir });
+    // Each app's chat-days by their lowest new row, WhatsApp first.
+    assert.deepEqual(read.records.map((r) => r.chat_key), ["Alice", "Warehouse", "Shop supplier"]);
+    assert.deepEqual(read.cursor, { whatsapp: 9, business: 1 });
+    assert.deepEqual(read.cursorAt(0), { whatsapp: 0, business: 0 });
+    assert.deepEqual(read.cursorAt(1), { whatsapp: 5, business: 0 });
+    assert.deepEqual(read.cursorAt(2), { whatsapp: 9, business: 0 });
+    assert.deepEqual(read.cursorAt(3), read.cursor);
+    // Reading on from the first part's position: the group and the Business chat are left.
+    const rest = await readWhatsApp({ platform: "darwin", homeDir: h.dir, cursor: read.cursorAt(1) });
+    assert.deepEqual(rest.records.map((r) => r.chat_key), ["Warehouse", "Shop supplier"]);
+  } finally {
+    h.close();
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+
 test("readWhatsApp reads WhatsApp Business too; a name both apps use stays two chats", async () => {
   const h = home({ business: true });
   try {
