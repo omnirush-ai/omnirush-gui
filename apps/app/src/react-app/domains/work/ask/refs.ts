@@ -39,6 +39,7 @@ export type WorkRef = {
 export const MAX_REFS = 5;
 const TITLE_MAX = 120;
 const NOTE_MAX = 200;
+const PLACEHOLDER_TITLE_MAX = 28;
 
 /** One line, no control characters, at most `max` characters. */
 export function oneLine(value: string | null | undefined, max = TITLE_MAX): string {
@@ -187,7 +188,8 @@ export function defaultQuestion(refs: readonly WorkRef[]): string {
 /** The composer's placeholder while chips are attached. */
 export function refPlaceholder(refs: readonly WorkRef[]): string {
   if (refs.length === 0) return "";
-  if (refs.length === 1) return t("work.ask.placeholder_one", { title: oneLine(refs[0]!.title, 60) });
+  // A short title keeps the hint on one line in the chat beside the viewer.
+  if (refs.length === 1) return t("work.ask.placeholder_one", { title: oneLine(refs[0]!.title, PLACEHOLDER_TITLE_MAX) });
   return t("work.ask.placeholder_many", { count: refs.length });
 }
 

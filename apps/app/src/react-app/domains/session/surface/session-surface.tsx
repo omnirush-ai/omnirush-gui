@@ -3835,6 +3835,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                 onSend={sendStarter}
                 onFill={(text) => void typeComposerText(text)}
                 shortcuts
+                tooltipSide="top"
                 testId="work-ask-starters"
                 className="mb-2 px-1"
               />
