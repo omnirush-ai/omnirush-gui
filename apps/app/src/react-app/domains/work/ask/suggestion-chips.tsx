@@ -60,7 +60,7 @@ function emptyComposerFocused(root: HTMLElement | null): boolean {
 const CHIP_SHELL = "group/chip relative inline-flex h-8 min-w-0 max-w-[280px] shrink-0 items-center rounded-full border border-border bg-background transition-colors has-focus-visible:ring-2 has-focus-visible:ring-foreground/60";
 const CHIP_BUTTON = "flex h-full min-w-0 items-center gap-1.5 rounded-full text-[13px] leading-none text-foreground outline-none";
 const MORE_BUTTON = "inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-border bg-background ps-3 pe-2.5 text-[13px] leading-none text-foreground outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-foreground/60 data-popup-open:bg-muted/60";
-const MENU_POPUP = "z-50 min-w-48 max-w-[min(22rem,calc(100vw-2rem))] origin-(--transform-origin) rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-md outline-none";
+const MENU_POPUP = "z-50 min-w-48 max-w-[min(22rem,calc(100vw-2rem))] origin-(--transform-origin) rounded-xl border border-border bg-popover p-1 text-popover-foreground outline-none";
 const MENU_ITEM = "flex h-8 min-w-0 cursor-default select-none items-center gap-2 rounded-lg px-2.5 text-[13px] text-foreground outline-none data-highlighted:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60 data-disabled:opacity-60";
 
 function ChipFace(props: { chip: SuggestionChip; label: string }) {

@@ -39,7 +39,8 @@ export function refUIParts(refs: readonly WorkRef[], id: string): { type: "data-
 export const FOCUS_RING = "outline-none focus-visible:ring-2 focus-visible:ring-foreground/60";
 const CHIP = "inline-flex h-7 min-w-0 max-w-[220px] shrink-0 items-center gap-1.5 rounded-full border border-border bg-background ps-1 text-[13px] leading-none text-foreground";
 const MORE_CHIP = cn("inline-flex h-7 shrink-0 items-center rounded-full border border-border bg-background px-2.5 text-[13px] font-medium leading-none text-foreground transition-colors hover:bg-muted/60 data-popup-open:bg-muted/60", FOCUS_RING);
-const LIST = "w-80 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-1.5";
+// Flat and crisp: a hairline border, no shadow.
+const LIST = "w-80 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl border border-border p-1.5 shadow-none ring-0";
 const LIST_ROW = "flex h-9 min-w-0 items-center gap-2 rounded-xl px-2 text-[13px] text-foreground";
 
 function chipTitle(ref: WorkRef): string {
@@ -140,7 +141,7 @@ function MoreRefs(props: {
           </button>
         )}
       />
-      <PopoverContent align="end" side="top" sideOffset={6} className={LIST} data-testid={`${props.testId}-more-list`}>
+      <PopoverContent align="end" side="top" sideOffset={6} className={LIST} aria-label={t("work.ask.more_list")} data-testid={`${props.testId}-more-list`}>
         <ul ref={listRef} className="flex max-h-72 flex-col overflow-y-auto" aria-label={t("work.ask.more_list")}>
           {rest.map((ref, index) => {
             const key = refKey(ref);
