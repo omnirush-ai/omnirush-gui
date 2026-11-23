@@ -2,12 +2,10 @@
 import * as React from "react";
 import {
   Blocks,
-  ArrowLeft,
-  ArrowRight,
   Globe,
   Loader2,
+  Maximize2,
   Plus,
-  RotateCw,
   X,
 } from "lucide-react";
 import { useDragControls } from "motion/react";
@@ -15,14 +13,9 @@ import { useDragControls } from "motion/react";
 import type { OmniRushServerClient } from "@/app/lib/omnirush-server";
 import { PanelTab, PanelTabClose, PanelTabItem, PanelTabList } from "@/components/panel-tabs";
 import { Button } from "@/components/ui/button";
-import { toast } from "@/components/ui/sonner";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { t } from "@/i18n";
 
 import { ArtifactIcon } from "../artifacts/artifact-icon";
 import { AppArtifact } from "../../apps/app-artifact";
@@ -40,13 +33,25 @@ import { useSidePanelTabs } from "./use-side-panel-tabs";
 import { handlePanelEscape, PanelEmpty } from "./panel-empty";
 import { BrowserLibraryBar } from "./browser-library-bar";
 import {
-  computeBounds,
+  agentWorkingIn,
+  BrowserAddressField,
+  BrowserAgentStrip,
+  BrowserApprovalOverlay,
+  BrowserNavButtons,
+  BrowserSuspendedNotice,
+  reportBrowserError,
+  useNativeBrowserView,
+} from "./browser-surface";
+import { NO_SESSION_SIDE_PANEL_KEY } from "./side-panel-session";
+import {
   getElectronBrowser,
   getNativeMenuPoint,
-  hasNativeBrowserOccluder,
-  sameBounds,
 } from "./utils";
 import { LoginSyncCard } from "../../browser-logins/login-sync-card";
+import { useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
+import { BrowserHome } from "../../work/browser/browser-home";
+import { useCompanyApps } from "../../work/browser/use-work-browser";
+import { isBrowserHomeTab, WORK_BROWSER_EXPAND_EVENT } from "../../work/browser/work-browser";
 import { RecordPanel, RecordTabIcon } from "../../work/viewer/record-panel-entry";
 
 type SidePanelProps = {
@@ -177,269 +182,41 @@ function BrowserPanelContent({
   tab,
   onClose,
 }: BrowserPanelContentProps) {
-  const isAvailable = Boolean(getElectronBrowser());
   const suspended = tab.status === "suspended";
-  const busy = tab.status === "suspending" || tab.status === "restoring";
-  const [urlInput, setUrlInput] = React.useState(tab.url);
-  const urlFocusedRef = React.useRef(false);
   const contentRef = React.useRef<HTMLDivElement>(null);
   const urlInputRef = React.useRef<HTMLInputElement>(null);
-  const shownRef = React.useRef(false);
-  const boundsFrameRef = React.useRef<number | null>(null);
-  const lastBoundsRef = React.useRef<{ x: number; y: number; width: number; height: number } | null>(null);
-
-  React.useEffect(() => {
-    if (!urlFocusedRef.current) {
-      setUrlInput(tab.url);
-    }
-  }, [tab.id, tab.url]);
-
-  const navigate = React.useCallback(() => {
-    void getElectronBrowser()?.navigate?.(urlInput).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : String(error));
-    });
-  }, [urlInput]);
-
-  const back = React.useCallback(() => {
-    void getElectronBrowser()?.back?.().catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : String(error));
-    });
-  }, []);
-
-  const forward = React.useCallback(() => {
-    void getElectronBrowser()?.forward?.().catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : String(error));
-    });
-  }, []);
-
-  const reload = React.useCallback(() => {
-    const browser = getElectronBrowser();
-    void (suspended ? browser?.selectTab?.(tab.id) : browser?.reload?.())?.catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : String(error));
-    });
-  }, [suspended, tab.id]);
+  const isAvailable = useNativeBrowserView(contentRef, sessionId);
+  // A Work account's own tabs (Work pages, no conversation): a new tab shows Browser home, Expand moves the tab to
+  // the Work browser, and the agent strip shows only while an agent works in the tab.
+  const work = useBrowserLibraryAvailable();
+  const userTabs = work && sessionId === NO_SESSION_SIDE_PANEL_KEY;
+  const home = work && isBrowserHomeTab(tab);
 
   const suspend = React.useCallback(() => {
-    void getElectronBrowser()?.suspendTab?.(tab.id).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : String(error));
-    });
+    void getElectronBrowser()?.suspendTab?.(tab.id).catch(reportBrowserError);
   }, [tab.id]);
-
-  const handleUrlKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      navigate();
-      urlInputRef.current?.blur();
-    }
-  }, [navigate]);
-
-  React.useLayoutEffect(() => {
-    const browser = getElectronBrowser();
-    const content = contentRef.current;
-    if (!browser || !content || !isAvailable) {
-      return;
-    }
-
-    const bounds = computeBounds(content);
-    if (bounds.width < 1 || bounds.height < 1) {
-      return;
-    }
-
-    browser.setBounds?.(bounds);
-    lastBoundsRef.current = bounds;
-  });
-
-  React.useLayoutEffect(() => {
-    const browser = getElectronBrowser();
-    const content = contentRef.current;
-
-    if (!browser || !content || !isAvailable) {
-      browser?.hide?.();
-      shownRef.current = false;
-      lastBoundsRef.current = null;
-
-      if (boundsFrameRef.current != null) {
-        window.cancelAnimationFrame(boundsFrameRef.current);
-        boundsFrameRef.current = null;
-      }
-
-      return;
-    }
-
-    let disposed = false;
-
-    const resetNativeView = async () => {
-      await browser.hide?.();
-
-      if (disposed) {
-        return;
-      }
-
-      shownRef.current = false;
-      lastBoundsRef.current = null;
-      boundsFrameRef.current = window.requestAnimationFrame(watchBounds);
-    };
-
-    const syncBounds = () => {
-      const bounds = computeBounds(content);
-
-      if (bounds.width < 1 || bounds.height < 1 || hasNativeBrowserOccluder()) {
-        if (shownRef.current) {
-          browser.hide?.();
-          shownRef.current = false;
-          lastBoundsRef.current = null;
-        }
-
-        return;
-      }
-
-      if (!shownRef.current) {
-        // Naming the conversation lets the native browser put that
-        // conversation's tabs on screen and keep every other conversation's
-        // tabs silently in the background.
-        void browser.show?.(bounds, sessionId).catch((error: unknown) => {
-          toast.error(error instanceof Error ? error.message : String(error));
-        });
-        shownRef.current = true;
-        lastBoundsRef.current = bounds;
-        return;
-      }
-
-      if (!sameBounds(lastBoundsRef.current, bounds)) {
-        browser.setBounds?.(bounds);
-        lastBoundsRef.current = bounds;
-      }
-    };
-
-    const watchBounds = () => {
-      syncBounds();
-      boundsFrameRef.current = window.requestAnimationFrame(watchBounds);
-    };
-
-    void resetNativeView();
-
-    const observer = new ResizeObserver(syncBounds);
-
-    observer.observe(content);
-    window.addEventListener("resize", syncBounds);
-    window.addEventListener("scroll", syncBounds, true);
-
-    return () => {
-      disposed = true;
-      observer.disconnect();
-      window.removeEventListener("resize", syncBounds);
-      window.removeEventListener("scroll", syncBounds, true);
-
-      if (boundsFrameRef.current != null) {
-        window.cancelAnimationFrame(boundsFrameRef.current);
-        boundsFrameRef.current = null;
-      }
-
-      browser.hide?.();
-      shownRef.current = false;
-      lastBoundsRef.current = null;
-    };
-  }, [isAvailable, sessionId]);
 
   return (
     <>
-      {isAvailable ? (
-        <div className="flex min-h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
-          <span className="shrink-0 font-medium">Built-in browser</span>
-          <span role="status" className="min-w-0 flex-1 truncate text-muted-foreground">
-            {tab.browserTask?.status === "paused" ? "You have control · resume when finished" : tab.browserTask?.status === "running" ? browserOperationLabels[tab.browserTask.operation ?? ""] ?? "Working on this page" : tab.browserTask?.status === "needs_attention" ? browserOperationLabels[tab.browserTask.operation ?? ""] ?? "Review this page" : "This conversation's tab"}
-          </span>
-          <Button variant="outline" size="sm" className="h-6 px-2 text-xs"
-            onClick={() => { void window.__OMNIRUSH_ELECTRON__?.browser?.taskControl?.(tab.id, tab.browserTask?.status === "paused" ? "resume" : "pause"); }}>
-            {tab.browserTask?.status === "paused" ? "Resume browser" : "Take over"}
-          </Button>
-        </div>
-      ) : null}
+      {isAvailable && (!userTabs || agentWorkingIn(tab)) ? <BrowserAgentStrip tab={tab} /> : null}
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-background px-2 mac:bg-background/80 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
         {isAvailable ? (
           <>
-            <Tooltip>
-              <TooltipTrigger
-                render={(
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={back}
-                    disabled={suspended || busy || !tab.canGoBack}
-                    aria-label="Go back"
-                  >
-                    <ArrowLeft />
-                  </Button>
-                )}
-              />
-              <TooltipContent>Back</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={(
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={forward}
-                    disabled={suspended || busy || !tab.canGoForward}
-                    aria-label="Go forward"
-                  >
-                    <ArrowRight />
-                  </Button>
-                )}
-              />
-              <TooltipContent>Forward</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={(
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={reload}
-                    disabled={busy}
-                    aria-label="Reload page"
-                  >
-                    {tab.status === "loading" || busy ? <Loader2 className="animate-spin" /> : <RotateCw />}
-                  </Button>
-                )}
-              />
-              <TooltipContent>Reload</TooltipContent>
-            </Tooltip>
-            <InputGroup className="mx-1 h-7 flex-1 rounded-md">
-              <InputGroupInput
-                ref={urlInputRef}
-                type="text"
-                className="h-7"
-                value={urlInput}
-                disabled={suspended || busy}
-                onChange={(event) => setUrlInput(event.target.value)}
-                onKeyDown={handleUrlKeyDown}
-                onFocus={() => {
-                  urlFocusedRef.current = true;
-                  urlInputRef.current?.select();
-                }}
-                onBlur={() => {
-                  urlFocusedRef.current = false;
-                }}
-                placeholder="Enter URL..."
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <InputGroupAddon align="inline-start" className="ps-2">
-                <Globe />
-              </InputGroupAddon>
-            </InputGroup>
+            <BrowserNavButtons tab={tab} />
+            <BrowserAddressField tab={tab} inputRef={urlInputRef} blankAsEmpty={work} placeholder={userTabs ? t("work_browser.address") : undefined} />
             <BrowserLibraryBar sessionId={sessionId} tab={tab} inputRef={urlInputRef} />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={suspend}
-              disabled={tab.status !== "ready" || tab.automationProtected}
-              title={tab.automationProtected ? "Protected until browser work is released" : "Suspend this tab to free memory"}
-            >
-              Suspend
-            </Button>
+            {/* Beside Work pages the panel is narrow and the tab moves to the Work browser with Expand, where ".." has Suspend. */}
+            {userTabs ? null : (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={suspend}
+                disabled={tab.status !== "ready" || tab.automationProtected}
+                title={tab.automationProtected ? "Protected until browser work is released" : "Suspend this tab to free memory"}
+              >
+                Suspend
+              </Button>
+            )}
             {tab.siteToolCount > 0 ? (
               <Popover>
                 <PopoverTrigger
@@ -493,6 +270,24 @@ function BrowserPanelContent({
                 </PopoverContent>
               </Popover>
             ) : null}
+            {userTabs ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={(
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => window.dispatchEvent(new Event(WORK_BROWSER_EXPAND_EVENT))}
+                      aria-label={t("work_browser.expand")}
+                      data-testid="browser-expand"
+                    >
+                      <Maximize2 />
+                    </Button>
+                  )}
+                />
+                <TooltipContent>{t("work_browser.expand")}</TooltipContent>
+              </Tooltip>
+            ) : null}
           </>
         ) : (
           <p className="px-2 text-sm text-muted-foreground">
@@ -512,39 +307,29 @@ function BrowserPanelContent({
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {isAvailable ? (
           <div ref={contentRef} className="h-full overflow-hidden">
-            {suspended ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-                <p className="text-sm font-medium">Tab suspended</p>
-                <p className="text-sm text-muted-foreground">Reload opens the saved URL, not the previous page state.</p>
-                <Button variant="outline" size="sm" onClick={reload}>Reload</Button>
-              </div>
-            ) : null}
+            {suspended ? <BrowserSuspendedNotice tab={tab} /> : null}
           </div>
         ) : null}
-        {tab.browserApproval ? (
-          <div className="absolute inset-0 z-10 flex flex-col justify-center gap-3 overflow-y-auto bg-background p-5 text-sm" role="region" aria-label="Browser permission request">
-            <h3 className="font-semibold">{tab.browserApproval.title}</h3>
-            <p className="font-medium">{tab.browserApproval.message}</p>
-            <p className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">{tab.browserApproval.detail}</p>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={() => { if (tab.browserApproval) void window.__OMNIRUSH_ELECTRON__?.browser?.approve?.(tab.id, tab.browserApproval.id, true); }}>{tab.browserApproval.approveLabel ?? "Allow once"}</Button>
-              <Button size="sm" variant="outline" onClick={() => { if (tab.browserApproval) void window.__OMNIRUSH_ELECTRON__?.browser?.approve?.(tab.id, tab.browserApproval.id, false); }}>Deny</Button>
-            </div>
+        {isAvailable && home ? (
+          <div className="absolute inset-0">
+            <PanelBrowserHome sessionId={sessionId} />
           </div>
         ) : null}
+        <BrowserApprovalOverlay tab={tab} />
       </div>
     </>
   );
 }
 
-const browserOperationLabels: Record<string, string> = {
-  observe: "Reading this page", site_tools: "Finding website tools", site_tool: "Using a website tool",
-  navigate: "Opening a page", click: "Clicking a control", fill: "Entering text", key: "Using the keyboard", scroll: "Scrolling",
-  "Website access": "Review website access", website_blocked: "This website is blocked", browser_disabled: "Browser control is disabled",
-  stale_observation: "A fresh page view is needed", stale_tool: "Website tools have changed", user_denied: "The action was declined",
-  needs_attention: "Review this page", sign_in_required: "Sign in directly in this browser", timeout: "Check the page before continuing",
-  result_withheld: "Website result was kept private",
-};
+/** Browser home in a narrow panel: tiles open in this tab, Cmd or Ctrl click in a new one. */
+function PanelBrowserHome({ sessionId }: { sessionId: string }) {
+  const company = useCompanyApps();
+  const open = React.useCallback((url: string, options?: { newTab?: boolean }) => {
+    const browser = getElectronBrowser();
+    void (options?.newTab ? browser?.createTab?.(url, sessionId) : browser?.navigate?.(url))?.catch(reportBrowserError);
+  }, [sessionId]);
+  return <BrowserHome compact companyName={company.companyName} apps={company.apps} onOpen={open} />;
+}
 
 export function SidePanel({
   sessionId,

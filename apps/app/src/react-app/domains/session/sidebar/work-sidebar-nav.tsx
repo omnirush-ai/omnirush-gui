@@ -3,7 +3,7 @@
 // Organization, Insights) and the person's connectors with a logo, the name and where each stands ("Synced",
 // "Syncing 42%", "Reconnect": always words beside the dot). A connector opens Home filtered to its items; Manage opens
 // Work > Connectors. Sections fold, remembered, so the chat list keeps its height on a small window.
-import { Activity, Building2, ChevronRight, Handshake, Home, Library, Mic, MoreHorizontal, Plug, Plus, Search, Settings2, Zap, type LucideIcon } from "lucide-react";
+import { Activity, Building2, ChevronRight, Globe, Handshake, Home, Library, Mic, MoreHorizontal, Plug, Plus, Search, Settings2, Zap, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,8 @@ export type WorkNavigation = {
   onOpenOrganization: () => void; organizationActive: boolean;
   onOpenConnectors: (id?: string) => void; connectorsActive: boolean;
   onOpenKnowledge: () => void; knowledgeActive: boolean;
+  /** The Work browser (desktop app only): one row, no count. */
+  onOpenBrowser?: () => void; browserActive?: boolean;
   onOpenActivity: () => void; activityActive: boolean;
   onOpenInsights?: () => void; insightsActive?: boolean;
   /** The person's connectors (GET /work/connectors) for the Connectors section; undefined while they load. */
@@ -206,6 +208,7 @@ export function WorkSidebarNav(props: { nav: WorkNavigation }) {
         {nav.onOpenDeals ? <NavRow icon={Handshake} label={t("work.nav.deals")} active={nav.dealsActive} onClick={nav.onOpenDeals} testId="sidebar-work-deals" /> : null}
         {nav.onOpenMeetings ? <NavRow icon={Mic} label={t("work.nav.meetings")} active={nav.meetingsActive} onClick={nav.onOpenMeetings} testId="sidebar-work-meetings" /> : null}
         <NavRow icon={Library} label={t("work.nav.knowledge")} active={nav.knowledgeActive} onClick={nav.onOpenKnowledge} testId="sidebar-work-knowledge" />
+        {nav.onOpenBrowser ? <NavRow icon={Globe} label={t("work.nav.browser")} active={nav.browserActive} onClick={nav.onOpenBrowser} testId="sidebar-work-browser" /> : null}
         <NavRow icon={Zap} label={t("work.nav.automation")} active={nav.activityActive} onClick={nav.onOpenActivity} testId="sidebar-work-automation" />
         <NavRow icon={Building2} label={t("work.nav.organization")} active={nav.organizationActive} onClick={nav.onOpenOrganization} testId="sidebar-work-organization" />
         {nav.onOpenInsights ? <NavRow icon={Activity} label={t("work.nav.insights")} active={nav.insightsActive} onClick={nav.onOpenInsights} testId="sidebar-work-insights" /> : null}

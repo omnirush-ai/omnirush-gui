@@ -1500,3 +1500,110 @@ test("minimizing the window parks the displayed tab and restoring brings it back
   assert.deepEqual(view.getBounds(), PANEL_BOUNDS);
   assert.equal(invoke("omnirush:browser:state").backgroundWindowCount, 0);
 });
+
+// The Work browser: the person's own tabs (no conversation owns them).
+const USER = "__omnirush_no_session__";
+
+test("the person's tabs come back after a restart unloaded, load when selected, and never count toward the live limit", async () => {
+  const before = createPanel();
+  before.invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  for (const url of ["https://tms.example.com/s/4471", "https://linear.app/acme", "https://mail.example.com/"]) before.invoke("omnirush:browser:createTab", url, USER);
+  await flush();
+  // What the app keeps on this computer: each tab's address and title.
+  const saved = before.invoke("omnirush:browser:state").tabs.filter((tab) => tab.ownerSessionId === USER).map((tab) => ({ url: tab.url, title: tab.label }));
+  assert.equal(saved.length, 3);
+  before.invoke("omnirush:browser:destroy");
+
+  // The app starts again.
+  const { invoke, emit, views } = createPanel();
+  assert.deepEqual(emit("omnirush:browser:restoreSaved", { sender: {}, senderFrame: {} }, saved, USER, 0), [], "only the app's own window may restore");
+  const ids = invoke("omnirush:browser:restoreSaved", [...saved, { url: "file:///etc/passwd", title: "x" }, { url: "javascript:alert(1)", title: "y" }, null], USER, 1);
+  assert.equal(ids.length, 3);
+  let state = invoke("omnirush:browser:state");
+  assert.deepEqual(state.tabs.map((tab) => [tab.url, tab.status, tab.ownerSessionId]), saved.map((entry) => [entry.url, "suspended", USER]));
+  assert.equal(state.activeTabIdByOwner[USER], ids[1], "the tab that was active is active again");
+  assert.equal(views().length, 0, "nothing loads until a tab is selected");
+  assert.deepEqual(invoke("omnirush:browser:restoreSaved", saved, USER, 0), [], "once per launch");
+  assert.deepEqual(invoke("omnirush:browser:restoreSaved", saved, "ses_other", 0).length, 3, "another owner is separate");
+  invoke("omnirush:browser:closeSessionTabs", "ses_other");
+
+  // Twelve live tabs elsewhere: the restored entries are still listed, and the limit refuses a new live tab.
+  for (let i = 0; i < 12; i++) invoke("omnirush:browser:createTab", "about:blank", `ses_${i}`);
+  assert.throws(() => invoke("omnirush:browser:createTab", "about:blank", USER), /12 browser tabs/);
+  assert.equal(invoke("omnirush:browser:state").tabs.filter((tab) => tab.ownerSessionId === USER).length, 3);
+  invoke("omnirush:browser:closeSessionTabs", "ses_0");
+
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  await invoke("omnirush:browser:selectTab", ids[0]);
+  state = invoke("omnirush:browser:state");
+  const loaded = state.tabs.find((tab) => tab.id === ids[0]);
+  assert.equal(loaded.status === "suspended", false);
+  assert.equal(loaded.url, saved[0].url);
+  assert.equal(views().at(-1).webContents.loads.at(-1), saved[0].url);
+  assert.equal(state.tabs.filter((tab) => tab.ownerSessionId === USER && tab.status === "suspended").length, 2, "the others wait until selected");
+});
+
+test("browser_tabs in a Work chat never lists the person's tabs, and no agent request may name their key", async () => {
+  const { invoke, panel } = createPanel();
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  invoke("omnirush:browser:createTab", "https://tms.example.com/s/4471", USER);
+  invoke("omnirush:browser:restoreSaved", [{ url: "https://linear.app/acme", title: "Ops" }], USER, 0);
+  invoke("omnirush:browser:createTab", "https://agent.example/", "ses_work");
+  await flush();
+  const listed = await panel.browserTask({ sessionId: "ses_work", operation: "tabs" });
+  assert.equal(listed.ok, true);
+  assert.deepEqual(listed.tabs.map((tab) => tab.url), ["https://agent.example/"]);
+  for (const call of [
+    panel.browserTask({ sessionId: USER, operation: "tabs" }),
+    panel.browserTask({ sessionId: USER, operation: "observe", args: {} }),
+    panel.listWebMcpTools({ sessionId: USER }),
+    panel.executeWebMcpTool({ sessionId: USER, toolId: "x" }),
+  ]) {
+    assert.deepEqual(await call, { ok: false, code: "missing_session", error: "Browser control requires a requesting conversation." });
+  }
+});
+
+test("Suspend oldest takes the person's least recently used idle tab without a second dialog, never the one on screen", async () => {
+  const { invoke, emit } = createPanel();
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const a = invoke("omnirush:browser:createTab", "https://a.example/", USER).tabId;
+  const b = invoke("omnirush:browser:createTab", "https://b.example/", USER).tabId;
+  const c = invoke("omnirush:browser:createTab", "https://c.example/", USER).tabId;
+  invoke("omnirush:browser:createTab", "https://chat.example/", "ses_chat");
+  await flush();
+  await invoke("omnirush:browser:selectTab", a);
+  await invoke("omnirush:browser:selectTab", c);
+  effects.length = 0;
+  await assert.rejects(async () => emit("omnirush:browser:suspendOldest", { sender: {}, senderFrame: {} }, USER), /toolbar/);
+  assert.equal(await invoke("omnirush:browser:suspendOldest", USER), b);
+  assert.deepEqual(effects, [], "the inline choice was the confirmation");
+  assert.equal(invoke("omnirush:browser:state").tabs.find((tab) => tab.id === b).status, "suspended");
+  assert.equal(await invoke("omnirush:browser:suspendOldest", USER), a);
+  assert.equal(await invoke("omnirush:browser:suspendOldest", USER), null, "the tab on screen stays");
+  assert.equal(invoke("omnirush:browser:state").tabs.find((tab) => tab.ownerSessionId === "ses_chat").status, "ready", "a chat's tab is never touched");
+  // The plain Suspend still asks first.
+  await invoke("omnirush:browser:suspendTab", c);
+  assert.deepEqual(effects, [{ type: "dialog" }]);
+});
+
+test("Ask reads only the title, address and selection of the person's tab on screen", async () => {
+  const { invoke, emit, onScreen } = createPanel();
+  invoke("omnirush:browser:show", PANEL_BOUNDS, USER);
+  const { tabId } = invoke("omnirush:browser:createTab", "https://tms.example.com/s/4471", USER);
+  await flush();
+  const contents = onScreen().webContents;
+  const worlds = [];
+  contents.getTitle = () => "Shipment 4471";
+  contents.executeJavaScriptInIsolatedWorld = async (world, scripts) => { worlds.push([world, scripts.length]); return "  ETA moved to Friday  "; };
+  assert.deepEqual(await invoke("omnirush:browser:pageContext", tabId), { title: "Shipment 4471", url: "https://tms.example.com/s/4471", selection: "ETA moved to Friday" });
+  assert.equal(worlds.length, 1);
+  assert.notEqual(worlds[0][0], 0, "never the page's own world");
+  contents.executeJavaScriptInIsolatedWorld = async () => { throw new Error("no frame"); };
+  assert.equal((await invoke("omnirush:browser:pageContext", tabId)).selection, "");
+  await assert.rejects(async () => emit("omnirush:browser:pageContext", { sender: {}, senderFrame: {} }, tabId), /toolbar/);
+  invoke("omnirush:browser:show", PANEL_BOUNDS, "ses_chat");
+  const chat = invoke("omnirush:browser:createTab", "https://chat.example/", "ses_chat").tabId;
+  await flush();
+  await assert.rejects(invoke("omnirush:browser:pageContext", chat), /Select this tab/);
+  await assert.rejects(invoke("omnirush:browser:pageContext", tabId), /Select this tab/, "only the tab on screen");
+});

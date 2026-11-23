@@ -118,7 +118,7 @@ import {
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
 import { MeetingsPage } from "@/react-app/domains/meetings/meetings-page";
-import { hasDeals, hasRealSource, isWorkModeShortcut, needsOnboarding, isWorkSearchShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, workAutopilotActive, workToolPermission, WORK_ACTIVITY_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_MEETINGS_ROUTE, MEETINGS_IN_APP, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_PRESET, WORK_SEARCH_ROUTE, workConnectorsKey, workDealsKey, workMembersKey, workStateKey, WORK_SEARCH_FOCUS_EVENT, type AppMode } from "@/react-app/domains/work/work-mode";
+import { hasDeals, hasRealSource, isWorkBrowserShortcut, isWorkModeShortcut, needsOnboarding, isWorkSearchShortcut, shownInMode, useWorkModeStore, useWorkOnboarding, useWorkSetupStore, useWorkState, workAutopilotActive, workToolPermission, WORK_ACTIVITY_ROUTE, WORK_BROWSER_ROUTE, WORK_CONNECTORS_ROUTE, WORK_DEALS_ROUTE, WORK_HOME_ROUTE, WORK_INSIGHTS_ROUTE, WORK_MEETINGS_ROUTE, MEETINGS_IN_APP, WORK_KNOWLEDGE_ROUTE, WORK_ONBOARDING_ROUTE, WORK_ORG_ROUTE, WORK_PRESET, WORK_SEARCH_ROUTE, workConnectorsKey, workDealsKey, workMembersKey, workStateKey, WORK_SEARCH_FOCUS_EVENT, type AppMode } from "@/react-app/domains/work/work-mode";
 import { WorkSearchPage } from "@/react-app/domains/work/work-search";
 import { WorkDealsPage } from "@/react-app/domains/work/work-deals";
 import { WorkOrganizationPage } from "@/react-app/domains/work/work-org";
@@ -132,6 +132,11 @@ import { enterpriseRedirect, useEnterpriseMode, useEnterpriseStore } from "@/rea
 import { EnterpriseWaiting } from "@/react-app/domains/work/enterprise-ui";
 import { ASK_WORK_RECORD_EVENT } from "@/react-app/domains/work/viewer/records";
 import { WorkPageBoundary } from "@/react-app/domains/work/work-page-boundary";
+import { WorkBrowserPage } from "@/react-app/domains/work/browser/work-browser-page";
+import { useWorkBrowserRestore } from "@/react-app/domains/work/browser/use-work-browser";
+import { WORK_BROWSER_EXPAND_EVENT } from "@/react-app/domains/work/browser/work-browser";
+import { useBrowserLibraryAvailable } from "@/react-app/domains/browser-logins/use-browser-library";
+import { NO_SESSION_SIDE_PANEL_KEY } from "@/react-app/domains/session/panel/side-panel-session";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -571,6 +576,10 @@ export function SessionRoute() {
   const workWorkspace = workspaces.find((workspace) => workspace.preset === WORK_PRESET && workspace.workspaceType !== "remote") ?? null;
   const workChatActive = workEnabled && Boolean(selectedWorkspace && selectedWorkspace.preset === WORK_PRESET) && !workRouteRequested;
   const workRouteActive = workEnabled && workRouteRequested;
+  // The Work browser: a Work account in the desktop app. Its tabs come back after a restart (kept on this computer).
+  const workBrowserAvailable = useBrowserLibraryAvailable();
+  const workBrowserActive = workRouteActive && workBrowserAvailable && location.pathname.startsWith(WORK_BROWSER_ROUTE);
+  useWorkBrowserRestore(workBrowserAvailable);
   // The tryout: Work is off but this account may turn it on ("Try Work"), then onboarding runs.
   const workAvailable = !workEnabled && workState.data?.available === true;
   const workOnboarding = useWorkOnboarding(client ?? null, workEnabled);
@@ -692,6 +701,12 @@ export function SessionRoute() {
         else navigate(WORK_SEARCH_ROUTE);
         return;
       }
+      // Cmd/Ctrl+Shift+B inside Work: the Work browser.
+      if (appMode === "work" && workBrowserAvailable && isWorkBrowserShortcut(event, mac)) {
+        event.preventDefault();
+        navigate(WORK_BROWSER_ROUTE);
+        return;
+      }
       // A company account without Code has no Code to switch to: the shortcut does nothing.
       if (!isWorkModeShortcut(event, mac) || codeHidden) return;
       event.preventDefault();
@@ -699,7 +714,16 @@ export function SessionRoute() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [appMode, codeHidden, location.pathname, navigate, switchAppMode, workEnabled]);
+  }, [appMode, codeHidden, location.pathname, navigate, switchAppMode, workBrowserAvailable, workEnabled]);
+  // Expand in the side panel of a Work page: the same tab, full size in the Work browser.
+  useEffect(() => {
+    const expand = () => {
+      useUiStateStore.getState().setSidePanelState(NO_SESSION_SIDE_PANEL_KEY, null);
+      navigate(WORK_BROWSER_ROUTE);
+    };
+    window.addEventListener(WORK_BROWSER_EXPAND_EVENT, expand);
+    return () => window.removeEventListener(WORK_BROWSER_EXPAND_EVENT, expand);
+  }, [navigate]);
   // "Send feedback" from a menu that does not know the open session (Help menu, sidebar).
   useEffect(() => {
     setFeedbackCurrentSession(selectedSessionId ?? null);
@@ -4006,8 +4030,9 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? t("work.nav.connectors") : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? t("work.nav.search") : location.pathname.startsWith(WORK_DEALS_ROUTE) ? t("work.nav.deals") : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? t("work.nav.meetings") : location.pathname.startsWith(WORK_ORG_ROUTE) ? t("work.nav.organization") : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? t("work.nav.insights") : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? t("work.nav.automation") : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? t("work.nav.knowledge") : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? t("work.nav.welcome") : t("work.nav.work")) : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? t("work.nav.connectors") : location.pathname.startsWith(WORK_SEARCH_ROUTE) ? t("work.nav.search") : location.pathname.startsWith(WORK_DEALS_ROUTE) ? t("work.nav.deals") : location.pathname.startsWith(WORK_MEETINGS_ROUTE) && meetingsShown ? t("work.nav.meetings") : location.pathname.startsWith(WORK_ORG_ROUTE) ? t("work.nav.organization") : location.pathname.startsWith(WORK_INSIGHTS_ROUTE) ? t("work.nav.insights") : location.pathname.startsWith(WORK_ACTIVITY_ROUTE) ? t("work.nav.automation") : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? t("work.nav.knowledge") : workBrowserActive ? t("work.nav.browser") : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? t("work.nav.welcome") : t("work.nav.work")) : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
+      workBrowserPage={workBrowserActive}
       primarySlot={workRouteActive ? (
         // One Work page that fails to draw shows "couldn't load" with Reload, never a blank window.
         <WorkPageBoundary key={location.pathname.split("/").slice(0, 3).join("/")}>{location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
@@ -4038,6 +4063,8 @@ export function SessionRoute() {
           <WorkAutomationPage client={client ?? null} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
           <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
+        ) : workBrowserActive ? (
+          <WorkBrowserPage onAsk={(prompt) => startWorkChat(prompt)} openExternal={(url) => platform.openLink(url)} />
         ) : location.pathname.startsWith(WORK_ONBOARDING_ROUTE) ? (
           <WorkOnboarding
             client={client ?? null}
@@ -4142,6 +4169,7 @@ export function SessionRoute() {
           onOpenConnectors: (id?: string) => navigate(`${WORK_CONNECTORS_ROUTE}${id ? `#${encodeURIComponent(id)}` : ""}`, workChatActive ? { state: { from: `${location.pathname}${location.search}` } } : undefined),
           connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE),
           onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE),
+          ...(workBrowserAvailable ? { onOpenBrowser: () => navigate(WORK_BROWSER_ROUTE), browserActive: workBrowserActive } : {}),
           onOpenActivity: () => navigate(WORK_ACTIVITY_ROUTE), activityActive: location.pathname.startsWith(WORK_ACTIVITY_ROUTE),
           ...(workIsOwner ? { onOpenInsights: () => navigate(WORK_INSIGHTS_ROUTE), insightsActive: location.pathname.startsWith(WORK_INSIGHTS_ROUTE) } : {}),
           // A connector opens Home with only its items.

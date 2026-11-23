@@ -9,6 +9,7 @@ import {
   usePanelTabStore,
 } from "./panel-tab-store";
 import { getElectronBrowser } from "./utils";
+import { useNewBrowserTabUrl } from "../../work/browser/use-work-browser";
 
 export function useSidePanelTabs(sessionId: string) {
   const syncBrowserTabs = usePanelTabStore((state) => state.syncBrowserTabs);
@@ -41,6 +42,8 @@ export function useSidePanelTabs(sessionId: string) {
   }, [applyBrowserState]);
 
   const createTab = useCreateTab();
+  // A Work account's new tab opens Browser home; everyone else keeps the browser's default page.
+  const newTabUrl = useNewBrowserTabUrl();
 
   const closeTab = useCloseTab();
 
@@ -49,7 +52,7 @@ export function useSidePanelTabs(sessionId: string) {
   const reorderTabs = useReorderTabs();
 
   return {
-    createTab: (url?: string) => createTab(url, sessionId),
+    createTab: (url?: string) => createTab(url ?? newTabUrl, sessionId),
     closeTab: (tab: PanelTab) => closeTab(sessionId, tab),
     selectTab: (tabId: string) => selectTab(sessionId, tabId),
     reorderTabs: (tabIds: string[]) => reorderTabs(sessionId, tabIds),

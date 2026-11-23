@@ -38,6 +38,9 @@ import { isPermissionError, parseBinaryPlist, safariBookmarksTree } from "@omnir
 /** Pages the user starred in the built-in browser. */
 export const USER_SOURCE = "omnirush";
 export const SUGGESTION_LIMIT = 8;
+/** The Work browser's Recent list: the last 30 days, at most 50 pages. */
+export const RECENT_DAYS = 30;
+export const RECENT_LIMIT = 50;
 const TREE_LIMIT = 20_000;
 const FULL_DISK_ACCESS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
@@ -574,6 +577,25 @@ export function createBrowserLibrary({
       .map(({ url, title, kind }) => ({ url, title, kind }));
   }
 
+  /**
+   * Pages for the Work browser's Recent list: the newest visits of the last 30
+   * days, one row per address, at most 50, optionally filtered by what was
+   * typed. `total` counts the same window (capped at 50) for "Show all".
+   */
+  function recent({ limit = RECENT_LIMIT, query = "" } = {}) {
+    const size = Math.max(1, Math.min(RECENT_LIMIT, Math.trunc(Number(limit) || RECENT_LIMIT)));
+    const text = String(query ?? "").trim().toLowerCase().slice(0, 200);
+    const since = Math.trunc(now() / 1000) - RECENT_DAYS * 86_400;
+    const filter = text ? " AND (lower(url) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\')" : "";
+    const args = text ? [since, `%${escapeLike(text)}%`, `%${escapeLike(text)}%`] : [since];
+    const store = database();
+    const pages = store.prepare(`SELECT url, MAX(title) AS title, MAX(last_visit_at) AS last FROM history WHERE last_visit_at >= ?${filter} GROUP BY url ORDER BY last DESC LIMIT ?`)
+      .all(...args, size)
+      .map((row) => ({ url: String(row.url), title: String(row.title ?? ""), lastVisitAt: Number(row.last) * 1000 }));
+    const total = Number(store.prepare(`SELECT COUNT(*) AS n FROM (SELECT url FROM history WHERE last_visit_at >= ?${filter} GROUP BY url LIMIT ${RECENT_LIMIT})`).get(...args)?.n ?? 0);
+    return { pages, total };
+  }
+
   function isBookmarked(url) {
     const clean = importableUrl(url);
     if (!clean) return false;
@@ -641,6 +663,7 @@ export function createBrowserLibrary({
     ipcMain.handle("omnirush:browser-library:bookmarks", () => bookmarkTree());
     ipcMain.handle("omnirush:browser-library:top", (_event, limit) => topBookmarks(limit));
     ipcMain.handle("omnirush:browser-library:suggest", (_event, query) => suggest(query));
+    ipcMain.handle("omnirush:browser-library:recent", (_event, value) => recent(request(value)));
     ipcMain.handle("omnirush:browser-library:isBookmarked", (_event, url) => isBookmarked(url));
     ipcMain.handle("omnirush:browser-library:toggleBookmark", (_event, value) => toggleBookmark(request(value)));
     ipcMain.handle("omnirush:browser-library:summary", () => summary());
@@ -660,6 +683,7 @@ export function createBrowserLibrary({
     bookmarkTree,
     topBookmarks,
     suggest,
+    recent,
     isBookmarked,
     toggleBookmark,
     summary,

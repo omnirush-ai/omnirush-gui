@@ -19,6 +19,8 @@ export const WORK_INSIGHTS_ROUTE = "/work/insights";
 export const WORK_ACTIVITY_ROUTE = "/work/activity";
 export const WORK_SEARCH_ROUTE = "/work/search";
 export const WORK_DEALS_ROUTE = "/work/deals";
+/** The Work browser: the person's own tabs, full size (desktop app). */
+export const WORK_BROWSER_ROUTE = "/work/browser";
 /** Shown only while the server transcribes meeting audio (`meetings` in the Work state) and MEETINGS_IN_APP is on. */
 export const WORK_MEETINGS_ROUTE = "/work/meetings";
 /** Meeting notes stay hidden in this build: not yet checked with real audio on macOS or Windows. */
@@ -323,6 +325,11 @@ export function needsOnboarding(onboarding: OmniRushWorkOnboarding | null | unde
   if (finished[org.id]) return false;
   const next = onboarding.next;
   return next === "tools" || next === "connect" || next === "invite";
+}
+
+/** Cmd/Ctrl+Shift+B in Work: the Work browser. */
+export function isWorkBrowserShortcut(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">, mac: boolean): boolean {
+  return (mac ? event.metaKey : event.ctrlKey) && event.shiftKey && !event.altKey && event.key?.toLowerCase() === "b";
 }
 
 /** Cmd/Ctrl+Shift+K: switch between Code and Work. */

@@ -46,6 +46,8 @@ type BarProps = {
   sessionId: string;
   tab: BrowserPanelTab;
   inputRef: React.RefObject<HTMLInputElement | null>;
+  /** The Work browser page: the star and suggestions only; its ".." menu holds the bookmarks (BookmarkBrowser). */
+  page?: boolean;
 };
 
 export function BrowserLibraryBar(props: BarProps) {
@@ -76,14 +78,14 @@ function useCompact(inputRef: React.RefObject<HTMLInputElement | null>): boolean
   return compact;
 }
 
-function LibraryBar({ sessionId, tab, inputRef }: BarProps) {
+function LibraryBar({ sessionId, tab, inputRef, page = false }: BarProps) {
   const anchorRef = React.useRef<HTMLSpanElement>(null);
   const [importOpen, setImportOpen] = React.useState(false);
-  const compact = useCompact(inputRef);
+  const compact = useCompact(inputRef) && !page;
   return (
     <span ref={anchorRef} className="contents">
       {compact ? null : <StarButton tab={tab} />}
-      <BookmarksMenu sessionId={sessionId} tab={compact ? tab : null} onImport={() => setImportOpen(true)} />
+      {page ? null : <BookmarksMenu sessionId={sessionId} tab={compact ? tab : null} onImport={() => setImportOpen(true)} />}
       <AddressSuggestions inputRef={inputRef} anchorRef={anchorRef} currentUrl={tab.url} />
       <BrowserImportDialog open={importOpen} onOpenChange={setImportOpen} />
     </span>
@@ -168,29 +170,9 @@ function StarRow({ tab }: { tab: BrowserPanelTab }) {
 
 function BookmarksMenu({ sessionId, tab, onImport }: { sessionId: string; tab: BrowserPanelTab | null; onImport: () => void }) {
   const [open, setOpen] = React.useState(false);
-  const [path, setPath] = React.useState<number[]>([]);
-  const tree = useQuery({
-    queryKey: browserLibraryKeys.bookmarks,
-    queryFn: () => getBrowserLibraryBridge()!.bookmarks(),
-    enabled: open,
-    retry: false,
-  });
-  const nodes = tree.data ?? [];
-  const folder = path.length > 0 ? findFolder(nodes, path[path.length - 1]!) : null;
-  const list = folder ? folder.children : nodes;
-  const choose = (node: BrowserBookmarkNode, event: React.MouseEvent | React.KeyboardEvent) => {
-    if ("children" in node) {
-      setPath((current) => [...current, node.id]);
-      return;
-    }
-    setOpen(false);
-    setPath([]);
-    if (event.metaKey || event.ctrlKey) void getElectronBrowser()?.createTab?.(node.url, sessionId);
-    else openUrl(node.url);
-  };
 
   return (
-    <Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setPath([]); }}>
+    <Popover open={open} onOpenChange={setOpen}>
       <Tooltip>
         <TooltipTrigger
           render={(
@@ -206,67 +188,106 @@ function BookmarksMenu({ sessionId, tab, onImport }: { sessionId: string; tab: B
         <TooltipContent>{t("browser_library.bookmarks")}</TooltipContent>
       </Tooltip>
       <PopoverContent align="end" sideOffset={6} className="w-80 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl p-0" data-browser-occluder="" data-testid="browser-bookmarks-menu">
-        {tab && !folder ? <StarRow tab={tab} /> : null}
-        <div className="flex h-10 items-center gap-1 border-b border-border px-2">
-          {folder ? (
-            <Button variant="ghost" size="icon-sm" aria-label={t("browser_library.back")} onClick={() => setPath((current) => current.slice(0, -1))}>
-              <ArrowLeft />
-            </Button>
-          ) : null}
-          <p className={cn("min-w-0 flex-1 truncate text-[13px] font-medium", !folder && "ps-2")}>{folder ? folder.title : t("browser_library.bookmarks")}</p>
-        </div>
-        <div className="max-h-80 overflow-y-auto p-1" role="list">
-          {tree.isLoading ? (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">{t("browser_library.loading")}</p>
-          ) : list.length === 0 ? (
-            <div className="px-4 py-6 text-center">
-              <p className="text-[13px] font-medium">{t("browser_library.empty_title")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t("browser_library.empty_body")}</p>
-            </div>
-          ) : (
-            list.map((node) => (
-              <button
-                key={node.id}
-                type="button"
-                role="listitem"
-                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
-                onClick={(event) => choose(node, event)}
-                title={"url" in node ? node.url : node.title}
-              >
-                {"children" in node ? (
-                  node.browser && isImportBrowser(node.browser)
-                    ? <BrowserTile browser={node.browser} size="chip" />
-                    : <Folder aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <SiteMonogram url={node.url} />
-                )}
-                <span className="min-w-0 flex-1 truncate">{node.title}</span>
-                {"children" in node ? (
-                  <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground">
-                    {node.children.length}
-                    <ChevronRight aria-hidden className="size-3.5" />
-                  </span>
-                ) : null}
-              </button>
-            ))
-          )}
-        </div>
-        <div className="border-t border-border p-1">
-          <button
-            type="button"
-            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
-            onClick={() => {
-              setOpen(false);
-              onImport();
-            }}
-            data-testid="browser-bookmarks-import"
-          >
-            <Download aria-hidden className="size-4 shrink-0" />
-            {t("browser_library.import")}
-          </button>
-        </div>
+        <BookmarkBrowser sessionId={sessionId} tab={tab} onDone={() => setOpen(false)} onImport={onImport} />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The bookmarks as imported (folders to step into, Back to step out), a page opens on click (Cmd or Ctrl click: a new
+ * tab), and "Import from another browser" at the foot. Shown in the side panel's bookmarks menu and the Work
+ * browser's ".." menu; `onBack` adds a way back to that menu.
+ */
+export function BookmarkBrowser({ sessionId, tab, onDone, onImport, onBack }: {
+  sessionId: string;
+  tab: BrowserPanelTab | null;
+  onDone: () => void;
+  onImport: () => void;
+  onBack?: () => void;
+}) {
+  const [path, setPath] = React.useState<number[]>([]);
+  const tree = useQuery({
+    queryKey: browserLibraryKeys.bookmarks,
+    queryFn: () => getBrowserLibraryBridge()!.bookmarks(),
+    retry: false,
+  });
+  const nodes = tree.data ?? [];
+  const folder = path.length > 0 ? findFolder(nodes, path[path.length - 1]!) : null;
+  const list = folder ? folder.children : nodes;
+  const choose = (node: BrowserBookmarkNode, event: React.MouseEvent | React.KeyboardEvent) => {
+    if ("children" in node) {
+      setPath((current) => [...current, node.id]);
+      return;
+    }
+    onDone();
+    if (event.metaKey || event.ctrlKey) void getElectronBrowser()?.createTab?.(node.url, sessionId);
+    else openUrl(node.url);
+  };
+  const back = folder ? () => setPath((current) => current.slice(0, -1)) : onBack;
+
+  return (
+    <>
+      {tab && !folder ? <StarRow tab={tab} /> : null}
+      <div className="flex h-10 items-center gap-1 border-b border-border px-2">
+        {back ? (
+          <Button variant="ghost" size="icon-sm" aria-label={t("browser_library.back")} onClick={back}>
+            <ArrowLeft />
+          </Button>
+        ) : null}
+        <p className={cn("min-w-0 flex-1 truncate text-[13px] font-medium", !back && "ps-2")}>{folder ? folder.title : t("browser_library.bookmarks")}</p>
+      </div>
+      <div className="max-h-80 overflow-y-auto p-1" role="list">
+        {tree.isLoading ? (
+          <p className="px-3 py-6 text-center text-xs text-muted-foreground">{t("browser_library.loading")}</p>
+        ) : list.length === 0 ? (
+          <div className="px-4 py-6 text-center">
+            <p className="text-[13px] font-medium">{t("browser_library.empty_title")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{t("browser_library.empty_body")}</p>
+          </div>
+        ) : (
+          list.map((node) => (
+            <button
+              key={node.id}
+              type="button"
+              role="listitem"
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+              onClick={(event) => choose(node, event)}
+              title={"url" in node ? node.url : node.title}
+            >
+              {"children" in node ? (
+                node.browser && isImportBrowser(node.browser)
+                  ? <BrowserTile browser={node.browser} size="chip" />
+                  : <Folder aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <SiteMonogram url={node.url} />
+              )}
+              <span className="min-w-0 flex-1 truncate">{node.title}</span>
+              {"children" in node ? (
+                <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground">
+                  {node.children.length}
+                  <ChevronRight aria-hidden className="size-3.5" />
+                </span>
+              ) : null}
+            </button>
+          ))
+        )}
+      </div>
+      <div className="border-t border-border p-1">
+        <button
+          type="button"
+          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-dls-secondary hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
+          onClick={() => {
+            onDone();
+            onImport();
+          }}
+          data-testid="browser-bookmarks-import"
+        >
+          <Download aria-hidden className="size-4 shrink-0" />
+          {t("browser_library.import")}
+        </button>
+      </div>
+    </>
   );
 }
 

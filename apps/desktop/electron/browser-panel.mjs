@@ -10,6 +10,7 @@ import {
   backgroundTabEmulationCommands,
   createBrowserTabRegistry,
   foregroundTabEmulationCommands,
+  USER_TABS_OWNER,
 } from "@omnirush/browser-tabs";
 import { runDetachedTask } from "./process-resilience.mjs";
 import { listInstalledBrowsers } from "./installed-browsers.mjs";
@@ -59,6 +60,13 @@ export function describeDesktopDeepLink(url, sourceUrl) {
 // than evicting a live document (unsaved input and CDP handles cannot be restored
 // from a URL). This is a tab bound, not a Chromium process or memory limit.
 const MAX_BROWSER_TABS = 12;
+// The person's own tabs come back after a restart as unloaded entries (address
+// and title only). They hold no page, so they never count toward the limit above.
+const RESTORED_TABS_LIMIT = 30;
+// "Ask about this page" takes the page's title, address and the selected text,
+// read in a world of our own so the page's scripts cannot answer for it.
+const PAGE_CONTEXT_WORLD_ID = 1031;
+const PAGE_SELECTION_LIMIT = 4000;
 const BROWSER_TARGET_RESOLVE_TIMEOUT_MS = 2500;
 const MENU_OVERLAY_HTML = "overlay.html";
 const MENU_OVERLAY_WIDTH = 196;
@@ -148,6 +156,10 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
   // Converted to window device-independent pixels at every setBounds call.
   let lastBrowserBounds = null;
   let browserTabCounter = 0;
+  // Use order of live tabs (created or selected), for Suspend oldest.
+  let browserTabActivity = 0;
+  // Owners whose saved tabs came back this launch (restoreSavedBrowserTabs).
+  const restoredOwners = new Set();
   // Active proxy for the built-in browser session: { rules, username, password }.
   let browserProxy = null;
   let browserControlEnabled = true;
@@ -907,7 +919,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     });
     const tab = {
       tabId, view, favicon: null, background: false, automationProtected,
-      deferBackground,
+      deferBackground, lastActiveAt: ++browserTabActivity,
       operation: false, suspending: false, mediaPlaying: false, downloads: new Set(),
       domReady: false, emulation: Promise.resolve(),
       /** @type {((error: Error | null) => void) | null} */
@@ -1274,6 +1286,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     hideMenuOverlay();
     const previousView = getActiveBrowserView();
     registry.select(tabId);
+    tab.lastActiveAt = ++browserTabActivity;
     if (registry.surfacingFor(tabId) === "foreground") {
       if (previousView && previousView !== tab.view && !tabForView(previousView)?.background) {
         detachBrowserView(previousView);
@@ -1329,24 +1342,37 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     }
   }
 
-  async function suspendBrowserTab(tabId) {
+  /** Why a live tab cannot be suspended right now, or null when it can. */
+  function suspendBlocker(tab) {
+    if (tab.automationProtected || tab.operation || tab.suspending) return "Browser tab is protected or busy. Release task protection before suspending.";
+    if (tab.view.webContents.isLoading() || tab.downloads.size || tab.mediaPlaying || tab.view.webContents.isCurrentlyAudible()) {
+      return "Browser tab is loading, downloading, or playing media.";
+    }
+    return null;
+  }
+
+  /**
+   * `confirmed`: the person already chose this in the app (Suspend oldest at
+   * the tab limit, which says what is lost), so no second dialog.
+   */
+  async function suspendBrowserTab(tabId, { confirmed = false } = {}) {
     const tab = browserTabs.get(tabId);
     const mainWindow = window();
     const check = () => {
       if (!tab || browserTabs.get(tabId) !== tab || tab.view.webContents.isDestroyed()) throw new Error("Unknown browser tab.");
-      if (tab.automationProtected || tab.operation || tab.suspending) throw new Error("Browser tab is protected or busy. Release task protection before suspending.");
-      if (tab.view.webContents.isLoading() || tab.downloads.size || tab.mediaPlaying || tab.view.webContents.isCurrentlyAudible()) {
-        throw new Error("Browser tab is loading, downloading, or playing media.");
-      }
+      const blocker = suspendBlocker(tab);
+      if (blocker) throw new Error(blocker);
     };
     check();
     if (!mainWindow || mainWindow.isDestroyed()) throw new Error("Browser window is unavailable.");
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: "warning", title: "Suspend browser tab?", message: "Suspend browser tab?",
-      detail: "Form input, scroll position, and page history will be lost. Reload opens the saved URL, not the current document. Only suspend if you are willing to lose this page state.",
-      buttons: ["Cancel", "Suspend"], defaultId: 0, cancelId: 0, noLink: true,
-    });
-    if (response !== 1) return null;
+    if (!confirmed) {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: "warning", title: "Suspend browser tab?", message: "Suspend browser tab?",
+        detail: "Form input, scroll position, and page history will be lost. Reload opens the saved URL, not the current document. Only suspend if you are willing to lose this page state.",
+        buttons: ["Cancel", "Suspend"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (response !== 1) return null;
+    }
     check();
     suspendedTabs.set(tabId, { ...browserTabToPanelTab(tabId, tab), status: "suspended", canGoBack: false, canGoForward: false });
     tab.suspending = true;
@@ -1366,6 +1392,83 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
         sendBrowserState();
       }
     });
+  }
+
+  /**
+   * At the tab limit the person may choose "Suspend oldest": their least
+   * recently used tab that is idle (never the one on screen, never one an agent
+   * holds, never one loading, downloading or playing) is suspended. Nothing is
+   * suspended without that choice. Returns the tab's id, or null when none can be.
+   */
+  async function suspendOldestBrowserTab(ownerSessionId) {
+    const owner = normalizeSessionId(ownerSessionId);
+    if (!owner) return null;
+    const onScreen = registry.onScreenTabId();
+    const oldest = registry.tabsFor(owner)
+      .map(({ tabId }) => browserTabs.get(tabId))
+      .filter((tab) => tab && tab.tabId !== onScreen && !tab.view.webContents.isDestroyed() && !suspendBlocker(tab))
+      .sort((left, right) => left.lastActiveAt - right.lastActiveAt)[0];
+    return oldest ? suspendBrowserTab(oldest.tabId, { confirmed: true }) : null;
+  }
+
+  /**
+   * The person's tabs after a restart: each saved address comes back as an
+   * unloaded entry (address and title, no page) that loads when selected and
+   * does not count toward the live tab limit. Once per owner per launch, and
+   * never over tabs the owner already has (a reloaded window keeps its own).
+   * The list is kept by the app on this computer; nothing here leaves it.
+   */
+  function restoreSavedBrowserTabs(entries, ownerSessionId, activeIndex) {
+    const owner = normalizeSessionId(ownerSessionId);
+    if (!owner || !Array.isArray(entries) || restoredOwners.has(owner) || registry.tabsFor(owner).length > 0) return [];
+    restoredOwners.add(owner);
+    /** @type {Map<number, string>} */
+    const byIndex = new Map();
+    entries.slice(0, RESTORED_TABS_LIMIT).forEach((entry, index) => {
+      const url = typeof entry?.url === "string" ? entry.url.trim() : "";
+      if (!/^https?:\/\/[^\s]+$/i.test(url) || url.length > 4096 || registry.size() >= 100) return;
+      const title = typeof entry.title === "string" ? entry.title.trim().slice(0, 300) : "";
+      const tabId = createBrowserTabId();
+      registry.add({ tabId, ownerSessionId: owner });
+      suspendedTabs.set(tabId, {
+        id: tabId, type: "browser", label: getBrowserTabLabel(title, url), url, favicon: null, status: "suspended",
+        automationProtected: false, canGoBack: false, canGoForward: false, ownerSessionId: owner,
+        browserApproval: null, browserTask: { status: "idle", operation: null },
+        siteToolCount: 0, siteTools: [], siteToolActivity: [],
+      });
+      byIndex.set(index, tabId);
+    });
+    const restored = [...byIndex.values()];
+    const active = byIndex.get(Number.isInteger(activeIndex) ? activeIndex : 0) ?? restored[0];
+    if (active) registry.select(active);
+    sendBrowserState();
+    return restored;
+  }
+
+  /**
+   * "Ask about this page" in the Work browser: the on-screen tab's title,
+   * address and the text the person selected. Only for the person's own tabs,
+   * never page text or anything else, and only when they ask.
+   */
+  async function userPageContext(tabId) {
+    const tab = browserTabs.get(String(tabId ?? ""));
+    if (!tab || tab.view.webContents.isDestroyed() || tab.tabId !== registry.onScreenTabId() || registry.ownerOf(tab.tabId) !== USER_TABS_OWNER) {
+      throw new Error("Select this tab first.");
+    }
+    const contents = tab.view.webContents;
+    const url = contents.getURL();
+    if (!/^https?:\/\//i.test(url)) return { title: "", url: "", selection: "" };
+    let selection = "";
+    try {
+      const value = await Promise.race([
+        contents.executeJavaScriptInIsolatedWorld(PAGE_CONTEXT_WORLD_ID, [{ code: "String(globalThis.getSelection?.() ?? \"\")" }]),
+        new Promise((resolve) => { setTimeout(() => resolve(""), 1000).unref?.(); }),
+      ]);
+      selection = typeof value === "string" ? value.trim().slice(0, PAGE_SELECTION_LIMIT) : "";
+    } catch {
+      selection = "";
+    }
+    return { title: contents.getTitle().slice(0, 300), url, selection };
   }
 
   // Known live contents can identify their target without replacing the document
@@ -1533,6 +1636,10 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     return typeof value === "string" && value.trim() ? value : null;
   }
 
+  function userTabsRefused() {
+    return { ok: false, code: "missing_session", error: "Browser control requires a requesting conversation." };
+  }
+
   function registerIpc(ipcMain) {
     function authorizeManualNavigation(event) {
       const contents = window()?.webContents;
@@ -1595,6 +1702,18 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     });
     ipcMain.handle("omnirush:browser:closeTab", (_event, tabId) => closeBrowserTab(tabId == null ? undefined : String(tabId)));
     ipcMain.handle("omnirush:browser:suspendTab", (_event, tabId) => suspendBrowserTab(tabId));
+    ipcMain.handle("omnirush:browser:suspendOldest", (event, sessionId) => {
+      if (event.sender !== window()?.webContents || event.senderFrame !== window()?.webContents.mainFrame) throw new Error("Use the browser toolbar.");
+      return suspendOldestBrowserTab(sessionId);
+    });
+    ipcMain.handle("omnirush:browser:restoreSaved", (event, entries, sessionId, activeIndex) => {
+      if (event.sender !== window()?.webContents || event.senderFrame !== window()?.webContents.mainFrame) return [];
+      return restoreSavedBrowserTabs(entries, sessionId, activeIndex);
+    });
+    ipcMain.handle("omnirush:browser:pageContext", (event, tabId) => {
+      if (event.sender !== window()?.webContents || event.senderFrame !== window()?.webContents.mainFrame) throw new Error("Use the browser toolbar.");
+      return userPageContext(tabId);
+    });
     ipcMain.handle("omnirush:browser:restoreTab", async (_event, tabId, sessionId) => {
       requireTabOwner(tabId, sessionId);
       return (await restoreBrowserTab(tabId, true)).handle;
@@ -1686,9 +1805,10 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     isMainWindowAllowedNavigation,
     setMainWindowEntryUrl,
     allowMainWindowInternalUrl,
-    browserTask: (args, options) => taskHost.request(args, options),
-    listWebMcpTools: (args, options) => taskHost.request({ sessionId: args?.sessionId, operation: "site_tools", args }, options),
-    executeWebMcpTool: (args, options) => taskHost.request({ sessionId: args?.sessionId, operation: "site_tool", args }, options),
+    // The person's own tabs belong to no conversation: no agent request may name their owner.
+    browserTask: (args, options) => (args?.sessionId === USER_TABS_OWNER ? userTabsRefused() : taskHost.request(args, options)),
+    listWebMcpTools: (args, options) => (args?.sessionId === USER_TABS_OWNER ? userTabsRefused() : taskHost.request({ sessionId: args?.sessionId, operation: "site_tools", args }, options)),
+    executeWebMcpTool: (args, options) => (args?.sessionId === USER_TABS_OWNER ? userTabsRefused() : taskHost.request({ sessionId: args?.sessionId, operation: "site_tool", args }, options)),
     registerIpc,
     routeBlockedMainWindowNavigation,
   };

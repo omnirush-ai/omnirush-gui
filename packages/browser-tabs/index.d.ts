@@ -114,6 +114,8 @@ export type BrowserTabRegistry = {
 };
 
 export const SHARED_OWNER_KEY: "*";
+/** Owner key of the person's own tabs (no conversation): never listed to or driven by an agent. */
+export const USER_TABS_OWNER: "__omnirush_no_session__";
 export const BACKGROUND_TAB_VIEWPORT: Readonly<Viewport>;
 export const BACKGROUND_TAB_PRESENCE_BOUNDS: Readonly<Bounds>;
 

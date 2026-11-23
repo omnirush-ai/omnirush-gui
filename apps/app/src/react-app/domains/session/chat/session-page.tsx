@@ -86,8 +86,10 @@ import { isCollectibleArtifactTarget, isLocalhostBrowserTarget, isOpenableFileTa
 import { opensInIdeEditor, resolveCollectibleOpenTarget } from "../artifacts/resolve-open-target";
 import type { OpenTargetOptions } from "@/lib/target-provider";
 import { SidePanel } from "../panel/side-panel";
-import { getSidePanelSessionKey } from "../panel/side-panel-session";
+import { getSidePanelSessionKey, NO_SESSION_SIDE_PANEL_KEY } from "../panel/side-panel-session";
 import { useCreateTab } from "../panel/use-side-panel-tabs";
+import { useBrowserLibraryAvailable } from "../../browser-logins/use-browser-library";
+import { WORK_BROWSER_NEW_TAB_URL } from "../../work/browser/work-browser";
 import { TerminalDock } from "../terminal/terminal-dock";
 import { LazyEditorPanel } from "../editor/editor-entry";
 import { DEFAULT_IDE_CHAT_WIDTH, tabId, useEditorStore, type EditorTab, type LayoutMode } from "../editor/editor-store";
@@ -307,6 +309,8 @@ export type SessionPageProps = {
   primarySlot?: React.ReactNode;
   /** A Work mode chat (domains/work): the chat alone, no IDE layout, editor or terminal. */
   workChat?: boolean;
+  /** The Work browser fills the page: the person's own tabs are on screen, with no side panel or rail (they would show twice). */
+  workBrowserPage?: boolean;
   primaryTitle?: string;
   terminalOpen?: boolean;
   onTerminalOpenChange?: (open: boolean) => void;
@@ -500,7 +504,9 @@ export function SessionPage(props: SessionPageProps) {
   const artifactTargetCount = artifactFileTargets.length;
   const hasArtifactTargets = artifactTargetCount > 0;
   const hasBrowserTabs = sessionPanelState.tabs.some((tab) => tab.type === "browser");
-  const activeSidePanel = sessionSidePanel;
+  const activeSidePanel = props.workBrowserPage ? null : sessionSidePanel;
+  // A Work account in the desktop app: the Work browser (Browser home on new tabs, the Globe with no tabs).
+  const workBrowser = useBrowserLibraryAvailable();
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
   // A Work record in the panel reads best at 400 px or more.
@@ -647,6 +653,13 @@ export function SessionPage(props: SessionPageProps) {
     if (!isElectronRuntime()) return;
     void (window as Window).__OMNIRUSH_ELECTRON__?.browser?.setVisibleSession?.(props.selectedSessionId ?? null);
   }, [props.selectedSessionId]);
+  // With no conversation selected, the person's own tabs take the screen while the Work browser or this panel shows
+  // them (a blank tab under Browser home never attaches a page that would say so).
+  const userTabsOnScreen = props.workBrowserPage === true || (workBrowser && !props.selectedSessionId && sidePanelOpen);
+  useEffect(() => {
+    if (!isElectronRuntime() || !userTabsOnScreen) return;
+    void (window as Window).__OMNIRUSH_ELECTRON__?.browser?.setVisibleSession?.(NO_SESSION_SIDE_PANEL_KEY);
+  }, [props.selectedSessionId, userTabsOnScreen]);
 
   // Open the side panel of the conversation that owns a browser event. For the
   // conversation on screen that is the visible panel; for a background
@@ -859,6 +872,10 @@ export function SessionPage(props: SessionPageProps) {
   useEffect(() => {
     if (activeSidePanel === "editor") setCurrentSidePanel(null);
   }, [activeSidePanel, setCurrentSidePanel]);
+  // On the Work browser a tab opened there must not also open the panel of the Work pages behind it.
+  useEffect(() => {
+    if (props.workBrowserPage && sessionSidePanel !== null) setCurrentSidePanel(null);
+  }, [props.workBrowserPage, sessionSidePanel, setCurrentSidePanel]);
   // An approval must never wait in a hidden chat: it brings the chat panel back.
   useEffect(() => {
     if (ideMode && props.activePermission && useEditorStore.getState().ideChatCollapsed) useEditorStore.getState().setIdeChatCollapsed(false);
@@ -867,12 +884,19 @@ export function SessionPage(props: SessionPageProps) {
   const openGeneralSidePanel = useCallback(() => {
     setCurrentSidePanel("panel");
   }, [setCurrentSidePanel]);
+  // A Work account's Globe works with no tabs yet: it opens the panel on a new tab (Browser home).
+  const globeEnabled = hasBrowserTabs || workBrowser;
   const openBrowserRailPane = useCallback(() => {
-    if (!hasBrowserTabs) return;
+    if (!hasBrowserTabs) {
+      if (!workBrowser) return;
+      setCurrentSidePanel("panel");
+      void createBrowserTab(WORK_BROWSER_NEW_TAB_URL, sidePanelSessionKey);
+      return;
+    }
     // Opening the browser pane should land on a usable page, not an empty
     // panel that forces the user to click "+".
     toggleCurrentSidePanel("panel");
-  }, [hasBrowserTabs, toggleCurrentSidePanel]);
+  }, [createBrowserTab, hasBrowserTabs, setCurrentSidePanel, sidePanelSessionKey, toggleCurrentSidePanel, workBrowser]);
   const openBrowserUrlControlAction = useMemo<OmniRushControlAction>(() => ({
     id: "browser.open_url",
     label: "Open URL in built-in browser",
@@ -2363,7 +2387,7 @@ export function SessionPage(props: SessionPageProps) {
               </>
             ) : null}
           </ResizablePanelGroup>
-          <aside className="hidden w-10 shrink-0 flex-col items-center gap-1 px-1 py-2 text-muted-foreground lg:flex mac:titlebar-no-drag">
+          <aside className={cn("hidden w-10 shrink-0 flex-col items-center gap-1 px-1 py-2 text-muted-foreground lg:flex mac:titlebar-no-drag", props.workBrowserPage && "lg:hidden")}>
             {editorAvailable ? (
               <Button
                 variant="ghost"
@@ -2386,10 +2410,10 @@ export function SessionPage(props: SessionPageProps) {
                   panelRailActive && hasBrowserTabs && "bg-primary/10 text-link hover:bg-primary/15 hover:text-link",
                 )}
                 onClick={openBrowserRailPane}
-                title={hasBrowserTabs ? t("session.browser") : t("session.browser_unavailable")}
-                aria-label={hasBrowserTabs ? t("session.browser") : t("session.browser_unavailable")}
+                title={globeEnabled ? t("session.browser") : t("session.browser_unavailable")}
+                aria-label={globeEnabled ? t("session.browser") : t("session.browser_unavailable")}
                 aria-pressed={panelRailActive && hasBrowserTabs}
-                disabled={!hasBrowserTabs}
+                disabled={!globeEnabled}
               >
                 <Globe size={15} />
               </Button>

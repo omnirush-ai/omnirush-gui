@@ -4,6 +4,7 @@ import {
   BACKGROUND_TAB_PRESENCE_BOUNDS,
   BACKGROUND_TAB_VIEWPORT,
   SHARED_OWNER_KEY,
+  USER_TABS_OWNER,
   activeBrowserTabIdForSession,
   backgroundTabEmulationCommands,
   browserTabsForSession,
@@ -160,5 +161,18 @@ describe("background rendering recipe", () => {
 
   test("the on-window presence is a single corner pixel", () => {
     expect(BACKGROUND_TAB_PRESENCE_BOUNDS).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+  });
+});
+
+describe("the person's own tabs", () => {
+  test("belong to no conversation: no chat's panel or agent list includes them", () => {
+    const registry = createBrowserTabRegistry();
+    registry.add({ tabId: "mine", ownerSessionId: USER_TABS_OWNER });
+    registry.add({ tabId: "chat", ownerSessionId: "ses_work" });
+    expect(registry.tabsFor("ses_work").map((tab) => tab.tabId)).toEqual(["chat"]);
+    expect(registry.tabsFor(USER_TABS_OWNER).map((tab) => tab.tabId)).toEqual(["mine"]);
+    const tabs = [{ id: "mine", ownerSessionId: USER_TABS_OWNER }, { id: "chat", ownerSessionId: "ses_work" }];
+    expect(browserTabsForSession(tabs, "ses_work").map((tab) => tab.id)).toEqual(["chat"]);
+    expect(USER_TABS_OWNER).not.toBe(SHARED_OWNER_KEY);
   });
 });

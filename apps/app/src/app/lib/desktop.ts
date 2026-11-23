@@ -194,6 +194,8 @@ export type BrowserBookmarkNode =
 
 export type BrowserSuggestion = { url: string; title: string; kind: "bookmark" | "history" };
 
+export type BrowserRecentPages = { pages: Array<{ url: string; title: string; lastVisitAt: number }>; total: number };
+
 export type BrowserLibrarySummary = {
   imports: Array<{
     sourceId: string;
@@ -218,6 +220,8 @@ export type BrowserLibraryBridge = {
   bookmarks: () => Promise<BrowserBookmarkNode[]>;
   topBookmarks: (limit?: number) => Promise<Array<{ url: string; title: string }>>;
   suggest: (query: string) => Promise<BrowserSuggestion[]>;
+  /** The Work browser's Recent list (last 30 days, newest first, at most 50). */
+  recent?: (request: { limit?: number; query?: string }) => Promise<BrowserRecentPages>;
   isBookmarked: (url: string) => Promise<boolean>;
   toggleBookmark: (request: { url: string; title?: string }) => Promise<{ bookmarked: boolean }>;
   summary: () => Promise<BrowserLibrarySummary>;
@@ -425,6 +429,12 @@ declare global {
         createTab?: (url?: string, sessionId?: string | null) => Promise<{ tabId: string }>;
         closeTab?: (tabId: string) => Promise<string | null>;
         suspendTab?: (tabId: string) => Promise<string | null>;
+        /** At the tab limit, after the person chose Suspend oldest: their least recently used idle tab. */
+        suspendOldest?: (sessionId: string) => Promise<string | null>;
+        /** The person's saved tabs after a restart, as unloaded entries; returns the new tab ids. */
+        restoreSaved?: (entries: Array<{ url: string; title: string }>, sessionId: string, activeIndex: number) => Promise<string[]>;
+        /** Ask about this page: the on-screen tab's title, address and selected text (the person's own tabs only). */
+        pageContext?: (tabId: string) => Promise<{ title: string; url: string; selection: string }>;
         restoreTab?: (tabId: string, sessionId: string | null) => Promise<OpenBrowserUrlResult>;
         releaseTab?: (tabId: string, sessionId: string | null) => Promise<{ tabId: string; released: true }>;
         closeAllTabs?: () => Promise<string[]>;

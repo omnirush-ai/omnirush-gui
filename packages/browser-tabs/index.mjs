@@ -11,6 +11,13 @@
 /** Owner key used for tabs that no conversation claimed (legacy/shared tabs). */
 export const SHARED_OWNER_KEY = "*";
 
+/**
+ * Owner key of the person's own tabs: the panel with no conversation selected
+ * and the Work browser. No conversation owns them, so no agent ever lists,
+ * reads or drives them.
+ */
+export const USER_TABS_OWNER = "__omnirush_no_session__";
+
 /** Viewport a background tab lays out and paints at while it is off screen. */
 export const BACKGROUND_TAB_VIEWPORT = Object.freeze({ width: 1280, height: 800 });
 

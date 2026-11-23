@@ -234,6 +234,24 @@ test("address bar suggestions: a site typed from its start first, bookmarks and 
   assert.deepEqual(library.topBookmarks(2).map((entry) => entry.title), ["Team tracker", "Handbook"]);
 });
 
+test("Recent for the Work browser: newest visits of the last 30 days, one row per address, with a filter and a count", async () => {
+  const { library } = setup();
+  assert.deepEqual(library.recent(), { pages: [], total: 0 });
+  await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
+  const recent = library.recent({ limit: 5 });
+  assert.deepEqual(recent.pages.map((page) => page.url), ["https://tracker.example.org/board", "https://exampleapp.io/login", "https://example.com/pricing"]);
+  assert.equal(recent.total, 3, "the 200-day-old page is not recent");
+  assert.equal(recent.pages[0].title, "Board");
+  assert.ok(recent.pages[0].lastVisitAt > recent.pages[1].lastVisitAt);
+  assert.deepEqual(library.recent({ query: "PRICING" }), { pages: [recent.pages[2]], total: 1 });
+  assert.deepEqual(library.recent({ query: "100%_" }), { pages: [], total: 0 });
+  assert.equal(library.recent({ limit: 1 }).pages.length, 1);
+  const ipc = ipcHarness(library);
+  assert.ok(ipc.channels.includes("omnirush:browser-library:recent"));
+  assert.equal((await ipc.call("omnirush:browser-library:recent", { limit: 2 })).pages.length, 2);
+  assert.equal((await ipc.call("omnirush:browser-library:recent", "junk")).total, 3);
+});
+
 test("the star adds and removes a page; clearing imports keeps starred pages", async () => {
   const { library } = setup();
   await library.runImport({ sourceId: "chrome:Default", bookmarks: true, history: true });
