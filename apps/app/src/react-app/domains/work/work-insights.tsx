@@ -11,14 +11,14 @@ import { t } from "@/i18n";
 import type { OmniRushWorkInsights, OmniRushWorkInsightsAlert, OmniRushWorkInsightsMember } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { relativeTime, useWorkOrgInsights, workFailure, type WorkClient } from "./work-mode";
+import { relativeTime, useWorkOrgInsights, workFailure, workRoleLabel, type WorkClient } from "./work-mode";
 
 const RANGES = [7, 14, 30, 90] as const;
 const DEFAULT_DAYS = 14;
 
 /** A member's name line from the three bits the server gives (email is always there, the rest when set). */
 function memberName(member: OmniRushWorkInsightsMember): { primary: string; secondary: string | null } {
-  const role = member.role === "owner" ? t("work.role.owner") : member.role === "member" ? t("work.role.member") : member.role;
+  const role = member.role ? workRoleLabel(member.role) : null;
   const tags = [member.job_role, role].filter((part): part is string => Boolean(part));
   return { primary: member.email, secondary: tags.length ? tags.join(" · ") : null };
 }

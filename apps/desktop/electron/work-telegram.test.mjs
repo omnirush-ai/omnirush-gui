@@ -295,6 +295,33 @@ test("incremental: only chats past their last id are read, and a new message's w
   }
 });
 
+test("a read sent in parts: a chat whose days all landed moves on, the others are read again next run", async () => {
+  const r = rig();
+  try {
+    await signIn(r);
+    seed(r.server);
+    const read = await r.tg.read(undefined, "acct_a");
+    const chats = read.records.map((rec) => rec.chat_id);
+    // A chat's days come together.
+    assert.deepEqual(chats, [...new Set(chats)].flatMap((id) => chats.filter((other) => other === id)));
+    const ann = chats.indexOf("777");
+    const annDays = chats.filter((id) => id === "777").length;
+    assert.equal(annDays, 2);
+    const before = read.cursorAt(ann + 1);
+    assert.equal(before.chats[777], undefined, "half of a chat's days does not move it");
+    const part = read.cursorAt(ann + annDays);
+    assert.equal(part.chats[777], 12);
+    // The run's floor stays (none yet), so every chat not sent is found again.
+    assert.deepEqual([part.user, part.at, "channels" in part], ["42", null, false]);
+    assert.deepEqual(read.cursorAt(read.records.length), read.cursor);
+    const sentFirst = new Set(chats.slice(0, ann + annDays));
+    const rest = await r.tg.read(part, "acct_a");
+    assert.deepEqual(new Set(rest.records.map((rec) => rec.chat_id)), new Set(chats.filter((id) => !sentFirst.has(id))));
+  } finally {
+    r.done();
+  }
+});
+
 test("FLOOD_WAIT: a short one is waited out; a long one ends the run with what was read", async () => {
   const r = rig();
   try {

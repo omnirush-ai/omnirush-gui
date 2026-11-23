@@ -954,14 +954,25 @@ export type ComputerUseRealScreen = { on: boolean; forced: boolean; allowed: boo
 
 /** A Work chat source the desktop reads (this Mac's databases, or the user's own Telegram login) and pushes (work-chat-sync.mjs). */
 export type WorkChatSyncSource = "imessage" | "whatsapp" | "telegram";
+/** A running read: `reading` the chats, then `uploading` them in pushes; chat-days (records) and pushes sent and in all. */
+export type WorkChatSyncProgress = {
+  phase: "reading" | "uploading";
+  pushesDone: number;
+  pushesTotal: number;
+  recordsDone: number;
+  recordsTotal: number;
+};
 /** One source's state for the signed-in Work account. `enabled` is null until the first good read turns it on. */
 export type WorkChatSyncSourceStatus = {
   enabled: boolean | null;
   lastSyncAt: string | null;
-  /** fda_required, no_messages_db, no_whatsapp, unsupported_schema, or the server's or a push's error code. */
+  /** fda_required, no_messages_db, no_whatsapp, unsupported_schema, timeout (a push ran out of time), or the server's
+   *  or a push's error code. */
   lastError: string | null;
   failures: number;
   running: boolean;
+  /** While `running`; absent from older desktops. */
+  progress?: WorkChatSyncProgress | null;
 };
 /** Null while signed out, offline or Work is off. */
 export type WorkChatSyncStatus = Record<WorkChatSyncSource, WorkChatSyncSourceStatus> | null;
