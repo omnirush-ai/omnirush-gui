@@ -798,6 +798,94 @@ describe("Work Today, connectors attention, organization, tools (Addendum C)", (
     }
   });
 
+  test("Trello, ClickUp and monday.com: marks, copy that says what needs approval, Trello's token field and board picker", async () => {
+    for (const id of ["trello", "clickup"]) {
+      const icon = renderToStaticMarkup(<ConnectorIcon id={id} />);
+      expect(icon).toContain(`data-connector-icon="${id}"`);
+      expect(icon).toMatch(/<path fill="#[0-9A-F]{6}"/);
+    }
+    expect(renderToStaticMarkup(<ConnectorIcon id="monday" />)).toContain('data-connector-icon="monday"');
+    for (const id of ["trello", "clickup", "monday"]) {
+      expect(connectorAccess(id)).toContain("only after you approve");
+      expect(connectorAccess(id)).not.toMatch(/[\u2013\u2014]/);
+    }
+    expect(workToolPermission("omnirush-work_trello_create_card")).toEqual({ label: "Create a card (Trello)", scope: "Your Trello account" });
+    expect(workToolPermission("omnirush-work_monday_create_item")?.label).toBe("Create an item (monday.com)");
+    expect(workToolPermission("omnirush-work_clickup_comment")?.label).toBe("Add a comment (ClickUp)");
+    const boards = [{ id: "b1", name: "Launch", picked: true }, { id: "b2", name: "Ops", picked: true }];
+    const trelloRow = renderToStaticMarkup(
+      <ConnectorRow connector={row({ id: "trello", label: "Trello", status: "connected", records: 3, sync_enabled: true, choices: boards })}
+        connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onPick={noop} />,
+    );
+    expect(trelloRow).toContain("Boards to read");
+    const registered = typeof globalThis.window === "undefined";
+    if (registered) GlobalRegistrator.register({ url: "http://localhost/" });
+    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    try {
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const sent: unknown[] = [];
+      const rows = [
+        row({ id: "trello", label: "Trello", mode: "key" }),
+        row({ id: "clickup", label: "ClickUp", mode: "key" }),
+        row({ id: "monday", label: "monday.com", mode: "key" }),
+      ];
+      const opened: string[] = [];
+      const client = {
+        baseUrl: "http://projects.test",
+        listWorkConnectors: async () => rows,
+        listWorkImports: async () => [],
+        getWorkCoverage: async () => { throw new Error("no coverage"); },
+        startWorkConnector: async () => { throw new Error("no OAuth for a key source"); },
+        connectWorkCredentials: async (id: string, form: unknown) => { sent.push([id, form]); return { ok: true, account: "ann@acme.example" }; },
+      } as never;
+      const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      queries.setQueryData(workConnectorsKey(client), rows);
+      document.body.innerHTML = '<div id="root"></div>';
+      const root = createRoot(document.getElementById("root")!);
+      await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter><WorkConnectorsPage client={client} openLink={(url) => opened.push(url)} /></MemoryRouter></QueryClientProvider>));
+      const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
+      const type = async (form: Element, key: string, value: string) => {
+        const input = form.querySelector<HTMLInputElement>(`[data-key-field="${key}"]`)!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      };
+      // Trello: a key and a token, both secret; Test and save waits for both.
+      await act(async () => button("Connect Trello")!.click());
+      const form = document.querySelector('[data-testid="work-key-trello"]')!;
+      expect(form.querySelector('[data-testid="work-key-where"]')?.textContent).toContain("Trello Auth");
+      expect(form.querySelector('[data-key-field="token"]')?.getAttribute("type")).toBe("password");
+      expect(form.querySelector('[data-key-field="host"]')).toBeNull();
+      expect(form.textContent).toContain("Nothing is posted or created without your approval.");
+      await act(async () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-help"]')!.click());
+      expect(opened).toEqual(["https://trello.com/apps/admin"]);
+      const save = () => form.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!;
+      await type(form, "api_key", " 0123456789abcdef0123456789abcdef ");
+      expect(save().disabled).toBe(true);
+      await type(form, "token", "ATTAtoken123");
+      expect(save().disabled).toBe(false);
+      await act(async () => save().click());
+      expect(sent).toEqual([["trello", { api_key: "0123456789abcdef0123456789abcdef", token: "ATTAtoken123" }]]);
+      // ClickUp and monday.com: one token.
+      await act(async () => button("Connect ClickUp")!.click());
+      const clickupForm = document.querySelector('[data-testid="work-key-clickup"]')!;
+      expect(clickupForm.querySelector('[data-key-field="token"]')).toBeNull();
+      expect(clickupForm.textContent).toContain("pk_");
+      await type(clickupForm, "api_key", "pk_1_ABC");
+      await act(async () => clickupForm.querySelector<HTMLButtonElement>('[data-testid="work-key-save"]')!.click());
+      await act(async () => button("Connect monday.com")!.click());
+      const mondayForm = document.querySelector('[data-testid="work-key-monday"]')!;
+      expect(mondayForm.querySelector('[data-testid="work-key-where"]')?.textContent).toContain("Developers");
+      expect(sent.at(-1)).toEqual(["clickup", { api_key: "pk_1_ABC" }]);
+      await act(async () => root.unmount());
+      queries.clear();
+    } finally {
+      if (registered) await GlobalRegistrator.unregister();
+    }
+  });
+
   test("a company hook row with records but no URL of its own reads No URL yet and offers Create URL", () => {
     const card = (status: OmniRushWorkConnector["status"]) => renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>

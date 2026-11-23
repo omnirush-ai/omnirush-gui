@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Inbox, Info, Kanban, LifeBuoy, Mail, MessageCircle, MessageSquare, MessagesSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
+  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Inbox, Info, Kanban, LayoutGrid, LifeBuoy, Mail, MessageCircle, MessageSquare, MessagesSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -37,7 +37,7 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  chatSyncProgress, connectorAccess, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  chatSyncProgress, choicesTitle, connectorAccess, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
   sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
 } from "./work-mode";
 
@@ -49,6 +49,7 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   whatsapp: MessageCircle, whatsapp_business: MessageCircle, telegram: Send, imessage: MessageSquare, meetings: Phone, zoom: Phone,
   imap: AtSign, caldav: Calendar, stripe: CreditCard, freshdesk: LifeBuoy, pipedrive: Handshake, hook: Webhook, hook_org: Webhook,
   zendesk: LifeBuoy, intercom: MessagesSquare, front: Inbox,
+  monday: LayoutGrid,
 };
 
 // Company marks in their brand colour (simple-icons paths, CC0).
@@ -64,6 +65,14 @@ const BRAND_ICONS: Record<string, { color: string; path: string }> = {
   dropbox: {
     color: "#0061FF",
     path: "M6 1.807L0 5.629l6 3.822 6.001-3.822L6 1.807zM18 1.807l-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zM18 9.452l-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z",
+  },
+  trello: {
+    color: "#0052CC",
+    path: "M21.147 0H2.853A2.86 2.86 0 000 2.853v18.294A2.86 2.86 0 002.853 24h18.294A2.86 2.86 0 0024 21.147V2.853A2.86 2.86 0 0021.147 0zM10.34 17.287a.953.953 0 01-.953.953h-4a.954.954 0 01-.954-.953V5.38a.953.953 0 01.954-.953h4a.954.954 0 01.953.953zm9.233-5.467a.944.944 0 01-.953.947h-4a.947.947 0 01-.953-.947V5.38a.953.953 0 01.953-.953h4a.954.954 0 01.953.953z",
+  },
+  clickup: {
+    color: "#7B68EE",
+    path: "M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z",
   },
   zoom: {
     color: "#0B5CFF",
@@ -371,7 +380,7 @@ export function ConnectorRow(props: {
           </div>
         ) : null}
         {connected && props.onPick && (row.choices?.length ?? 0) > 1 ? (
-          <ConnectorChoices choices={row.choices!} busy={props.busy} onPick={props.onPick} />
+          <ConnectorChoices title={choicesTitle(row.id)} choices={row.choices!} busy={props.busy} onPick={props.onPick} />
         ) : null}
         {connected && props.health !== undefined ? (
           <div className={cn("mt-0.5 text-[12px]", problem ? "text-destructive" : "text-muted-foreground")} data-testid="work-connector-health">
@@ -416,7 +425,7 @@ export function ConnectorRow(props: {
 const CHOICES_SHOWN = 5;
 
 /** What a picking source reads (Asana's workspaces), as checkboxes; the last checked one stays checked. */
-function ConnectorChoices(props: { choices: NonNullable<OmniRushWorkConnector["choices"]>; busy: boolean; onPick: (picked: string[]) => void }) {
+function ConnectorChoices(props: { title: string; choices: NonNullable<OmniRushWorkConnector["choices"]>; busy: boolean; onPick: (picked: string[]) => void }) {
   const [all, setAll] = useState(false);
   const idBase = useId();
   const picked = props.choices.filter((choice) => choice.picked).map((choice) => choice.id);
@@ -427,8 +436,8 @@ function ConnectorChoices(props: { choices: NonNullable<OmniRushWorkConnector["c
   };
   const shown = all ? props.choices : props.choices.slice(0, CHOICES_SHOWN);
   return (
-    <div className="mt-2" role="group" aria-label={t("work.connectors.choices_title")} data-testid="work-connector-choices">
-      <div className="text-[12px] font-medium">{t("work.connectors.choices_title")}</div>
+    <div className="mt-2" role="group" aria-label={props.title} data-testid="work-connector-choices">
+      <div className="text-[12px] font-medium">{props.title}</div>
       <div className="mt-1 flex flex-col gap-1">
         {shown.map((choice) => (
           <div key={choice.id} className="flex items-center gap-2 text-[12px]">
@@ -578,8 +587,10 @@ export function CredentialsForm(props: { connector: OmniRushWorkConnector; clien
   );
 }
 
-/** The pasted-key sources: where the key is (the steps and a link), its field's name and, for Freshdesk, the account's address. */
-const KEY_FORMS: Record<string, { help: string; placeholder: string; where: () => string; label: () => string; host?: () => string }> = {
+/** The pasted-key sources: where the key is (the steps and a link), its field's name, for Freshdesk the account's address, for
+ *  Trello its second secret (the token), and whether the key is also used for writes the user approves. */
+type KeyFormSpec = { help: string; placeholder: string; where: () => string; label: () => string; host?: () => string; token?: () => string; writes?: boolean };
+const KEY_FORMS: Record<string, KeyFormSpec> = {
   stripe: { help: "https://dashboard.stripe.com/apikeys", placeholder: "rk_live_...", where: () => t("work.key.where_stripe"), label: () => t("work.key.label_stripe") },
   freshdesk: {
     help: "https://support.freshdesk.com/support/solutions/articles/215517-how-to-find-your-api-key",
@@ -589,26 +600,47 @@ const KEY_FORMS: Record<string, { help: string; placeholder: string; where: () =
     host: () => t("work.key.host_freshdesk"),
   },
   pipedrive: { help: "https://pipedrive.readme.io/docs/how-to-find-the-api-token", placeholder: "", where: () => t("work.key.where_pipedrive"), label: () => t("work.key.label_pipedrive") },
+  trello: {
+    help: "https://trello.com/apps/admin",
+    placeholder: "",
+    where: () => t("work.key.where_trello"),
+    label: () => t("work.key.label_trello"),
+    token: () => t("work.key.token_trello"),
+    writes: true,
+  },
+  clickup: { help: "https://app.clickup.com/settings/apps", placeholder: "pk_...", where: () => t("work.key.where_clickup"), label: () => t("work.key.label_clickup"), writes: true },
+  monday: {
+    help: "https://developer.monday.com/api-reference/docs/authentication",
+    placeholder: "",
+    where: () => t("work.key.where_monday"),
+    label: () => t("work.key.label_monday"),
+    writes: true,
+  },
 };
 
-/** A source connected with a pasted API key (Stripe, Freshdesk, Pipedrive): where to find the key, paste it, and Test and save
- *  tries it before anything is saved. The key goes to the server once and is not kept here. */
+/** A source connected with a pasted API key (Stripe, Freshdesk, Pipedrive, Trello, ClickUp, monday.com): where to find the key,
+ *  paste it, and Test and save tries it before anything is saved. The key goes to the server once and is not kept here. */
 export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkClient | null; openLink: (url: string) => void; onDone: () => void; onCancel: () => void }) {
   const id = props.connector.id;
-  const spec = KEY_FORMS[id] ?? { help: "", placeholder: "", where: () => "", label: () => t("work.key.label_freshdesk") };
+  const spec: KeyFormSpec = KEY_FORMS[id] ?? { help: "", placeholder: "", where: () => "", label: () => t("work.key.label_freshdesk") };
   const name = connectorLabel(id, props.connector.label);
-  const [field, setField] = useState({ api_key: "", host: "" });
+  const [field, setField] = useState({ api_key: "", host: "", token: "" });
   const [error, setError] = useState<string | null>(null);
   const save = useMutation({
-    mutationFn: () => props.client!.connectWorkCredentials(id, { api_key: field.api_key.trim(), ...(spec.host ? { host: field.host.trim() } : {}) }),
+    mutationFn: () =>
+      props.client!.connectWorkCredentials(id, {
+        api_key: field.api_key.trim(),
+        ...(spec.host ? { host: field.host.trim() } : {}),
+        ...(spec.token ? { token: field.token.trim() } : {}),
+      }),
     onSuccess: () => {
-      setField({ api_key: "", host: "" });
+      setField({ api_key: "", host: "", token: "" });
       toast.success(t("work.mailcal.connected", { name }));
       props.onDone();
     },
     onError: (reason) => setError(workFailure(reason).text),
   });
-  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || Boolean(field.host.trim()));
+  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || Boolean(field.host.trim())) && (!spec.token || Boolean(field.token.trim()));
   const input = (key: keyof typeof field, label: string, extra: { type?: string; placeholder?: string } = {}) => (
     <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
       {label}
@@ -647,8 +679,9 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
       <div className="grid gap-3 sm:grid-cols-2">
         {spec.host ? input("host", spec.host(), { placeholder: "yourcompany.freshdesk.com" }) : null}
         {input("api_key", spec.label(), { type: "password", placeholder: spec.placeholder })}
+        {spec.token ? input("token", spec.token(), { type: "password" }) : null}
       </div>
-      <p className="text-[12px] text-muted-foreground">{t("work.key.note")}</p>
+      <p className="text-[12px] text-muted-foreground">{spec.writes ? t("work.key.note_write") : t("work.key.note")}</p>
       {error ? <p className="text-[12px] text-destructive" role="alert" data-testid="work-key-error">{error}</p> : null}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={props.onCancel}>{t("common.cancel")}</Button>

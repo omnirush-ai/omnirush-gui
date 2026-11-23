@@ -288,6 +288,14 @@ describe("work routes", () => {
     );
   });
 
+  test("Trello's token goes on with its key; the new read tools do not ask first", async () => {
+    const { calls, call } = setup(() => json({ ok: true, account: "ann@acme.example" }));
+    await call("POST", "/work/connectors/trello/connect", { api_key: "k1", token: "t1", evil: "x" });
+    expect(calls).toEqual([`POST connectors/trello/connect ${JSON.stringify({ api_key: "k1", token: "t1" })}`]);
+    for (const tool of ["trello_search", "trello_read", "clickup_tasks", "clickup_read", "monday_search", "monday_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["trello_comment", "trello_create_card", "clickup_comment", "clickup_create_task", "monday_comment", "monday_create_item"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+  });
+
   test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {
     const { calls, call } = setup((path) => json(path.startsWith("health") ? { sources: [{ id: "jira", token_ok: true, scopes_ok: false, missing_scopes: ["write:jira-work"] }] } : { items: [], next_cursor: null }));
     expect((await (await call("GET", "/work/health?source=jira")).json()).sources[0].missing_scopes).toEqual(["write:jira-work"]);
