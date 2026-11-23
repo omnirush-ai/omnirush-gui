@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
 import { readDenSettings } from "@/app/lib/den";
 import { dedupeModelOptions, modelEquals, resolveProviderDisplayName } from "../../../../app/utils";
-import { isSupportedModelProvider, providerCatalogRank } from "../../../../app/lib/provider-catalog";
+import { compareGroupModels, isSupportedModelProvider, providerCatalogRank, providerDisplayGroup } from "../../../../app/lib/provider-catalog";
 import type { ModelOption, ModelRef } from "../../../../app/types";
 import { isRecommendedModel } from "../../../../app/defaults";
 import { ProviderIcon } from "../../../design-system/provider-icon";
@@ -168,19 +168,20 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
   const providerGroups = useMemo<ProviderGroup[]>(() => {
     const map = new Map<string, ProviderGroup>();
     for (const opt of filteredOptions) {
-      const key = opt.group ? `${opt.providerID}\u0000${opt.group}` : opt.providerID;
+      const providerID = providerDisplayGroup(opt.providerID);
+      const key = opt.group ? `${providerID}\u0000${opt.group}` : providerID;
       // A family group follows its provider's own group.
       const accessRank = providerCatalogRank(opt.providerID) + (opt.group ? 0.5 : 0);
       let group = map.get(key);
       if (!group) {
         group = {
-          id: opt.providerID,
+          id: providerID,
           key,
-          iconProviderId: opt.providerID,
+          iconProviderId: providerID,
           name: opt.group ?? opt.description ?? resolveProviderDisplayName(opt.providerID),
           isNew: !!opt.isRecommended,
           isCloud: opt.source === "cloud",
-          isDisabled: disabledSet.has(opt.providerID),
+          isDisabled: disabledSet.has(providerID),
           hasCurrent: false,
           accessRank,
           recommended: [],
@@ -200,8 +201,8 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     }
     const groups = [...map.values()];
     for (const group of groups) {
-      group.recommended.sort((a, b) => a.title.localeCompare(b.title));
-      group.other.sort((a, b) => a.title.localeCompare(b.title));
+      group.recommended.sort(compareGroupModels);
+      group.other.sort(compareGroupModels);
     }
     return groups.sort((a, b) => {
       if (a.isDisabled !== b.isDisabled) return a.isDisabled ? 1 : -1;
