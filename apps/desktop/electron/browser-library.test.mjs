@@ -421,3 +421,13 @@ test("the sign-in sync setup (Settings > Permissions) lists what it always liste
   // Importing still reaches Linux Chrome through the key ring (the test above).
   assert.equal((await linux.library.sources()).browsers[0].signIns.importable, true);
 });
+
+test("the library file is readable by its owner only", { skip: process.platform === "win32" }, async () => {
+  const { statSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "browser-library-db-"));
+  const library = createBrowserLibrary({ dbPath: join(dir, "browser-library.sqlite"), platform: "linux", home: dir, now: () => NOW });
+  library.toggleBookmark({ url: "https://example.com/", title: "Example" });
+  assert.equal(statSync(join(dir, "browser-library.sqlite")).mode & 0o777, 0o600);
+  assert.equal(library.isBookmarked("https://example.com/"), true);
+  library.close();
+});

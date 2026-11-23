@@ -7,6 +7,7 @@
 // (sign-ins go through the login sync, which returns counts only) and saved
 // passwords, which are never read. Nothing here is uploaded or added to a
 // chat; the agent does not see the library.
+import { chmodSync, closeSync, openSync } from "node:fs";
 import { copyFile, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -145,6 +146,15 @@ export function createBrowserLibrary({
 
   function database() {
     if (!db) {
+      if (dbPath) {
+        // Imported history is private: the file (and the WAL files SQLite copies its mode to) is the user's alone.
+        try {
+          closeSync(openSync(dbPath, "a", 0o600));
+          chmodSync(dbPath, 0o600);
+        } catch {
+          // Windows has no POSIX modes; the profile folder's ACL applies.
+        }
+      }
       db = openDatabase(dbPath);
       db.exec("PRAGMA journal_mode = WAL");
       db.exec(SCHEMA);
