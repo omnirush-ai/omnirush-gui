@@ -158,6 +158,11 @@ describe("work prompt and tools", () => {
   test("context tools read without asking; remember and forget ask; the prompt briefs and remembers", () => {
     for (const tool of ["work_context", "work_entity", "jira_search", "github_read", "work_read", "work_count", "work_deals"]) expect(WORK_READ_TOOLS).toContain(tool);
     for (const tool of ["work_remember", "work_forget", "jira_comment", "github_create_issue"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+    // Discord: listing and reading channels and threads run; a post asks.
+    for (const tool of ["discord_list_channels", "discord_read_channel", "discord_read_thread"]) expect(WORK_READ_TOOLS).toContain(tool);
+    expect(WORK_READ_TOOLS).not.toContain("discord_post");
+    for (const tool of ["gitlab_search", "gitlab_read", "shopify_search", "shopify_read", "box_search", "box_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["gitlab_comment", "gitlab_create_issue", "shopify_note", "box_comment"]) expect(WORK_READ_TOOLS).not.toContain(tool);
     for (const style of ["brief", "detailed"] as const) {
       expect(workPrompt(style)).toContain("call work_context once with the task and a budget");
       expect(workPrompt(style)).toContain("pass max_tokens on searches");
@@ -231,6 +236,24 @@ describe("work routes", () => {
     expect(calls).toEqual(["GET connectors ", "GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}", "PATCH connectors/asana {\"picked\":[\"w1\"]}"]);
   });
 
+  test("a start sends on only Zendesk's address and Intercom's region; no body or a bad one sends nothing", async () => {
+    const { calls, call } = setup(() => json({ auth_url: "https://acme.zendesk.com/oauth/authorizations/new?x=1" }));
+    expect(await (await call("POST", "/work/connectors/zendesk/start", { host: " acme.zendesk.com ", evil: "x" })).json()).toEqual({ auth_url: "https://acme.zendesk.com/oauth/authorizations/new?x=1" });
+    await call("POST", "/work/connectors/intercom/start", { region: "eu", host: "" });
+    await call("POST", "/work/connectors/intercom/start", { region: "mars" });
+    await call("POST", "/work/connectors/zendesk/start");
+    await call("POST", "/work/connectors/zendesk/start", [1]);
+    expect(calls).toEqual([
+      `POST connectors/zendesk/start ${JSON.stringify({ host: "acme.zendesk.com" })}`,
+      `POST connectors/intercom/start ${JSON.stringify({ region: "eu" })}`,
+      "POST connectors/intercom/start {}",
+      "POST connectors/zendesk/start {}",
+      "POST connectors/zendesk/start {}",
+    ]);
+    for (const tool of ["zendesk_search", "zendesk_search_articles", "zendesk_read", "intercom_search", "intercom_read", "front_inboxes", "front_search", "front_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["zendesk_note", "zendesk_reply", "intercom_note", "intercom_reply", "front_comment"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+  });
+
   test("a server-and-password connect forwards only the form's fields", async () => {
     const { calls, call } = setup(() => json({ ok: true, account: "me@corp.test" }));
     const form = { preset: "other", host: "mail.corp.test", port: 993, security: "tls", username: "me@corp.test", password: "app-pw", evil: "x", url: 5 };
@@ -261,6 +284,20 @@ describe("work routes", () => {
     expect((await (await missing.call("POST", "/work/connectors/freshdesk/connect", { api_key: "fd-key-1", host: "acme" })).json()).message).toBe(
       "Freshdesk could not find that account address. Check it and try again.",
     );
+    // Shopify's Dev Dashboard app: the Client ID goes on with the secret; its refusals are worded.
+    const shop = setup(() => json({ ok: true, account: "acme.myshopify.com" }));
+    await shop.call("POST", "/work/connectors/shopify/connect", { host: "acme", client_id: "abc123def456", api_key: "shpss_x", evil: "x" });
+    expect(shop.calls).toEqual([`POST connectors/shopify/connect ${JSON.stringify({ host: "acme", api_key: "shpss_x", client_id: "abc123def456" })}`]);
+    for (const [detail, words] of [
+      ["shopify_not_permitted", "own organization"],
+      ["shopify_scope_missing", "read_orders"],
+      ["gitlab_not_found", "gitlab.com"],
+      ["gitlab_scope_missing", "read_api"],
+    ]) {
+      const message = (await (await setup(() => json({ detail }, 400)).call("POST", "/work/connectors/gitlab/connect", { api_key: "glpat-x" })).json()).message;
+      expect(message).toContain(words);
+      expect(message).not.toMatch(/[\u2013\u2014]/);
+    }
     const moved = setup(() => json({ detail: "bad_redirect", reason: "unusable location" }, 400));
     expect((await (await moved.call("POST", "/work/connectors/caldav/connect", { preset: "other", url: "https://dav.example.com/", username: "u", password: "p" })).json()).message).toBe(
       "The calendar server sent us to an address that does not work. Check the URL.",
@@ -284,6 +321,14 @@ describe("work routes", () => {
     expect(await word({ detail: "no_bases" })).toContain("no bases");
     for (const tool of ["airtable_bases", "airtable_search", "airtable_read", "calendly_events", "calendly_read_event", "calendly_event_types", "figma_list", "figma_read_file"]) expect(WORK_READ_TOOLS).toContain(tool);
     for (const tool of ["airtable_comment", "airtable_create_record", "calendly_create_link", "figma_comment"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+  });
+
+  test("Trello's token goes on with its key; the new read tools do not ask first", async () => {
+    const { calls, call } = setup(() => json({ ok: true, account: "ann@acme.example" }));
+    await call("POST", "/work/connectors/trello/connect", { api_key: "k1", token: "t1", evil: "x" });
+    expect(calls).toEqual([`POST connectors/trello/connect ${JSON.stringify({ api_key: "k1", token: "t1" })}`]);
+    for (const tool of ["trello_search", "trello_read", "clickup_tasks", "clickup_read", "monday_search", "monday_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["trello_comment", "trello_create_card", "clickup_comment", "clickup_create_task", "monday_comment", "monday_create_item"]) expect(WORK_READ_TOOLS).not.toContain(tool);
   });
 
   test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {
@@ -326,9 +371,9 @@ describe("work routes", () => {
   test("the broker reaches only the contract's paths", () => {
     for (const path of ["connectors", "connectors/jira/start", "connectors/imap/connect", "connectors/hook/hook", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "graph", "timeline", "mcp", "enable", "onboarding", "demo", "org/invites", "org/invites/accept", "org/members",
       "feed", "connectors/github/sync", "org", "org/me", "org/leave", "org/transfer", "org/invites/inv_1", "org/members/user_2",
-      "org/insights", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
+      "org/insights", "org/connectors", "settings", "imessage", "whatsapp-local", "telegram", "actions", "actions/act_1/undo", "search", "coverage", "deals", "deals/demo:hubspot:deal:9001", "imports",
       "meetings", "meetings/0193a0b4-7c1e-7d2a-9b3c-1234567890ab", "meetings/m_1/audio"]) expect(WORK_PATH.test(path)).toBe(true);
-    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", "", "org/x", "org/../admin", "org/invites/a/b", "org/members/a/b", "org/connectors/x", "audit", "data", "graph/x", "feed/x", "connectors/github/purge",
       "actions/x", "actions/a/b/undo", "actions/a/redo", "settings/x", "imessage/x", "whatsapp-local/x", "whatsapp", "telegram/x", "org/insights/x", "actions/../undo", "entities/..", "facts/.", "org/members/..",
       "search/x", "coverage/x", "deals/a/b", "deals/..", "imports/x", "asks", "meetings/..", "meetings/m_1/x", "meetings/m_1/audio/x", "meetings/../admin", "hooks/h1/orh_x", "connectors/hook/hook/x"]) expect(WORK_PATH.test(path)).toBe(false);
   });
@@ -470,6 +515,51 @@ describe("work routes", () => {
     expect(await (await denied("POST", "/work/org/leave")).json()).toMatchObject({ code: "transfer_first", message: "Make someone else the owner before you leave." });
   });
 
+  test("the company's connectors and a member's role are checked, then forwarded; a saved list re-reads the switch", async () => {
+    const asked: unknown[] = [];
+    const { calls, call } = setup(() => json({ ok: true }), async (options) => {
+      asked.push(options);
+      return { work: { enabled: true, sources: ["google"] } };
+    });
+    await call("GET", "/work/state");
+    await call("GET", "/work/org/connectors");
+    expect((await call("PATCH", "/work/org/connectors", { shown: ["google", "slack", "google"], evil: 1 })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/connectors", { shown: null })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/connectors", { shown: [] })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/connectors", {})).status).toBe(400);
+    expect((await call("PATCH", "/work/org/connectors", { shown: "google" })).status).toBe(400);
+    expect((await call("PATCH", "/work/org/connectors", { shown: ["../admin"] })).status).toBe(400);
+    expect((await call("PATCH", "/work/org/connectors", { shown: Array.from({ length: 101 }, (_, i) => `c${i}`) })).status).toBe(400);
+    await call("GET", "/work/state");
+    expect(asked).toEqual([undefined, { maxAgeMs: 0 }]);
+    expect((await call("PATCH", "/work/org/members/user_2", { role: "admin", evil: 1 })).status).toBe(200);
+    expect((await call("PATCH", "/work/org/members/user_2", { role: "owner" })).status).toBe(400);
+    expect((await call("PATCH", "/work/org/members/a%2Fb", { role: "member" })).status).toBe(404);
+    expect(calls).toEqual([
+      "GET org/connectors ",
+      "PATCH org/connectors {\"shown\":[\"google\",\"slack\"]}",
+      "PATCH org/connectors {\"shown\":null}",
+      "PATCH org/connectors {\"shown\":[]}",
+      "PATCH org/members/user_2 {\"role\":\"admin\"}",
+    ]);
+    // The server's refusals read in words.
+    const { call: refused } = setup(() => json({ detail: "connector_off", reason: "x" }, 403));
+    expect(await (await refused("POST", "/work/connectors/slack/start")).json()).toMatchObject({ code: "connector_off", message: "Your company admin has turned this off." });
+    // A connector the company turned off: the next state reads the sources fresh (the desktop's chat sync follows them).
+    const fresh: unknown[] = [];
+    const { call: offCall } = setup(() => json({ detail: "connector_not_allowed" }, 403), async (options) => {
+      fresh.push(options);
+      return { work: { enabled: true, sources: ["google"] } };
+    });
+    await offCall("GET", "/work/state");
+    expect((await offCall("POST", "/work/whatsapp-local", { records: [] })).status).toBe(403);
+    await offCall("GET", "/work/state");
+    await offCall("GET", "/work/state");
+    expect(fresh).toEqual([undefined, { maxAgeMs: 0 }, undefined]);
+    const { call: notAdmin } = setup(() => json({ detail: "not_admin" }, 403));
+    expect(await (await notAdmin("PATCH", "/work/org/connectors", { shown: null })).json()).toMatchObject({ code: "not_admin", message: "Only your company owner or an admin can change this." });
+  });
+
   test("insights, the action layer and iMessage are checked, then forwarded; a saved setting re-reads the switch", async () => {
     const asked: unknown[] = [];
     let autopilot = false;
@@ -514,6 +604,20 @@ describe("work routes", () => {
       "GET telegram ",
       `POST telegram ${JSON.stringify({ records: [tg] })}`,
     ]);
+  });
+
+  test("a chat push waits longer than the default minute; running out of time answers timeout, other errors stay errors", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const { calls, call } = setup((_path, init) => { signals.push(init.signal); return json({ imported: 1 }); });
+    for (const path of ["imessage", "whatsapp-local", "telegram"]) expect((await call("POST", `/work/${path}`, { records: [] })).status).toBe(200);
+    expect(calls).toEqual(["POST imessage {\"records\":[]}", "POST whatsapp-local {\"records\":[]}", "POST telegram {\"records\":[]}"]);
+    expect(signals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(true);
+    const late = setup(() => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); });
+    const answer = await late.call("POST", "/work/whatsapp-local", { records: [] });
+    expect(answer.status).toBe(504);
+    expect(await answer.json()).toMatchObject({ code: "timeout" });
+    const broken = setup(() => { throw new TypeError("fetch failed"); });
+    await expect(broken.call("POST", "/work/telegram", { records: [] })).rejects.toThrow("fetch failed");
   });
 
   test("an error reads in words: known codes their own text, any other code or a validation list a plain line", async () => {

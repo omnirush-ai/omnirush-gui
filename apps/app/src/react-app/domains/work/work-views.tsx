@@ -1,22 +1,24 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Info, Kanban, LifeBuoy, Mail, MessageCircle, MessageSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
+  ArrowLeft, AtSign, BookOpen, Briefcase, Calculator, Calendar, Cloud, Code2, Copy, CreditCard, Database, FileText, Github, Handshake, Hash, Inbox, Info, Kanban, LayoutGrid, LifeBuoy, Mail, MessageCircle, MessageSquare, MessagesSquare, Phone, Plug, Plus, Send, Shapes, Sparkles, Ticket, Webhook,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Progress as ProgressPrimitive } from "@base-ui/react/progress";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { ProgressIndicator, ProgressTrack } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { t } from "@/i18n";
-import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
-import type { WorkChatSyncSource, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
+import type { OmniRushWorkConnector, OmniRushWorkCredentials, OmniRushWorkHealth, OmniRushWorkImport, OmniRushWorkImportKind, OmniRushWorkStart, OmniRushWorkStarter } from "@/app/lib/omnirush-server";
+import type { WorkChatSyncSource, WorkChatSyncStatus, WorkTelegramLoginStep } from "@omnirush/types/desktop-ipc";
 import { desktopBridge } from "@/app/lib/desktop";
 import { isDesktopRuntime } from "@/app/lib/runtime-env";
 import { isMacPlatform } from "@/app/utils";
@@ -36,8 +38,8 @@ import { ConfirmModal } from "@/react-app/design-system/modals/confirm-modal";
 import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from "@/react-app/domains/session/surface/composer/composer";
 
 import {
-  connectorAccess, connectorChoicesTitle, connectorLabel, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
-  sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type WorkClient,
+  chatSyncProgress, connectorAccess, connectorChoicesTitle, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, hasSampleData, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOnboarding, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
+  sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
 } from "./work-mode";
 
 // Connectors, and the channels search results and deals name (gmail, drive, qbo, …).
@@ -47,6 +49,8 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> = {
   gmail: Mail, outlook: Mail, drive: FileText, onedrive: FileText, calendar: Calendar, qbo: Calculator, teams: MessageSquare,
   whatsapp: MessageCircle, whatsapp_business: MessageCircle, telegram: Send, imessage: MessageSquare, meetings: Phone, zoom: Phone,
   imap: AtSign, caldav: Calendar, stripe: CreditCard, freshdesk: LifeBuoy, pipedrive: Handshake, hook: Webhook, hook_org: Webhook,
+  zendesk: LifeBuoy, intercom: MessagesSquare, front: Inbox,
+  monday: LayoutGrid,
 };
 
 // Company marks in their brand colour (simple-icons paths, CC0).
@@ -55,9 +59,21 @@ const BRAND_ICONS: Record<string, { color: string; path: string }> = {
     color: "#F06A6A",
     path: "M18.78 12.653c-2.882 0-5.22 2.336-5.22 5.22s2.338 5.22 5.22 5.22 5.22-2.34 5.22-5.22-2.336-5.22-5.22-5.22zm-13.56 0c-2.88 0-5.22 2.337-5.22 5.22s2.338 5.22 5.22 5.22 5.22-2.338 5.22-5.22-2.336-5.22-5.22-5.22zm12-6.525c0 2.883-2.337 5.22-5.22 5.22-2.882 0-5.22-2.337-5.22-5.22 0-2.88 2.338-5.22 5.22-5.22 2.883 0 5.22 2.34 5.22 5.22z",
   },
+  discord: {
+    color: "#5865F2",
+    path: "M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z",
+  },
   dropbox: {
     color: "#0061FF",
     path: "M6 1.807L0 5.629l6 3.822 6.001-3.822L6 1.807zM18 1.807l-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zM18 9.452l-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z",
+  },
+  trello: {
+    color: "#0052CC",
+    path: "M21.147 0H2.853A2.86 2.86 0 000 2.853v18.294A2.86 2.86 0 002.853 24h18.294A2.86 2.86 0 0024 21.147V2.853A2.86 2.86 0 0021.147 0zM10.34 17.287a.953.953 0 01-.953.953h-4a.954.954 0 01-.954-.953V5.38a.953.953 0 01.954-.953h4a.954.954 0 01.953.953zm9.233-5.467a.944.944 0 01-.953.947h-4a.947.947 0 01-.953-.947V5.38a.953.953 0 01.953-.953h4a.954.954 0 01.953.953z",
+  },
+  clickup: {
+    color: "#7B68EE",
+    path: "M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z",
   },
   airtable: {
     color: "#18BFFF",
@@ -74,6 +90,18 @@ const BRAND_ICONS: Record<string, { color: string; path: string }> = {
   zoom: {
     color: "#0B5CFF",
     path: "M5.033 14.649H.743a.74.74 0 0 1-.686-.458.74.74 0 0 1 .16-.808L3.19 10.41H1.06A1.06 1.06 0 0 1 0 9.35h3.957c.301 0 .57.18.686.458a.74.74 0 0 1-.161.808L1.51 13.59h2.464c.585 0 1.06.475 1.06 1.06zM24 11.338c0-1.14-.927-2.066-2.066-2.066-.61 0-1.158.265-1.537.686a2.061 2.061 0 0 0-1.536-.686c-1.14 0-2.066.926-2.066 2.066v3.311a1.06 1.06 0 0 0 1.06-1.06v-2.251a1.004 1.004 0 0 1 2.013 0v2.251c0 .586.474 1.06 1.06 1.06v-3.311a1.004 1.004 0 0 1 2.012 0v2.251c0 .586.475 1.06 1.06 1.06zM16.265 12a2.728 2.728 0 1 1-5.457 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0zm-4.82 0a2.728 2.728 0 1 1-5.458 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0z",
+  },
+  gitlab: {
+    color: "#FC6D26",
+    path: "m23.6004 9.5927-.0337-.0862L20.3.9814a.851.851 0 0 0-.3362-.405.8748.8748 0 0 0-.9997.0539.8748.8748 0 0 0-.29.4399l-2.2055 6.748H7.5375l-2.2057-6.748a.8573.8573 0 0 0-.29-.4412.8748.8748 0 0 0-.9997-.0537.8585.8585 0 0 0-.3362.4049L.4332 9.5015l-.0325.0862a6.0657 6.0657 0 0 0 2.0119 7.0105l.0113.0087.03.0213 4.976 3.7264 2.462 1.8633 1.4995 1.1321a1.0085 1.0085 0 0 0 1.2197 0l1.4995-1.1321 2.4619-1.8633 5.006-3.7489.0125-.01a6.0682 6.0682 0 0 0 2.0094-7.003z",
+  },
+  shopify: {
+    color: "#7AB55C",
+    path: "M15.337 23.979l7.216-1.561s-2.604-17.613-2.625-17.73c-.018-.116-.114-.192-.211-.192s-1.929-.136-1.929-.136-1.275-1.274-1.439-1.411c-.045-.037-.075-.057-.121-.074l-.914 21.104h.023zM11.71 11.305s-.81-.424-1.774-.424c-1.447 0-1.504.906-1.504 1.141 0 1.232 3.24 1.715 3.24 4.629 0 2.295-1.44 3.76-3.406 3.76-2.354 0-3.54-1.465-3.54-1.465l.646-2.086s1.245 1.066 2.28 1.066c.675 0 .975-.545.975-.932 0-1.619-2.654-1.694-2.654-4.359-.034-2.237 1.571-4.416 4.827-4.416 1.257 0 1.875.361 1.875.361l-.945 2.715-.02.01zM11.17.83c.136 0 .271.038.405.135-.984.465-2.064 1.639-2.508 3.992-.656.213-1.293.405-1.889.578C7.697 3.75 8.951.84 11.17.84V.83zm1.235 2.949v.135c-.754.232-1.583.484-2.394.736.466-1.777 1.333-2.645 2.085-2.971.193.501.309 1.176.309 2.1zm.539-2.234c.694.074 1.141.867 1.429 1.755-.349.114-.735.231-1.158.366v-.252c0-.752-.096-1.371-.271-1.871v.002zm2.992 1.289c-.02 0-.06.021-.078.021s-.289.075-.714.21c-.423-1.233-1.176-2.37-2.508-2.37h-.115C12.135.209 11.669 0 11.265 0 8.159 0 6.675 3.877 6.21 5.846c-1.194.365-2.063.636-2.16.674-.675.213-.694.232-.772.87-.075.462-1.83 14.063-1.83 14.063L15.009 24l.927-21.166z",
+  },
+  box: {
+    color: "#0061D5",
+    path: "M.959 5.523c-.54 0-.959.42-.959.899v7.549a4.59 4.59 0 004.613 4.494 4.717 4.717 0 004.135-2.457c.779 1.438 2.337 2.457 4.074 2.457 2.577 0 4.674-2.037 4.674-4.613.06-2.457-2.037-4.495-4.613-4.495-1.738 0-3.295.959-4.074 2.397-.78-1.438-2.338-2.397-4.135-2.397-1.079 0-2.038.36-2.817.899V6.422a.92.92 0 00-.898-.899zM17.602 9.26a.95.95 0 00-.704.158c-.36.3-.479.899-.18 1.318l2.397 3.116-2.396 3.115c-.3.42-.24.96.18 1.26.419.3 1.016.298 1.316-.122l2.039-2.636 2.096 2.697c.3.36.899.419 1.318.12.36-.3.42-.84.121-1.259l-2.338-3.115 2.338-3.057c.3-.419.298-1.018-.121-1.318-.48-.3-1.019-.24-1.318.18l-2.096 2.576-2.04-2.695c-.149-.18-.373-.3-.612-.338zM4.613 11.154c1.558 0 2.817 1.26 2.817 2.758 0 1.558-1.259 2.756-2.817 2.756-1.558 0-2.816-1.198-2.816-2.756 0-1.498 1.258-2.758 2.816-2.758zm8.27 0c1.558 0 2.816 1.26 2.816 2.758-.06 1.558-1.318 2.756-2.816 2.756-1.558 0-2.817-1.198-2.817-2.756 0-1.498 1.259-2.758 2.817-2.758Z",
   },
 };
 
@@ -234,6 +262,7 @@ function statusLabel(status: OmniRushWorkConnector["status"]): string {
   if (status === "syncing") return t("work.connectors.status_syncing");
   if (status === "error") return t("work.today.dot_attention");
   if (status === "disconnected") return t("work.error.not_connected");
+  if (status === "paused_by_admin") return t("work.connectors.status_paused");
   return t("work.connectors.status_unavailable");
 }
 
@@ -245,6 +274,46 @@ function lastSync(value: string | null): string {
 export const CONNECT_POLL_MS = 2_000;
 // Sign-in with a second factor or an admin prompt often takes over a minute.
 export const CONNECT_TIMEOUT_MS = 180_000;
+// While a source imports its history, its bar moves with this poll.
+export const PROGRESS_POLL_MS = 5_000;
+// The chat sync's status (an IPC call) while a read runs, and otherwise.
+export const CHAT_SYNC_POLL_MS = 1_500;
+const CHAT_SYNC_IDLE_POLL_MS = 15_000;
+
+/** The thin bar under a source's line while it syncs: filled as far as it got, or a short pulsing piece while how much
+ *  is left is not known, with its words beside it (under it on a narrow card). One width on every row, so the bars line
+ *  up; the coverage meter's colours. */
+export function SyncProgressBar(props: { view: SyncProgressView; name: string }) {
+  const { view } = props;
+  return (
+    <ProgressPrimitive.Root
+      value={view.value}
+      aria-label={t("work.connectors.progress_for", { name: props.name })}
+      getAriaValueText={() => view.label}
+      className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1"
+      data-testid="work-sync-progress"
+      data-value={view.value ?? "unknown"}
+    >
+      <ProgressTrack className="h-1 w-40 max-w-full shrink-0 bg-muted-foreground/15 dark:bg-muted-foreground/25">
+        <ProgressIndicator className={cn("rounded-full bg-foreground/45 motion-safe:duration-500 motion-reduce:transition-none dark:bg-foreground/55", view.value === null && "w-1/4 motion-safe:animate-pulse")} />
+      </ProgressTrack>
+      <span className="text-[12px] tabular-nums text-muted-foreground">{view.label}</span>
+    </ProgressPrimitive.Root>
+  );
+}
+
+/** Whether a chat sync read runs now (the cards poll faster then). */
+const chatSyncRunning = (status: WorkChatSyncStatus | undefined) => Boolean(status && Object.values(status).some((source) => source?.running));
+const chatSyncPoll = (query: { state: { data?: WorkChatSyncStatus } }) => (chatSyncRunning(query.state.data) ? CHAT_SYNC_POLL_MS : CHAT_SYNC_IDLE_POLL_MS);
+
+/** Calls `done` when the source's read stops running (an automatic one too), so its count is read again. */
+function useRunEnded(running: boolean, done: () => void) {
+  const was = useRef(running);
+  useEffect(() => {
+    if (was.current && !running) done();
+    was.current = running;
+  });
+}
 
 /** One source on the Connectors page. */
 export function ConnectorRow(props: {
@@ -265,10 +334,14 @@ export function ConnectorRow(props: {
   retrying?: boolean;
   /** Saves what a picking source reads (Asana's workspaces; [] is all). */
   onPick?: (picked: string[]) => void;
+  /** The company's owner or an admin: a connector the company turned off says so for the team, and opens Organization. */
+  onManage?: () => void;
 }) {
   const row = props.connector;
   const name = connectorLabel(row.id, row.label);
   const connected = row.status === "connected" || row.status === "syncing" || row.status === "error";
+  // Turned off by the company: what was connected stays, and Disconnect is the only button.
+  const paused = isPausedByAdmin(row);
   const problem = healthProblem(props.health ?? null);
   // The server's own account of a problem (contract Addendum C1) decides the button when it sends one.
   const attention = connected ? row.attention ?? null : null;
@@ -276,6 +349,8 @@ export function ConnectorRow(props: {
   // Connected and caught up with nothing to read: for GitHub, the App is not installed on any repository yet.
   const needsSetup = !attention && Boolean(row.setup_url) && row.status === "connected" && row.records === 0;
   const coverage = coverageLine(row.coverage);
+  // The history import's bar (servers that send `progress`); nothing once it is caught up.
+  const progress = connected ? connectorProgress(row.progress) : null;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
       <ConnectorIcon id={row.id} />
@@ -283,7 +358,7 @@ export function ConnectorRow(props: {
       <div className="min-w-[16rem] flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{name}</span>
-          <Badge variant={row.status === "error" || attention?.kind === "reconnect" || attention?.kind === "failing" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
+          <Badge variant={row.status === "error" || attention?.kind === "reconnect" || attention?.kind === "failing" ? "destructive" : row.status === "disconnected" || paused ? "outline" : "secondary"} data-testid="work-connector-status">
             {props.connecting ? t("work.common.waiting_sign_in") : attention ? statusLabel("error") : statusLabel(row.status)}
           </Badge>
         </div>
@@ -292,8 +367,24 @@ export function ConnectorRow(props: {
             ? sourceErrorText(row.error)
             : connected
               ? [row.account, coverage ?? countLabel(row.records, "work.count.records"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
-              : connectorAccess(row.id)}
+              : paused
+                ? [row.account, countLabel(row.records, "work.count.records")].filter(Boolean).join(" · ")
+                : connectorAccess(row.id)}
         </div>
+        {paused ? (
+          <div className="mt-0.5 break-words text-[12px] text-amber-11" data-testid="work-connector-paused" data-by={row.paused_by}>
+            {row.paused_by === "staff" ? t("work.connectors.paused_by_staff") : props.onManage ? t("work.connectors.paused_for_team") : t("work.connectors.paused_by_org")}
+            {row.paused_by !== "staff" && props.onManage ? (
+              <>
+                {" "}
+                <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={props.onManage} data-testid="work-connector-paused-manage">
+                  {t("work.connectors.paused_manage")}
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        {progress ? <SyncProgressBar view={progress} name={name} /> : null}
         {attention ? (
           <div
             className={cn("mt-0.5 break-words text-[12px]", attention.kind === "reconnect" || attention.kind === "failing" ? "text-destructive" : "text-amber-11")}
@@ -346,7 +437,7 @@ export function ConnectorRow(props: {
       {connected && reconnect ? (
         <Button size="sm" aria-label={t("work.connectors.reconnect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.connectors.reconnect")}</Button>
       ) : null}
-      {connected ? (
+      {connected || paused ? (
         <Button variant="outline" size="sm" aria-label={t("work.connectors.disconnect_name", { name })} disabled={props.busy} onClick={props.onDisconnect}>{t("work.connectors.disconnect")}</Button>
       ) : (
         <Button size="sm" aria-label={t("work.connectors.connect_name", { name })} disabled={props.busy || props.connecting} onClick={props.onConnect}>{t("work.common.connect")}</Button>
@@ -521,9 +612,15 @@ export function CredentialsForm(props: { connector: OmniRushWorkConnector; clien
   );
 }
 
-/** The pasted-key sources: where the key is (the steps and a link), its field's name, for Freshdesk the account's address, for
- *  Figma the links to follow (Figma cannot list every file), and whether the token is also used for writes the user approves. */
-type KeyFormSpec = { help: string; placeholder: string; where: () => string; label: () => string; host?: () => string; links?: () => string; writes?: boolean };
+/** The pasted-key sources: where the key is (the steps and a link), its field's name, the account's address where it has one
+ *  (Freshdesk, Shopify; GitLab's is optional: empty is gitlab.com), Shopify's Client ID, Trello's second secret (the token),
+ *  for Figma the links to follow (Figma cannot list every file), and whether the key is also used for writes the user approves
+ *  ("token": the note says token). */
+type KeyFormSpec = {
+  help: string; placeholder: string; where: () => string; label: () => string;
+  host?: () => string; hostPlaceholder?: string; hostOptional?: boolean; clientId?: () => string; token?: () => string; links?: () => string;
+  writes?: boolean | "token";
+};
 const KEY_FORMS: Record<string, KeyFormSpec> = {
   stripe: { help: "https://dashboard.stripe.com/apikeys", placeholder: "rk_live_...", where: () => t("work.key.where_stripe"), label: () => t("work.key.label_stripe") },
   freshdesk: {
@@ -534,13 +631,49 @@ const KEY_FORMS: Record<string, KeyFormSpec> = {
     host: () => t("work.key.host_freshdesk"),
   },
   pipedrive: { help: "https://pipedrive.readme.io/docs/how-to-find-the-api-token", placeholder: "", where: () => t("work.key.where_pipedrive"), label: () => t("work.key.label_pipedrive") },
-  airtable: { help: "https://airtable.com/create/tokens", placeholder: "pat...", where: () => t("work.key.where_airtable"), label: () => t("work.key.label_token"), writes: true },
+  trello: {
+    help: "https://trello.com/apps/admin",
+    placeholder: "",
+    where: () => t("work.key.where_trello"),
+    label: () => t("work.key.label_trello"),
+    token: () => t("work.key.token_trello"),
+    writes: true,
+  },
+  clickup: { help: "https://app.clickup.com/settings/apps", placeholder: "pk_...", where: () => t("work.key.where_clickup"), label: () => t("work.key.label_clickup"), writes: true },
+  monday: {
+    help: "https://developer.monday.com/api-reference/docs/authentication",
+    placeholder: "",
+    where: () => t("work.key.where_monday"),
+    label: () => t("work.key.label_monday"),
+    writes: true,
+  },
+  gitlab: {
+    help: "https://docs.gitlab.com/user/profile/personal_access_tokens/",
+    placeholder: "glpat-...",
+    where: () => t("work.key.where_gitlab"),
+    label: () => t("work.key.label_gitlab"),
+    host: () => t("work.key.host_gitlab"),
+    hostPlaceholder: "gitlab.com",
+    hostOptional: true,
+    writes: true,
+  },
+  shopify: {
+    help: "https://help.shopify.com/en/manual/apps/app-types/custom-apps",
+    placeholder: "shpss_... or shpat_...",
+    where: () => t("work.key.where_shopify"),
+    label: () => t("work.key.label_shopify"),
+    host: () => t("work.key.host_shopify"),
+    hostPlaceholder: "yourstore.myshopify.com",
+    clientId: () => t("work.key.client_id_shopify"),
+    writes: true,
+  },
+  airtable: { help: "https://airtable.com/create/tokens", placeholder: "pat...", where: () => t("work.key.where_airtable"), label: () => t("work.key.label_token"), writes: "token" },
   calendly: {
     help: "https://calendly.com/app/developer?tab=personal_access_tokens",
     placeholder: "",
     where: () => t("work.key.where_calendly"),
     label: () => t("work.key.label_token"),
-    writes: true,
+    writes: "token",
   },
   figma: {
     help: "https://developers.figma.com/docs/rest-api/personal-access-tokens/",
@@ -548,34 +681,37 @@ const KEY_FORMS: Record<string, KeyFormSpec> = {
     where: () => t("work.key.where_figma"),
     label: () => t("work.key.label_token"),
     links: () => t("work.key.links_figma"),
-    writes: true,
+    writes: "token",
   },
 };
 
-/** A source connected with a pasted API key or token (Stripe, Freshdesk, Pipedrive, Airtable, Calendly, Figma): where to find
- *  it, paste it, and Test and save tries it before anything is saved. The key goes to the server once and is not kept here. */
+/** A source connected with a pasted API key or token (Stripe, Freshdesk, Pipedrive, Trello, ClickUp, monday.com, GitLab, Shopify,
+ *  Airtable, Calendly, Figma): where to find it, paste it, and Test and save tries it before anything is saved. The key goes to
+ *  the server once and is not kept here. */
 export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkClient | null; openLink: (url: string) => void; onDone: () => void; onCancel: () => void }) {
   const id = props.connector.id;
   const spec: KeyFormSpec = KEY_FORMS[id] ?? { help: "", placeholder: "", where: () => "", label: () => t("work.key.label_freshdesk") };
   const name = connectorLabel(id, props.connector.label);
-  const [field, setField] = useState({ api_key: "", host: "", url: "" });
+  const [field, setField] = useState({ api_key: "", host: "", client_id: "", token: "", url: "" });
   const [error, setError] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: () =>
       props.client!.connectWorkCredentials(id, {
         api_key: field.api_key.trim(),
-        ...(spec.host ? { host: field.host.trim() } : {}),
+        ...(spec.host && field.host.trim() ? { host: field.host.trim() } : {}),
+        ...(spec.clientId && field.client_id.trim() ? { client_id: field.client_id.trim() } : {}),
+        ...(spec.token ? { token: field.token.trim() } : {}),
         // Figma's links, one per line (the server also splits on spaces and commas).
         ...(spec.links ? { url: field.url.trim() } : {}),
       }),
     onSuccess: () => {
-      setField({ api_key: "", host: "", url: "" });
+      setField({ api_key: "", host: "", client_id: "", token: "", url: "" });
       toast.success(t("work.mailcal.connected", { name }));
       props.onDone();
     },
     onError: (reason) => setError(workFailure(reason).text),
   });
-  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || Boolean(field.host.trim())) && (!spec.links || Boolean(field.url.trim()));
+  const ready = Boolean(props.client) && Boolean(field.api_key.trim()) && (!spec.host || spec.hostOptional || Boolean(field.host.trim())) && (!spec.token || Boolean(field.token.trim())) && (!spec.links || Boolean(field.url.trim()));
   const input = (key: keyof typeof field, label: string, extra: { type?: string; placeholder?: string } = {}) => (
     <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
       {label}
@@ -612,8 +748,10 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
         ) : null}
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
-        {spec.host ? input("host", spec.host(), { placeholder: "yourcompany.freshdesk.com" }) : null}
+        {spec.host ? input("host", spec.host(), { placeholder: spec.hostPlaceholder ?? "yourcompany.freshdesk.com" }) : null}
+        {spec.clientId ? input("client_id", spec.clientId()) : null}
         {input("api_key", spec.label(), { type: "password", placeholder: spec.placeholder })}
+        {spec.token ? input("token", spec.token(), { type: "password" }) : null}
       </div>
       {spec.links ? (
         <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
@@ -630,13 +768,74 @@ export function KeyForm(props: { connector: OmniRushWorkConnector; client: WorkC
           />
         </label>
       ) : null}
-      <p className="text-[12px] text-muted-foreground">{spec.writes ? t("work.key.note_token_write") : t("work.key.note")}</p>
+      <p className="text-[12px] text-muted-foreground">{spec.writes === "token" ? t("work.key.note_token_write") : spec.writes ? t("work.key.note_write") : t("work.key.note")}</p>
       {error ? <p className="text-[12px] text-destructive" role="alert" data-testid="work-key-error">{error}</p> : null}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={props.onCancel}>{t("common.cancel")}</Button>
         <Button type="submit" size="sm" disabled={!ready || save.isPending} data-testid="work-key-save">
           {save.isPending ? t("work.mailcal.testing") : t("work.mailcal.test_and_save")}
         </Button>
+      </div>
+    </form>
+  );
+}
+
+const REGIONS = [
+  { value: "us", label: () => t("work.start.region_us") },
+  { value: "eu", label: () => t("work.start.region_eu") },
+  { value: "au", label: () => t("work.start.region_au") },
+] as const;
+
+/** What a sign-in source asks before its sign-in page opens (`start_fields`): Zendesk's address, Intercom's region. */
+export function StartForm(props: { connector: OmniRushWorkConnector; busy: boolean; onStart: (form: OmniRushWorkStart) => void; onCancel: () => void }) {
+  const id = props.connector.id;
+  const fields = props.connector.start_fields ?? [];
+  const name = connectorLabel(id, props.connector.label);
+  const [host, setHost] = useState("");
+  const [region, setRegion] = useState<OmniRushWorkStart["region"]>("us");
+  const asksHost = fields.includes("host");
+  const asksRegion = fields.includes("region");
+  const ready = !asksHost || Boolean(host.trim());
+  const items = REGIONS.map((item) => ({ value: item.value, label: item.label() }));
+  return (
+    <form
+      className="flex flex-col gap-3 border-b border-border bg-muted/30 px-4 py-3 last:border-b-0"
+      data-testid={`work-start-${id}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (ready && !props.busy) props.onStart({ ...(asksHost ? { host: host.trim() } : {}), ...(asksRegion ? { region } : {}) });
+      }}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        {asksHost ? (
+          <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+            {t("work.start.host", { name })}
+            <Input
+              className="h-8"
+              value={host}
+              disabled={props.busy}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={`yourcompany.${id}.com`}
+              onChange={(event) => setHost(event.target.value)}
+              data-start-field="host"
+            />
+          </label>
+        ) : null}
+        {asksRegion ? (
+          <label className="flex flex-col gap-1 text-[12px] text-muted-foreground">
+            {t("work.start.region", { name })}
+            <Select value={region} items={items} onValueChange={(value) => { if (value) setRegion(value as OmniRushWorkStart["region"]); }}>
+              <SelectTrigger className="h-8" aria-label={t("work.start.region", { name })} data-start-field="region"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>{items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
+            </Select>
+          </label>
+        ) : null}
+      </div>
+      <p className="text-[12px] text-muted-foreground">{asksHost ? t("work.start.host_note", { name }) : t("work.start.region_note", { name })}</p>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={props.busy} onClick={props.onCancel}>{t("common.cancel")}</Button>
+        <Button type="submit" size="sm" disabled={!ready || props.busy} data-testid="work-start-continue">{t("work.start.continue")}</Button>
       </div>
     </form>
   );
@@ -759,9 +958,15 @@ const FDA_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy
 
 const LOCAL_CHAT_NAMES: Record<WorkChatSyncSource, string> = { imessage: "iMessage", whatsapp: "WhatsApp", telegram: "Telegram" };
 
+/** The server's answer for a source the company (or OmniRush) turned off. */
+const turnedOff = (code: string | null | undefined) => code === "connector_off" || code === "connector_not_allowed";
+
 /** What a chat sync error says on the card; repeated failures are one line with the count. */
 export function localChatError(source: WorkChatSyncSource, code: string | null, failures: number): string | null {
   if (!code) return null;
+  // The company (or OmniRush) turned it off: no failure, and no count of tries.
+  if (code === "connector_off") return t("work.connectors.paused_by_org");
+  if (code === "connector_not_allowed") return t("work.connectors.paused_by_staff");
   const name = LOCAL_CHAT_NAMES[source];
   const text = code === "fda_required" ? t("work.chatsync.fda_needed", { name })
     : code === "no_messages_db" ? t("work.imessage.no_db")
@@ -770,6 +975,7 @@ export function localChatError(source: WorkChatSyncSource, code: string | null, 
     : code === "flood_wait" ? t("work.telegram.flood_sync")
     : code === "signed_out" ? t("work.telegram.signed_out")
     : code === "no_keyring" ? t("work.telegram.no_keyring")
+    : code === "timeout" ? t("work.chatsync.timeout")
     : t("work.chatsync.failed");
   return failures > 1 ? `${text} ${t("work.chatsync.repeated", { n: failures })}` : text;
 }
@@ -782,7 +988,7 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
   const name = LOCAL_CHAT_NAMES[source];
   const statusKey = ["omnirush-chat-sync"];
   const countKey = [`omnirush-${source}-count`, props.client?.baseUrl?.trim() || "default"];
-  const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: 15_000 });
+  const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: chatSyncPoll });
   const count = useQuery({
     queryKey: countKey,
     queryFn: () => (source === "imessage" ? props.client!.getIMessageCount() : props.client!.getWhatsAppLocalCount()),
@@ -803,8 +1009,14 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
   const toggle = useMutation({ mutationFn: (enabled: boolean) => desktopBridge.workChatSyncSet(source, enabled), onSettled: settle });
   const state = status.data?.[source];
   const busy = syncNow.isPending || toggle.isPending || Boolean(state?.running);
+  useRunEnded(Boolean(state?.running), () => {
+    void queryClient.invalidateQueries({ queryKey: countKey });
+    void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) });
+  });
   const records = count.data?.records ?? 0;
-  const error = localChatError(source, state?.lastError ?? null, state?.failures ?? 0);
+  // While a read runs its bar shows instead of the last run's error.
+  const progress = state?.running ? chatSyncProgress(state.progress, t("work.chatsync.reading_mac")) : null;
+  const error = progress ? null : localChatError(source, state?.lastError ?? null, state?.failures ?? 0);
   const line = [
     records > 0 ? countLabel(records, "work.imessage.synced_days") : source === "imessage" ? t("work.imessage.intro") : t("work.chatsync.whatsapp_intro"),
     state?.lastSyncAt ? t("work.chatsync.last_sync", { when: relativeTime(state.lastSyncAt) }) : null,
@@ -815,8 +1027,9 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
       <div className="min-w-[16rem] flex-1">
         <span className="text-sm font-medium">{name}</span>
         <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-local-chat-line">{line}</div>
-        {error ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
-        {state?.lastError === "fda_required" ? (
+        {progress ? <SyncProgressBar view={progress} name={name} /> : null}
+        {error ? <div className={cn("mt-0.5 text-[12px]", turnedOff(state?.lastError) ? "text-amber-11" : "text-destructive")} data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
+        {error && state?.lastError === "fda_required" ? (
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground" data-testid="work-local-chat-fda">
             {t("work.chatsync.fda_steps")}
             <Button type="button" variant="outline" size="sm" onClick={() => props.openLink(FDA_URL)}>{t("work.imessage.open_settings")}</Button>
@@ -834,19 +1047,19 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
           />
         </label>
         <Button type="button" variant="outline" size="sm" disabled={busy || !status.data} onClick={() => syncNow.mutate()} data-testid={`work-${source}-sync`}>
-          {busy ? t("work.imessage.reading") : t("work.chatsync.sync_now")}
+          {busy ? (progress?.value != null ? t("work.chatsync.syncing") : t("work.imessage.reading")) : t("work.chatsync.sync_now")}
         </Button>
       </div>
     </div>
   );
 }
 
-/** The chats this Mac syncs on its own (iMessage, the WhatsApp app). */
-export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void }) {
+/** The chats this Mac syncs on its own (iMessage, the WhatsApp app); `off` leaves out the ones the company turned off. */
+export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void; off?: readonly string[] }) {
+  const sources = (["whatsapp", "imessage"] as const).filter((source) => !props.off?.includes(source));
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-local-chats">
-      <LocalChatCard source="whatsapp" client={props.client} openLink={props.openLink} />
-      <LocalChatCard source="imessage" client={props.client} openLink={props.openLink} />
+      {sources.map((source) => <LocalChatCard key={source} source={source} client={props.client} openLink={props.openLink} />)}
     </div>
   );
 }
@@ -876,7 +1089,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
   const status = useQuery({ queryKey: statusKey, queryFn: () => desktopBridge.workTelegramStatus(), enabled: isDesktopRuntime() });
   const data = status.data?.available ? status.data : null;
   const signedIn = data?.step === "signed_in";
-  const sync = useQuery({ queryKey: syncKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: 15_000, enabled: signedIn });
+  const sync = useQuery({ queryKey: syncKey, queryFn: () => desktopBridge.workChatSyncStatus(), refetchInterval: chatSyncPoll, enabled: signedIn });
   const count = useQuery({ queryKey: countKey, queryFn: () => props.client!.getTelegramCount(), enabled: Boolean(props.client) && signedIn });
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -904,9 +1117,14 @@ export function TelegramCard(props: { client: WorkClient | null }) {
   });
   const settings = useMutation({ mutationFn: (change: { channels?: boolean; days?: number }) => desktopBridge.workTelegramSettings(change), onSettled: settle });
   const logout = useMutation({ mutationFn: () => desktopBridge.workTelegramLogout(), onSettled: settle });
+  useRunEnded(Boolean(sync.data?.telegram?.running), () => {
+    void queryClient.invalidateQueries({ queryKey: countKey });
+    void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) });
+  });
   if (!data) return null;
   const state = sync.data?.telegram;
   const records = count.data?.records ?? 0;
+  const progress = signedIn && state?.running ? chatSyncProgress(state.progress, t("work.chatsync.reading_telegram")) : null;
   const asking = data.step === "signed_out" || data.step === "code" || data.step === "password";
   const busy = login.isPending || logout.isPending;
   const line = signedIn
@@ -915,7 +1133,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
     : data.step === "code" ? (data.via === "app" ? t("work.telegram.code_app") : t("work.telegram.code_sms"))
     : data.step === "password" ? (data.hint ? t("work.telegram.password_hint", { hint: data.hint }) : t("work.telegram.password_intro"))
     : t("work.telegram.intro");
-  const shownError = error ?? (signedIn ? localChatError("telegram", state?.lastError ?? null, state?.failures ?? 0) : null);
+  const shownError = error ?? (signedIn && !progress ? localChatError("telegram", state?.lastError ?? null, state?.failures ?? 0) : null);
   const submit = (): WorkTelegramLoginStep => (data.step === "code" ? { code: value } : data.step === "password" ? { password: value } : { phone: value });
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-telegram-card" data-step={data.step}>
@@ -924,6 +1142,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
         <div className="min-w-[16rem] flex-1">
           <span className="text-sm font-medium">Telegram</span>
           <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-telegram-line">{line}</div>
+          {progress ? <SyncProgressBar view={progress} name="Telegram" /> : null}
           {shownError ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-telegram-error">{shownError}</div> : null}
           {asking ? (
             <form
@@ -973,7 +1192,7 @@ export function TelegramCard(props: { client: WorkClient | null }) {
                 <Switch aria-label={t("work.connectors.data_sync_for", { name: "Telegram" })} checked={state?.enabled === true} disabled={!sync.data || toggle.isPending} onCheckedChange={(checked: boolean) => toggle.mutate(checked)} />
               </label>
               <Button type="button" variant="outline" size="sm" disabled={syncNow.isPending || Boolean(state?.running) || !sync.data} onClick={() => syncNow.mutate()} data-testid="work-telegram-sync">
-                {syncNow.isPending || state?.running ? t("work.imessage.reading") : t("work.chatsync.sync_now")}
+                {syncNow.isPending || state?.running ? (progress?.value != null ? t("work.chatsync.syncing") : t("work.imessage.reading")) : t("work.chatsync.sync_now")}
               </Button>
             </>
           ) : null}
@@ -1047,8 +1266,9 @@ const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
 const IMPORT_ACCEPT: Record<OmniRushWorkImportKind, string> = { whatsapp: ".txt,.zip,text/plain,application/zip", telegram: ".json,application/json" };
 
 /** WhatsApp and Telegram have no sign-in: a chat export from the phone (or Telegram Desktop) is uploaded instead. Each row says
- *  how to export, Import opens the file picker, and the line under it shows the last import. */
-export function ChatImportCard(props: { client: WorkClient | null }) {
+ *  how to export, Import opens the file picker, and the line under it shows the last import. `off` leaves out the kinds
+ *  the company turned off. */
+export function ChatImportCard(props: { client: WorkClient | null; off?: readonly string[] }) {
   const queryClient = useQueryClient();
   const imports = useQuery({ queryKey: workImportsKey(props.client), queryFn: () => props.client!.listWorkImports(), enabled: Boolean(props.client), retry: false });
   const upload = useMutation({
@@ -1068,9 +1288,11 @@ export function ChatImportCard(props: { client: WorkClient | null }) {
     },
   });
   const latest = (kind: string): OmniRushWorkImport | undefined => (Array.isArray(imports.data) ? imports.data : []).find((item) => (item.source ?? "whatsapp") === kind);
+  const kinds = IMPORT_KINDS.filter((kind) => !props.off?.includes(kind));
+  if (!kinds.length) return null;
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-import-card">
-      {IMPORT_KINDS.map((kind) => {
+      {kinds.map((kind) => {
         const last = latest(kind);
         // A file with no messages in it (a Telegram file that is no export) comes back done with nothing: not read either.
         const failed = last?.status === "failed" || (last?.status === "done" && !last.records);
@@ -1118,8 +1340,9 @@ export function ChatImportCard(props: { client: WorkClient | null }) {
   );
 }
 
-/** Work > Connectors (also reachable from Settings): each source's status, record count, last sync and sync switch. */
-export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string; notice?: ReactNode }) {
+/** Work > Connectors (also reachable from Settings): each source's status, record count, last sync and sync switch.
+ *  `onOpenOrganization` opens Work > Organization (where the owner and admins choose the team's connectors). */
+export function WorkConnectorsPage(props: { client: WorkClient | null; openLink: (url: string) => void; onBack?: () => void; backLabel?: string; notice?: ReactNode; onOpenOrganization?: () => void }) {
   const queryClient = useQueryClient();
   const key = workConnectorsKey(props.client);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -1132,8 +1355,13 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     queryKey: key,
     queryFn: () => props.client!.listWorkConnectors(),
     enabled: Boolean(props.client),
-    refetchInterval: connecting ? CONNECT_POLL_MS : false,
+    refetchInterval: (current) => (connecting ? CONNECT_POLL_MS : current.state.data?.some((row) => connectorProgress(row.progress)) ? PROGRESS_POLL_MS : false),
   });
+  // The company's list: the WhatsApp import and the Mac's WhatsApp leave the page while it is turned off. On an older
+  // server (404) nothing is off.
+  const team = useWorkOrgConnectors(props.client);
+  const off = localSourcesOff(query.data, team.data);
+  const manage = team.data?.can_manage ? props.onOpenOrganization : undefined;
   useEffect(() => {
     if (!connecting) return;
     if (connectSettled(query.data, connecting)) {
@@ -1152,10 +1380,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   };
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
   const connect = useMutation({
-    mutationFn: (id: string) => props.client!.startWorkConnector(id),
-    onSuccess: (answer, id) => {
+    mutationFn: ({ id, form: start }: { id: string; form?: OmniRushWorkStart }) => props.client!.startWorkConnector(id, start),
+    onSuccess: (answer, { id }) => {
       connectStarted.current = Date.now();
       setConnecting(id);
+      setForm((current) => (current === id ? null : current));
       props.openLink(answer.auth_url);
     },
     onError,
@@ -1193,11 +1422,11 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const busy = connect.isPending || disconnect.isPending || sync.isPending || pick.isPending;
   // The meter's "+ Slack" connects Slack here; "+ WhatsApp import" opens the import's file picker. A source this page does not
   // list (Meetings) gets no chip.
-  const canAdd = (id: string) => coverageCanAdd(query.data, id);
+  const canAdd = (id: string) => !off.includes(id) && coverageCanAdd(query.data, id);
   const add = (id: string) => {
     if (isImportKind(id)) document.querySelector<HTMLInputElement>(`[data-import-input="${id}"]`)?.click();
     else if (signsInWithForm(query.data, id)) setForm(id);
-    else if (canAdd(id) && !busy) connect.mutate(id);
+    else if (canAdd(id) && !busy) connect.mutate({ id });
   };
   const failure = query.error ? workFailure(query.error) : null;
   return (
@@ -1228,7 +1457,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               connector={row}
               connecting={connecting === row.id}
               busy={busy}
-              onConnect={() => (row.mode === "credentials" || row.mode === "key" ? setForm(form === row.id ? null : row.id) : connect.mutate(row.id))}
+              onConnect={() => (row.mode === "credentials" || row.mode === "key" || row.start_fields?.length ? setForm(form === row.id ? null : row.id) : connect.mutate({ id: row.id }))}
               onDisconnect={() => setConfirmDisconnect(row)}
               onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
               onSetup={row.setup_url ? () => props.openLink(row.setup_url!) : undefined}
@@ -1238,6 +1467,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               retrying={retry.isPending && retry.variables === row.id}
               onRetry={() => retry.mutate(row.id)}
               onPick={(picked) => pick.mutate({ id: row.id, picked })}
+              onManage={manage}
             />,
             form === row.id ? (
               (() => {
@@ -1248,20 +1478,23 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
                   onDone: () => { setForm(null); void refresh(); void queryClient.invalidateQueries({ queryKey: workCoverageKey(props.client) }); },
                   onCancel: () => setForm(null),
                 };
+                if (row.start_fields?.length) {
+                  return <StartForm key={`${row.id}-form`} connector={row} busy={connect.isPending} onStart={(start) => connect.mutate({ id: row.id, form: start })} onCancel={() => setForm(null)} />;
+                }
                 return row.mode === "key" ? <KeyForm key={`${row.id}-form`} {...formProps} /> : <CredentialsForm key={`${row.id}-form`} {...formProps} />;
               })()
             ) : null,
           ])}
         </div>
         <HookCard rows={hookRows} client={props.client} onChanged={() => void refresh()} />
-        <ChatImportCard client={props.client} />
-        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} /> : null}
+        <ChatImportCard client={props.client} off={off} />
+        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} off={off} /> : null}
         <TelegramCard client={props.client} />
       </div>
       <ConfirmModal
         open={confirmDisconnect !== null}
         title={t("work.connectors.disconnect_title", { name: confirmDisconnect ? connectorLabel(confirmDisconnect.id, confirmDisconnect.label) : "" })}
-        message={t("work.connectors.disconnect_body")}
+        message={confirmDisconnect && isPausedByAdmin(confirmDisconnect) ? t("work.connectors.disconnect_body_paused") : t("work.connectors.disconnect_body")}
         confirmLabel={t("work.connectors.disconnect")}
         cancelLabel={t("common.cancel")}
         variant="danger"

@@ -3,7 +3,8 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { t } from "@/i18n";
-import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { WorkChatSyncProgress } from "@omnirush/types/desktop-ipc";
+import type { OmniRushServerClient, OmniRushWorkAction, OmniRushWorkConnector, OmniRushWorkCoverage, OmniRushWorkDeal, OmniRushWorkEntitySummary, OmniRushWorkFeedItem, OmniRushWorkHealth, OmniRushWorkInsights, OmniRushWorkOnboarding, OmniRushWorkOrgConnectors, OmniRushWorkSettings, OmniRushWorkStarter, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -54,6 +55,7 @@ export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "getWorkOrg
   | "getWorkAnswerStyle" | "setWorkAnswerStyle"
   | "enableWork" | "getWorkOnboarding" | "saveWorkOnboarding" | "seedWorkDemo" | "removeWorkDemo" | "inviteWorkMember" | "acceptWorkInvite"
   | "listWorkMembers" | "updateWorkOrg" | "updateWorkOrgMe" | "cancelWorkInvite" | "removeWorkMember" | "transferWorkOrg" | "leaveWorkOrg"
+  | "getWorkOrgConnectors" | "setWorkOrgConnectors" | "setWorkMemberRole"
   | "getWorkFeed" | "syncWorkConnector" | "getWorkChatTools" | "fixWorkChatTools"
   | "getWorkSettings" | "setWorkSettings" | "listWorkActions" | "undoWorkAction"
   | "importIMessage" | "getIMessageCount" | "getWhatsAppLocalCount" | "getTelegramCount"
@@ -66,6 +68,7 @@ export const workOnboardingKey = (client: WorkClient | null) => ["omnirush-work-
 export const workEntityKey = (client: WorkClient | null, id: string) => ["omnirush-work-entity", client?.baseUrl?.trim() || "default", id];
 export const workFeedKey = (client: WorkClient | null, source: string | null) => ["omnirush-work-feed", client?.baseUrl?.trim() || "default", source ?? "all"];
 export const workMembersKey = (client: WorkClient | null) => ["omnirush-work-members", client?.baseUrl?.trim() || "default"];
+export const workOrgConnectorsKey = (client: WorkClient | null) => ["omnirush-work-org-connectors", client?.baseUrl?.trim() || "default"];
 export const workChatToolsKey = (client: WorkClient | null) => ["omnirush-work-chat-tools", client?.baseUrl?.trim() || "default"];
 export const workInsightsKey = (client: WorkClient | null, days: number) => ["omnirush-work-insights", client?.baseUrl?.trim() || "default", days];
 export const workSettingsKey = (client: WorkClient | null) => ["omnirush-work-settings", client?.baseUrl?.trim() || "default"];
@@ -137,6 +140,17 @@ export function useWorkState(client: WorkClient | null) {
     queryFn: () => client!.getWorkState(),
     enabled: Boolean(client),
     refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/** The company's connector list (GET /work/org/connectors). An older server answers 404: no retry, and every caller
+ *  then behaves as before the list existed. */
+export function useWorkOrgConnectors(client: WorkClient | null, enabled = true) {
+  return useQuery<OmniRushWorkOrgConnectors>({
+    queryKey: workOrgConnectorsKey(client),
+    queryFn: () => client!.getWorkOrgConnectors(),
+    enabled: Boolean(client) && enabled,
     retry: false,
   });
 }
@@ -219,6 +233,28 @@ export const useWorkSetupStore = create<WorkSetupStore>()(
 export const DEMO_SOURCE = "demo";
 const LINKED = new Set(["connected", "syncing", "error"]);
 export const isLinked = (row: Pick<OmniRushWorkConnector, "status">) => LINKED.has(row.status);
+/** Turned off by the company (or OmniRush): the connection is kept, and Disconnect is the only thing it offers. */
+export const isPausedByAdmin = (row: Pick<OmniRushWorkConnector, "status">) => row.status === "paused_by_admin";
+
+/** The sources on the company's list that the app offers outside the server's connector rows: the WhatsApp chat import
+ *  and the Mac's WhatsApp sync. Telegram and iMessage are not on the list (the server never turns them off). */
+const LISTED_LOCAL_SOURCES = ["whatsapp"] as const;
+
+/** Of those, the ones turned off for this account: a paused row in GET /work/connectors, or left out of the company's
+ *  GET /work/org/connectors list. An older server has neither (no paused rows, no list), so nothing is off. */
+export function localSourcesOff(
+  rows: OmniRushWorkConnector[] | null | undefined,
+  view: Pick<OmniRushWorkOrgConnectors, "org" | "connectors"> | null | undefined,
+): string[] {
+  const listed = view?.org && Array.isArray(view.connectors) ? new Set(view.connectors.map((item) => item.id)) : null;
+  const paused = new Set((Array.isArray(rows) ? rows : []).filter(isPausedByAdmin).map((row) => row.id));
+  return LISTED_LOCAL_SOURCES.filter((id) => paused.has(id) || (listed !== null && !listed.has(id)));
+}
+
+/** A company role in words; a role this app does not know reads as the server sent it. */
+export function workRoleLabel(role: string): string {
+  return role === "owner" ? t("work.role.owner") : role === "admin" ? t("work.role.admin") : role === "member" ? t("work.role.member") : role;
+}
 export const hasSampleData = (onboarding: OmniRushWorkOnboarding | null | undefined) => onboarding?.sample_data === true;
 /** A real (non-sample) source is connected. */
 export const hasRealSource = (rows: OmniRushWorkConnector[] | null | undefined) => visibleConnectors(rows).some((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && isLinked(row));
@@ -235,16 +271,20 @@ export function domainFromEmail(email: string | null | undefined): string {
  *  pasted key) or inbound hook (both on Connectors). */
 export function connectOrder(rows: OmniRushWorkConnector[] | null | undefined, recommended: string[] = []): OmniRushWorkConnector[] {
   const rank = (id: string) => { const at = recommended.indexOf(id); return at === -1 ? recommended.length : at; };
-  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && !["import", "credentials", "key", "hook"].includes(row.mode ?? "")).sort((a, b) => rank(a.id) - rank(b.id));
+  return visibleConnectors(rows).filter((row) => row.id !== DEMO_SOURCE && row.id !== "mock" && !isPausedByAdmin(row) && !["import", "credentials", "key", "hook"].includes(row.mode ?? "") && !needsAddress(row)).sort((a, b) => rank(a.id) - rank(b.id));
 }
 
-/** A source connected with a form on Connectors (a server and password, or a pasted key), not a sign-in page. */
+/** A sign-in source that asks for its account's address first (Zendesk): only Connectors has the form for it. */
+export const needsAddress = (row: Pick<OmniRushWorkConnector, "start_fields">) => Boolean(row.start_fields?.includes("host"));
+
+/** A source connected with a form on Connectors (a server and password, or a pasted key), not a sign-in page, or one whose
+ *  sign-in asks something first (`start_fields`). */
 export const signsInWithForm = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
-  (rows ?? []).some((row) => row.id === id && (row.mode === "credentials" || row.mode === "key"));
+  (rows ?? []).some((row) => row.id === id && (row.mode === "credentials" || row.mode === "key" || Boolean(row.start_fields?.length)));
 
 /** A coverage "+" chip has somewhere to go on Connectors: an import card, or a row that signs in (Meetings has neither). */
 export const coverageCanAdd = (rows: OmniRushWorkConnector[] | null | undefined, id: string) =>
-  isImportKind(id) || visibleConnectors(rows).some((row) => row.id === id && row.mode !== "import");
+  isImportKind(id) || visibleConnectors(rows).some((row) => row.id === id && row.mode !== "import" && !isPausedByAdmin(row));
 
 /** The first-run checklist: company, a source connected (or sample data), a first chat. */
 export function checklistItems(onboarding: OmniRushWorkOnboarding | null | undefined, rows: OmniRushWorkConnector[] | null | undefined) {
@@ -286,13 +326,18 @@ export const WORK_TOOL_PREFIX = "omnirush-work_";
 const WORK_APPS: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
   slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
-  linear: "Linear", github: "GitHub", airtable: "Airtable", calendly: "Calendly", figma: "Figma",
+  linear: "Linear", github: "GitHub", discord: "Discord", zendesk: "Zendesk", intercom: "Intercom", front: "Front", trello: "Trello", clickup: "ClickUp", monday: "monday.com",
+  gitlab: "GitLab", shopify: "Shopify", box: "Box", airtable: "Airtable", calendly: "Calendly", figma: "Figma",
 };
+/** Connectors whose writes the OmniRush Work app makes (a bot), not the person's own account. */
+const APP_WRITES = new Set(["discord"]);
 function workAction(action: string): string | undefined {
   const actions: Record<string, string> = {
     send: t("work.tool.send"), draft: t("work.tool.draft"), post: t("work.tool.post"), create: t("work.tool.create"), note: t("work.tool.note"),
     create_task: t("work.tool.create_task"), update_deal: t("work.tool.update_deal"), create_invoice_draft: t("work.tool.create_invoice_draft"),
     create_page: t("work.tool.create_page"), comment: t("work.tool.comment"), create_issue: t("work.tool.create_issue"),
+    reply: t("work.tool.reply"),
+    create_card: t("work.tool.create_card"), create_item: t("work.tool.create_item"),
     create_record: t("work.tool.create_record"), create_link: t("work.tool.create_link"),
   };
   return actions[action];
@@ -308,16 +353,19 @@ export function workToolPermission(permission: string): { label: string; scope: 
   const [app, ...rest] = tool.split("_");
   const action = workAction(rest.join("_")) ?? (rest.join(" ") || tool).replace(/^./, (c) => c.toUpperCase());
   const name = app === "mock" ? t("work.connector.mock") : WORK_APPS[app] ?? app;
-  return { label: `${action} (${name})`, scope: t("work.tool.account_scope", { name }) };
+  const scope = APP_WRITES.has(app) ? t("work.tool.app_scope", { name }) : t("work.tool.account_scope", { name });
+  return { label: `${action} (${name})`, scope };
 }
 
 /** Connector names for ids the server lists without a label; an unknown id shows as it is (with a generic icon). */
 const CONNECTOR_LABELS: Record<string, string> = {
-  google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
+  google: "Google", microsoft: "Microsoft 365", slack: "Slack", discord: "Discord", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
   notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", asana: "Asana", dropbox: "Dropbox", zoom: "Zoom",
   whatsapp: "WhatsApp", whatsapp_business: "WhatsApp Business", telegram: "Telegram", imessage: "iMessage", meetings: "Meetings",
   imap: "Other email (IMAP)", caldav: "Other calendar (CalDAV or link)", stripe: "Stripe", freshdesk: "Freshdesk", pipedrive: "Pipedrive",
-  hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)", airtable: "Airtable", calendly: "Calendly", figma: "Figma",
+  zendesk: "Zendesk", intercom: "Intercom", front: "Front",
+  hook: "Zapier, Make or n8n", hook_org: "Zapier, Make or n8n (company)", trello: "Trello", clickup: "ClickUp", monday: "monday.com",
+  gitlab: "GitLab", shopify: "Shopify", box: "Box", airtable: "Airtable", calendly: "Calendly", figma: "Figma",
 };
 export const connectorLabel = (id: string, label?: string | null) =>
   label?.trim() || CONNECTOR_LABELS[id] || (id === "mock" ? t("work.connector.mock") : id === "demo" ? t("work.connector.demo") : id);
@@ -328,6 +376,7 @@ export function connectorAccess(id: string): string {
     google: t("work.connector.access_google"),
     microsoft: t("work.connector.access_microsoft"),
     slack: t("work.connector.access_slack"),
+    discord: t("work.connector.access_discord"),
     hubspot: t("work.connector.access_hubspot"),
     quickbooks: t("work.connector.access_quickbooks"),
     notion: t("work.connector.access_notion"),
@@ -343,6 +392,15 @@ export function connectorAccess(id: string): string {
     stripe: t("work.connector.access_stripe"),
     freshdesk: t("work.connector.access_freshdesk"),
     pipedrive: t("work.connector.access_pipedrive"),
+    zendesk: t("work.connector.access_zendesk"),
+    intercom: t("work.connector.access_intercom"),
+    front: t("work.connector.access_front"),
+    trello: t("work.connector.access_trello"),
+    clickup: t("work.connector.access_clickup"),
+    monday: t("work.connector.access_monday"),
+    gitlab: t("work.connector.access_gitlab"),
+    shopify: t("work.connector.access_shopify"),
+    box: t("work.connector.access_box"),
     airtable: t("work.connector.access_airtable"),
     calendly: t("work.connector.access_calendly"),
     figma: t("work.connector.access_figma"),
@@ -350,9 +408,9 @@ export function connectorAccess(id: string): string {
   return access[id] ?? t("work.connector.access_other");
 }
 
-/** What a picking source's choices are: Airtable's are bases, Figma's projects, the others' workspaces. */
+/** What a picking source's choices are: Trello's are boards, Airtable's bases, Figma's projects, the others' workspaces. */
 export function connectorChoicesTitle(id: string): string {
-  const titles: Record<string, string> = { airtable: t("work.connectors.choices_bases"), figma: t("work.connectors.choices_projects") };
+  const titles: Record<string, string> = { trello: t("work.connectors.choices_boards"), airtable: t("work.connectors.choices_bases"), figma: t("work.connectors.choices_projects") };
   return titles[id] ?? t("work.connectors.choices_title");
 }
 
@@ -490,6 +548,39 @@ export function coverageLine(coverage: OmniRushWorkConnector["coverage"]): strin
   if (!kinds.length) return null;
   const plural = (noun: string, count: number) => (count === 1 ? noun : /(s|x|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`);
   return kinds.map(([kind, count]) => `${count.toLocaleString()} ${plural(kind.replace(/_/g, " "), count)}`).join(" · ");
+}
+
+/** A sync's bar: `value` 0 to 100, or null when how much is left is not known (the bar pulses), and its words. */
+export type SyncProgressView = { value: number | null; label: string };
+
+const percent = (done: number, total: number) => Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+
+/** A server-side source's bar while it imports its history (phase backfill): by the provider's total when it says one,
+ *  else by the list it reads one item at a time, else a pulsing bar with the count so far. Null otherwise, and for an
+ *  older server that sends no `progress`. */
+export function connectorProgress(progress: OmniRushWorkConnector["progress"]): SyncProgressView | null {
+  if (!progress || progress.phase !== "backfill") return null;
+  const done = Math.max(0, Number(progress.done) || 0);
+  const total = Number(progress.total);
+  if (progress.total !== null && Number.isFinite(total) && total > 0) {
+    return { value: percent(done, total), label: t("work.connectors.progress_of", { count: total, done: Math.min(done, total).toLocaleString(), total: total.toLocaleString() }) };
+  }
+  const steps = Number(progress.steps_total);
+  if (progress.steps_total !== null && Number.isFinite(steps) && steps > 0) {
+    const stepsDone = Math.min(Math.max(0, Number(progress.steps_done) || 0), steps);
+    const part = t("work.connectors.progress_steps", { done: stepsDone.toLocaleString(), total: steps.toLocaleString() });
+    return { value: percent(stepsDone, steps), label: done > 0 ? `${part} · ${countLabel(done, "work.connectors.progress_items")}` : part };
+  }
+  return { value: null, label: done > 0 ? countLabel(done, "work.connectors.progress_so_far") : t("work.connectors.progress_starting") };
+}
+
+/** A chat sync's bar while it runs: `reading` (pulsing) until the chat-days are read, then how many of them are sent. */
+export function chatSyncProgress(progress: WorkChatSyncProgress | null | undefined, reading: string): SyncProgressView | null {
+  if (!progress) return null;
+  const total = Number(progress.recordsTotal) || 0;
+  if (progress.phase !== "uploading" || total <= 0) return { value: null, label: reading };
+  const done = Math.min(Math.max(0, Number(progress.recordsDone) || 0), total);
+  return { value: percent(done, total), label: t("work.chatsync.progress", { count: total, done: done.toLocaleString(), total: total.toLocaleString() }) };
 }
 
 /** "5 min ago", "in 2 h", "Yesterday", "Tue": short, for feed rows. */

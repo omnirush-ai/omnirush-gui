@@ -18,10 +18,10 @@ export const WORK_PRESET = "work";
 export const WORK_SOURCE_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** The `/omnirush/work/` paths the app calls (the contract's): connectors, entities, facts, health, the graph, the timeline,
- *  the MCP server, the Today feed, the tryout and company setup (enable, onboarding, demo, the org, its invites, members and
- *  insights), iMessage, WhatsApp from the Mac app, Telegram from the desktop, search, coverage, deals, chat-export imports, meetings (one, and its audio parts), and the action
+ *  the MCP server, the Today feed, the tryout and company setup (enable, onboarding, demo, the org, its invites, members,
+ *  insights and connectors), iMessage, WhatsApp from the Mac app, Telegram from the desktop, search, coverage, deals, chat-export imports, meetings (one, and its audio parts), and the action
  *  layer (settings, the activity log and an action's undo). */
-export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|connect|disconnect|sync|hook))?)?|entities(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|facts(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|deals(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|meetings(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}(?:\/audio)?)?|health|graph|timeline|feed|mcp|enable|onboarding|demo|settings|imessage|whatsapp-local|telegram|search|coverage|imports|actions(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/undo)?|org(?:\/(?:me|leave|transfer|insights|invites(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|members(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?))?)$/;
+export const WORK_PATH = /^(?:connectors(?:\/[a-z][a-z0-9_-]{0,31}(?:\/(?:start|connect|disconnect|sync|hook))?)?|entities(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|facts(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|deals(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|meetings(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}(?:\/audio)?)?|health|graph|timeline|feed|mcp|enable|onboarding|demo|settings|imessage|whatsapp-local|telegram|search|coverage|imports|actions(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/undo)?|org(?:\/(?:me|leave|transfer|insights|connectors|invites(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?|members(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127})?))?)$/;
 
 /** The hosted server's tools that only read (the contract's table): every other tool asks first, in every mode. */
 export const WORK_READ_TOOLS = [
@@ -30,6 +30,10 @@ export const WORK_READ_TOOLS = [
   "slack_search", "slack_read_channel", "slack_read_thread", "hubspot_search", "hubspot_read",
   "qbo_query", "qbo_read", "notion_search", "notion_read", "work_search", "mock_search", "mock_read",
   "jira_search", "jira_read", "confluence_search", "confluence_read", "linear_search", "linear_read", "github_search", "github_read",
+  "discord_list_channels", "discord_read_channel", "discord_read_thread",
+  "zendesk_search", "zendesk_search_articles", "zendesk_read", "intercom_search", "intercom_read", "front_inboxes", "front_search", "front_read",
+  "trello_search", "trello_read", "clickup_tasks", "clickup_read", "monday_search", "monday_read",
+  "gitlab_search", "gitlab_read", "shopify_search", "shopify_read", "box_search", "box_read",
   "airtable_bases", "airtable_search", "airtable_read", "calendly_events", "calendly_read_event", "calendly_event_types",
   "figma_list", "figma_read_file",
   // The context graph: briefing and lookup only; work_remember and work_forget ask like every write.

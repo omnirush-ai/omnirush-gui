@@ -666,9 +666,23 @@ export type OmniRushWorkOnboarding = { done: boolean; org?: OmniRushWorkOrg | nu
 export type OmniRushWorkOnboardingInput = { company: string; domain?: string; size?: string; industry?: string; role?: string; tools: string[] };
 export type OmniRushWorkOnboardingResult = { org: OmniRushWorkOrg; recommended_sources?: string[]; starters?: OmniRushWorkStarter[] };
 /** GET /omnirush/work/org/members (contract Addendum B2, C1 adds `you_role` and `org.tools`). */
-export type OmniRushWorkMember = { user_id: string; email: string; role: "owner" | "member" | string; job_role?: string | null; tools?: string[] | null; you?: boolean };
+export type OmniRushWorkMember = { user_id: string; email: string; role: "owner" | "admin" | "member" | string; job_role?: string | null; tools?: string[] | null; you?: boolean };
 export type OmniRushWorkInvite = { id: string; email: string; created_at?: string | null; expires_at?: string | null; link?: string | null };
-export type OmniRushWorkMembers = { org: OmniRushWorkOrg | null; members: OmniRushWorkMember[]; invites: OmniRushWorkInvite[]; you_role?: "owner" | "member" | string };
+export type OmniRushWorkMembers = { org: OmniRushWorkOrg | null; members: OmniRushWorkMember[]; invites: OmniRushWorkInvite[]; you_role?: "owner" | "admin" | "member" | string };
+/** GET /omnirush/work/org/connectors: the connectors the company shows its members. Owners and admins (`can_manage`) also
+ *  get every connector the company may use (`allowed`), whether it is shown and how many members connected it; `shown`
+ *  null shows them all. */
+export type OmniRushWorkOrgConnector = { id: string; label: string; shown: boolean; members_connected: number };
+export type OmniRushWorkOrgConnectors = {
+  org: { id: string; name: string } | null;
+  role: string | null;
+  can_manage: boolean;
+  connectors: { id: string; label: string }[];
+  shown?: string[] | null;
+  staff_limited?: boolean;
+  members?: number;
+  allowed?: OmniRushWorkOrgConnector[];
+};
 export type OmniRushWorkOrgPatch = { name?: string; domain?: string; size?: string; industry?: string; tools?: string[] };
 /** A connected source's problem (contract Addendum C1): what to show and which button fixes it. */
 export type OmniRushWorkAttention = {
@@ -686,7 +700,8 @@ export type OmniRushWorkFeed = {
 };
 /** Whether the Work chat's engine has the hosted Work tools (the app's own check, GET /work/chat-tools). */
 export type OmniRushWorkChatTools = { attached: boolean; reason: string | null };
-export type OmniRushWorkConnectorStatus = "disconnected" | "connected" | "error" | "syncing" | "unavailable";
+/** `paused_by_admin`: the company (or OmniRush) turned the connector off; the connection is kept and can only be disconnected. */
+export type OmniRushWorkConnectorStatus = "disconnected" | "connected" | "error" | "syncing" | "unavailable" | "paused_by_admin";
 /** One source of GET /omnirush/work/connectors (e2e/work-mode-contract-2026-11-09.md). */
 export type OmniRushWorkConnector = {
   id: string;
@@ -705,16 +720,43 @@ export type OmniRushWorkConnector = {
   skipped_records?: number;
   /** "import": no sign-in, the data comes from an uploaded export (WhatsApp); "credentials": a server and a password
    *  (other email over IMAP, other calendar over CalDAV or a link), connected with `connectWorkCredentials`; "key": a pasted
-   *  API key (Stripe, Freshdesk, Pipedrive), also `connectWorkCredentials`; "hook": the account's inbound URL for Zapier,
+   *  API key (Stripe, Freshdesk, Pipedrive, ClickUp, monday.com, GitLab, Shopify; Trello: a key and a token), also `connectWorkCredentials`; "hook": the account's inbound URL for Zapier,
    *  Make or n8n (`createWorkHook`); absent for OAuth sources. */
   mode?: "import" | "credentials" | "key" | "hook" | string;
   last_import_at?: string | null;
   /** What a source that picks could read (Asana's workspaces), once its first sync has seen them; `picked` is true for all
    *  until the user picks (`setWorkConnectorPicked`). */
   choices?: { id: string; name: string; picked: boolean }[];
+  /** What a sign-in source asks before its sign-in page (Zendesk: "host", the account's address; Intercom: "region"),
+   *  sent with `startWorkConnector`. */
+  start_fields?: string[];
+  /** With `paused_by_admin`: who turned it off ("org": the company's owner or an admin, "staff": OmniRush). */
+  paused_by?: "org" | "staff" | string;
+  /** The sync's pass (null for pushed and imported sources and before a first run; absent from older servers). */
+  progress?: OmniRushWorkSyncProgress | null;
 };
+/** A server-side source's sync pass: `phase` idle when no run reads now; `done` records read this pass; `total` when the
+ *  provider says (Gmail); `steps_done`/`steps_total` for a list read one item at a time (GitHub repositories, channels). */
+export type OmniRushWorkSyncProgress = {
+  phase: "backfill" | "incremental" | "idle" | string;
+  done: number;
+  total: number | null;
+  steps_done: number | null;
+  steps_total: number | null;
+  started_at?: string | null;
+  updated_at?: string | null;
+};
+/** What `startWorkConnector` sends for a source with `start_fields`. A reconnect may send nothing: the server keeps the
+ *  address or region the source has. */
+export type OmniRushWorkStart = { host?: string; region?: "us" | "eu" | "au" };
 /** The connect form of a "credentials" or "key" source (POST /omnirush/work/connectors/{id}/connect). */
-export type OmniRushWorkCredentials = { preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string };
+export type OmniRushWorkCredentials = {
+  preset?: string; host?: string; port?: number; security?: "tls" | "starttls"; url?: string; username?: string; password?: string; api_key?: string;
+  /** Shopify: the Client ID of the store's Dev Dashboard app (`api_key` is then its secret). */
+  client_id?: string;
+  /** Trello: the user token (`api_key` is the app's key). */
+  token?: string;
+};
 /** One chat-per-day record the desktop reads from the Mac's local chat.db
  *  and pushes to POST /omnirush/work/imessage (contract Addendum D5). */
 export type OmniRushIMessageRecord = {
@@ -2525,8 +2567,8 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<{ workspaceId: string; path: string }>(baseUrl, "/work/workspace", { token, hostToken, method: "POST", timeoutMs: timeouts.activateWorkspace }),
     listWorkConnectors: () =>
       requestJson<OmniRushWorkConnector[]>(baseUrl, "/work/connectors", { token, hostToken, timeoutMs: timeouts.config }),
-    startWorkConnector: (id: string) =>
-      requestJson<{ auth_url: string }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/start`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    startWorkConnector: (id: string, form?: OmniRushWorkStart) =>
+      requestJson<{ auth_url: string }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/start`, { token, hostToken, method: "POST", ...(form ? { body: form } : {}), timeoutMs: timeouts.config }),
     connectWorkCredentials: (id: string, form: OmniRushWorkCredentials) =>
       requestJson<{ ok: boolean; account: string | null }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/connect`, { token, hostToken, method: "POST", body: form, timeoutMs: 60_000 }),
     /** A new inbound URL for "hook" / "hook_org" (the one before stops working); the URL is shown this once. */
@@ -2590,6 +2632,15 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<{ ok: boolean }>(baseUrl, "/work/org/transfer", { token, hostToken, method: "POST", body: { user_id: userId }, timeoutMs: timeouts.config }),
     leaveWorkOrg: () =>
       requestJson<{ ok: boolean }>(baseUrl, "/work/org/leave", { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    /** The company's connectors; an older server answers 404 (nothing to show). */
+    getWorkOrgConnectors: () =>
+      requestJson<OmniRushWorkOrgConnectors>(baseUrl, "/work/org/connectors", { token, hostToken, timeoutMs: timeouts.config }),
+    /** What members see (owner or admin): the ids shown, or null for every connector the company may use. */
+    setWorkOrgConnectors: (shown: string[] | null) =>
+      requestJson<OmniRushWorkOrgConnectors>(baseUrl, "/work/org/connectors", { token, hostToken, method: "PATCH", body: { shown }, timeoutMs: timeouts.config }),
+    /** A member's role (owner only): an admin also manages which connectors members see. */
+    setWorkMemberRole: (userId: string, role: "admin" | "member") =>
+      requestJson<{ ok: boolean; role: string }>(baseUrl, `/work/org/members/${encodeURIComponent(userId)}`, { token, hostToken, method: "PATCH", body: { role }, timeoutMs: timeouts.config }),
     getWorkFeed: (query: { source?: string; tz?: string; limit?: number } = {}) => {
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
       return requestJson<OmniRushWorkFeed>(baseUrl, `/work/feed${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
