@@ -144,7 +144,7 @@ function MailComposer(props: {
       <div className="rounded-xl border border-border">
         <div className="relative">
           <RecipientField label={t("work.viewer.field_to")} value={to} onChange={(v) => { setTo(v); draft.put({ to: v }); }} suggestions={people} autoFocus={props.action === "forward"} testId="work-mail-to" />
-          {!more ? <button type="button" onClick={() => setMore(true)} className="absolute right-2 top-2 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline">{t("work.viewer.cc_bcc")}</button> : null}
+          {!more ? <button type="button" onClick={() => setMore(true)} className="absolute right-2 top-2 text-[12px] text-muted-foreground outline-none hover:text-foreground rounded-sm focus-visible:ring-2 focus-visible:ring-ring">{t("work.viewer.cc_bcc")}</button> : null}
         </div>
         {more ? <RecipientField label={t("work.viewer.field_cc")} value={cc} onChange={(v) => { setCc(v); draft.put({ cc: v }); }} suggestions={people} testId="work-mail-cc" /> : null}
         {more ? <RecipientField label={t("work.viewer.field_bcc")} value={bcc} onChange={(v) => { setBcc(v); draft.put({ bcc: v }); }} suggestions={people} testId="work-mail-bcc" /> : null}

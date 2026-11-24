@@ -110,7 +110,8 @@ function Slider(props: {
 const ratio = (value: number) => `${value.toFixed(1)}:1`;
 
 /** Accent colour: theme default, a swatch or any hex. Buttons, focus rings, selection and links follow it. */
-export function AccentSection(props: SectionProps) {
+/** `compact` (company accounts) keeps the swatches and drops the custom colour field. */
+export function AccentSection(props: SectionProps & { compact?: boolean }) {
   const prefs = useAppearancePrefs();
   const active = useActiveTheme();
   const [draft, setDraft] = useState(prefs.accent ?? "");
@@ -156,7 +157,7 @@ export function AccentSection(props: SectionProps) {
         {swatch(t("settings.appearance.theme_accent"), null, themeAccent)}
         {ACCENT_SWATCHES.map((item) => swatch(item.name, item.hex, item.hex))}
       </div>
-      <Row label={t("settings.appearance.custom_colour")} htmlFor={inputId}>
+      {props.compact ? null : <Row label={t("settings.appearance.custom_colour")} htmlFor={inputId}>
         <label className="relative size-7 shrink-0 overflow-hidden rounded-md border border-border" style={{ background: pickerValue }}>
           <input
             type="color"
@@ -185,9 +186,9 @@ export function AccentSection(props: SectionProps) {
           onBlur={() => setDraft(prefs.accent ?? "")}
           data-testid="accent-hex"
         />
-      </Row>
+      </Row>}
       {check && !check.ok ? (
-        <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs" data-testid="accent-warning">
+        <div role="status" className={cn("flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2", props.compact ? "text-[13px]" : "text-xs")} data-testid="accent-warning">
           <AlertTriangle className="size-3.5 shrink-0 text-warning" />
           <span className="min-w-0 flex-1 text-foreground">
             {check.uiRatio < 3 ? `Hard to see on this theme: ${ratio(check.uiRatio)} (needs 3:1). ` : ""}

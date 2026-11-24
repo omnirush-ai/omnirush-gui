@@ -1120,7 +1120,7 @@ function WhatsNewIconButton() {
   );
 }
 
-export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSettings: () => void }) {
+export function NativeAccountFooter({ onOpenAccountSettings, work = false }: { onOpenAccountSettings: () => void; work?: boolean }) {
   // Shared with the quality popup (QualityRewards): one /device/me read for both.
   const status: NativeAccountStatus | null = useAccountStatusStore((store) => store.status);
   const { config: shellConfig } = useShellConfig();
@@ -1186,7 +1186,7 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
             <span
               className={cn(
                 "relative flex size-7 shrink-0 items-center justify-center rounded-full",
-                connected ? "bg-primary/15 text-[10.5px] font-semibold text-link" : "border border-dashed border-sidebar-border text-muted-foreground",
+                connected ? cn("bg-primary/15 font-semibold text-link", work ? "text-[12px]" : "text-[10.5px]") : "border border-dashed border-sidebar-border text-muted-foreground",
               )}
               data-testid="native-account-avatar"
             >
@@ -1203,7 +1203,7 @@ export function NativeAccountFooter({ onOpenAccountSettings }: { onOpenAccountSe
                 <span className="truncate text-xs font-medium">{accountLabel}</span>
                 {quality ? <QualityTierBadge quality={quality} /> : null}
               </span>
-              <span className="line-clamp-2 whitespace-normal break-words text-[10.5px] leading-snug text-muted-foreground" data-testid="native-account-detail">
+              <span className={cn("line-clamp-2 whitespace-normal break-words leading-snug text-muted-foreground", work ? "text-[12px]" : "text-[10.5px]")} data-testid="native-account-detail">
                 {accountDetail}
               </span>
               {usage ? (
@@ -1270,6 +1270,8 @@ function isSessionActivityStatus(status: string | undefined): status is SessionA
 
 export function AppSidebar(props: AppSidebarProps) {
   const { config: shellConfig } = useShellConfig();
+  // A company account signs in with its Work account, not omnirush.ai Cloud sync: the desktop shows that account.
+  const enterpriseAccount = useEnterpriseFlags().on && isDesktopRuntime();
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [localWorkflowsOpen, setLocalWorkflowsOpen] = React.useState(false);
   const auditSummary = useAuditTrailController({
@@ -1685,12 +1687,12 @@ export function AppSidebar(props: AppSidebarProps) {
           </m.div>
         </SidebarReorderScope>
 
-        {shellConfig.cloudSignin ? (
+        {shellConfig.cloudSignin && !enterpriseAccount ? (
           <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
-            <AccountStatusMenu {...props.status} onOpenAccountSettings={props.onOpenAccountSettings} />
+            <AccountStatusMenu {...props.status} onOpenAccountSettings={props.onOpenAccountSettings} work={Boolean(props.workNavigation)} />
           </SidebarFooter>
         ) : props.onOpenAccountSettings && isDesktopRuntime() ? (
-          <NativeAccountFooter onOpenAccountSettings={props.onOpenAccountSettings} />
+          <NativeAccountFooter onOpenAccountSettings={props.onOpenAccountSettings} work={Boolean(props.workNavigation)} />
         ) : props.onOpenAccountSettings ? (
           <SidebarFooter className="border-t border-sidebar-border/60 p-1.5 pe-0">
             <SidebarMenu><SidebarMenuItem><SidebarMenuButton type="button" onClick={props.onOpenAccountSettings} tooltip="Settings" aria-label="Settings"><Settings className="size-4" /><span>Settings</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu>

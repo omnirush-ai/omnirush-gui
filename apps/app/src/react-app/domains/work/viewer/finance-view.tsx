@@ -5,17 +5,11 @@ import { t } from "@/i18n";
 
 import { Body, FieldGrid, Pill, SectionTitle, statusTone } from "./parts";
 import type { RecordFinance, WorkRecord } from "./records";
+import { money } from "../money";
 
-export function money(amount: string | null | undefined, currency: string | null | undefined): string {
-  if (amount == null || amount === "") return "";
-  const value = Number(amount);
-  if (!Number.isFinite(value)) return `${amount}${currency ? ` ${currency}` : ""}`;
-  try {
-    return currency ? new Intl.NumberFormat(undefined, { style: "currency", currency }).format(value) : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
-  } catch {
-    return `${value.toFixed(2)}${currency ? ` ${currency}` : ""}`;
-  }
-}
+// Deals and the viewers format money the same way (../money.ts).
+export { money };
+
 const day = (value: string | null | undefined) => {
   if (!value) return "";
   const at = new Date(value);

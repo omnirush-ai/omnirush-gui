@@ -57,7 +57,7 @@ function MessageHeader(props: { message: MailMessage; open: boolean; onToggle: (
       <Avatar person={m.from} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <button type="button" onClick={props.onToggle} className="max-w-[60%] shrink-0 truncate text-start text-[13px] font-semibold text-foreground outline-none focus-visible:underline" aria-expanded={props.open}>
+          <button type="button" onClick={props.onToggle} className="max-w-[60%] shrink-0 truncate text-start text-[13px] font-semibold text-foreground outline-none rounded-sm focus-visible:ring-2 focus-visible:ring-ring" aria-expanded={props.open}>
             <PersonName person={m.from} />
           </button>
           {m.from.email && !m.from.me ? <span className="hidden min-w-0 flex-1 truncate text-[12px] text-muted-foreground @[28rem]/viewer:inline">{m.from.email}</span> : <span className="flex-1" />}
@@ -66,7 +66,7 @@ function MessageHeader(props: { message: MailMessage; open: boolean; onToggle: (
         {line || props.onReply ? (
           <div className="flex min-h-5 items-center gap-2">
             {line ? (
-              <button type="button" onClick={() => setDetails(!details)} aria-expanded={details} className="min-w-0 truncate text-start text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline">
+              <button type="button" onClick={() => setDetails(!details)} aria-expanded={details} className="min-w-0 truncate text-start text-[12px] text-muted-foreground outline-none hover:text-foreground rounded-sm focus-visible:ring-2 focus-visible:ring-ring">
                 {line}
               </button>
             ) : null}
@@ -101,9 +101,9 @@ function ImagesBar(props: { sender: RecordPerson; onShow: () => void }) {
     <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-[12px] text-muted-foreground" data-testid="work-mail-images-hidden">
       <ImageOff className="size-3.5 shrink-0" aria-hidden />
       <span>{t("work.viewer.images_hidden")}</span>
-      <button type="button" onClick={props.onShow} className="font-medium text-foreground outline-none hover:underline focus-visible:underline">{t("work.viewer.show_images")}</button>
+      <button type="button" onClick={props.onShow} className="font-medium text-foreground outline-none hover:underline rounded-sm focus-visible:ring-2 focus-visible:ring-ring">{t("work.viewer.show_images")}</button>
       {props.sender.email ? (
-        <button type="button" onClick={() => { allow(props.sender.email!); props.onShow(); }} className="font-medium text-foreground outline-none hover:underline focus-visible:underline">{t("work.viewer.always_show_images")}</button>
+        <button type="button" onClick={() => { allow(props.sender.email!); props.onShow(); }} className="font-medium text-foreground outline-none hover:underline rounded-sm focus-visible:ring-2 focus-visible:ring-ring">{t("work.viewer.always_show_images")}</button>
       ) : null}
     </div>
   );
