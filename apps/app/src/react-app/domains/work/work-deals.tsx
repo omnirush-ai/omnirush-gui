@@ -13,6 +13,7 @@ import type { OmniRushWorkDeal, OmniRushWorkDealDetail, OmniRushWorkDealFilter }
 import { cn } from "@/lib/utils";
 
 import { askAboutDealPrompt, connectorLabel, relativeTime, workDealKey, workDealsKey, workFailure, type WorkClient } from "./work-mode";
+import { money } from "./money";
 import { SECTION_ROWS } from "./work-today";
 import { ConnectorIcon } from "./work-views";
 import { isMac, openItem, openModifiers, type RecordRef } from "./viewer/records";
@@ -23,17 +24,19 @@ const FILTERS = [
   { id: "closing_soon", get label() { return t("work.deals.filter_closing_soon"); } },
 ] as const satisfies readonly { id: OmniRushWorkDealFilter; label: string }[];
 
-export const dealAmount = (amount: number | null | undefined) => (typeof amount === "number" ? amount.toLocaleString(undefined, { maximumFractionDigits: 0 }) : "");
+/** The deal's amount in its currency when the CRM sent one (as the record viewer shows it), else the bare number. */
+export const dealAmount = (amount: number | null | undefined, currency?: string | null) =>
+  typeof amount !== "number" ? "" : currency ? money(amount, currency) : amount.toLocaleString(undefined, { maximumFractionDigits: 0 });
 export function dealDate(value: string | null | undefined): string {
   const at = value ? new Date(value) : null;
   return at && !Number.isNaN(at.getTime()) ? at.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
 }
 
-/** Risk reasons as quiet amber text: the first one, and "+N" with all of them on hover. */
+/** Risk reasons: an amber dot with the first one in the text colour (AA in light and dark), and "+N" with all of them on hover. */
 function RiskChips(props: { risk: string[] }) {
   if (!props.risk.length) return null;
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-amber-11" title={props.risk.join("\n")} data-testid="work-deal-risk">
+    <span className="flex min-w-0 items-center gap-1.5 text-[13px] text-foreground" title={props.risk.join("\n")} data-testid="work-deal-risk">
       <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-amber-9" />
       <span className="truncate">{props.risk[0]}</span>
       {props.risk.length > 1 ? <span className="shrink-0 text-muted-foreground">+{props.risk.length - 1}</span> : null}
@@ -61,7 +64,7 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
   const deal = detail.data ?? props.deal;
   const facts = [
     [t("work.deals.stage"), deal.stage],
-    [t("work.deals.amount"), dealAmount(deal.amount)],
+    [t("work.deals.amount"), dealAmount(deal.amount, deal.currency)],
     [t("work.deals.close_date"), dealDate(deal.close_date)],
     [t("work.deals.owner"), deal.owner],
   ].filter((row): row is [string, string] => Boolean(row[1]));
@@ -202,8 +205,8 @@ export function WorkDealsPage(props: { client: WorkClient | null; openLink: (url
                       <div className="line-clamp-2 break-words font-medium text-foreground" title={deal.name ?? ""}>{deal.name || deal.source_id}</div>
                       {deal.company ? <div className="truncate text-[12px] text-muted-foreground">{deal.company}</div> : null}
                     </td>
-                    <td className={cn("truncate px-3 py-2.5 text-muted-foreground", narrow)}>{deal.stage}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-foreground">{dealAmount(deal.amount)}</td>
+                    <td className={cn("truncate px-3 py-2.5 text-muted-foreground", narrow)} title={deal.stage ?? undefined}>{deal.stage}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-foreground">{dealAmount(deal.amount, deal.currency)}</td>
                     <td className={cn("px-3 py-2.5 text-muted-foreground", narrow)}>{dealDate(deal.close_date)}</td>
                     <td className="px-3 py-2.5 text-[12px]"><LastTouch touch={deal.last_touch} now={now} /></td>
                     <td className="px-3 py-2.5"><RiskChips risk={deal.risk} /></td>

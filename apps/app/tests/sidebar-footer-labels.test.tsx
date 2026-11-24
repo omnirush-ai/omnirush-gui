@@ -52,6 +52,24 @@ describe("sidebar footer", () => {
     await act(async () => root.unmount());
   });
 
+  test("in Work the account line reads at 12 px; outside Work it keeps 10.5 px", async () => {
+    const size = async (work: boolean) => {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      await act(async () => {
+        useAccountStatusStore.getState().set({ connected: true, gatewayConfigured: true, displayName: "Ada Lovelace", email: "ada@example.invalid" });
+        root.render(<ShellConfigProvider><SidebarProvider><NativeAccountFooter onOpenAccountSettings={() => {}} work={work} /></SidebarProvider></ShellConfigProvider>);
+        await tick();
+      });
+      const detail = host.querySelector('[data-testid="native-account-detail"]')!.className;
+      await act(async () => root.unmount());
+      return detail;
+    };
+    expect(await size(true)).toContain("text-[12px]");
+    expect(await size(false)).toContain("text-[10.5px]");
+  });
+
   test("an icon button carries its aria-label and is a tooltip trigger, not a bare title", async () => {
     const host = document.createElement("div");
     document.body.append(host);
