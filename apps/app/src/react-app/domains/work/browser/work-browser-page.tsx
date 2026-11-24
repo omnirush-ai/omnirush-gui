@@ -184,6 +184,7 @@ function WorkBrowser({ onAsk, openExternal }: WorkBrowserPageProps) {
           tab={tab}
           inputRef={inputRef}
           blankAsEmpty
+          compact
           placeholder={t("work_browser.address")}
           onNavigate={activeTab ? undefined : (url) => newTab(url)}
           className="h-8 rounded-lg"

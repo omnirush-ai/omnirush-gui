@@ -41,7 +41,10 @@ export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement 
   // Taking the page's picture before it steps aside: nothing else moves the view meanwhile.
   const steppingAsideRef = React.useRef(false);
   const stillShownRef = React.useRef(false);
+  // The page box's size when its picture was taken: a picture is only true to the page at that size.
+  const stillSizeRef = React.useRef<{ width: number; height: number } | null>(null);
   const setStill = React.useCallback((still: string | null) => {
+    if (!still) stillSizeRef.current = null;
     if (!still && !stillShownRef.current) return;
     stillShownRef.current = Boolean(still);
     onStillRef.current?.(still);
@@ -101,13 +104,26 @@ export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement 
       const occluded = hasNativeBrowserOccluder();
 
       if (bounds.width < 1 || bounds.height < 1 || occluded) {
+        if (!shownRef.current && stillShownRef.current && stillSizeRef.current && !sameSize(stillSizeRef.current, bounds)) {
+          // The page box changed size under a menu: the picture no longer matches the page, so the menu closes (as
+          // menus do when a window resizes) and the page comes back at its new size. A cover that stays drops the
+          // picture rather than show it stretched or cut.
+          stillSizeRef.current = null;
+          closeCoveringMenu();
+          window.setTimeout(() => { if (!disposed && !shownRef.current && hasNativeBrowserOccluder()) setStill(null); }, STILL_COVER_GRACE_MS);
+          return;
+        }
         if (shownRef.current) {
           const takeStill = occluded && bounds.width >= 1 && bounds.height >= 1 && onStillRef.current && browser.pageStill;
           if (takeStill) {
             // The page's picture goes in its place first, then the page steps aside for the menu.
             steppingAsideRef.current = true;
+            const size = { width: bounds.width, height: bounds.height };
             void browser.pageStill!().catch(() => null).then((still) => {
-              if (!disposed && still) setStill(still);
+              if (!disposed && still) {
+                setStill(still);
+                stillSizeRef.current = size;
+              }
               if (!disposed) browser.hide?.();
               shownRef.current = false;
               lastBoundsRef.current = null;
@@ -178,6 +194,25 @@ export function useNativeBrowserView(contentRef: React.RefObject<HTMLDivElement 
   }, [contentRef, hidden, isAvailable, ownerKey, setStill]);
 
   return isAvailable;
+}
+
+// Long enough for a closing menu to finish its exit before a cover that stays loses the picture.
+const STILL_COVER_GRACE_MS = 400;
+
+function sameSize(left: { width: number; height: number }, right: { width: number; height: number }) {
+  return Math.abs(left.width - right.width) < 1 && Math.abs(left.height - right.height) < 1;
+}
+
+/**
+ * Closes the menu or dialog over the page the way Escape does, sent from inside it so only that menu hears it. The
+ * Work browser's home is a cover too, but it is the page itself and stays.
+ */
+function closeCoveringMenu() {
+  const covers = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [data-browser-occluder]')]
+    .filter((element) => element.dataset.testid !== "browser-home" && (element.offsetParent !== null || element.getClientRects().length > 0));
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const target = covers.find((cover) => active && cover.contains(active)) ? active! : covers.at(-1);
+  target?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
 }
 
 /** The picture of the page shown in its place while a menu covers it (see `NativeBrowserViewOptions.onStill`). */
@@ -277,17 +312,33 @@ type AddressFieldProps = {
   blankAsEmpty?: boolean;
   /** Where Enter goes (the Work browser with no tab opens one); the tab's own page otherwise. */
   onNavigate?: (url: string) => void;
+  /**
+   * The person's own tabs: while the field is not focused it reads host first with no scheme, cut at the end, and the
+   * full address is its hover text. Focus shows the full address, selected. A chat's panel leaves it out.
+   */
+  compact?: boolean;
   className?: string;
   inputClassName?: string;
 };
 
+/** A web address as the field shows it at rest: no http(s) scheme and no lone trailing slash. Other addresses as they are. */
+export function addressForDisplay(url: string): string {
+  const match = /^https?:\/\/(.*)$/i.exec(url.trim());
+  if (!match) return url;
+  const rest = match[1]!;
+  return /^[^/?#]+\/$/.test(rest) ? rest.slice(0, -1) : rest;
+}
+
 /** The address field: shows the tab's address, Enter goes to what was typed. */
-export function BrowserAddressField({ tab, inputRef, placeholder = "Enter URL...", blankAsEmpty = false, onNavigate, className, inputClassName }: AddressFieldProps) {
+export function BrowserAddressField({ tab, inputRef, placeholder = "Enter URL...", blankAsEmpty = false, onNavigate, compact = false, className, inputClassName }: AddressFieldProps) {
   const suspended = tab.status === "suspended";
   const busy = tab.status === "suspending" || tab.status === "restoring";
   const shownUrl = blankAsEmpty && tab.url === "about:blank" ? "" : tab.url;
   const [urlInput, setUrlInput] = React.useState(shownUrl);
   const urlFocusedRef = React.useRef(false);
+  const [focused, setFocused] = React.useState(false);
+  // At rest the compact field reads the tab's own address host first; anything typed and not sent stays as typed.
+  const resting = compact && !focused && urlInput === shownUrl;
 
   React.useEffect(() => {
     if (!urlFocusedRef.current) {
@@ -314,17 +365,28 @@ export function BrowserAddressField({ tab, inputRef, placeholder = "Enter URL...
       <InputGroupInput
         ref={inputRef}
         type="text"
-        className={cn("h-7", inputClassName)}
-        value={urlInput}
+        className={cn("h-7", compact && "truncate", inputClassName)}
+        value={resting ? addressForDisplay(urlInput) : urlInput}
+        title={compact && shownUrl ? shownUrl : undefined}
         disabled={suspended || busy}
         onChange={(event) => setUrlInput(event.target.value)}
         onKeyDown={handleUrlKeyDown}
-        onFocus={() => {
+        onFocus={(event) => {
           urlFocusedRef.current = true;
-          inputRef.current?.select();
+          setFocused(true);
+          const input = event.currentTarget;
+          if (!compact) {
+            input.select();
+            return;
+          }
+          // The full address replaces the short one first, then all of it is selected for editing.
+          input.value = urlInput;
+          input.select();
+          window.requestAnimationFrame(() => { if (document.activeElement === input) input.select(); });
         }}
         onBlur={() => {
           urlFocusedRef.current = false;
+          setFocused(false);
         }}
         placeholder={placeholder}
         aria-label={placeholder}

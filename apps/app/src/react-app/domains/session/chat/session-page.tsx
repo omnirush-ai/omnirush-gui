@@ -515,8 +515,9 @@ export function SessionPage(props: SessionPageProps) {
   const activeSidePanel = props.workBrowserPage ? null : sessionSidePanel;
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
-  // A Work record in the panel reads best at 400 px or more.
+  // A Work record in the panel reads best at 400 px or more, and so does a page the person opened from Work.
   const recordTabActive = activeSidePanel === "panel" && activePanelTab?.type === "record";
+  const widePanelTab = recordTabActive || (activeSidePanel === "panel" && workBrowser && panelContentKey === NO_SESSION_SIDE_PANEL_KEY && activePanelTab?.type === "browser");
   // The editor needs the local server's file routes: desktop, local workspaces.
   const editorAvailable = isElectronRuntime()
     && Boolean(props.omnirushServerClient && props.runtimeWorkspaceId)
@@ -2385,8 +2386,8 @@ export function SessionPage(props: SessionPageProps) {
                 <ResizableHandle className="hidden bg-transparent lg:flex" />
                 <ResizablePanel
                   panelRef={browserPanelRef}
-                  defaultSize={`${activeSidePanel === "extensions" ? Math.max(browserPanelDefaultWidth, 480) : activeSidePanel === "editor" ? Math.max(browserPanelDefaultWidth, 560) : recordTabActive ? Math.max(browserPanelDefaultWidth, 480) : browserPanelDefaultWidth}px`}
-                  minSize={activeSidePanel === "extensions" ? "420px" : activeSidePanel === "editor" ? "420px" : recordTabActive ? "400px" : "320px"}
+                  defaultSize={`${activeSidePanel === "extensions" ? Math.max(browserPanelDefaultWidth, 480) : activeSidePanel === "editor" ? Math.max(browserPanelDefaultWidth, 560) : widePanelTab ? Math.max(browserPanelDefaultWidth, 480) : browserPanelDefaultWidth}px`}
+                  minSize={activeSidePanel === "extensions" ? "420px" : activeSidePanel === "editor" ? "420px" : widePanelTab ? "400px" : "320px"}
                   maxSize="70%"
                   className="min-h-0 overflow-hidden pl-2 lg:flex lg:flex-col"
                 >

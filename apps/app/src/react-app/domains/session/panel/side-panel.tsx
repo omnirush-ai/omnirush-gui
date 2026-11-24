@@ -209,7 +209,7 @@ function BrowserPanelContent({
         {isAvailable ? (
           <>
             <BrowserNavButtons tab={tab} />
-            <BrowserAddressField tab={tab} inputRef={urlInputRef} blankAsEmpty={work} placeholder={userTabs ? t("work_browser.address") : undefined} />
+            <BrowserAddressField tab={tab} inputRef={urlInputRef} blankAsEmpty={work} compact={userTabs} placeholder={userTabs ? t("work_browser.address") : undefined} />
             <BrowserLibraryBar sessionId={sessionId} tab={tab} inputRef={urlInputRef} />
             {/* Beside Work pages the panel is narrow and the tab moves to the Work browser with Expand, where ".." has Suspend. */}
             {userTabs ? null : (

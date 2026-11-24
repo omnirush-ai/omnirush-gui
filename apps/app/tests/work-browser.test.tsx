@@ -150,6 +150,8 @@ describe("work browser rules", () => {
     expect(siteBrand("https://mail.google.com/mail/u/0")).toBe("gmail");
     expect(siteBrand("https://www.google.com/")).toBe("google");
     expect(siteBrand("https://acme.atlassian.net/browse/OPS-1")).toBe("jira");
+    expect(siteBrand("https://jira.atlassian.com/browse/JRASERVER-1")).toBe("jira");
+    expect(siteBrand("https://www.atlassian.com/")).toBeNull();
     expect(siteBrand("https://acme.sharepoint.com/sites/ops")).toBe("sharepoint");
     expect(siteBrand("https://notlinear.app/")).toBeNull();
     expect(siteBrand("https://tms.acme.example/")).toBeNull();
@@ -624,5 +626,100 @@ describe("the side panel", () => {
       expect(expanded).toEqual(["expand"]);
     }, { browser: work.browser, browserLibrary: libraryBridge() });
     window.removeEventListener(WORK_BROWSER_EXPAND_EVENT, onExpand);
+  });
+});
+
+describe("the address field on the person's own tabs", () => {
+  const long = "https://tms.juniperfreight.example/shipments/4471?view=timeline";
+
+  test("at rest it reads host first with no scheme; other addresses stay as they are", async () => {
+    const { addressForDisplay } = await import("../src/react-app/domains/session/panel/browser-surface");
+    expect(addressForDisplay("https://tms.juniperfreight.example/shipments/4471")).toBe("tms.juniperfreight.example/shipments/4471");
+    expect(addressForDisplay("http://linear.app/")).toBe("linear.app");
+    expect(addressForDisplay("https://linear.app/acme/")).toBe("linear.app/acme/");
+    expect(addressForDisplay("about:blank")).toBe("about:blank");
+    expect(addressForDisplay("file:///tmp/a.pdf")).toBe("file:///tmp/a.pdf");
+  });
+
+  test("beside Work: short at rest, cut at the end, the full address on hover; focus shows all of it selected. A chat's panel is unchanged", async () => {
+    const { SidePanel: Panel } = await import("../src/react-app/domains/session/panel/side-panel");
+    const { DenAuthProvider } = await import("../src/react-app/domains/cloud/den-auth-provider");
+    const SidePanel = (props: Parameters<typeof Panel>[0]) => <DenAuthProvider><Panel {...props} /></DenAuthProvider>;
+    const own = fakeBrowser(stateOf([tab("u1", USER_TABS_OWNER, long, { label: "Shipment 4471" })], { [USER_TABS_OWNER]: "u1" }));
+    await withDom(async ({ mount, act }) => {
+      await mount(<SidePanel sessionId={USER_TABS_OWNER} client={null} workspaceId={null} workspaceRoot="" onClose={() => undefined} />);
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="Type an address"]')!;
+      expect(input.value).toBe("tms.juniperfreight.example/shipments/4471?view=timeline");
+      expect(input.title).toBe(long);
+      expect(input.className).toContain("truncate");
+      await act(() => input.focus());
+      expect(input.value).toBe(long);
+      expect([input.selectionStart, input.selectionEnd]).toEqual([0, long.length]);
+      await act(() => input.blur());
+      expect(input.value).toBe("tms.juniperfreight.example/shipments/4471?view=timeline");
+    }, { browser: own.browser, browserLibrary: libraryBridge() });
+    const chat = fakeBrowser(stateOf([tab("c1", "ses_chat", long)], { ses_chat: "c1" }));
+    await withDom(async ({ mount }) => {
+      await mount(<SidePanel sessionId="ses_chat" client={null} workspaceId={null} workspaceRoot="" onClose={() => undefined} />);
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="Enter URL..."]')!;
+      expect(input.value).toBe(long);
+      expect(input.title).toBe("");
+    }, { browser: chat.browser, browserLibrary: libraryBridge() });
+  });
+});
+
+describe("the page's picture under a menu", () => {
+  test("taken at the page box's size; when the box changes size under the menu, the menu closes and the page comes back at the new size", async () => {
+    const React = await import("react");
+    const { useNativeBrowserView, BrowserPageStill } = await import("../src/react-app/domains/session/panel/browser-surface");
+    const size = { width: 1000, height: 700 };
+    const rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: size.width, bottom: size.height, width: size.width, height: size.height, toJSON: () => ({}) }) as DOMRect;
+    const proto = HTMLElement.prototype as unknown as { getBoundingClientRect: () => DOMRect; getClientRects: () => DOMRect[] };
+    const original = { box: proto.getBoundingClientRect, rects: proto.getClientRects };
+    proto.getBoundingClientRect = rect;
+    proto.getClientRects = () => [rect()];
+    const calls = { shown: [] as Array<{ width: number; height: number }>, hidden: 0, stills: 0 };
+    const browser = {
+      show: async (bounds: { width: number; height: number }) => { calls.shown.push({ width: bounds.width, height: bounds.height }); },
+      hide: async () => { calls.hidden += 1; },
+      setBounds: async () => undefined,
+      pageStill: async () => { calls.stills += 1; return "data:image/jpeg;base64,c3RpbGw="; },
+    };
+    let setMenu: (open: boolean) => void = () => undefined;
+    function Harness() {
+      const box = React.useRef<HTMLDivElement>(null);
+      const [still, setStill] = React.useState<string | null>(null);
+      const [menu, setMenuOpen] = React.useState(false);
+      setMenu = setMenuOpen;
+      useNativeBrowserView(box, USER_TABS_OWNER, false, { onStill: setStill });
+      return (
+        <div>
+          <div ref={box} data-testid="page-box"><BrowserPageStill still={still} /></div>
+          {menu ? <div data-browser-occluder="" data-testid="menu" onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); }} /> : null}
+        </div>
+      );
+    }
+    try {
+      await withDom(async ({ mount, act }) => {
+        await mount(<Harness />);
+        await act(() => wait(60));
+        expect(calls.shown).toEqual([{ width: 1000, height: 700 }]);
+        await act(async () => { setMenu(true); await wait(80); });
+        expect(byTestId("browser-page-still")).not.toBeNull();
+        expect(calls.stills).toBe(1);
+        size.width = 1400;
+        await act(async () => { window.dispatchEvent(new Event("resize")); await wait(80); });
+        expect(byTestId("menu")).toBeNull();
+        expect(calls.shown.at(-1)).toEqual({ width: 1400, height: 700 });
+        expect(byTestId("browser-page-still")).toBeNull();
+        // Opened again at the new size, the picture is taken again, at that size.
+        await act(async () => { setMenu(true); await wait(80); });
+        expect(calls.stills).toBe(2);
+        expect(byTestId("browser-page-still")).not.toBeNull();
+      }, { browser });
+    } finally {
+      proto.getBoundingClientRect = original.box;
+      proto.getClientRects = original.rects;
+    }
   });
 });
