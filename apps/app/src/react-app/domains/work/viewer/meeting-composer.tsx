@@ -198,7 +198,7 @@ export function NewMail(props: { formKey: string; compose: RecordCompose; mailbo
       <div className="rounded-xl border border-border">
         <div className="relative">
           <RecipientField label={t("work.viewer.field_to")} value={to} onChange={setTo} autoFocus testId="work-new-mail-to" />
-          {!more ? <button type="button" onClick={() => setMore(true)} className="absolute right-2 top-2 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline">{t("work.viewer.cc_bcc")}</button> : null}
+          {!more ? <button type="button" onClick={() => setMore(true)} className="absolute right-2 top-2 text-[12px] text-muted-foreground outline-none hover:text-foreground rounded-sm focus-visible:ring-2 focus-visible:ring-ring">{t("work.viewer.cc_bcc")}</button> : null}
         </div>
         {more ? <RecipientField label={t("work.viewer.field_cc")} value={cc} onChange={setCc} /> : null}
         {more ? <RecipientField label={t("work.viewer.field_bcc")} value={bcc} onChange={setBcc} /> : null}

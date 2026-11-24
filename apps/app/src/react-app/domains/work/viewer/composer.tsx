@@ -34,7 +34,7 @@ export const COMPOSER_NODES = [ListNode, ListItemNode, LinkNode, AutoLinkNode];
 const THEME: InitialConfigType["theme"] = {
   paragraph: "m-0",
   text: { bold: "font-semibold", italic: "italic", underline: "underline", strikethrough: "line-through", code: "rounded bg-muted px-1 py-px font-mono text-[12px]" },
-  link: "text-link underline underline-offset-2",
+  link: "text-foreground underline decoration-foreground/40 underline-offset-2",
   list: {
     ul: "my-1 list-disc ps-5",
     ol: "my-1 list-decimal ps-5",

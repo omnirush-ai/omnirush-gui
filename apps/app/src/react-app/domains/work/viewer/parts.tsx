@@ -79,6 +79,9 @@ export function RecordMarkdown(props: { text: string; className?: string; compac
   );
 }
 
+/** Links in the viewers: the text colour with an underline, AA in light and dark (the theme's link blue is 3.2:1 in light). */
+export const VIEWER_LINK = "rounded-sm text-foreground underline decoration-foreground/40 underline-offset-2 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring";
+
 function Linked(props: { text: string }) {
   const open = useLinkOpener();
   return (
@@ -88,7 +91,7 @@ function Linked(props: { text: string }) {
           key={index}
           href={part.href}
           onClick={(event) => { event.preventDefault(); open(part.href!); }}
-          className="text-link underline-offset-2 hover:underline"
+          className={VIEWER_LINK}
         >
           {part.text}
         </a>
@@ -306,7 +309,7 @@ export function RelatedList(props: { links: RecordLink[] | null | undefined }) {
         ))}
       </ul>
       {links.length > shown.length ? (
-        <button type="button" onClick={() => setAll(true)} className="mt-2 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:underline" data-testid="work-viewer-related-more">
+        <button type="button" onClick={() => setAll(true)} className="mt-2 rounded-sm text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background" data-testid="work-viewer-related-more">
           {t("work.viewer.show_more", { count: links.length - shown.length })}
         </button>
       ) : null}

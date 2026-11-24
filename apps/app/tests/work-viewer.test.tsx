@@ -491,6 +491,22 @@ describe("readable viewer labels", () => {
     }
   });
 
+  test("viewer links reach AA in light: the text colour with an underline, never the link blue; focus shows as a ring", () => {
+    const dir = new URL("../src/react-app/domains/work/viewer/", import.meta.url);
+    for (const name of ["parts.tsx", "chat-view.tsx", "composer.tsx", "record-actions.tsx", "meeting-composer.tsx", "mail-view.tsx", "crm-view.tsx"]) {
+      const source = readFileSync(new URL(name, dir), "utf8");
+      expect(source).not.toContain("text-link");
+      expect(source).not.toContain("focus-visible:underline");
+    }
+  });
+
+  test("a link in a plain body uses the viewer link style", async () => {
+    const { Body, VIEWER_LINK } = await import("../src/react-app/domains/work/viewer/parts");
+    const markup = renderToStaticMarkup(<Body body={{ format: "text", content: "Deck: https://coldchain.example/deck" }} />);
+    expect(markup).toContain(`class="${VIEWER_LINK}"`);
+    expect(markup).toContain("underline");
+  });
+
   test("no viewer text is under 12 px", () => {
     const dir = new URL("../src/react-app/domains/work/viewer/", import.meta.url);
     for (const name of ["parts.tsx", "record-panel.tsx", "chat-view.tsx", "event-view.tsx", "issue-view.tsx", "meeting-view.tsx", "html-frame.tsx", "record-actions.tsx", "meeting-composer.tsx", "mail-view.tsx"]) {

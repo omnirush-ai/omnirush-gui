@@ -36,7 +36,7 @@ function AllProperties(props: { fields: RecordField[] }) {
   const [open, setOpen] = useState(false);
   return (
     <section aria-label={t("work.viewer.all_properties")}>
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-center gap-1 text-[12px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:underline" data-testid="work-viewer-properties">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-center gap-1 text-[12px] font-medium text-muted-foreground outline-none hover:text-foreground rounded-sm focus-visible:ring-2 focus-visible:ring-ring" data-testid="work-viewer-properties">
         <ChevronRight className={cn("size-3.5 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
         {t("work.viewer.all_properties")}
       </button>
