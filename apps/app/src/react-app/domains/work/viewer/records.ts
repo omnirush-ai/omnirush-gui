@@ -32,7 +32,8 @@ export type RecordComment = {
   source_id?: string; author: RecordPerson; at?: string | null; body: { format: string; content: string };
   internal?: boolean; inbound?: boolean; reply?: boolean;
 };
-export type RecordField = { label: string; value: string };
+/** `attachment`: the index of the record's file this field stands for (a cloud task's "File: PDF"). */
+export type RecordField = { label: string; value: string; attachment?: number };
 export type RecordAnswer = "yes" | "maybe" | "no" | "none";
 export type RecordAttendee = RecordPerson & { response?: RecordAnswer | string; organizer?: boolean; optional?: boolean };
 export type RecordEvent = {
@@ -86,6 +87,8 @@ export type WorkRecord = Omit<OmniRushWorkRecordDetail, "body" | "attachments" |
   code?: RecordCode;
   stage?: string | null;
   path?: string | null;
+  /** A cloud task's record: the task it came from (the person-facing source is the label map's). */
+  source_detail?: string | null;
 };
 
 export type RecordClient = Pick<WorkClient, "getWorkRecord" | "getWorkRecordAttachment" | "runWorkRecordAction" | "composeWork" | "undoWorkAction" | "startWorkConnector"> & { baseUrl?: string };
@@ -183,6 +186,8 @@ const CHANNEL_LABELS: Record<string, string> = {
 let catalog: ReturnType<typeof builtInCatalog> | null = null;
 /** A connector's name as people know it ("Xero", "monday.com"), from the built-in catalog, else the Work label. */
 export function connectorName(source: string): string {
+  // Not a connector: rows a cloud task collected.
+  if (source === "webtask") return t("work.cloud.record_source");
   catalog ??= builtInCatalog([]);
   const known = toolLabel(catalog, source);
   return (known && known !== source && source !== "google" && source !== "microsoft" ? known : connectorLabel(source)).replace(/\s*\(.*\)$/, "");

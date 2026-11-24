@@ -3783,6 +3783,7 @@ export default {
   "work.cloud.size_mb": "{n} MB",
   "work.cloud.result": "Result",
   "work.cloud.records": "Records",
+  "work.cloud.record_source": "Cloud task",
   "work.cloud.files": "Files",
   "work.cloud.more_files_one": "And {count} more file, attached to its record.",
   "work.cloud.more_files_other": "And {count} more files, attached to their records.",

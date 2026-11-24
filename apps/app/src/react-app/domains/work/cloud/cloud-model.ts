@@ -312,7 +312,18 @@ export function blockedHosts(run: Pick<OmniRushWorkCloudRun, "flags"> | null | u
 }
 
 /** What the person should know: instructions on the screen the agent ignored, and its own notes. */
-export const runNotes = (run: Pick<OmniRushWorkCloudRun, "flags"> | null | undefined) => (run?.flags ?? []).filter((flag) => flag.kind !== "blocked_host" && flag.text.trim());
+/**
+ * The notes a run shows: every on-screen instruction the agent ignored, and only the latest of the agent's own notes
+ * (they repeat each other). While the run waits for a code the code box says what to do, so the agent's own notes
+ * ("complete verification in the portal") are left out.
+ */
+export function runNotes(run: Pick<OmniRushWorkCloudRun, "flags" | "status" | "waiting_for"> | null | undefined) {
+  const flags = (run?.flags ?? []).filter((flag) => flag.kind !== "blocked_host" && flag.text.trim());
+  const own = flags.filter((flag) => flag.kind !== "ignored_instruction");
+  const codeBox = run?.status === "waiting" && run.waiting_for === "code";
+  const latest = codeBox ? null : own[own.length - 1] ?? null;
+  return flags.filter((flag) => flag.kind === "ignored_instruction" || flag === latest);
+}
 
 /** A saved record's key as people read it: `webtask:<task8>:INV-4471` reads as INV-4471. */
 export function recordKey(sourceId: string): string {

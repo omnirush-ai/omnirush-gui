@@ -10,7 +10,7 @@ import { FinanceView } from "./finance-view";
 import { IssueView } from "./issue-view";
 import { MailView } from "./mail-view";
 import { MeetingView } from "./meeting-view";
-import { Body, FieldGrid } from "./parts";
+import { AttachmentChips, Body, FieldGrid } from "./parts";
 import type { MailMessage, RecordFile, WorkRecord } from "./records";
 
 export function RecordView(props: { record: WorkRecord; onPreview: (file: RecordFile, sourceId: string) => void; onReplyTo?: (message: MailMessage) => void }) {
@@ -29,8 +29,9 @@ export function RecordView(props: { record: WorkRecord; onPreview: (file: Record
     default:
       return (
         <div className="flex flex-col gap-5 px-4 py-4" data-testid="work-generic-view">
-          <FieldGrid fields={record.fields} />
+          <FieldGrid fields={record.fields} files={record.attachments} sourceId={record.source_id} onPreview={onPreview} />
           <Body body={record.body} />
+          {record.source === "webtask" ? <AttachmentChips sourceId={record.source_id} files={record.attachments} onPreview={onPreview} /> : null}
         </div>
       );
   }

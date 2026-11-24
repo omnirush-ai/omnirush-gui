@@ -125,6 +125,7 @@ import { WorkOrganizationPage } from "@/react-app/domains/work/work-org";
 import { WorkInsightsPage } from "@/react-app/domains/work/work-insights";
 import { WORK_CLOUD_ROUTE } from "@/react-app/domains/work/work-mode";
 import { cloudPageProps } from "@/react-app/domains/work/cloud/cloud-tasks";
+import { CloudTodayStrip, useCloudHomeItems } from "@/react-app/domains/work/cloud/cloud-card";
 import { cloudSearch, useCloudClientStore, useCloudWaiting, workCloud, WORK_CLOUD_OPEN_EVENT, type CloudOpen } from "@/react-app/domains/work/cloud/cloud-model";
 import { WorkAutomationPage } from "@/react-app/domains/work/work-activity";
 import { WorkToday } from "@/react-app/domains/work/work-today";
@@ -595,6 +596,8 @@ export function SessionRoute() {
   const workCloudCaps = workEnabled ? workCloud(workState.data) : null;
   const workCloudActive = workRouteActive && workCloudCaps !== null && location.pathname.startsWith(WORK_CLOUD_ROUTE);
   const workCloudWaiting = useCloudWaiting(client ?? null, workCloudCaps !== null);
+  const workHasSource = hasRealSource(workConnectorRows.data);
+  const workCloudHome = useCloudHomeItems(client ?? null, workCloudCaps !== null && !workHasSource && !workConnectorRows.isPending);
   const setWorkCloudClient = useCloudClientStore((state) => state.setClient);
   useEffect(() => setWorkCloudClient(workCloudCaps && client ? client : null, workCloudCaps?.live === true), [client, setWorkCloudClient, workCloudCaps !== null, workCloudCaps?.live]);
   useEffect(() => {
@@ -4068,7 +4071,7 @@ export function SessionRoute() {
             checklist={workChecklist}
             onConnect={() => navigate(WORK_CONNECTORS_ROUTE)}
             pending={workConnectorRows.isPending || workOnboarding.isPending}
-            today={hasRealSource(workConnectorRows.data) ? (
+            today={workHasSource ? (
               <WorkToday
                 client={client ?? null}
                 openLink={(url) => platform.openLink(url)}
@@ -4078,6 +4081,9 @@ export function SessionRoute() {
                 onSourceChange={(id) => navigate(id ? `${WORK_HOME_ROUTE}?source=${encodeURIComponent(id)}` : WORK_HOME_ROUTE, { replace: true })}
                 checklist={workChecklist ? <div className="w-full max-w-[420px]">{workChecklist}</div> : null}
               />
+            ) : workCloudHome.length ? (
+              // No connector, but Cloud tasks on: the runs that need the person still show on Home (portals with no API).
+              <CloudTodayStrip items={workCloudHome} />
             ) : null}
             composer={(
               <NewTaskComposer

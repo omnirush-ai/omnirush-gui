@@ -82,7 +82,7 @@ function Steps(props: { client: CloudClient | null; run: OmniRushWorkCloudRun })
                   <span className="w-6 shrink-0 text-end text-[12px] tabular-nums text-muted-foreground">{step.n}</span>
                   <div className="min-w-0 flex-1">
                     <p className="break-words text-[13px] text-foreground">{step.summary}</p>
-                    {!step.ok && step.error ? <p className="text-[12px] text-red-11">{step.error}</p> : null}
+                    {!step.ok && step.error ? <p className="text-[13px] text-red-11">{step.error}</p> : null}
                   </div>
                   {step.has_shot ? (
                     <Button size="xs" variant="ghost" aria-expanded={shot === step.n} onClick={() => setShot(shot === step.n ? null : step.n)} data-testid="work-cloud-step-shot">

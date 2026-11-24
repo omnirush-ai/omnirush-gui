@@ -66,7 +66,9 @@ export function LiveFrame(props: { client: CloudClient | null; run: OmniRushWork
   const waitingOnPerson = props.run.status === "waiting" && props.run.waiting_for && props.run.waiting_for !== "takeover";
   const line = control ? t("work.cloud.live_control") : waitingOnPerson ? waitingText(props.run.waiting_for) : t("work.cloud.live_working");
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-background" aria-label={t("work.cloud.live_title")} data-testid="work-cloud-live" data-mode={mode}>
+    // shrink-0: inside the run view's scrolling column the frame keeps its 16:10 screen and its bar (Take over, Hand
+    // back) instead of being squeezed under the blocks after it.
+    <section className="shrink-0 overflow-hidden rounded-xl border border-border bg-background" aria-label={t("work.cloud.live_title")} data-testid="work-cloud-live" data-mode={mode}>
       <div className="relative aspect-[16/10] w-full bg-muted">
         {url ? (
           <iframe

@@ -70,6 +70,7 @@ function sourceDetail(record: WorkRecord): string {
   }
   if (record.view === "chat") return record.where ?? "";
   if (record.view === "issue") return issueRef(record);
+  if (record.source === "webtask" && record.source_detail?.trim()) return record.source_detail.trim();
   return record.kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 function stateWord(record: WorkRecord): string | null {

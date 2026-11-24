@@ -49,7 +49,7 @@ function TaskRow(props: { task: OmniRushWorkCloudTask; now: number; active: bool
       >
         <span className="min-w-0">
           <span className="block truncate text-[13px] font-medium text-foreground">{task.title}</span>
-          {site ? <span className="block truncate text-[12px] text-muted-foreground">{site}</span> : null}
+          {site ? <span className="block truncate text-[13px] text-muted-foreground">{site}</span> : null}
         </span>
         <span className={cn("min-w-0 text-[12px] @2xl:line-clamp-2 @2xl:text-[13px]", task.paused ? WAIT_TEXT : "text-muted-foreground")}>
           {task.paused ? (task.paused_reason || t("work.cloud.paused")) : scheduleText(task.schedule)}

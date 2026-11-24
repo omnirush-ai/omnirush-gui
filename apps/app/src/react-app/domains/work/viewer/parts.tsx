@@ -143,18 +143,30 @@ export function SectionTitle(props: { children: ReactNode; count?: number; actio
   );
 }
 
-/** Label and value pairs, two columns where they fit. */
-export function FieldGrid(props: { fields: RecordField[] | null | undefined; className?: string }) {
+/** Label and value pairs, two columns where they fit. A field that stands for one of the record's files ("File: PDF")
+ * opens it, like its chip. */
+export function FieldGrid(props: { fields: RecordField[] | null | undefined; className?: string; files?: RecordFile[] | null; sourceId?: string; onPreview?: (file: RecordFile, sourceId: string) => void }) {
   const fields = (props.fields ?? []).filter((f) => f.label && f.value);
   if (!fields.length) return null;
+  const fileOf = (field: RecordField) => (field.attachment == null || !props.onPreview ? undefined : (props.files ?? []).find((f) => f.n === field.attachment && !(f.available === false && f.skipped)));
   return (
     <dl className={cn("grid grid-cols-[minmax(84px,max-content)_1fr] gap-x-4 gap-y-1.5 text-[13px] leading-5", props.className)} data-testid="work-viewer-fields">
-      {fields.map((field, index) => (
-        <div key={`${field.label}:${index}`} className="contents">
-          <dt className="truncate text-muted-foreground">{field.label}</dt>
-          <dd className="min-w-0 break-words text-foreground"><Linked text={fieldValue(field.label, field.value)} /></dd>
-        </div>
-      ))}
+      {fields.map((field, index) => {
+        const file = fileOf(field);
+        return (
+          <div key={`${field.label}:${index}`} className="contents">
+            <dt className="truncate text-muted-foreground">{field.label}</dt>
+            <dd className="min-w-0 break-words text-foreground">
+              {file ? (
+                <button type="button" onClick={() => props.onPreview!(file, props.sourceId ?? "")} title={file.name} className="inline-flex max-w-full items-center gap-1.5 rounded text-start text-foreground underline underline-offset-2 outline-none hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring" data-field-file={file.n}>
+                  <FileIcon type={file.content_type} className="size-3.5" />
+                  <span className="min-w-0 truncate">{file.name}</span>
+                </button>
+              ) : <Linked text={fieldValue(field.label, field.value)} />}
+            </dd>
+          </div>
+        );
+      })}
     </dl>
   );
 }

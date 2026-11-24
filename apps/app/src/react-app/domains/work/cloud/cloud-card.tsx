@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
 import type { OmniRushWorkCloudFeedItem } from "@/app/lib/omnirush-server";
 
-import { relativeTime } from "../work-mode";
+import { relativeTime, workFeedKey, type WorkClient } from "../work-mode";
 import { cloudCard, cloudRunKey, isOpen, openCloud, RUN_POLL_MS, savedText, scheduleText, TODAY_ROWS, useCloudClientStore, waitingAction, type CloudCard } from "./cloud-model";
 import { StatusLine } from "./run-view";
 
@@ -64,9 +64,37 @@ export function CloudToolCard(props: { toolName: string; output: unknown }) {
   );
 }
 
+/** The feed's Cloud tasks rows that need the person or failed. */
+export function actionableCloud(items: OmniRushWorkCloudFeedItem[] | null | undefined): OmniRushWorkCloudFeedItem[] {
+  return (items ?? []).filter((item) => item.status === "waiting" || item.status === "failed" || item.status === "limit" || item.status === "timed_out");
+}
+
+/** How often Work Home reads the feed for the strip while nothing is connected (a code or a sign-in may be waiting). */
+export const CLOUD_HOME_REFRESH_MS = 60_000;
+
+/**
+ * Cloud tasks runs for Work Home when no connector is connected, so the Today view is not there (the main use: portals
+ * with no API). Reads the feed only while `on` (Cloud tasks on for this person); otherwise asks nothing.
+ */
+export function useCloudHomeItems(client: Pick<WorkClient, "getWorkFeed" | "baseUrl"> | null, on: boolean): OmniRushWorkCloudFeedItem[] {
+  const feed = useQuery({
+    queryKey: workFeedKey(client as WorkClient | null, null),
+    queryFn: () => client!.getWorkFeed({ tz: zoneName(), limit: 60 }),
+    enabled: Boolean(client) && on,
+    refetchInterval: CLOUD_HOME_REFRESH_MS,
+    refetchOnWindowFocus: true,
+    retry: 1,
+  });
+  return on ? actionableCloud(feed.data?.cloud) : [];
+}
+
+function zoneName(): string | undefined {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; }
+}
+
 /** Today's Cloud tasks strip: only rows that need the person or failed, at most 3; nothing when there are none. */
 export function CloudTodayStrip(props: { items: OmniRushWorkCloudFeedItem[] | null | undefined; now?: number }) {
-  const items = (props.items ?? []).filter((item) => item.status === "waiting" || item.status === "failed" || item.status === "limit" || item.status === "timed_out");
+  const items = actionableCloud(props.items);
   if (!items.length) return null;
   return (
     <section className="flex flex-col gap-2" aria-label={t("work.nav.cloud")} data-testid="work-today-cloud">
@@ -79,7 +107,7 @@ export function CloudTodayStrip(props: { items: OmniRushWorkCloudFeedItem[] | nu
           <li key={item.run_id} className="flex items-center gap-3 px-3 py-2.5" data-cloud-feed={item.run_id}>
             <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-medium text-foreground">{item.title}</div>
-              <div className="flex min-w-0 items-center gap-1.5 text-[12px]">
+              <div className="flex min-w-0 items-center gap-1.5 text-[13px]">
                 <StatusLine status={item.status} waiting={item.waiting_for} />
                 {item.at ? <span className="shrink-0 text-muted-foreground">· {relativeTime(item.at, props.now)}</span> : null}
               </div>

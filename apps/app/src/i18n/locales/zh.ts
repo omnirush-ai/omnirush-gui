@@ -3790,6 +3790,7 @@ export default {
   "work.cloud.size_mb": "{n} MB",
   "work.cloud.result": "结果",
   "work.cloud.records": "记录",
+  "work.cloud.record_source": "云端任务",
   "work.cloud.files": "文件",
   "work.cloud.more_files_one": "另有 {count} 个文件，已附在对应记录上。",
   "work.cloud.more_files_other": "另有 {count} 个文件，已附在对应记录上。",

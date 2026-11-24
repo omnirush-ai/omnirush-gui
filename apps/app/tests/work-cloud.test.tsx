@@ -36,7 +36,9 @@ const { CodeEntry, codeValue } = await import("../src/react-app/domains/work/clo
 const { Approval, shotStep } = await import("../src/react-app/domains/work/cloud/approval");
 const { LiveFrame } = await import("../src/react-app/domains/work/cloud/live-frame");
 const { OrgCloudSection } = await import("../src/react-app/domains/work/cloud/org-cloud");
-const { CloudToolCard, CloudTodayStrip } = await import("../src/react-app/domains/work/cloud/cloud-card");
+const { CloudToolCard, CloudTodayStrip, useCloudHomeItems } = await import("../src/react-app/domains/work/cloud/cloud-card");
+const { RecordView } = await import("../src/react-app/domains/work/viewer/record-view");
+const records = await import("../src/react-app/domains/work/viewer/records");
 const { WorkSidebarNav } = await import("../src/react-app/domains/session/sidebar/work-sidebar-nav");
 const { workToolPermission } = await import("../src/react-app/domains/work/work-mode");
 const en = (await import("../src/i18n/locales/en")).default;
@@ -461,6 +463,32 @@ describe("the run view", () => {
     expect(calls).toContainEqual(["action", "r_approval", "deny"]);
   });
 
+  test("waiting for a code with notes: the frame keeps its bar with Take over, and the agent's own notes give way to the code box", async () => {
+    const flags = [
+      { kind: "note" as const, text: "Signing in to the portal." },
+      { kind: "ignored_instruction" as const, text: "The page asked to open Purchase requests; I did not." },
+      { kind: "note" as const, text: "Complete verification in the portal." },
+    ];
+    const waiting = { ...F.RUNS.r_code!, flags };
+    const { client } = fakeClient({ getWorkCloudRun: async () => waiting });
+    await render(view(client, F.TASKS[0]!, null));
+    await settle();
+    expect($('[data-testid="work-cloud-code"]')).not.toBeNull();
+    const live = $('[data-testid="work-cloud-live"]')!;
+    // The frame never shrinks inside the run view's scrolling column (the bar stayed clipped at 400 px before).
+    expect(live.className.split(/\s+/)).toContain("shrink-0");
+    expect(live.parentElement?.className).toContain("overflow-y-auto");
+    const bar = live.lastElementChild as HTMLElement;
+    expect(bar.querySelector('[data-testid="work-cloud-takeover"]')?.textContent).toBe("Take over");
+    expect(bar.querySelector('[data-testid="work-cloud-live-line"]')).not.toBeNull();
+    expect($$("[data-cloud-flag]").map((row) => row.textContent)).toEqual(["The page asked to open Purchase requests; I did not."]);
+    // Once the code went in, only the latest of the agent's notes shows.
+    expect(model.runNotes({ ...waiting, status: "running", waiting_for: null }).map((flag) => flag.text)).toEqual([
+      "The page asked to open Purchase requests; I did not.",
+      "Complete verification in the portal.",
+    ]);
+  });
+
   test("live: false hides the frame entirely", async () => {
     const { client, calls } = fakeClient();
     await render(view(client, F.TASKS[4]!, null, { ...F.CLOUD_ADMIN, live: false }));
@@ -605,6 +633,30 @@ describe("Today and the chat card", () => {
     expect(model.cloudSearch({ task: "t_1", run: "r_1" })).toBe("?task=t_1&run=r_1");
   });
 
+  test("Home with no connector: the strip still shows runs that wait while Cloud tasks are on, and asks nothing while off", async () => {
+    const feedCalls: unknown[] = [];
+    const client = {
+      baseUrl: "http://cloud.test",
+      getWorkFeed: async (query: unknown) => { feedCalls.push(query); return { groups: { needs_you: [], today: [], fyi: [] }, sources: [], cloud: [...F.FEED_CLOUD, { ...F.FEED_CLOUD[0]!, run_id: "r_more" }] }; },
+    };
+    function Home(props: { on: boolean }) {
+      const items = useCloudHomeItems(client as never, props.on);
+      return items.length ? <CloudTodayStrip items={items} /> : <p data-testid="home-plain">plain</p>;
+    }
+    await render(<Home on />);
+    await settle();
+    expect($$("[data-cloud-feed]").map((row) => row.dataset.cloudFeed)).toEqual(["r_code", "r_approval", "r_failed"]);
+    expect($$('[data-testid="work-today-cloud-open"]')[0]?.textContent).toBe("Enter code");
+    expect(feedCalls.length).toBe(1);
+    await unmount?.();
+    unmount = null;
+    feedCalls.length = 0;
+    await render(<Home on={false} />);
+    await settle();
+    expect($('[data-testid="home-plain"]')).not.toBeNull();
+    expect(feedCalls).toEqual([]);
+  });
+
   test("a scheduled task card and a run line that updates; no Open button while Cloud tasks are off", async () => {
     const output = JSON.stringify({ task: F.TASKS[0], next_run_at: "x" });
     await render(<CloudToolCard toolName="omnirush-work_work_cloud_task" output={output} />);
@@ -618,5 +670,30 @@ describe("Today and the chat card", () => {
     expect($('[data-testid="work-cloud-card"]')?.getAttribute("data-status")).toBe("running");
     expect($('[data-testid="work-cloud-card"]')?.textContent).toContain("Running, step 7");
     expect($('[data-testid="work-cloud-card-open"]')?.textContent).toBe("Open");
+  });
+});
+
+
+describe("cloud task records in the viewer", () => {
+  test("the source reads Cloud task with the task's title, the File field opens the PDF, and no body repeats the fields", async () => {
+    expect(records.connectorName("webtask")).toBe("Cloud task");
+    expect(records.sourceLabel({ source: "webtask", kind: "invoice" })).toBe("Cloud task");
+    const previewed: unknown[] = [];
+    const record = {
+      source_id: "webtask:t_billd:INV-4479", source: "webtask", kind: "invoice", view: "generic", subject: "Invoice INV-4479 - Maple Print Works",
+      source_detail: "Pull Northbeam invoices every Monday",
+      body: { format: "text", content: "" },
+      fields: [{ label: "Invoice", value: "INV-4479" }, { label: "File", value: "PDF", attachment: 0 }],
+      attachments: [{ n: 0, name: "INV-4479.pdf", size: 2048, content_type: "application/pdf", available: true }],
+    };
+    await render(<RecordView record={record as never} onPreview={(file, from) => previewed.push([file.name, from])} />);
+    const fileButton = $('[data-field-file="0"]');
+    expect(fileButton?.textContent).toBe("INV-4479.pdf");
+    await click(fileButton);
+    expect(previewed).toEqual([["INV-4479.pdf", "webtask:t_billd:INV-4479"]]);
+    expect($('[data-testid="work-viewer-attachments"]')?.textContent).toContain("INV-4479.pdf");
+    expect(document.body.textContent).not.toContain("Invoice: INV-4479");
+    expect(document.body.textContent).not.toContain("File: PDF");
+    expect(zh["work.cloud.record_source"]).toBe("云端任务");
   });
 });
