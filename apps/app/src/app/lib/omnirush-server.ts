@@ -886,6 +886,8 @@ export type OmniRushWorkDeal = {
   name?: string | null;
   company?: string | null;
   amount?: number | null;
+  /** ISO 4217 code from the CRM (HubSpot deal_currency_code, Pipedrive currency, Salesforce CurrencyIsoCode); null when unknown. */
+  currency?: string | null;
   stage?: string | null;
   close_date?: string | null;
   owner?: string | null;

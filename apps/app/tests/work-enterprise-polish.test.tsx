@@ -2,6 +2,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
+import type { ReactNode } from "react";
 import type { OmniRushWorkConnector, OmniRushWorkInsightsMember, OmniRushWorkMembers, OmniRushWorkSearch } from "../src/app/lib/omnirush-server";
 
 const registered = typeof globalThis.window === "undefined";
@@ -22,6 +23,19 @@ const { focusAreas, focusLabel, memberName, withNames } = await import("../src/r
 const { WorkOrganizationPage } = await import("../src/react-app/domains/work/work-org");
 const { CHANNEL_ROWS, ChannelStrip, WorkSearchPage } = await import("../src/react-app/domains/work/work-search");
 const { CONNECTED_SHOWN, ConnectorRow, WorkConnectorsPage } = await import("../src/react-app/domains/work/work-views");
+const { useEnterpriseStore } = await import("../src/react-app/domains/work/enterprise-mode");
+const { dealAmount } = await import("../src/react-app/domains/work/work-deals");
+const { workCoverageKey } = await import("../src/react-app/domains/work/work-mode");
+
+const companyBlock = {
+  status: "active" as const,
+  org: { id: "org_1", name: "Atlas Logistics", domain: "atlas.example" },
+  role: "owner" as const,
+  code: false,
+  capture: { code: false, chat: true },
+  portal_url: null,
+};
+const coverage = { groups: [{ group: "mail", label: "Mail", state: "connected", sources: ["google"] }, { group: "chat", label: "Chat", state: "missing", sources: ["whatsapp", "slack"] }], connected: 1, total: 2, missing_used: ["whatsapp"] };
 
 const noop = () => {};
 const client = { baseUrl: "http://polish.test" } as never;
@@ -50,6 +64,8 @@ describe("people read by name", () => {
     expect(focusLabel("thread:gmail:gm-t-pallets")).toBe("Gmail thread");
     expect(focusLabel("email:ana@x.test")).toBe("ana@x.test");
     expect(focusAreas([["thread:slack:C1:1", 3], ["thread:slack:D1:2", 2], ["domain:acme.test", 4]])).toEqual([["Slack thread", 5], ["acme.test", 4]]);
+    // The person's own address and the company's own domain match everything, so they are left out.
+    expect(focusAreas([["domain:acme.test", 200], ["email:Max@Acme.test", 200], ["company:ColdChain", 9]], "max@acme.test")).toEqual([["ColdChain", 9]]);
     for (const [label] of focusAreas([["thread:gmail:x", 1], ["thread:imap:y", 1]])) expect(label).not.toContain("thread:");
   });
 });
@@ -120,6 +136,68 @@ describe("connectors", () => {
   });
 });
 
+describe("company accounts: one clear action on Connectors and Search", () => {
+  const render = async (node: ReactNode, setup: (queries: InstanceType<typeof QueryClient>) => void) => {
+    const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    setup(queries);
+    document.body.innerHTML = '<div id="root"></div>';
+    const root = createRoot(document.getElementById("root")!);
+    await act(async () => root.render(<QueryClientProvider client={queries}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>));
+    return root;
+  };
+
+  test("connectors: no channel meter; WhatsApp and Telegram fold into one named Import chats row; own e-mail from the members list", async () => {
+    await act(async () => { useEnterpriseStore.getState().setBlock(companyBlock); });
+    const root = await render(<WorkConnectorsPage client={client} openLink={noop} />, (queries) => {
+      queries.setQueryData(workConnectorsKey(client), [row({ account: "max@atlas.example" })]);
+      queries.setQueryData(workCoverageKey(client), coverage);
+      queries.setQueryData(workMembersKey(client), { org: null, invites: [], members: [{ user_id: "u1", email: "max@atlas.example", role: "owner", you: true }] } satisfies OmniRushWorkMembers);
+    });
+    expect(document.querySelector('[data-testid="work-coverage"]')).toBeNull();
+    const card = document.querySelector('[data-testid="work-import-card"]')!;
+    expect(card.getAttribute("data-folded")).toBe("true");
+    expect(card.querySelector('[data-testid="work-import-names"]')!.textContent).toBe("WhatsApp and Telegram chat exports");
+    expect(card.querySelectorAll("[data-work-import]").length).toBe(0);
+    await act(async () => card.querySelector<HTMLButtonElement>('[data-testid="work-import-toggle"]')!.click());
+    expect([...card.querySelectorAll("[data-work-import]")].map((node) => node.getAttribute("data-work-import"))).toEqual(["whatsapp", "telegram"]);
+    expect(card.querySelector("[data-work-import] .text-\\[12px\\]")).toBeNull();
+    expect(document.querySelector('[data-testid="work-connector-meta"]')!.textContent).not.toContain("max@atlas.example");
+    await act(async () => root.unmount());
+    await act(async () => { useEnterpriseStore.getState().setBlock(null); });
+  });
+
+  test("connectors: Work users without a company keep the meter and the open import rows", async () => {
+    const root = await render(<WorkConnectorsPage client={client} openLink={noop} />, (queries) => {
+      queries.setQueryData(workConnectorsKey(client), [row({})]);
+      queries.setQueryData(workCoverageKey(client), coverage);
+    });
+    expect(document.querySelector('[data-testid="work-coverage"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="work-import-card"]')!.getAttribute("data-folded")).toBeNull();
+    expect(document.querySelectorAll("[data-work-import]").length).toBe(2);
+    await act(async () => root.unmount());
+  });
+
+  test("search: a company account gets the search box without the channel meter", async () => {
+    await act(async () => { useEnterpriseStore.getState().setBlock(companyBlock); });
+    const root = await render(<WorkSearchPage client={client} openLink={noop} onAsk={async () => {}} onOpenConnectors={noop} />, (queries) => {
+      queries.setQueryData(workConnectorsKey(client), []);
+      queries.setQueryData(workCoverageKey(client), coverage);
+    });
+    expect(document.querySelector('[data-testid="work-coverage"]')).toBeNull();
+    expect(document.querySelector('[data-testid="work-search-input"]')).not.toBeNull();
+    await act(async () => root.unmount());
+    await act(async () => { useEnterpriseStore.getState().setBlock(null); });
+  });
+});
+
+describe("deals", () => {
+  test("an amount shows in its currency when the CRM sent one, else as the bare number", () => {
+    expect(dealAmount(48000, "EUR")).toBe(new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR" }).format(48000));
+    expect(dealAmount(9000, null)).toBe((9000).toLocaleString(undefined, { maximumFractionDigits: 0 }));
+    expect(dealAmount(null, "EUR")).toBe("");
+  });
+});
+
 describe("search", () => {
   const groups = Array.from({ length: 12 }, (_, index) => ({ id: `c${index}`, label: `Channel ${index}`, count: 40 - index }));
 
@@ -149,5 +227,24 @@ describe("search", () => {
     await act(async () => more.click());
     expect(document.querySelectorAll("[data-search-item]").length).toBe(40);
     await act(async () => root.unmount());
+  });
+});
+
+describe("appearance for company accounts", () => {
+  test("only Mode and Accent colour, with the swatches and no custom colour field", async () => {
+    const { AppearanceView } = await import("../src/react-app/domains/settings/pages/appearance-view");
+    const props = { busy: false, themeMode: "light" as const, setThemeMode: noop, language: "en" as never, setLanguage: noop, hideTitlebar: false, toggleHideTitlebar: noop };
+    await act(async () => { useEnterpriseStore.getState().setBlock(companyBlock); });
+    document.body.innerHTML = '<div id="root"></div>';
+    const root = createRoot(document.getElementById("root")!);
+    await act(async () => root.render(<AppearanceView {...props} />));
+    const company = document.body.innerHTML;
+    await act(async () => root.unmount());
+    expect(company).toContain('data-testid="appearance-accent"');
+    expect(company).not.toContain('data-testid="accent-hex"');
+    expect(company).not.toContain("Discord");
+    expect(company).not.toContain("theme code");
+    expect(company.match(/data-slot="item-title"/g)?.length).toBe(2);
+    await act(async () => { useEnterpriseStore.getState().setBlock(null); });
   });
 });

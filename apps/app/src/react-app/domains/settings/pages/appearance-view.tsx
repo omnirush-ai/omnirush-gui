@@ -30,6 +30,7 @@ import {
 } from "../appearance/theme-state";
 import { WindowSection } from "../appearance/window-section";
 import { LayoutStack } from "../settings-layout";
+import { useEnterpriseFlags } from "../../work/enterprise-mode";
 
 export type AppearanceViewProps = {
   busy: boolean;
@@ -52,6 +53,7 @@ export function AppearanceView(props: AppearanceViewProps) {
   /** The theme Share offers: the one in use, else the first saved one. */
   const customTheme = (selectedCustom ?? customThemes[0])?.theme ?? null;
   const active = useActiveTheme();
+  const enterprise = useEnterpriseFlags();
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [importing, setImporting] = useState<{ theme: CustomTheme; source: string } | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -143,6 +145,17 @@ export function AppearanceView(props: AppearanceViewProps) {
     setEditor(null);
     setImporting(null);
   };
+
+  // Company accounts get the two settings that matter at work: Mode and Accent colour.
+  if (enterprise.on) {
+    return (
+      <LayoutStack>
+        <ThemeSection {...props} />
+        <Separator />
+        <AccentSection busy={props.busy} compact />
+      </LayoutStack>
+    );
+  }
 
   return (
     <LayoutStack>

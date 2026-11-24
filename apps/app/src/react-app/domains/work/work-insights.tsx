@@ -137,18 +137,23 @@ export function focusLabel(label: string): string {
 }
 
 /** The work areas as readable labels, the same label once (two Slack threads are one "Slack thread" chip with both
- *  counts), highest first. */
-export function focusAreas(focus: OmniRushWorkInsightsMember["focus"]): [string, number][] {
+ *  counts), highest first. `email` is the person's own address: it and its domain (the company's own) match everything
+ *  they touch, so they say nothing and are left out. */
+export function focusAreas(focus: OmniRushWorkInsightsMember["focus"], email?: string | null): [string, number][] {
+  const own = email?.trim().toLowerCase() ?? "";
+  const ownDomain = own.includes("@") ? own.slice(own.lastIndexOf("@") + 1) : "";
   const merged = new Map<string, number>();
   for (const [label, count] of focus) {
     const text = focusLabel(label).trim();
+    const key = text.toLowerCase();
+    if (own && (key === own || (ownDomain && key === ownDomain))) continue;
     if (text) merged.set(text, (merged.get(text) ?? 0) + count);
   }
   return [...merged.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-function FocusChips(props: { focus: OmniRushWorkInsightsMember["focus"] }) {
-  const areas = focusAreas(props.focus);
+function FocusChips(props: { focus: OmniRushWorkInsightsMember["focus"]; email?: string | null }) {
+  const areas = focusAreas(props.focus, props.email);
   if (!areas.length) return null;
   return (
     <div className="flex flex-wrap gap-1.5" data-testid="work-insights-focus">
@@ -184,7 +189,7 @@ function MemberCard(props: { member: OmniRushWorkInsightsMember; now: number }) 
         <span><span className="font-medium tabular-nums text-foreground">{member.active_days}</span> {t("work.insights.active_days_unit", { count: member.active_days })}</span>
         <span>{member.last_active ? t("work.insights.last_active", { when: relativeTime(member.last_active, props.now) }) : t("work.insights.no_activity")}</span>
       </div>
-      <FocusChips focus={member.focus} />
+      <FocusChips focus={member.focus} email={member.email} />
       {member.alerts.length ? (
         <div className="flex flex-wrap gap-2" data-testid="work-insights-alerts">
           {member.alerts.map((alert, index) => <AlertBadge key={`${alert.kind}-${index}`} alert={alert} member={member} />)}

@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { askAboutItemPrompt, coverageCanAdd, periodStart, relativeTime, snippetParts, workConnectorsKey, workFailure, workSearchKey, WORK_SEARCH_FOCUS_EVENT, type SearchPeriod, type WorkClient } from "./work-mode";
 import { ConnectorIcon, useCoverageMeter, WorkCoverageMeter } from "./work-views";
 import { ListMore, ListSearch, matchesQuery, useListCap } from "./list-cap";
+import { useEnterpriseFlags } from "./enterprise-mode";
 import { fitStrip, stripSources } from "./work-today";
 
 /** Items a group shows before "Show all". */
@@ -215,7 +216,9 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
   // "+" chips only for what Connectors can add (Meetings has no row there). While the meter shows, it alone says what is missing.
   const connectors = useQuery({ queryKey: workConnectorsKey(props.client), queryFn: () => props.client!.listWorkConnectors(), enabled: Boolean(props.client), retry: false });
   const canAdd = (id: string) => coverageCanAdd(connectors.data, id);
-  const meterShown = useCoverageMeter(props.client, canAdd).shown;
+  // A company account's Search has one job, the search box: no channel meter (consumer Work users keep it).
+  const company = useEnterpriseFlags().on;
+  const meterShown = useCoverageMeter(props.client, canAdd).shown && !company;
   // The chips always show every channel of the unfiltered search, also while one is picked.
   const data = q ? results.data : undefined;
   const all = queryClient.getQueryData<OmniRushWorkSearch>(workSearchKey(props.client, base)) ?? (channel ? undefined : data);
@@ -233,7 +236,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
     <div className="h-full overflow-y-auto" data-testid="work-search">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-10 pt-10">
         <h1 className="text-[22px] font-semibold leading-[28px] tracking-[-0.02em] text-foreground">{t("work.nav.search")}</h1>
-        <WorkCoverageMeter client={props.client} onAdd={props.onOpenConnectors} canAdd={canAdd} />
+        {company ? null : <WorkCoverageMeter client={props.client} onAdd={props.onOpenConnectors} canAdd={canAdd} />}
         <form className="flex items-center gap-2" role="search" onSubmit={(event) => { event.preventDefault(); setQ(text.trim().slice(0, 500)); }}>
           <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-border bg-background px-3 focus-within:ring-2 focus-within:ring-ring">
             <Search aria-hidden className="size-4 shrink-0 text-muted-foreground" />
@@ -305,7 +308,7 @@ export function WorkSearchPage(props: { client: WorkClient | null; openLink: (ur
             })}
           </div>
         )}
-        {data?.coverage_note && q && !meterShown ? <p className="text-[12px] text-muted-foreground" data-testid="work-search-note">{data.coverage_note}</p> : null}
+        {data?.coverage_note && q && !meterShown ? <p className="text-[13px] text-muted-foreground" data-testid="work-search-note">{data.coverage_note}</p> : null}
       </div>
     </div>
   );

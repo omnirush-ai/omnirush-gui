@@ -181,6 +181,8 @@ export type AccountStatusMenuProps = {
   showSettingsButton?: boolean;
   onOpenAccountSettings?: () => void;
   onSendFeedback?: () => void;
+  /** Work mode: the small lines read at 12 px (consumers keep 10.5 px). */
+  work?: boolean;
 };
 
 /**
@@ -209,6 +211,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
     return () => window.clearTimeout(timeout);
   }, [initializing]);
 
+  const small = props.work ? "text-[12px]" : "text-[10.5px]";
   const openSettings = props.onOpenAccountSettings;
   const openDocs = useCallback(() => platform.openLink(DOCS_URL), [platform]);
   const whatsNewUnseen = useWhatsNewUnseen();
@@ -371,7 +374,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
                 <span className="block truncate text-[12px] font-medium text-sidebar-foreground">
                   {accountLabel}
                 </span>
-                <span className="block truncate text-[10.5px] leading-tight text-muted-foreground">
+                <span className={cn("block truncate leading-tight text-muted-foreground", small)}>
                   {accountDetail}
                 </span>
               </span>
@@ -386,7 +389,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
       />
       <DropdownMenuContent side="top" align="start" className="w-72">
         {signedIn ? (
-          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{user.email}</div>
+          <div className={cn("truncate px-2 py-1.5 text-muted-foreground", props.work ? "text-[12px]" : "text-[11px]")} title={user.email}>{user.email}</div>
         ) : null}
 
         {showStatus ? (
@@ -399,9 +402,9 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
                       <StatusDot variant={runtimeStatus.variant} />
                     </span>
                     <div className="min-w-0">
-                      <div className="text-[11.5px] font-medium text-foreground">{runtimeStatus.label}</div>
+                      <div className={cn("font-medium text-foreground", props.work ? "text-[13px]" : "text-[11.5px]")}>{runtimeStatus.label}</div>
                       {runtimeStatus.detail ? (
-                        <div className="text-[10.5px] leading-tight text-muted-foreground">
+                        <div className={cn("leading-tight text-muted-foreground", small)}>
                           {runtimeStatus.detail}
                         </div>
                       ) : null}
@@ -414,10 +417,10 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
                       <StatusDot variant={connectDotVariant(connectStatus)} />
                     </span>
                     <div className="min-w-0">
-                      <div className="text-[11.5px] font-medium text-foreground">
+                      <div className={cn("font-medium text-foreground", props.work ? "text-[13px]" : "text-[11.5px]")}>
                         {`omnirush.ai Connect: ${connectStatus.label}`}
                       </div>
-                      <div className="text-[10.5px] leading-tight text-muted-foreground">
+                      <div className={cn("leading-tight text-muted-foreground", small)}>
                         {connectStatus.description}
                       </div>
                     </div>
@@ -430,9 +433,9 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
                   <StatusDot variant={collapsedStatus.variant} />
                 </span>
                 <div className="min-w-0">
-                  <div className="text-[11.5px] font-medium text-foreground">{collapsedStatus.label}</div>
+                  <div className={cn("font-medium text-foreground", props.work ? "text-[13px]" : "text-[11.5px]")}>{collapsedStatus.label}</div>
                   {collapsedStatus.detail ? (
-                    <div className="text-[10.5px] leading-tight text-muted-foreground">
+                    <div className={cn("leading-tight text-muted-foreground", small)}>
                       {collapsedStatus.detail}
                     </div>
                   ) : null}
@@ -440,7 +443,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
               </div>
             ) : null}
             {props.showConnectionStatus && props.developerMode ? (
-              <div className="text-[10.5px] leading-tight text-muted-foreground">
+              <div className={cn("leading-tight text-muted-foreground", small)}>
                 {t("account.providers_connected", { count: props.providerConnectedIds.length })}
                 {" · "}
                 {t("account.mcp_connected", { count: props.mcpConnectedCount })}
