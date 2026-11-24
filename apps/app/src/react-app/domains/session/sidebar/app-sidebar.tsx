@@ -1197,7 +1197,7 @@ export function NativeAccountFooter({ onOpenAccountSettings, work = false }: { o
                 <span className="truncate text-xs font-medium">{accountLabel}</span>
                 {quality ? <QualityTierBadge quality={quality} /> : null}
               </span>
-              <span className={cn("line-clamp-2 whitespace-normal break-words leading-snug text-muted-foreground", work ? "text-[12px]" : "text-[10.5px]")} data-testid="native-account-detail">
+              <span className={cn("line-clamp-2 whitespace-normal break-words", work ? "text-[12px]" : "text-[10.5px]", "leading-snug text-muted-foreground")} data-testid="native-account-detail">
                 {accountDetail}
               </span>
               {usage ? (

@@ -67,7 +67,11 @@ describe("sidebar footer", () => {
       return detail;
     };
     expect(await size(true)).toContain("text-[12px]");
-    expect(await size(false)).toContain("text-[10.5px]");
+    const consumer = await size(false);
+    expect(consumer).toContain("text-[10.5px]");
+    // The size class must not drop the line height (consumers see the footer exactly as before).
+    expect(consumer).toContain("leading-snug");
+    expect(await size(true)).toContain("leading-snug");
   });
 
   test("an icon button carries its aria-label and is a tooltip trigger, not a bare title", async () => {
