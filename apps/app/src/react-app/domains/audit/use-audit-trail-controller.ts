@@ -28,7 +28,9 @@ export function useAuditTrailController(options: AuditTrailControllerOptions) {
     if (!sessionId) return;
     return queryClient.getQueryCache().subscribe((event) => {
       const key = event.query.queryKey;
-      if (key[0] === "react-session-snapshot" && key[1] === workspaceId && key[2] === sessionId) setSnapshotVersion((value) => value + 1);
+      // The cache can report a new snapshot query while another component renders (the chat's first render creates
+      // it): the count moves right after that render, never inside it.
+      if (key[0] === "react-session-snapshot" && key[1] === workspaceId && key[2] === sessionId) queueMicrotask(() => setSnapshotVersion((value) => value + 1));
     });
   }, [queryClient, workspaceId, sessionId]);
   const currentSnapshot = sessionId
