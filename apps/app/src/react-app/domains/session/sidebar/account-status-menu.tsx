@@ -51,6 +51,7 @@ import {
   type OmniRushConnectStatus,
 } from "../../connections/omnirush-connect-status";
 import type { SessionCloudMcpMaintenanceState } from "../../connections/use-session-mcp-maintenance";
+import { WorkSignInChoice } from "../../work/work-signin";
 
 const DOCS_URL = "https://github.com/omnirush-ai/omnirush-gui#readme";
 const BOOT_STARTED_AT = Date.now();
@@ -514,6 +515,8 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
                 <ArrowUpRight className="size-3.5" />
               </Button>
             ) : null}
+            {/* Desktop: a company account signs in to OmniRush Work (its company portal account) instead. */}
+            <WorkSignInChoice />
 
             <button
               type="button"

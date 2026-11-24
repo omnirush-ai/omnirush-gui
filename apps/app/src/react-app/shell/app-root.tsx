@@ -59,6 +59,7 @@ import { TurnRunningSync } from "../domains/quality/good-session";
 import { SettingsRoute } from "./settings-route";
 import { ShellConfigProvider } from "./shell-config";
 import { WelcomeRoute } from "./welcome-route";
+import { WorkSignInListener } from "../domains/work/work-signin";
 import { readOrgSelectionPending } from "../../app/lib/den-sign-in-intent";
 import { signedInRoute } from "./den-signin-routing";
 
@@ -409,6 +410,7 @@ export function AppRoot() {
               <OmniRushWebAccessGate>
                 <CloudWorkspaceStatusProvider>
                   <ComputerUseControls />
+                  <WorkSignInListener />
                   <Routes>
               <Route
                 path="/signin"
