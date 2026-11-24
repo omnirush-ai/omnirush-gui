@@ -293,7 +293,12 @@ export function OrgCloudSection(props: { client: WorkClient | null; cloud: OmniR
             />
           </>
         ) : null}
-        {usageLine ? <div className="px-4 py-3 text-[12px] text-muted-foreground" data-testid="work-org-cloud-usage">{usageLine}</div> : null}
+        {usageLine ? (
+          <div className="px-4 py-3 text-[12px] text-muted-foreground" data-testid="work-org-cloud-usage">
+            {usageLine}
+            {usage.minutes_limit ? <span className="block">{t("work.cloud.usage_minutes_note")}</span> : null}
+          </div>
+        ) : null}
       </div>
     </section>
   );

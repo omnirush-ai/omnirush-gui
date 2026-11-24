@@ -565,7 +565,7 @@ describe("Organization", () => {
   test("admins: the switch, who creates, sites (8 then Show more, add and remove), sign-ins, notify, screenshots; members read", async () => {
     const { client, calls } = fakeClient();
     await render(<OrgCloudSection client={client} cloud={F.CLOUD_ADMIN} manager enterprise />);
-    expect($('[data-testid="work-org-cloud-usage"]')?.textContent).toBe("188 of 600 minutes this month · 1,240 of 3,000 steps · 2 cloud computers at once");
+    expect($('[data-testid="work-org-cloud-usage"]')?.textContent).toBe("188 of 600 minutes this month · 1,240 of 3,000 steps · 2 cloud computers at onceMinutes count while a cloud computer is on, time spent waiting for someone included.");
     expect($$("[data-cloud-site]").length).toBe(8);
     await click($('[data-testid="work-org-cloud-sites-more"]'));
     expect($$("[data-cloud-site]").length).toBe(10);

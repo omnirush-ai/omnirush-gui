@@ -3681,6 +3681,7 @@ export default {
   "work.cloud.subtitle_org": "Jobs that run on a cloud computer for {org}.",
   "work.cloud.usage_minutes": "{used} of {limit} minutes used this month.",
   "work.cloud.usage_minutes_short": "{used} of {limit} minutes this month",
+  "work.cloud.usage_minutes_note": "Minutes count while a cloud computer is on, time spent waiting for someone included.",
   "work.cloud.usage_steps": "{used} of {limit} steps",
   "work.cloud.usage_desktops_one": "{n} cloud computer at once",
   "work.cloud.usage_desktops_other": "{n} cloud computers at once",

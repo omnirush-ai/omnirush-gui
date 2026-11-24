@@ -3688,6 +3688,7 @@ export default {
   "work.cloud.subtitle_org": "在云端电脑上为 {org} 运行的工作。",
   "work.cloud.usage_minutes": "本月已用 {used} / {limit} 分钟。",
   "work.cloud.usage_minutes_short": "本月 {used} / {limit} 分钟",
+  "work.cloud.usage_minutes_note": "分钟数按云端电脑开着的时间计算，包括等待他人的时间。",
   "work.cloud.usage_steps": "{used} / {limit} 步",
   "work.cloud.usage_desktops_one": "同时 {n} 台云端电脑",
   "work.cloud.usage_desktops_other": "同时 {n} 台云端电脑",
