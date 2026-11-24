@@ -348,14 +348,51 @@ describe("Work browser basics", () => {
         await act(() => setList([pod]));
         await act(() => setList([invoice, pod]));
         await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 100 }, pod]));
+        // Told after React finished the update, never from inside it (the toaster could miss it there).
+        expect(told).not.toHaveBeenCalled();
+        await act(() => wait(5));
         await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 100 }, pod]));
+        await act(() => wait(5));
       }, { browser: fakeBrowser(page).browser, browserLibrary: libraryBridge() });
       // The page opens again (Expand from a tab): neither comes back.
       await withDom(async ({ mount, act }) => {
         await mount(<Notices />);
         await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 100 }, pod]));
+        await act(() => wait(5));
       }, { browser: fakeBrowser(page).browser, browserLibrary: libraryBridge() });
       expect(told.mock.calls.map((call) => call[0])).toEqual(["invoice-4471.pdf is in Downloads"]);
+    } finally {
+      told.mockRestore();
+    }
+  });
+
+  test("download notes: two quick downloads while the page is open are both told once, also one first seen in the opening list", async () => {
+    const sonner = await import("../src/components/ui/sonner");
+    const told = spyOn(sonner.toast, "success");
+    const { useDownloadNotices } = await import("../src/react-app/domains/work/browser/browser-downloads");
+    const React = await import("react");
+    let setList: (next: BrowserDownload[] | null) => void = () => undefined;
+    function Notices() {
+      const [list, set] = React.useState<BrowserDownload[] | null>(null);
+      setList = set;
+      useDownloadNotices(list);
+      return null;
+    }
+    const later = Date.now() + 60_000;
+    const pod: BrowserDownload = { id: "quick-pod", filename: "pod-4472.csv", state: "completed", receivedBytes: 38, totalBytes: 38, startedAt: later };
+    const invoice: BrowserDownload = { id: "quick-invoice", filename: "invoice-4472.pdf", state: "progressing", receivedBytes: 0, totalBytes: 607, startedAt: later };
+    try {
+      await withDom(async ({ mount, act }) => {
+        await mount(<Notices />);
+        // The first list the page hears already has a file that started and ended after it opened: that is news.
+        await act(() => setList([pod]));
+        await act(() => setList([invoice, pod]));
+        await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 607 }, pod]));
+        await act(() => wait(5));
+        await act(() => setList([{ ...invoice, state: "completed", receivedBytes: 607 }, pod]));
+        await act(() => wait(5));
+      }, { browser: fakeBrowser(page).browser, browserLibrary: libraryBridge() });
+      expect(told.mock.calls.map((call) => call[0])).toEqual(["pod-4472.csv is in Downloads", "invoice-4472.pdf is in Downloads"]);
     } finally {
       told.mockRestore();
     }

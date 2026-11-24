@@ -96,30 +96,36 @@ const endsTold = new Set<string>();
 
 /**
  * A quiet note when a download starts, or ends while the page is open (the page itself covers the rest of the window).
- * Each end is told once: what the page opened with is not news, even after it opens again.
+ * Each end is told once: what had ended before the page opened is not news, even after it opens again. The notes go
+ * out once React has finished this update: the toaster listens again after each of its own updates, and a note sent
+ * from inside the same update could be dropped (a small file that ends right after it starts).
  */
 export function useDownloadNotices(downloads: BrowserDownload[] | null) {
   const seen = React.useRef<Map<string, BrowserDownload["state"]> | null>(null);
+  const openedAt = React.useRef(Date.now());
   React.useEffect(() => {
     // Nothing from the desktop app yet: no list to compare with.
     if (!downloads) return;
     const previous = seen.current;
     seen.current = new Map(downloads.map((download) => [download.id, download.state] as const));
-    if (!previous) {
-      for (const download of downloads) if (download.state !== "progressing") endsTold.add(download.id);
-      return;
-    }
+    const notes: Array<() => void> = [];
     for (const download of downloads) {
-      const before = previous.get(download.id);
-      if (before === download.state) continue;
+      const before = previous ? previous.get(download.id) : undefined;
+      if (previous && before === download.state) continue;
+      // The first list: only a download started since the page opened can be news.
+      if (!previous && download.startedAt < openedAt.current) {
+        if (download.state !== "progressing") endsTold.add(download.id);
+        continue;
+      }
       if (download.state === "progressing") {
-        if (before === undefined) toast(t("work_browser.downloading", { name: download.filename }));
+        if (before === undefined) notes.push(() => toast(t("work_browser.downloading", { name: download.filename })));
         continue;
       }
       if (endsTold.has(download.id)) continue;
       endsTold.add(download.id);
-      if (download.state === "completed") toast.success(t("work_browser.downloaded", { name: download.filename }));
-      else if (download.state === "failed") toast.error(t("work_browser.download_failed_toast", { name: download.filename }));
+      if (download.state === "completed") notes.push(() => toast.success(t("work_browser.downloaded", { name: download.filename })));
+      else if (download.state === "failed") notes.push(() => toast.error(t("work_browser.download_failed_toast", { name: download.filename })));
     }
+    if (notes.length) window.setTimeout(() => { for (const note of notes) note(); }, 0);
   }, [downloads]);
 }
