@@ -338,6 +338,9 @@ function PanelBrowserHome({ sessionId }: { sessionId: string }) {
   return <BrowserHome compact companyName={company.companyName} apps={company.apps} onOpen={open} />;
 }
 
+// A menu or dialog over the page (the Work browser's home is the page itself, not a cover).
+const PAGE_COVER_SELECTOR = '[data-browser-occluder]:not([data-testid="browser-home"]), [role="dialog"], [role="alertdialog"]';
+
 export function SidePanel({
   sessionId,
   client,
@@ -538,6 +541,9 @@ export function SidePanel({
       <div
         className="flex h-full flex-col"
         onKeyDownCapture={(event) => {
+          // Beside Work pages, Escape in a menu or dialog over the page (bookmarks, suggestions) closes that menu and
+          // keeps the panel. A chat's panel closes as before.
+          if (userPanel && event.key === "Escape" && event.target instanceof Element && event.target.closest(PAGE_COVER_SELECTOR)) return;
           if (!handlePanelEscape(event.key, onClose)) return;
           event.preventDefault();
           event.stopPropagation();

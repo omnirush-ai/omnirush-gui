@@ -723,3 +723,34 @@ describe("the page's picture under a menu", () => {
     }
   });
 });
+
+describe("Escape in the panel", () => {
+  test("beside Work, Escape in the bookmarks menu closes the menu and keeps the panel; a chat's panel closes as before", async () => {
+    const { SidePanel: Panel } = await import("../src/react-app/domains/session/panel/side-panel");
+    const { DenAuthProvider } = await import("../src/react-app/domains/cloud/den-auth-provider");
+    const SidePanel = (props: Parameters<typeof Panel>[0]) => <DenAuthProvider><Panel {...props} /></DenAuthProvider>;
+    const escape = (target: Element) => target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    let closed = 0;
+    const own = fakeBrowser(stateOf([tab("u1", USER_TABS_OWNER, "https://tms.juniperfreight.example/shipments/4471")], { [USER_TABS_OWNER]: "u1" }));
+    await withDom(async ({ mount, act }) => {
+      await mount(<SidePanel sessionId={USER_TABS_OWNER} client={null} workspaceId={null} workspaceRoot="" onClose={() => { closed += 1; }} />);
+      await act(() => byTestId("browser-bookmarks")!.click());
+      await act(() => wait(30));
+      const menu = byTestId("browser-bookmarks-menu");
+      expect(menu).not.toBeNull();
+      await act(() => { escape(menu!); });
+      await act(() => wait(30));
+      expect(closed).toBe(0);
+      // Outside a menu, Escape still closes the panel.
+      await act(() => { escape(document.querySelector('input[aria-label="Type an address"]')!); });
+      expect(closed).toBe(1);
+    }, { browser: own.browser, browserLibrary: libraryBridge() });
+    closed = 0;
+    const chat = fakeBrowser(stateOf([tab("c1", "ses_chat", "https://agent.example/")], { ses_chat: "c1" }));
+    await withDom(async ({ mount, act }) => {
+      await mount(<SidePanel sessionId="ses_chat" client={null} workspaceId={null} workspaceRoot="" onClose={() => { closed += 1; }} />);
+      await act(() => { escape(document.querySelector('input[aria-label="Enter URL..."]')!); });
+      expect(closed).toBe(1);
+    }, { browser: chat.browser, browserLibrary: libraryBridge() });
+  });
+});
