@@ -1035,7 +1035,7 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
 }
 
 /** The chats this Mac syncs on its own (iMessage, the WhatsApp app); `off` leaves out the ones the company turned off. */
-export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void; off?: readonly string[]; keepOff?: boolean }) {
+export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void; off?: readonly string[]; keepOff?: boolean; onManage?: () => void }) {
   // `keepOff` (company accounts): a chat the company turned off stays listed with that reason instead of leaving the page.
   const sources = (["whatsapp", "imessage"] as const).filter((source) => props.keepOff || !props.off?.includes(source));
   return (
@@ -1047,6 +1047,7 @@ export function LocalChatsCard(props: { client: WorkClient | null; openLink: (ur
             <span className="text-sm font-medium">{LOCAL_CHAT_NAMES[source]}</span>
             <div className="mt-0.5 text-[13px] text-muted-foreground">{t("work.setup.turned_off")}</div>
           </div>
+          {props.onManage ? <button type="button" className="ms-auto shrink-0 rounded text-[13px] text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={props.onManage} data-testid="work-local-off-manage">{t("work.connectors.paused_manage")}</button> : null}
         </div>
       ) : <LocalChatCard key={source} source={source} client={props.client} openLink={props.openLink} />)}
     </div>
@@ -1254,7 +1255,7 @@ const IMPORT_ACCEPT: Record<OmniRushWorkImportKind, string> = { whatsapp: ".txt,
  *  how to export, Import opens the file picker, and the line under it shows the last import. `off` leaves out the kinds
  *  the company turned off. `folded` (company accounts): one "Import chats" row naming WhatsApp and Telegram opens the rows,
  *  and a kind the company turned off stays listed with that reason, so WhatsApp is always easy to find. */
-export function ChatImportCard(props: { client: WorkClient | null; off?: readonly string[]; folded?: boolean }) {
+export function ChatImportCard(props: { client: WorkClient | null; off?: readonly string[]; folded?: boolean; onManage?: () => void }) {
   // Null until the row is clicked: it starts open while an import runs or the last one failed.
   const [open, setOpen] = useState<boolean | null>(null);
   const queryClient = useQueryClient();
@@ -1314,7 +1315,7 @@ export function ChatImportCard(props: { client: WorkClient | null; off?: readonl
                 if (file) upload.mutate({ kind, file });
               }}
             />
-            {off ? null : (
+            {off ? props.onManage ? <button type="button" className="ms-auto shrink-0 rounded text-[13px] text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={props.onManage} data-testid="work-import-off-manage">{t("work.connectors.paused_manage")}</button> : null : (
               <Button
                 variant="outline"
                 size="sm"
@@ -1592,8 +1593,8 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           </div>
         )}
         <HookCard rows={hookRows} client={props.client} onChanged={() => void refresh()} />
-        <ChatImportCard client={props.client} off={off} folded={company} />
-        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} off={off} keepOff={company} /> : null}
+        <ChatImportCard client={props.client} off={off} folded={company} onManage={manage} />
+        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} off={off} keepOff={company} onManage={manage} /> : null}
         <TelegramCard client={props.client} />
       </div>
       <ConfirmModal
