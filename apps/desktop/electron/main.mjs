@@ -53,7 +53,7 @@ import { createBrowserLoginSync } from "./browser-login-sync.mjs";
 import { createBrowserLibrary } from "./browser-library.mjs";
 import { createBrowserPanel } from "./browser-panel.mjs";
 import { createBrowserSiteGuard } from "./browser-site-guard.mjs";
-import { clearConfirmOptions, createBrowserAccountGuard, signOutWithBrowserGuard } from "./browser-account-guard.mjs";
+import { clearConfirmChoice, clearConfirmOptions, createBrowserAccountGuard, signOutWithBrowserGuard } from "./browser-account-guard.mjs";
 import { applyBackgroundRenderingSwitches } from "./background-rendering.mjs";
 import { createWorkspaceStore } from "./workspace-store.mjs";
 import {
@@ -1483,7 +1483,7 @@ const browserAccountGuard = createBrowserAccountGuard({
     const result = mainWindow && !mainWindow.isDestroyed()
       ? await dialog.showMessageBox(mainWindow, options)
       : await dialog.showMessageBox(options);
-    return result.response === 1 ? "keep" : "clear";
+    return clearConfirmChoice(reason, result.response);
   },
   clearBrowser: async () => {
     // The sync from another browser stops and forgets its sites first, so nothing copies sign-ins back.
@@ -2684,6 +2684,8 @@ const desktopCommandHandlers = {
           return omnirushAccountStore.clear();
         },
       });
+      // Cancelled in the confirm: still signed in, nothing cleared.
+      if (result === null) return { connected: true, cancelled: true };
       await runtimeManager.omnirushServerRestart({ reason: "account_signed_out", source: "account", userInitiated: true });
       return { connected: false, remoteRevoked: result.remoteRevoked, reason: result.reason };
   },

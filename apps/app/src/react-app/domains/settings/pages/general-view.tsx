@@ -469,6 +469,11 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
       // What is still queued goes first (a few seconds at most); the rest stays on this computer for this account.
       const kept = account?.connected ? await sendPendingBeforeSignOut(setAccountMessage) : 0;
       const result = await omnirushAccountSignOut({ language: currentLocale() });
+      // Cancel in the company browser confirm: still signed in, nothing to say.
+      if ("cancelled" in result) {
+        setAccountMessage("");
+        return;
+      }
       resetAnalyticsAccount();
       const next = await omnirushAccountStatus().catch(() => null);
       setAccount(next ?? { connected: false, gatewayConfigured: account?.gatewayConfigured ?? false });

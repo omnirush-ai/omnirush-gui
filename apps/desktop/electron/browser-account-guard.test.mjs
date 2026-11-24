@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { clearBrowsingData, clearConfirmOptions, createBrowserAccountGuard, signOutWithBrowserGuard } from "./browser-account-guard.mjs";
+import { clearBrowsingData, clearConfirmChoice, clearConfirmOptions, createBrowserAccountGuard, signOutWithBrowserGuard } from "./browser-account-guard.mjs";
 
 /** A browser session with a cookie jar, site storage and a cache, like Electron's. */
 function fakeSession(cookies = []) {
@@ -182,18 +182,24 @@ test("one question at a time", async () => {
   }
 });
 
-test("the confirm: Clear first and default (Escape too), then Keep; English and Chinese", () => {
+test("the confirm: Clear first and default, then Keep; signing out has Cancel, which Escape picks; English and Chinese", () => {
   const en = clearConfirmOptions("sign_out", { company: "Acme Freight", language: "en" });
-  assert.deepEqual(en.buttons, ["Clear and sign out", "Keep browser sign-ins"]);
+  assert.deepEqual(en.buttons, ["Clear and sign out", "Keep browser sign-ins", "Cancel"]);
   assert.equal(en.defaultId, 0);
-  assert.equal(en.cancelId, 0);
+  assert.equal(en.cancelId, 2);
+  assert.equal(clearConfirmChoice("sign_out", en.cancelId), "cancel");
+  assert.equal(clearConfirmChoice("sign_out", 0), "clear");
+  assert.equal(clearConfirmChoice("sign_out", 1), "keep");
   assert.equal(en.message, "Clear Acme Freight's sign-ins from this computer?");
   assert.match(en.detail, /Keep them only on a computer that is yours\./);
   const switched = clearConfirmOptions("switch", { company: null, language: "en" });
   assert.equal(switched.message, "The browser still has your company's sign-ins.");
   assert.deepEqual(switched.buttons, ["Clear browser", "Keep browser sign-ins"]);
+  // After another account signed in there is nothing to back out of: Escape clears.
+  assert.equal(switched.cancelId, 0);
+  assert.equal(clearConfirmChoice("switch", 2), "clear");
   const zh = clearConfirmOptions("sign_out", { company: "Acme Freight", language: "zh" });
-  assert.deepEqual(zh.buttons, ["清除并退出", "保留浏览器登录信息"]);
+  assert.deepEqual(zh.buttons, ["清除并退出", "保留浏览器登录信息", "取消"]);
   assert.equal(zh.message, "要从这台电脑清除 Acme Freight 的登录信息吗？");
   assert.equal(clearConfirmOptions("switch", { language: "zh" }).message, "浏览器中仍有公司的登录信息。");
   assert.equal(clearConfirmOptions("switch", { language: "zh-CN" }).buttons[1], "保留浏览器登录信息");
@@ -244,4 +250,21 @@ test("a guard that fails to answer still signs out (not cleared)", async () => {
   const result = await signOutWithBrowserGuard({ beforeSignOut: async () => { throw new Error("dialog gone"); }, notify: (cleared) => heard.push(cleared), signOut: async () => 7 });
   assert.equal(result, 7);
   assert.deepEqual(heard, [false]);
+});
+
+test("Cancel in the sign-out confirm keeps everything and the person stays signed in", async () => {
+  const { guard, state, owner, cleanup } = rig({ choice: /** @type {any} */ ("cancel") });
+  try {
+    /** @type {boolean[]} */
+    const heard = [];
+    let signedOut = false;
+    const result = await signOutWithBrowserGuard({ beforeSignOut: () => guard.beforeSignOut(), notify: (cleared) => heard.push(cleared), signOut: async () => { signedOut = true; return "signed out"; } });
+    assert.equal(result, null);
+    assert.equal(signedOut, false);
+    assert.equal(state.cleared, 0);
+    assert.deepEqual(heard, []);
+    assert.equal(owner(), null);
+  } finally {
+    cleanup();
+  }
 });

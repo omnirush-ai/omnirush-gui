@@ -3881,7 +3881,8 @@ export function SessionRoute() {
           if (next) queryClient.setQueryData(workStateKey(client), next);
         }}
         onSignOut={async () => {
-          await omnirushAccountSignOut({ language: currentLocale() }).catch(() => undefined);
+          const result = await omnirushAccountSignOut({ language: currentLocale() }).catch(() => undefined);
+          if (result && "cancelled" in result) return;
           useEnterpriseStore.getState().setBlock(null);
           await queryClient.invalidateQueries({ queryKey: workStateKey(client ?? null) });
         }}

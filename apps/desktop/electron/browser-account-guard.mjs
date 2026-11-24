@@ -32,6 +32,7 @@ const COPY = {
       clear: "Clear browser",
     },
     keep: "Keep browser sign-ins",
+    cancel: "Cancel",
   },
   zh: {
     signOut: {
@@ -47,28 +48,44 @@ const COPY = {
       clear: "清除浏览器",
     },
     keep: "保留浏览器登录信息",
+    cancel: "取消",
   },
 };
 
 /**
- * The native confirm's options: the clear button first (the default, and what
- * Escape picks), then Keep.
+ * The native confirm's options: the clear button first (the default), then
+ * Keep. Signing out also has Cancel, which Escape picks: backing out keeps the
+ * person signed in with every browser sign-in. After another account signed
+ * in there is nothing to back out of, so Escape clears.
  * @param {"sign_out" | "switch"} reason
  * @param {{ company?: string | null, language?: string | null }} [options]
  */
 export function clearConfirmOptions(reason, { company = null, language = null } = {}) {
   const copy = String(language ?? "").toLowerCase().startsWith("zh") ? COPY.zh : COPY.en;
   const text = reason === "switch" ? copy.switch : copy.signOut;
+  const buttons = reason === "switch" ? [text.clear, copy.keep] : [text.clear, copy.keep, copy.cancel];
   return {
     type: /** @type {"question"} */ ("question"),
     title: text.title,
     message: text.message(company),
     detail: text.detail,
-    buttons: [text.clear, copy.keep],
+    buttons,
     defaultId: 0,
-    cancelId: 0,
+    cancelId: reason === "switch" ? 0 : 2,
     noLink: true,
   };
+}
+
+/**
+ * What the person chose in the confirm.
+ * @param {"sign_out" | "switch"} reason
+ * @param {number} response the button index
+ * @returns {"clear" | "keep" | "cancel"}
+ */
+export function clearConfirmChoice(reason, response) {
+  if (response === 1) return "keep";
+  if (response === 2 && reason === "sign_out") return "cancel";
+  return "clear";
 }
 
 /**
@@ -102,14 +119,17 @@ export async function clearBrowsingData(browserSession) {
  * finished, cleared or not, so the library follows the account.
  * @template T
  * @param {{
- *   beforeSignOut: () => Promise<{ cleared?: boolean } | null | undefined>,
+ *   beforeSignOut: () => Promise<{ cleared?: boolean, cancelled?: boolean } | null | undefined>,
  *   notify: (cleared: boolean) => void,
  *   signOut: () => Promise<T>,
  * }} steps
- * @returns {Promise<T>}
+ * @returns {Promise<T | null>} null when the person cancelled (still signed in)
  */
 export async function signOutWithBrowserGuard({ beforeSignOut, notify, signOut }) {
+  /** @type {{ cleared?: boolean, cancelled?: boolean } | null | undefined} */
   const browser = await beforeSignOut().catch(() => ({ cleared: false }));
+  // Cancel: nothing is cleared and the person stays signed in.
+  if (browser?.cancelled === true) return null;
   if (browser?.cleared === true) notify(true);
   try {
     return await signOut();
@@ -123,7 +143,7 @@ export async function signOutWithBrowserGuard({ beforeSignOut, notify, signOut }
  *   ownerPath: string,
  *   accountId: () => Promise<string | null>,
  *   company: () => { id: string | null, name: string | null } | null,
- *   confirm: (request: { reason: "sign_out" | "switch", company: string | null, language: string | null }) => Promise<"clear" | "keep">,
+ *   confirm: (request: { reason: "sign_out" | "switch", company: string | null, language: string | null }) => Promise<"clear" | "keep" | "cancel">,
  *   clearBrowser: () => Promise<{ cookies: number }>,
  *   now?: () => number,
  * }} options
@@ -167,6 +187,7 @@ export function createBrowserAccountGuard({ ownerPath, accountId, company, confi
 
   async function decide(reason, owner, language) {
     const choice = await confirm({ reason, company: owner.company?.name ?? null, language: language ?? null });
+    if (choice === "cancel") return { asked: true, cleared: false, cancelled: true };
     if (choice === "keep") return { asked: true, cleared: false };
     let cookies;
     try {
@@ -208,7 +229,7 @@ export function createBrowserAccountGuard({ ownerPath, accountId, company, confi
       const current = org ? { accountId: id ?? owner?.accountId ?? null, company: org } : owner && id && owner.accountId === id ? owner : null;
       if (!current) return { asked: false, cleared: false };
       const result = await decide("sign_out", current, language);
-      if (!result.cleared && current.accountId) await writeOwner(current);
+      if (!result.cleared && !result.cancelled && current.accountId) await writeOwner(current);
       return result;
     });
   }

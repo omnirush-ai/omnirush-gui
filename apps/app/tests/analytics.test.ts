@@ -260,7 +260,9 @@ describe("call sites", () => {
     const view = src("react-app/domains/settings/pages/general-view.tsx");
     expect(view).toContain('captureAnalyticsEvent("device_approved"');
     expect(view).toContain('captureAnalyticsEvent("sign_in_completed"');
-    expect(view).toMatch(/omnirushAccountSignOut\(.*\);\n\s+resetAnalyticsAccount\(\);/);
+    // Signed out (a Cancel in the company browser confirm returns first, still signed in): the account is forgotten.
+    expect(view).toMatch(/omnirushAccountSignOut\(.*\);\n(?:.*\n){0,6}?\s+resetAnalyticsAccount\(\);/);
+    expect(view).toMatch(/if \("cancelled" in result\) \{[^}]*return;\s*\}\n\s+resetAnalyticsAccount\(\);/);
     expect(src("app/lib/quality.ts")).toContain("syncAnalyticsAccount(status)");
   });
 

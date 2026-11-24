@@ -154,6 +154,10 @@ export type OmniRushAccountSignOutResult = {
   connected: false;
   remoteRevoked: boolean;
   reason: OmniRushAccountSignOutReason;
+} | {
+  /** Cancelled in the company browser confirm: still signed in, nothing cleared. */
+  connected: true;
+  cancelled: true;
 };
 
 /**
