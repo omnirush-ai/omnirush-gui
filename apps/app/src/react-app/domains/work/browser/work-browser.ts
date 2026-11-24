@@ -96,7 +96,7 @@ const BRAND_HOSTS: Array<[string, string]> = [
   ["office.com", "microsoft"], ["microsoft.com", "microsoft"], ["microsoft365.com", "microsoft"],
   ["slack.com", "slack"], ["discord.com", "discord"], ["web.whatsapp.com", "whatsapp"], ["web.telegram.org", "telegram"],
   ["notion.so", "notion"], ["notion.com", "notion"], ["dropbox.com", "dropbox"], ["box.com", "box"], ["figma.com", "figma"],
-  ["airtable.com", "airtable"], ["atlassian.net", "jira"], ["linear.app", "linear"], ["asana.com", "asana"], ["trello.com", "trello"],
+  ["airtable.com", "airtable"], ["atlassian.net", "jira"], ["jira.atlassian.com", "jira"], ["confluence.atlassian.com", "confluence"], ["linear.app", "linear"], ["asana.com", "asana"], ["trello.com", "trello"],
   ["clickup.com", "clickup"], ["monday.com", "monday"], ["github.com", "github"], ["gitlab.com", "gitlab"],
   ["hubspot.com", "hubspot"], ["salesforce.com", "salesforce"], ["force.com", "salesforce"], ["pipedrive.com", "pipedrive"],
   ["zendesk.com", "zendesk"], ["intercom.com", "intercom"], ["front.com", "front"], ["frontapp.com", "front"], ["freshdesk.com", "freshdesk"],
