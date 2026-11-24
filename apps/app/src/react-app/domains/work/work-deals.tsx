@@ -78,7 +78,7 @@ export function DealPanel(props: { client: WorkClient | null; deal: OmniRushWork
       {deal.risk.length ? (
         <section className="flex flex-col gap-1.5" aria-label={t("work.deals.risk")}>
           <h3 className="text-[12px] font-semibold text-foreground">{t("work.deals.risk")}</h3>
-          <ul className="flex flex-col gap-1">{deal.risk.map((reason) => <li key={reason} className="flex items-center gap-2 text-amber-11"><span aria-hidden className="size-1.5 rounded-full bg-amber-9" />{reason}</li>)}</ul>
+          <ul className="flex flex-col gap-1">{deal.risk.map((reason) => <li key={reason} className="flex items-center gap-2 text-foreground"><span aria-hidden className="size-1.5 shrink-0 rounded-full bg-amber-9" />{reason}</li>)}</ul>
         </section>
       ) : null}
       {detail.isLoading ? <Skeleton className="h-24 rounded-lg" data-testid="work-deal-loading" /> : failure ? (
