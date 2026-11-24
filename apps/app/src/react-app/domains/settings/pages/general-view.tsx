@@ -57,6 +57,7 @@ import { BuildathonTrackCard } from "../../buildathon/buildathon";
 import { ComputerUseSettingsCard } from "../../session/surface/computer-use/setup";
 import { EventsJoinedList } from "../../events/event-badge";
 import { useEnterpriseFlags } from "../../work/enterprise-mode";
+import { WorkSignInChoice } from "../../work/work-signin";
 import { enterpriseSettingsTabs } from "../shell/settings-tabs";
 
 export type GeneralSettingsViewProps = {
@@ -548,6 +549,8 @@ export function GeneralSettingsView(props: GeneralSettingsViewProps) {
               </button>
             )}
           </div>
+          {/* Desktop, signed out: a company account signs in to OmniRush Work (its company portal account) instead. */}
+          {!account.connected ? <WorkSignInChoice className="max-w-xs" /> : null}
         </div>
       )}
       {isElectronRuntime() && account?.connected && account.events && !enterprise.on ? <EventsJoinedList events={account.events} /> : null}
