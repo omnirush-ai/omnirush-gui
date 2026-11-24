@@ -37,10 +37,11 @@ import { COMPOSER_BOTTOM, COMPOSER_GLIDE, COMPOSER_GUTTER, COMPOSER_WIDTH } from
 
 import {
   chatSyncProgress, connectorAccess, connectorChoicesTitle, isLinked, connectorLabel, connectorProgress, connectorsBackState, connectSettled, countLabel, coverageAdds, coverageCanAdd, coverageLine, healthFor, healthProblem, IMPORT_KINDS, isImportKind, isPausedByAdmin, localSourcesOff, relativeTime, setupLabel, signsInWithForm, useWorkCoverage, useWorkOrgConnectors, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE,
-  sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
+  sourceErrorText, workChatToolsKey, workConnectorsKey, workCoverageKey, workFailure, workImportsKey, workMembersKey, workStateKey, type AppMode, type SyncProgressView, type WorkClient,
 } from "./work-mode";
 
 import { connectorState } from "@/react-app/domains/session/sidebar/work-sidebar-nav";
+import { useEnterpriseFlags } from "./enterprise-mode";
 import { ListMore, ListSearch, matchesQuery, StatusPill, useListCap, WORK_DESTRUCTIVE, type PillTone } from "./list-cap";
 import { useWorkCatalog } from "./catalog";
 
@@ -1005,11 +1006,11 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
       <BrandTile id={source} />
       <div className="min-w-[16rem] flex-1">
         <span className="text-sm font-medium">{name}</span>
-        <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-local-chat-line">{line}</div>
+        <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="work-local-chat-line">{line}</div>
         {progress ? <SyncProgressBar view={progress} name={name} /> : null}
-        {error ? <div className={cn("mt-0.5 text-[12px]", turnedOff(state?.lastError) ? "text-amber-11" : "text-destructive")} data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
+        {error ? <div className={cn("mt-0.5 text-[13px]", turnedOff(state?.lastError) ? "text-amber-11" : "text-destructive")} data-testid="work-local-chat-error" data-code={state?.lastError}>{error}</div> : null}
         {error && state?.lastError === "fda_required" ? (
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground" data-testid="work-local-chat-fda">
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground" data-testid="work-local-chat-fda">
             {t("work.chatsync.fda_steps")}
             <Button type="button" variant="outline" size="sm" onClick={() => props.openLink(FDA_URL)}>{t("work.imessage.open_settings")}</Button>
           </div>
@@ -1034,11 +1035,20 @@ export function LocalChatCard(props: { source: WorkChatSyncSource; client: WorkC
 }
 
 /** The chats this Mac syncs on its own (iMessage, the WhatsApp app); `off` leaves out the ones the company turned off. */
-export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void; off?: readonly string[] }) {
-  const sources = (["whatsapp", "imessage"] as const).filter((source) => !props.off?.includes(source));
+export function LocalChatsCard(props: { client: WorkClient | null; openLink: (url: string) => void; off?: readonly string[]; keepOff?: boolean }) {
+  // `keepOff` (company accounts): a chat the company turned off stays listed with that reason instead of leaving the page.
+  const sources = (["whatsapp", "imessage"] as const).filter((source) => props.keepOff || !props.off?.includes(source));
   return (
     <div className="rounded-xl border border-border bg-background" data-testid="work-local-chats">
-      {sources.map((source) => <LocalChatCard key={source} source={source} client={props.client} openLink={props.openLink} />)}
+      {sources.map((source) => props.off?.includes(source) ? (
+        <div key={source} className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={source} data-testid={`work-${source}-card`} data-off="true">
+          <BrandTile id={source} />
+          <div className="min-w-0 flex-1">
+            <span className="text-sm font-medium">{LOCAL_CHAT_NAMES[source]}</span>
+            <div className="mt-0.5 text-[13px] text-muted-foreground">{t("work.setup.turned_off")}</div>
+          </div>
+        </div>
+      ) : <LocalChatCard key={source} source={source} client={props.client} openLink={props.openLink} />)}
     </div>
   );
 }
@@ -1120,9 +1130,9 @@ export function TelegramCard(props: { client: WorkClient | null }) {
         <BrandTile id="telegram" />
         <div className="min-w-[16rem] flex-1">
           <span className="text-sm font-medium">Telegram</span>
-          <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-telegram-line">{line}</div>
+          <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="work-telegram-line">{line}</div>
           {progress ? <SyncProgressBar view={progress} name="Telegram" /> : null}
-          {shownError ? <div className="mt-0.5 text-[12px] text-destructive" data-testid="work-telegram-error">{shownError}</div> : null}
+          {shownError ? <div className="mt-0.5 text-[13px] text-destructive" data-testid="work-telegram-error">{shownError}</div> : null}
           {asking ? (
             <form
               className="mt-2 flex flex-wrap items-center gap-2"
@@ -1242,8 +1252,11 @@ const IMPORT_ACCEPT: Record<OmniRushWorkImportKind, string> = { whatsapp: ".txt,
 
 /** WhatsApp and Telegram have no sign-in: a chat export from the phone (or Telegram Desktop) is uploaded instead. Each row says
  *  how to export, Import opens the file picker, and the line under it shows the last import. `off` leaves out the kinds
- *  the company turned off. */
-export function ChatImportCard(props: { client: WorkClient | null; off?: readonly string[] }) {
+ *  the company turned off. `folded` (company accounts): one "Import chats" row naming WhatsApp and Telegram opens the rows,
+ *  and a kind the company turned off stays listed with that reason, so WhatsApp is always easy to find. */
+export function ChatImportCard(props: { client: WorkClient | null; off?: readonly string[]; folded?: boolean }) {
+  // Null until the row is clicked: it starts open while an import runs or the last one failed.
+  const [open, setOpen] = useState<boolean | null>(null);
   const queryClient = useQueryClient();
   const imports = useQuery({ queryKey: workImportsKey(props.client), queryFn: () => props.client!.listWorkImports(), enabled: Boolean(props.client), retry: false });
   const upload = useMutation({
@@ -1263,11 +1276,13 @@ export function ChatImportCard(props: { client: WorkClient | null; off?: readonl
     },
   });
   const latest = (kind: string): OmniRushWorkImport | undefined => (Array.isArray(imports.data) ? imports.data : []).find((item) => (item.source ?? "whatsapp") === kind);
-  const kinds = IMPORT_KINDS.filter((kind) => !props.off?.includes(kind));
+  const kinds = props.folded ? [...IMPORT_KINDS] : IMPORT_KINDS.filter((kind) => !props.off?.includes(kind));
   if (!kinds.length) return null;
-  return (
-    <div className="rounded-xl border border-border bg-background" data-testid="work-import-card">
+  const anyFailed = kinds.some((kind) => latest(kind)?.status === "failed");
+  const rows = (
+    <>
       {kinds.map((kind) => {
+        const off = Boolean(props.folded && props.off?.includes(kind));
         const last = latest(kind);
         // A file with no messages in it (a Telegram file that is no export) comes back done with nothing: not read either.
         const failed = last?.status === "failed" || (last?.status === "done" && !last.records);
@@ -1277,10 +1292,11 @@ export function ChatImportCard(props: { client: WorkClient | null; off?: readonl
             <BrandTile id={kind} />
             <div className="min-w-[16rem] flex-1">
               <span className="text-sm font-medium">{connectorLabel(kind)}</span>
-              <div className="mt-0.5 text-[12px] text-muted-foreground">{kind === "whatsapp" ? t("work.import.howto_whatsapp") : t("work.import.howto_telegram")}</div>
-              {kind === "whatsapp" && !macDesktop() ? <div className="mt-0.5 text-[12px] text-muted-foreground" data-testid="work-import-whatsapp-manual">{t("work.import.whatsapp_no_local")}</div> : null}
-              {last ? (
-                <div className={cn("mt-0.5 truncate text-[12px]", failed ? "text-destructive" : "text-muted-foreground")} data-testid="work-import-status" data-status={failed ? "failed" : last.status}>
+              {off ? <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="work-import-off">{t("work.setup.turned_off")}</div> : null}
+              {off ? null : <div className="mt-0.5 text-[13px] text-muted-foreground">{kind === "whatsapp" ? t("work.import.howto_whatsapp") : t("work.import.howto_telegram")}</div>}
+              {!off && kind === "whatsapp" && !macDesktop() ? <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="work-import-whatsapp-manual">{t("work.import.whatsapp_no_local")}</div> : null}
+              {last && !off ? (
+                <div className={cn("mt-0.5 truncate text-[13px]", failed ? "text-destructive" : "text-muted-foreground")} data-testid="work-import-status" data-status={failed ? "failed" : last.status}>
                   {failed
                     ? t("work.import.failed_line", { file: last.file_name ?? "" })
                     : [last.file_name, last.status === "parsing" ? t("work.import.reading") : countLabel(last.records, "work.import.days"), relativeTime(last.created_at)].filter(Boolean).join(" · ")}
@@ -1298,19 +1314,43 @@ export function ChatImportCard(props: { client: WorkClient | null; off?: readonl
                 if (file) upload.mutate({ kind, file });
               }}
             />
-            <Button
-              variant="outline"
-              size="sm"
-              className="ms-auto"
-              disabled={upload.isPending}
-              aria-label={t("work.import.import_name", { name: connectorLabel(kind) })}
-              onClick={(event) => event.currentTarget.parentElement?.querySelector<HTMLInputElement>("[data-import-input]")?.click()}
-            >
-              {busy ? t("work.import.importing") : t("work.import.import")}
-            </Button>
+            {off ? null : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ms-auto"
+                disabled={upload.isPending}
+                aria-label={t("work.import.import_name", { name: connectorLabel(kind) })}
+                onClick={(event) => event.currentTarget.parentElement?.querySelector<HTMLInputElement>("[data-import-input]")?.click()}
+              >
+                {busy ? t("work.import.importing") : t("work.import.import")}
+              </Button>
+            )}
           </div>
         );
       })}
+    </>
+  );
+  if (!props.folded) return <div className="rounded-xl border border-border bg-background" data-testid="work-import-card">{rows}</div>;
+  const shown = open ?? (anyFailed || upload.isPending);
+  const names = kinds.map((kind) => connectorLabel(kind));
+  return (
+    <div className="rounded-xl border border-border bg-background" data-testid="work-import-card" data-folded="true">
+      <button
+        type="button"
+        aria-expanded={shown}
+        onClick={() => setOpen(!shown)}
+        className="flex min-h-14 w-full items-center gap-4 rounded-xl px-4 py-3 text-start outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring"
+        data-testid="work-import-toggle"
+      >
+        <span aria-hidden className="flex shrink-0 items-center gap-1">{kinds.map((kind) => <BrandTile key={kind} id={kind} size="chip" />)}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium">{t("work.import.title")}</span>
+          <span className="block truncate text-[13px] text-muted-foreground" data-testid="work-import-names">{t("work.import.names", { names: names.join(t("work.import.and")) })}</span>
+        </span>
+        <ChevronDown aria-hidden className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", !shown && "-rotate-90")} />
+      </button>
+      {shown ? <div className="border-t border-border">{rows}</div> : null}
     </div>
   );
 }
@@ -1328,7 +1368,13 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const [search, setSearch] = useState("");
   // The kinds of tool opened (the connected group is always open).
   const [openGroups, setOpenGroups] = useState<string[]>([]);
-  const ownEmail = useAccountStatusStore((state) => state.status?.email ?? null);
+  // The person's own address is left out of each row's line: the Work account's e-mail (the company's member list, always
+  // there for a company account), else the signed-in account's.
+  // A company account also gets no channel meter, and its chat imports fold into one "Import chats" row.
+  const company = useEnterpriseFlags().on;
+  const accountEmail = useAccountStatusStore((state) => state.status?.email ?? null);
+  const members = useQuery({ queryKey: workMembersKey(props.client), queryFn: () => props.client!.listWorkMembers(), enabled: Boolean(props.client) && company, retry: false });
+  const ownEmail = members.data?.members?.find((member) => member.you)?.email ?? accountEmail;
   const connectStarted = useRef(0);
   const query = useQuery({
     queryKey: key,
@@ -1497,7 +1543,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           </p>
           {props.notice ? <div className="mt-3">{props.notice}</div> : null}
         </div>
-        <WorkCoverageMeter client={props.client} onAdd={add} canAdd={canAdd} />
+        {company ? null : <WorkCoverageMeter client={props.client} onAdd={add} canAdd={canAdd} />}
         {query.isLoading ? (
           <div className="rounded-xl border border-border px-4 py-6 text-[14px] text-muted-foreground">{t("common.loading")}</div>
         ) : failure ? (
@@ -1546,8 +1592,8 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
           </div>
         )}
         <HookCard rows={hookRows} client={props.client} onChanged={() => void refresh()} />
-        <ChatImportCard client={props.client} off={off} />
-        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} off={off} /> : null}
+        <ChatImportCard client={props.client} off={off} folded={company} />
+        {macDesktop() ? <LocalChatsCard client={props.client} openLink={props.openLink} off={off} keepOff={company} /> : null}
         <TelegramCard client={props.client} />
       </div>
       <ConfirmModal
