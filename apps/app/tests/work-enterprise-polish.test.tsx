@@ -22,7 +22,7 @@ const { personInitials, PersonAvatar } = await import("../src/react-app/domains/
 const { focusAreas, focusLabel, memberName, withNames } = await import("../src/react-app/domains/work/work-insights");
 const { WorkOrganizationPage } = await import("../src/react-app/domains/work/work-org");
 const { CHANNEL_ROWS, ChannelStrip, WorkSearchPage } = await import("../src/react-app/domains/work/work-search");
-const { CONNECTED_SHOWN, ConnectorRow, WorkConnectorsPage } = await import("../src/react-app/domains/work/work-views");
+const { CONNECTED_SHOWN, ChatImportCard, ConnectorRow, LocalChatsCard, WorkConnectorsPage } = await import("../src/react-app/domains/work/work-views");
 const { useEnterpriseStore } = await import("../src/react-app/domains/work/enterprise-mode");
 const { dealAmount } = await import("../src/react-app/domains/work/work-deals");
 const { workCoverageKey } = await import("../src/react-app/domains/work/work-mode");
@@ -164,6 +164,30 @@ describe("company accounts: one clear action on Connectors and Search", () => {
     expect(document.querySelector('[data-testid="work-connector-meta"]')!.textContent).not.toContain("max@atlas.example");
     await act(async () => root.unmount());
     await act(async () => { useEnterpriseStore.getState().setBlock(null); });
+  });
+
+  test("connectors: WhatsApp the company turned off stays listed with the reason; owners get Change in Organization", async () => {
+    let managed = 0;
+    const root = await render(
+      <>
+        <ChatImportCard client={client} off={["whatsapp"]} folded onManage={() => { managed += 1; }} />
+        <LocalChatsCard client={client} openLink={noop} off={["whatsapp"]} keepOff onManage={() => { managed += 1; }} />
+      </>,
+      () => {},
+    );
+    const card = document.querySelector('[data-testid="work-import-card"]')!;
+    expect(card.querySelector('[data-testid="work-import-names"]')!.textContent).toBe("WhatsApp and Telegram chat exports");
+    await act(async () => card.querySelector<HTMLButtonElement>('[data-testid="work-import-toggle"]')!.click());
+    const whatsapp = card.querySelector('[data-work-import="whatsapp"]')!;
+    expect(whatsapp.querySelector('[data-testid="work-import-off"]')!.textContent).toBe("Turned off by your company");
+    expect(whatsapp.querySelector('[aria-label="Import a WhatsApp chat"]')).toBeNull();
+    expect(card.querySelector('[data-work-import="telegram"] [aria-label="Import a Telegram chat"]')).not.toBeNull();
+    await act(async () => whatsapp.querySelector<HTMLButtonElement>('[data-testid="work-import-off-manage"]')!.click());
+    const local = document.querySelector('[data-testid="work-whatsapp-card"]')!;
+    expect(local.getAttribute("data-off")).toBe("true");
+    await act(async () => local.querySelector<HTMLButtonElement>('[data-testid="work-local-off-manage"]')!.click());
+    expect(managed).toBe(2);
+    await act(async () => root.unmount());
   });
 
   test("connectors: Work users without a company keep the meter and the open import rows", async () => {
